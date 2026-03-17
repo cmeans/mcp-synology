@@ -82,7 +82,7 @@ Debug output includes every DSM API request/response (passwords masked), credent
 ## Development
 
 ```bash
-uv sync --dev                              # Install dependencies
+uv sync --extra dev                              # Install dependencies
 uv run ruff check src/ tests/              # Lint
 uv run ruff format --check src/ tests/     # Format check
 uv run mypy src/                           # Type check

@@ -31,7 +31,7 @@ Modules are domain-split: `listing.py`, `search.py`, `metadata.py`, `operations.
 ## Build & Development Commands
 
 ```bash
-uv sync --dev                              # Install all dependencies
+uv sync --extra dev                              # Install all dependencies
 uv run ruff check src/ tests/              # Lint
 uv run ruff format --check src/ tests/     # Format check
 uv run ruff format src/ tests/             # Auto-format
