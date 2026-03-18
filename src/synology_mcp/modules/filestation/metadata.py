@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import contextlib
+import logging
 from typing import TYPE_CHECKING, Any
 
 from synology_mcp.core.errors import SynologyError
@@ -20,6 +20,22 @@ from synology_mcp.modules.filestation.helpers import (
 
 if TYPE_CHECKING:
     from synology_mcp.core.client import DsmClient
+
+logger = logging.getLogger(__name__)
+
+
+async def _stop_dirsize_task(client: DsmClient, taskid: str) -> None:
+    """Stop a DirSize background task. Logs warnings on failure."""
+    try:
+        await client.request(
+            "SYNO.FileStation.DirSize",
+            "stop",
+            params={"taskid": taskid},
+        )
+    except SynologyError as e:
+        logger.warning("DirSize task cleanup failed for %s: %s", taskid, e)
+    except Exception:  # noqa: BLE001
+        logger.warning("DirSize task cleanup failed for %s", taskid, exc_info=True)
 
 
 async def get_file_info(
@@ -138,50 +154,51 @@ async def get_dir_size(
 
     taskid = start_data.get("taskid", "")
 
-    # Poll for completion
+    # Poll for completion. Use try/finally to ensure task is always stopped,
+    # preventing orphaned processes that consume CPU on the NAS.
     import asyncio
 
     elapsed = 0.0
     interval = 0.5
+    poll_error: str | None = None
+    result: str | None = None
 
-    while elapsed < timeout:
-        try:
-            status = await client.request(
-                "SYNO.FileStation.DirSize",
-                "status",
-                params={"taskid": taskid},
-            )
-        except SynologyError as e:
-            return format_error("Get directory size", str(e), e.suggestion)
-
-        if status.get("finished", False):
-            total_size = status.get("total_size", 0)
-            num_file = status.get("num_file", 0)
-            num_dir = status.get("num_dir", 0)
-
-            # Stop task
-            with contextlib.suppress(SynologyError):
-                await client.request(
+    try:
+        while elapsed < timeout:
+            try:
+                status = await client.request(
                     "SYNO.FileStation.DirSize",
-                    "stop",
+                    "status",
                     params={"taskid": taskid},
                 )
+            except SynologyError as e:
+                poll_error = format_error("Get directory size", str(e), e.suggestion)
+                break
 
-            return format_key_value(
-                [
-                    ("Total size", format_size(total_size)),
-                    ("Files", str(num_file)),
-                    ("Directories", str(num_dir)),
-                ],
-                title=f"Directory Size: {normalized}",
-            )
+            if status.get("finished", False):
+                total_size = status.get("total_size", 0)
+                num_file = status.get("num_file", 0)
+                num_dir = status.get("num_dir", 0)
 
-        await asyncio.sleep(interval)
-        elapsed += interval
+                result = format_key_value(
+                    [
+                        ("Total size", format_size(total_size)),
+                        ("Files", str(num_file)),
+                        ("Directories", str(num_dir)),
+                    ],
+                    title=f"Directory Size: {normalized}",
+                )
+                break
 
-    # Timeout
-    with contextlib.suppress(SynologyError):
-        await client.request("SYNO.FileStation.DirSize", "stop", params={"taskid": taskid})
+            await asyncio.sleep(interval)
+            elapsed += interval
+    finally:
+        await _stop_dirsize_task(client, taskid)
+
+    if poll_error:
+        return poll_error
+    if result:
+        return result
 
     return format_error(
         "Get directory size",

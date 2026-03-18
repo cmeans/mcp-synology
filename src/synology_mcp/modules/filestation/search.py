@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -17,6 +16,24 @@ from synology_mcp.modules.filestation.helpers import (
 
 if TYPE_CHECKING:
     from synology_mcp.core.client import DsmClient
+
+
+async def _cleanup_search_task(
+    client: DsmClient, taskid: str, version: int, logger: logging.Logger
+) -> None:
+    """Stop and clean a search task. Logs warnings on failure instead of silently suppressing."""
+    for method in ("stop", "clean"):
+        try:
+            await client.request(
+                "SYNO.FileStation.Search",
+                method,
+                version=version,
+                params={"taskid": taskid},
+            )
+        except SynologyError as e:
+            logger.warning("Search task cleanup (%s) failed for %s: %s", method, taskid, e)
+        except Exception:  # noqa: BLE001
+            logger.warning("Search task cleanup (%s) failed for %s", method, taskid, exc_info=True)
 
 
 async def search_files(
@@ -106,49 +123,43 @@ async def search_files(
     all_files: list[dict[str, Any]] = []
     finished = False
     poll_count = 0
+    poll_error: str | None = None
 
-    while (time.monotonic() - start_time) < timeout:
-        try:
-            list_data = await client.request(
-                "SYNO.FileStation.Search",
-                "list",
-                version=search_version,
-                params={
-                    "taskid": taskid,
-                    "additional": '["' + '","'.join(additional) + '"]',
-                    "limit": str(limit),
-                    "offset": "0",
-                },
-            )
-        except SynologyError as e:
-            return format_error("Search files", str(e), e.suggestion)
+    try:
+        while (time.monotonic() - start_time) < timeout:
+            try:
+                list_data = await client.request(
+                    "SYNO.FileStation.Search",
+                    "list",
+                    version=search_version,
+                    params={
+                        "taskid": taskid,
+                        "additional": '["' + '","'.join(additional) + '"]',
+                        "limit": str(limit),
+                        "offset": "0",
+                    },
+                )
+            except SynologyError as e:
+                poll_error = format_error("Search files", str(e), e.suggestion)
+                break
 
-        poll_count += 1
-        all_files = list_data.get("files", [])
-        finished = list_data.get("finished", False)
+            poll_count += 1
+            all_files = list_data.get("files", [])
+            finished = list_data.get("finished", False)
 
-        if finished and (all_files or poll_count >= 3):
-            # Trust finished=True if we have results, or after enough polls
-            # to confirm the search genuinely found nothing.
-            break
+            if finished and (all_files or poll_count >= 3):
+                # Trust finished=True if we have results, or after enough polls
+                # to confirm the search genuinely found nothing.
+                break
 
-        await asyncio.sleep(poll_interval)
+            await asyncio.sleep(poll_interval)
+    finally:
+        # Always clean up the task to avoid orphaned processes on the NAS.
+        # Orphaned search tasks consume CPU indefinitely.
+        await _cleanup_search_task(client, taskid, search_version, logger)
 
-    # Clean up task
-    with contextlib.suppress(SynologyError):
-        await client.request(
-            "SYNO.FileStation.Search",
-            "stop",
-            version=search_version,
-            params={"taskid": taskid},
-        )
-    with contextlib.suppress(SynologyError):
-        await client.request(
-            "SYNO.FileStation.Search",
-            "clean",
-            version=search_version,
-            params={"taskid": taskid},
-        )
+    if poll_error:
+        return poll_error
 
     # Apply client-side exclude_pattern
     excluded_count = 0

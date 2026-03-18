@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -18,6 +17,22 @@ if TYPE_CHECKING:
     from synology_mcp.core.client import DsmClient
 
 logger = logging.getLogger(__name__)
+
+
+async def _stop_background_task(
+    client: DsmClient,
+    api: str,
+    taskid: str,
+    version: int,
+    task_logger: logging.Logger,
+) -> None:
+    """Stop a background task (CopyMove, Delete). Logs warnings on failure."""
+    try:
+        await client.request(api, "stop", version=version, params={"taskid": taskid})
+    except SynologyError as e:
+        task_logger.warning("%s task cleanup failed for %s: %s", api, taskid, e)
+    except Exception:  # noqa: BLE001
+        task_logger.warning("%s task cleanup failed for %s", api, taskid, exc_info=True)
 
 
 async def create_folder(
@@ -175,38 +190,48 @@ async def _copy_move(
 
     taskid = start_data.get("taskid", "")
 
-    # Poll for completion
+    # Poll for completion. Use try/finally to ensure task is always stopped,
+    # preventing orphaned processes that consume CPU on the NAS.
     elapsed = 0.0
     interval = 0.5
     status: dict[str, Any] = {}
+    poll_error: str | None = None
+    timed_out = False
 
-    while elapsed < timeout:
-        try:
-            status = await client.request(
-                "SYNO.FileStation.CopyMove",
-                "status",
-                version=copymove_version,
-                params={"taskid": taskid},
-            )
-        except SynologyError as e:
-            return format_error(f"{operation} files", str(e), e.suggestion)
+    try:
+        while elapsed < timeout:
+            try:
+                status = await client.request(
+                    "SYNO.FileStation.CopyMove",
+                    "status",
+                    version=copymove_version,
+                    params={"taskid": taskid},
+                )
+            except SynologyError as e:
+                poll_error = format_error(f"{operation} files", str(e), e.suggestion)
+                break
 
-        logger.debug("%s status: %s", operation, status)
+            logger.debug("%s status: %s", operation, status)
 
-        if status.get("finished", False):
-            break
+            if status.get("finished", False):
+                break
 
-        await asyncio.sleep(interval)
-        elapsed += interval
-    else:
-        # Timeout
-        with contextlib.suppress(SynologyError):
-            await client.request(
-                "SYNO.FileStation.CopyMove",
-                "stop",
-                version=copymove_version,
-                params={"taskid": taskid},
-            )
+            await asyncio.sleep(interval)
+            elapsed += interval
+        else:
+            timed_out = True
+    finally:
+        await _stop_background_task(
+            client,
+            "SYNO.FileStation.CopyMove",
+            taskid,
+            copymove_version,
+            logger,
+        )
+
+    if poll_error:
+        return poll_error
+    if timed_out:
         return format_error(
             f"{operation} files",
             f"Timed out after {timeout}s.",
@@ -274,37 +299,47 @@ async def delete_files(
 
     taskid = start_data.get("taskid", "")
 
-    # Poll for completion
+    # Poll for completion. Use try/finally to ensure task is always stopped.
     elapsed = 0.0
     interval = 0.5
     status: dict[str, Any] = {}
+    poll_error: str | None = None
+    timed_out = False
 
-    while elapsed < timeout:
-        try:
-            status = await client.request(
-                "SYNO.FileStation.Delete",
-                "status",
-                version=delete_version,
-                params={"taskid": taskid},
-            )
-        except SynologyError as e:
-            return format_error("Delete files", str(e), e.suggestion)
+    try:
+        while elapsed < timeout:
+            try:
+                status = await client.request(
+                    "SYNO.FileStation.Delete",
+                    "status",
+                    version=delete_version,
+                    params={"taskid": taskid},
+                )
+            except SynologyError as e:
+                poll_error = format_error("Delete files", str(e), e.suggestion)
+                break
 
-        logger.debug("Delete status: %s", status)
+            logger.debug("Delete status: %s", status)
 
-        if status.get("finished", False):
-            break
+            if status.get("finished", False):
+                break
 
-        await asyncio.sleep(interval)
-        elapsed += interval
-    else:
-        with contextlib.suppress(SynologyError):
-            await client.request(
-                "SYNO.FileStation.Delete",
-                "stop",
-                version=delete_version,
-                params={"taskid": taskid},
-            )
+            await asyncio.sleep(interval)
+            elapsed += interval
+        else:
+            timed_out = True
+    finally:
+        await _stop_background_task(
+            client,
+            "SYNO.FileStation.Delete",
+            taskid,
+            delete_version,
+            logger,
+        )
+
+    if poll_error:
+        return poll_error
+    if timed_out:
         return format_error(
             "Delete files",
             f"Timed out after {timeout}s.",
