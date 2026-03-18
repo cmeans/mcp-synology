@@ -55,6 +55,7 @@ Documentation = "https://github.com/cmeans/synology-mcp/tree/main/docs"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/synology_mcp"]
+artifacts = ["src/synology_mcp/instructions/*.md"]
 
 [tool.ruff]
 target-version = "py311"

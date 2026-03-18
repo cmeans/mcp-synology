@@ -125,6 +125,16 @@ FILESTATION_ERROR_CODES: dict[int, tuple[str, str]] = {
     ),
     421: ("Device or resource busy", "The file is in use by another process. Wait and retry."),
     599: ("No such task", "Background task not found (may have already completed)."),
+    900: ("Unexpected server error", "Check DSM logs for details."),
+    1100: (
+        "Insufficient filesystem permissions",
+        "The DSM user does not have write access to this shared folder. "
+        "Check DSM > Control Panel > Shared Folder > Permissions.",
+    ),
+    1101: (
+        "Unsupported target filesystem",
+        "The destination filesystem does not support this operation.",
+    ),
 }
 
 
