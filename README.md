@@ -46,7 +46,7 @@ Copy the snippet from setup into your `claude_desktop_config.json` and restart C
 }
 ```
 
-On Linux, add `"env": {"DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/<uid>/bus"}` for keyring access. The setup command generates this for you.
+On Linux, the server auto-detects the D-Bus session socket for keyring access. If auto-detection fails, add `"env": {"DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/<uid>/bus"}` to the Claude Desktop config. The setup command includes this in the generated snippet.
 
 ### 4. Verify
 
@@ -60,18 +60,18 @@ synology-mcp setup --list             # Shows all configured NAS instances
 If you prefer not to install globally, `uvx` downloads and runs the latest version on each invocation:
 
 ```bash
-uvx --from git+https://github.com/cmeans/synology-mcp synology-mcp setup
-uvx --from git+https://github.com/cmeans/synology-mcp synology-mcp check
+uvx synology-mcp setup
+uvx synology-mcp check
 ```
 
-The trade-off: the Claude Desktop config must use the full `uvx` invocation:
+The trade-off: the Claude Desktop config must use `uvx`:
 
 ```json
 {
   "mcpServers": {
     "synology": {
       "command": "uvx",
-      "args": ["--from", "git+https://github.com/cmeans/synology-mcp", "synology-mcp", "serve", "--config", "~/.config/synology-mcp/config.yaml"]
+      "args": ["synology-mcp", "serve", "--config", "~/.config/synology-mcp/config.yaml"]
     }
   }
 }
@@ -192,13 +192,25 @@ uv sync --extra dev                        # Install dependencies
 uv run ruff check src/ tests/              # Lint
 uv run ruff format --check src/ tests/     # Format check
 uv run mypy src/                           # Type check
-uv run pytest                              # Run tests
-uv run pytest -m integration               # Integration tests (requires NAS)
+uv run pytest                              # Run unit tests (243 tests, no NAS needed)
 ```
+
+### Integration tests
+
+Integration tests run against a real Synology NAS. They verify the full stack — HTTP, auth, and all File Station operations.
+
+```bash
+cp tests/integration_config.yaml.example tests/integration_config.yaml
+# Edit integration_config.yaml with your NAS connection details and test paths
+uv run pytest -m integration -v --log-cli-level=INFO
+```
+
+32 tests covering: connection, listing, search, metadata, copy/move/rename/delete lifecycle, recycle bin, and error handling. See the example config for required fields.
 
 ## Design Docs
 
-Detailed specs live in `docs/specs/`:
+Detailed specs live in `docs/specs/`. These were the original design documents — the code is authoritative where they diverge (e.g., DSM API version pinning, GET-only requests, and search behavior were discovered during live testing and are documented in `CLAUDE.md`).
+
 - `architecture.md` — layered architecture, auth strategy, session lifecycle
 - `filestation-module-spec.md` — all 12 File Station tools
 - `config-schema-spec.md` — YAML config structure and validation
@@ -208,9 +220,9 @@ Detailed specs live in `docs/specs/`:
 
 This project was built using a **Spec-First Coding** approach — a human-AI collaboration model where design precedes implementation and specs are the contract between the two.
 
-Unlike vibe coding, where you describe what you want and let the AI generate code on the fly, spec-first coding treats design as a separate, deliberate phase. The four specs in `docs/specs/` were developed through extended conversation — exploring trade-offs, rejecting alternatives, and documenting decisions with rationale. Only after the specs were complete did implementation begin, with the specs serving as the source of truth across 11 build phases.
+Unlike vibe coding, where you describe what you want and let the AI generate code on the fly, spec-first coding treats design as a separate, deliberate phase. The four specs in `docs/specs/` were developed through extended conversation — exploring trade-offs, rejecting alternatives, and documenting decisions with rationale. Implementation then used the specs as the source of truth across 11 build phases.
 
-The result: every line of code traces back to a design decision that was made intentionally, not improvised.
+Live testing against real hardware revealed behaviors the specs couldn't anticipate (DSM API quirks, search service throttling, version format incompatibilities). These discoveries are documented in `CLAUDE.md` and the code, which is authoritative where specs diverge.
 
 ## License
 
