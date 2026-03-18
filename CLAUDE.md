@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 synology-mcp is an MCP server for Synology NAS devices. It exposes Synology DSM API functionality as MCP tools that Claude can use. Modular, secure (2FA-ready), permission-tiered. Python 3.11+, async throughout, MIT licensed.
 
-**Current status:** Pre-implementation. Design specs are complete in `docs/specs/`. No source code yet.
+**Current status:** v0.3.0 — File Station module fully implemented (12 tools), CLI, integration tests.
 
 ## Architecture
 
@@ -15,7 +15,7 @@ Layered design: core → modules → server/CLI.
 - **Core** (`src/synology_mcp/core/`): DSM API client (async httpx), auth manager (session lifecycle, 2FA, keyring), YAML+Pydantic config loader, shared response formatters, typed exception hierarchy
 - **Modules** (`src/synology_mcp/modules/`): Feature-specific tool handlers. Each module declares `MODULE_INFO` with API requirements and tool metadata. File Station is the first module (12 tools: 6 READ + 6 WRITE)
 - **Server** (`src/synology_mcp/server.py`): FastMCP initialization, module loading, startup
-- **CLI** (`src/synology_mcp/cli.py`): click-based with `serve`, `setup`, `check` subcommands
+- **CLI** (`src/synology_mcp/cli/`): click-based package with `serve`, `setup`, `check` subcommands
 
 Modules are domain-split: `listing.py`, `search.py`, `metadata.py`, `operations.py`, `helpers.py` — grouped by what they do, not permission tier.
 
@@ -80,6 +80,7 @@ uv run pytest --cov=synology_mcp           # Tests with coverage
 - Common error codes (100-series) handled in the core client; module-specific codes (400-series for File Station) handled in modules
 - Always include actionable suggestions in error messages
 - Session errors (106/107/119) trigger transparent re-auth with exactly one retry; error 105 (permission denied) is NOT a session issue — never re-auth on 105
+- **Background task cleanup:** All async background tasks (Search, DirSize, CopyMove, Delete) must use `try/finally` to ensure stop/clean is called. Orphaned tasks consume CPU indefinitely on the NAS. Log warnings on cleanup failure — never silently suppress
 
 ### Auth
 - Strategy chain auto-detects 2FA vs non-2FA on login attempt
@@ -89,8 +90,9 @@ uv run pytest --cov=synology_mcp           # Tests with coverage
 
 ### DSM API Client
 - Thin wrapper — knows DSM request/response conventions, nothing about specific APIs
+- **Always use GET** — never POST. DSM reports `requestFormat=JSON` on all FileStation APIs (even v2), but this is metadata not a mandate. POST causes silent failures on DSM 7.1
 - Calls `SYNO.API.Info` with `query=ALL` at startup; caches API name → path/version map
-- Auto-negotiates API versions (highest supported by NAS)
+- **Version pinning:** CopyMove, Delete, and Search are pinned to v2 (`negotiate_version(..., max_version=2)`) to avoid v3 JSON request format issues
 - Session ID injection and comma/backslash escaping in multi-path params are transparent to modules
 
 ### Config
@@ -104,11 +106,21 @@ uv run pytest --cov=synology_mcp           # Tests with coverage
 - Always return fully-qualified paths: `/shared_folder/...`
 - Validate first path component against cached share list
 
+### Search (File Station)
+- Always pass `filetype=all` — DSM defaults to `"file"` if omitted, excluding directories from results
+- Auto-wrap bare keywords with wildcards: `"Bambu"` → `"*Bambu*"` so substring matching works
+- Pure extension patterns like `"*.mkv"` use DSM's native `extension` filter
+- DSM search service on non-indexed shares (`has_not_index_share: True`) can be unreliable under load — orphaned tasks or rapid-fire requests can exhaust it
+
 ## Testing
 
 - **Mock boundary is HTTP:** `respx` intercepts httpx calls, returns canned DSM responses — not function-level mocks
 - **Test files mirror source files:** `listing.py` → `test_listing.py`
 - **Integration tests** marked `@pytest.mark.integration`, excluded from CI by default
+  - Require `tests/integration_config.yaml` (copy from `integration_config.yaml.example`)
+  - Configure NAS connection + `test_paths` (existing_share, search_folder, search_keyword, writable_folder)
+  - Run: `uv run pytest -m integration -v --log-cli-level=INFO`
+  - Search tests can be flaky if the NAS search service is overloaded — allow recovery time between runs
 
 ## Common Tasks
 

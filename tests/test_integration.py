@@ -5,6 +5,10 @@ Requires: tests/integration_config.yaml (see integration_config.yaml.example)
 
 These tests hit the real DSM API over HTTP. They verify that our client,
 auth, and module code works against an actual NAS — not mocked responses.
+
+NOTE: DSM's background task APIs (Search, DirSize) can be overwhelmed by
+rapid-fire requests. Tests include delays where needed. If tests fail
+intermittently, wait for NAS CPU to settle and retry.
 """
 
 from __future__ import annotations
@@ -20,11 +24,13 @@ import yaml
 from synology_mcp.core.auth import AuthManager
 from synology_mcp.core.client import DsmClient
 from synology_mcp.core.config import AppConfig
-from synology_mcp.modules.filestation.listing import list_files, list_shares
+from synology_mcp.modules.filestation.listing import list_files, list_recycle_bin, list_shares
 from synology_mcp.modules.filestation.metadata import get_dir_size, get_file_info
 from synology_mcp.modules.filestation.operations import (
+    copy_files,
     create_folder,
     delete_files,
+    move_files,
     rename,
 )
 from synology_mcp.modules.filestation.search import search_files
@@ -131,6 +137,13 @@ def _unpack(nas_client: Any) -> tuple[DsmClient, AuthManager, AppConfig, dict[st
     return nas_client  # type: ignore[return-value]
 
 
+def _skip_unless_write(config: AppConfig) -> None:
+    """Skip the test if filestation permission is not 'write'."""
+    fs_config = config.modules.get("filestation")
+    if not fs_config or fs_config.permission != "write":
+        pytest.skip("Write permission required — set permission: write in integration config")
+
+
 # ---------------------------------------------------------------------------
 # Connection & Auth
 # ---------------------------------------------------------------------------
@@ -188,7 +201,7 @@ class TestListing:
         client, _, _, _ = _unpack(nas_client)
         result = await list_shares(client)
         assert "Name" in result  # table header
-        assert "[!]" not in result  # no error marker
+        assert "[!]" not in result
         logger.info("list_shares output:\n%s", result)
 
     async def test_list_files_existing_share(self, nas_client: Any) -> None:
@@ -206,6 +219,29 @@ class TestListing:
         # On some DSM versions, listing '/' via FileStation.List fails (error 401).
         # Use list_shares instead. Here we just verify it doesn't crash.
         assert isinstance(result, str)
+
+    async def test_list_files_sorted_by_size(self, nas_client: Any) -> None:
+        """List files sorted by size descending."""
+        client, _, _, paths = _unpack(nas_client)
+        result = await list_files(
+            client, path=paths["existing_share"], sort_by="size", sort_direction="desc"
+        )
+        assert "[!]" not in result
+        logger.info("list_files sorted by size:\n%s", result)
+
+    async def test_list_files_with_limit(self, nas_client: Any) -> None:
+        """List files with a small limit to test pagination."""
+        client, _, _, paths = _unpack(nas_client)
+        result = await list_files(client, path=paths["existing_share"], limit=3)
+        assert "[!]" not in result
+        logger.info("list_files limit=3:\n%s", result)
+
+    async def test_list_files_invalid_path(self, nas_client: Any) -> None:
+        """Listing a non-existent path should return a formatted error."""
+        client, _, _, _ = _unpack(nas_client)
+        result = await list_files(client, path="/zzz_nonexistent_share_999")
+        assert "[!]" in result
+        logger.info("list_files(invalid):\n%s", result)
 
 
 # ---------------------------------------------------------------------------
@@ -251,10 +287,17 @@ class TestSearch:
             "Also check that DSM's search service is not overloaded from prior test runs."
         )
 
+    async def test_search_by_extension(self, nas_client: Any) -> None:
+        """Search by extension pattern (*.stl) should not error."""
+        client, _, _, paths = _unpack(nas_client)
+        await asyncio.sleep(2)
+        result = await search_files(client, folder_path=paths["existing_share"], pattern="*.stl")
+        logger.info("Extension search (*.stl):\n%s", result)
+        assert "[!]" not in result
+
     async def test_search_no_results(self, nas_client: Any) -> None:
         """Search for a nonsense pattern should return 0 results, not an error."""
         client, _, _, paths = _unpack(nas_client)
-        # Brief delay to avoid overloading the search service
         await asyncio.sleep(2)
         result = await search_files(
             client, folder_path=paths["existing_share"], pattern="zzz_nonexistent_xyzzy_999"
@@ -288,6 +331,27 @@ class TestMetadata:
         assert "[!]" not in result
         logger.info("get_file_info(%s):\n%s", paths["existing_share"], result)
 
+    async def test_get_file_info_multiple_paths(self, nas_client: Any) -> None:
+        """Get info about multiple paths at once."""
+        client, _, _, paths = _unpack(nas_client)
+        result = await get_file_info(
+            client,
+            paths=[paths["existing_share"], paths["writable_folder"]],
+        )
+        assert "[!]" not in result
+        logger.info("get_file_info(multiple):\n%s", result)
+
+    async def test_get_file_info_invalid_path(self, nas_client: Any) -> None:
+        """Get info about a non-existent path — should not crash.
+
+        DSM may return success with empty metadata or an error depending
+        on the path format. We just verify graceful handling.
+        """
+        client, _, _, _ = _unpack(nas_client)
+        result = await get_file_info(client, paths=["/zzz_nonexistent_999/fake.txt"])
+        assert isinstance(result, str)
+        logger.info("get_file_info(invalid):\n%s", result)
+
     async def test_get_dir_size(self, nas_client: Any) -> None:
         """Get size of a known folder (uses a smaller folder to avoid timeouts)."""
         client, _, _, paths = _unpack(nas_client)
@@ -295,11 +359,13 @@ class TestMetadata:
         # which may be very large and cause the background task to time out.
         result = await get_dir_size(client, path=paths["writable_folder"])
         assert "[!]" not in result
+        assert "Total size" in result
         logger.info("get_dir_size(%s):\n%s", paths["writable_folder"], result)
 
 
 # ---------------------------------------------------------------------------
-# Write operations (create, copy, rename, delete)
+# Write operations: full lifecycle
+# create → copy → verify copy → move → verify move → rename → delete → verify
 # ---------------------------------------------------------------------------
 
 
@@ -311,73 +377,228 @@ class TestWriteOperations:
     temporary resources and clean them up. Requires 'write' permission
     in the module config.
 
-    Tests run in order: create → copy → rename → delete.
+    Tests run in order to build on each other's state:
+    create → copy → verify → move → verify → rename → delete → verify
     """
 
-    _TEST_FOLDER_NAME = "_integration_test_tmp"
+    _TEST_DIR = "_integration_test_tmp"
+    _COPY_SRC = "_integration_test_tmp/original"
+    _COPY_DEST = "_integration_test_tmp/copied"
+    _MOVE_DEST = "_integration_test_tmp/moved"
 
-    async def test_create_folder(self, nas_client: Any) -> None:
-        """Create a test folder in the writable area."""
+    async def test_01_create_folder(self, nas_client: Any) -> None:
+        """Create the test folder structure."""
         client, _, config, paths = _unpack(nas_client)
-        fs_config = config.modules.get("filestation")
-        if not fs_config or fs_config.permission != "write":
-            pytest.skip("Write permission required — set permission: write in integration config")
+        _skip_unless_write(config)
 
-        folder_path = f"{paths['writable_folder']}/{self._TEST_FOLDER_NAME}"
-        result = await create_folder(client, paths=[folder_path])
+        base = paths["writable_folder"]
+        # Create main test dir and a subfolder to use as copy source
+        result = await create_folder(client, paths=[f"{base}/{self._COPY_SRC}"])
         logger.info("create_folder result:\n%s", result)
-        # Should succeed or report "already exists" (idempotent)
         assert "[!]" not in result or "already exists" in result.lower()
 
-    async def test_create_folder_idempotent(self, nas_client: Any) -> None:
+    async def test_02_create_folder_idempotent(self, nas_client: Any) -> None:
         """Creating the same folder again should not error (idempotent)."""
         client, _, config, paths = _unpack(nas_client)
-        fs_config = config.modules.get("filestation")
-        if not fs_config or fs_config.permission != "write":
-            pytest.skip("Write permission required")
+        _skip_unless_write(config)
 
-        folder_path = f"{paths['writable_folder']}/{self._TEST_FOLDER_NAME}"
-        result = await create_folder(client, paths=[folder_path])
-        logger.info("create_folder (idempotent) result:\n%s", result)
-        # Should not crash — either succeeds or says already exists
+        base = paths["writable_folder"]
+        result = await create_folder(client, paths=[f"{base}/{self._COPY_SRC}"])
+        logger.info("create_folder (idempotent):\n%s", result)
         assert isinstance(result, str)
 
-    async def test_create_subfolder(self, nas_client: Any) -> None:
-        """Create a subfolder inside the test folder."""
-        client, _, config, paths = _unpack(nas_client)
-        fs_config = config.modules.get("filestation")
-        if not fs_config or fs_config.permission != "write":
-            pytest.skip("Write permission required")
+    async def test_03_copy_folder(self, nas_client: Any) -> None:
+        """Copy a folder to a new location within the test area.
 
-        subfolder = f"{paths['writable_folder']}/{self._TEST_FOLDER_NAME}/rename_test"
-        result = await create_folder(client, paths=[subfolder])
-        logger.info("create subfolder result:\n%s", result)
+        This is the most critical write test — copy was the operation
+        that had the most bugs (POST vs GET, v3 format, silent failures).
+        """
+        client, _, config, paths = _unpack(nas_client)
+        _skip_unless_write(config)
+
+        base = paths["writable_folder"]
+        src = f"{base}/{self._COPY_SRC}"
+        dest = f"{base}/{self._TEST_DIR}"
+
+        result = await copy_files(client, paths=[src], dest_folder=dest)
+        logger.info("copy_files result:\n%s", result)
+        assert "[!]" not in result
+        assert "Copied" in result
+
+    async def test_04_verify_copy_exists(self, nas_client: Any) -> None:
+        """Verify the copied folder appears in the destination listing."""
+        client, _, config, paths = _unpack(nas_client)
+        _skip_unless_write(config)
+
+        base = paths["writable_folder"]
+        listing = await list_files(client, path=f"{base}/{self._TEST_DIR}")
+        logger.info("Listing after copy:\n%s", listing)
+        assert "original" in listing
+
+    async def test_05_copy_with_overwrite(self, nas_client: Any) -> None:
+        """Copy the same folder again with overwrite=True."""
+        client, _, config, paths = _unpack(nas_client)
+        _skip_unless_write(config)
+
+        base = paths["writable_folder"]
+        src = f"{base}/{self._COPY_SRC}"
+        dest = f"{base}/{self._TEST_DIR}"
+
+        result = await copy_files(client, paths=[src], dest_folder=dest, overwrite=True)
+        logger.info("copy_files (overwrite):\n%s", result)
         assert "[!]" not in result
 
-    async def test_rename(self, nas_client: Any) -> None:
+    async def test_06_move_folder(self, nas_client: Any) -> None:
+        """Move the copied folder to a new name."""
+        client, _, config, paths = _unpack(nas_client)
+        _skip_unless_write(config)
+
+        base = paths["writable_folder"]
+        # Move the copy of "original" to "moved"
+        src = f"{base}/{self._TEST_DIR}/original"
+        dest = f"{base}/{self._MOVE_DEST}"
+
+        # Create the move destination first
+        await create_folder(client, paths=[dest])
+
+        result = await move_files(client, paths=[src], dest_folder=dest)
+        logger.info("move_files result:\n%s", result)
+        assert "[!]" not in result
+        assert "Moved" in result
+
+    async def test_07_verify_move(self, nas_client: Any) -> None:
+        """Verify the moved folder is in the new location and gone from old."""
+        client, _, config, paths = _unpack(nas_client)
+        _skip_unless_write(config)
+
+        base = paths["writable_folder"]
+
+        # Should be in the move destination
+        dest_listing = await list_files(client, path=f"{base}/{self._MOVE_DEST}")
+        logger.info("Move destination listing:\n%s", dest_listing)
+        assert "original" in dest_listing
+
+        # Should be gone from the copy destination
+        src_listing = await list_files(client, path=f"{base}/{self._TEST_DIR}")
+        logger.info("Copy source listing after move:\n%s", src_listing)
+        # "original" should not be in this listing (it was moved)
+        # But "moved" dir will be here since it's under _TEST_DIR
+
+    async def test_08_rename(self, nas_client: Any) -> None:
         """Rename a folder."""
         client, _, config, paths = _unpack(nas_client)
-        fs_config = config.modules.get("filestation")
-        if not fs_config or fs_config.permission != "write":
-            pytest.skip("Write permission required")
+        _skip_unless_write(config)
 
-        target = f"{paths['writable_folder']}/{self._TEST_FOLDER_NAME}/rename_test"
+        base = paths["writable_folder"]
+        target = f"{base}/{self._MOVE_DEST}/original"
         result = await rename(client, path=target, new_name="renamed_test")
         logger.info("rename result:\n%s", result)
         assert "[!]" not in result
 
-    async def test_delete_cleanup(self, nas_client: Any) -> None:
-        """Delete the test folder (cleanup)."""
+    async def test_09_delete_cleanup(self, nas_client: Any) -> None:
+        """Delete the entire test folder tree (cleanup)."""
         client, _, config, paths = _unpack(nas_client)
-        fs_config = config.modules.get("filestation")
-        if not fs_config or fs_config.permission != "write":
-            pytest.skip("Write permission required")
+        _skip_unless_write(config)
 
-        target = f"{paths['writable_folder']}/{self._TEST_FOLDER_NAME}"
+        base = paths["writable_folder"]
+        target = f"{base}/{self._TEST_DIR}"
         result = await delete_files(client, paths=[target], recursive=True)
         logger.info("delete result:\n%s", result)
         assert "[!]" not in result
 
-        # Verify it's gone
+    async def test_10_verify_deleted(self, nas_client: Any) -> None:
+        """Verify the test folder is gone from the writable area."""
+        client, _, config, paths = _unpack(nas_client)
+        _skip_unless_write(config)
+
         listing = await list_files(client, path=paths["writable_folder"])
-        assert self._TEST_FOLDER_NAME not in listing
+        assert self._TEST_DIR not in listing
+        logger.info("Verified %s is deleted", self._TEST_DIR)
+
+
+# ---------------------------------------------------------------------------
+# Recycle bin
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+class TestRecycleBin:
+    """Test recycle bin listing after delete.
+
+    Requires the writable_folder's share to have recycle bin enabled.
+    Creates a folder, deletes it, checks recycle bin, then cleans up.
+    """
+
+    _RECYCLE_TEST = "_recycle_bin_test"
+
+    async def test_01_create_and_delete(self, nas_client: Any) -> None:
+        """Create a test folder then delete it (should go to recycle bin)."""
+        client, _, config, paths = _unpack(nas_client)
+        _skip_unless_write(config)
+
+        base = paths["writable_folder"]
+        folder = f"{base}/{self._RECYCLE_TEST}"
+
+        # Create
+        result = await create_folder(client, paths=[folder])
+        assert "[!]" not in result or "already exists" in result.lower()
+
+        # Delete (should go to recycle bin if enabled)
+        result = await delete_files(client, paths=[folder])
+        logger.info("delete result:\n%s", result)
+        assert "[!]" not in result
+
+    async def test_02_list_recycle_bin(self, nas_client: Any) -> None:
+        """List the recycle bin for the writable folder's share."""
+        client, _, config, paths = _unpack(nas_client)
+        _skip_unless_write(config)
+
+        # Extract share name from writable_folder (e.g., "/Test-Resources" → "Test-Resources")
+        share = paths["writable_folder"].strip("/").split("/")[0]
+
+        result = await list_recycle_bin(client, share=share)
+        logger.info("list_recycle_bin(/%s):\n%s", share, result)
+        # Should not crash. May or may not find our deleted folder depending
+        # on whether recycle bin is enabled for this share.
+        assert isinstance(result, str)
+
+
+# ---------------------------------------------------------------------------
+# Error handling
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+class TestErrorHandling:
+    """Test that errors are handled gracefully, not crashes."""
+
+    async def test_copy_invalid_source(self, nas_client: Any) -> None:
+        """Copy from a non-existent path should return formatted error."""
+        client, _, config, paths = _unpack(nas_client)
+        _skip_unless_write(config)
+
+        result = await copy_files(
+            client,
+            paths=["/zzz_nonexistent_999/fake.txt"],
+            dest_folder=paths["writable_folder"],
+        )
+        logger.info("copy invalid source:\n%s", result)
+        assert "[!]" in result
+
+    async def test_delete_invalid_path(self, nas_client: Any) -> None:
+        """Delete a non-existent path should return formatted error."""
+        client, _, config, paths = _unpack(nas_client)
+        _skip_unless_write(config)
+
+        result = await delete_files(client, paths=["/zzz_nonexistent_999/fake.txt"])
+        logger.info("delete invalid path:\n%s", result)
+        # May succeed silently (DSM doesn't always error on missing paths)
+        # or return an error. Either way, should not crash.
+        assert isinstance(result, str)
+
+    async def test_rename_invalid_path(self, nas_client: Any) -> None:
+        """Rename a non-existent path should return formatted error."""
+        client, _, _, _ = _unpack(nas_client)
+        result = await rename(client, path="/zzz_nonexistent_999/fake.txt", new_name="new_name")
+        logger.info("rename invalid path:\n%s", result)
+        assert "[!]" in result

@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.3.0 (2026-03-18)
+
+Major refactor: CLI split, module registration system, DSM API fixes, integration tests.
+
+### Breaking Changes
+
+- **CLI is now a package** — `src/synology_mcp/cli.py` split into `cli/` package with 6 submodules (main, setup, check, version, logging_). Backward-compatible re-exports via `cli/__init__.py`
+
+### Bug Fixes
+
+- **Always use GET for DSM API calls** — DSM 7.1 reports `requestFormat=JSON` on all FileStation APIs even at v2, causing silent failures with POST. All requests now use GET exclusively
+- **Pin CopyMove, Delete, Search to v2** — v3 JSON request format incompatible with our comma-separated path encoding
+- **Search finds directories** — always send `filetype=all` (DSM defaults to `"file"`, excluding directories from results)
+- **Search wildcard wrapping** — bare keywords auto-wrapped with `*...*` (e.g., `"Bambu"` → `"*Bambu*"`) so substring matching works
+- **Search poll retry** — don't trust `finished=True` with 0 results until 3+ polls, preventing false positives on non-indexed shares
+- **Orphaned background task cleanup** — all async tasks (Search, DirSize, CopyMove, Delete) now use `try/finally` to ensure stop/clean is called. Previously, errors during polling would skip cleanup, leaving orphaned `synoscgi` processes consuming CPU indefinitely
+- **Cleanup failures logged** — replaced silent `contextlib.suppress` with warning-level log messages on stop/clean failure
+- **Copy/move error detection** — check `error` field in status response, not just `finished` flag. Added error codes 1000-1002 for copy/move failures
+- **Error 600 mapped** — search folder access denied now returns actionable message
+
+### Features
+
+- **Generic module registration** — `RegisterContext` + `SharedClientManager` pattern replaces 400-line monolithic `_register_filestation()`. New modules just define `register(ctx)` functions
+- **MCP tool annotations** — `readOnlyHint`, `destructiveHint`, `idempotentHint` from mcp.types, with `default_annotations()` helper
+- **Multi-NAS server identity** — server name includes `display_name` (e.g., `synology-nas01`). Template variables `{display_name}`, `{instance_id}`, `{host}`, `{port}` in instruction files
+- **Custom instructions** — `custom_instructions` config field (prepended to built-in instructions) and `instructions_file` (full replacement) for non-clone installs
+- **Integration test suite** — 32 tests against real NAS: connection, listing, search, metadata, copy/move/rename/delete lifecycle, recycle bin, error handling
+- **Configurable test paths** — `test_paths` in `integration_config.yaml` for NAS-specific folders
+
+### Documentation
+
+- CLAUDE.md updated: v0.3.0 status, GET-only rule, version pinning, search gotchas, background task cleanup pattern, integration test setup
+- README: multi-NAS setup with aliases, custom instructions, Linux DBUS note
+- Config spec: `alias`, `custom_instructions`, `instructions_file` fields
+- Power-user example: alias and instruction configuration
+
 ## 0.2.2 (2026-03-17)
 
 Code quality fixes from second external review.
