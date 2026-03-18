@@ -32,10 +32,11 @@ _VERSION_CHECK_INTERVAL = 86400  # 24 hours
 def _get_current_version() -> str:
     """Return the running version."""
     try:
+        from importlib.metadata import PackageNotFoundError
         from importlib.metadata import version as _pkg_version
 
         return _pkg_version(_PYPI_PACKAGE)
-    except Exception:  # noqa: BLE001
+    except (PackageNotFoundError, ImportError):
         return __version__
 
 
@@ -50,14 +51,14 @@ def _get_latest_pypi_version() -> str | None:
             data = json_mod.loads(resp.read())
         result: str = data["info"]["version"]
         return result
-    except Exception:  # noqa: BLE001
+    except (OSError, KeyError, ValueError):
         return None
 
 
 def _version_tuple(v: str) -> tuple[int, ...]:
     try:
         return tuple(int(x) for x in v.split("."))
-    except Exception:  # noqa: BLE001
+    except (ValueError, AttributeError):
         return (0,)
 
 
@@ -81,7 +82,7 @@ def _load_global_state() -> dict[str, Any]:
     try:
         raw: dict[str, Any] = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         return raw
-    except Exception:  # noqa: BLE001
+    except (OSError, yaml.YAMLError):
         return {}
 
 
@@ -107,7 +108,7 @@ def _check_for_update(state: dict[str, Any], *, force: bool = False) -> str | No
                     if latest and _version_tuple(latest) > _version_tuple(current):
                         return latest
                     return None
-            except Exception:  # noqa: BLE001
+            except (ValueError, TypeError, AttributeError):
                 pass
 
     latest = _get_latest_pypi_version()
@@ -379,7 +380,7 @@ def _list_configurations() -> None:
             click.echo(f"    Name: {label}")
             click.echo(f"    Host: {host}")
             click.echo()
-        except Exception:  # noqa: BLE001
+        except (OSError, yaml.YAMLError, AttributeError):
             click.echo(f"  {f.name}  (could not parse)")
 
 
@@ -526,12 +527,13 @@ def _store_keyring(service: str, username: str, password: str) -> bool:
     """Store credentials in the OS keyring. Returns True on success."""
     try:
         import keyring
+        from keyring.errors import KeyringError
 
         keyring.set_password(service, "username", username)
         keyring.set_password(service, "password", password)
         click.echo("\nCredentials stored in OS keyring.")
         return True
-    except Exception:  # noqa: BLE001
+    except (ImportError, KeyringError, OSError):
         click.echo(
             "\nKeyring not available. Set environment variables instead:\n"
             f"  export SYNOLOGY_USERNAME={username}\n"
@@ -590,13 +592,13 @@ async def _attempt_login(
                     click.echo("Device token stored in keyring.")
                 else:
                     click.echo(click.style("Login successful!", fg="green"))
-            except Exception as e2:  # noqa: BLE001
+            except SynologyError as e2:
                 click.echo(click.style(f"Login failed: {e2}", fg="red"), err=True)
                 return result
         else:
             click.echo(click.style(f"Login failed: {e}", fg="red"), err=True)
             return result
-    except Exception as e:  # noqa: BLE001
+    except OSError as e:
         click.echo(click.style(f"Login failed: {e}", fg="red"), err=True)
         return result
 
@@ -755,11 +757,13 @@ async def _check_login(config: object) -> None:
     ) as client:
         await client.query_api_info()
 
+        from synology_mcp.core.errors import SynologyError
+
         auth = AuthManager(config, client)
         try:
             await auth.login()
             click.echo(click.style("Authentication successful!", fg="green"))
             await auth.logout()
-        except Exception as e:  # noqa: BLE001
+        except (SynologyError, OSError) as e:
             click.echo(click.style(f"Authentication failed: {e}", fg="red"), err=True)
             sys.exit(1)

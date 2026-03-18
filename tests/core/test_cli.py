@@ -370,8 +370,10 @@ class TestStoreKeyring:
         from synology_mcp.cli import _store_keyring
 
         mock_kr = MagicMock()
-        mock_kr.set_password.side_effect = Exception("No backend")
-        with patch.dict("sys.modules", {"keyring": mock_kr}):
+        mock_kr.set_password.side_effect = OSError("No backend")
+        mock_errors = MagicMock()
+        mock_errors.KeyringError = type("KeyringError", (Exception,), {})
+        with patch.dict("sys.modules", {"keyring": mock_kr, "keyring.errors": mock_errors}):
             result = _store_keyring("synology-mcp/test", "admin", "secret")
 
         assert result is False

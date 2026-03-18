@@ -45,14 +45,14 @@ The device token is specific to the `instance_id`. Multiple NAS configs with dif
 |----------|----------------|----------------|-------|
 | macOS | Keychain | Works | May prompt once for keychain access |
 | Windows | Credential Manager | Works | Runs as logged-in user |
-| Linux | GNOME Keyring / KWallet | Works | Auto-detects D-Bus session bus |
+| Linux | GNOME Keyring / KWallet | Works | Uses standard D-Bus socket path |
 | Docker | None | N/A | Use env vars or config file credentials |
 
 ### Linux and Claude Desktop
 
-On Linux, keyring backends communicate via D-Bus. When Claude Desktop launches the MCP server, the subprocess may not inherit the `DBUS_SESSION_BUS_ADDRESS` environment variable. synology-mcp handles this automatically by detecting the standard systemd socket path (`/run/user/<uid>/bus`) at runtime.
+On Linux, keyring backends communicate via D-Bus. When Claude Desktop launches the MCP server, the subprocess may not inherit the `DBUS_SESSION_BUS_ADDRESS` environment variable. synology-mcp handles this by checking for the standard systemd socket at `/run/user/<uid>/bus` and setting the env var if the socket exists.
 
-No special configuration is needed — keyring just works from Claude Desktop on Linux.
+No special configuration is needed — keyring works from Claude Desktop on Linux with standard systemd-based desktop environments.
 
 ## Inspecting Keyring Entries
 

@@ -55,9 +55,9 @@ synology-mcp check                    # Validates credentials work
 synology-mcp setup --list             # Shows all configured NAS instances
 ```
 
-### Alternative: no-install mode
+### Alternative: run without global install
 
-If you prefer not to install, `uvx` runs directly from the repo and always uses the latest version:
+If you prefer not to install globally, `uvx` downloads and runs the latest version on each invocation:
 
 ```bash
 uvx --from git+https://github.com/cmeans/synology-mcp synology-mcp setup

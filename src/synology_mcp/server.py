@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -118,17 +119,17 @@ def _register_filestation(
     search_poll_interval = settings.search_poll_interval
     hide_recycle = settings.hide_recycle_in_listings
 
-    # These will be initialized at runtime when the server starts
-    # For now, create closures that reference config for lazy initialization
-    _state: dict[str, Any] = {
-        "client": None,
-        "auth": None,
-        "server_state": ServerState(),
-        "update_notice": None,  # Set once on first tool call, then cleared
-    }
+    @dataclasses.dataclass
+    class _LazyState:
+        client: DsmClient | None = None
+        auth: AuthManager | None = None
+        server_state: ServerState = dataclasses.field(default_factory=ServerState)
+        update_notice: str | None = None
+
+    _state = _LazyState()
 
     async def _get_client() -> DsmClient:
-        if _state["client"] is None:
+        if _state.client is None:
             conn = config.connection
             assert conn is not None
             protocol = "https" if conn.https else "http"
@@ -138,15 +139,14 @@ def _register_filestation(
                 verify_ssl=conn.verify_ssl,
                 timeout=conn.timeout,
             )
-            _state["_http_ctx"] = client
             await client.__aenter__()
             await client.query_api_info()
 
             auth = AuthManager(config, client)
             await auth.login()
 
-            _state["client"] = client
-            _state["auth"] = auth
+            _state.client = client
+            _state.auth = auth
 
             # Check for updates in background — never blocks tool execution
             if config.check_for_updates:
@@ -168,23 +168,23 @@ def _register_filestation(
                         if latest:
                             from synology_mcp import __version__
 
-                            _state["update_notice"] = (
+                            _state.update_notice = (
                                 f"\n\n---\nUpdate available: synology-mcp {latest} "
                                 f"(current: {__version__}). "
                                 f"Run: synology-mcp --check-update"
                             )
-                    except Exception:  # noqa: BLE001
+                    except (OSError, ValueError, KeyError):
                         pass  # Never let update check break tool functionality
 
                 asyncio.create_task(_bg_update_check())
-        client_result: DsmClient = _state["client"]
-        return client_result
+        assert _state.client is not None
+        return _state.client
 
     def _with_update_notice(result: str) -> str:
         """Append update notice to tool result (first call only, then clears)."""
-        notice = _state.get("update_notice") or ""
+        notice = _state.update_notice or ""
         if notice:
-            _state["update_notice"] = None
+            _state.update_notice = None
         return result + notice
 
     recycle_status: dict[str, bool] = {}

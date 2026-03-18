@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
 
 import pytest
 
@@ -59,9 +62,9 @@ def mock_config() -> AppConfig:
 
 
 @pytest.fixture
-async def mock_client() -> DsmClient:  # type: ignore[misc]
+async def mock_client() -> AsyncGenerator[DsmClient, None]:
     """Provide a DsmClient with a mocked API cache."""
     client = DsmClient(base_url=BASE_URL)
     client._api_cache = make_api_cache()
     async with client:
-        yield client  # type: ignore[misc]
+        yield client
