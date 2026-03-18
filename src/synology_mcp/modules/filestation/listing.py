@@ -19,6 +19,20 @@ from synology_mcp.modules.filestation.helpers import (
 if TYPE_CHECKING:
     from synology_mcp.core.client import DsmClient
 
+# Map common sort field names to DSM API field names
+_SORT_ALIASES: dict[str, str] = {
+    "modified": "mtime",
+    "date": "mtime",
+    "time": "mtime",
+    "created": "crtime",
+    "accessed": "atime",
+    "owner": "user",
+}
+
+
+def _resolve_sort_by(sort_by: str) -> str:
+    return _SORT_ALIASES.get(sort_by, sort_by)
+
 
 async def list_shares(
     client: DsmClient,
@@ -33,6 +47,8 @@ async def list_shares(
     """List all shared folders on the NAS."""
     if additional is None:
         additional = ["real_path", "size", "owner", "perm"]
+
+    sort_by = _resolve_sort_by(sort_by)
 
     try:
         data = await client.request(
@@ -100,6 +116,8 @@ async def list_files(
         additional = ["size", "time"]
 
     normalized = normalize_path(path)
+
+    sort_by = _resolve_sort_by(sort_by)
 
     params: dict[str, Any] = {
         "folder_path": normalized,
