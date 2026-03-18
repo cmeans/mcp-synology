@@ -5,49 +5,42 @@ MCP server for Synology NAS devices. Exposes Synology DSM API functionality as M
 ## Features
 
 - **File Station** — browse, search, move, copy, delete, and organize files on your NAS (12 tools)
+- **Interactive setup** — guided configuration that creates your config, stores credentials, handles 2FA, and emits a Claude Desktop snippet
 - **Permission tiers** — READ (safe browsing) or WRITE (file operations), configured per module
-- **2FA support** — full two-factor authentication with device token bootstrap; once set up, re-authentication is automatic with no OTP prompts
-- **Secure credentials** — OS keyring integration that works transparently, including from Claude Desktop on Linux (auto-detects D-Bus session). See [docs/credentials.md](docs/credentials.md) for details.
+- **2FA support** — auto-detected; device token bootstrap with automatic silent re-auth
+- **Secure credentials** — OS keyring integration that works transparently on macOS, Windows, and Linux (including from Claude Desktop). See [docs/credentials.md](docs/credentials.md).
 - **Multi-NAS** — manage multiple NAS devices with separate configs, credentials, and state
-- **Zero-config start** — interactive setup creates config, stores credentials, and emits a Claude Desktop snippet
 
 ## Quick Start
 
-### 1. Run interactive setup
+### 1. Install
 
 ```bash
-# Clone and install
-git clone https://github.com/cmeans/synology-mcp.git
-cd synology-mcp
-uv sync
-
-# Interactive setup — prompts for host, credentials, handles 2FA
-uv run synology-mcp setup
+uv tool install git+https://github.com/cmeans/synology-mcp
 ```
 
-Setup will:
-- Prompt for NAS host, HTTPS preference, and permission level
-- Prompt for DSM username and password
-- Store credentials in the OS keyring
-- Connect to the NAS and validate login
-- Handle 2FA if enabled (prompts for OTP, stores device token)
-- Write a config file to `~/.config/synology-mcp/{instance_id}.yaml`
-- Print a Claude Desktop JSON snippet ready to copy-paste
+This installs the `synology-mcp` command globally. Requires [uv](https://docs.astral.sh/uv/).
 
-### 2. Add to Claude Desktop
+### 2. Run setup
 
-Copy the JSON snippet from setup into your `claude_desktop_config.json`. Or manually:
+```bash
+synology-mcp setup
+```
+
+Setup will prompt for your NAS host, credentials, and preferences. If your account has 2FA enabled, it will prompt for an OTP code and store a device token for automatic future logins.
+
+At the end, it prints a Claude Desktop JSON snippet ready to copy-paste.
+
+### 3. Add to Claude Desktop
+
+Copy the snippet from setup into your `claude_desktop_config.json` and restart Claude Desktop. It will look something like:
 
 ```json
 {
   "mcpServers": {
-    "synology": {
-      "command": "uv",
-      "args": [
-        "--directory", "/path/to/synology-mcp",
-        "run", "synology-mcp", "serve",
-        "--config", "~/.config/synology-mcp/config.yaml"
-      ]
+    "synology-nas": {
+      "command": "synology-mcp",
+      "args": ["serve", "--config", "~/.config/synology-mcp/nas.yaml"]
     }
   }
 }
@@ -55,11 +48,33 @@ Copy the JSON snippet from setup into your `claude_desktop_config.json`. Or manu
 
 No `env` block needed — keyring credentials are accessed automatically on all platforms.
 
-### 3. Verify
+### 4. Verify
 
 ```bash
-uv run synology-mcp check                    # Validates credentials work
-uv run synology-mcp setup --list             # Shows all configured NAS instances
+synology-mcp check                    # Validates credentials work
+synology-mcp setup --list             # Shows all configured NAS instances
+```
+
+### Alternative: no-install mode
+
+If you prefer not to install, `uvx` runs directly from the repo and always uses the latest version:
+
+```bash
+uvx --from git+https://github.com/cmeans/synology-mcp synology-mcp setup
+uvx --from git+https://github.com/cmeans/synology-mcp synology-mcp check
+```
+
+The trade-off: the Claude Desktop config must use the full `uvx` invocation:
+
+```json
+{
+  "mcpServers": {
+    "synology": {
+      "command": "uvx",
+      "args": ["--from", "git+https://github.com/cmeans/synology-mcp", "synology-mcp", "serve", "--config", "~/.config/synology-mcp/config.yaml"]
+    }
+  }
+}
 ```
 
 ### Alternative: env-var-only mode
@@ -67,12 +82,12 @@ uv run synology-mcp setup --list             # Shows all configured NAS instance
 No config file needed if `SYNOLOGY_HOST` is set:
 
 ```bash
-SYNOLOGY_HOST=192.168.1.100 uv run synology-mcp check
+SYNOLOGY_HOST=192.168.1.100 synology-mcp check
 ```
 
 ## 2FA Support
 
-synology-mcp fully supports DSM accounts with two-factor authentication:
+synology-mcp fully supports DSM accounts with two-factor authentication. It's auto-detected — you don't need to configure anything special:
 
 1. **Bootstrap** — `synology-mcp setup` detects 2FA, prompts for your OTP code, and stores a device token in the keyring
 2. **Silent re-auth** — subsequent logins use the device token automatically (no OTP prompts)
@@ -97,9 +112,9 @@ See [docs/credentials.md](docs/credentials.md) for keyring service names, multi-
 
 ## Configuration
 
-See `examples/` for sample configs:
-- `config-minimal.yaml` — quick start
-- `config-power-user.yaml` — HTTPS, custom settings, logging
+Interactive setup creates a config file for you. For manual configuration or advanced options, see `examples/`:
+- `config-minimal.yaml` — simplest possible config
+- `config-power-user.yaml` — HTTPS, custom timeouts, logging
 - `config-docker.yaml` — environment-variable-driven
 
 ## Debugging
@@ -116,10 +131,23 @@ Or set it persistently in your config file:
 ```yaml
 logging:
   level: debug
-  file: ~/.local/state/synology-mcp/primary/server.log  # optional, logs to stderr by default
+  file: ~/.local/state/synology-mcp/nas/server.log  # optional, logs to stderr by default
 ```
 
 Debug output includes every DSM API request/response (passwords masked), credential resolution steps, config discovery, version negotiation, and module registration decisions.
+
+## Development
+
+```bash
+git clone https://github.com/cmeans/synology-mcp.git
+cd synology-mcp
+uv sync --extra dev                        # Install dependencies
+uv run ruff check src/ tests/              # Lint
+uv run ruff format --check src/ tests/     # Format check
+uv run mypy src/                           # Type check
+uv run pytest                              # Run tests
+uv run pytest -m integration               # Integration tests (requires NAS)
+```
 
 ## Design Docs
 
@@ -128,17 +156,6 @@ Detailed specs live in `docs/specs/`:
 - `filestation-module-spec.md` — all 12 File Station tools
 - `config-schema-spec.md` — YAML config structure and validation
 - `project-scaffolding-spec.md` — repo structure, CI, testing
-
-## Development
-
-```bash
-uv sync --extra dev                        # Install dependencies
-uv run ruff check src/ tests/              # Lint
-uv run ruff format --check src/ tests/     # Format check
-uv run mypy src/                           # Type check
-uv run pytest                              # Run tests
-uv run pytest -m integration               # Integration tests (requires NAS)
-```
 
 ## Acknowledgements
 
