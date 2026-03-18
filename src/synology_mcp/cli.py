@@ -287,8 +287,9 @@ def main(
     state["running_version"] = current
     _save_global_state(state)
 
-    # Auto-upgrade check (non-blocking, cached)
-    if state.get("auto_upgrade"):
+    # Auto-upgrade check — only on interactive commands, not serve
+    # (serve is launched by Claude Desktop; upgrading mid-launch is risky)
+    if state.get("auto_upgrade") and ctx.invoked_subcommand != "serve":
         latest = _check_for_update(state)
         _save_global_state(state)
         if latest:
