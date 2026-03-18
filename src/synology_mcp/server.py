@@ -171,26 +171,27 @@ def _register_filestation(
             _state["auth"] = auth
 
             # Check for updates on first connection (non-blocking)
-            try:
-                from synology_mcp.cli import (
-                    _check_for_update,
-                    _load_global_state,
-                    _save_global_state,
-                )
-
-                gstate = _load_global_state()
-                latest = _check_for_update(gstate)
-                _save_global_state(gstate)
-                if latest:
-                    from synology_mcp import __version__
-
-                    _state["update_notice"] = (
-                        f"\n\n---\nUpdate available: synology-mcp {latest} "
-                        f"(current: {__version__}). "
-                        f"Run: synology-mcp --check-update"
+            if config.check_for_updates:
+                try:
+                    from synology_mcp.cli import (
+                        _check_for_update,
+                        _load_global_state,
+                        _save_global_state,
                     )
-            except Exception:  # noqa: BLE001
-                pass  # Never let update check break tool functionality
+
+                    gstate = _load_global_state()
+                    latest = _check_for_update(gstate)
+                    _save_global_state(gstate)
+                    if latest:
+                        from synology_mcp import __version__
+
+                        _state["update_notice"] = (
+                            f"\n\n---\nUpdate available: synology-mcp {latest} "
+                            f"(current: {__version__}). "
+                            f"Run: synology-mcp --check-update"
+                        )
+                except Exception:  # noqa: BLE001
+                    pass  # Never let update check break tool functionality
         client_result: DsmClient = _state["client"]
         return client_result
 

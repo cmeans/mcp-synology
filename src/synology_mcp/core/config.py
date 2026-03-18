@@ -77,6 +77,7 @@ class AppConfig(BaseModel, extra="forbid"):
     schema_version: int
     instance_id: str | None = None
     alias: str | None = None
+    check_for_updates: bool = True
     connection: ConnectionConfig | None = None
     auth: AuthConfig = Field(default_factory=AuthConfig)
     modules: dict[str, ModuleConfig]

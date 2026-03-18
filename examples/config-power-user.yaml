@@ -1,6 +1,7 @@
 # Power user config — HTTPS, custom settings, logging.
 schema_version: 1
 instance_id: nas-primary
+# check_for_updates: false  # Uncomment to disable update notices in Claude Desktop
 
 connection:
   host: nas.local

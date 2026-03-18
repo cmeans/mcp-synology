@@ -110,6 +110,25 @@ Credential resolution order: **env vars > config file > keyring**. Explicit sour
 
 See [docs/credentials.md](docs/credentials.md) for keyring service names, multi-NAS setup, and how to inspect/remove stored credentials.
 
+## Updates
+
+synology-mcp checks for updates and notifies you in your Claude Desktop conversation — the first tool response in each session will include a notice if a newer version is available on PyPI.
+
+To manage updates from the CLI:
+
+```bash
+synology-mcp --check-update                 # Check for a newer version
+synology-mcp --auto-upgrade enable           # Auto-upgrade on each interactive run
+synology-mcp --revert                        # Roll back to previous version
+synology-mcp --revert 0.1.0                  # Roll back to a specific version
+```
+
+To disable update notifications in Claude Desktop, add to your config:
+
+```yaml
+check_for_updates: false
+```
+
 ## Configuration
 
 Interactive setup creates a config file for you. For manual configuration or advanced options, see `examples/`:
