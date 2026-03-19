@@ -54,6 +54,8 @@ class SharedClientManager:
         self._auth: AuthManager | None = None
         self._server_state: ServerState = ServerState()
         self._update_notice: str | None = None
+        self._bg_task: asyncio.Task[None] | None = None
+        self._cleanup_task: asyncio.Task[None] | None = None
 
     async def get_client(self) -> DsmClient:
         """Lazily initialize and return the DSM client."""

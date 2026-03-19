@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -156,8 +157,6 @@ async def get_dir_size(
 
     # Poll for completion. Use try/finally to ensure task is always stopped,
     # preventing orphaned processes that consume CPU on the NAS.
-    import asyncio
-
     elapsed = 0.0
     interval = 0.5
     poll_error: str | None = None

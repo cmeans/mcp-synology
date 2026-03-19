@@ -121,8 +121,8 @@ def serve(config: str | None) -> None:
 
 # Import and attach subcommands — avoids circular imports since
 # setup.py and check.py define standalone @click.command() functions.
-from synology_mcp.cli.check import check
-from synology_mcp.cli.setup import setup
+from synology_mcp.cli.check import check  # noqa: E402
+from synology_mcp.cli.setup import setup  # noqa: E402
 
 main.add_command(setup)
 main.add_command(check)

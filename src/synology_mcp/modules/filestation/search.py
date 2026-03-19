@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from typing import TYPE_CHECKING, Any
 
 from synology_mcp.core.errors import SynologyError
@@ -116,9 +118,6 @@ async def search_files(
     # finish and discard results before we read them. We also don't trust
     # finished=True on the very first poll with 0 results, as it can be a
     # false positive on non-indexed shares.
-    import asyncio
-    import time
-
     start_time = time.monotonic()
     all_files: list[dict[str, Any]] = []
     finished = False
