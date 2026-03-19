@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.3.1 (2026-03-18)
+
+### Features
+
+- **System monitoring module** — 2 new read-only tools:
+  - `get_system_info` — model, firmware, CPU specs, RAM, temperature, uptime (works for all users via `SYNO.DSM.Info`, supplemented by `SYNO.Core.System` for admin users)
+  - `get_resource_usage` — live CPU load, memory usage, disk I/O per drive, network throughput per interface (requires admin account via `SYNO.Core.System.Utilization`)
+
+### Bug Fixes
+
+- **Orphaned background tasks** — Search, DirSize, CopyMove, and Delete operations now use `try/finally` to ensure tasks are always stopped. Previously, errors during polling could skip cleanup, leaving `synoscgi` processes consuming CPU indefinitely on the NAS
+- **Cleanup failures logged** — replaced silent `contextlib.suppress` with warning-level log messages
+- **Always use GET** — removed POST logic entirely. DSM 7.1 reports `requestFormat=JSON` on all FileStation APIs even at v2, causing silent failures with POST
+
+### Code Quality
+
+- Removed unused `noqa` directives
+- `datetime.now(tz=UTC)` instead of naive `datetime.now()`
+- `Self` return type for `__aenter__`
+- `int | float` simplified to `float` in type hints
+- `list.extend` with generators instead of append loops
+- Store `asyncio.create_task` references to prevent GC
+- Move inline imports (`asyncio`, `time`) to module top level
+- Initialize task attributes in `__init__`
+
+### Documentation
+
+- README restructured: modules listed separately from features, env-var mode shows Claude Desktop config, 2FA token expiry clarified, config hierarchy shown in YAML examples, custom instructions use cases expanded
+- DEVELOPMENT.md extracted from README: build commands, integration test setup, design docs
+- CLAUDE.md updated: v0.3.x status, GET-only rule, version pinning, search gotchas, background task cleanup pattern
+- Integration tests expanded to 37 (system info, resource usage with admin fixture, utilization under load)
+
 ## 0.3.0 (2026-03-18)
 
 Major refactor: CLI split, module registration system, DSM API fixes, integration tests.
