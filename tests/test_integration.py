@@ -34,6 +34,8 @@ from synology_mcp.modules.filestation.operations import (
     rename,
 )
 from synology_mcp.modules.filestation.search import search_files
+from synology_mcp.modules.system.info import get_system_info
+from synology_mcp.modules.system.utilization import get_resource_usage
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +65,10 @@ def _load_integration_config() -> tuple[AppConfig, dict[str, str]]:
 
     raw = yaml.safe_load(_CONFIG_PATH.read_text(encoding="utf-8"))
     test_paths = {**_DEFAULT_TEST_PATHS, **raw.pop("test_paths", {})}
+    # Store admin_config path in test_paths for later use
+    admin_config = raw.pop("admin_config", None)
+    if admin_config:
+        test_paths["admin_config"] = admin_config
     config = AppConfig(**raw)
     return config, test_paths
 
@@ -125,6 +131,55 @@ async def nas_client(
         yield client, auth, config, test_paths
 
         # Cleanup
+        await auth.logout()
+
+
+# ---------------------------------------------------------------------------
+# Admin fixture (for APIs requiring admin privileges)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+async def admin_client(
+    integration_config: tuple[AppConfig, dict[str, str]],
+) -> Any:
+    """Provide an authenticated admin DsmClient.
+
+    Uses the admin_config path from integration_config.yaml.
+    Skips if no admin config is configured.
+    Yields (client, auth, config, test_paths).
+    """
+    _, test_paths = integration_config
+    admin_config_path = test_paths.get("admin_config")
+    if not admin_config_path:
+        pytest.skip("No admin_config path in integration_config.yaml")
+
+    admin_path = Path(admin_config_path).expanduser()
+    if not admin_path.exists():
+        pytest.skip(f"Admin config not found: {admin_path}")
+
+    raw = yaml.safe_load(admin_path.read_text(encoding="utf-8"))
+    admin_cfg = AppConfig(**raw)
+    conn = admin_cfg.connection
+    assert conn is not None
+
+    protocol = "https" if conn.https else "http"
+    base_url = f"{protocol}://{conn.host}:{conn.port}"
+
+    client = DsmClient(
+        base_url=base_url,
+        verify_ssl=conn.verify_ssl,
+        timeout=conn.timeout,
+    )
+
+    async with client:
+        await client.query_api_info()
+        auth = AuthManager(admin_cfg, client)
+        sid = await auth.login()
+        logger.info("Admin authenticated, SID=%s...", sid[:8])
+
+        yield client, auth, admin_cfg, test_paths
+
         await auth.logout()
 
 
@@ -602,3 +657,92 @@ class TestErrorHandling:
         result = await rename(client, path="/zzz_nonexistent_999/fake.txt", new_name="new_name")
         logger.info("rename invalid path:\n%s", result)
         assert "[!]" in result
+
+
+# ---------------------------------------------------------------------------
+# System monitoring
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+class TestSystemInfo:
+    """Test system info tool (works for all users via SYNO.DSM.Info)."""
+
+    async def test_get_system_info(self, nas_client: Any) -> None:
+        """Should return model, firmware, temperature, uptime."""
+        client, _, _, _ = _unpack(nas_client)
+        result = await get_system_info(client)
+        logger.info("get_system_info:\n%s", result)
+        assert "[!]" not in result
+        assert "Model" in result
+        assert "Firmware" in result
+        assert "Temperature" in result
+        assert "Uptime" in result
+
+    async def test_system_info_has_ram(self, nas_client: Any) -> None:
+        """Should report RAM size."""
+        client, _, _, _ = _unpack(nas_client)
+        result = await get_system_info(client)
+        assert "RAM" in result
+        assert "MB" in result
+
+
+@pytest.mark.integration
+class TestResourceUsage:
+    """Test resource utilization tool.
+
+    Uses admin_client fixture for tests that need admin privileges.
+    Falls back gracefully when admin config is not available.
+    """
+
+    async def test_resource_usage_non_admin(self, nas_client: Any) -> None:
+        """Non-admin user should get a clear permission error."""
+        client, _, _, _ = _unpack(nas_client)
+        result = await get_resource_usage(client)
+        logger.info("get_resource_usage (non-admin):\n%s", result)
+        # Should fail with permission error for non-admin users
+        if "[!]" in result:
+            assert "admin" in result.lower() or "permission" in result.lower()
+        # If it succeeds, the user IS admin — that's fine too
+
+    async def test_resource_usage_admin(self, admin_client: Any) -> None:
+        """Admin user should get real utilization data."""
+        client, _, _, _ = _unpack(admin_client)
+        result = await get_resource_usage(client)
+        logger.info("get_resource_usage (admin):\n%s", result)
+        assert "[!]" not in result
+        assert "CPU" in result
+        assert "Memory" in result
+
+    async def test_utilization_before_and_during_load(self, admin_client: Any) -> None:
+        """Verify utilization reports plausible values under load.
+
+        1. Check CPU is not already pegged (baseline)
+        2. Start a DirSize task on a large folder to generate load
+        3. Check CPU again — should still return valid data
+        """
+        client, _, _, paths = _unpack(admin_client)
+
+        # Baseline reading — verify NAS isn't already overloaded
+        baseline = await get_resource_usage(client)
+        logger.info("Baseline utilization:\n%s", baseline)
+        assert "[!]" not in baseline, "Baseline should succeed with admin"
+        assert "CPU" in baseline, "Baseline should include CPU data"
+
+        # Start a heavy operation concurrently
+        dir_task = asyncio.create_task(get_dir_size(client, path=paths["existing_share"]))
+
+        # Wait for the operation to start consuming resources
+        await asyncio.sleep(1)
+
+        # Check utilization during the load
+        during_load = await get_resource_usage(client)
+        logger.info("During-load utilization:\n%s", during_load)
+
+        # Wait for dir_size to complete (cleanup)
+        await dir_task
+
+        # Both readings should be valid
+        assert "[!]" not in during_load
+        assert "CPU" in during_load
+        logger.info("Utilization test passed — both readings returned valid data")

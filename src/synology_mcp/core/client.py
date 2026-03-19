@@ -144,6 +144,8 @@ class DsmClient:
                 "SYNO.FileStation.Rename",
                 "SYNO.FileStation.CopyMove",
                 "SYNO.FileStation.Delete",
+                "SYNO.Core.System",
+                "SYNO.Core.System.Utilization",
             }
         )
         for name in sorted(_relevant_apis):

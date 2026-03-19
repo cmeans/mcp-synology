@@ -5,6 +5,7 @@ MCP server for Synology NAS devices. Exposes Synology DSM API functionality as M
 ## Features
 
 - **File Station** — browse, search, move, copy, delete, and organize files on your NAS (12 tools)
+- **System monitoring** — NAS model, firmware, temperature, uptime, and live CPU/memory/disk/network utilization (2 tools; resource usage requires admin)
 - **Interactive setup** — guided configuration that creates your config, stores credentials, handles 2FA, and emits a Claude Desktop snippet
 - **Permission tiers** — READ (safe browsing) or WRITE (file operations), configured per module
 - **2FA support** — auto-detected; device token bootstrap with automatic silent re-auth

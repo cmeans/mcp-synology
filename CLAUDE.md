@@ -6,14 +6,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 synology-mcp is an MCP server for Synology NAS devices. It exposes Synology DSM API functionality as MCP tools that Claude can use. Modular, secure (2FA-ready), permission-tiered. Python 3.11+, async throughout, MIT licensed.
 
-**Current status:** v0.3.0 — File Station module fully implemented (12 tools), CLI, integration tests.
+**Current status:** v0.3.x — File Station (12 tools) + System monitoring (2 tools), CLI, integration tests.
 
 ## Architecture
 
 Layered design: core → modules → server/CLI.
 
 - **Core** (`src/synology_mcp/core/`): DSM API client (async httpx), auth manager (session lifecycle, 2FA, keyring), YAML+Pydantic config loader, shared response formatters, typed exception hierarchy
-- **Modules** (`src/synology_mcp/modules/`): Feature-specific tool handlers. Each module declares `MODULE_INFO` with API requirements and tool metadata. File Station is the first module (12 tools: 6 READ + 6 WRITE)
+- **Modules** (`src/synology_mcp/modules/`): Feature-specific tool handlers. Each module declares `MODULE_INFO` with API requirements and tool metadata. File Station (12 tools: 6 READ + 6 WRITE), System (2 tools: get_system_info, get_resource_usage)
 - **Server** (`src/synology_mcp/server.py`): FastMCP initialization, module loading, startup
 - **CLI** (`src/synology_mcp/cli/`): click-based package with `serve`, `setup`, `check` subcommands
 
@@ -132,10 +132,11 @@ uv run pytest --cov=synology_mcp           # Tests with coverage
 5. Add tests with mocked DSM responses in the matching test file
 
 ### Adding a new module
-1. Create `modules/{name}/` package with `__init__.py`, domain files, helpers
+1. Create `modules/{name}/` package with `__init__.py`, domain files
 2. Define `MODULE_INFO` with `ApiRequirement` list, `ToolInfo` list, and optional Pydantic `settings_schema`
-3. Implement `register(server, client, allowed_tools)`
-4. Add module name to config schema and example configs
+3. Implement `register(ctx: RegisterContext)` — see `modules/system/` for a minimal example
+4. Import and add to `_MODULE_REGISTRY` in `server.py`
+5. Add module name to example configs and integration test config
 
 ### Adding a new DSM error code
 1. Common codes (100-series): add to `core/errors.py` error code map

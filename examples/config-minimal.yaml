@@ -8,3 +8,5 @@ connection:
 modules:
   filestation:
     enabled: true
+  system:
+    enabled: true

@@ -25,6 +25,8 @@ modules:
   filestation:
     enabled: true
     permission: write  # 'write' needed to test copy/move/delete
+  system:
+    enabled: true
 
 # Override these in integration_config.yaml to match your NAS:
 # test_paths:
@@ -32,3 +34,7 @@ modules:
 #   search_folder: /home/3D         # A folder with known content to search
 #   search_keyword: Bambu           # A keyword that matches something in search_folder
 #   writable_folder: /home/Test     # A folder where tests can create/copy/delete files
+
+# Optional: path to a config using an admin account (for resource utilization tests).
+# The admin account must be set up via 'synology-mcp setup --config <path>'.
+# admin_config: ~/.config/synology-mcp/admin.yaml

@@ -30,6 +30,8 @@ modules:
     settings:
       file_type_indicator: text
       async_timeout: 180
+  system:
+    enabled: true  # CPU, memory, temperature, uptime (resource usage requires admin)
 
 logging:
   level: debug
