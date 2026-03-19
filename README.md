@@ -2,12 +2,26 @@
 
 MCP server for Synology NAS devices. Exposes Synology DSM API functionality as MCP tools that Claude can use.
 
+## Supported Modules
+
+### File Station
+
+Browse, search, move, copy, delete, and organize files on your NAS. 12 tools across two permission tiers:
+
+- **READ** — list_shares, list_files, list_recycle_bin, search_files, get_file_info, get_dir_size
+- **WRITE** — create_folder, rename, copy_files, move_files, delete_files, restore_from_recycle_bin
+
+### System
+
+Monitor NAS health and resource utilization. 2 read-only tools:
+
+- **get_system_info** — model, firmware version, RAM, temperature, uptime (works for all users)
+- **get_resource_usage** — live CPU load, memory usage, disk I/O, network throughput (requires admin account)
+
 ## Features
 
-- **File Station** — browse, search, move, copy, delete, and organize files on your NAS (12 tools)
-- **System monitoring** — NAS model, firmware, temperature, uptime, and live CPU/memory/disk/network utilization (2 tools; resource usage requires admin)
 - **Interactive setup** — guided configuration that creates your config, stores credentials, handles 2FA, and emits a Claude Desktop snippet
-- **Permission tiers** — READ (safe browsing) or WRITE (file operations), configured per module
+- **Permission tiers** — READ or WRITE per module, enforced at tool registration
 - **2FA support** — auto-detected; device token bootstrap with automatic silent re-auth
 - **Secure credentials** — OS keyring integration that works transparently on macOS, Windows, and Linux (including from Claude Desktop). See [docs/credentials.md](docs/credentials.md).
 - **Multi-NAS** — manage multiple NAS devices with separate configs, credentials, and state
@@ -20,7 +34,7 @@ MCP server for Synology NAS devices. Exposes Synology DSM API functionality as M
 uv tool install synology-mcp
 ```
 
-This installs the `synology-mcp` command globally from [PyPI](https://pypi.org/project/synology-mcp/). Requires [uv](https://docs.astral.sh/uv/).
+Installs the `synology-mcp` command globally from [PyPI](https://pypi.org/project/synology-mcp/). Requires [uv](https://docs.astral.sh/uv/).
 
 ### 2. Run setup
 
@@ -47,6 +61,8 @@ Copy the snippet from setup into your `claude_desktop_config.json` and restart C
 }
 ```
 
+The config file name (e.g., `nas.yaml`) also serves as a natural identifier for the connection — you can name it to match your NAS (e.g., `home-nas.yaml`, `office-nas.yaml`).
+
 On Linux, the server auto-detects the D-Bus session socket for keyring access. If auto-detection fails, add `"env": {"DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/<uid>/bus"}` to the Claude Desktop config. The setup command includes this in the generated snippet.
 
 ### 4. Verify
@@ -60,13 +76,6 @@ synology-mcp setup --list             # Shows all configured NAS instances
 
 If you prefer not to install globally, `uvx` downloads and runs the latest version on each invocation:
 
-```bash
-uvx synology-mcp setup
-uvx synology-mcp check
-```
-
-The trade-off: the Claude Desktop config must use `uvx`:
-
 ```json
 {
   "mcpServers": {
@@ -78,9 +87,34 @@ The trade-off: the Claude Desktop config must use `uvx`:
 }
 ```
 
+You can also use `uvx` for CLI commands:
+
+```bash
+uvx synology-mcp setup
+uvx synology-mcp check
+```
+
 ### Alternative: env-var-only mode
 
-No config file needed if `SYNOLOGY_HOST` is set:
+No config file needed if `SYNOLOGY_HOST` is set. This is useful for Docker or CI environments:
+
+```json
+{
+  "mcpServers": {
+    "synology": {
+      "command": "synology-mcp",
+      "args": ["serve"],
+      "env": {
+        "SYNOLOGY_HOST": "192.168.1.100",
+        "SYNOLOGY_USERNAME": "your_user",
+        "SYNOLOGY_PASSWORD": "your_password"
+      }
+    }
+  }
+}
+```
+
+Or from the CLI:
 
 ```bash
 SYNOLOGY_HOST=192.168.1.100 synology-mcp check
@@ -94,7 +128,7 @@ synology-mcp fully supports DSM accounts with two-factor authentication. It's au
 2. **Silent re-auth** — subsequent logins use the device token automatically (no OTP prompts)
 3. **Per-instance** — each NAS config gets its own device token, so mixed 2FA/non-2FA setups work fine
 
-If a device token expires or is revoked, run `synology-mcp setup` again to re-bootstrap.
+Device tokens persist until you explicitly revoke them in DSM (Personal > Security > Sign-in Activity). They do not expire on their own. If a token is revoked, run `synology-mcp setup` again to re-bootstrap.
 
 ## Keyring & Credentials
 
@@ -105,9 +139,10 @@ Credentials are stored in the OS keyring and accessed transparently:
 | macOS | Keychain | Just works |
 | Windows | Credential Manager | Just works |
 | Linux | GNOME Keyring / KWallet | Auto-detects D-Bus session, works from Claude Desktop |
-| Docker | N/A | Use env vars or config file credentials |
 
 Credential resolution order: **env vars > config file > keyring**. Explicit sources override the implicit default.
+
+For environments without a keyring (Docker, CI), use environment variables or inline credentials in the config file.
 
 See [docs/credentials.md](docs/credentials.md) for keyring service names, multi-NAS setup, and how to inspect/remove stored credentials.
 
@@ -124,9 +159,10 @@ synology-mcp --revert                        # Roll back to previous version
 synology-mcp --revert 0.1.0                  # Roll back to a specific version
 ```
 
-To disable update notifications in Claude Desktop, add to your config:
+To disable update notifications, add to your config (top level):
 
 ```yaml
+# ~/.config/synology-mcp/config.yaml
 check_for_updates: false
 ```
 
@@ -139,27 +175,39 @@ Interactive setup creates a config file for you. For manual configuration or adv
 
 ### Multi-NAS
 
-Each NAS gets its own config file, credentials, and Claude Desktop entry. Set `alias` to give Claude a name to distinguish them:
+Each NAS gets its own config file, credentials, and Claude Desktop entry. The config file name serves as a natural identifier (e.g., `home-nas.yaml`, `media-server.yaml`).
+
+Set `alias` to give Claude a display name for the connection:
 
 ```yaml
+# ~/.config/synology-mcp/home-nas.yaml
 alias: HomeNAS
 ```
 
+The alias appears in the MCP server name (e.g., `synology-HomeNAS`) so Claude knows which NAS it's talking to.
+
 ### Custom Instructions
 
-You can customize the prompt that guides Claude's behavior with your NAS tools.
+Custom instructions let you shape how Claude interacts with your NAS tools. This is useful when:
+
+- **Multiple NAS connections** — tell Claude which connection to prefer for different tasks ("use this for media, use admin for cross-user operations")
+- **Safety guardrails** — add rules like "always confirm before deleting" or "never touch /Backups"
+- **Context** — explain what's on the NAS ("this is a media server, /video has our library sorted by genre")
 
 **Add context** — `custom_instructions` is prepended to the built-in prompt (higher priority):
 
 ```yaml
+# ~/.config/synology-mcp/config.yaml
 custom_instructions: |
   This is the admin NAS with elevated privileges.
   Prefer this connection for file operations requiring cross-user access.
+  Never delete files from /Backups without explicit confirmation.
 ```
 
 **Full control** — `instructions_file` replaces the built-in prompt entirely. Copy the [built-in server.md](src/synology_mcp/instructions/server.md) as a starting point:
 
 ```yaml
+# ~/.config/synology-mcp/config.yaml
 instructions_file: ~/.config/synology-mcp/my-instructions.md
 ```
 
@@ -177,6 +225,7 @@ SYNOLOGY_LOG_LEVEL=debug synology-mcp serve           # env var, works for all c
 Or set it persistently in your config file:
 
 ```yaml
+# ~/.config/synology-mcp/config.yaml
 logging:
   level: debug
   file: ~/.local/state/synology-mcp/nas/server.log  # optional, logs to stderr by default
@@ -184,38 +233,9 @@ logging:
 
 Debug output includes every DSM API request/response (passwords masked), credential resolution steps, config discovery, version negotiation, and module registration decisions.
 
-## Development
+## Contributing
 
-```bash
-git clone https://github.com/cmeans/synology-mcp.git
-cd synology-mcp
-uv sync --extra dev                        # Install dependencies
-uv run ruff check src/ tests/              # Lint
-uv run ruff format --check src/ tests/     # Format check
-uv run mypy src/                           # Type check
-uv run pytest                              # Run unit tests (243 tests, no NAS needed)
-```
-
-### Integration tests
-
-Integration tests run against a real Synology NAS. They verify the full stack — HTTP, auth, and all File Station operations.
-
-```bash
-cp tests/integration_config.yaml.example tests/integration_config.yaml
-# Edit integration_config.yaml with your NAS connection details and test paths
-uv run pytest -m integration -v --log-cli-level=INFO
-```
-
-32 tests covering: connection, listing, search, metadata, copy/move/rename/delete lifecycle, recycle bin, and error handling. See the example config for required fields.
-
-## Design Docs
-
-Detailed specs live in `docs/specs/`. These were the original design documents — the code is authoritative where they diverge (e.g., DSM API version pinning, GET-only requests, and search behavior were discovered during live testing and are documented in `CLAUDE.md`).
-
-- `architecture.md` — layered architecture, auth strategy, session lifecycle
-- `filestation-module-spec.md` — all 12 File Station tools
-- `config-schema-spec.md` — YAML config structure and validation
-- `project-scaffolding-spec.md` — repo structure, CI, testing
+See [DEVELOPMENT.md](DEVELOPMENT.md) for build commands, testing, integration test setup, and design docs.
 
 ## Acknowledgements
 
@@ -227,7 +247,7 @@ Live testing against real hardware revealed behaviors the specs couldn't anticip
 
 ## License
 
-MIT
+[MIT](LICENSE)
 
 ---
 
