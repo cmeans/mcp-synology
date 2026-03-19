@@ -47,8 +47,7 @@ def format_table(
 
     lines.append("  " + format_row(headers))
     lines.append("  " + format_row(["─" * w for w in col_widths]))
-    for row in rows:
-        lines.append("  " + format_row(row))
+    lines.extend("  " + format_row(row) for row in rows)
 
     return "\n".join(lines)
 
@@ -180,7 +179,7 @@ def format_size(size_bytes: int) -> str:
     return f"{size_bytes} B"
 
 
-def format_timestamp(epoch: int | float) -> str:
+def format_timestamp(epoch: float) -> str:
     """Format a Unix epoch timestamp as a human-readable datetime string.
 
     Returns format: YYYY-MM-DD HH:MM:SS

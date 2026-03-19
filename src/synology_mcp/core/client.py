@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Coroutine
-from typing import Any
+from typing import Any, Self
 
 import httpx
 
@@ -71,7 +71,7 @@ class DsmClient:
         """Set callback for transparent re-authentication on session errors."""
         self._re_auth_callback = callback
 
-    async def __aenter__(self) -> DsmClient:
+    async def __aenter__(self) -> Self:
         logger.debug("Opening HTTP client connection to %s", self._base_url)
         # Silence httpx's built-in request logger — it logs full URLs at INFO level,
         # which leaks sensitive query params (passwd, _sid, device_id, otp_code).
@@ -153,7 +153,7 @@ class DsmClient:
             if entry:
                 fmt_tag = f", format={entry.request_format}" if entry.request_format else ""
                 logger.debug(
-                    "  %s: path=%s, v%d–v%d%s",
+                    "  %s: path=%s, v%d-v%d%s",
                     name,
                     entry.path,
                     entry.min_version,
@@ -208,7 +208,7 @@ class DsmClient:
             )
 
         logger.debug(
-            "Negotiated %s: v%d (NAS v%d–v%d, requested v%d–v%s)",
+            "Negotiated %s: v%d (NAS v%d-v%d, requested v%d-v%s)",
             api_name,
             negotiated,
             nas_min,

@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _format_rate(bytes_per_sec: int | float) -> str:
+def _format_rate(bytes_per_sec: float) -> str:
     """Format a transfer rate as human-readable string."""
     return f"{format_size(int(bytes_per_sec))}/s"
 

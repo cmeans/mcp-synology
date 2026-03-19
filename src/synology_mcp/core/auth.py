@@ -114,7 +114,7 @@ class AuthManager:
                 if kr_device and not device_id:
                     device_id = kr_device
                     logger.debug("Device ID from keyring")
-            except Exception:  # noqa: BLE001
+            except Exception:
                 logger.debug("Keyring not available.")
 
         if not username or not password:

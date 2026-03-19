@@ -31,7 +31,7 @@ async def _stop_background_task(
         await client.request(api, "stop", version=version, params={"taskid": taskid})
     except SynologyError as e:
         task_logger.warning("%s task cleanup failed for %s: %s", api, taskid, e)
-    except Exception:  # noqa: BLE001
+    except Exception:
         task_logger.warning("%s task cleanup failed for %s", api, taskid, exc_info=True)
 
 
@@ -253,18 +253,14 @@ async def _copy_move(
     processed_size = status.get("processed_size", 0)
     verb = "Copied" if not remove_src else "Moved"
     lines = [format_status(f"{verb} {len(normalized)} item(s) to {dest}/:")]
-    for p in normalized:
-        name = p.split("/")[-1]
-        lines.append(f"  {name}")
+    lines.extend(f"  {p.split('/')[-1]}" for p in normalized)
 
     if processed_size > 0:
         lines.append(f"\nTotal size: {format_size(processed_size)}")
 
     if remove_src:
-        # Extract source directories
-        src_dirs = {"/".join(p.split("/")[:-1]) for p in normalized}
-        for d in sorted(src_dirs):
-            lines.append(f"\nSource files have been removed from {d}/.")
+        src_dirs = sorted({"/".join(p.split("/")[:-1]) for p in normalized})
+        lines.extend(f"\nSource files have been removed from {d}/." for d in src_dirs)
 
     return "\n".join(lines)
 
@@ -375,21 +371,17 @@ async def delete_files(
     verb = "Deleted" if has_recycle else "Permanently deleted"
 
     lines = [format_status(f"{verb} {len(normalized)} item(s):")]
-    for p in normalized:
-        lines.append(f"  {p}")
+    lines.extend(f"  {p}" for p in normalized)
 
-    if shares_with_recycle:
-        for share in sorted(shares_with_recycle):
-            lines.append(
-                f"\nRecycle bin is enabled on /{share} \u2014 "
-                f"files can be recovered with list_recycle_bin and restore_from_recycle_bin."
-            )
-    if shares_without_recycle:
-        for share in sorted(shares_without_recycle):
-            lines.append(
-                f"\n\u26a0 Recycle bin is NOT enabled on /{share} \u2014 "
-                f"these files cannot be recovered."
-            )
+    lines.extend(
+        f"\nRecycle bin is enabled on /{share} \u2014 "
+        f"files can be recovered with list_recycle_bin and restore_from_recycle_bin."
+        for share in sorted(shares_with_recycle)
+    )
+    lines.extend(
+        f"\n\u26a0 Recycle bin is NOT enabled on /{share} \u2014 these files cannot be recovered."
+        for share in sorted(shares_without_recycle)
+    )
 
     return "\n".join(lines)
 

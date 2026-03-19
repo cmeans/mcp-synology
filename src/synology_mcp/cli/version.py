@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json as json_mod
 import subprocess
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.request import Request, urlopen
@@ -36,7 +36,7 @@ def _get_latest_pypi_version() -> str | None:
             f"https://pypi.org/pypi/{_PYPI_PACKAGE}/json",
             headers={"User-Agent": f"{_PYPI_PACKAGE}/{_get_current_version()}"},
         )
-        with urlopen(req, timeout=5) as resp:  # noqa: S310
+        with urlopen(req, timeout=5) as resp:
             data = json_mod.loads(resp.read())
         result: str = data["info"]["version"]
         return result
@@ -85,7 +85,7 @@ def _save_global_state(state: dict[str, Any]) -> None:
 
 def _check_for_update(state: dict[str, Any], *, force: bool = False) -> str | None:
     """Check PyPI for a newer version. Returns latest version string if newer, else None."""
-    now = datetime.now().timestamp()
+    now = datetime.now(tz=UTC).timestamp()
     if not force:
         last = state.get("last_version_check")
         if last:
@@ -101,7 +101,7 @@ def _check_for_update(state: dict[str, Any], *, force: bool = False) -> str | No
                 pass
 
     latest = _get_latest_pypi_version()
-    state["last_version_check"] = datetime.now().isoformat()
+    state["last_version_check"] = datetime.now(tz=UTC).isoformat()
     if not latest:
         return None
 
@@ -130,7 +130,7 @@ def _do_auto_upgrade(state: dict[str, Any]) -> bool:
         return False
 
     click.echo(f"Upgrading {_PYPI_PACKAGE} via {installer}...")
-    result = subprocess.run(cmd, capture_output=True, text=True)  # noqa: S603
+    result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode == 0:
         state["previous_version"] = current
         _save_global_state(state)
@@ -174,7 +174,7 @@ def _do_revert(target_version: str | None = None) -> None:
         return
 
     click.echo(f"Reverting from {current} to {prev}...")
-    result = subprocess.run(cmd, capture_output=True, text=True)  # noqa: S603
+    result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode == 0:
         state["previous_version"] = None
         state["auto_upgrade"] = False

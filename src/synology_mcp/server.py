@@ -79,7 +79,7 @@ class SharedClientManager:
 
             # Check for updates in background — never blocks tool execution
             if self._config.check_for_updates:
-                asyncio.create_task(self._bg_update_check())
+                self._bg_task = asyncio.create_task(self._bg_update_check())
 
         if self._client is None:
             raise RuntimeError("Client initialization failed")
@@ -115,12 +115,12 @@ class SharedClientManager:
                     await self._auth.logout()
                 if self._client is not None:
                     await self._client.__aexit__(None, None, None)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass  # Best effort — process is exiting
 
         try:
             loop = asyncio.get_running_loop()
-            loop.create_task(_logout())
+            self._cleanup_task = loop.create_task(_logout())
         except RuntimeError:
             # No running loop — create one for cleanup
             asyncio.run(_logout())

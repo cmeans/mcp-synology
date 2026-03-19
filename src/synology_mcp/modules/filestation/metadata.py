@@ -34,7 +34,7 @@ async def _stop_dirsize_task(client: DsmClient, taskid: str) -> None:
         )
     except SynologyError as e:
         logger.warning("DirSize task cleanup failed for %s: %s", taskid, e)
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.warning("DirSize task cleanup failed for %s", taskid, exc_info=True)
 
 

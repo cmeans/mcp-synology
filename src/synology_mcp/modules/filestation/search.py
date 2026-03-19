@@ -32,7 +32,7 @@ async def _cleanup_search_task(
             )
         except SynologyError as e:
             logger.warning("Search task cleanup (%s) failed for %s: %s", method, taskid, e)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.warning("Search task cleanup (%s) failed for %s", method, taskid, exc_info=True)
 
 
