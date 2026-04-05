@@ -1,5 +1,5 @@
 # Minimal config — just host + one module.
-# Credentials come from the keyring (populated by `synology-mcp setup`).
+# Credentials come from the keyring (populated by `mcp-synology setup`).
 schema_version: 1
 
 connection:

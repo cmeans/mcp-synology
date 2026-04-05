@@ -4,9 +4,9 @@
 # Credentials are resolved via the standard chain:
 #   1. Environment variables: SYNOLOGY_USERNAME, SYNOLOGY_PASSWORD, SYNOLOGY_DEVICE_ID
 #   2. Config file auth section (below)
-#   3. OS keyring (set by 'synology-mcp setup')
+#   3. OS keyring (set by 'mcp-synology setup')
 #
-# For 2FA NAS, run 'synology-mcp setup' first to store the device token in keyring.
+# For 2FA NAS, run 'mcp-synology setup' first to store the device token in keyring.
 
 schema_version: 1
 
@@ -36,5 +36,5 @@ modules:
 #   writable_folder: /home/Test     # A folder where tests can create/copy/delete files
 
 # Optional: path to a config using an admin account (for resource utilization tests).
-# The admin account must be set up via 'synology-mcp setup --config <path>'.
-# admin_config: ~/.config/synology-mcp/admin.yaml
+# The admin account must be set up via 'mcp-synology setup --config <path>'.
+# admin_config: ~/.config/mcp-synology/admin.yaml

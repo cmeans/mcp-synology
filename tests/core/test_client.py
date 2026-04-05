@@ -6,14 +6,14 @@ import httpx
 import pytest
 import respx
 
-from synology_mcp.core.client import DsmClient
-from synology_mcp.core.errors import (
+from mcp_synology.core.client import DsmClient
+from mcp_synology.core.errors import (
     ApiNotFoundError,
     PathNotFoundError,
     SessionExpiredError,
     SynologyError,
 )
-from synology_mcp.core.state import ApiInfoEntry
+from mcp_synology.core.state import ApiInfoEntry
 
 BASE_URL = "http://nas:5000"
 

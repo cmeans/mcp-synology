@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 import httpx
 import respx
 
-from synology_mcp.modules.filestation.operations import (
+from mcp_synology.modules.filestation.operations import (
     copy_files,
     create_folder,
     delete_files,
@@ -18,7 +18,7 @@ from synology_mcp.modules.filestation.operations import (
 from tests.conftest import BASE_URL
 
 if TYPE_CHECKING:
-    from synology_mcp.core.client import DsmClient
+    from mcp_synology.core.client import DsmClient
 
 
 def _async_task_side_effect(

@@ -10,11 +10,11 @@ import httpx
 import pytest
 import respx
 
-from synology_mcp.core.auth import AuthManager
-from synology_mcp.core.client import DsmClient
-from synology_mcp.core.config import AppConfig
-from synology_mcp.core.errors import AuthenticationError
-from synology_mcp.core.state import ApiInfoEntry
+from mcp_synology.core.auth import AuthManager
+from mcp_synology.core.client import DsmClient
+from mcp_synology.core.config import AppConfig
+from mcp_synology.core.errors import AuthenticationError
+from mcp_synology.core.state import ApiInfoEntry
 
 BASE_URL = "http://nas:5000"
 
@@ -73,7 +73,7 @@ class TestCredentialResolution:
 
         with (
             patch.dict(os.environ, _clean_env(), clear=True),
-            patch("synology_mcp.core.auth.kr", _no_keyring()),
+            patch("mcp_synology.core.auth.kr", _no_keyring()),
         ):
             username, password, device_id = auth._resolve_credentials()
 
@@ -94,7 +94,7 @@ class TestCredentialResolution:
         }
         with (
             patch.dict(os.environ, env, clear=True),
-            patch("synology_mcp.core.auth.kr", _no_keyring()),
+            patch("mcp_synology.core.auth.kr", _no_keyring()),
         ):
             username, password, device_id = auth._resolve_credentials()
 
@@ -110,7 +110,7 @@ class TestCredentialResolution:
         with (
             patch.dict(os.environ, _clean_env(), clear=True),
             patch(
-                "synology_mcp.core.auth.kr",
+                "mcp_synology.core.auth.kr",
                 _keyring_with("kr_user", "kr_pass", "kr_device"),
             ),
         ):
@@ -127,7 +127,7 @@ class TestCredentialResolution:
 
         with (
             patch.dict(os.environ, _clean_env(), clear=True),
-            patch("synology_mcp.core.auth.kr", _no_keyring()),
+            patch("mcp_synology.core.auth.kr", _no_keyring()),
             pytest.raises(AuthenticationError, match="No credentials"),
         ):
             auth._resolve_credentials()
@@ -145,7 +145,7 @@ class TestLogin:
             auth = AuthManager(config, client)
             with (
                 patch.dict(os.environ, _clean_env(), clear=True),
-                patch("synology_mcp.core.auth.kr", _no_keyring()),
+                patch("mcp_synology.core.auth.kr", _no_keyring()),
             ):
                 sid = await auth.login()
 
@@ -164,7 +164,7 @@ class TestLogin:
             auth = AuthManager(config, client)
             with (
                 patch.dict(os.environ, _clean_env(), clear=True),
-                patch("synology_mcp.core.auth.kr", _no_keyring()),
+                patch("mcp_synology.core.auth.kr", _no_keyring()),
             ):
                 sid = await auth.login()
 
@@ -183,7 +183,7 @@ class TestLogin:
             auth = AuthManager(config, client)
             with (
                 patch.dict(os.environ, _clean_env(), clear=True),
-                patch("synology_mcp.core.auth.kr", _no_keyring()),
+                patch("mcp_synology.core.auth.kr", _no_keyring()),
                 pytest.raises(AuthenticationError, match="2FA"),
             ):
                 await auth.login()
@@ -213,7 +213,7 @@ class TestReAuth:
 
             with (
                 patch.dict(os.environ, _clean_env(), clear=True),
-                patch("synology_mcp.core.auth.kr", _no_keyring()),
+                patch("mcp_synology.core.auth.kr", _no_keyring()),
             ):
                 data = await client.request("SYNO.FileStation.List", "list_share", version=2)
         assert "shares" in data
@@ -237,7 +237,7 @@ class TestReAuth:
             auth = AuthManager(config, client)
             with (
                 patch.dict(os.environ, _clean_env(), clear=True),
-                patch("synology_mcp.core.auth.kr", _no_keyring()),
+                patch("mcp_synology.core.auth.kr", _no_keyring()),
             ):
                 sid = await auth.get_session()
         assert sid == "fresh-sid"
@@ -260,7 +260,7 @@ class TestCredentialPriority:
         with (
             patch.dict(os.environ, env, clear=True),
             patch(
-                "synology_mcp.core.auth.kr",
+                "mcp_synology.core.auth.kr",
                 _keyring_with("kr_user", "kr_pass"),
             ),
         ):
@@ -278,7 +278,7 @@ class TestCredentialPriority:
         with (
             patch.dict(os.environ, _clean_env(), clear=True),
             patch(
-                "synology_mcp.core.auth.kr",
+                "mcp_synology.core.auth.kr",
                 _keyring_with("kr_user", "kr_pass"),
             ),
         ):
@@ -300,7 +300,7 @@ class TestCredentialPriority:
         }
         with (
             patch.dict(os.environ, env, clear=True),
-            patch("synology_mcp.core.auth.kr", _no_keyring()),
+            patch("mcp_synology.core.auth.kr", _no_keyring()),
         ):
             username, password, device_id = auth._resolve_credentials()
 
@@ -320,7 +320,7 @@ class TestCredentialPriority:
         with (
             patch.dict(os.environ, env, clear=True),
             patch(
-                "synology_mcp.core.auth.kr",
+                "mcp_synology.core.auth.kr",
                 _keyring_with("kr_user", "kr_pass"),
             ),
         ):
@@ -339,7 +339,7 @@ class TestCredentialPriority:
         with (
             patch.dict(os.environ, env, clear=True),
             patch(
-                "synology_mcp.core.auth.kr",
+                "mcp_synology.core.auth.kr",
                 _keyring_with(device_id="kr_device"),
             ),
         ):
@@ -363,7 +363,7 @@ class TestDbusAutoDetect:
 
         with (
             patch.dict(os.environ, clean, clear=True),
-            patch("synology_mcp.core.auth.kr", _keyring_with("user", "pass")),
+            patch("mcp_synology.core.auth.kr", _keyring_with("user", "pass")),
             patch("sys.platform", "linux"),
             patch("pathlib.Path.exists", return_value=True),
             patch("os.getuid", return_value=1000),
@@ -384,7 +384,7 @@ class TestDbusAutoDetect:
 
         with (
             patch.dict(os.environ, clean, clear=True),
-            patch("synology_mcp.core.auth.kr", _no_keyring()),
+            patch("mcp_synology.core.auth.kr", _no_keyring()),
             patch("sys.platform", "darwin"),
         ):
             username, password, _ = auth._resolve_credentials()
@@ -397,6 +397,6 @@ class TestSessionNaming:
         config = _make_config(instance_id="test-nas")
         client = _make_client()
         auth = AuthManager(config, client)
-        assert auth._session_name.startswith("SynologyMCP_test-nas_")
+        assert auth._session_name.startswith("MCPSynology_test-nas_")
         uuid_part = auth._session_name.split("_")[-1]
         assert len(uuid_part) == 8

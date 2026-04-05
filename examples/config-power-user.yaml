@@ -15,7 +15,7 @@ alias: HomeNAS
 # Full replacement for the built-in server instructions.
 # Copy the built-in server.md as a starting point, customize it,
 # and point to your version. Same template variables are supported.
-# instructions_file: ~/.config/synology-mcp/my-instructions.md
+# instructions_file: ~/.config/mcp-synology/my-instructions.md
 
 connection:
   host: nas.local
@@ -30,9 +30,13 @@ modules:
     settings:
       file_type_indicator: text
       async_timeout: 180
+      upload_timeout: 600
+      download_timeout: 600
+      default_download_dir: ~/Downloads
+      default_upload_dir: /home/uploads
   system:
     enabled: true  # CPU, memory, temperature, uptime (resource usage requires admin)
 
 logging:
   level: debug
-  file: ~/.local/state/synology-mcp/nas-primary/server.log
+  file: ~/.local/state/mcp-synology/nas-primary/server.log

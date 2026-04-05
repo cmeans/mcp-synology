@@ -4,18 +4,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-synology-mcp is an MCP server for Synology NAS devices. It exposes Synology DSM API functionality as MCP tools that Claude can use. Modular, secure (2FA-ready), permission-tiered. Python 3.11+, async throughout, MIT licensed.
+mcp-synology is an MCP server for Synology NAS devices. It exposes Synology DSM API functionality as MCP tools that Claude can use. Modular, secure (2FA-ready), permission-tiered. Python 3.11+, async throughout, Apache 2.0 licensed.
 
-**Current status:** v0.3.x — File Station (12 tools) + System monitoring (2 tools), CLI, integration tests.
+**Current status:** v0.4.x — File Station (12 tools) + System monitoring (2 tools), CLI, integration tests.
 
 ## Architecture
 
 Layered design: core → modules → server/CLI.
 
-- **Core** (`src/synology_mcp/core/`): DSM API client (async httpx), auth manager (session lifecycle, 2FA, keyring), YAML+Pydantic config loader, shared response formatters, typed exception hierarchy
-- **Modules** (`src/synology_mcp/modules/`): Feature-specific tool handlers. Each module declares `MODULE_INFO` with API requirements and tool metadata. File Station (12 tools: 6 READ + 6 WRITE), System (2 tools: get_system_info, get_resource_usage)
-- **Server** (`src/synology_mcp/server.py`): FastMCP initialization, module loading, startup
-- **CLI** (`src/synology_mcp/cli/`): click-based package with `serve`, `setup`, `check` subcommands
+- **Core** (`src/mcp_synology/core/`): DSM API client (async httpx), auth manager (session lifecycle, 2FA, keyring), YAML+Pydantic config loader, shared response formatters, typed exception hierarchy
+- **Modules** (`src/mcp_synology/modules/`): Feature-specific tool handlers. Each module declares `MODULE_INFO` with API requirements and tool metadata. File Station (12 tools: 6 READ + 6 WRITE), System (2 tools: get_system_info, get_resource_usage)
+- **Server** (`src/mcp_synology/server.py`): FastMCP initialization, module loading, startup
+- **CLI** (`src/mcp_synology/cli/`): click-based package with `serve`, `setup`, `check` subcommands
 
 Modules are domain-split: `listing.py`, `search.py`, `metadata.py`, `operations.py`, `helpers.py` — grouped by what they do, not permission tier.
 
@@ -40,7 +40,7 @@ uv run pytest                              # Run unit + module tests
 uv run pytest tests/modules/filestation/test_listing.py  # Single test file
 uv run pytest -k "test_list_shares"        # Single test by name
 uv run pytest -m integration               # Integration tests (requires real NAS)
-uv run pytest --cov=synology_mcp           # Tests with coverage
+uv run pytest --cov=mcp_synology           # Tests with coverage
 ```
 
 ## Key Conventions
@@ -71,7 +71,7 @@ uv run pytest --cov=synology_mcp           # Tests with coverage
 - **DEBUG**: detailed operational trace — every DSM request/response (passwords masked), credential resolution steps, config discovery, version negotiation, API cache contents, session lifecycle, module registration
 - **INFO**: significant lifecycle events only — successful auth, re-auth, security config notes
 - **WARNING/ERROR**: configuration issues, failures
-- Three ways to enable debug: `synology-mcp check -v` (flag), `SYNOLOGY_LOG_LEVEL=debug` (env var), `logging.level: debug` (config)
+- Three ways to enable debug: `mcp-synology check -v` (flag), `SYNOLOGY_LOG_LEVEL=debug` (env var), `logging.level: debug` (config)
 - The `setup` and `check` commands accept `-v`/`--verbose`; `serve` uses config/env var (no interactive flag since it's launched by Claude Desktop)
 - Logging is initialized *before* config loading so config discovery is visible at debug level
 
@@ -85,7 +85,7 @@ uv run pytest --cov=synology_mcp           # Tests with coverage
 ### Auth
 - Strategy chain auto-detects 2FA vs non-2FA on login attempt
 - Credential lookup: keyring → env vars → config file (last resort, plaintext warning)
-- DSM session name format: `SynologyMCP_{instance_id}_{unique_id}`
+- DSM session name format: `MCPSynology_{instance_id}_{unique_id}`
 - Lazy keepalive (re-auth on next request, no proactive pings)
 
 ### DSM API Client
@@ -97,7 +97,7 @@ uv run pytest --cov=synology_mcp           # Tests with coverage
 
 ### Config
 - Config is read-only from the server's perspective — never write to it
-- Runtime state goes in `~/.local/state/synology-mcp/{instance_id}/state.yaml`
+- Runtime state goes in `~/.local/state/mcp-synology/{instance_id}/state.yaml`
 - Strict validation at top level (unknown keys = error), lenient within module settings (unknown keys = warning)
 - Two-phase loading: parse YAML → merge env var overrides → apply defaults → validate with Pydantic
 
