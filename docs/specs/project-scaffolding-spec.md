@@ -52,7 +52,7 @@ mcp-synology/
 ├── docs/
 │   └── specs/
 │       ├── architecture.md          # Layered architecture, auth, session lifecycle
-│       ├── filestation-module.md     # File Station tool specs (12 tools)
+│       ├── filestation-module.md     # File Station tool specs (14 tools)
 │       └── config-schema.md         # YAML config structure, validation rules
 │
 ├── examples/
@@ -419,7 +419,7 @@ MCP server for Synology NAS devices. Layered architecture:
 ## Architecture & Design Docs
 Design decisions and tool specifications live in `docs/specs/`:
 - `architecture.md` — layered architecture, auth strategy chain, session lifecycle
-- `filestation-module.md` — all 12 File Station tools with parameters and response shapes
+- `filestation-module.md` — all 14 File Station tools with parameters and response shapes
 - `config-schema.md` — YAML config structure, validation rules, env var overrides
 
 **Read the relevant spec before implementing.** These docs record design decisions

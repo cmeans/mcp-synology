@@ -132,8 +132,8 @@ async def download_file(
         files = info.get("files", [])
         if files:
             nas_file_size = files[0].get("additional", {}).get("size", 0)
-    except Exception:  # noqa: BLE001
-        pass  # Best-effort — download will catch disk space issues via Content-Length
+    except Exception as e:  # noqa: BLE001
+        logger.debug("Pre-flight getinfo failed: %s", e)
 
     if nas_file_size:
         free_space = shutil.disk_usage(local_dir).free
