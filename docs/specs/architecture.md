@@ -24,7 +24,7 @@
 
 ## Layered Architecture
 
-### Layer 1 — Core (`synology_mcp/core/`)
+### Layer 1 — Core (`mcp_synology/core/`)
 
 Shared infrastructure used by all modules.
 
@@ -94,7 +94,7 @@ Modules use these by default. They can compose them (e.g., a file move returns `
 
 **Rationale:** Consistent formatting means the LLM learns response patterns quickly and is less prone to parsing errors. Doesn't preclude the LLM or downstream tools from reformatting further.
 
-### Layer 2 — Modules (`synology_mcp/modules/`)
+### Layer 2 — Modules (`mcp_synology/modules/`)
 
 Each module is a Python package (directory with `__init__.py`) corresponding to a DSM service.
 
@@ -160,7 +160,7 @@ class VersionedHandler:
 - Multi-version is opt-in per handler for broader NAS compatibility
 - The lower you go in version support, the wider the installed base you can serve
 
-### Layer 3 — Server (`synology_mcp/server.py`)
+### Layer 3 — Server (`mcp_synology/server.py`)
 
 Top-level MCP server entry point.
 
@@ -217,10 +217,10 @@ Users with multiple NAS devices configure multiple MCP server entries in their c
 # Claude Desktop config
 "synology-primary":
     command: uvx
-    args: [synology-mcp, --config, ~/.config/synology-mcp/primary.yaml]
+    args: [mcp-synology, --config, ~/.config/mcp-synology/primary.yaml]
 "synology-backup":
     command: uvx
-    args: [synology-mcp, --config, ~/.config/synology-mcp/backup.yaml]
+    args: [mcp-synology, --config, ~/.config/mcp-synology/backup.yaml]
 ```
 
 The LLM distinguishes them by server name. Each instance validates independently against its target NAS.
@@ -263,7 +263,7 @@ All three secrets (including device_id) are stored in the keyring when available
 **Service name convention for keyring:**
 
 ```
-Service: synology-mcp/{instance_id}
+Service: mcp-synology/{instance_id}
 Accounts: username, password, device_id
 ```
 
@@ -271,7 +271,7 @@ Accounts: username, password, device_id
 
 Non-sensitive server-managed runtime state is stored in a separate state file (not in the YAML config):
 
-- **Location:** `~/.local/state/synology-mcp/{instance_id}/state.yaml` (or alongside the config file)
+- **Location:** `~/.local/state/mcp-synology/{instance_id}/state.yaml` (or alongside the config file)
 - **Contents:** SYNO.API.Info cache (API name → path/version map), last successful connection timestamp, negotiated API versions
 - **Not stored here:** credentials, device tokens, session IDs (these go in the keyring or are ephemeral)
 
@@ -283,7 +283,7 @@ Non-sensitive server-managed runtime state is stored in a separate state file (n
 
 DSM supports multiple concurrent named sessions per account via the `session` parameter on `SYNO.API.Auth`. Different station APIs use different session names (e.g., `FileStation`, `DownloadStation`). Sessions with different names coexist without conflict; sessions with the *same* name on the same account will displace each other (error 107).
 
-**Session name format:** `SynologyMCP_{instance_id}_{unique_id}`
+**Session name format:** `MCPSynology_{instance_id}_{unique_id}`
 
 - `instance_id`: from the config file, differentiates multiple NAS targets
 - `unique_id`: generated at process startup (short UUID), prevents collision with stale sessions from previous runs that didn't cleanly logout
@@ -323,14 +323,14 @@ sid = await auth_manager.get_session()
 sid = await auth_manager.get_session(session_key=ctx.session_id)
 ```
 
-The DSM session name becomes `SynologyMCP_{instance_id}_{mcp_session_id}`, giving each connecting client its own isolated DSM session.
+The DSM session name becomes `MCPSynology_{instance_id}_{mcp_session_id}`, giving each connecting client its own isolated DSM session.
 
 ### Setup / Bootstrap Flow
 
 A separate CLI command handles interactive first-run setup, including the 2FA device token exchange:
 
 ```
-$ synology-mcp setup --config ~/.config/synology-mcp/primary.yaml
+$ mcp-synology setup --config ~/.config/mcp-synology/primary.yaml
 ```
 
 **Setup sequence:**
@@ -338,7 +338,7 @@ $ synology-mcp setup --config ~/.config/synology-mcp/primary.yaml
 2. Prompt for username and password interactively (or read from env vars if pre-set)
 3. Attempt login to the NAS
 4. If error 403 (2FA required): prompt for OTP code from the user's authenticator app
-5. Login with otp_code + `enable_device_token=yes` + `device_name=SynologyMCP`
+5. Login with otp_code + `enable_device_token=yes` + `device_name=MCPSynology`
 6. Store username, password, and returned device_id in the keyring (or fallback storage)
 7. Perform a validation login using the stored credentials (mimicking server startup)
 8. Confirm success; log out the setup session
@@ -351,11 +351,11 @@ $ synology-mcp setup --config ~/.config/synology-mcp/primary.yaml
 
 **Additional CLI commands:**
 
-- `synology-mcp serve` — normal MCP server mode (launched by Claude Desktop)
-- `synology-mcp setup` — interactive credential setup and 2FA bootstrap
-- `synology-mcp check` — validate stored credentials can authenticate (for debugging, does not start the server)
+- `mcp-synology serve` — normal MCP server mode (launched by Claude Desktop)
+- `mcp-synology setup` — interactive credential setup and 2FA bootstrap
+- `mcp-synology check` — validate stored credentials can authenticate (for debugging, does not start the server)
 
-**Documentation flow:** install → create config with host/port → run `synology-mcp setup` → add server entry to Claude Desktop config → restart Claude Desktop.
+**Documentation flow:** install → create config with host/port → run `mcp-synology setup` → add server entry to Claude Desktop config → restart Claude Desktop.
 
 #### Future: In-Chat Bootstrap via MCP Elicitation
 
@@ -375,7 +375,7 @@ Documentation should strongly recommend:
 
 ### Approach
 
-Every module uses `logging.getLogger(__name__)` so log output includes the full module path (e.g., `synology_mcp.core.client`, `synology_mcp.core.auth`). This makes it easy to trace log messages to their source file during debugging.
+Every module uses `logging.getLogger(__name__)` so log output includes the full module path (e.g., `mcp_synology.core.client`, `mcp_synology.core.auth`). This makes it easy to trace log messages to their source file during debugging.
 
 ### Log Level Guidelines
 

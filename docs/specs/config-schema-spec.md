@@ -1,11 +1,11 @@
 # Config Schema — YAML Structure
 
 > **Version:** 0.2 | **Updated:** 2026-03-16T22:30Z — Resolved all open items: env-var-only config (Option B), schema_version field, hybrid module settings validation.
-> **Parent doc:** `synology-mcp-architecture.md` v0.3
+> **Parent doc:** `mcp-synology-architecture.md` v0.3
 
 ## Overview
 
-The config file is the single user-edited input to the synology-mcp server. It is **never modified by the server** — runtime state goes in a separate state file. The config's job is to answer three questions:
+The config file is the single user-edited input to the mcp-synology server. It is **never modified by the server** — runtime state goes in a separate state file. The config's job is to answer three questions:
 
 1. **Where is the NAS?** (connection details)
 2. **What modules should be active, and with what permissions?** (module config)
@@ -15,10 +15,10 @@ The config file is the single user-edited input to the synology-mcp server. It i
 
 ## Minimal Config (Quick Start)
 
-The smallest useful config file. The `synology-mcp setup` CLI fills in credentials via the keyring, so they don't appear here:
+The smallest useful config file. The `mcp-synology setup` CLI fills in credentials via the keyring, so they don't appear here:
 
 ```yaml
-# ~/.config/synology-mcp/config.yaml
+# ~/.config/mcp-synology/config.yaml
 schema_version: 1
 
 connection:
@@ -34,15 +34,15 @@ That's it. Everything else has sensible defaults:
 - HTTPS defaults to `false` (most home LANs use HTTP internally)
 - Instance ID auto-generated from hostname if not specified
 - Permission tier defaults to `read`
-- Credentials come from the keyring (populated by `synology-mcp setup`)
+- Credentials come from the keyring (populated by `mcp-synology setup`)
 
 ---
 
 ## Full Config (Annotated Reference)
 
 ```yaml
-# synology-mcp configuration
-# Docs: https://github.com/cmeans/synology-mcp#configuration
+# mcp-synology configuration
+# Docs: https://github.com/cmeans/mcp-synology#configuration
 
 # ─── Schema Version ──────────────────────────────────────────────
 # Required. Identifies the config format version so the server can
@@ -52,9 +52,9 @@ schema_version: 1
 
 # ─── Instance Identity ───────────────────────────────────────────
 # Unique identifier for this server instance. Used for:
-#   - Keyring namespacing (synology-mcp/{instance_id})
-#   - DSM session naming (SynologyMCP_{instance_id}_{uuid})
-#   - State file location (~/.local/state/synology-mcp/{instance_id}/)
+#   - Keyring namespacing (mcp-synology/{instance_id})
+#   - DSM session naming (MCPSynology_{instance_id}_{uuid})
+#   - State file location (~/.local/state/mcp-synology/{instance_id}/)
 #   - Claude Desktop server name differentiation (multi-NAS setups)
 #
 # Default: derived from connection.host (sanitized to alphanumeric + hyphens)
@@ -89,12 +89,12 @@ connection:
 
 # ─── Authentication ──────────────────────────────────────────────
 # Credentials are resolved in this order:
-#   1. OS keyring (preferred — populated by `synology-mcp setup`)
+#   1. OS keyring (preferred — populated by `mcp-synology setup`)
 #   2. Environment variables: SYNOLOGY_USERNAME, SYNOLOGY_PASSWORD,
 #      SYNOLOGY_DEVICE_ID
 #   3. Values in this section (⚠ plaintext on disk — testing only)
 #
-# For production use, run `synology-mcp setup` and leave this
+# For production use, run `mcp-synology setup` and leave this
 # section empty or omitted entirely.
 auth:
   # ⚠ INSECURE: Plaintext credentials. Use keyring or env vars instead.
@@ -160,7 +160,7 @@ logging:
   # Useful for debugging when the server is launched by Claude Desktop
   # (where stderr may not be visible).
   # Default: null (stderr only)
-  # file: ~/.local/state/synology-mcp/primary/server.log
+  # file: ~/.local/state/mcp-synology/primary/server.log
 ```
 
 ---
@@ -231,7 +231,7 @@ Each key is a module name (e.g., `filestation`, `docker`, `system_info`). The va
 - `warning` — configuration issues (unknown modules, deprecated settings).
 - `error` — failures that prevent operation.
 
-All modules use `logging.getLogger(__name__)` so log output includes the full module path (e.g., `synology_mcp.core.client`), making it easy to trace messages to source.
+All modules use `logging.getLogger(__name__)` so log output includes the full module path (e.g., `mcp_synology.core.client`), making it easy to trace messages to source.
 
 ---
 
@@ -294,11 +294,11 @@ Certain config values can be overridden by environment variables. This supports 
 
 The server finds its config file in this order:
 
-1. **Explicit `--config` flag:** `synology-mcp serve --config /path/to/config.yaml`
-2. **Environment variable:** `SYNOLOGY_MCP_CONFIG=/path/to/config.yaml`
+1. **Explicit `--config` flag:** `mcp-synology serve --config /path/to/config.yaml`
+2. **Environment variable:** `MCP_SYNOLOGY_CONFIG=/path/to/config.yaml`
 3. **Default locations** (first found wins):
-   - `~/.config/synology-mcp/config.yaml`
-   - `./synology-mcp.yaml` (current directory)
+   - `~/.config/mcp-synology/config.yaml`
+   - `./mcp-synology.yaml` (current directory)
 
 For multi-NAS setups, users must use the `--config` flag to specify which config to load:
 
@@ -308,11 +308,11 @@ For multi-NAS setups, users must use the `--config` flag to specify which config
   "mcpServers": {
     "synology-primary": {
       "command": "uvx",
-      "args": ["synology-mcp", "serve", "--config", "~/.config/synology-mcp/primary.yaml"]
+      "args": ["mcp-synology", "serve", "--config", "~/.config/mcp-synology/primary.yaml"]
     },
     "synology-backup": {
       "command": "uvx",
-      "args": ["synology-mcp", "serve", "--config", "~/.config/synology-mcp/backup.yaml"]
+      "args": ["mcp-synology", "serve", "--config", "~/.config/mcp-synology/backup.yaml"]
     }
   }
 }
@@ -324,12 +324,12 @@ For multi-NAS setups, users must use the `--config` flag to specify which config
 
 Separate from the config. Server-managed, never user-edited.
 
-**Location:** `~/.local/state/synology-mcp/{instance_id}/state.yaml`
+**Location:** `~/.local/state/mcp-synology/{instance_id}/state.yaml`
 
 **Contents:**
 
 ```yaml
-# Auto-generated by synology-mcp. Do not edit.
+# Auto-generated by mcp-synology. Do not edit.
 api_info_cache:
   SYNO.API.Auth:
     path: entry.cgi
@@ -414,7 +414,7 @@ modules:
 
 logging:
   level: debug
-  file: ~/.local/state/synology-mcp/nas-primary/server.log
+  file: ~/.local/state/mcp-synology/nas-primary/server.log
 ```
 
 ### Docker Deployment — All Config via Environment
@@ -455,7 +455,7 @@ Unknown top-level keys are errors (catches typos like `conection` or `moduels`).
 
 **Decision: The server never writes to the config file.**
 
-All server-managed state goes in the state file. This means `synology-mcp setup` writes credentials to the keyring, not to the config file. The config file remains exactly as the user authored it.
+All server-managed state goes in the state file. This means `mcp-synology setup` writes credentials to the keyring, not to the config file. The config file remains exactly as the user authored it.
 
 ### 3. YAML Variable Interpolation
 
@@ -481,7 +481,7 @@ This means Docker deployments can use a minimal config file that contains only `
 
 The server checks `schema_version` before attempting to parse the rest of the config. This enables:
 - Clear error messages when a user's config is from an older/newer schema version
-- Automated migration guidance ("your config is schema_version 1, this version of synology-mcp expects schema_version 2 — here's what changed")
+- Automated migration guidance ("your config is schema_version 1, this version of mcp-synology expects schema_version 2 — here's what changed")
 - The ability to make breaking config changes without silent failures
 
 Current schema version: `1`. The version increments only on breaking changes to the config structure, not on additive changes (new optional keys are backward-compatible).

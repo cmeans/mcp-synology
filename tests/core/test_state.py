@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from synology_mcp.core.state import ApiInfoEntry, ServerState, load_state, save_state
+from mcp_synology.core.state import ApiInfoEntry, ServerState, load_state, save_state
 
 
 class TestServerState:
@@ -32,7 +32,7 @@ class TestServerState:
         )
 
         # Use tmp_path for home directory to avoid polluting real filesystem
-        with patch("synology_mcp.core.state.Path.home", return_value=tmp_path):
+        with patch("mcp_synology.core.state.Path.home", return_value=tmp_path):
             save_state(instance_id, state)
             loaded = load_state(instance_id)
 

@@ -21,21 +21,22 @@ from typing import Any
 import pytest
 import yaml
 
-from synology_mcp.core.auth import AuthManager
-from synology_mcp.core.client import DsmClient
-from synology_mcp.core.config import AppConfig
-from synology_mcp.modules.filestation.listing import list_files, list_recycle_bin, list_shares
-from synology_mcp.modules.filestation.metadata import get_dir_size, get_file_info
-from synology_mcp.modules.filestation.operations import (
+from mcp_synology.core.auth import AuthManager
+from mcp_synology.core.client import DsmClient
+from mcp_synology.core.config import AppConfig
+from mcp_synology.modules.filestation.listing import list_files, list_recycle_bin, list_shares
+from mcp_synology.modules.filestation.metadata import get_dir_size, get_file_info
+from mcp_synology.modules.filestation.operations import (
     copy_files,
     create_folder,
     delete_files,
     move_files,
     rename,
 )
-from synology_mcp.modules.filestation.search import search_files
-from synology_mcp.modules.system.info import get_system_info
-from synology_mcp.modules.system.utilization import get_resource_usage
+from mcp_synology.modules.filestation.search import search_files
+from mcp_synology.modules.filestation.transfer import download_file, upload_file
+from mcp_synology.modules.system.info import get_system_info
+from mcp_synology.modules.system.utilization import get_resource_usage
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +116,8 @@ async def nas_client(
             "SYNO.FileStation.Rename",
             "SYNO.FileStation.DirSize",
             "SYNO.FileStation.Info",
+            "SYNO.FileStation.Upload",
+            "SYNO.FileStation.Download",
             "SYNO.DSM.Info",
         ]
         for api_name in _relevant:
@@ -616,6 +619,208 @@ class TestRecycleBin:
         # Should not crash. May or may not find our deleted folder depending
         # on whether recycle bin is enabled for this share.
         assert isinstance(result, str)
+
+
+# ---------------------------------------------------------------------------
+# File transfers (upload / download)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+class TestFileTransfers:
+    """Test upload_file and download_file against real NAS.
+
+    Creates a temp file locally, uploads it, downloads it back, and verifies
+    the round-trip. Cleans up both local and NAS files.
+    """
+
+    _UPLOAD_DIR = "_integration_test_transfer"
+    _TEST_CONTENT = b"mcp-synology integration test content\n"
+
+    async def test_01_upload_file(self, nas_client: Any, tmp_path: Path) -> None:
+        """Upload a small test file to the NAS."""
+        client, _, config, paths = _unpack(nas_client)
+        _skip_unless_write(config)
+
+        base = paths["writable_folder"]
+        dest = f"{base}/{self._UPLOAD_DIR}"
+
+        # Create local test file
+        local_file = tmp_path / "upload_test.txt"
+        local_file.write_bytes(self._TEST_CONTENT)
+
+        result = await upload_file(
+            client,
+            local_path=str(local_file),
+            dest_folder=dest,
+            create_parents=True,
+        )
+        logger.info("upload_file result:\n%s", result)
+        assert "[+]" in result
+        assert "upload_test.txt" in result
+
+    async def test_02_upload_duplicate_no_overwrite(self, nas_client: Any, tmp_path: Path) -> None:
+        """Uploading the same file again without overwrite.
+
+        Note: DSM's Upload API v2 may silently skip or overwrite depending
+        on the NAS configuration. We verify it doesn't crash — the behavior
+        varies across DSM versions.
+        """
+        client, _, config, paths = _unpack(nas_client)
+        _skip_unless_write(config)
+
+        base = paths["writable_folder"]
+        dest = f"{base}/{self._UPLOAD_DIR}"
+
+        local_file = tmp_path / "upload_test.txt"
+        local_file.write_bytes(self._TEST_CONTENT)
+
+        result = await upload_file(
+            client,
+            local_path=str(local_file),
+            dest_folder=dest,
+        )
+        logger.info("upload duplicate (no overwrite):\n%s", result)
+        # DSM may return success (silent overwrite) or error (already exists).
+        # Either is acceptable — we just verify it doesn't crash.
+        assert isinstance(result, str)
+
+    async def test_03_upload_overwrite(self, nas_client: Any, tmp_path: Path) -> None:
+        """Uploading with overwrite=True should succeed."""
+        client, _, config, paths = _unpack(nas_client)
+        _skip_unless_write(config)
+
+        base = paths["writable_folder"]
+        dest = f"{base}/{self._UPLOAD_DIR}"
+
+        local_file = tmp_path / "upload_test.txt"
+        local_file.write_bytes(self._TEST_CONTENT)
+
+        result = await upload_file(
+            client,
+            local_path=str(local_file),
+            dest_folder=dest,
+            overwrite=True,
+        )
+        logger.info("upload overwrite:\n%s", result)
+        assert "[+]" in result
+
+    async def test_04_upload_custom_filename(self, nas_client: Any, tmp_path: Path) -> None:
+        """Upload with a custom filename on the NAS."""
+        client, _, config, paths = _unpack(nas_client)
+        _skip_unless_write(config)
+
+        base = paths["writable_folder"]
+        dest = f"{base}/{self._UPLOAD_DIR}"
+
+        local_file = tmp_path / "original_name.txt"
+        local_file.write_bytes(b"renamed upload test\n")
+
+        result = await upload_file(
+            client,
+            local_path=str(local_file),
+            dest_folder=dest,
+            filename="renamed_on_nas.txt",
+        )
+        logger.info("upload custom filename:\n%s", result)
+        assert "[+]" in result
+        assert "renamed_on_nas.txt" in result
+
+    async def test_05_verify_uploaded_files(self, nas_client: Any) -> None:
+        """Verify both uploaded files appear in the NAS listing."""
+        client, _, config, paths = _unpack(nas_client)
+        _skip_unless_write(config)
+
+        base = paths["writable_folder"]
+        listing = await list_files(client, path=f"{base}/{self._UPLOAD_DIR}")
+        logger.info("Listing after uploads:\n%s", listing)
+        assert "upload_test.txt" in listing
+        assert "renamed_on_nas.txt" in listing
+
+    async def test_06_download_file(self, nas_client: Any, tmp_path: Path) -> None:
+        """Download the uploaded file back and verify content."""
+        client, _, config, paths = _unpack(nas_client)
+        _skip_unless_write(config)
+
+        base = paths["writable_folder"]
+        nas_path = f"{base}/{self._UPLOAD_DIR}/upload_test.txt"
+
+        result = await download_file(
+            client,
+            path=nas_path,
+            dest_folder=str(tmp_path),
+        )
+        logger.info("download_file result:\n%s", result)
+        assert "[+]" in result
+        assert "upload_test.txt" in result
+
+        # Verify content round-trip
+        downloaded = tmp_path / "upload_test.txt"
+        assert downloaded.exists()
+        assert downloaded.read_bytes() == self._TEST_CONTENT
+
+    async def test_07_download_custom_filename(self, nas_client: Any, tmp_path: Path) -> None:
+        """Download with a custom local filename."""
+        client, _, config, paths = _unpack(nas_client)
+        _skip_unless_write(config)
+
+        base = paths["writable_folder"]
+        nas_path = f"{base}/{self._UPLOAD_DIR}/upload_test.txt"
+
+        result = await download_file(
+            client,
+            path=nas_path,
+            dest_folder=str(tmp_path),
+            filename="local_renamed.txt",
+        )
+        logger.info("download custom filename:\n%s", result)
+        assert "[+]" in result
+        assert "local_renamed.txt" in result
+        assert (tmp_path / "local_renamed.txt").exists()
+
+    async def test_08_download_no_overwrite(self, nas_client: Any, tmp_path: Path) -> None:
+        """Download should fail if local file exists and overwrite=False."""
+        client, _, config, paths = _unpack(nas_client)
+        _skip_unless_write(config)
+
+        base = paths["writable_folder"]
+        nas_path = f"{base}/{self._UPLOAD_DIR}/upload_test.txt"
+
+        # Create existing local file
+        existing = tmp_path / "upload_test.txt"
+        existing.write_text("existing local content")
+
+        result = await download_file(
+            client,
+            path=nas_path,
+            dest_folder=str(tmp_path),
+        )
+        logger.info("download no overwrite:\n%s", result)
+        assert "[!]" in result
+        assert "already exists" in result
+
+    async def test_09_download_nonexistent(self, nas_client: Any, tmp_path: Path) -> None:
+        """Download a non-existent NAS file should return formatted error."""
+        client, _, _, _ = _unpack(nas_client)
+
+        result = await download_file(
+            client,
+            path="/zzz_nonexistent_999/fake.txt",
+            dest_folder=str(tmp_path),
+        )
+        logger.info("download nonexistent:\n%s", result)
+        assert "[!]" in result
+
+    async def test_10_cleanup(self, nas_client: Any) -> None:
+        """Delete the test upload directory from the NAS."""
+        client, _, config, paths = _unpack(nas_client)
+        _skip_unless_write(config)
+
+        base = paths["writable_folder"]
+        target = f"{base}/{self._UPLOAD_DIR}"
+        result = await delete_files(client, paths=[target], recursive=True)
+        logger.info("transfer cleanup:\n%s", result)
+        assert "[!]" not in result
 
 
 # ---------------------------------------------------------------------------

@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
-from synology_mcp.core.config import (
+from mcp_synology.core.config import (
     AppConfig,
     ConnectionConfig,
     LoggingConfig,
@@ -191,7 +191,7 @@ class TestDiscoverConfigPath:
     def test_env_var_path(self, tmp_path: Path) -> None:
         config_file = tmp_path / "config.yaml"
         config_file.write_text("schema_version: 1\n")
-        with patch.dict(os.environ, {"SYNOLOGY_MCP_CONFIG": str(config_file)}):
+        with patch.dict(os.environ, {"MCP_SYNOLOGY_CONFIG": str(config_file)}):
             result = discover_config_path()
         assert result == config_file
 

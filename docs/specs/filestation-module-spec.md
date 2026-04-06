@@ -1,7 +1,7 @@
 # File Station Module — Tool Specifications
 
-> **Version:** 0.3 | **Updated:** 2026-03-16T22:30Z — restore_from_recycle_bin moved to WRITE tier. #recycle path preservation confirmed on DS1618+. Tool counts: 6 READ + 6 WRITE = 12.
-> **Parent doc:** `synology-mcp-architecture.md` v0.3
+> **Version:** 0.4 | **Updated:** 2026-03-18 — Added upload_file (WRITE) and download_file (READ) tools for local↔NAS file transfer. Tool counts: 7 READ + 7 WRITE = 14.
+> **Parent doc:** `mcp-synology-architecture.md` v0.3
 
 ## Module Metadata
 
@@ -18,8 +18,10 @@ MODULE_INFO = ModuleInfo(
         ApiRequirement(api_name="SYNO.FileStation.Rename", min_version=1),
         ApiRequirement(api_name="SYNO.FileStation.CopyMove", min_version=1),
         ApiRequirement(api_name="SYNO.FileStation.Delete", min_version=1),
+        ApiRequirement(api_name="SYNO.FileStation.Upload", min_version=1, optional=True),
+        ApiRequirement(api_name="SYNO.FileStation.Download", min_version=1, optional=True),
     ],
-    tools=[...],  # See individual tool specs below; 6 READ + 6 WRITE = 12 total
+    tools=[...],  # See individual tool specs below; 7 READ + 7 WRITE = 14 total
 )
 ```
 
@@ -93,7 +95,7 @@ MCP tool descriptions are the primary way the LLM learns what each tool does. Gi
 
 ---
 
-## READ Tier Tools (6 tools)
+## READ Tier Tools (7 tools)
 
 ### 1. `list_shares`
 
@@ -354,9 +356,80 @@ To restore items, use restore_from_recycle_bin with the file paths shown above.
 
 ---
 
-## WRITE Tier Tools (6 tools)
+### 7. `download_file`
 
-### 7. `restore_from_recycle_bin`
+Download a NAS file to a local directory on this machine.
+
+**Permission tier:** READ
+
+**DSM API:** `SYNO.FileStation.Download` / `download` (GET, binary response)
+
+**Tool description (LLM-facing):**
+> Download a NAS file to a local directory on this machine. Provide the NAS file path and a local destination directory. Does not overwrite existing local files by default.
+
+**Parameters:**
+
+| Name | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `path` | `str` | **Yes** | — | NAS file path to download. |
+| `dest_folder` | `str` | **Yes** | — | Local directory to save the file to. |
+| `filename` | `str` | No | `None` | Rename on download (defaults to the NAS filename). |
+| `overwrite` | `bool` | No | `false` | Replace existing local file. |
+
+**Response shape:**
+
+```
+[+] Downloaded movie.mkv (4.2 GB) to /home/user/Downloads/movie.mkv
+```
+
+**Design notes:**
+- Single-file download only in v1. Multi-file download (returns zip) deferred.
+- Binary data streamed to disk in 64 KB chunks — never buffered entirely in memory.
+- If the NAS returns `Content-Type: application/json` instead of binary, it's an error envelope — parsed and raised.
+- Partial files are cleaned up on failure (network error, DSM error).
+- The MCP server runs locally, so `dest_folder` refers to a path on the machine running the server.
+
+---
+
+## WRITE Tier Tools (7 tools)
+
+### 8. `upload_file`
+
+Upload a local file from this machine to a NAS folder.
+
+**Permission tier:** WRITE
+
+**DSM API:** `SYNO.FileStation.Upload` / `upload` (POST multipart — the ONE exception to the GET-only rule)
+
+**Tool description (LLM-facing):**
+> Upload a local file from this machine to a NAS folder. Provide the local file path and NAS destination folder. Does not overwrite existing NAS files by default.
+
+**Parameters:**
+
+| Name | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `local_path` | `str` | **Yes** | — | Local file path on this machine. |
+| `dest_folder` | `str` | **Yes** | — | NAS destination folder. |
+| `filename` | `str` | No | `None` | Rename on upload (defaults to the local filename). |
+| `overwrite` | `bool` | No | `false` | Replace existing NAS file. |
+| `create_parents` | `bool` | No | `true` | Create missing parent directories on the NAS. |
+
+**Response shape:**
+
+```
+[+] Uploaded report.pdf (2.4 MB) to /documents/reports/
+```
+
+**Design notes:**
+- Upload uses POST multipart — the only DSM API call that requires POST. Documented clearly in the client method.
+- File is streamed from disk, not buffered in memory.
+- On session error (106/107/119), re-auth and retry with a fresh file handle.
+- `SynologyFileExistsError` (414) caught with suggestion to use `overwrite=true`.
+- The MCP server runs locally, so `local_path` refers to a path on the machine running the server.
+
+---
+
+### 9. `restore_from_recycle_bin`
 
 Restore files from a shared folder's recycle bin.
 
@@ -392,7 +465,7 @@ Restore files from a shared folder's recycle bin.
 
 ---
 
-### 8. `create_folder`
+### 10. `create_folder`
 
 Create one or more new folders.
 
@@ -419,7 +492,7 @@ Create one or more new folders.
 
 ---
 
-### 9. `rename`
+### 11. `rename`
 
 Rename a file or folder.
 
@@ -446,7 +519,7 @@ Rename a file or folder.
 
 ---
 
-### 10. `copy_files`
+### 12. `copy_files`
 
 Copy files or folders to a destination.
 
@@ -475,7 +548,7 @@ Copy files or folders to a destination.
 
 ---
 
-### 11. `move_files`
+### 13. `move_files`
 
 Move files or folders to a new location. **Source files are removed after successful transfer.**
 
@@ -506,7 +579,7 @@ Source files have been removed from /video/Downloads/.
 
 ---
 
-### 12. `delete_files`
+### 14. `delete_files`
 
 Delete files or folders.
 
@@ -607,7 +680,7 @@ This is outside the MCP server's scope but worth documenting as a power-user pat
 The `FastMCP(instructions=...)` string provides shared knowledge at connection time:
 
 ```
-You are connected to a Synology NAS via the synology-mcp File Station module.
+You are connected to a Synology NAS via the mcp-synology File Station module.
 
 PATH FORMAT:
 All file paths start with a shared folder name: /video/..., /music/..., etc.

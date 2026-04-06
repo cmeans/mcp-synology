@@ -1,4 +1,19 @@
-# synology-mcp
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/cmeans/mcp-synology/main/src/mcp_synology/icons/mcp-synology-logo-dark.svg" width="128">
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/cmeans/mcp-synology/main/src/mcp_synology/icons/mcp-synology-logo-light.svg" width="128">
+    <img src="https://raw.githubusercontent.com/cmeans/mcp-synology/main/src/mcp_synology/icons/mcp-synology-logo-light.svg" alt="mcp-synology logo" width="128">
+  </picture>
+</p>
+
+# mcp-synology
+
+[![PyPI version](https://img.shields.io/pypi/v/mcp-synology)](https://pypi.org/project/mcp-synology/)
+[![Python versions](https://img.shields.io/pypi/pyversions/mcp-synology)](https://pypi.org/project/mcp-synology/)
+[![License](https://img.shields.io/pypi/l/mcp-synology)](https://github.com/cmeans/mcp-synology/blob/main/LICENSE)
+[![Tests](https://img.shields.io/github/actions/workflow/status/cmeans/mcp-synology/ci.yml?label=tests)](https://github.com/cmeans/mcp-synology/actions/workflows/ci.yml)
+[![Coverage](https://codecov.io/gh/cmeans/mcp-synology/graph/badge.svg)](https://codecov.io/gh/cmeans/mcp-synology)
+[![Downloads](https://img.shields.io/pypi/dm/mcp-synology)](https://pypi.org/project/mcp-synology/)
 
 MCP server for Synology NAS devices. Exposes Synology DSM API functionality as MCP tools that Claude can use.
 
@@ -6,10 +21,10 @@ MCP server for Synology NAS devices. Exposes Synology DSM API functionality as M
 
 ### File Station
 
-Browse, search, move, copy, delete, and organize files on your NAS. 12 tools across two permission tiers:
+Browse, search, transfer, and manage files on your NAS. 14 tools across two permission tiers:
 
-- **READ** — list_shares, list_files, list_recycle_bin, search_files, get_file_info, get_dir_size
-- **WRITE** — create_folder, rename, copy_files, move_files, delete_files, restore_from_recycle_bin
+- **READ** — list_shares, list_files, list_recycle_bin, search_files, get_file_info, get_dir_size, download_file
+- **WRITE** — create_folder, rename, copy_files, move_files, delete_files, restore_from_recycle_bin, upload_file
 
 ### System
 
@@ -31,15 +46,15 @@ Monitor NAS health and resource utilization. 2 read-only tools:
 ### 1. Install
 
 ```bash
-uv tool install synology-mcp
+uv tool install mcp-synology
 ```
 
-Installs the `synology-mcp` command globally from [PyPI](https://pypi.org/project/synology-mcp/). Requires [uv](https://docs.astral.sh/uv/).
+Installs the `mcp-synology` command globally from [PyPI](https://pypi.org/project/mcp-synology/). Requires [uv](https://docs.astral.sh/uv/).
 
 ### 2. Run setup
 
 ```bash
-synology-mcp setup
+mcp-synology setup
 ```
 
 Setup will prompt for your NAS host, credentials, and preferences. If your account has 2FA enabled, it will prompt for an OTP code and store a device token for automatic future logins.
@@ -54,8 +69,8 @@ Copy the snippet from setup into your `claude_desktop_config.json` and restart C
 {
   "mcpServers": {
     "synology-nas": {
-      "command": "synology-mcp",
-      "args": ["serve", "--config", "~/.config/synology-mcp/nas.yaml"]
+      "command": "mcp-synology",
+      "args": ["serve", "--config", "~/.config/mcp-synology/nas.yaml"]
     }
   }
 }
@@ -68,8 +83,8 @@ On Linux, the server auto-detects the D-Bus session socket for keyring access. I
 ### 4. Verify
 
 ```bash
-synology-mcp check                    # Validates credentials work
-synology-mcp setup --list             # Shows all configured NAS instances
+mcp-synology check                    # Validates credentials work
+mcp-synology setup --list             # Shows all configured NAS instances
 ```
 
 ### Alternative: run without global install
@@ -81,7 +96,7 @@ If you prefer not to install globally, `uvx` downloads and runs the latest versi
   "mcpServers": {
     "synology": {
       "command": "uvx",
-      "args": ["synology-mcp", "serve", "--config", "~/.config/synology-mcp/config.yaml"]
+      "args": ["mcp-synology", "serve", "--config", "~/.config/mcp-synology/config.yaml"]
     }
   }
 }
@@ -90,8 +105,8 @@ If you prefer not to install globally, `uvx` downloads and runs the latest versi
 You can also use `uvx` for CLI commands:
 
 ```bash
-uvx synology-mcp setup
-uvx synology-mcp check
+uvx mcp-synology setup
+uvx mcp-synology check
 ```
 
 ### Alternative: env-var-only mode
@@ -102,7 +117,7 @@ No config file needed if `SYNOLOGY_HOST` is set. This is useful for Docker or CI
 {
   "mcpServers": {
     "synology": {
-      "command": "synology-mcp",
+      "command": "mcp-synology",
       "args": ["serve"],
       "env": {
         "SYNOLOGY_HOST": "192.168.1.100",
@@ -117,18 +132,18 @@ No config file needed if `SYNOLOGY_HOST` is set. This is useful for Docker or CI
 Or from the CLI:
 
 ```bash
-SYNOLOGY_HOST=192.168.1.100 synology-mcp check
+SYNOLOGY_HOST=192.168.1.100 mcp-synology check
 ```
 
 ## 2FA Support
 
-synology-mcp fully supports DSM accounts with two-factor authentication. It's auto-detected — you don't need to configure anything special:
+mcp-synology fully supports DSM accounts with two-factor authentication. It's auto-detected — you don't need to configure anything special:
 
-1. **Bootstrap** — `synology-mcp setup` detects 2FA, prompts for your OTP code, and stores a device token in the keyring
+1. **Bootstrap** — `mcp-synology setup` detects 2FA, prompts for your OTP code, and stores a device token in the keyring
 2. **Silent re-auth** — subsequent logins use the device token automatically (no OTP prompts)
 3. **Per-instance** — each NAS config gets its own device token, so mixed 2FA/non-2FA setups work fine
 
-Device tokens persist until you explicitly revoke them in DSM (Personal > Security > Sign-in Activity). They do not expire on their own. If a token is revoked, run `synology-mcp setup` again to re-bootstrap.
+Device tokens persist until you explicitly revoke them in DSM (Personal > Security > Sign-in Activity). They do not expire on their own. If a token is revoked, run `mcp-synology setup` again to re-bootstrap.
 
 ## Keyring & Credentials
 
@@ -148,21 +163,21 @@ See [docs/credentials.md](docs/credentials.md) for keyring service names, multi-
 
 ## Updates
 
-synology-mcp checks for updates and notifies you in your Claude Desktop conversation — the first tool response in each session will include a notice if a newer version is available on PyPI.
+mcp-synology checks for updates and notifies you in your Claude Desktop conversation — the first tool response in each session will include a notice if a newer version is available on PyPI.
 
 To manage updates from the CLI:
 
 ```bash
-synology-mcp --check-update                 # Check for a newer version
-synology-mcp --auto-upgrade enable           # Auto-upgrade on each interactive run
-synology-mcp --revert                        # Roll back to previous version
-synology-mcp --revert 0.1.0                  # Roll back to a specific version
+mcp-synology --check-update                 # Check for a newer version
+mcp-synology --auto-upgrade enable           # Auto-upgrade on each interactive run
+mcp-synology --revert                        # Roll back to previous version
+mcp-synology --revert 0.1.0                  # Roll back to a specific version
 ```
 
 To disable update notifications, add to your config (top level):
 
 ```yaml
-# ~/.config/synology-mcp/config.yaml
+# ~/.config/mcp-synology/config.yaml
 check_for_updates: false
 ```
 
@@ -180,7 +195,7 @@ Each NAS gets its own config file, credentials, and Claude Desktop entry. The co
 Set `alias` to give Claude a display name for the connection:
 
 ```yaml
-# ~/.config/synology-mcp/home-nas.yaml
+# ~/.config/mcp-synology/home-nas.yaml
 alias: HomeNAS
 ```
 
@@ -197,18 +212,18 @@ Custom instructions let you shape how Claude interacts with your NAS tools. This
 **Add context** — `custom_instructions` is prepended to the built-in prompt (higher priority):
 
 ```yaml
-# ~/.config/synology-mcp/config.yaml
+# ~/.config/mcp-synology/config.yaml
 custom_instructions: |
   This is the admin NAS with elevated privileges.
   Prefer this connection for file operations requiring cross-user access.
   Never delete files from /Backups without explicit confirmation.
 ```
 
-**Full control** — `instructions_file` replaces the built-in prompt entirely. Copy the [built-in server.md](src/synology_mcp/instructions/server.md) as a starting point:
+**Full control** — `instructions_file` replaces the built-in prompt entirely. Copy the [built-in server.md](src/mcp_synology/instructions/server.md) as a starting point:
 
 ```yaml
-# ~/.config/synology-mcp/config.yaml
-instructions_file: ~/.config/synology-mcp/my-instructions.md
+# ~/.config/mcp-synology/config.yaml
+instructions_file: ~/.config/mcp-synology/my-instructions.md
 ```
 
 Both support template variables: `{display_name}`, `{instance_id}`, `{host}`, `{port}`.
@@ -218,17 +233,17 @@ Both support template variables: `{display_name}`, `{instance_id}`, `{host}`, `{
 Two ways to enable debug logging:
 
 ```bash
-synology-mcp check --verbose                          # --verbose flag on setup/check
-SYNOLOGY_LOG_LEVEL=debug synology-mcp serve           # env var, works for all commands
+mcp-synology check --verbose                          # --verbose flag on setup/check
+SYNOLOGY_LOG_LEVEL=debug mcp-synology serve           # env var, works for all commands
 ```
 
 Or set it persistently in your config file:
 
 ```yaml
-# ~/.config/synology-mcp/config.yaml
+# ~/.config/mcp-synology/config.yaml
 logging:
   level: debug
-  file: ~/.local/state/synology-mcp/nas/server.log  # optional, logs to stderr by default
+  file: ~/.local/state/mcp-synology/nas/server.log  # optional, logs to stderr by default
 ```
 
 Debug output includes every DSM API request/response (passwords masked), credential resolution steps, config discovery, version negotiation, and module registration decisions.
@@ -247,8 +262,12 @@ Live testing against real hardware revealed behaviors the specs couldn't anticip
 
 ## License
 
-[MIT](LICENSE)
+[Apache 2.0](LICENSE)
 
 ---
 
-Copyright (c) 2026 Chris Means
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/cmeans/mcp-synology/main/src/mcp_synology/icons/mcp-synology-logo-dark.svg" width="24">
+  <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/cmeans/mcp-synology/main/src/mcp_synology/icons/mcp-synology-logo-light.svg" width="24">
+  <img src="https://raw.githubusercontent.com/cmeans/mcp-synology/main/src/mcp_synology/icons/mcp-synology-logo-light.svg" alt="" width="24" align="top">
+</picture> © 2026 Chris Means

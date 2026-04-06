@@ -1,5 +1,8 @@
-# synology-mcp
+# mcp-synology
 tests/integration_config.yaml
+
+# Virtual DSM test infrastructure (golden images ~2GB each)
+.vdsm/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

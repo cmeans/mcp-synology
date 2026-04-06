@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 import respx
 
-from synology_mcp.modules.filestation.listing import (
+from mcp_synology.modules.filestation.listing import (
     list_files,
     list_recycle_bin,
     list_shares,
@@ -14,7 +14,7 @@ from synology_mcp.modules.filestation.listing import (
 from tests.conftest import BASE_URL
 
 if TYPE_CHECKING:
-    from synology_mcp.core.client import DsmClient
+    from mcp_synology.core.client import DsmClient
 
 
 class TestListShares:

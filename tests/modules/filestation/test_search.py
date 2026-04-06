@@ -7,11 +7,11 @@ from typing import TYPE_CHECKING
 import httpx
 import respx
 
-from synology_mcp.modules.filestation.search import search_files
+from mcp_synology.modules.filestation.search import search_files
 from tests.conftest import BASE_URL
 
 if TYPE_CHECKING:
-    from synology_mcp.core.client import DsmClient
+    from mcp_synology.core.client import DsmClient
 
 
 class TestSearchFiles:

@@ -5,11 +5,11 @@ from __future__ import annotations
 import httpx
 import respx
 
-from synology_mcp.core.client import DsmClient
-from synology_mcp.modules.filestation.listing import list_shares
-from synology_mcp.modules.filestation.operations import move_files
-from synology_mcp.modules.filestation.search import search_files
-from synology_mcp.server import create_server
+from mcp_synology.core.client import DsmClient
+from mcp_synology.modules.filestation.listing import list_shares
+from mcp_synology.modules.filestation.operations import move_files
+from mcp_synology.modules.filestation.search import search_files
+from mcp_synology.server import create_server
 from tests.conftest import BASE_URL, make_api_cache, make_test_config
 
 

@@ -1,16 +1,16 @@
 # Project Scaffolding — Repo Structure, Build, CI, Testing
 
 > **Version:** 0.2 | **Updated:** 2026-03-16T23:30Z — Domain-based module split, click for CLI, spec docs in repo, example configs, py.typed marker.
-> **Parent doc:** `synology-mcp-architecture.md` v0.3
+> **Parent doc:** `mcp-synology-architecture.md` v0.3
 
 ## Repository Structure
 
 ```
-synology-mcp/
+mcp-synology/
 ├── src/
-│   └── synology_mcp/
+│   └── mcp_synology/
 │       ├── __init__.py              # Package version, top-level exports
-│       ├── __main__.py              # `python -m synology_mcp` entry point
+│       ├── __main__.py              # `python -m mcp_synology` entry point
 │       ├── py.typed                 # PEP 561 marker — ship type information
 │       ├── cli.py                   # CLI: serve, setup, check (click-based)
 │       ├── server.py                # FastMCP server init, module loading, startup
@@ -52,7 +52,7 @@ synology-mcp/
 ├── docs/
 │   └── specs/
 │       ├── architecture.md          # Layered architecture, auth, session lifecycle
-│       ├── filestation-module.md     # File Station tool specs (12 tools)
+│       ├── filestation-module.md     # File Station tool specs (14 tools)
 │       └── config-schema.md         # YAML config structure, validation rules
 │
 ├── examples/
@@ -63,7 +63,7 @@ synology-mcp/
 ├── pyproject.toml                   # Build config, dependencies, entry points
 ├── README.md                        # User-facing docs: install, configure, usage
 ├── CLAUDE.md                        # Claude Code instructions for this repo
-├── LICENSE                          # MIT
+├── LICENSE                          # Apache 2.0
 ├── .gitignore
 └── .github/
     └── workflows/
@@ -98,11 +98,11 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "synology-mcp"
+name = "mcp-synology"
 version = "0.1.0"
 description = "MCP server for Synology NAS — manage files, containers, and more via Claude"
 readme = "README.md"
-license = "MIT"
+license = "Apache-2.0"
 requires-python = ">=3.11"
 authors = [
     { name = "Chris Means", email = "..." },
@@ -112,7 +112,7 @@ classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Intended Audience :: System Administrators",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -139,16 +139,16 @@ dev = [
 ]
 
 [project.scripts]
-synology-mcp = "synology_mcp.cli:main"
+mcp-synology = "mcp_synology.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/cmeans/synology-mcp"
-Repository = "https://github.com/cmeans/synology-mcp"
-Issues = "https://github.com/cmeans/synology-mcp/issues"
-Documentation = "https://github.com/cmeans/synology-mcp/tree/main/docs"
+Homepage = "https://github.com/cmeans/mcp-synology"
+Repository = "https://github.com/cmeans/mcp-synology"
+Issues = "https://github.com/cmeans/mcp-synology/issues"
+Documentation = "https://github.com/cmeans/mcp-synology/tree/main/docs"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/synology_mcp"]
+packages = ["src/mcp_synology"]
 
 [tool.ruff]
 target-version = "py311"
@@ -204,7 +204,7 @@ import click
 @click.group()
 @click.version_option()
 def main():
-    """synology-mcp — MCP server for Synology NAS."""
+    """mcp-synology — MCP server for Synology NAS."""
     pass
 
 @main.command()
@@ -281,7 +281,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --dev
-      - run: uv run pytest --cov=synology_mcp --cov-report=xml
+      - run: uv run pytest --cov=mcp_synology --cov-report=xml
       - uses: codecov/codecov-action@v4
         if: matrix.python-version == '3.12'
         with:
@@ -407,7 +407,7 @@ async def test_list_shares(mock_client):
 Detailed instructions for Claude Code when working on this repo:
 
 ```markdown
-# CLAUDE.md — synology-mcp
+# CLAUDE.md — mcp-synology
 
 ## Project Overview
 MCP server for Synology NAS devices. Layered architecture:
@@ -419,7 +419,7 @@ MCP server for Synology NAS devices. Layered architecture:
 ## Architecture & Design Docs
 Design decisions and tool specifications live in `docs/specs/`:
 - `architecture.md` — layered architecture, auth strategy chain, session lifecycle
-- `filestation-module.md` — all 12 File Station tools with parameters and response shapes
+- `filestation-module.md` — all 14 File Station tools with parameters and response shapes
 - `config-schema.md` — YAML config structure, validation rules, env var overrides
 
 **Read the relevant spec before implementing.** These docs record design decisions
@@ -474,14 +474,14 @@ and their rationale — don't reinvent or contradict them without discussion.
 
 ```bash
 # Users install and run:
-uvx --from git+https://github.com/cmeans/synology-mcp synology-mcp serve
+uvx --from git+https://github.com/cmeans/mcp-synology mcp-synology serve
 
 # Claude Desktop config:
 {
   "mcpServers": {
     "synology": {
       "command": "uvx",
-      "args": ["--from", "git+https://github.com/cmeans/synology-mcp", "synology-mcp", "serve"]
+      "args": ["--from", "git+https://github.com/cmeans/mcp-synology", "mcp-synology", "serve"]
     }
   }
 }
@@ -489,14 +489,14 @@ uvx --from git+https://github.com/cmeans/synology-mcp synology-mcp serve
 
 ### Future: PyPI
 
-Once stable enough for versioned releases: `uvx synology-mcp serve`
+Once stable enough for versioned releases: `uvx mcp-synology serve`
 
 ### Future: Docker
 
 ```dockerfile
 FROM python:3.12-slim
-RUN pip install synology-mcp
-ENTRYPOINT ["synology-mcp", "serve", "--config", "/config/config.yaml"]
+RUN pip install mcp-synology
+ENTRYPOINT ["mcp-synology", "serve", "--config", "/config/config.yaml"]
 ```
 
 ---

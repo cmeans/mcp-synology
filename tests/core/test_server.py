@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from synology_mcp.server import _BASE_INSTRUCTIONS, create_server
+from mcp_synology.server import _BASE_INSTRUCTIONS, create_server
 from tests.conftest import make_test_config
 
 
@@ -81,7 +81,7 @@ class TestMcpInstructions:
 
 class TestFileStationSettings:
     def test_default_settings(self) -> None:
-        from synology_mcp.modules.filestation import FileStationSettings
+        from mcp_synology.modules.filestation import FileStationSettings
 
         s = FileStationSettings()
         assert s.hide_recycle_in_listings is False
@@ -94,7 +94,7 @@ class TestFileStationSettings:
         assert s.search_poll_interval == 1.0
 
     def test_specific_timeouts_override(self) -> None:
-        from synology_mcp.modules.filestation import FileStationSettings
+        from mcp_synology.modules.filestation import FileStationSettings
 
         s = FileStationSettings(
             async_timeout=60,
@@ -109,7 +109,7 @@ class TestFileStationSettings:
     def test_search_poll_interval_bounds(self) -> None:
         import pytest
 
-        from synology_mcp.modules.filestation import FileStationSettings
+        from mcp_synology.modules.filestation import FileStationSettings
 
         with pytest.raises(ValueError):
             FileStationSettings(search_poll_interval=0.1)  # below minimum 0.5

@@ -1,0 +1,54 @@
+<svg width="512" height="512" viewBox="0 0 160 160" xmlns="http://www.w3.org/2000/svg">
+  <g transform="translate(80, 73)">
+    <!-- Top face -->
+    <path d="M0,-60 L65,-30 L0,0 L-65,-30Z" fill="#0ea5e9" fill-opacity="0.12" stroke="#0ea5e9" stroke-width="1.5"/>
+
+    <!-- Swarm dots — full top face -->
+    <circle cx="0" cy="-26" r="3.5" fill="#0ea5e9" fill-opacity="0.7"/>
+    <circle cx="-35" cy="-42" r="2.5" fill="#0ea5e9" fill-opacity="0.55"/>
+    <line x1="-32" y1="-41" x2="-10" y2="-32" stroke="#0ea5e9" stroke-width="1" stroke-opacity="0.35" stroke-linecap="round" stroke-dasharray="2 2"/>
+    <circle cx="30" cy="-44" r="2.5" fill="#0ea5e9" fill-opacity="0.55"/>
+    <line x1="27" y1="-43" x2="8" y2="-32" stroke="#0ea5e9" stroke-width="1" stroke-opacity="0.35" stroke-linecap="round" stroke-dasharray="2 2"/>
+    <circle cx="-18" cy="-15" r="2" fill="#0ea5e9" fill-opacity="0.45"/>
+    <line x1="-15" y1="-17" x2="-5" y2="-24" stroke="#0ea5e9" stroke-width="0.8" stroke-opacity="0.3" stroke-linecap="round" stroke-dasharray="2 2"/>
+    <circle cx="22" cy="-16" r="2" fill="#0ea5e9" fill-opacity="0.45"/>
+    <line x1="19" y1="-18" x2="6" y2="-24" stroke="#0ea5e9" stroke-width="0.8" stroke-opacity="0.3" stroke-linecap="round" stroke-dasharray="2 2"/>
+    <circle cx="-8" cy="-48" r="2" fill="#0ea5e9" fill-opacity="0.4"/>
+    <line x1="-6" y1="-45" x2="-2" y2="-32" stroke="#0ea5e9" stroke-width="0.8" stroke-opacity="0.3" stroke-linecap="round" stroke-dasharray="2 2"/>
+    <circle cx="48" cy="-30" r="2" fill="#0ea5e9" fill-opacity="0.4"/>
+    <line x1="44" y1="-30" x2="10" y2="-28" stroke="#0ea5e9" stroke-width="0.8" stroke-opacity="0.3" stroke-linecap="round" stroke-dasharray="2 2"/>
+
+    <!-- Video transport panel -->
+    <g transform="translate(20, -24) rotate(-24.8)">
+      <rect x="-16" y="-5.5" width="30" height="11" rx="2" fill="#0ea5e9" fill-opacity="0.45" stroke="#0ea5e9" stroke-width="0.6"/>
+      <path d="M-12,-1.5 L-14.5,0 L-12,1.5Z" fill="#0ea5e9" fill-opacity="0.85"/>
+      <path d="M-9,-1.5 L-11.5,0 L-9,1.5Z" fill="#0ea5e9" fill-opacity="0.85"/>
+      <path d="M-5.5,-2 L-1.5,0 L-5.5,2Z" fill="#0ea5e9" fill-opacity="0.9"/>
+      <path d="M1.5,-1.5 L4,0 L1.5,1.5Z" fill="#0ea5e9" fill-opacity="0.85"/>
+      <path d="M4.5,-1.5 L7,0 L4.5,1.5Z" fill="#0ea5e9" fill-opacity="0.85"/>
+      <rect x="9" y="-1.5" width="3" height="3" rx="0.3" fill="#0ea5e9" fill-opacity="0.85"/>
+    </g>
+
+    <!-- Right face — drive bays -->
+    <path d="M0,0 L65,-30 L65,35 L0,65Z" fill="#0ea5e9" fill-opacity="0.20" stroke="#0ea5e9" stroke-width="1.5"/>
+    <path d="M8,6 L56,-16 L56,-8 L8,14Z" fill="#0ea5e9" fill-opacity="0.3" stroke="#0ea5e9" stroke-width="0.8"/>
+    <path d="M8,20 L56,-2 L56,6 L8,28Z" fill="#0ea5e9" fill-opacity="0.3" stroke="#0ea5e9" stroke-width="0.8"/>
+    <path d="M8,34 L56,12 L56,20 L8,42Z" fill="#0ea5e9" fill-opacity="0.3" stroke="#0ea5e9" stroke-width="0.8"/>
+    <path d="M8,48 L56,26 L56,34 L8,56Z" fill="#0ea5e9" fill-opacity="0.3" stroke="#0ea5e9" stroke-width="0.8"/>
+    <line x1="34" y1="-2" x2="48" y2="-8" stroke="#0ea5e9" stroke-width="1.5" stroke-linecap="round"/>
+    <line x1="34" y1="12" x2="48" y2="6" stroke="#0ea5e9" stroke-width="1.5" stroke-linecap="round"/>
+    <line x1="34" y1="26" x2="48" y2="20" stroke="#0ea5e9" stroke-width="1.5" stroke-linecap="round"/>
+    <line x1="34" y1="40" x2="48" y2="34" stroke="#0ea5e9" stroke-width="1.5" stroke-linecap="round"/>
+
+    <!-- Left face — Docker containers -->
+    <path d="M0,0 L-65,-30 L-65,35 L0,65Z" fill="#0ea5e9" fill-opacity="0.08" stroke="#0ea5e9" stroke-width="1.5"/>
+    <path d="M-58,-6 L-44,0.5 L-44,10.5 L-58,4Z" fill="#0ea5e9" fill-opacity="0.22" stroke="#0ea5e9" stroke-width="0.8"/>
+    <path d="M-40,2.3 L-26,8.8 L-26,18.8 L-40,12.3Z" fill="#0ea5e9" fill-opacity="0.22" stroke="#0ea5e9" stroke-width="0.8"/>
+    <path d="M-22,10.6 L-8,17.1 L-8,27.1 L-22,20.6Z" fill="#0ea5e9" fill-opacity="0.5" stroke="#0ea5e9" stroke-width="1"/>
+    <path d="M-58,7 L-44,13.5 L-44,23.5 L-58,17Z" fill="#0ea5e9" fill-opacity="0.28" stroke="#0ea5e9" stroke-width="0.8"/>
+    <path d="M-40,15.3 L-26,21.8 L-26,31.8 L-40,25.3Z" fill="#0ea5e9" fill-opacity="0.28" stroke="#0ea5e9" stroke-width="0.8"/>
+    <path d="M-22,23.6 L-8,30.1 L-8,40.1 L-22,33.6Z" fill="#0ea5e9" fill-opacity="0.28" stroke="#0ea5e9" stroke-width="0.8"/>
+
+    <circle cx="0" cy="70" r="3.5" fill="#0ea5e9"/>
+  </g>
+</svg>

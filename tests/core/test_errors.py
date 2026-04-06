@@ -1,6 +1,6 @@
 """Tests for core/errors.py — exception hierarchy and error_from_code factory."""
 
-from synology_mcp.core.errors import (
+from mcp_synology.core.errors import (
     ApiNotFoundError,
     AuthenticationError,
     DiskFullError,

@@ -9,9 +9,9 @@ if TYPE_CHECKING:
 
 import pytest
 
-from synology_mcp.core.client import DsmClient
-from synology_mcp.core.config import AppConfig
-from synology_mcp.core.state import ApiInfoEntry
+from mcp_synology.core.client import DsmClient
+from mcp_synology.core.config import AppConfig
+from mcp_synology.core.state import ApiInfoEntry
 
 BASE_URL = "http://nas:5000"
 
@@ -52,6 +52,8 @@ def make_api_cache() -> dict[str, ApiInfoEntry]:
         "SYNO.FileStation.Rename": ApiInfoEntry(path="entry.cgi", min_version=1, max_version=2),
         "SYNO.FileStation.CopyMove": ApiInfoEntry(path="entry.cgi", min_version=1, max_version=3),
         "SYNO.FileStation.Delete": ApiInfoEntry(path="entry.cgi", min_version=1, max_version=2),
+        "SYNO.FileStation.Upload": ApiInfoEntry(path="entry.cgi", min_version=1, max_version=2),
+        "SYNO.FileStation.Download": ApiInfoEntry(path="entry.cgi", min_version=1, max_version=2),
     }
 
 

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from synology_mcp.core.state import ApiInfoEntry
-from synology_mcp.modules import (
+from mcp_synology.core.state import ApiInfoEntry
+from mcp_synology.modules import (
     ApiRequirement,
     ModuleInfo,
     PermissionTier,

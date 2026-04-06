@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.4.0 (2026-04-05)
+
+### Breaking Changes
+
+- **Package renamed** — `synology-mcp` → `mcp-synology` (distribution, CLI command, config paths, state paths, keyring service)
+- **Python import renamed** — `synology_mcp` → `mcp_synology`
+- **Config directory** — `~/.config/synology-mcp/` → `~/.config/mcp-synology/`
+- **State directory** — `~/.local/state/synology-mcp/` → `~/.local/state/mcp-synology/`
+- **Keyring service** — `synology-mcp/{instance_id}` → `mcp-synology/{instance_id}` (re-run `mcp-synology setup`)
+- **DSM session/device name** — `SynologyMCP` → `MCPSynology`
+- **License** — MIT → Apache 2.0
+
+### Features
+
+- **File transfer tools** — 2 new tools for uploading and downloading files:
+  - `upload_file` — upload local files to NAS with overwrite control, custom filenames, and progress reporting (WRITE tier)
+  - `download_file` — download NAS files to local disk with pre-flight disk space check, streaming writes, partial file cleanup on failure, and progress reporting (READ tier)
+  - Large file warnings when transfers exceed 1 GB
+- **Project icons** — light/dark SVGs, PNGs (16–256px), and favicon.ico exposed via MCP `icons` parameter
+- **TestPyPI workflow** — dedicated `test-publish.yml` for manual dispatch; `publish.yml` simplified to tag-only PyPI publishing
+- **Virtual DSM test framework** — container-based integration testing with golden image save/restore, Playwright-based DSM wizard automation, and Podman/Docker auto-detection (`tests/vdsm/`)
+
+### Migration
+
+A migration script handles config, state, and keyring automatically:
+
+```bash
+uv tool install mcp-synology
+python scripts/migrate-from-synology-mcp.py          # dry run — preview changes
+python scripts/migrate-from-synology-mcp.py --apply  # apply changes
+```
+
+Then update Claude Desktop config: change `"command"` from `"synology-mcp"` to `"mcp-synology"`.
+
 ## 0.3.1 (2026-03-18)
 
 ### Features
@@ -38,7 +72,7 @@ Major refactor: CLI split, module registration system, DSM API fixes, integratio
 
 ### Breaking Changes
 
-- **CLI is now a package** — `src/synology_mcp/cli.py` split into `cli/` package with 6 submodules (main, setup, check, version, logging_). Backward-compatible re-exports via `cli/__init__.py`
+- **CLI is now a package** — `src/mcp_synology/cli.py` split into `cli/` package with 6 submodules (main, setup, check, version, logging_). Backward-compatible re-exports via `cli/__init__.py`
 
 ### Bug Fixes
 
@@ -83,7 +117,7 @@ Code quality fixes from second external review.
 
 ### Documentation
 
-- README install updated to `uv tool install synology-mcp` (PyPI) instead of git URL
+- README install updated to `uv tool install mcp-synology` (PyPI) instead of git URL
 
 ## 0.2.1 (2026-03-18)
 
@@ -139,7 +173,7 @@ Initial release.
 - **File Station module** — 12 tools for managing files on Synology NAS:
   - READ: list_shares, list_files, list_recycle_bin, search_files, get_file_info, get_dir_size
   - WRITE: create_folder, rename, copy_files, move_files, delete_files, restore_from_recycle_bin
-- **Interactive setup** — `synology-mcp setup` creates config, stores credentials, handles 2FA, emits Claude Desktop snippet
+- **Interactive setup** — `mcp-synology setup` creates config, stores credentials, handles 2FA, emits Claude Desktop snippet
 - **2FA support** — auto-detected device token bootstrap with silent re-authentication
 - **Secure credentials** — OS keyring integration (macOS Keychain, Windows Credential Manager, Linux GNOME Keyring / KWallet)
 - **Linux D-Bus auto-detection** — keyring works from Claude Desktop without manual env var configuration

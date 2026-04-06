@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from synology_mcp.modules.filestation.helpers import (
+from mcp_synology.modules.filestation.helpers import (
     escape_multi_path,
     file_type_icon,
     matches_pattern,

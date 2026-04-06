@@ -3,11 +3,11 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "synology-mcp"
-version = "0.3.1"
+name = "mcp-synology"
+version = "0.4.0"
 description = "MCP server for Synology NAS — manage files on your NAS via Claude"
 readme = "README.md"
-license = "MIT"
+license = "Apache-2.0"
 requires-python = ">=3.11"
 authors = [
     { name = "Chris Means" },
@@ -17,7 +17,7 @@ classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Intended Audience :: System Administrators",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -43,19 +43,28 @@ dev = [
     "types-PyYAML>=6.0",
     "respx>=0.22",
 ]
+vdsm = [
+    "testcontainers>=4.0",
+    "playwright>=1.50",
+]
 
 [project.scripts]
-synology-mcp = "synology_mcp.cli:main"
+mcp-synology = "mcp_synology.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/cmeans/synology-mcp"
-Repository = "https://github.com/cmeans/synology-mcp"
-Issues = "https://github.com/cmeans/synology-mcp/issues"
-Documentation = "https://github.com/cmeans/synology-mcp/tree/main/docs"
+Homepage = "https://github.com/cmeans/mcp-synology"
+Repository = "https://github.com/cmeans/mcp-synology"
+Issues = "https://github.com/cmeans/mcp-synology/issues"
+Documentation = "https://github.com/cmeans/mcp-synology/tree/main/docs"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/synology_mcp"]
-artifacts = ["src/synology_mcp/instructions/*.md"]
+packages = ["src/mcp_synology"]
+artifacts = [
+    "src/mcp_synology/instructions/*.md",
+    "src/mcp_synology/icons/*.svg",
+    "src/mcp_synology/icons/*.png",
+    "src/mcp_synology/favicon.ico",
+]
 
 [tool.ruff]
 target-version = "py311"
@@ -74,5 +83,8 @@ disallow_untyped_defs = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-markers = ["integration: requires a real Synology NAS (not run in CI)"]
-addopts = "-m 'not integration'"
+markers = [
+    "integration: requires a real Synology NAS (not run in CI)",
+    "vdsm: requires virtual-dsm Docker container with KVM (not run in CI by default)",
+]
+addopts = "-m 'not integration and not vdsm'"

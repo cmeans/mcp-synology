@@ -1,6 +1,6 @@
 """Tests for core/formatting.py — all shared formatters."""
 
-from synology_mcp.core.formatting import (
+from mcp_synology.core.formatting import (
     TreeNode,
     format_error,
     format_key_value,
