@@ -21,10 +21,10 @@ MCP server for Synology NAS devices. Exposes Synology DSM API functionality as M
 
 ### File Station
 
-Browse, search, move, copy, delete, and organize files on your NAS. 12 tools across two permission tiers:
+Browse, search, transfer, and manage files on your NAS. 14 tools across two permission tiers:
 
-- **READ** — list_shares, list_files, list_recycle_bin, search_files, get_file_info, get_dir_size
-- **WRITE** — create_folder, rename, copy_files, move_files, delete_files, restore_from_recycle_bin
+- **READ** — list_shares, list_files, list_recycle_bin, search_files, get_file_info, get_dir_size, download_file
+- **WRITE** — create_folder, rename, copy_files, move_files, delete_files, restore_from_recycle_bin, upload_file
 
 ### System
 

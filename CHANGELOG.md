@@ -12,14 +12,24 @@
 - **DSM session/device name** — `SynologyMCP` → `MCPSynology`
 - **License** — MIT → Apache 2.0
 
+### Features
+
+- **File transfer tools** — 2 new tools for uploading and downloading files:
+  - `upload_file` — upload local files to NAS with overwrite control, custom filenames, and progress reporting (WRITE tier)
+  - `download_file` — download NAS files to local disk with pre-flight disk space check, streaming writes, partial file cleanup on failure, and progress reporting (READ tier)
+  - Large file warnings when transfers exceed 1 GB
+- **Project icons** — light/dark SVGs, PNGs (16–256px), and favicon.ico exposed via MCP `icons` parameter
+- **TestPyPI workflow** — dedicated `test-publish.yml` for manual dispatch; `publish.yml` simplified to tag-only PyPI publishing
+- **Virtual DSM test framework** — container-based integration testing with golden image save/restore, Playwright-based DSM wizard automation, and Podman/Docker auto-detection (`tests/vdsm/`)
+
 ### Migration
 
 A migration script handles config, state, and keyring automatically:
 
 ```bash
 uv tool install mcp-synology
-uv run python scripts/migrate-from-synology-mcp.py          # dry run — preview changes
-uv run python scripts/migrate-from-synology-mcp.py --apply  # apply changes
+python scripts/migrate-from-synology-mcp.py          # dry run — preview changes
+python scripts/migrate-from-synology-mcp.py --apply  # apply changes
 ```
 
 Then update Claude Desktop config: change `"command"` from `"synology-mcp"` to `"mcp-synology"`.
