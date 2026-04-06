@@ -36,7 +36,7 @@ def _load_instruction(name: str) -> str:
 
 _BASE_INSTRUCTIONS = _load_instruction("server.md")
 
-_ICON_BASE_URL = "https://raw.githubusercontent.com/cmeans/mcp-synology/main/assets/icons"
+_ICON_BASE_URL = "https://raw.githubusercontent.com/cmeans/mcp-synology/main/src/mcp_synology/icons"
 
 
 def _load_icons() -> list[Icon]:
