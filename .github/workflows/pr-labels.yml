@@ -1,0 +1,151 @@
+name: PR Label Automation
+
+# Handles label transitions triggered by PR events (push, label, unlabel).
+# CI-completion promotion lives in pr-labels-ci.yml (separate workflow_run trigger).
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, labeled, unlabeled]
+
+permissions:
+  pull-requests: write
+  checks: read
+
+jobs:
+  # When a PR is opened or new commits are pushed, reset to Awaiting CI.
+  # Removes stale QA/workflow labels. Keeps Dev Active if present (coexists
+  # with Awaiting CI — dev is still working, CI runs but won't promote).
+  on-push:
+    if: github.event.action == 'opened' || github.event.action == 'synchronize'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Reset labels on new push
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          PR=${{ github.event.pull_request.number }}
+          REPO=${{ github.repository }}
+
+          HAD_QA_ACTIVE=false
+          if echo "$PR_LABELS" | grep -q '"QA Active"'; then
+            HAD_QA_ACTIVE=true
+          fi
+
+          # Remove stale workflow labels (coalesced into one API call)
+          REMOVE=""
+          for LABEL in "Ready for QA" "Ready for QA Signoff" "QA Approved" "QA Active" "QA Failed" "CI Failed"; do
+            if echo "$PR_LABELS" | grep -q "\"$LABEL\""; then
+              if [ -n "$REMOVE" ]; then
+                REMOVE="$REMOVE,$LABEL"
+              else
+                REMOVE="$LABEL"
+              fi
+            fi
+          done
+          if [ -n "$REMOVE" ]; then
+            gh pr edit "$PR" --repo "$REPO" --remove-label "$REMOVE"
+          fi
+
+          # Add Awaiting CI (unless already present).
+          # Dev Active is NOT removed — it coexists with Awaiting CI.
+          if ! echo "$PR_LABELS" | grep -q '"Awaiting CI"'; then
+            gh pr edit "$PR" --repo "$REPO" --add-label "Awaiting CI"
+          fi
+
+          # If QA was actively reviewing, notify via comment
+          if [ "$HAD_QA_ACTIVE" = true ]; then
+            gh pr comment "$PR" --repo "$REPO" \
+              --body "New commits pushed while QA was active. QA review invalidated — resetting to Awaiting CI."
+          fi
+
+  # When Dev Active is removed manually, check if CI already passed.
+  # If yes, promote straight to Ready for QA. If no, Awaiting CI is
+  # already present and on-ci-pass will promote when CI completes.
+  on-unlabel:
+    if: >-
+      github.event.action == 'unlabeled'
+      && github.event.label.name == 'Dev Active'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Transition after Dev Active removed
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          PR=${{ github.event.pull_request.number }}
+          REPO=${{ github.repository }}
+
+          # Check if CI already passed for the head commit
+          HEAD_SHA=${{ github.event.pull_request.head.sha }}
+          CI_CONCLUSION=$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$HEAD_SHA" \
+            --jq '.workflow_runs[0].conclusion // empty' 2>/dev/null) || true
+
+          if [ "$CI_CONCLUSION" = "success" ]; then
+            # CI passed — promote to Ready for QA
+            REMOVE=""
+            if echo "$PR_LABELS" | grep -q '"Awaiting CI"'; then
+              REMOVE="Awaiting CI"
+            fi
+            if echo "$PR_LABELS" | grep -q '"CI Failed"'; then
+              REMOVE="${REMOVE:+$REMOVE,}CI Failed"
+            fi
+            if [ -n "$REMOVE" ]; then
+              gh pr edit "$PR" --repo "$REPO" --remove-label "$REMOVE"
+            fi
+            gh pr edit "$PR" --repo "$REPO" --add-label "Ready for QA"
+          else
+            # CI hasn't passed — Awaiting CI should already be present
+            if ! echo "$PR_LABELS" | grep -q '"Awaiting CI"'; then
+              gh pr edit "$PR" --repo "$REPO" --add-label "Awaiting CI"
+            fi
+          fi
+
+  # When a workflow label is added, clean up labels that no longer apply.
+  # Only runs for labels that have cleanup rules.
+  on-label:
+    if: >-
+      github.event.action == 'labeled'
+      && contains(fromJSON('["Ready for QA","QA Active","Dev Active","Ready for QA Signoff","QA Failed","QA Approved"]'), github.event.label.name)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clean up stale labels
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ADDED_LABEL: ${{ github.event.label.name }}
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          PR=${{ github.event.pull_request.number }}
+          REPO=${{ github.repository }}
+
+          remove_if_present() {
+            if echo "$PR_LABELS" | grep -q "\"$1\""; then
+              gh pr edit "$PR" --repo "$REPO" --remove-label "$1"
+            fi
+          }
+
+          case "$ADDED_LABEL" in
+            "Ready for QA")
+              remove_if_present "Awaiting CI"
+              remove_if_present "CI Failed"
+              ;;
+            "QA Active")
+              remove_if_present "Ready for QA"
+              ;;
+            "Dev Active")
+              remove_if_present "QA Failed"
+              remove_if_present "CI Failed"
+              remove_if_present "Awaiting CI"
+              remove_if_present "Ready for QA"
+              ;;
+            "Ready for QA Signoff")
+              remove_if_present "QA Active"
+              ;;
+            "QA Failed")
+              remove_if_present "QA Active"
+              remove_if_present "Ready for QA Signoff"
+              ;;
+            "QA Approved")
+              remove_if_present "Ready for QA Signoff"
+              ;;
+          esac

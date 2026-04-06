@@ -1,0 +1,30 @@
+name: QA Gate
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  statuses: write
+
+jobs:
+  qa-approved:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set QA status
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if echo '${{ toJSON(github.event.pull_request.labels.*.name) }}' | grep -q '"QA Approved"'; then
+            STATE="success"
+            DESC="QA testing completed"
+          else
+            STATE="pending"
+            DESC="Waiting for QA — add 'QA Approved' label when testing is complete"
+          fi
+          gh api repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha }} \
+            --method POST \
+            -f state="$STATE" \
+            -f description="$DESC" \
+            -f context="QA Gate"
