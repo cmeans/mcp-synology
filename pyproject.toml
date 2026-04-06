@@ -63,7 +63,7 @@ artifacts = [
     "src/mcp_synology/instructions/*.md",
     "src/mcp_synology/icons/*.svg",
     "src/mcp_synology/icons/*.png",
-    "src/mcp_synology/favicon.ico",
+    "src/mcp_synology/icons/*.ico",
 ]
 
 [tool.ruff]
