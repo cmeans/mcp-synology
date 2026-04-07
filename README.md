@@ -17,6 +17,25 @@
 
 MCP server for Synology NAS devices. Exposes Synology DSM API functionality as MCP tools that Claude can use.
 
+## Migrating from synology-mcp
+
+If you're upgrading from `synology-mcp` (v0.3.x or earlier), the package has been renamed. A migration script handles config, state, keyring entries, and Claude Desktop config automatically:
+
+```bash
+# Download and run the migration script
+curl -O https://raw.githubusercontent.com/cmeans/mcp-synology/main/scripts/migrate-from-synology-mcp.py
+python migrate-from-synology-mcp.py          # dry run — preview changes
+python migrate-from-synology-mcp.py --apply  # apply changes
+```
+
+The script migrates:
+- Config directory (`~/.config/synology-mcp/` → `~/.config/mcp-synology/`)
+- State directory (`~/.local/state/synology-mcp/` → `~/.local/state/mcp-synology/`)
+- Keyring credentials
+- Claude Desktop `claude_desktop_config.json` (updates command and paths)
+
+See [CHANGELOG.md](CHANGELOG.md) for full details on breaking changes.
+
 ## Supported Modules
 
 ### File Station
@@ -43,25 +62,19 @@ Monitor NAS health and resource utilization. 2 read-only tools:
 
 ## Quick Start
 
-### 1. Install
+### 1. Run setup
 
 ```bash
-uv tool install mcp-synology
+uvx mcp-synology setup
 ```
 
-Installs the `mcp-synology` command globally from [PyPI](https://pypi.org/project/mcp-synology/). Requires [uv](https://docs.astral.sh/uv/).
-
-### 2. Run setup
-
-```bash
-mcp-synology setup
-```
+Requires [uv](https://docs.astral.sh/uv/). `uvx` downloads and runs the latest version automatically — no separate install step needed.
 
 Setup will prompt for your NAS host, credentials, and preferences. If your account has 2FA enabled, it will prompt for an OTP code and store a device token for automatic future logins.
 
 At the end, it prints a Claude Desktop JSON snippet ready to copy-paste.
 
-### 3. Add to Claude Desktop
+### 2. Add to Claude Desktop
 
 Copy the snippet from setup into your `claude_desktop_config.json` and restart Claude Desktop. It will look something like:
 
@@ -80,33 +93,21 @@ The config file name (e.g., `nas.yaml`) also serves as a natural identifier for 
 
 On Linux, the server auto-detects the D-Bus session socket for keyring access. If auto-detection fails, add `"env": {"DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/<uid>/bus"}` to the Claude Desktop config. The setup command includes this in the generated snippet.
 
-### 4. Verify
+### 3. Verify
 
 ```bash
-mcp-synology check                    # Validates credentials work
-mcp-synology setup --list             # Shows all configured NAS instances
+uvx mcp-synology check                # Validates credentials work
+uvx mcp-synology setup --list         # Shows all configured NAS instances
 ```
 
-### Alternative: run without global install
+### Alternative: global install
 
-If you prefer not to install globally, `uvx` downloads and runs the latest version on each invocation:
-
-```json
-{
-  "mcpServers": {
-    "synology": {
-      "command": "uvx",
-      "args": ["mcp-synology", "serve", "--config", "~/.config/mcp-synology/config.yaml"]
-    }
-  }
-}
-```
-
-You can also use `uvx` for CLI commands:
+If you prefer a persistent install (avoids download on each invocation):
 
 ```bash
-uvx mcp-synology setup
-uvx mcp-synology check
+uv tool install mcp-synology
+mcp-synology setup
+mcp-synology check
 ```
 
 ### Alternative: env-var-only mode
@@ -117,8 +118,8 @@ No config file needed if `SYNOLOGY_HOST` is set. This is useful for Docker or CI
 {
   "mcpServers": {
     "synology": {
-      "command": "mcp-synology",
-      "args": ["serve"],
+      "command": "uvx",
+      "args": ["mcp-synology", "serve"],
       "env": {
         "SYNOLOGY_HOST": "192.168.1.100",
         "SYNOLOGY_USERNAME": "your_user",
@@ -132,7 +133,7 @@ No config file needed if `SYNOLOGY_HOST` is set. This is useful for Docker or CI
 Or from the CLI:
 
 ```bash
-SYNOLOGY_HOST=192.168.1.100 mcp-synology check
+SYNOLOGY_HOST=192.168.1.100 uvx mcp-synology check
 ```
 
 ## 2FA Support
