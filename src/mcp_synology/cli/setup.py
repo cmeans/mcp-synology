@@ -387,14 +387,11 @@ async def _setup_login(config: object, username: str, password: str, service: st
 
 def _emit_claude_desktop_snippet(config: Any, config_path: Path) -> None:
     """Print a Claude Desktop JSON snippet for the user to copy."""
-    uv_path = shutil.which("uv") or "<path-to-uv>"
+    uvx_path = shutil.which("uvx") or "<path-to-uvx>"
 
     server_entry: dict[str, Any] = {
-        "command": uv_path,
+        "command": uvx_path,
         "args": [
-            "--directory",
-            str(Path.cwd()),
-            "run",
             "mcp-synology",
             "serve",
             "--config",
