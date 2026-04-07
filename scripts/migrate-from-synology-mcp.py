@@ -192,10 +192,26 @@ def migrate_claude_desktop_config(*, dry_run: bool) -> bool:
         if config_arg:
             config_arg = config_arg.replace("synology-mcp", "mcp-synology")
 
+        # Collect extra args (anything that's not the old command structure or --config)
+        extra_args: list[str] = []
+        skip_next = False
+        known_old = {"--directory", "run", "synology-mcp", "mcp-synology", "serve", "--config"}
+        for arg in args:
+            if skip_next:
+                skip_next = False
+                continue
+            if arg in known_old:
+                if arg in ("--directory", "--config"):
+                    skip_next = True  # skip the value that follows
+                continue
+            # Skip the --directory value (path)
+            extra_args.append(arg)
+
         # Build new entry with uvx
         new_args = ["mcp-synology", "serve"]
         if config_arg:
             new_args.extend(["--config", config_arg])
+        new_args.extend(extra_args)
 
         old_desc = f"{entry.get('command', '?')} {' '.join(args)}"
         new_desc = f"{uvx_path} {' '.join(new_args)}"
@@ -204,10 +220,14 @@ def migrate_claude_desktop_config(*, dry_run: bool) -> bool:
             print(f"  UPDATE [{name}]")
             print(f"         old: {old_desc}")
             print(f"         new: {new_desc}")
+            if extra_args:
+                print(f"         preserved extra args: {extra_args}")
         else:
             entry["command"] = uvx_path
             entry["args"] = new_args
             print(f"  UPDATED [{name}] -> {uvx_path} {' '.join(new_args)}")
+            if extra_args:
+                print(f"         preserved extra args: {extra_args}")
 
         changed = True
 
@@ -216,8 +236,10 @@ def migrate_claude_desktop_config(*, dry_run: bool) -> bool:
         return False
 
     if not dry_run:
+        backup = config_path.with_suffix(".json.bak")
+        shutil.copy2(config_path, backup)
         config_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-        print(f"  SAVED {config_path}")
+        print(f"  SAVED {config_path} (backup: {backup})")
 
     return changed
 
