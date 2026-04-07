@@ -175,17 +175,22 @@ def migrate_claude_desktop_config(*, dry_run: bool) -> bool:
         args = entry.get("args", [])
 
         # Detect old-style configs: command is synology-mcp, or args contain synology-mcp
-        is_old_direct = entry.get("command", "").endswith("synology-mcp") and "serve" in args
+        cmd = entry.get("command", "")
+        cmd_name = Path(cmd).name if cmd else ""
+        is_old_direct = cmd_name == "synology-mcp" and "serve" in args
         is_old_uv_run = "run" in args and "synology-mcp" in args
 
         if not is_old_direct and not is_old_uv_run:
             continue
 
-        # Extract the config path from args (follows --config)
+        # Extract the config path from args (handles both --config /path and --config=/path)
         config_arg = None
         for i, arg in enumerate(args):
             if arg == "--config" and i + 1 < len(args):
                 config_arg = args[i + 1]
+                break
+            if arg.startswith("--config="):
+                config_arg = arg.split("=", 1)[1]
                 break
 
         # Update config path references
@@ -204,7 +209,8 @@ def migrate_claude_desktop_config(*, dry_run: bool) -> bool:
                 if arg in ("--directory", "--config"):
                     skip_next = True  # skip the value that follows
                 continue
-            # Skip the --directory value (path)
+            if arg.startswith(("--config=", "--directory=")):
+                continue
             extra_args.append(arg)
 
         # Build new entry with uvx
