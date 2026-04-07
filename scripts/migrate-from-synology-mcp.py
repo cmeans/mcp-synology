@@ -12,8 +12,8 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
-import sys
 from pathlib import Path
 
 OLD_NAME = "synology-mcp"
@@ -134,10 +134,96 @@ def cleanup_keyring(instances: set[str], *, dry_run: bool) -> None:
                     print(f"  ERROR  deleting {old_service}/{key}: {e}")
 
 
+def _find_claude_desktop_config() -> Path | None:
+    """Locate claude_desktop_config.json across platforms."""
+    home = Path.home()
+    candidates = [
+        home / ".config" / "Claude" / "claude_desktop_config.json",  # Linux
+        home / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json",  # macOS
+        home / "AppData" / "Roaming" / "Claude" / "claude_desktop_config.json",  # Windows
+    ]
+    for path in candidates:
+        if path.exists():
+            return path
+    return None
+
+
+def migrate_claude_desktop_config(*, dry_run: bool) -> bool:
+    """Update Claude Desktop config: replace old synology-mcp references.
+
+    Rewrites command/args entries that reference synology-mcp to use
+    uvx mcp-synology, and updates config paths from synology-mcp to mcp-synology.
+    Returns True if changes were made (or would be made in dry run).
+    """
+    config_path = _find_claude_desktop_config()
+    if not config_path:
+        print("  SKIP  claude_desktop_config.json not found")
+        return False
+
+    text = config_path.read_text(encoding="utf-8")
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        print(f"  ERROR could not parse {config_path}")
+        return False
+
+    servers = data.get("mcpServers", {})
+    changed = False
+    uvx_path = shutil.which("uvx") or "uvx"
+
+    for name, entry in servers.items():
+        args = entry.get("args", [])
+
+        # Detect old-style configs: command is synology-mcp, or args contain synology-mcp
+        is_old_direct = entry.get("command", "").endswith("synology-mcp") and "serve" in args
+        is_old_uv_run = "run" in args and "synology-mcp" in args
+
+        if not is_old_direct and not is_old_uv_run:
+            continue
+
+        # Extract the config path from args (follows --config)
+        config_arg = None
+        for i, arg in enumerate(args):
+            if arg == "--config" and i + 1 < len(args):
+                config_arg = args[i + 1]
+                break
+
+        # Update config path references
+        if config_arg:
+            config_arg = config_arg.replace("synology-mcp", "mcp-synology")
+
+        # Build new entry with uvx
+        new_args = ["mcp-synology", "serve"]
+        if config_arg:
+            new_args.extend(["--config", config_arg])
+
+        old_desc = f"{entry.get('command', '?')} {' '.join(args)}"
+        new_desc = f"{uvx_path} {' '.join(new_args)}"
+
+        if dry_run:
+            print(f"  UPDATE [{name}]")
+            print(f"         old: {old_desc}")
+            print(f"         new: {new_desc}")
+        else:
+            entry["command"] = uvx_path
+            entry["args"] = new_args
+            print(f"  UPDATED [{name}] -> {uvx_path} {' '.join(new_args)}")
+
+        changed = True
+
+    if not changed:
+        print("  OK    no synology-mcp references found in Claude Desktop config")
+        return False
+
+    if not dry_run:
+        config_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        print(f"  SAVED {config_path}")
+
+    return changed
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Migrate from synology-mcp to mcp-synology"
-    )
+    parser = argparse.ArgumentParser(description="Migrate from synology-mcp to mcp-synology")
     parser.add_argument(
         "--apply",
         action="store_true",
@@ -196,6 +282,11 @@ def main() -> None:
             print("\n  TIP: Run with --apply --cleanup to remove old keyring entries")
     print()
 
+    # --- Claude Desktop config ---
+    print("Claude Desktop:")
+    desktop_changed = migrate_claude_desktop_config(dry_run=dry_run)
+    print()
+
     # --- Summary ---
     if dry_run:
         print("Re-run with --apply to execute these changes.")
@@ -203,7 +294,8 @@ def main() -> None:
         print("Migration complete.")
         print(f"  - Config: {new_config}")
         print(f"  - State:  {new_state}")
-        print("  - Update Claude Desktop config: change \"synology-mcp\" to \"mcp-synology\"")
+        if desktop_changed:
+            print("  - Claude Desktop config updated — restart Claude Desktop")
 
 
 if __name__ == "__main__":

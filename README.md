@@ -69,8 +69,8 @@ Copy the snippet from setup into your `claude_desktop_config.json` and restart C
 {
   "mcpServers": {
     "synology-nas": {
-      "command": "mcp-synology",
-      "args": ["serve", "--config", "~/.config/mcp-synology/nas.yaml"]
+      "command": "uvx",
+      "args": ["mcp-synology", "serve", "--config", "~/.config/mcp-synology/nas.yaml"]
     }
   }
 }
