@@ -1,0 +1,21 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.cmeans/mcp-synology",
+  "title": "Synology NAS",
+  "description": "MCP server for Synology NAS — manage files, monitor system health, and automate NAS operations via Claude",
+  "version": "0.4.0",
+  "repository": {
+    "url": "https://github.com/cmeans/mcp-synology",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "mcp-synology",
+      "version": "0.4.0",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}
