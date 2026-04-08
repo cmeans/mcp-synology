@@ -17,6 +17,8 @@
 
 MCP server for Synology NAS devices. Exposes Synology DSM API functionality as MCP tools that Claude can use.
 
+<!-- mcp-name: io.github.cmeans/mcp-synology -->
+
 ## Migrating from synology-mcp
 
 If you're upgrading from `synology-mcp` (v0.3.x or earlier), the package has been renamed. A migration script handles config, state, keyring entries, and Claude Desktop config automatically:
