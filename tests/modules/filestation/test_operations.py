@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING
 
 import httpx
+import pytest
 import respx
+from mcp.server.fastmcp.exceptions import ToolError
 
 from mcp_synology.modules.filestation.operations import (
     copy_files,
@@ -65,8 +68,11 @@ class TestCreateFolder:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
             json={"success": False, "error": {"code": 418}}
         )
-        result = await create_folder(mock_client, paths=["/video/bad<name"])
-        assert "[!]" in result
+        with pytest.raises(ToolError) as exc_info:
+            await create_folder(mock_client, paths=["/video/bad<name"])
+        body = json.loads(str(exc_info.value))
+        assert body["status"] == "error"
+        assert body["error"]["code"] == "invalid_parameter"
 
 
 class TestRename:
@@ -90,17 +96,23 @@ class TestRename:
         assert "Severance" in result
 
     async def test_rename_rejects_path_in_name(self, mock_client: DsmClient) -> None:
-        result = await rename(mock_client, path="/video/test", new_name="some/path/name")
-        assert "[!]" in result
-        assert "just a filename" in result
+        with pytest.raises(ToolError) as exc_info:
+            await rename(mock_client, path="/video/test", new_name="some/path/name")
+        body = json.loads(str(exc_info.value))
+        assert body["status"] == "error"
+        assert body["error"]["code"] == "invalid_parameter"
+        assert body["error"]["param"] == "new_name"
 
     @respx.mock
     async def test_rename_error(self, mock_client: DsmClient) -> None:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
             json={"success": False, "error": {"code": 419}}
         )
-        result = await rename(mock_client, path="/video/test", new_name="bad<name")
-        assert "[!]" in result
+        with pytest.raises(ToolError) as exc_info:
+            await rename(mock_client, path="/video/test", new_name="bad<name")
+        body = json.loads(str(exc_info.value))
+        assert body["status"] == "error"
+        assert body["error"]["code"] == "invalid_parameter"
 
 
 class TestCopyFiles:
@@ -121,12 +133,15 @@ class TestCopyFiles:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
             json={"success": False, "error": {"code": 414}}
         )
-        result = await copy_files(
-            mock_client,
-            paths=["/video/file.mkv"],
-            dest_folder="/video/dest",
-        )
-        assert "[!]" in result
+        with pytest.raises(ToolError) as exc_info:
+            await copy_files(
+                mock_client,
+                paths=["/video/file.mkv"],
+                dest_folder="/video/dest",
+            )
+        body = json.loads(str(exc_info.value))
+        assert body["status"] == "error"
+        assert body["error"]["code"] == "already_exists"
 
 
 class TestMoveFiles:
@@ -147,13 +162,15 @@ class TestMoveFiles:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
             json={"success": False, "error": {"code": 414}}
         )
-        result = await move_files(
-            mock_client,
-            paths=["/video/file.mkv"],
-            dest_folder="/video/dest",
-        )
-        assert "[!]" in result
-        assert "exists" in result.lower()
+        with pytest.raises(ToolError) as exc_info:
+            await move_files(
+                mock_client,
+                paths=["/video/file.mkv"],
+                dest_folder="/video/dest",
+            )
+        body = json.loads(str(exc_info.value))
+        assert body["status"] == "error"
+        assert body["error"]["code"] == "already_exists"
 
 
 class TestDeleteFiles:
@@ -185,8 +202,11 @@ class TestDeleteFiles:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
             json={"success": False, "error": {"code": 408}}
         )
-        result = await delete_files(mock_client, paths=["/nonexistent/file"])
-        assert "[!]" in result
+        with pytest.raises(ToolError) as exc_info:
+            await delete_files(mock_client, paths=["/nonexistent/file"])
+        body = json.loads(str(exc_info.value))
+        assert body["status"] == "error"
+        assert body["error"]["code"] == "not_found"
 
     @respx.mock
     async def test_delete_multiple_shares(self, mock_client: DsmClient) -> None:
@@ -237,9 +257,12 @@ class TestRestoreFromRecycleBin:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
             json={"success": False, "error": {"code": 408}}
         )
-        result = await restore_from_recycle_bin(
-            mock_client,
-            share="video",
-            paths=["nonexistent.mkv"],
-        )
-        assert "[!]" in result
+        with pytest.raises(ToolError) as exc_info:
+            await restore_from_recycle_bin(
+                mock_client,
+                share="video",
+                paths=["nonexistent.mkv"],
+            )
+        body = json.loads(str(exc_info.value))
+        assert body["status"] == "error"
+        assert body["error"]["code"] == "not_found"

@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import contextlib
+import json
 from typing import TYPE_CHECKING
 from unittest.mock import patch
 
 import httpx
+import pytest
 import respx
+from mcp.server.fastmcp.exceptions import ToolError
 
 from mcp_synology.modules.filestation.transfer import (
     download_file,
@@ -39,13 +42,15 @@ class TestUploadFile:
         assert "/video/uploads/" in result
 
     async def test_upload_local_file_not_found(self, mock_client: DsmClient) -> None:
-        result = await upload_file(
-            mock_client,
-            local_path="/nonexistent/file.txt",
-            dest_folder="/video/uploads",
-        )
-        assert "[!]" in result
-        assert "not found" in result.lower()
+        with pytest.raises(ToolError) as exc_info:
+            await upload_file(
+                mock_client,
+                local_path="/nonexistent/file.txt",
+                dest_folder="/video/uploads",
+            )
+        body = json.loads(str(exc_info.value))
+        assert body["status"] == "error"
+        assert body["error"]["code"] == "not_found"
 
     @respx.mock
     async def test_upload_file_exists_no_overwrite(
@@ -58,14 +63,16 @@ class TestUploadFile:
             json={"success": False, "error": {"code": 414}}
         )
 
-        result = await upload_file(
-            mock_client,
-            local_path=str(local_file),
-            dest_folder="/video/uploads",
-        )
-        assert "[!]" in result
-        assert "already exists" in result
-        assert "overwrite=true" in result
+        with pytest.raises(ToolError) as exc_info:
+            await upload_file(
+                mock_client,
+                local_path=str(local_file),
+                dest_folder="/video/uploads",
+            )
+        body = json.loads(str(exc_info.value))
+        assert body["status"] == "error"
+        assert body["error"]["code"] == "already_exists"
+        assert "overwrite=true" in body["error"]["suggestion"]
 
     @respx.mock
     async def test_upload_overwrite_success(self, mock_client: DsmClient, tmp_path: Path) -> None:
@@ -108,31 +115,38 @@ class TestUploadFile:
             json={"success": False, "error": {"code": 1802}}
         )
 
-        result = await upload_file(
-            mock_client,
-            local_path=str(local_file),
-            dest_folder="/video/uploads",
-        )
-        assert "[!]" in result
-        assert "Upload" in result
+        with pytest.raises(ToolError) as exc_info:
+            await upload_file(
+                mock_client,
+                local_path=str(local_file),
+                dest_folder="/video/uploads",
+            )
+        body = json.loads(str(exc_info.value))
+        assert body["status"] == "error"
+        assert "Upload" in body["error"]["message"]
 
     async def test_upload_local_file_permission_error(
         self, mock_client: DsmClient, tmp_path: Path
     ) -> None:
-        """OSError reading local file should return a formatted error."""
+        """OSError reading local file should raise ToolError."""
         local_file = tmp_path / "no_read.txt"
         local_file.write_text("hello")
         local_file.chmod(0o000)
 
-        result = await upload_file(
-            mock_client,
-            local_path=str(local_file),
-            dest_folder="/video/uploads",
-        )
-        # Restore permissions for cleanup
-        local_file.chmod(0o644)
-        assert "[!]" in result
-        assert "permission" in result.lower() or "not found" in result.lower()
+        try:
+            with pytest.raises(ToolError) as exc_info:
+                await upload_file(
+                    mock_client,
+                    local_path=str(local_file),
+                    dest_folder="/video/uploads",
+                )
+            body = json.loads(str(exc_info.value))
+            assert body["status"] == "error"
+            # Could be "not_found" (can't stat) or "filesystem_error" (can't read)
+            assert body["error"]["code"] in ("not_found", "filesystem_error")
+        finally:
+            # Restore permissions for cleanup
+            local_file.chmod(0o644)
 
 
 class TestDownloadFile:
@@ -157,13 +171,15 @@ class TestDownloadFile:
         assert downloaded.read_bytes() == file_content
 
     async def test_download_local_dir_not_found(self, mock_client: DsmClient) -> None:
-        result = await download_file(
-            mock_client,
-            path="/video/movie.mkv",
-            dest_folder="/nonexistent/dir",
-        )
-        assert "[!]" in result
-        assert "not found" in result.lower()
+        with pytest.raises(ToolError) as exc_info:
+            await download_file(
+                mock_client,
+                path="/video/movie.mkv",
+                dest_folder="/nonexistent/dir",
+            )
+        body = json.loads(str(exc_info.value))
+        assert body["status"] == "error"
+        assert body["error"]["code"] == "not_found"
 
     async def test_download_file_exists_no_overwrite(
         self, mock_client: DsmClient, tmp_path: Path
@@ -171,14 +187,16 @@ class TestDownloadFile:
         existing = tmp_path / "movie.mkv"
         existing.write_text("existing")
 
-        result = await download_file(
-            mock_client,
-            path="/video/movie.mkv",
-            dest_folder=str(tmp_path),
-        )
-        assert "[!]" in result
-        assert "already exists" in result
-        assert "overwrite=true" in result
+        with pytest.raises(ToolError) as exc_info:
+            await download_file(
+                mock_client,
+                path="/video/movie.mkv",
+                dest_folder=str(tmp_path),
+            )
+        body = json.loads(str(exc_info.value))
+        assert body["status"] == "error"
+        assert body["error"]["code"] == "already_exists"
+        assert "overwrite=true" in body["error"]["suggestion"]
 
     @respx.mock
     async def test_download_overwrite_success(self, mock_client: DsmClient, tmp_path: Path) -> None:
@@ -226,13 +244,15 @@ class TestDownloadFile:
             headers={"content-type": "application/json"},
         )
 
-        result = await download_file(
-            mock_client,
-            path="/video/nonexistent.mkv",
-            dest_folder=str(tmp_path),
-        )
-        assert "[!]" in result
-        assert "Download" in result
+        with pytest.raises(ToolError) as exc_info:
+            await download_file(
+                mock_client,
+                path="/video/nonexistent.mkv",
+                dest_folder=str(tmp_path),
+            )
+        body = json.loads(str(exc_info.value))
+        assert body["status"] == "error"
+        assert "Download" in body["error"]["message"]
         # Partial file should not exist
         assert not (tmp_path / "nonexistent.mkv").exists()
 
@@ -257,7 +277,7 @@ class TestDownloadFile:
     async def test_download_write_permission_error(
         self, mock_client: DsmClient, tmp_path: Path
     ) -> None:
-        """OSError writing local file should return a formatted error.
+        """OSError writing local file should raise ToolError.
 
         Simulates what happens when the filename contains OS-illegal characters
         (e.g., ':' on Windows) or the directory is read-only, by attempting to
@@ -272,16 +292,20 @@ class TestDownloadFile:
             headers={"content-type": "application/octet-stream"},
         )
 
-        result = await download_file(
-            mock_client,
-            path="/video/file.mkv",
-            dest_folder=str(readonly_dir),
-            filename="test.mkv",
-        )
-        # Restore permissions for cleanup
-        readonly_dir.chmod(0o755)
-        assert "[!]" in result
-        assert "filename" in result.lower()
+        try:
+            with pytest.raises(ToolError) as exc_info:
+                await download_file(
+                    mock_client,
+                    path="/video/file.mkv",
+                    dest_folder=str(readonly_dir),
+                    filename="test.mkv",
+                )
+            body = json.loads(str(exc_info.value))
+            assert body["status"] == "error"
+            assert body["error"]["code"] == "filesystem_error"
+        finally:
+            # Restore permissions for cleanup
+            readonly_dir.chmod(0o755)
 
     @respx.mock
     async def test_download_insufficient_disk_space_preflight(
@@ -310,13 +334,15 @@ class TestDownloadFile:
             ]
         )
 
-        result = await download_file(
-            mock_client,
-            path="/video/huge.mkv",
-            dest_folder=str(tmp_path),
-        )
-        assert "[!]" in result
-        assert "disk space" in result.lower()
+        with pytest.raises(ToolError) as exc_info:
+            await download_file(
+                mock_client,
+                path="/video/huge.mkv",
+                dest_folder=str(tmp_path),
+            )
+        body = json.loads(str(exc_info.value))
+        assert body["status"] == "error"
+        assert body["error"]["code"] == "disk_full"
 
     @respx.mock
     async def test_download_progress_callback(self, mock_client: DsmClient, tmp_path: Path) -> None:

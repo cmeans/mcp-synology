@@ -6,46 +6,90 @@ from __future__ import annotations
 class SynologyError(Exception):
     """Base exception for all Synology DSM errors."""
 
-    def __init__(self, message: str, code: int | None = None, suggestion: str | None = None):
+    help_url: str | None = None
+    error_code: str = "dsm_error"
+    retryable: bool = False
+
+    def __init__(
+        self,
+        message: str,
+        code: int | None = None,
+        suggestion: str | None = None,
+        help_url: str | None = None,
+    ):
         self.code = code
         self.suggestion = suggestion
+        if help_url is not None:
+            self.help_url = help_url
         super().__init__(message)
 
 
 class AuthenticationError(SynologyError):
     """Authentication failed (bad credentials, 2FA required, etc.)."""
 
+    help_url = (
+        "https://kb.synology.com/en-global/DSM/help/DSM/AdminCenter/connection_security_autoblock"
+    )
+    error_code = "auth_failed"
+
 
 class SessionExpiredError(SynologyError):
     """Session expired or invalidated (codes 106, 107, 119)."""
+
+    help_url = (
+        "https://kb.synology.com/en-global/DSM/help/DSM/AdminCenter/connection_security_autoblock"
+    )
+    error_code = "session_expired"
+    retryable = True
 
 
 class SynologyPermissionError(SynologyError):
     """Permission denied (code 105). NOT a session issue — never re-auth on this."""
 
+    help_url = "https://kb.synology.com/en-global/DSM/help/DSM/AdminCenter/file_user_desc"
+    error_code = "permission_denied"
+
 
 class ApiNotFoundError(SynologyError):
     """Requested API does not exist on this NAS."""
+
+    help_url = "https://kb.synology.com/en-global/DSM/help/DSM/Tutorial/cloud_set_up_dsm"
+    error_code = "api_not_found"
 
 
 class FileStationError(SynologyError):
     """Base exception for File Station API errors."""
 
+    error_code = "filestation_error"
+
 
 class PathNotFoundError(FileStationError):
     """Path not found (code 408)."""
+
+    help_url = "https://kb.synology.com/en-global/DSM/help/FileStation/connect"
+    error_code = "not_found"
 
 
 class SynologyFileExistsError(FileStationError):
     """File already exists at destination (code 414)."""
 
+    help_url = "https://kb.synology.com/en-global/DSM/help/FileStation/connect"
+    error_code = "already_exists"
+
 
 class DiskFullError(FileStationError):
     """No space left on device (code 416)."""
 
+    help_url = "https://kb.synology.com/en-global/DSM/help/DSM/AdminCenter/system_info_storage"
+    error_code = "disk_full"
+    retryable = True
+
 
 class IllegalNameError(FileStationError):
     """Invalid file or folder name (codes 418, 419)."""
+
+    help_url = "https://en.wikipedia.org/wiki/Filename#Reserved_characters_and_words"
+    error_code = "invalid_parameter"
 
 
 # Common DSM error codes (100-series) shared across all APIs.

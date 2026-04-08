@@ -1,7 +1,18 @@
 """Tests for core/formatting.py — all shared formatters."""
 
+import json
+
+import pytest
+from mcp.server.fastmcp.exceptions import ToolError
+
+from mcp_synology.core.errors import (
+    FileStationError,
+    PathNotFoundError,
+    SynologyError,
+)
 from mcp_synology.core.formatting import (
     TreeNode,
+    error_response,
     format_error,
     format_key_value,
     format_size,
@@ -9,6 +20,7 @@ from mcp_synology.core.formatting import (
     format_table,
     format_timestamp,
     format_tree,
+    synology_error_response,
 )
 
 
@@ -144,3 +156,89 @@ class TestFormatTimestamp:
         # 2025-03-15 12:00:00 UTC
         result = format_timestamp(1742040000)
         assert "2025-03-15" in result
+
+
+class TestErrorResponse:
+    def test_raises_tool_error(self) -> None:
+        with pytest.raises(ToolError) as exc_info:
+            error_response("not_found", "File not found", retryable=False)
+        body = json.loads(str(exc_info.value))
+        assert body["status"] == "error"
+        assert body["error"]["code"] == "not_found"
+        assert body["error"]["message"] == "File not found"
+        assert body["error"]["retryable"] is False
+
+    def test_includes_optional_fields(self) -> None:
+        with pytest.raises(ToolError) as exc_info:
+            error_response(
+                "invalid_parameter",
+                "Bad param",
+                retryable=False,
+                param="path",
+                value="/bad",
+                valid=["/good1", "/good2"],
+                suggestion="Try a valid path.",
+                help_url="https://example.com",
+            )
+        body = json.loads(str(exc_info.value))
+        err = body["error"]
+        assert err["param"] == "path"
+        assert err["value"] == "/bad"
+        assert err["valid"] == ["/good1", "/good2"]
+        assert err["suggestion"] == "Try a valid path."
+        assert err["help_url"] == "https://example.com"
+
+    def test_omits_optional_fields_when_none(self) -> None:
+        with pytest.raises(ToolError) as exc_info:
+            error_response("dsm_error", "Something broke", retryable=True)
+        body = json.loads(str(exc_info.value))
+        err = body["error"]
+        assert "param" not in err
+        assert "value" not in err
+        assert "valid" not in err
+        assert "suggestion" not in err
+        assert "help_url" not in err
+        assert err["retryable"] is True
+
+
+class TestSynologyErrorResponse:
+    def test_maps_path_not_found(self) -> None:
+        exc = PathNotFoundError("No such file", code=408, suggestion="Check path")
+        with pytest.raises(ToolError) as exc_info:
+            synology_error_response("List files", exc)
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "not_found"
+        assert body["error"]["retryable"] is False
+        assert "List files" in body["error"]["message"]
+        assert "408" in body["error"]["message"]
+        assert body["error"]["suggestion"] == "Check path"
+
+    def test_maps_generic_synology_error(self) -> None:
+        exc = SynologyError("Unknown", code=100)
+        with pytest.raises(ToolError) as exc_info:
+            synology_error_response("Operation", exc)
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "dsm_error"
+
+    def test_maps_filestation_error(self) -> None:
+        exc = FileStationError("FS error", code=401)
+        with pytest.raises(ToolError) as exc_info:
+            synology_error_response("Copy", exc)
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "filestation_error"
+
+    def test_includes_help_url(self) -> None:
+        exc = PathNotFoundError("Not found", code=408)
+        with pytest.raises(ToolError) as exc_info:
+            synology_error_response("Get info", exc)
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["help_url"] is not None
+
+    def test_no_code(self) -> None:
+        exc = SynologyError("Network timeout")
+        with pytest.raises(ToolError) as exc_info:
+            synology_error_response("Upload", exc)
+        body = json.loads(str(exc_info.value))
+        # When no code, message should not contain "DSM error"
+        assert "DSM error" not in body["error"]["message"]
+        assert "Upload failed" in body["error"]["message"]

@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 import datetime
+import json
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, NoReturn
+
+if TYPE_CHECKING:
+    from mcp_synology.core.errors import SynologyError
 
 
 def format_table(
@@ -150,6 +155,70 @@ def format_error(
     if suggestion:
         lines.append(f"    Suggestion: {suggestion}")
     return "\n".join(lines)
+
+
+def error_response(
+    code: str,
+    message: str,
+    *,
+    retryable: bool,
+    param: str | None = None,
+    value: Any | None = None,
+    valid: list[str] | None = None,
+    suggestion: str | None = None,
+    help_url: str | None = None,
+) -> NoReturn:
+    """Build a structured error envelope and raise ToolError.
+
+    The MCP SDK wraps ToolError in a CallToolResult with isError=True,
+    so clients get proper error signaling. The JSON envelope provides
+    structured fields for smart clients alongside a human-readable message.
+
+    Raises:
+        ToolError: always — this function never returns.
+    """
+    from mcp.server.fastmcp.exceptions import ToolError
+
+    error: dict[str, Any] = {
+        "code": code,
+        "message": message,
+        "retryable": retryable,
+    }
+    if param is not None:
+        error["param"] = param
+    if value is not None:
+        error["value"] = value
+    if valid is not None:
+        error["valid"] = valid
+    if suggestion is not None:
+        error["suggestion"] = suggestion
+    if help_url is not None:
+        error["help_url"] = help_url
+
+    raise ToolError(json.dumps({"status": "error", "error": error}))
+
+
+def synology_error_response(operation: str, exc: SynologyError) -> NoReturn:
+    """Convert a caught SynologyError into a structured error response.
+
+    Maps SynologyError attributes to structured error fields and raises
+    ToolError with a JSON envelope. The operation name provides context
+    (e.g., "List files", "Upload").
+
+    Raises:
+        ToolError: always — this function never returns.
+    """
+    msg = f"{operation} failed: {exc}"
+    if exc.code is not None:
+        msg = f"{operation} failed (DSM error {exc.code}): {exc}"
+
+    error_response(
+        exc.error_code,
+        msg,
+        retryable=exc.retryable,
+        suggestion=exc.suggestion,
+        help_url=exc.help_url,
+    )
 
 
 _SIZE_UNITS = ["B", "KB", "MB", "GB", "TB", "PB"]

@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING
 
 import httpx
+import pytest
 import respx
+from mcp.server.fastmcp.exceptions import ToolError
 
 from mcp_synology.modules.filestation.search import search_files
 from tests.conftest import BASE_URL
@@ -135,8 +138,11 @@ class TestSearchFiles:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
             json={"success": False, "error": {"code": 408}}
         )
-        result = await search_files(mock_client, folder_path="/nonexistent")
-        assert "[!]" in result
+        with pytest.raises(ToolError) as exc_info:
+            await search_files(mock_client, folder_path="/nonexistent")
+        body = json.loads(str(exc_info.value))
+        assert body["status"] == "error"
+        assert body["error"]["code"] == "not_found"
 
     @respx.mock
     async def test_search_with_size_filter(self, mock_client: DsmClient) -> None:

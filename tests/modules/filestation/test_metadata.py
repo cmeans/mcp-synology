@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING
 
 import httpx
+import pytest
 import respx
+from mcp.server.fastmcp.exceptions import ToolError
 
 from mcp_synology.modules.filestation.metadata import get_dir_size, get_file_info
 from tests.conftest import BASE_URL
@@ -79,8 +82,11 @@ class TestGetFileInfo:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
             json={"success": False, "error": {"code": 408}}
         )
-        result = await get_file_info(mock_client, paths=["/nonexistent"])
-        assert "[!]" in result
+        with pytest.raises(ToolError) as exc_info:
+            await get_file_info(mock_client, paths=["/nonexistent"])
+        body = json.loads(str(exc_info.value))
+        assert body["status"] == "error"
+        assert body["error"]["code"] == "not_found"
 
 
 class TestGetDirSize:

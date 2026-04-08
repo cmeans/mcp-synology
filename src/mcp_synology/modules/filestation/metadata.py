@@ -8,11 +8,12 @@ from typing import TYPE_CHECKING, Any
 
 from mcp_synology.core.errors import SynologyError
 from mcp_synology.core.formatting import (
-    format_error,
+    error_response,
     format_key_value,
     format_size,
     format_table,
     format_timestamp,
+    synology_error_response,
 )
 from mcp_synology.modules.filestation.helpers import (
     escape_multi_path,
@@ -62,7 +63,7 @@ async def get_file_info(
             },
         )
     except SynologyError as e:
-        return format_error("Get file info", str(e), e.suggestion)
+        synology_error_response("Get file info", e)
 
     files = data.get("files", [])
 
@@ -71,10 +72,11 @@ async def get_file_info(
 
     # Multiple files: table format
     if not files:
-        return format_error(
-            "Get file info",
-            "No file information returned.",
-            "Check that the paths exist.",
+        error_response(
+            "not_found",
+            "Get file info failed: No file information returned.",
+            retryable=False,
+            suggestion="Check that the paths exist.",
         )
 
     headers = ["Name", "Path", "Type", "Size", "Modified"]
@@ -151,7 +153,7 @@ async def get_dir_size(
             params={"path": normalized},
         )
     except SynologyError as e:
-        return format_error("Get directory size", str(e), e.suggestion)
+        synology_error_response("Get directory size", e)
 
     taskid = start_data.get("taskid", "")
 
@@ -159,7 +161,7 @@ async def get_dir_size(
     # preventing orphaned processes that consume CPU on the NAS.
     elapsed = 0.0
     interval = 0.5
-    poll_error: str | None = None
+    poll_error: SynologyError | None = None
     result: str | None = None
 
     try:
@@ -171,7 +173,7 @@ async def get_dir_size(
                     params={"taskid": taskid},
                 )
             except SynologyError as e:
-                poll_error = format_error("Get directory size", str(e), e.suggestion)
+                poll_error = e
                 break
 
             if status.get("finished", False):
@@ -195,12 +197,13 @@ async def get_dir_size(
         await _stop_dirsize_task(client, taskid)
 
     if poll_error:
-        return poll_error
+        synology_error_response("Get directory size", poll_error)
     if result:
         return result
 
-    return format_error(
-        "Get directory size",
-        f"Timed out after {timeout}s.",
-        "The directory may be very large. Try a subdirectory.",
+    error_response(
+        "timeout",
+        f"Get directory size failed: timed out after {timeout}s.",
+        retryable=True,
+        suggestion="The directory may be very large. Try a subdirectory.",
     )

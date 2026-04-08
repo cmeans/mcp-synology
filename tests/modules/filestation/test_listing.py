@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING
 
+import pytest
 import respx
+from mcp.server.fastmcp.exceptions import ToolError
 
 from mcp_synology.modules.filestation.listing import (
     list_files,
@@ -159,8 +162,11 @@ class TestListFiles:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
             json={"success": False, "error": {"code": 408}}
         )
-        result = await list_files(mock_client, path="/nonexistent")
-        assert "[!]" in result
+        with pytest.raises(ToolError) as exc_info:
+            await list_files(mock_client, path="/nonexistent")
+        body = json.loads(str(exc_info.value))
+        assert body["status"] == "error"
+        assert body["error"]["code"] == "not_found"
 
 
 class TestListRecycleBin:
