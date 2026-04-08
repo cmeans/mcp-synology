@@ -1,0 +1,81 @@
+name: Platform Test Report
+description: Report results from testing on your platform and NAS
+labels: ["testing", "help wanted"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Help us verify platform support! Report what works (or doesn't) on your setup.
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Linux
+        - macOS
+        - Windows
+    validations:
+      required: true
+  - type: input
+    id: os_version
+    attributes:
+      label: OS version
+      placeholder: "e.g., macOS 15.3, Windows 11 24H2, Fedora 43"
+    validations:
+      required: true
+  - type: input
+    id: dsm_version
+    attributes:
+      label: DSM version
+      placeholder: "e.g., DSM 7.2.2-72806"
+    validations:
+      required: true
+  - type: dropdown
+    id: client
+    attributes:
+      label: MCP Client
+      options:
+        - Claude Desktop
+        - Claude Code
+        - Claude.ai (web/mobile)
+        - Cursor
+        - ChatGPT
+        - Other (describe below)
+    validations:
+      required: true
+  - type: input
+    id: install_method
+    attributes:
+      label: Install method
+      placeholder: "e.g., uvx, uv tool install, pip install"
+    validations:
+      required: false
+  - type: checkboxes
+    id: features
+    attributes:
+      label: What worked?
+      options:
+        - label: "mcp-synology setup — interactive config creation"
+        - label: "mcp-synology check — credential validation"
+        - label: "list_shares — enumerate shared folders"
+        - label: "list_files — browse directory contents"
+        - label: "search_files — search by name/extension"
+        - label: "get_file_info — file metadata"
+        - label: "get_dir_size — directory size calculation"
+        - label: "download_file — download file contents"
+        - label: "create_folder — create new directory"
+        - label: "rename — rename file or folder"
+        - label: "copy_files / move_files — copy or move"
+        - label: "delete_files — delete to recycle bin"
+        - label: "upload_file — upload file to NAS"
+        - label: "get_system_info — system information"
+        - label: "get_resource_usage — resource monitoring"
+        - label: "2FA authentication"
+        - label: "Keyring credential storage"
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Anything else — quirks, workarounds, error messages, debug logs.
+    validations:
+      required: false

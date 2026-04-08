@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: README / Setup Guide
+    url: https://github.com/cmeans/mcp-synology#quick-start
+    about: Installation and configuration instructions
+  - name: Credentials & Keyring
+    url: https://github.com/cmeans/mcp-synology/blob/main/docs/credentials.md
+    about: Keyring setup, multi-NAS credentials, and troubleshooting
