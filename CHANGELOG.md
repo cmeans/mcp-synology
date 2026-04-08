@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.1 (2026-04-07)
+
+### Fixes
+
+- **Claude Desktop config** — setup snippet now uses `uvx mcp-synology` instead of bare command, which failed with ENOENT on systems where `~/.local/bin` isn't in Claude Desktop's PATH
+- **Migration script** — now auto-updates `claude_desktop_config.json` (detects and rewrites old synology-mcp entries), creates `.json.bak` backup before writing, preserves extra args, handles `--config=value` equals syntax
+- **README** — added migration section near top for users upgrading from synology-mcp, standardized all examples on `uvx`
+
+### Added
+
+- **MCP registry files** — `glama.json` for Glama.ai directory, `server.json` for official MCP Registry
+- **PyPI ownership verification** — `mcp-name` comment in README for official registry validation
+- **GitHub issue templates** — bug report, feature request, platform test report
+
 ## 0.4.0 (2026-04-05)
 
 ### Breaking Changes
