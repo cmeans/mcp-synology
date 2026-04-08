@@ -14,6 +14,7 @@
 [![Tests](https://img.shields.io/github/actions/workflow/status/cmeans/mcp-synology/ci.yml?label=tests)](https://github.com/cmeans/mcp-synology/actions/workflows/ci.yml)
 [![Coverage](https://codecov.io/gh/cmeans/mcp-synology/graph/badge.svg)](https://codecov.io/gh/cmeans/mcp-synology)
 [![Downloads](https://img.shields.io/pypi/dm/mcp-synology)](https://pypi.org/project/mcp-synology/)
+[![Glama](https://glama.ai/mcp/servers/cmeans/mcp-synology/badges/score.svg)](https://glama.ai/mcp/servers/cmeans/mcp-synology)
 
 MCP server for Synology NAS devices. Exposes Synology DSM API functionality as MCP tools that Claude can use.
 
