@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import contextlib
+import errno
 import logging
 import shutil
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
-from mcp_synology.core.errors import SynologyError, SynologyFileExistsError
-from mcp_synology.core.formatting import format_error, format_size, format_status
+from mcp_synology.core.errors import ErrorCode, SynologyError, SynologyFileExistsError
+from mcp_synology.core.formatting import (
+    error_response,
+    format_size,
+    format_status,
+    synology_error_response,
+)
 from mcp_synology.modules.filestation.helpers import normalize_path
 
 if TYPE_CHECKING:
@@ -35,10 +41,13 @@ async def upload_file(
     """Upload a local file to a NAS folder."""
     local = Path(local_path)
     if not local.is_file():
-        return format_error(
-            "Upload",
-            f"Local file not found: {local_path}",
-            "Check the file path and try again.",
+        error_response(
+            ErrorCode.NOT_FOUND,
+            f"Upload failed: Local file not found: {local_path}",
+            retryable=False,
+            param="local_path",
+            value=local_path,
+            suggestion="Check the file path and try again.",
         )
 
     file_size = local.stat().st_size
@@ -59,18 +68,24 @@ async def upload_file(
             timeout=timeout,
         )
     except SynologyFileExistsError:
-        return format_error(
-            "Upload",
-            f"File '{effective_name}' already exists in {dest}.",
-            "Use overwrite=true to replace the existing file.",
+        error_response(
+            ErrorCode.ALREADY_EXISTS,
+            f"Upload failed: File '{effective_name}' already exists in {dest}.",
+            retryable=False,
+            param="filename",
+            value=effective_name,
+            suggestion="Use overwrite=true to replace the existing file.",
         )
     except SynologyError as e:
-        return format_error("Upload", str(e), e.suggestion)
+        synology_error_response("Upload", e)
     except OSError as e:
-        return format_error(
-            "Upload",
-            f"Failed to read local file '{local_path}': {e}",
-            "Check file permissions and that the file is not locked.",
+        error_response(
+            ErrorCode.FILESYSTEM_ERROR,
+            f"Upload failed: Failed to read local file '{local_path}': {e}",
+            retryable=False,
+            param="local_path",
+            value=local_path,
+            suggestion="Check file permissions and that the file is not locked.",
         )
 
     # Report completion
@@ -102,10 +117,13 @@ async def download_file(
     """Download a NAS file to a local directory."""
     local_dir = Path(dest_folder)
     if not local_dir.is_dir():
-        return format_error(
-            "Download",
-            f"Local directory not found: {dest_folder}",
-            "Check the directory path and try again.",
+        error_response(
+            ErrorCode.NOT_FOUND,
+            f"Download failed: Local directory not found: {dest_folder}",
+            retryable=False,
+            param="dest_folder",
+            value=dest_folder,
+            suggestion="Check the directory path and try again.",
         )
 
     nas_path = normalize_path(path)
@@ -113,10 +131,13 @@ async def download_file(
     dest_file = local_dir / effective_name
 
     if dest_file.exists() and not overwrite:
-        return format_error(
-            "Download",
-            f"Local file already exists: {dest_file}",
-            "Use overwrite=true to replace the existing file.",
+        error_response(
+            ErrorCode.ALREADY_EXISTS,
+            f"Download failed: Local file already exists: {dest_file}",
+            retryable=False,
+            param="dest_folder",
+            value=str(dest_file),
+            suggestion="Use overwrite=true to replace the existing file.",
         )
 
     # Pre-flight disk space check using NAS file metadata.
@@ -138,11 +159,13 @@ async def download_file(
     if nas_file_size:
         free_space = shutil.disk_usage(local_dir).free
         if nas_file_size > free_space:
-            return format_error(
-                "Download",
-                f"Insufficient local disk space: file is {format_size(nas_file_size)} "
+            error_response(
+                ErrorCode.DISK_FULL,
+                f"Download failed: Insufficient local disk space: "
+                f"file is {format_size(nas_file_size)} "
                 f"but only {format_size(free_space)} free on {local_dir}.",
-                "Free space on the local disk or choose a different destination.",
+                retryable=True,
+                suggestion="Free space on the local disk or choose a different destination.",
             )
 
     try:
@@ -160,22 +183,36 @@ async def download_file(
                 logger.debug("Cleaned up partial download: %s", dest_file)
             except OSError:
                 logger.warning("Failed to clean up partial download: %s", dest_file)
-        return format_error("Download", str(e), e.suggestion)
+        synology_error_response("Download", e)
     except OSError as e:
-        # Filesystem rejected the write — illegal characters in filename on this OS,
-        # permission denied, disk full, path too long, etc.
+        # Filesystem rejected the write. Possibilities:
+        #   - ENOSPC: disk full
+        #   - EACCES/EPERM: permission denied
+        #   - EINVAL/ENAMETOOLONG: illegal chars, path too long
+        # Disk-full is handled specifically here so smart clients get a
+        # retryable ``disk_full`` code that matches the pre-flight branch
+        # earlier in this function. Using ``errno`` rather than substring
+        # matching on the error message — the message is locale-dependent
+        # and varies across OS versions, ``errno`` does not.
         if dest_file.exists():
             with contextlib.suppress(OSError):
                 dest_file.unlink()
-        error_str = str(e)
-        if "disk space" in error_str.lower() or "space" in error_str.lower():
-            suggestion = "Free space on the local disk or choose a different destination."
-        else:
-            suggestion = (
+        if e.errno == errno.ENOSPC:
+            error_response(
+                ErrorCode.DISK_FULL,
+                f"Download failed: No space left on local disk: {e}",
+                retryable=True,
+                suggestion="Free space on the local disk or choose a different destination.",
+            )
+        error_response(
+            ErrorCode.FILESYSTEM_ERROR,
+            f"Download failed: Failed to write local file: {e}",
+            retryable=False,
+            suggestion=(
                 "The filename may contain characters not allowed on this OS. "
                 "Use the filename parameter to specify a compatible name."
-            )
-        return format_error("Download", f"Failed to write local file: {e}", suggestion)
+            ),
+        )
     except Exception:
         # Clean up partial file on unexpected failure
         if dest_file.exists():

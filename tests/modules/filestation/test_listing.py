@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING
 
+import pytest
 import respx
+from mcp.server.fastmcp.exceptions import ToolError
 
 from mcp_synology.modules.filestation.listing import (
     list_files,
@@ -86,6 +89,18 @@ class TestListShares:
         result = await list_shares(mock_client)
         assert "No items" in result
 
+    @respx.mock
+    async def test_list_shares_error(self, mock_client: DsmClient) -> None:
+        """DSM error on list_shares should propagate as a structured envelope."""
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 105}}
+        )
+        with pytest.raises(ToolError) as exc_info:
+            await list_shares(mock_client)
+        body = json.loads(str(exc_info.value))
+        assert body["status"] == "error"
+        assert body["error"]["code"] == "permission_denied"
+
 
 class TestListFiles:
     @respx.mock
@@ -159,8 +174,11 @@ class TestListFiles:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
             json={"success": False, "error": {"code": 408}}
         )
-        result = await list_files(mock_client, path="/nonexistent")
-        assert "[!]" in result
+        with pytest.raises(ToolError) as exc_info:
+            await list_files(mock_client, path="/nonexistent")
+        body = json.loads(str(exc_info.value))
+        assert body["status"] == "error"
+        assert body["error"]["code"] == "not_found"
 
 
 class TestListRecycleBin:

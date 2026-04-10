@@ -6,10 +6,10 @@ from typing import TYPE_CHECKING, Any
 
 from mcp_synology.core.errors import SynologyError
 from mcp_synology.core.formatting import (
-    format_error,
     format_size,
     format_table,
     format_timestamp,
+    synology_error_response,
 )
 from mcp_synology.modules.filestation.helpers import (
     file_type_icon,
@@ -61,7 +61,7 @@ async def list_shares(
             },
         )
     except SynologyError as e:
-        return format_error("List shares", str(e), e.suggestion)
+        synology_error_response("List shares", e)
 
     shares = data.get("shares", [])
     if not shares:
@@ -134,7 +134,7 @@ async def list_files(
     try:
         data = await client.request("SYNO.FileStation.List", "list", params=params)
     except SynologyError as e:
-        return format_error("List files", str(e), e.suggestion)
+        synology_error_response("List files", e)
 
     files = data.get("files", [])
     total = data.get("total", len(files))

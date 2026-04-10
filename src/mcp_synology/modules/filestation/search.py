@@ -8,7 +8,12 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from mcp_synology.core.errors import SynologyError
-from mcp_synology.core.formatting import format_error, format_size, format_table, format_timestamp
+from mcp_synology.core.formatting import (
+    format_size,
+    format_table,
+    format_timestamp,
+    synology_error_response,
+)
 from mcp_synology.modules.filestation.helpers import (
     file_type_icon,
     matches_pattern,
@@ -109,7 +114,7 @@ async def search_files(
             params=start_params,
         )
     except SynologyError as e:
-        return format_error("Search files", str(e), e.suggestion)
+        synology_error_response("Search files", e)
 
     taskid = start_data.get("taskid", "")
 
@@ -122,7 +127,7 @@ async def search_files(
     all_files: list[dict[str, Any]] = []
     finished = False
     poll_count = 0
-    poll_error: str | None = None
+    poll_error: SynologyError | None = None
 
     try:
         while (time.monotonic() - start_time) < timeout:
@@ -139,7 +144,7 @@ async def search_files(
                     },
                 )
             except SynologyError as e:
-                poll_error = format_error("Search files", str(e), e.suggestion)
+                poll_error = e
                 break
 
             poll_count += 1
@@ -158,7 +163,7 @@ async def search_files(
         await _cleanup_search_task(client, taskid, search_version, logger)
 
     if poll_error:
-        return poll_error
+        synology_error_response("Search files", poll_error)
 
     # Apply client-side exclude_pattern
     excluded_count = 0

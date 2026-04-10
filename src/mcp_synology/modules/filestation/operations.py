@@ -6,8 +6,13 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
-from mcp_synology.core.errors import SynologyError
-from mcp_synology.core.formatting import format_error, format_size, format_status
+from mcp_synology.core.errors import ErrorCode, SynologyError
+from mcp_synology.core.formatting import (
+    error_response,
+    format_size,
+    format_status,
+    synology_error_response,
+)
 from mcp_synology.modules.filestation.helpers import (
     escape_multi_path,
     normalize_path,
@@ -64,7 +69,7 @@ async def create_folder(
             },
         )
     except SynologyError as e:
-        return format_error("Create folder", str(e), e.suggestion)
+        synology_error_response("Create folder", e)
 
     folders = data.get("folders", [])
     lines = [format_status(f"Created {len(folders)} folder(s):")]
@@ -86,10 +91,13 @@ async def rename(
 
     # Validate new_name is just a name, not a path
     if "/" in new_name:
-        return format_error(
-            "Rename",
-            "new_name should be just a filename, not a path.",
-            "Use move_files to relocate files to a different directory.",
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            "Rename failed: new_name should be just a filename, not a path.",
+            retryable=False,
+            param="new_name",
+            value=new_name,
+            suggestion="Use move_files to relocate files to a different directory.",
         )
 
     try:
@@ -102,7 +110,7 @@ async def rename(
             },
         )
     except SynologyError as e:
-        return format_error("Rename", str(e), e.suggestion)
+        synology_error_response("Rename", e)
 
     files = data.get("files", [])
     if files:
@@ -186,7 +194,7 @@ async def _copy_move(
             },
         )
     except SynologyError as e:
-        return format_error(f"{operation} files", str(e), e.suggestion)
+        synology_error_response(f"{operation} files", e)
 
     taskid = start_data.get("taskid", "")
 
@@ -195,7 +203,7 @@ async def _copy_move(
     elapsed = 0.0
     interval = 0.5
     status: dict[str, Any] = {}
-    poll_error: str | None = None
+    poll_error: SynologyError | None = None
     timed_out = False
 
     try:
@@ -208,7 +216,7 @@ async def _copy_move(
                     params={"taskid": taskid},
                 )
             except SynologyError as e:
-                poll_error = format_error(f"{operation} files", str(e), e.suggestion)
+                poll_error = e
                 break
 
             logger.debug("%s status: %s", operation, status)
@@ -230,12 +238,13 @@ async def _copy_move(
         )
 
     if poll_error:
-        return poll_error
+        synology_error_response(f"{operation} files", poll_error)
     if timed_out:
-        return format_error(
-            f"{operation} files",
-            f"Timed out after {timeout}s.",
-            "The operation may still be running on the NAS.",
+        error_response(
+            ErrorCode.TIMEOUT,
+            f"{operation} files failed: timed out after {timeout}s.",
+            retryable=True,
+            suggestion="The operation may still be running on the NAS.",
         )
 
     # Check for errors in the completed task
@@ -243,10 +252,11 @@ async def _copy_move(
         err = status["error"]
         err_code = err.get("code", 0) if isinstance(err, dict) else err
         err_path = status.get("path", "")
-        return format_error(
-            f"{operation} files",
-            f"DSM error code {err_code} on path: {err_path}",
-            "Check that source paths exist and you have permission to access them.",
+        error_response(
+            ErrorCode.DSM_ERROR,
+            f"{operation} files failed: DSM error code {err_code} on path: {err_path}",
+            retryable=False,
+            suggestion="Check that source paths exist and you have permission to access them.",
         )
 
     # Build response
@@ -291,7 +301,7 @@ async def delete_files(
             },
         )
     except SynologyError as e:
-        return format_error("Delete files", str(e), e.suggestion)
+        synology_error_response("Delete files", e)
 
     taskid = start_data.get("taskid", "")
 
@@ -299,7 +309,7 @@ async def delete_files(
     elapsed = 0.0
     interval = 0.5
     status: dict[str, Any] = {}
-    poll_error: str | None = None
+    poll_error: SynologyError | None = None
     timed_out = False
 
     try:
@@ -312,7 +322,7 @@ async def delete_files(
                     params={"taskid": taskid},
                 )
             except SynologyError as e:
-                poll_error = format_error("Delete files", str(e), e.suggestion)
+                poll_error = e
                 break
 
             logger.debug("Delete status: %s", status)
@@ -334,12 +344,13 @@ async def delete_files(
         )
 
     if poll_error:
-        return poll_error
+        synology_error_response("Delete files", poll_error)
     if timed_out:
-        return format_error(
-            "Delete files",
-            f"Timed out after {timeout}s.",
-            "The operation may still be running on the NAS.",
+        error_response(
+            ErrorCode.TIMEOUT,
+            f"Delete files failed: timed out after {timeout}s.",
+            retryable=True,
+            suggestion="The operation may still be running on the NAS.",
         )
 
     # Check for errors in the completed task
@@ -347,10 +358,11 @@ async def delete_files(
         err = status["error"]
         err_code = err.get("code", 0) if isinstance(err, dict) else err
         err_path = status.get("path", "")
-        return format_error(
-            "Delete files",
-            f"DSM error code {err_code} on path: {err_path}",
-            "Check that paths exist and you have permission to delete them.",
+        error_response(
+            ErrorCode.DSM_ERROR,
+            f"Delete files failed: DSM error code {err_code} on path: {err_path}",
+            retryable=False,
+            suggestion="Check that paths exist and you have permission to delete them.",
         )
 
     # Determine recycle bin status per share

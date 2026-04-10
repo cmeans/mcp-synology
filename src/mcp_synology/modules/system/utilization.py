@@ -5,8 +5,13 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from mcp_synology.core.errors import SynologyError
-from mcp_synology.core.formatting import format_error, format_key_value, format_size
+from mcp_synology.core.errors import ErrorCode, SynologyError
+from mcp_synology.core.formatting import (
+    error_response,
+    format_key_value,
+    format_size,
+    synology_error_response,
+)
 
 if TYPE_CHECKING:
     from mcp_synology.core.client import DsmClient
@@ -103,23 +108,26 @@ def _format_disk(disks: list[dict[str, Any]]) -> list[tuple[str, str]]:
 async def get_resource_usage(client: DsmClient) -> str:
     """Get live system resource utilization."""
     if "SYNO.Core.System.Utilization" not in client._api_cache:
-        return format_error(
-            "Resource usage",
-            "SYNO.Core.System.Utilization API not available.",
-            "This API may require admin privileges or may not be available on this DSM version.",
+        error_response(
+            ErrorCode.API_NOT_FOUND,
+            "Resource usage failed: SYNO.Core.System.Utilization API not available.",
+            retryable=False,
+            suggestion="This API may require admin privileges or may not be available "
+            "on this DSM version.",
         )
 
     try:
         data = await client.request("SYNO.Core.System.Utilization", "get")
     except SynologyError as e:
         if e.code == 105:
-            return format_error(
-                "Resource usage",
-                "Permission denied — admin account required.",
-                "The SYNO.Core.System.Utilization API requires an admin DSM account. "
+            error_response(
+                ErrorCode.PERMISSION_DENIED,
+                "Resource usage failed: Permission denied — admin account required.",
+                retryable=False,
+                suggestion="The SYNO.Core.System.Utilization API requires an admin DSM account. "
                 "Configure an admin connection or check DSM user permissions.",
             )
-        return format_error("Resource usage", str(e), e.suggestion)
+        synology_error_response("Resource usage", e)
 
     pairs: list[tuple[str, str]] = []
 
@@ -150,10 +158,16 @@ async def get_resource_usage(client: DsmClient) -> str:
         pairs.extend(_format_disk(disk_list))
 
     if not pairs:
-        return format_error(
-            "Resource usage",
-            "No utilization data returned.",
-            "The API returned successfully but no metrics were populated.",
+        # retryable=True matches the other ``unavailable`` call sites in
+        # modules/system/info.py and the PR's error-code table. The API
+        # responded successfully but populated nothing, which is more
+        # likely transient (service warming up, monitor not ready after
+        # reboot) than a permanent condition.
+        error_response(
+            ErrorCode.UNAVAILABLE,
+            "Resource usage failed: No utilization data returned.",
+            retryable=True,
+            suggestion="The API returned successfully but no metrics were populated.",
         )
 
     return format_key_value(pairs, title="Resource Usage")

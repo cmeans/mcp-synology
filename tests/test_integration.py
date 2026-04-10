@@ -14,12 +14,14 @@ intermittently, wait for NAS CPU to settle and retry.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from pathlib import Path
 from typing import Any
 
 import pytest
 import yaml
+from mcp.server.fastmcp.exceptions import ToolError
 
 from mcp_synology.core.auth import AuthManager
 from mcp_synology.core.client import DsmClient
@@ -259,24 +261,24 @@ class TestListing:
         client, _, _, _ = _unpack(nas_client)
         result = await list_shares(client)
         assert "Name" in result  # table header
-        assert "[!]" not in result
         logger.info("list_shares output:\n%s", result)
 
     async def test_list_files_existing_share(self, nas_client: Any) -> None:
         """Should list files in a known share."""
         client, _, _, paths = _unpack(nas_client)
         result = await list_files(client, path=paths["existing_share"])
-        assert "[!]" not in result
         logger.info("list_files(%s):\n%s", paths["existing_share"], result)
 
     async def test_list_files_root(self, nas_client: Any) -> None:
         """Listing '/' may fail on some DSM versions — verify graceful handling."""
         client, _, _, _ = _unpack(nas_client)
-        result = await list_files(client, path="/")
-        logger.info("list_files(/):\n%s", result)
         # On some DSM versions, listing '/' via FileStation.List fails (error 401).
-        # Use list_shares instead. Here we just verify it doesn't crash.
-        assert isinstance(result, str)
+        # Use list_shares instead. Here we just verify it doesn't crash hard.
+        try:
+            result = await list_files(client, path="/")
+            logger.info("list_files(/):\n%s", result)
+        except ToolError as e:
+            logger.info("list_files(/) raised ToolError (expected on some DSM): %s", e)
 
     async def test_list_files_sorted_by_size(self, nas_client: Any) -> None:
         """List files sorted by size descending."""
@@ -284,22 +286,22 @@ class TestListing:
         result = await list_files(
             client, path=paths["existing_share"], sort_by="size", sort_direction="desc"
         )
-        assert "[!]" not in result
         logger.info("list_files sorted by size:\n%s", result)
 
     async def test_list_files_with_limit(self, nas_client: Any) -> None:
         """List files with a small limit to test pagination."""
         client, _, _, paths = _unpack(nas_client)
         result = await list_files(client, path=paths["existing_share"], limit=3)
-        assert "[!]" not in result
         logger.info("list_files limit=3:\n%s", result)
 
     async def test_list_files_invalid_path(self, nas_client: Any) -> None:
-        """Listing a non-existent path should return a formatted error."""
+        """Listing a non-existent path should raise ToolError."""
         client, _, _, _ = _unpack(nas_client)
-        result = await list_files(client, path="/zzz_nonexistent_share_999")
-        assert "[!]" in result
-        logger.info("list_files(invalid):\n%s", result)
+        with pytest.raises(ToolError) as exc_info:
+            await list_files(client, path="/zzz_nonexistent_share_999")
+        body = json.loads(str(exc_info.value))
+        assert body["status"] == "error"
+        logger.info("list_files(invalid) raised ToolError: %s", exc_info.value)
 
 
 # ---------------------------------------------------------------------------
@@ -338,7 +340,6 @@ class TestSearch:
         result = await search_files(client, folder_path=folder, pattern=keyword)
 
         logger.info("search_files(%s, pattern=%s):\n%s", folder, keyword, result)
-        assert "[!]" not in result
         assert "0 results found" not in result, (
             f"Search for '{keyword}' in {folder} returned 0 results. "
             "Verify the search_keyword and search_folder in integration_config.yaml. "
@@ -351,7 +352,6 @@ class TestSearch:
         await asyncio.sleep(2)
         result = await search_files(client, folder_path=paths["existing_share"], pattern="*.stl")
         logger.info("Extension search (*.stl):\n%s", result)
-        assert "[!]" not in result
 
     async def test_search_no_results(self, nas_client: Any) -> None:
         """Search for a nonsense pattern should return 0 results, not an error."""
@@ -361,16 +361,17 @@ class TestSearch:
             client, folder_path=paths["existing_share"], pattern="zzz_nonexistent_xyzzy_999"
         )
         assert "0 results found" in result
-        assert "[!]" not in result
 
     async def test_search_from_root_error_handling(self, nas_client: Any) -> None:
         """Searching from '/' may fail — verify we handle it gracefully."""
         client, _, _, _ = _unpack(nas_client)
         await asyncio.sleep(2)
-        result = await search_files(client, folder_path="/", pattern="test")
-        logger.info("Root search result:\n%s", result)
-        # Whether it returns results or an error, it should not crash.
-        assert isinstance(result, str)
+        # Whether it returns results or raises ToolError, it should not crash hard.
+        try:
+            result = await search_files(client, folder_path="/", pattern="test")
+            logger.info("Root search result:\n%s", result)
+        except ToolError as e:
+            logger.info("Root search raised ToolError (expected on some DSM): %s", e)
 
 
 # ---------------------------------------------------------------------------
@@ -386,7 +387,6 @@ class TestMetadata:
         """Get info about a known share folder."""
         client, _, _, paths = _unpack(nas_client)
         result = await get_file_info(client, paths=[paths["existing_share"]])
-        assert "[!]" not in result
         logger.info("get_file_info(%s):\n%s", paths["existing_share"], result)
 
     async def test_get_file_info_multiple_paths(self, nas_client: Any) -> None:
@@ -396,19 +396,20 @@ class TestMetadata:
             client,
             paths=[paths["existing_share"], paths["writable_folder"]],
         )
-        assert "[!]" not in result
         logger.info("get_file_info(multiple):\n%s", result)
 
     async def test_get_file_info_invalid_path(self, nas_client: Any) -> None:
         """Get info about a non-existent path — should not crash.
 
-        DSM may return success with empty metadata or an error depending
+        DSM may return success with empty metadata or raise ToolError depending
         on the path format. We just verify graceful handling.
         """
         client, _, _, _ = _unpack(nas_client)
-        result = await get_file_info(client, paths=["/zzz_nonexistent_999/fake.txt"])
-        assert isinstance(result, str)
-        logger.info("get_file_info(invalid):\n%s", result)
+        try:
+            result = await get_file_info(client, paths=["/zzz_nonexistent_999/fake.txt"])
+            logger.info("get_file_info(invalid):\n%s", result)
+        except ToolError as e:
+            logger.info("get_file_info(invalid) raised ToolError: %s", e)
 
     async def test_get_dir_size(self, nas_client: Any) -> None:
         """Get size of a known folder (uses a smaller folder to avoid timeouts)."""
@@ -416,7 +417,6 @@ class TestMetadata:
         # Use the writable folder (likely small) rather than the existing_share
         # which may be very large and cause the background task to time out.
         result = await get_dir_size(client, path=paths["writable_folder"])
-        assert "[!]" not in result
         assert "Total size" in result
         logger.info("get_dir_size(%s):\n%s", paths["writable_folder"], result)
 
@@ -451,9 +451,12 @@ class TestWriteOperations:
 
         base = paths["writable_folder"]
         # Create main test dir and a subfolder to use as copy source
-        result = await create_folder(client, paths=[f"{base}/{self._COPY_SRC}"])
-        logger.info("create_folder result:\n%s", result)
-        assert "[!]" not in result or "already exists" in result.lower()
+        try:
+            result = await create_folder(client, paths=[f"{base}/{self._COPY_SRC}"])
+            logger.info("create_folder result:\n%s", result)
+        except ToolError as e:
+            body = json.loads(str(e))
+            assert body["error"]["code"] == "already_exists", f"Unexpected error: {e}"
 
     async def test_02_create_folder_idempotent(self, nas_client: Any) -> None:
         """Creating the same folder again should not error (idempotent)."""
@@ -480,7 +483,6 @@ class TestWriteOperations:
 
         result = await copy_files(client, paths=[src], dest_folder=dest)
         logger.info("copy_files result:\n%s", result)
-        assert "[!]" not in result
         assert "Copied" in result
 
     async def test_04_verify_copy_exists(self, nas_client: Any) -> None:
@@ -504,7 +506,6 @@ class TestWriteOperations:
 
         result = await copy_files(client, paths=[src], dest_folder=dest, overwrite=True)
         logger.info("copy_files (overwrite):\n%s", result)
-        assert "[!]" not in result
 
     async def test_06_move_folder(self, nas_client: Any) -> None:
         """Move the copied folder to a new name."""
@@ -521,7 +522,6 @@ class TestWriteOperations:
 
         result = await move_files(client, paths=[src], dest_folder=dest)
         logger.info("move_files result:\n%s", result)
-        assert "[!]" not in result
         assert "Moved" in result
 
     async def test_07_verify_move(self, nas_client: Any) -> None:
@@ -551,7 +551,6 @@ class TestWriteOperations:
         target = f"{base}/{self._MOVE_DEST}/original"
         result = await rename(client, path=target, new_name="renamed_test")
         logger.info("rename result:\n%s", result)
-        assert "[!]" not in result
 
     async def test_09_delete_cleanup(self, nas_client: Any) -> None:
         """Delete the entire test folder tree (cleanup)."""
@@ -562,7 +561,6 @@ class TestWriteOperations:
         target = f"{base}/{self._TEST_DIR}"
         result = await delete_files(client, paths=[target], recursive=True)
         logger.info("delete result:\n%s", result)
-        assert "[!]" not in result
 
     async def test_10_verify_deleted(self, nas_client: Any) -> None:
         """Verify the test folder is gone from the writable area."""
@@ -598,13 +596,15 @@ class TestRecycleBin:
         folder = f"{base}/{self._RECYCLE_TEST}"
 
         # Create
-        result = await create_folder(client, paths=[folder])
-        assert "[!]" not in result or "already exists" in result.lower()
+        try:
+            result = await create_folder(client, paths=[folder])
+        except ToolError as e:
+            body = json.loads(str(e))
+            assert body["error"]["code"] == "already_exists", f"Unexpected error: {e}"
 
         # Delete (should go to recycle bin if enabled)
         result = await delete_files(client, paths=[folder])
         logger.info("delete result:\n%s", result)
-        assert "[!]" not in result
 
     async def test_02_list_recycle_bin(self, nas_client: Any) -> None:
         """List the recycle bin for the writable folder's share."""
@@ -675,15 +675,17 @@ class TestFileTransfers:
         local_file = tmp_path / "upload_test.txt"
         local_file.write_bytes(self._TEST_CONTENT)
 
-        result = await upload_file(
-            client,
-            local_path=str(local_file),
-            dest_folder=dest,
-        )
-        logger.info("upload duplicate (no overwrite):\n%s", result)
-        # DSM may return success (silent overwrite) or error (already exists).
-        # Either is acceptable — we just verify it doesn't crash.
-        assert isinstance(result, str)
+        # DSM may return success (silent overwrite) or raise ToolError (already exists).
+        # Either is acceptable — we just verify it doesn't crash hard.
+        try:
+            result = await upload_file(
+                client,
+                local_path=str(local_file),
+                dest_folder=dest,
+            )
+            logger.info("upload duplicate (no overwrite):\n%s", result)
+        except ToolError as e:
+            logger.info("upload duplicate raised ToolError (expected): %s", e)
 
     async def test_03_upload_overwrite(self, nas_client: Any, tmp_path: Path) -> None:
         """Uploading with overwrite=True should succeed."""
@@ -790,26 +792,29 @@ class TestFileTransfers:
         existing = tmp_path / "upload_test.txt"
         existing.write_text("existing local content")
 
-        result = await download_file(
-            client,
-            path=nas_path,
-            dest_folder=str(tmp_path),
-        )
-        logger.info("download no overwrite:\n%s", result)
-        assert "[!]" in result
-        assert "already exists" in result
+        with pytest.raises(ToolError) as exc_info:
+            await download_file(
+                client,
+                path=nas_path,
+                dest_folder=str(tmp_path),
+            )
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "already_exists"
+        logger.info("download no overwrite raised ToolError: %s", exc_info.value)
 
     async def test_09_download_nonexistent(self, nas_client: Any, tmp_path: Path) -> None:
-        """Download a non-existent NAS file should return formatted error."""
+        """Download a non-existent NAS file should raise ToolError."""
         client, _, _, _ = _unpack(nas_client)
 
-        result = await download_file(
-            client,
-            path="/zzz_nonexistent_999/fake.txt",
-            dest_folder=str(tmp_path),
-        )
-        logger.info("download nonexistent:\n%s", result)
-        assert "[!]" in result
+        with pytest.raises(ToolError) as exc_info:
+            await download_file(
+                client,
+                path="/zzz_nonexistent_999/fake.txt",
+                dest_folder=str(tmp_path),
+            )
+        body = json.loads(str(exc_info.value))
+        assert body["status"] == "error"
+        logger.info("download nonexistent raised ToolError: %s", exc_info.value)
 
     async def test_10_cleanup(self, nas_client: Any) -> None:
         """Delete the test upload directory from the NAS."""
@@ -820,7 +825,6 @@ class TestFileTransfers:
         target = f"{base}/{self._UPLOAD_DIR}"
         result = await delete_files(client, paths=[target], recursive=True)
         logger.info("transfer cleanup:\n%s", result)
-        assert "[!]" not in result
 
 
 # ---------------------------------------------------------------------------
@@ -833,35 +837,41 @@ class TestErrorHandling:
     """Test that errors are handled gracefully, not crashes."""
 
     async def test_copy_invalid_source(self, nas_client: Any) -> None:
-        """Copy from a non-existent path should return formatted error."""
+        """Copy from a non-existent path should raise ToolError."""
         client, _, config, paths = _unpack(nas_client)
         _skip_unless_write(config)
 
-        result = await copy_files(
-            client,
-            paths=["/zzz_nonexistent_999/fake.txt"],
-            dest_folder=paths["writable_folder"],
-        )
-        logger.info("copy invalid source:\n%s", result)
-        assert "[!]" in result
+        with pytest.raises(ToolError) as exc_info:
+            await copy_files(
+                client,
+                paths=["/zzz_nonexistent_999/fake.txt"],
+                dest_folder=paths["writable_folder"],
+            )
+        body = json.loads(str(exc_info.value))
+        assert body["status"] == "error"
+        logger.info("copy invalid source raised ToolError: %s", exc_info.value)
 
     async def test_delete_invalid_path(self, nas_client: Any) -> None:
-        """Delete a non-existent path should return formatted error."""
+        """Delete a non-existent path should raise ToolError or succeed silently."""
         client, _, config, paths = _unpack(nas_client)
         _skip_unless_write(config)
 
-        result = await delete_files(client, paths=["/zzz_nonexistent_999/fake.txt"])
-        logger.info("delete invalid path:\n%s", result)
         # May succeed silently (DSM doesn't always error on missing paths)
-        # or return an error. Either way, should not crash.
-        assert isinstance(result, str)
+        # or raise ToolError. Either way, should not crash.
+        try:
+            result = await delete_files(client, paths=["/zzz_nonexistent_999/fake.txt"])
+            logger.info("delete invalid path:\n%s", result)
+        except ToolError as e:
+            logger.info("delete invalid path raised ToolError: %s", e)
 
     async def test_rename_invalid_path(self, nas_client: Any) -> None:
-        """Rename a non-existent path should return formatted error."""
+        """Rename a non-existent path should raise ToolError."""
         client, _, _, _ = _unpack(nas_client)
-        result = await rename(client, path="/zzz_nonexistent_999/fake.txt", new_name="new_name")
-        logger.info("rename invalid path:\n%s", result)
-        assert "[!]" in result
+        with pytest.raises(ToolError) as exc_info:
+            await rename(client, path="/zzz_nonexistent_999/fake.txt", new_name="new_name")
+        body = json.loads(str(exc_info.value))
+        assert body["status"] == "error"
+        logger.info("rename invalid path raised ToolError: %s", exc_info.value)
 
 
 # ---------------------------------------------------------------------------
@@ -878,7 +888,6 @@ class TestSystemInfo:
         client, _, _, _ = _unpack(nas_client)
         result = await get_system_info(client)
         logger.info("get_system_info:\n%s", result)
-        assert "[!]" not in result
         assert "Model" in result
         assert "Firmware" in result
         assert "Temperature" in result
@@ -903,19 +912,22 @@ class TestResourceUsage:
     async def test_resource_usage_non_admin(self, nas_client: Any) -> None:
         """Non-admin user should get a clear permission error."""
         client, _, _, _ = _unpack(nas_client)
-        result = await get_resource_usage(client)
-        logger.info("get_resource_usage (non-admin):\n%s", result)
         # Should fail with permission error for non-admin users
-        if "[!]" in result:
-            assert "admin" in result.lower() or "permission" in result.lower()
-        # If it succeeds, the user IS admin — that's fine too
+        # or succeed if the user IS admin.
+        try:
+            result = await get_resource_usage(client)
+            logger.info("get_resource_usage (non-admin succeeded — user is admin):\n%s", result)
+        except ToolError as e:
+            body = json.loads(str(e))
+            logger.info("get_resource_usage (non-admin) raised ToolError: %s", e)
+            msg = body["error"]["message"].lower()
+            assert "admin" in msg or "permission" in msg
 
     async def test_resource_usage_admin(self, admin_client: Any) -> None:
         """Admin user should get real utilization data."""
         client, _, _, _ = _unpack(admin_client)
         result = await get_resource_usage(client)
         logger.info("get_resource_usage (admin):\n%s", result)
-        assert "[!]" not in result
         assert "CPU" in result
         assert "Memory" in result
 
@@ -931,7 +943,6 @@ class TestResourceUsage:
         # Baseline reading — verify NAS isn't already overloaded
         baseline = await get_resource_usage(client)
         logger.info("Baseline utilization:\n%s", baseline)
-        assert "[!]" not in baseline, "Baseline should succeed with admin"
         assert "CPU" in baseline, "Baseline should include CPU data"
 
         # Start a heavy operation concurrently
@@ -948,6 +959,5 @@ class TestResourceUsage:
         await dir_task
 
         # Both readings should be valid
-        assert "[!]" not in during_load
         assert "CPU" in during_load
         logger.info("Utilization test passed — both readings returned valid data")
