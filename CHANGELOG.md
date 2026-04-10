@@ -36,16 +36,9 @@
 - **`download_file` disk-full is now reported with the same code in both detection paths** — the pre-flight branch (via `shutil.disk_usage`) and the OSError fallback previously disagreed: pre-flight emitted `disk_full`/retryable=True, fallback emitted `filesystem_error`/retryable=False despite a "Free space on the local disk" suggestion. Both now emit `disk_full`/retryable=True when disk-full is the actual cause.
 - **`error_response()` is safe against non-JSON-serializable `value` arguments** — `json.dumps(..., default=str)` prevents a future caller passing `bytes` or a custom object from crashing the error handler mid-envelope.
 
-### Dev
-
-- Tests: 270 → 312 (+42, including a new `tests/modules/system/` package with 13 tests covering previously-uncovered system-module error paths)
-- Patch coverage: 100% on the structured-errors diff per codecov
-- `mypy --strict` clean across all 27 source files
-- `ruff check` / `ruff format --check` clean
-
 ## 0.4.1 (2026-04-07)
 
-### Fixes
+### Fixed
 
 - **Claude Desktop config** — setup snippet now uses `uvx mcp-synology` instead of bare command, which failed with ENOENT on systems where `~/.local/bin` isn't in Claude Desktop's PATH
 - **Migration script** — now auto-updates `claude_desktop_config.json` (detects and rewrites old synology-mcp entries), creates `.json.bak` backup before writing, preserves extra args, handles `--config=value` equals syntax
