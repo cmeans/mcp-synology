@@ -6,6 +6,7 @@ import pytest
 from mcp.server.fastmcp.exceptions import ToolError
 
 from mcp_synology.core.errors import (
+    ErrorCode,
     FileStationError,
     PathNotFoundError,
     SynologyError,
@@ -161,7 +162,7 @@ class TestFormatTimestamp:
 class TestErrorResponse:
     def test_raises_tool_error(self) -> None:
         with pytest.raises(ToolError) as exc_info:
-            error_response("not_found", "File not found", retryable=False)
+            error_response(ErrorCode.NOT_FOUND, "File not found", retryable=False)
         body = json.loads(str(exc_info.value))
         assert body["status"] == "error"
         assert body["error"]["code"] == "not_found"
@@ -171,7 +172,7 @@ class TestErrorResponse:
     def test_includes_optional_fields(self) -> None:
         with pytest.raises(ToolError) as exc_info:
             error_response(
-                "invalid_parameter",
+                ErrorCode.INVALID_PARAMETER,
                 "Bad param",
                 retryable=False,
                 param="path",
@@ -189,11 +190,12 @@ class TestErrorResponse:
         assert err["help_url"] == "https://example.com"
 
     def test_omits_optional_fields_when_none(self) -> None:
-        # Use a code that is NOT registered in HELP_URLS so we can observe
-        # the "no help_url" behavior. Every registered code auto-populates
-        # help_url from the central lookup — that is tested separately.
+        # SESSION_EXPIRED is the one ErrorCode member intentionally absent
+        # from HELP_URLS (auto-retried, never surfaced to users), so it is
+        # the single legitimate way to exercise the "no help_url field"
+        # omission path under the tightened ``code: ErrorCode`` signature.
         with pytest.raises(ToolError) as exc_info:
-            error_response("zzz_unregistered_test_code", "Something broke", retryable=True)
+            error_response(ErrorCode.SESSION_EXPIRED, "Something broke", retryable=True)
         body = json.loads(str(exc_info.value))
         err = body["error"]
         assert "param" not in err
@@ -207,7 +209,7 @@ class TestErrorResponse:
         # Every code registered in HELP_URLS should be auto-populated
         # without the caller having to pass help_url explicitly.
         with pytest.raises(ToolError) as exc_info:
-            error_response("dsm_error", "Something broke", retryable=True)
+            error_response(ErrorCode.DSM_ERROR, "Something broke", retryable=True)
         body = json.loads(str(exc_info.value))
         assert "help_url" in body["error"]
         assert body["error"]["help_url"].endswith("#dsm_error")
@@ -217,7 +219,7 @@ class TestErrorResponse:
         # so callers can point at something specific when needed.
         with pytest.raises(ToolError) as exc_info:
             error_response(
-                "dsm_error",
+                ErrorCode.DSM_ERROR,
                 "Something broke",
                 retryable=True,
                 help_url="https://example.com/custom",

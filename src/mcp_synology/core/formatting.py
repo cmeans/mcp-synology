@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NoReturn
 
 if TYPE_CHECKING:
-    from mcp_synology.core.errors import SynologyError
+    from mcp_synology.core.errors import ErrorCode, SynologyError
 
 
 def format_table(
@@ -158,7 +158,7 @@ def format_error(
 
 
 def error_response(
-    code: str,
+    code: ErrorCode,
     message: str,
     *,
     retryable: bool,
@@ -174,6 +174,11 @@ def error_response(
     so clients get proper error signaling. The JSON envelope provides
     structured fields for smart clients alongside a human-readable message.
 
+    ``code`` is typed as ``ErrorCode`` rather than ``str`` so a typo at a
+    call site becomes a mypy error rather than a silent envelope with a
+    missing ``help_url``. ``StrEnum`` members are strings at runtime, so
+    JSON serialization and dict lookups still work unchanged.
+
     When ``help_url`` is not provided, the code is looked up in
     ``core.errors.HELP_URLS`` so every registered code gets a link
     automatically without the caller having to know the URL. Pass
@@ -187,7 +192,7 @@ def error_response(
     from mcp_synology.core.errors import HELP_URLS
 
     error: dict[str, Any] = {
-        "code": code,
+        "code": code.value,
         "message": message,
         "retryable": retryable,
     }
@@ -200,7 +205,7 @@ def error_response(
     if suggestion is not None:
         error["suggestion"] = suggestion
 
-    resolved_help_url = help_url if help_url is not None else HELP_URLS.get(code)
+    resolved_help_url = help_url if help_url is not None else HELP_URLS.get(code.value)
     if resolved_help_url is not None:
         error["help_url"] = resolved_help_url
 
