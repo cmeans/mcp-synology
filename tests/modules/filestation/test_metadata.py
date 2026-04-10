@@ -88,6 +88,26 @@ class TestGetFileInfo:
         assert body["status"] == "error"
         assert body["error"]["code"] == "not_found"
 
+    @respx.mock
+    async def test_empty_files_list_returns_not_found(self, mock_client: DsmClient) -> None:
+        """getinfo succeeds but returns no files → not_found.
+
+        DSM returns ``success=true, files=[]`` for multi-path requests where
+        every path is missing or unreadable. The tool converts this to
+        not_found so clients don't have to special-case empty success.
+        """
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": True, "data": {"files": []}}
+        )
+        with pytest.raises(ToolError) as exc_info:
+            await get_file_info(
+                mock_client,
+                paths=["/video/missing1", "/video/missing2"],
+            )
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "not_found"
+        assert body["error"]["retryable"] is False
+
 
 class TestGetDirSize:
     @respx.mock
@@ -122,3 +142,65 @@ class TestGetDirSize:
         assert "42.6 GB" in result
         assert "186" in result
         assert "12" in result
+
+    @respx.mock
+    async def test_dir_size_start_error(self, mock_client: DsmClient) -> None:
+        """DSM error on the start call should propagate as a structured error."""
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 408}}
+        )
+        with pytest.raises(ToolError) as exc_info:
+            await get_dir_size(mock_client, path="/nonexistent")
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "not_found"
+
+    @respx.mock
+    async def test_dir_size_poll_error(self, mock_client: DsmClient) -> None:
+        """DSM error mid-poll should still clean up the task and raise.
+
+        The task is started successfully but the first status call fails.
+        The ``try/finally`` must still invoke stop/clean, and the error
+        must be surfaced as a structured envelope (filestation_error for
+        code 402, "System too busy").
+        """
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            method = params.get("method", "")
+            if method == "start":
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "ds-2"}})
+            if method == "status":
+                return httpx.Response(200, json={"success": False, "error": {"code": 402}})
+            # stop/clean
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+
+        with pytest.raises(ToolError) as exc_info:
+            await get_dir_size(mock_client, path="/video/busy")
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "filestation_error"
+
+    @respx.mock
+    async def test_dir_size_timeout(self, mock_client: DsmClient) -> None:
+        """Polling never returns finished → timeout error, retryable=True."""
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            method = params.get("method", "")
+            if method == "start":
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "ds-3"}})
+            if method == "status":
+                # Never mark finished — force the polling loop to exhaust
+                # its budget.
+                return httpx.Response(200, json={"success": True, "data": {"finished": False}})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+
+        with pytest.raises(ToolError) as exc_info:
+            # Tight timeout so the test runs fast.
+            await get_dir_size(mock_client, path="/video/huge", timeout=1.0)
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "timeout"
+        assert body["error"]["retryable"] is True

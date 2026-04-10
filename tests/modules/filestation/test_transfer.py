@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import errno
 import json
 from typing import TYPE_CHECKING
 from unittest.mock import patch
@@ -343,6 +344,62 @@ class TestDownloadFile:
         body = json.loads(str(exc_info.value))
         assert body["status"] == "error"
         assert body["error"]["code"] == "disk_full"
+
+    async def test_download_enospc_reports_disk_full(
+        self, mock_client: DsmClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """OSError with errno=ENOSPC during write emits disk_full, not filesystem_error.
+
+        The pre-flight branch catches most disk-full cases up front using
+        ``shutil.disk_usage``. The OSError fallback covers races (disk
+        filled between the pre-flight and the actual write) or cases
+        where the pre-flight was skipped because getinfo failed. Both
+        branches must emit the same code so smart clients dispatch
+        consistently — this test exercises the fallback path.
+        """
+
+        async def _raise_enospc(*args: object, **kwargs: object) -> int:
+            raise OSError(errno.ENOSPC, "No space left on device")
+
+        monkeypatch.setattr(mock_client, "download", _raise_enospc)
+
+        with pytest.raises(ToolError) as exc_info:
+            await download_file(
+                mock_client,
+                path="/video/file.mkv",
+                dest_folder=str(tmp_path),
+            )
+        body = json.loads(str(exc_info.value))
+        assert body["status"] == "error"
+        assert body["error"]["code"] == "disk_full"
+        assert body["error"]["retryable"] is True
+        assert "No space left" in body["error"]["message"]
+
+    async def test_download_non_enospc_oserror_reports_filesystem_error(
+        self, mock_client: DsmClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """OSError with any errno other than ENOSPC falls through to filesystem_error.
+
+        Complements the ENOSPC test above by exercising the other side
+        of the errno branch. Uses EACCES (permission denied) rather than
+        relying on a readonly directory so the test is independent of
+        filesystem semantics.
+        """
+
+        async def _raise_eacces(*args: object, **kwargs: object) -> int:
+            raise OSError(errno.EACCES, "Permission denied")
+
+        monkeypatch.setattr(mock_client, "download", _raise_eacces)
+
+        with pytest.raises(ToolError) as exc_info:
+            await download_file(
+                mock_client,
+                path="/video/file.mkv",
+                dest_folder=str(tmp_path),
+            )
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "filesystem_error"
+        assert body["error"]["retryable"] is False
 
     @respx.mock
     async def test_download_progress_callback(self, mock_client: DsmClient, tmp_path: Path) -> None:

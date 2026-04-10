@@ -220,6 +220,162 @@ class TestDeleteFiles:
         assert "NOT enabled" in result
 
 
+class TestBackgroundTaskErrors:
+    """Error paths shared across CopyMove and Delete background tasks.
+
+    These exercise the polling-loop branches that previously had no
+    coverage: mid-poll errors, timeouts, and task-completion error dicts.
+    """
+
+    @respx.mock
+    async def test_copy_timeout(self, mock_client: DsmClient) -> None:
+        """Copy task that never finishes within timeout → timeout error."""
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            method = params.get("method", "")
+            if method == "start":
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "cm-1"}})
+            if method == "status":
+                return httpx.Response(200, json={"success": True, "data": {"finished": False}})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+
+        with pytest.raises(ToolError) as exc_info:
+            await copy_files(
+                mock_client,
+                paths=["/video/huge.mkv"],
+                dest_folder="/video/Archive",
+                timeout=1.0,
+            )
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "timeout"
+        assert body["error"]["retryable"] is True
+        assert "Copy files" in body["error"]["message"]
+
+    @respx.mock
+    async def test_copy_task_completes_with_error(self, mock_client: DsmClient) -> None:
+        """Copy task finishes but status has an ``error`` key → dsm_error."""
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            method = params.get("method", "")
+            if method == "start":
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "cm-2"}})
+            if method == "status":
+                return httpx.Response(
+                    200,
+                    json={
+                        "success": True,
+                        "data": {
+                            "finished": True,
+                            "error": {"code": 1100},
+                            "path": "/video/restricted/file.mkv",
+                        },
+                    },
+                )
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+
+        with pytest.raises(ToolError) as exc_info:
+            await copy_files(
+                mock_client,
+                paths=["/video/restricted/file.mkv"],
+                dest_folder="/video/Archive",
+            )
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "dsm_error"
+        assert "1100" in body["error"]["message"]
+        assert "/video/restricted/file.mkv" in body["error"]["message"]
+
+    @respx.mock
+    async def test_copy_poll_error_mid_operation(self, mock_client: DsmClient) -> None:
+        """DSM fails mid-poll → error propagates via synology_error_response."""
+        state = {"calls": 0}
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            state["calls"] += 1
+            params = dict(request.url.params)
+            method = params.get("method", "")
+            if method == "start":
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "cm-3"}})
+            if method == "status":
+                # Fail on the first status call
+                return httpx.Response(200, json={"success": False, "error": {"code": 402}})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+
+        with pytest.raises(ToolError) as exc_info:
+            await copy_files(
+                mock_client,
+                paths=["/video/file.mkv"],
+                dest_folder="/video/dest",
+            )
+        body = json.loads(str(exc_info.value))
+        # Code 402 "System too busy" is not specifically typed → filestation_error
+        assert body["error"]["code"] == "filestation_error"
+
+    @respx.mock
+    async def test_delete_timeout(self, mock_client: DsmClient) -> None:
+        """Delete task that never finishes → timeout error."""
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            method = params.get("method", "")
+            if method == "start":
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "del-1"}})
+            if method == "status":
+                return httpx.Response(200, json={"success": True, "data": {"finished": False}})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+
+        with pytest.raises(ToolError) as exc_info:
+            await delete_files(
+                mock_client,
+                paths=["/video/huge_dir"],
+                timeout=1.0,
+            )
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "timeout"
+        assert body["error"]["retryable"] is True
+        assert "Delete files" in body["error"]["message"]
+
+    @respx.mock
+    async def test_delete_task_completes_with_error(self, mock_client: DsmClient) -> None:
+        """Delete task finishes with an error dict → dsm_error."""
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            method = params.get("method", "")
+            if method == "start":
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "del-2"}})
+            if method == "status":
+                return httpx.Response(
+                    200,
+                    json={
+                        "success": True,
+                        "data": {
+                            "finished": True,
+                            "error": {"code": 1100},
+                            "path": "/video/locked/file.mkv",
+                        },
+                    },
+                )
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+
+        with pytest.raises(ToolError) as exc_info:
+            await delete_files(mock_client, paths=["/video/locked/file.mkv"])
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "dsm_error"
+        assert "1100" in body["error"]["message"]
+
+
 class TestRestoreFromRecycleBin:
     @respx.mock
     async def test_restore_success(self, mock_client: DsmClient) -> None:
