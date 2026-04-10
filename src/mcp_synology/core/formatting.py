@@ -204,7 +204,10 @@ def error_response(
     if resolved_help_url is not None:
         error["help_url"] = resolved_help_url
 
-    raise ToolError(json.dumps({"status": "error", "error": error}))
+    # ``default=str`` keeps a future caller from crashing the error path
+    # by passing a non-JSON-serializable ``value`` (bytes, a custom object,
+    # etc.). All current callers pass strings, so this is a safety net.
+    raise ToolError(json.dumps({"status": "error", "error": error}, default=str))
 
 
 def synology_error_response(operation: str, exc: SynologyError) -> NoReturn:

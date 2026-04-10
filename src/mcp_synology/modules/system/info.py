@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from mcp_synology.core.errors import SynologyError
+from mcp_synology.core.errors import ErrorCode, SynologyError
 from mcp_synology.core.formatting import error_response, format_key_value
 
 if TYPE_CHECKING:
@@ -61,7 +61,7 @@ async def get_system_info(client: DsmClient) -> str:
 
     if not dsm and not core:
         error_response(
-            "unavailable",
+            ErrorCode.UNAVAILABLE,
             "System info failed: No system information available.",
             retryable=True,
             suggestion="Check that the user has permission to query system info.",
@@ -123,7 +123,7 @@ async def get_system_info(client: DsmClient) -> str:
 
     if not pairs:
         error_response(
-            "unavailable",
+            ErrorCode.UNAVAILABLE,
             "System info failed: No system information returned.",
             retryable=True,
         )

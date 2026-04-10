@@ -2,41 +2,74 @@
 
 from __future__ import annotations
 
+from enum import StrEnum
+
 # Help URLs point at sections of our own error-code reference rather than
 # Synology's KB. The KB is sparsely indexed and rarely matches the semantics
 # of an MCP error — our page can say "use overwrite=true" and "run
 # mcp-synology check -v", which the vendor docs never will.
 #
-# Adding a new error code: add it to HELP_URLS below AND add a matching
-# `## <code>` section to docs/error-codes.md. The unit test in
+# Adding a new error code: add a member to ErrorCode below AND add a
+# matching `## <code>` section to docs/error-codes.md. The unit test in
 # tests/core/test_help_urls.py will fail if the two drift out of sync.
-#
-# Intentional omissions:
-#   - session_expired: auto-retried at the client layer. Users shouldn't
-#     see this code in a surfaced error; if they do, the retry itself
-#     failed, which is reported under the underlying failure's code.
+
+
+class ErrorCode(StrEnum):
+    """Canonical error codes emitted in structured error envelopes.
+
+    Single source of truth for every ``code`` value that can appear in
+    an error response. ``SynologyError`` subclasses set their
+    ``error_code`` to a member of this enum, and call sites that emit
+    codes directly (via ``error_response(code=...)``) pass a member
+    rather than a bare string — this prevents typos and gives mypy a
+    place to catch drift.
+
+    Members are strings (``StrEnum``), so dict lookups, JSON
+    serialization, and equality against string literals all work without
+    any conversion.
+    """
+
+    # Auth and access
+    AUTH_FAILED = "auth_failed"
+    SESSION_EXPIRED = "session_expired"
+    PERMISSION_DENIED = "permission_denied"
+    API_NOT_FOUND = "api_not_found"
+
+    # Paths and files
+    NOT_FOUND = "not_found"
+    ALREADY_EXISTS = "already_exists"
+    INVALID_PARAMETER = "invalid_parameter"
+    FILESYSTEM_ERROR = "filesystem_error"
+
+    # Storage and runtime
+    DISK_FULL = "disk_full"
+    TIMEOUT = "timeout"
+    UNAVAILABLE = "unavailable"
+
+    # Catch-alls
+    FILESTATION_ERROR = "filestation_error"
+    DSM_ERROR = "dsm_error"
+
 
 GITHUB_DOCS_BASE = "https://github.com/cmeans/mcp-synology/blob/main/docs/error-codes.md"
 
+# Codes that are intentionally NOT surfaced to users and therefore need
+# no documentation section. ``session_expired`` is auto-retried at the
+# core-client layer; if it ever reaches a user, the retry path itself
+# has failed and the underlying failure's code is what they see.
+_CODES_WITHOUT_HELP_URL: frozenset[ErrorCode] = frozenset({ErrorCode.SESSION_EXPIRED})
+
 HELP_URLS: dict[str, str] = {
-    "auth_failed": f"{GITHUB_DOCS_BASE}#auth_failed",
-    "permission_denied": f"{GITHUB_DOCS_BASE}#permission_denied",
-    "api_not_found": f"{GITHUB_DOCS_BASE}#api_not_found",
-    "not_found": f"{GITHUB_DOCS_BASE}#not_found",
-    "already_exists": f"{GITHUB_DOCS_BASE}#already_exists",
-    "invalid_parameter": f"{GITHUB_DOCS_BASE}#invalid_parameter",
-    "filesystem_error": f"{GITHUB_DOCS_BASE}#filesystem_error",
-    "disk_full": f"{GITHUB_DOCS_BASE}#disk_full",
-    "timeout": f"{GITHUB_DOCS_BASE}#timeout",
-    "unavailable": f"{GITHUB_DOCS_BASE}#unavailable",
-    "dsm_error": f"{GITHUB_DOCS_BASE}#dsm_error",
+    code.value: f"{GITHUB_DOCS_BASE}#{code.value}"
+    for code in ErrorCode
+    if code not in _CODES_WITHOUT_HELP_URL
 }
 
 
 class SynologyError(Exception):
     """Base exception for all Synology DSM errors."""
 
-    error_code: str = "dsm_error"
+    error_code: ErrorCode = ErrorCode.DSM_ERROR
     retryable: bool = False
 
     def __init__(
@@ -57,7 +90,7 @@ class SynologyError(Exception):
 class AuthenticationError(SynologyError):
     """Authentication failed (bad credentials, 2FA required, etc.)."""
 
-    error_code = "auth_failed"
+    error_code = ErrorCode.AUTH_FAILED
 
 
 class SessionExpiredError(SynologyError):
@@ -68,51 +101,51 @@ class SessionExpiredError(SynologyError):
     ever is, that indicates the retry path itself failed, which is a bug.
     """
 
-    error_code = "session_expired"
+    error_code = ErrorCode.SESSION_EXPIRED
     retryable = True
 
 
 class SynologyPermissionError(SynologyError):
     """Permission denied (code 105). NOT a session issue — never re-auth on this."""
 
-    error_code = "permission_denied"
+    error_code = ErrorCode.PERMISSION_DENIED
 
 
 class ApiNotFoundError(SynologyError):
     """Requested API does not exist on this NAS."""
 
-    error_code = "api_not_found"
+    error_code = ErrorCode.API_NOT_FOUND
 
 
 class FileStationError(SynologyError):
     """Base exception for File Station API errors."""
 
-    error_code = "filestation_error"
+    error_code = ErrorCode.FILESTATION_ERROR
 
 
 class PathNotFoundError(FileStationError):
     """Path not found (code 408)."""
 
-    error_code = "not_found"
+    error_code = ErrorCode.NOT_FOUND
 
 
 class SynologyFileExistsError(FileStationError):
     """File already exists at destination (code 414)."""
 
-    error_code = "already_exists"
+    error_code = ErrorCode.ALREADY_EXISTS
 
 
 class DiskFullError(FileStationError):
     """No space left on device (code 416)."""
 
-    error_code = "disk_full"
+    error_code = ErrorCode.DISK_FULL
     retryable = True
 
 
 class IllegalNameError(FileStationError):
     """Invalid file or folder name (codes 418, 419)."""
 
-    error_code = "invalid_parameter"
+    error_code = ErrorCode.INVALID_PARAMETER
 
 
 # Common DSM error codes (100-series) shared across all APIs.

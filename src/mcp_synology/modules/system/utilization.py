@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from mcp_synology.core.errors import SynologyError
+from mcp_synology.core.errors import ErrorCode, SynologyError
 from mcp_synology.core.formatting import (
     error_response,
     format_key_value,
@@ -109,7 +109,7 @@ async def get_resource_usage(client: DsmClient) -> str:
     """Get live system resource utilization."""
     if "SYNO.Core.System.Utilization" not in client._api_cache:
         error_response(
-            "api_not_found",
+            ErrorCode.API_NOT_FOUND,
             "Resource usage failed: SYNO.Core.System.Utilization API not available.",
             retryable=False,
             suggestion="This API may require admin privileges or may not be available "
@@ -121,7 +121,7 @@ async def get_resource_usage(client: DsmClient) -> str:
     except SynologyError as e:
         if e.code == 105:
             error_response(
-                "permission_denied",
+                ErrorCode.PERMISSION_DENIED,
                 "Resource usage failed: Permission denied — admin account required.",
                 retryable=False,
                 suggestion="The SYNO.Core.System.Utilization API requires an admin DSM account. "
@@ -158,10 +158,15 @@ async def get_resource_usage(client: DsmClient) -> str:
         pairs.extend(_format_disk(disk_list))
 
     if not pairs:
+        # retryable=True matches the other ``unavailable`` call sites in
+        # modules/system/info.py and the PR's error-code table. The API
+        # responded successfully but populated nothing, which is more
+        # likely transient (service warming up, monitor not ready after
+        # reboot) than a permanent condition.
         error_response(
-            "unavailable",
+            ErrorCode.UNAVAILABLE,
             "Resource usage failed: No utilization data returned.",
-            retryable=False,
+            retryable=True,
             suggestion="The API returned successfully but no metrics were populated.",
         )
 

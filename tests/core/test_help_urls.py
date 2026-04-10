@@ -24,7 +24,12 @@ from pathlib import Path
 
 import pytest
 
-from mcp_synology.core.errors import GITHUB_DOCS_BASE, HELP_URLS, SynologyError
+from mcp_synology.core.errors import (
+    GITHUB_DOCS_BASE,
+    HELP_URLS,
+    ErrorCode,
+    SynologyError,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DOCS_PATH = REPO_ROOT / "docs" / "error-codes.md"
@@ -33,15 +38,12 @@ DOCS_PATH = REPO_ROOT / "docs" / "error-codes.md"
 # tight — every addition needs a justification, because "no help" is a
 # user-facing regression unless there is a real reason the code cannot
 # be surfaced.
-EXEMPT_CODES: frozenset[str] = frozenset(
+EXEMPT_CODES: frozenset[ErrorCode] = frozenset(
     {
         # Auto-retried in the core client. A surfaced session_expired would
         # mean the retry itself failed, which is reported under the
         # underlying failure's code, not under session_expired.
-        "session_expired",
-        # Generic subclass base — no specific user action beyond what the
-        # concrete subclasses already document.
-        "filestation_error",
+        ErrorCode.SESSION_EXPIRED,
     }
 )
 
@@ -118,7 +120,7 @@ class TestHelpUrlsResolveToRealAnchors:
 
 class TestSynologyErrorSubclassCoverage:
     def test_every_subclass_error_code_is_registered_or_exempt(self) -> None:
-        uncovered: list[tuple[str, str]] = []
+        uncovered: list[tuple[str, ErrorCode]] = []
         for cls in _all_synology_error_subclasses():
             code = cls.error_code
             if code in HELP_URLS or code in EXEMPT_CODES:
@@ -127,12 +129,36 @@ class TestSynologyErrorSubclassCoverage:
         assert not uncovered, (
             f"SynologyError subclasses have an error_code with no HELP_URLS "
             f"entry and no exemption: {uncovered}. Add the code to HELP_URLS "
-            f"(and a section to troubleshooting.md) or justify it in "
+            f"(and a section to error-codes.md) or justify it in "
             f"EXEMPT_CODES in this test file."
         )
 
     def test_base_error_code_is_registered(self) -> None:
-        # SynologyError itself uses "dsm_error" — the catch-all code. That
+        # SynologyError itself uses dsm_error — the catch-all code. That
         # must always be registered, since any unhandled path ends up there.
-        assert SynologyError.error_code == "dsm_error"
-        assert "dsm_error" in HELP_URLS
+        assert SynologyError.error_code == ErrorCode.DSM_ERROR
+        assert ErrorCode.DSM_ERROR in HELP_URLS
+
+
+class TestErrorCodeEnumCoverage:
+    """Every ErrorCode member is either documented or explicitly exempt."""
+
+    def test_every_enum_member_is_registered_or_exempt(self) -> None:
+        uncovered = [
+            code for code in ErrorCode if code not in HELP_URLS and code not in EXEMPT_CODES
+        ]
+        assert not uncovered, (
+            f"ErrorCode members have no HELP_URLS entry and no exemption: "
+            f"{[c.value for c in uncovered]}. Add a section to error-codes.md "
+            f"or justify the omission in EXEMPT_CODES."
+        )
+
+    def test_help_urls_keys_are_all_valid_error_codes(self) -> None:
+        # Catch accidental string drift: every HELP_URLS key must be an
+        # actual ErrorCode value (not a typo or renamed code).
+        valid_values = {c.value for c in ErrorCode}
+        invalid = sorted(set(HELP_URLS.keys()) - valid_values)
+        assert not invalid, (
+            f"HELP_URLS has keys that are not ErrorCode values: {invalid}. "
+            f"Add them to ErrorCode or remove from HELP_URLS."
+        )

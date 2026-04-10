@@ -6,7 +6,7 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
-from mcp_synology.core.errors import SynologyError
+from mcp_synology.core.errors import ErrorCode, SynologyError
 from mcp_synology.core.formatting import (
     error_response,
     format_key_value,
@@ -73,7 +73,7 @@ async def get_file_info(
     # Multiple files: table format
     if not files:
         error_response(
-            "not_found",
+            ErrorCode.NOT_FOUND,
             "Get file info failed: No file information returned.",
             retryable=False,
             suggestion="Check that the paths exist.",
@@ -202,7 +202,7 @@ async def get_dir_size(
         return result
 
     error_response(
-        "timeout",
+        ErrorCode.TIMEOUT,
         f"Get directory size failed: timed out after {timeout}s.",
         retryable=True,
         suggestion="The directory may be very large. Try a subdirectory.",

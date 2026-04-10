@@ -6,7 +6,7 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
-from mcp_synology.core.errors import SynologyError
+from mcp_synology.core.errors import ErrorCode, SynologyError
 from mcp_synology.core.formatting import (
     error_response,
     format_size,
@@ -92,7 +92,7 @@ async def rename(
     # Validate new_name is just a name, not a path
     if "/" in new_name:
         error_response(
-            "invalid_parameter",
+            ErrorCode.INVALID_PARAMETER,
             "Rename failed: new_name should be just a filename, not a path.",
             retryable=False,
             param="new_name",
@@ -241,7 +241,7 @@ async def _copy_move(
         synology_error_response(f"{operation} files", poll_error)
     if timed_out:
         error_response(
-            "timeout",
+            ErrorCode.TIMEOUT,
             f"{operation} files failed: timed out after {timeout}s.",
             retryable=True,
             suggestion="The operation may still be running on the NAS.",
@@ -253,7 +253,7 @@ async def _copy_move(
         err_code = err.get("code", 0) if isinstance(err, dict) else err
         err_path = status.get("path", "")
         error_response(
-            "dsm_error",
+            ErrorCode.DSM_ERROR,
             f"{operation} files failed: DSM error code {err_code} on path: {err_path}",
             retryable=False,
             suggestion="Check that source paths exist and you have permission to access them.",
@@ -347,7 +347,7 @@ async def delete_files(
         synology_error_response("Delete files", poll_error)
     if timed_out:
         error_response(
-            "timeout",
+            ErrorCode.TIMEOUT,
             f"Delete files failed: timed out after {timeout}s.",
             retryable=True,
             suggestion="The operation may still be running on the NAS.",
@@ -359,7 +359,7 @@ async def delete_files(
         err_code = err.get("code", 0) if isinstance(err, dict) else err
         err_path = status.get("path", "")
         error_response(
-            "dsm_error",
+            ErrorCode.DSM_ERROR,
             f"Delete files failed: DSM error code {err_code} on path: {err_path}",
             retryable=False,
             suggestion="Check that paths exist and you have permission to delete them.",

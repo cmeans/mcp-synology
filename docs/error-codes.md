@@ -278,6 +278,33 @@ Fix:
 
 _Catch-all_
 
+## filestation_error
+
+**A File Station API error that mcp-synology recognized as File-Station-scoped
+but did not map to a more specific code above.**
+
+This is the fall-through for `SYNO.FileStation.*` calls whose DSM error code
+isn't in the specific-handler list (400–421 range is mostly covered; codes
+like 402 "System too busy" and 900 "Unexpected server error" land here). The
+envelope includes the DSM numeric code in the message text, so you can look
+it up directly.
+
+Fix:
+
+1. Read the numeric DSM code from the message (e.g., "DSM error 402"). This
+   is the authoritative identifier — the `filestation_error` label is just
+   the bucket.
+2. Cross-reference against the
+   [Synology File Station API documentation](https://global.download.synology.com/download/Document/Software/DeveloperGuide/Package/FileStation/All/enu/Synology_File_Station_API_Guide.pdf)
+   for that specific code.
+3. **Code 402 ("System too busy"):** wait and retry. This is genuinely
+   transient and often resolves on its own within a minute.
+4. **Code 900 ("Unexpected server error"):** check **Log Center** in DSM for
+   matching events. This usually indicates an internal DSM fault and may
+   require a package restart or reboot.
+5. If you see a specific code repeatedly, [open an issue](https://github.com/cmeans/mcp-synology/issues/new)
+   with the code and operation so we can add it to `core/errors.py`.
+
 ## dsm_error
 
 **A DSM error that does not map to one of the specific codes above.**
