@@ -189,8 +189,11 @@ class TestErrorResponse:
         assert err["help_url"] == "https://example.com"
 
     def test_omits_optional_fields_when_none(self) -> None:
+        # Use a code that is NOT registered in HELP_URLS so we can observe
+        # the "no help_url" behavior. Every registered code auto-populates
+        # help_url from the central lookup — that is tested separately.
         with pytest.raises(ToolError) as exc_info:
-            error_response("dsm_error", "Something broke", retryable=True)
+            error_response("zzz_unregistered_test_code", "Something broke", retryable=True)
         body = json.loads(str(exc_info.value))
         err = body["error"]
         assert "param" not in err
@@ -199,6 +202,28 @@ class TestErrorResponse:
         assert "suggestion" not in err
         assert "help_url" not in err
         assert err["retryable"] is True
+
+    def test_help_url_auto_populated_from_registry(self) -> None:
+        # Every code registered in HELP_URLS should be auto-populated
+        # without the caller having to pass help_url explicitly.
+        with pytest.raises(ToolError) as exc_info:
+            error_response("dsm_error", "Something broke", retryable=True)
+        body = json.loads(str(exc_info.value))
+        assert "help_url" in body["error"]
+        assert body["error"]["help_url"].endswith("#dsm_error")
+
+    def test_help_url_explicit_override_wins(self) -> None:
+        # An explicit help_url argument must override the registered default
+        # so callers can point at something specific when needed.
+        with pytest.raises(ToolError) as exc_info:
+            error_response(
+                "dsm_error",
+                "Something broke",
+                retryable=True,
+                help_url="https://example.com/custom",
+            )
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["help_url"] == "https://example.com/custom"
 
 
 class TestSynologyErrorResponse:

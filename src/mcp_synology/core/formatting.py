@@ -174,10 +174,17 @@ def error_response(
     so clients get proper error signaling. The JSON envelope provides
     structured fields for smart clients alongside a human-readable message.
 
+    When ``help_url`` is not provided, the code is looked up in
+    ``core.errors.HELP_URLS`` so every registered code gets a link
+    automatically without the caller having to know the URL. Pass
+    ``help_url`` explicitly to override the registered default.
+
     Raises:
         ToolError: always — this function never returns.
     """
     from mcp.server.fastmcp.exceptions import ToolError
+
+    from mcp_synology.core.errors import HELP_URLS
 
     error: dict[str, Any] = {
         "code": code,
@@ -192,8 +199,10 @@ def error_response(
         error["valid"] = valid
     if suggestion is not None:
         error["suggestion"] = suggestion
-    if help_url is not None:
-        error["help_url"] = help_url
+
+    resolved_help_url = help_url if help_url is not None else HELP_URLS.get(code)
+    if resolved_help_url is not None:
+        error["help_url"] = resolved_help_url
 
     raise ToolError(json.dumps({"status": "error", "error": error}))
 

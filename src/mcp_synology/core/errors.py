@@ -2,11 +2,40 @@
 
 from __future__ import annotations
 
+# Help URLs point at sections of our own error-code reference rather than
+# Synology's KB. The KB is sparsely indexed and rarely matches the semantics
+# of an MCP error — our page can say "use overwrite=true" and "run
+# mcp-synology check -v", which the vendor docs never will.
+#
+# Adding a new error code: add it to HELP_URLS below AND add a matching
+# `## <code>` section to docs/error-codes.md. The unit test in
+# tests/core/test_help_urls.py will fail if the two drift out of sync.
+#
+# Intentional omissions:
+#   - session_expired: auto-retried at the client layer. Users shouldn't
+#     see this code in a surfaced error; if they do, the retry itself
+#     failed, which is reported under the underlying failure's code.
+
+GITHUB_DOCS_BASE = "https://github.com/cmeans/mcp-synology/blob/main/docs/error-codes.md"
+
+HELP_URLS: dict[str, str] = {
+    "auth_failed": f"{GITHUB_DOCS_BASE}#auth_failed",
+    "permission_denied": f"{GITHUB_DOCS_BASE}#permission_denied",
+    "api_not_found": f"{GITHUB_DOCS_BASE}#api_not_found",
+    "not_found": f"{GITHUB_DOCS_BASE}#not_found",
+    "already_exists": f"{GITHUB_DOCS_BASE}#already_exists",
+    "invalid_parameter": f"{GITHUB_DOCS_BASE}#invalid_parameter",
+    "filesystem_error": f"{GITHUB_DOCS_BASE}#filesystem_error",
+    "disk_full": f"{GITHUB_DOCS_BASE}#disk_full",
+    "timeout": f"{GITHUB_DOCS_BASE}#timeout",
+    "unavailable": f"{GITHUB_DOCS_BASE}#unavailable",
+    "dsm_error": f"{GITHUB_DOCS_BASE}#dsm_error",
+}
+
 
 class SynologyError(Exception):
     """Base exception for all Synology DSM errors."""
 
-    help_url: str | None = None
     error_code: str = "dsm_error"
     retryable: bool = False
 
@@ -19,26 +48,26 @@ class SynologyError(Exception):
     ):
         self.code = code
         self.suggestion = suggestion
-        if help_url is not None:
-            self.help_url = help_url
+        # Per-instance override. When None (the usual case), callers resolve
+        # the URL from HELP_URLS using error_code at response-building time.
+        self.help_url = help_url
         super().__init__(message)
 
 
 class AuthenticationError(SynologyError):
     """Authentication failed (bad credentials, 2FA required, etc.)."""
 
-    help_url = (
-        "https://kb.synology.com/en-global/DSM/help/DSM/AdminCenter/connection_security_autoblock"
-    )
     error_code = "auth_failed"
 
 
 class SessionExpiredError(SynologyError):
-    """Session expired or invalidated (codes 106, 107, 119)."""
+    """Session expired or invalidated (codes 106, 107, 119).
 
-    help_url = (
-        "https://kb.synology.com/en-global/DSM/help/DSM/AdminCenter/connection_security_autoblock"
-    )
+    Intentionally has no entry in HELP_URLS — session expiry is auto-retried
+    by the core client and should never be surfaced to an end user. If it
+    ever is, that indicates the retry path itself failed, which is a bug.
+    """
+
     error_code = "session_expired"
     retryable = True
 
@@ -46,14 +75,12 @@ class SessionExpiredError(SynologyError):
 class SynologyPermissionError(SynologyError):
     """Permission denied (code 105). NOT a session issue — never re-auth on this."""
 
-    help_url = "https://kb.synology.com/en-global/DSM/help/DSM/AdminCenter/file_user_desc"
     error_code = "permission_denied"
 
 
 class ApiNotFoundError(SynologyError):
     """Requested API does not exist on this NAS."""
 
-    help_url = "https://kb.synology.com/en-global/DSM/help/DSM/Tutorial/cloud_set_up_dsm"
     error_code = "api_not_found"
 
 
@@ -66,21 +93,18 @@ class FileStationError(SynologyError):
 class PathNotFoundError(FileStationError):
     """Path not found (code 408)."""
 
-    help_url = "https://kb.synology.com/en-global/DSM/help/FileStation/connect"
     error_code = "not_found"
 
 
 class SynologyFileExistsError(FileStationError):
     """File already exists at destination (code 414)."""
 
-    help_url = "https://kb.synology.com/en-global/DSM/help/FileStation/connect"
     error_code = "already_exists"
 
 
 class DiskFullError(FileStationError):
     """No space left on device (code 416)."""
 
-    help_url = "https://kb.synology.com/en-global/DSM/help/DSM/AdminCenter/system_info_storage"
     error_code = "disk_full"
     retryable = True
 
@@ -88,7 +112,6 @@ class DiskFullError(FileStationError):
 class IllegalNameError(FileStationError):
     """Invalid file or folder name (codes 418, 419)."""
 
-    help_url = "https://en.wikipedia.org/wiki/Filename#Reserved_characters_and_words"
     error_code = "invalid_parameter"
 
 
