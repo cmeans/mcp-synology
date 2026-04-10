@@ -1,8 +1,44 @@
 # Changelog
 
+## 0.5.0 (2026-04-10)
+
+### Changed
+
+- **Error responses are now structured JSON envelopes with `isError=true`** (#9)
+  - Tool errors previously returned human-readable strings like `[!] List files failed: ...`. They now raise `ToolError` with a JSON envelope:
+    ```json
+    {
+      "status": "error",
+      "error": {
+        "code": "not_found",
+        "message": "List files failed (DSM error 408): No such file or directory",
+        "retryable": false,
+        "suggestion": "Use list_files or search_files to find the correct path.",
+        "help_url": "https://github.com/cmeans/mcp-synology/blob/main/docs/error-codes.md#not_found"
+      }
+    }
+    ```
+  - The MCP SDK wraps this in a `CallToolResult` with `isError=true`, which is the correct protocol signal for tool failures. Clients that only display text content see the JSON directly; clients that key off `isError` now get proper failure signaling.
+  - All 13 possible `code` values are documented in [`docs/error-codes.md`](docs/error-codes.md), with per-code sections covering symptoms, causes, retryability, and concrete fixes.
+  - This is a client-visible behavior change. Any client that was pattern-matching the old `[!] ... failed:` text format will need to update — parse the JSON envelope instead, or key off `isError` at the MCP protocol level.
+
+### Added
+
+- **`ErrorCode(StrEnum)` in `core/errors.py`** — single source of truth for every code the server can emit. `error_response(code: ErrorCode)` is typed so call-site typos become mypy errors rather than silent envelopes with missing `help_url`.
+- **`docs/error-codes.md`** — 12-section reference covering every surfaceable `ErrorCode` member. Each section has root causes, fix steps with specific DSM control-panel paths, and explicit retryability statements. `session_expired` is intentionally omitted (auto-retried by the core client; never surfaced to users).
+- **Multi-invariant drift test** (`tests/core/test_help_urls.py`) — enforces that `ErrorCode` ↔ `HELP_URLS` registry ↔ `docs/error-codes.md` anchors stay in sync in all directions. Adding a new code without its doc section, or renaming a section without updating the registry, fails CI.
+- **`errno.ENOSPC` detection** in `download_file` OSError fallback — replaces locale-dependent substring matching on error text, so local disk-full is correctly reported as `disk_full`/`retryable=True` regardless of OS language or DSM version.
+- **Unit test coverage** for `modules/system/info.py` and `modules/system/utilization.py` — both modules previously had no unit tests (13% coverage), now at 99–100%.
+
+### Fixed
+
+- **`unavailable` `retryable` semantic is now consistent across modules** — `system/utilization.py` previously reported `retryable=False` while `system/info.py` reported `retryable=True` for the same condition ("API responded but returned no data"). Both now use `retryable=True` with an inline comment explaining the transient-condition rationale.
+- **`download_file` disk-full is now reported with the same code in both detection paths** — the pre-flight branch (via `shutil.disk_usage`) and the OSError fallback previously disagreed: pre-flight emitted `disk_full`/retryable=True, fallback emitted `filesystem_error`/retryable=False despite a "Free space on the local disk" suggestion. Both now emit `disk_full`/retryable=True when disk-full is the actual cause.
+- **`error_response()` is safe against non-JSON-serializable `value` arguments** — `json.dumps(..., default=str)` prevents a future caller passing `bytes` or a custom object from crashing the error handler mid-envelope.
+
 ## 0.4.1 (2026-04-07)
 
-### Fixes
+### Fixed
 
 - **Claude Desktop config** — setup snippet now uses `uvx mcp-synology` instead of bare command, which failed with ENOENT on systems where `~/.local/bin` isn't in Claude Desktop's PATH
 - **Migration script** — now auto-updates `claude_desktop_config.json` (detects and rewrites old synology-mcp entries), creates `.json.bak` backup before writing, preserves extra args, handles `--config=value` equals syntax
