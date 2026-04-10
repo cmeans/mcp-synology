@@ -71,6 +71,89 @@ class TestGetResourceUsage:
         assert "sda" in result
 
     @respx.mock
+    async def test_cpu_other_load_fallback_format(self, mock_client: DsmClient) -> None:
+        """Alternate CPU format: no 15min_load, no system/user_load, just other_load.
+
+        Covers the ``elif "other_load" in cpu:`` branch — some DSM versions
+        report CPU purely as ``other_load`` (e.g., single-percent roll-up)
+        rather than the system/user split or the load-average block.
+        """
+        _install_utilization_api(mock_client)
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={
+                "success": True,
+                "data": {
+                    "cpu": {"other_load": 42},
+                    "memory": {"real_usage": 10},
+                    "disk": {"disk": []},
+                },
+            }
+        )
+        result = await get_resource_usage(mock_client)
+        assert "CPU usage" in result
+        assert "42%" in result
+
+    @respx.mock
+    async def test_memory_cached_and_swap_detail(self, mock_client: DsmClient) -> None:
+        """Memory payload with cached bytes and swap-in activity.
+
+        Covers the ``if cached:`` and ``if swap_used:`` branches in
+        ``_format_memory``. Both are conditional additions to the memory
+        output that only trigger when the NAS reports non-zero values.
+        """
+        _install_utilization_api(mock_client)
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={
+                "success": True,
+                "data": {
+                    "cpu": {"user_load": 5, "system_load": 2, "other_load": 0},
+                    "memory": {
+                        "memory_size": 8388608,  # 8 GB in KB
+                        "real_usage": 40,
+                        "avail_real": 5242880,  # ~5 GB
+                        "cached": 1048576,  # 1 GB cached
+                        "si_disk": 25,  # active swap-in
+                    },
+                    "disk": {"disk": []},
+                },
+            }
+        )
+        result = await get_resource_usage(mock_client)
+        assert "1024 MB cached" in result
+        assert "Swap in" in result
+        assert "25 pages/s" in result
+
+    @respx.mock
+    async def test_disk_unexpected_type_falls_through_to_empty_list(
+        self, mock_client: DsmClient
+    ) -> None:
+        """Disk as neither dict nor list → treated as empty, no disk rows.
+
+        Covers the ``else: disk_list = []`` fallback in get_resource_usage.
+        Should not raise — just render without any disk entries. Uses a
+        CPU/memory payload so ``pairs`` is non-empty and we don't trip
+        the ``unavailable`` branch.
+        """
+        _install_utilization_api(mock_client)
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={
+                "success": True,
+                "data": {
+                    "cpu": {"user_load": 5, "system_load": 2},
+                    "memory": {"real_usage": 30},
+                    # Neither dict with 'disk' key nor a bare list — e.g.,
+                    # DSM returned a string sentinel or null-like value.
+                    "disk": "unavailable",
+                },
+            }
+        )
+        result = await get_resource_usage(mock_client)
+        assert "Resource Usage" in result
+        assert "CPU usage" in result
+        # No disk entries rendered
+        assert "Disk (" not in result
+
+    @respx.mock
     async def test_success_disk_as_list(self, mock_client: DsmClient) -> None:
         """DSM sometimes returns disk as a bare list instead of {'disk': [...]}."""
         _install_utilization_api(mock_client)
