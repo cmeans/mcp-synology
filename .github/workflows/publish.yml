@@ -58,10 +58,57 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Create GitHub Release
+      - name: Extract release notes from CHANGELOG
+        id: notes
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          # CHANGELOG.md is the authoritative release narrative. Extract the
+          # section for the current tag and use it as the Release body so we
+          # don't duplicate content or rely on low-quality auto-generated
+          # commit lists. Falls back to --generate-notes if the CHANGELOG
+          # has no matching entry (e.g. an emergency tag without doc prep).
+          VERSION="${TAG#v}"
+          awk -v version="$VERSION" '
+            $0 ~ "^## "version"( |\\()" {flag=1; next}
+            flag && /^## / {exit}
+            flag
+          ' CHANGELOG.md > release_notes.md
+
+          # Strip leading blank lines so the body does not start with an
+          # empty paragraph.
+          sed -i '/./,$!d' release_notes.md
+
+          if [ -s release_notes.md ]; then
+            echo "Found CHANGELOG entry for $VERSION ($(wc -l < release_notes.md) lines)"
+            echo "use_changelog=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::No CHANGELOG entry for $VERSION — falling back to auto-generated notes"
+            echo "use_changelog=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          USE_CHANGELOG: ${{ steps.notes.outputs.use_changelog }}
         run: |
-          gh release create "${{ github.ref_name }}" \
-            --title "${{ github.ref_name }}" \
-            --generate-notes
+          # Idempotent: if a release for the tag already exists (e.g. it was
+          # hand-crafted before the publish workflow ran), update its notes
+          # in place with `gh release edit` rather than failing with a 422.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists — updating notes in place"
+            if [ "$USE_CHANGELOG" = "true" ]; then
+              gh release edit "$TAG" --title "$TAG" --notes-file release_notes.md
+            else
+              # Cannot regenerate auto notes on edit — leave existing body.
+              gh release edit "$TAG" --title "$TAG"
+            fi
+          else
+            echo "Creating new release $TAG"
+            if [ "$USE_CHANGELOG" = "true" ]; then
+              gh release create "$TAG" --title "$TAG" --notes-file release_notes.md
+            else
+              gh release create "$TAG" --title "$TAG" --generate-notes
+            fi
+          fi
