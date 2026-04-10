@@ -345,6 +345,31 @@ class TestBackgroundTaskErrors:
         assert "Delete files" in body["error"]["message"]
 
     @respx.mock
+    async def test_delete_poll_error_mid_operation(self, mock_client: DsmClient) -> None:
+        """DSM fails on status call during delete polling.
+
+        Covers the ``poll_error = e; break`` branch in delete_files,
+        mirroring the copymove version above. Previously uncovered in
+        the patch.
+        """
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            method = params.get("method", "")
+            if method == "start":
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "del-err"}})
+            if method == "status":
+                return httpx.Response(200, json={"success": False, "error": {"code": 402}})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+
+        with pytest.raises(ToolError) as exc_info:
+            await delete_files(mock_client, paths=["/video/file.mkv"])
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "filestation_error"
+
+    @respx.mock
     async def test_delete_task_completes_with_error(self, mock_client: DsmClient) -> None:
         """Delete task finishes with an error dict → dsm_error."""
 

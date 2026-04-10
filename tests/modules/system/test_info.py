@@ -144,7 +144,11 @@ class TestGetSystemInfo:
     async def test_both_sources_return_empty_data_returns_unavailable(
         self, mock_client: DsmClient
     ) -> None:
-        """API calls succeed but populate no fields → unavailable, retryable."""
+        """API calls succeed but populate no fields → unavailable, retryable.
+
+        Hits the first ``error_response`` branch (``not dsm and not core``)
+        because empty dicts are falsy.
+        """
         _install_system_apis(mock_client)
         responses = {
             "SYNO.DSM.Info": {"success": True, "data": {}},
@@ -159,6 +163,39 @@ class TestGetSystemInfo:
         body = json.loads(str(exc_info.value))
         assert body["error"]["code"] == "unavailable"
         assert body["error"]["retryable"] is True
+
+    @respx.mock
+    async def test_unrecognized_fields_produce_no_pairs(self, mock_client: DsmClient) -> None:
+        """Sources return non-empty dicts but with fields we don't extract.
+
+        This is the SECOND ``if not pairs: error_response(...)`` branch —
+        distinct from the empty-dict case above. The dicts are truthy so
+        the first branch is skipped, but since none of the expected
+        fields (model, version_string, ram, cpu_series, etc.) are
+        populated, ``pairs`` stays empty and the late-branch
+        ``unavailable`` fires at the bottom of the function.
+        """
+        _install_system_apis(mock_client)
+        responses = {
+            "SYNO.DSM.Info": {
+                "success": True,
+                "data": {"some_unknown_field": "value", "another_unknown": 42},
+            },
+            "SYNO.Core.System": {
+                "success": True,
+                "data": {"yet_another_field": "also unknown"},
+            },
+        }
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=lambda req: _mock_response(req, responses)
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await get_system_info(mock_client)
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "unavailable"
+        assert body["error"]["retryable"] is True
+        assert "No system information returned" in body["error"]["message"]
 
     @respx.mock
     async def test_uptime_formatting(self, mock_client: DsmClient) -> None:

@@ -89,6 +89,18 @@ class TestListShares:
         result = await list_shares(mock_client)
         assert "No items" in result
 
+    @respx.mock
+    async def test_list_shares_error(self, mock_client: DsmClient) -> None:
+        """DSM error on list_shares should propagate as a structured envelope."""
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 105}}
+        )
+        with pytest.raises(ToolError) as exc_info:
+            await list_shares(mock_client)
+        body = json.loads(str(exc_info.value))
+        assert body["status"] == "error"
+        assert body["error"]["code"] == "permission_denied"
+
 
 class TestListFiles:
     @respx.mock

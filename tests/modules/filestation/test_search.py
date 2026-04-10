@@ -145,6 +145,36 @@ class TestSearchFiles:
         assert body["error"]["code"] == "not_found"
 
     @respx.mock
+    async def test_search_poll_error_mid_operation(self, mock_client: DsmClient) -> None:
+        """DSM fails on the status/list call after search task was started.
+
+        Exercises the ``poll_error = e`` branch and the subsequent
+        ``synology_error_response("Search files", poll_error)`` after
+        the try/finally cleanup runs. Prior to this test, those lines
+        were uncovered in the patch.
+        """
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            method = params.get("method", "")
+            if method == "start":
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "search-err"}})
+            if method == "list":
+                # First list call fails — DSM busy
+                return httpx.Response(200, json={"success": False, "error": {"code": 402}})
+            # stop/clean
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+
+        with pytest.raises(ToolError) as exc_info:
+            await search_files(mock_client, folder_path="/video", pattern="test")
+        body = json.loads(str(exc_info.value))
+        assert body["status"] == "error"
+        # Code 402 "System too busy" is not specifically typed → filestation_error
+        assert body["error"]["code"] == "filestation_error"
+
+    @respx.mock
     async def test_search_with_size_filter(self, mock_client: DsmClient) -> None:
         call_count = 0
 
