@@ -14,6 +14,10 @@
 
 - **Test coverage Phase 1 of #14** (#16) — total coverage 81% → 85%. Five files brought to 100%: `cli/check.py` (51%), `cli/main.py` (56%), `cli/logging_.py` (78%), `modules/system/__init__.py` (23%), `modules/filestation/__init__.py` (70%). Test count 336 → 392 (+56 cases). New test classes in `tests/core/test_cli.py` cover the `_check_login` async path, every top-level option in the `main` group (`--check-update`, `--auto-upgrade`, `--revert`, version-change tracking, auto-upgrade trigger), and the early/configured logging setup. Two new test files (`tests/modules/{system,filestation}/test_register.py`) exercise module registration closure bodies via `server._tool_manager._tools[name].fn` extraction with sentinel `AsyncMock` return values, walking the tool body lines that the prior `assert server is not None` style left uncovered. No production code touched.
 
+### Documentation
+
+- **`CLAUDE.md` documents the per-PR CHANGELOG convention** (#16) — adds an "Adding a CHANGELOG entry on every PR" section under "Common Tasks" specifying that every PR (features, fixes, infra, tests, docs) updates `## Unreleased` in `CHANGELOG.md`, with the section-heading taxonomy (`Added`/`Changed`/`Fixed`/`Internal`/`Documentation`) and the PR/issue reference format. Updates the "Bumping the version for a release" steps to rename `## Unreleased` to `## <version> (<date>)` and add a fresh empty `## Unreleased` section, plus notes that the `publish.yml` `github-release` awk extractor (`## <version>( |\()`) walks past `## Unreleased` harmlessly during tag-push releases.
+
 ## 0.5.0 (2026-04-10)
 
 ### Changed
