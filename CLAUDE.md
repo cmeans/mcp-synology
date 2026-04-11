@@ -146,12 +146,12 @@ uv run pytest --cov=mcp_synology           # Tests with coverage
 ### Adding a CHANGELOG entry on every PR
 Every PR — features, fixes, infra, tests, docs — adds an entry to `CHANGELOG.md` under the `## Unreleased` section at the top of the file. Do not defer CHANGELOG updates until release prep.
 
-Use the existing section headings to categorize:
-- `### Added` — new features or capabilities
-- `### Changed` — behavior changes that aren't bug fixes
+`CHANGELOG.md` follows **strict [Keep a Changelog](https://keepachangelog.com/) categories** — only three section headings are valid:
+- `### Added` — anything new: features, capabilities, tests, docs, dev tooling
+- `### Changed` — behavior or API changes that aren't bug fixes
 - `### Fixed` — bug fixes
-- `### Internal` — test/CI/tooling/refactor changes with no user-visible behavior
-- `### Documentation` — docs-only changes
+
+Do not invent new categories like `### Internal`, `### Documentation`, or `### Code Quality`. The 0.5.0 entry deliberately transitioned away from the older Conventional Commits-style taxonomy; new PRs must respect that. Test coverage and doc additions both go under `### Added` (precedent: 0.5.0 puts unit test coverage and `docs/error-codes.md` under Added).
 
 Reference the PR number and any closed issue: `- ... (#16) — closes #14`. If no `## Unreleased` section exists (because the previous release just shipped), add one above the latest version section.
 
