@@ -25,48 +25,66 @@ import json
 import sys
 import tomllib
 from pathlib import Path
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PYPROJECT = REPO_ROOT / "pyproject.toml"
 SERVER_JSON = REPO_ROOT / "server.json"
 
+ServerJson = dict[str, Any]
 
-def read_pyproject_version() -> str:
-    with PYPROJECT.open("rb") as f:
-        data = tomllib.load(f)
+
+def read_pyproject_version(path: Path = PYPROJECT) -> str:
+    try:
+        with path.open("rb") as f:
+            data = tomllib.load(f)
+    except FileNotFoundError:
+        raise SystemExit(f"error: {path} not found") from None
+    except tomllib.TOMLDecodeError as exc:
+        raise SystemExit(f"error: {path} is not valid TOML: {exc}") from None
     version = data.get("project", {}).get("version")
     if not isinstance(version, str):
-        raise SystemExit(f"error: [project].version not found or not a string in {PYPROJECT}")
+        raise SystemExit(f"error: [project].version not found or not a string in {path}")
     return version
 
 
-def load_server_json() -> dict:
-    with SERVER_JSON.open("r", encoding="utf-8") as f:
-        return json.load(f)
+def load_server_json(path: Path = SERVER_JSON) -> ServerJson:
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data: Any = json.load(f)
+    except FileNotFoundError:
+        raise SystemExit(f"error: {path} not found") from None
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"error: {path} is not valid JSON: {exc}") from None
+    if not isinstance(data, dict):
+        raise SystemExit(f"error: {path} top-level value must be a JSON object")
+    return data
 
 
-def collect_versions(server: dict) -> dict[str, str]:
+def collect_versions(server: ServerJson) -> dict[str, str]:
     """Return the version fields server.json currently advertises."""
-    out: dict[str, str] = {"top_level": server.get("version", "")}
+    out: dict[str, str] = {"top_level": str(server.get("version", ""))}
     packages = server.get("packages") or []
-    for i, pkg in enumerate(packages):
-        out[f"packages[{i}]"] = pkg.get("version", "")
+    if isinstance(packages, list):
+        for i, pkg in enumerate(packages):
+            if isinstance(pkg, dict):
+                out[f"packages[{i}]"] = str(pkg.get("version", ""))
     return out
 
 
-def apply_version(server: dict, version: str) -> dict:
+def apply_version(server: ServerJson, version: str) -> ServerJson:
     """Return a new dict with all version fields set to `version`."""
-    updated = dict(server)
+    updated: ServerJson = dict(server)
     updated["version"] = version
-    if "packages" in updated and isinstance(updated["packages"], list):
+    packages = updated.get("packages")
+    if isinstance(packages, list):
         updated["packages"] = [
-            {**pkg, "version": version} if isinstance(pkg, dict) else pkg
-            for pkg in updated["packages"]
+            {**pkg, "version": version} if isinstance(pkg, dict) else pkg for pkg in packages
         ]
     return updated
 
 
-def serialize(server: dict) -> str:
+def serialize(server: ServerJson) -> str:
     # Match the existing 2-space indent and trailing newline so diffs stay
     # quiet when only the version changed.
     return json.dumps(server, indent=2, ensure_ascii=False) + "\n"
@@ -81,8 +99,8 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    pyproject_version = read_pyproject_version()
-    server = load_server_json()
+    pyproject_version = read_pyproject_version(PYPROJECT)
+    server = load_server_json(SERVER_JSON)
     current = collect_versions(server)
     drifted = {field: v for field, v in current.items() if v != pyproject_version}
 
@@ -108,7 +126,11 @@ def main() -> int:
 
     updated = apply_version(server, pyproject_version)
     SERVER_JSON.write_text(serialize(updated), encoding="utf-8")
-    print(f"Updated {SERVER_JSON.relative_to(REPO_ROOT)} to {pyproject_version}")
+    try:
+        display_path = SERVER_JSON.relative_to(REPO_ROOT)
+    except ValueError:
+        display_path = SERVER_JSON
+    print(f"Updated {display_path} to {pyproject_version}")
     for field, old in drifted.items():
         print(f"  {field}: {old!r} -> {pyproject_version!r}")
     return 0
