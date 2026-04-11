@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING, Any
-from unittest.mock import MagicMock, patch
-
-if TYPE_CHECKING:
-    from pathlib import Path
+from pathlib import Path
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from click.testing import CliRunner
 
@@ -626,3 +624,472 @@ class TestFetchDsmInfo:
 
         assert result["hostname"] == "MyNAS"
         assert result["model"] == "DS1618+"
+
+
+class TestCheckLogin:
+    """Tests for cli/check.py:_check_login — the async login validator."""
+
+    @staticmethod
+    def _make_fake_client() -> MagicMock:
+        fake_client = MagicMock()
+        fake_client.__aenter__ = AsyncMock(return_value=fake_client)
+        fake_client.__aexit__ = AsyncMock(return_value=None)
+        fake_client.query_api_info = AsyncMock(return_value=None)
+        return fake_client
+
+    async def test_check_login_success(self) -> None:
+        from mcp_synology.cli.check import _check_login
+        from tests.conftest import make_test_config
+
+        config = make_test_config()
+        fake_client = self._make_fake_client()
+        fake_auth = MagicMock()
+        fake_auth.login = AsyncMock()
+        fake_auth.logout = AsyncMock()
+
+        with (
+            patch("mcp_synology.core.client.DsmClient", return_value=fake_client),
+            patch("mcp_synology.core.auth.AuthManager", return_value=fake_auth),
+        ):
+            await _check_login(config)
+
+        fake_auth.login.assert_awaited_once()
+        fake_auth.logout.assert_awaited_once()
+
+    async def test_check_login_failure_synology_error(self) -> None:
+        import pytest
+
+        from mcp_synology.cli.check import _check_login
+        from mcp_synology.core.errors import SynologyError
+        from tests.conftest import make_test_config
+
+        config = make_test_config()
+        fake_client = self._make_fake_client()
+        fake_auth = MagicMock()
+        fake_auth.login = AsyncMock(side_effect=SynologyError("bad creds"))
+
+        with (
+            patch("mcp_synology.core.client.DsmClient", return_value=fake_client),
+            patch("mcp_synology.core.auth.AuthManager", return_value=fake_auth),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            await _check_login(config)
+
+        assert exc_info.value.code == 1
+
+    async def test_check_login_failure_oserror(self) -> None:
+        import pytest
+
+        from mcp_synology.cli.check import _check_login
+        from tests.conftest import make_test_config
+
+        config = make_test_config()
+        fake_client = self._make_fake_client()
+        fake_auth = MagicMock()
+        fake_auth.login = AsyncMock(side_effect=OSError("connection refused"))
+
+        with (
+            patch("mcp_synology.core.client.DsmClient", return_value=fake_client),
+            patch("mcp_synology.core.auth.AuthManager", return_value=fake_auth),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            await _check_login(config)
+
+        assert exc_info.value.code == 1
+
+    async def test_check_login_rejects_non_appconfig(self) -> None:
+        import pytest
+
+        from mcp_synology.cli.check import _check_login
+
+        with pytest.raises(RuntimeError, match="AppConfig"):
+            await _check_login("not a config")
+
+    async def test_check_login_rejects_missing_connection(self) -> None:
+        import pytest
+
+        from mcp_synology.cli.check import _check_login
+        from tests.conftest import make_test_config
+
+        config = make_test_config()
+        config.connection = None  # type: ignore[assignment]
+
+        with pytest.raises(RuntimeError, match="connection"):
+            await _check_login(config)
+
+    def test_check_command_invalid_config_exits_nonzero(self, tmp_path: Path) -> None:
+        """check with a config that fails schema validation exits 1 with an error."""
+        config_file = tmp_path / "wrong_schema.yaml"
+        config_file.write_text(
+            "schema_version: 999\n"
+            "connection:\n"
+            "  host: 1.2.3.4\n"
+            "modules:\n"
+            "  filestation:\n"
+            "    enabled: true\n"
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["check", "-c", str(config_file)])
+        assert result.exit_code == 1
+        assert "Error" in result.output
+
+    def test_check_command_verbose_flag(self, tmp_path: Path) -> None:
+        """--verbose enables debug logging early."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "schema_version: 1\n"
+            "instance_id: test-nas\n"
+            "connection:\n"
+            "  host: 192.168.1.100\n"
+            "modules:\n"
+            "  filestation:\n"
+            "    enabled: true\n"
+        )
+        runner = CliRunner()
+        with patch("mcp_synology.cli.check.asyncio.run", return_value=None):
+            result = runner.invoke(main, ["check", "-c", str(config_file), "--verbose"])
+        assert result.exit_code == 0
+
+
+class TestMainGroupOptions:
+    """Tests for cli/main.py top-level options: --check-update, --auto-upgrade, --revert."""
+
+    def test_check_update_with_newer_version_uv_installer(self) -> None:
+        runner = CliRunner()
+        with (
+            patch("mcp_synology.cli.main._load_global_state", return_value={}),
+            patch("mcp_synology.cli.main._save_global_state"),
+            patch("mcp_synology.cli.main._check_for_update", return_value="9.9.9"),
+            patch("mcp_synology.cli.main._get_current_version", return_value="0.5.0"),
+            patch("mcp_synology.cli.main._detect_installer", return_value="uv"),
+        ):
+            result = runner.invoke(main, ["--check-update"])
+
+        assert result.exit_code == 0
+        assert "Update available" in result.output
+        assert "0.5.0" in result.output
+        assert "9.9.9" in result.output
+        assert "uv tool install" in result.output
+
+    def test_check_update_with_newer_version_pipx_installer(self) -> None:
+        runner = CliRunner()
+        with (
+            patch("mcp_synology.cli.main._load_global_state", return_value={}),
+            patch("mcp_synology.cli.main._save_global_state"),
+            patch("mcp_synology.cli.main._check_for_update", return_value="9.9.9"),
+            patch("mcp_synology.cli.main._get_current_version", return_value="0.5.0"),
+            patch("mcp_synology.cli.main._detect_installer", return_value="pipx"),
+        ):
+            result = runner.invoke(main, ["--check-update"])
+
+        assert result.exit_code == 0
+        assert "pipx upgrade" in result.output
+
+    def test_check_update_with_newer_version_unknown_installer(self) -> None:
+        """Falls back to uv tool install when installer can't be detected."""
+        runner = CliRunner()
+        with (
+            patch("mcp_synology.cli.main._load_global_state", return_value={}),
+            patch("mcp_synology.cli.main._save_global_state"),
+            patch("mcp_synology.cli.main._check_for_update", return_value="9.9.9"),
+            patch("mcp_synology.cli.main._get_current_version", return_value="0.5.0"),
+            patch("mcp_synology.cli.main._detect_installer", return_value=None),
+        ):
+            result = runner.invoke(main, ["--check-update"])
+
+        assert result.exit_code == 0
+        assert "uv tool install" in result.output
+
+    def test_check_update_no_newer_version(self) -> None:
+        runner = CliRunner()
+        with (
+            patch("mcp_synology.cli.main._load_global_state", return_value={}),
+            patch("mcp_synology.cli.main._save_global_state"),
+            patch("mcp_synology.cli.main._check_for_update", return_value=None),
+            patch("mcp_synology.cli.main._get_current_version", return_value="0.5.0"),
+        ):
+            result = runner.invoke(main, ["--check-update"])
+
+        assert result.exit_code == 0
+        assert "latest version" in result.output
+
+    def test_auto_upgrade_enable(self) -> None:
+        runner = CliRunner()
+        saved_state: dict[str, Any] = {}
+
+        def _save(state: dict[str, Any]) -> None:
+            saved_state.update(state)
+
+        with (
+            patch("mcp_synology.cli.main._load_global_state", return_value={}),
+            patch("mcp_synology.cli.main._save_global_state", side_effect=_save),
+        ):
+            result = runner.invoke(main, ["--auto-upgrade", "enable"])
+
+        assert result.exit_code == 0
+        assert "enabled" in result.output
+        assert saved_state["auto_upgrade"] is True
+
+    def test_auto_upgrade_disable(self) -> None:
+        runner = CliRunner()
+        saved_state: dict[str, Any] = {}
+
+        def _save(state: dict[str, Any]) -> None:
+            saved_state.update(state)
+
+        with (
+            patch("mcp_synology.cli.main._load_global_state", return_value={}),
+            patch("mcp_synology.cli.main._save_global_state", side_effect=_save),
+        ):
+            result = runner.invoke(main, ["--auto-upgrade", "disable"])
+
+        assert result.exit_code == 0
+        assert "disabled" in result.output
+        assert saved_state["auto_upgrade"] is False
+
+    def test_revert_with_flag_value_uses_previous(self) -> None:
+        """--revert=__PREVIOUS__ (the click flag_value form) → _do_revert(None)."""
+        runner = CliRunner()
+        with patch("mcp_synology.cli.main._do_revert") as do_revert:
+            result = runner.invoke(main, ["--revert=__PREVIOUS__"])
+        assert result.exit_code == 0
+        do_revert.assert_called_once_with(None)
+
+    def test_revert_with_explicit_version(self) -> None:
+        """--revert=0.4.1 → _do_revert("0.4.1")."""
+        runner = CliRunner()
+        with patch("mcp_synology.cli.main._do_revert") as do_revert:
+            result = runner.invoke(main, ["--revert=0.4.1"])
+        assert result.exit_code == 0
+        do_revert.assert_called_once_with("0.4.1")
+
+    def test_no_subcommand_shows_help(self) -> None:
+        runner = CliRunner()
+        with (
+            patch("mcp_synology.cli.main._load_global_state", return_value={}),
+            patch("mcp_synology.cli.main._save_global_state"),
+            patch("mcp_synology.cli.main._get_current_version", return_value="0.5.0"),
+        ):
+            result = runner.invoke(main, [])
+        assert result.exit_code == 0
+        assert "Usage" in result.output
+
+    def test_version_change_recorded_as_previous(self) -> None:
+        """When running version differs from last_known, record it as previous."""
+        runner = CliRunner()
+        saved_state: dict[str, Any] = {}
+
+        def _save(state: dict[str, Any]) -> None:
+            saved_state.update(state)
+
+        with (
+            patch(
+                "mcp_synology.cli.main._load_global_state",
+                return_value={"running_version": "0.4.0"},
+            ),
+            patch("mcp_synology.cli.main._save_global_state", side_effect=_save),
+            patch("mcp_synology.cli.main._get_current_version", return_value="0.5.0"),
+        ):
+            result = runner.invoke(main, [])
+
+        assert result.exit_code == 0
+        assert saved_state["previous_version"] == "0.4.0"
+        assert saved_state["running_version"] == "0.5.0"
+
+    def test_auto_upgrade_triggers_on_non_serve_subcommand(self, tmp_path: Path) -> None:
+        """When auto_upgrade enabled and a non-serve subcommand runs, upgrade fires."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "schema_version: 1\n"
+            "instance_id: test\n"
+            "connection:\n"
+            "  host: 1.2.3.4\n"
+            "modules:\n"
+            "  filestation:\n"
+            "    enabled: true\n"
+        )
+
+        runner = CliRunner()
+        with (
+            patch(
+                "mcp_synology.cli.main._load_global_state",
+                return_value={"auto_upgrade": True},
+            ),
+            patch("mcp_synology.cli.main._save_global_state"),
+            patch("mcp_synology.cli.main._get_current_version", return_value="0.5.0"),
+            patch("mcp_synology.cli.main._check_for_update", return_value="9.9.9"),
+            patch("mcp_synology.cli.main._do_auto_upgrade") as upgrade,
+            patch("mcp_synology.cli.check.asyncio.run", return_value=None),
+        ):
+            runner.invoke(main, ["check", "-c", str(config_file)])
+
+        upgrade.assert_called_once()
+
+    def test_auto_upgrade_skipped_when_no_update(self, tmp_path: Path) -> None:
+        """auto_upgrade enabled but no newer version → no upgrade attempt."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "schema_version: 1\n"
+            "instance_id: test\n"
+            "connection:\n"
+            "  host: 1.2.3.4\n"
+            "modules:\n"
+            "  filestation:\n"
+            "    enabled: true\n"
+        )
+
+        runner = CliRunner()
+        with (
+            patch(
+                "mcp_synology.cli.main._load_global_state",
+                return_value={"auto_upgrade": True},
+            ),
+            patch("mcp_synology.cli.main._save_global_state"),
+            patch("mcp_synology.cli.main._get_current_version", return_value="0.5.0"),
+            patch("mcp_synology.cli.main._check_for_update", return_value=None),
+            patch("mcp_synology.cli.main._do_auto_upgrade") as upgrade,
+            patch("mcp_synology.cli.check.asyncio.run", return_value=None),
+        ):
+            runner.invoke(main, ["check", "-c", str(config_file)])
+
+        upgrade.assert_not_called()
+
+    def test_serve_command_uses_create_server_and_runs_stdio(self, tmp_path: Path) -> None:
+        """serve loads config, creates server, runs with stdio transport."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "schema_version: 1\n"
+            "instance_id: test\n"
+            "connection:\n"
+            "  host: 1.2.3.4\n"
+            "modules:\n"
+            "  filestation:\n"
+            "    enabled: true\n"
+        )
+
+        fake_server = MagicMock()
+        runner = CliRunner()
+        with (
+            patch("mcp_synology.server.create_server", return_value=fake_server) as create,
+            patch(
+                "mcp_synology.cli.main._load_global_state",
+                return_value={},
+            ),
+            patch("mcp_synology.cli.main._save_global_state"),
+            patch("mcp_synology.cli.main._get_current_version", return_value="0.5.0"),
+        ):
+            result = runner.invoke(main, ["serve", "-c", str(config_file)])
+
+        assert result.exit_code == 0, result.output
+        create.assert_called_once()
+        fake_server.run.assert_called_once_with(transport="stdio")
+
+
+class TestCliLogging:
+    """Tests for cli/logging_.py — early and config-driven logging setup."""
+
+    @staticmethod
+    def _reset_root_logger() -> list[Any]:
+        """Snapshot and clear root logger handlers + level for an isolated test.
+
+        Returns the saved state so the test can restore it in a finally block.
+        Without this, basicConfig() no-ops when other tests have already
+        attached handlers, and assertions on level become non-deterministic.
+        """
+        import logging
+
+        root = logging.getLogger()
+        saved = (root.level, list(root.handlers))
+        for h in list(root.handlers):
+            root.removeHandler(h)
+        return [saved]
+
+    @staticmethod
+    def _restore_root_logger(snapshot: list[Any]) -> None:
+        import logging
+
+        root = logging.getLogger()
+        for h in list(root.handlers):
+            root.removeHandler(h)
+        level, handlers = snapshot[0]
+        root.setLevel(level)
+        for h in handlers:
+            root.addHandler(h)
+
+    def test_init_early_logging_verbose(self) -> None:
+        """--verbose forces DEBUG regardless of env var."""
+        import logging
+
+        from mcp_synology.cli.logging_ import _init_early_logging
+
+        snapshot = self._reset_root_logger()
+        try:
+            with patch.dict(os.environ, {"SYNOLOGY_LOG_LEVEL": "warning"}, clear=False):
+                _init_early_logging(verbose=True)
+            assert logging.getLogger().level == logging.DEBUG
+        finally:
+            self._restore_root_logger(snapshot)
+
+    def test_init_early_logging_env_var(self) -> None:
+        """SYNOLOGY_LOG_LEVEL env var sets level when not verbose."""
+        import logging
+
+        from mcp_synology.cli.logging_ import _init_early_logging
+
+        snapshot = self._reset_root_logger()
+        try:
+            with patch.dict(os.environ, {"SYNOLOGY_LOG_LEVEL": "warning"}, clear=False):
+                _init_early_logging(verbose=False)
+            assert logging.getLogger().level == logging.WARNING
+        finally:
+            self._restore_root_logger(snapshot)
+
+    def test_init_early_logging_default_level(self) -> None:
+        """No env var → INFO."""
+        import logging
+
+        from mcp_synology.cli.logging_ import _init_early_logging
+
+        snapshot = self._reset_root_logger()
+        try:
+            clean_env = {k: v for k, v in os.environ.items() if k != "SYNOLOGY_LOG_LEVEL"}
+            with patch.dict(os.environ, clean_env, clear=True):
+                _init_early_logging(verbose=False)
+            assert logging.getLogger().level == logging.INFO
+        finally:
+            self._restore_root_logger(snapshot)
+
+    def test_configure_logging_with_log_file(self, tmp_path: Path) -> None:
+        """log_file argument adds a FileHandler to the root logger."""
+        import logging
+
+        from mcp_synology.cli.logging_ import _configure_logging
+
+        log_file = tmp_path / "test.log"
+        _configure_logging("debug", str(log_file))
+
+        root = logging.getLogger()
+        file_handlers = [
+            h
+            for h in root.handlers
+            if isinstance(h, logging.FileHandler) and Path(h.baseFilename) == log_file
+        ]
+        assert file_handlers, "expected a FileHandler for the log_file path"
+
+        # Cleanup so we don't leak handlers into other tests.
+        for h in file_handlers:
+            h.close()
+            root.removeHandler(h)
+
+    def test_configure_logging_without_log_file(self) -> None:
+        """No log_file → no FileHandler added (only level changes)."""
+        import logging
+
+        from mcp_synology.cli.logging_ import _configure_logging
+
+        before = list(logging.getLogger().handlers)
+        _configure_logging("info")
+        after = list(logging.getLogger().handlers)
+        # Same handlers (level may differ but we don't add new ones).
+        assert len(after) == len(before)
