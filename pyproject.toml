@@ -79,6 +79,15 @@ strict = true
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
+# vdsm tooling requires the optional [vdsm] extras (playwright, testcontainers)
+# which are not installed in the standard dev environment. Exclude both the
+# script and the test helpers it imports so default `mypy src/ scripts/` runs
+# clean. Run `uv sync --extra vdsm` and target these files explicitly to type
+# check them.
+exclude = [
+    "scripts/vdsm_setup\\.py$",
+    "tests/vdsm/",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

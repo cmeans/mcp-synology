@@ -142,3 +142,12 @@ uv run pytest --cov=mcp_synology           # Tests with coverage
 1. Common codes (100-series): add to `core/errors.py` error code map
 2. Module-specific codes: add to the module's error handling
 3. Always include: code, human-readable message, actionable suggestion
+
+### Bumping the version for a release
+1. Update `[project].version` in `pyproject.toml` (single source of truth)
+2. Run `python scripts/sync-server-json.py` to propagate the version into `server.json` (top-level + `packages[0].version`)
+3. Run `uv lock` to refresh `uv.lock`
+4. Update `CHANGELOG.md` with the new version section
+5. Commit all four files together
+
+CI runs `python scripts/sync-server-json.py --check` (no project install needed — stdlib only) and fails any PR where `server.json` has drifted from `pyproject.toml`. Never edit `server.json`'s version fields by hand.
