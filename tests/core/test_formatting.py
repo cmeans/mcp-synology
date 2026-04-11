@@ -72,6 +72,14 @@ class TestFormatKeyValue:
         result = format_key_value([])
         assert "No data" in result
 
+    def test_empty_pairs_with_title(self) -> None:
+        """Empty pairs + title → title appears with underline before "No data"."""
+        result = format_key_value([], title="Stats")
+        lines = result.split("\n")
+        assert lines[0] == "Stats"
+        assert lines[1] == "=====" == "=" * len("Stats")
+        assert "No data" in lines[2]
+
 
 class TestFormatStatus:
     def test_success(self) -> None:

@@ -96,4 +96,4 @@ markers = [
     "integration: requires a real Synology NAS (not run in CI)",
     "vdsm: requires virtual-dsm Docker container with KVM (not run in CI by default)",
 ]
-addopts = "-m 'not integration and not vdsm'"
+addopts = "-m 'not integration and not vdsm' --cov=mcp_synology --cov-fail-under=95"

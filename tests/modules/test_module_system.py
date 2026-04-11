@@ -31,6 +31,20 @@ class TestPermissionTier:
         assert PermissionTier.WRITE.value == "write"
         assert PermissionTier.ADMIN.value == "admin"
 
+    def test_comparison_with_non_tier_returns_notimplemented(self) -> None:
+        """The reflected-comparison contract: comparing PermissionTier to a
+        non-PermissionTier value returns NotImplemented from each operator
+        so Python can fall back to the other operand's reflected method.
+
+        This walks the `if not isinstance(other, PermissionTier): return
+        NotImplemented` defensive branches in modules/__init__.py:30/35/40/45.
+        """
+        tier = PermissionTier.READ
+        assert tier.__ge__("not a tier") is NotImplemented
+        assert tier.__gt__(42) is NotImplemented
+        assert tier.__le__(None) is NotImplemented
+        assert tier.__lt__(object()) is NotImplemented
+
 
 class TestFilterToolsByPermission:
     def _sample_tools(self) -> list[ToolInfo]:
