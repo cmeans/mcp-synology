@@ -1066,21 +1066,25 @@ class TestCliLogging:
 
         from mcp_synology.cli.logging_ import _configure_logging
 
-        log_file = tmp_path / "test.log"
-        _configure_logging("debug", str(log_file))
+        snapshot = self._reset_root_logger()
+        try:
+            log_file = tmp_path / "test.log"
+            _configure_logging("debug", str(log_file))
 
-        root = logging.getLogger()
-        file_handlers = [
-            h
-            for h in root.handlers
-            if isinstance(h, logging.FileHandler) and Path(h.baseFilename) == log_file
-        ]
-        assert file_handlers, "expected a FileHandler for the log_file path"
-
-        # Cleanup so we don't leak handlers into other tests.
-        for h in file_handlers:
-            h.close()
-            root.removeHandler(h)
+            root = logging.getLogger()
+            file_handlers = [
+                h
+                for h in root.handlers
+                if isinstance(h, logging.FileHandler) and Path(h.baseFilename) == log_file
+            ]
+            assert file_handlers, "expected a FileHandler for the log_file path"
+            # Close the file handle on the FileHandler so the underlying file
+            # descriptor doesn't leak past tmp_path teardown — _restore_root_logger
+            # only detaches handlers, it doesn't close them.
+            for h in file_handlers:
+                h.close()
+        finally:
+            self._restore_root_logger(snapshot)
 
     def test_configure_logging_without_log_file(self) -> None:
         """No log_file → no FileHandler added (only level changes)."""
@@ -1088,8 +1092,12 @@ class TestCliLogging:
 
         from mcp_synology.cli.logging_ import _configure_logging
 
-        before = list(logging.getLogger().handlers)
-        _configure_logging("info")
-        after = list(logging.getLogger().handlers)
-        # Same handlers (level may differ but we don't add new ones).
-        assert len(after) == len(before)
+        snapshot = self._reset_root_logger()
+        try:
+            before = list(logging.getLogger().handlers)
+            _configure_logging("info")
+            after = list(logging.getLogger().handlers)
+            # Same handlers (level may differ but we don't add new ones).
+            assert len(after) == len(before)
+        finally:
+            self._restore_root_logger(snapshot)
