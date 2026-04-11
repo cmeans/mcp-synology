@@ -29,7 +29,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from click.testing import CliRunner
 
-from mcp_synology.cli import main as cli_main_module  # noqa: F401  (ensures cli loaded)
 from mcp_synology.cli import setup as setup_mod
 from mcp_synology.cli.main import main
 

@@ -17,7 +17,6 @@ import subprocess
 from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock, patch
 
-import pytest
 import yaml
 
 from mcp_synology.cli import version as v
@@ -425,7 +424,3 @@ class TestDoRevert:
         loaded = yaml.safe_load((state_dir / "global.yaml").read_text())
         assert loaded["previous_version"] is None
         assert loaded["auto_upgrade"] is False
-
-
-# Suppress an unused-import warning if pytest is only used by TYPE_CHECKING
-_ = pytest
