@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Test coverage Phase 1 of #14** (#16) — total coverage 81% → 85%. Five files brought to 100%: `cli/check.py` (51%), `cli/main.py` (56%), `cli/logging_.py` (78%), `modules/system/__init__.py` (23%), `modules/filestation/__init__.py` (70%). Test count 336 → 392 (+56 cases). New test classes in `tests/core/test_cli.py` cover the `_check_login` async path, every top-level option in the `main` group (`--check-update`, `--auto-upgrade`, `--revert`, version-change tracking, auto-upgrade trigger), and the early/configured logging setup. Two new test files (`tests/modules/{system,filestation}/test_register.py`) exercise module registration closure bodies via `server._tool_manager._tools[name].fn` extraction with sentinel `AsyncMock` return values, walking the tool body lines that the prior `assert server is not None` style left uncovered. No production code touched.
+- **`CLAUDE.md` documents the per-PR CHANGELOG convention** (#16) — adds an "Adding a CHANGELOG entry on every PR" section under "Common Tasks" specifying that every PR updates `## Unreleased` in `CHANGELOG.md` using strict Keep a Changelog categories (`### Added`, `### Changed`, `### Fixed`). Updates the "Bumping the version for a release" steps to rename `## Unreleased` to `## <version> (<date>)` and add a fresh empty `## Unreleased` section, plus notes that the `publish.yml` `github-release` awk extractor (`## <version>( |\()`) walks past `## Unreleased` harmlessly during tag-push releases.
+
+### Changed
+
+- **`pyproject.toml` is now the single source of truth for the project version** (#15) — closes #11. Adds `scripts/sync-server-json.py` (stdlib only, uses `tomllib`) which propagates `[project].version` from `pyproject.toml` into `server.json`'s two version fields (top-level and `packages[0].version`). New `version-sync` CI job runs the script with `--check` and fails any PR where `server.json` has drifted from `pyproject.toml`. CI's `lint` and `typecheck` jobs were extended to cover `scripts/` (a pre-existing gap, dormant until this PR introduced the first `.py` file in that directory). Release flow documented in `CLAUDE.md`: bump `pyproject.toml`, run the sync script, run `uv lock`, update `CHANGELOG.md`, commit. Never edit `server.json`'s version fields by hand.
+
+### Fixed
+
+- **`publish.yml` `github-release` job is now idempotent** (#13) — closes #12. The release-creation step previously failed with HTTP 422 if a Release for the tag already existed (e.g., hand-crafted ahead of the workflow run). It now reads notes from `CHANGELOG.md` via `awk` extraction (skipping the `## <version>` heading, capturing up to the next `## `) and uses `gh release view` → `gh release edit` if a Release exists, `gh release create` otherwise. Falls back to `--generate-notes` with a `::warning::` annotation if `CHANGELOG.md` has no matching entry. Hardened against shell injection by passing values via `env:` instead of `${{ }}` interpolation.
+
 ## 0.5.0 (2026-04-10)
 
 ### Changed
