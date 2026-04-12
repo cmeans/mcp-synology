@@ -83,12 +83,16 @@ def vdsm_config(
 
     config = AppConfig(
         schema_version=1,
-        instance_id=f"vdsm-{dsm_version}",
+        instance_id=f"vdsm-{dsm_version.replace('.', '-')}",
         connection={
             "host": host,
             "port": port,
             "https": False,
             "verify_ssl": False,
+        },
+        auth={
+            "username": meta.get("admin_user", "admin"),
+            "password": meta.get("admin_password", ""),
         },
         modules={
             "filestation": {
@@ -170,7 +174,7 @@ async def admin_client(
     # Build admin config
     admin_config = AppConfig(
         schema_version=1,
-        instance_id=f"vdsm-admin-{dsm_version}",
+        instance_id=f"vdsm-admin-{dsm_version.replace('.', '-')}",
         connection={
             "host": conn.host,
             "port": conn.port,
@@ -179,6 +183,7 @@ async def admin_client(
         },
         auth={
             "username": meta.get("admin_user", "admin"),
+            "password": meta.get("admin_password", ""),
         },
         modules={
             "filestation": {"enabled": True, "permission": "write"},

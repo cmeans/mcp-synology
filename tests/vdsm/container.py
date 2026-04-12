@@ -192,6 +192,15 @@ class VirtualDsmContainer:
         raise TimeoutError(msg)
 
     @property
+    def container_id(self) -> str:
+        """Docker container ID (short hash)."""
+        if self._container is None:
+            msg = "Container is not started"
+            raise RuntimeError(msg)
+        cid: str = self._container._container.id  # type: ignore[union-attr]
+        return cid[:12]
+
+    @property
     def base_url(self) -> str:
         """HTTP base URL for the running DSM instance."""
         if self._container is None:
