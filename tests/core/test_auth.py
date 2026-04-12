@@ -400,3 +400,102 @@ class TestSessionNaming:
         assert auth._session_name.startswith("MCPSynology_test-nas_")
         uuid_part = auth._session_name.split("_")[-1]
         assert len(uuid_part) == 8
+
+
+class TestDbusSocketMissing:
+    def test_dbus_not_set_when_socket_missing_on_linux(self) -> None:
+        """Linux + DBUS unset + socket missing → log debug, do not set env var."""
+        config = _make_config(auth={"username": "admin", "password": "secret"})
+        client = _make_client()
+        auth = AuthManager(config, client)
+
+        clean = _clean_env()
+        clean.pop("DBUS_SESSION_BUS_ADDRESS", None)
+
+        with (
+            patch.dict(os.environ, clean, clear=True),
+            patch("mcp_synology.core.auth.kr", _no_keyring()),
+            patch("sys.platform", "linux"),
+            patch("pathlib.Path.exists", return_value=False),
+            patch("os.getuid", return_value=1000),
+        ):
+            username, _, _ = auth._resolve_credentials()
+            # Falls back to config-file credentials; the missing-socket branch
+            # logs at debug and does NOT set the env var (assert inside the
+            # patch.dict block so the assertion sees the patched env, not the
+            # restored one)
+            assert "DBUS_SESSION_BUS_ADDRESS" not in os.environ
+        assert username == "admin"
+
+
+class TestLoginErrorPaths:
+    @respx.mock
+    async def test_login_non_2fa_synology_error_propagates(self) -> None:
+        """A non-403 SynologyError on login is re-raised, not wrapped."""
+        from mcp_synology.core.errors import SynologyError
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 400}}
+        )
+
+        config = _make_config(auth={"username": "admin", "password": "secret"})
+        async with _make_client() as client:
+            auth = AuthManager(config, client)
+            with (
+                patch.dict(os.environ, _clean_env(), clear=True),
+                patch("mcp_synology.core.auth.kr", _no_keyring()),
+                pytest.raises(SynologyError),
+            ):
+                await auth.login()
+
+    @respx.mock
+    async def test_login_succeeds_but_no_sid_raises(self) -> None:
+        """DSM returns success=True but no sid in data → AuthenticationError."""
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": True, "data": {}}  # no sid
+        )
+
+        config = _make_config(auth={"username": "admin", "password": "secret"})
+        async with _make_client() as client:
+            auth = AuthManager(config, client)
+            with (
+                patch.dict(os.environ, _clean_env(), clear=True),
+                patch("mcp_synology.core.auth.kr", _no_keyring()),
+                pytest.raises(AuthenticationError, match="no session ID"),
+            ):
+                await auth.login()
+
+
+class TestLogout:
+    async def test_logout_no_sid_is_noop(self) -> None:
+        config = _make_config(auth={"username": "admin", "password": "secret"})
+        async with _make_client() as client:
+            auth = AuthManager(config, client)
+            client.sid = None
+            # Should not raise; should not call request
+            await auth.logout()
+
+    @respx.mock
+    async def test_logout_success_clears_sid(self) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(json={"success": True})
+
+        config = _make_config(auth={"username": "admin", "password": "secret"})
+        async with _make_client() as client:
+            auth = AuthManager(config, client)
+            client.sid = "active-sid"
+            await auth.logout()
+            assert client.sid is None
+
+    @respx.mock
+    async def test_logout_synology_error_still_clears_sid(self) -> None:
+        """Logout failure (e.g., already-expired session) is swallowed; sid cleared."""
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 105}}
+        )
+
+        config = _make_config(auth={"username": "admin", "password": "secret"})
+        async with _make_client() as client:
+            auth = AuthManager(config, client)
+            client.sid = "expired-sid"
+            await auth.logout()  # must not raise
+            assert client.sid is None
