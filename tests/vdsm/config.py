@@ -83,7 +83,7 @@ def storage_path(version: str) -> Path:
 # Default credentials for test DSM instances
 DEFAULT_ADMIN_USER: str = "mcpadmin"
 DEFAULT_TEST_USER: str = "mcptest"
-DEFAULT_TEST_PASSWORD: str = "McpTest123!"
+DEFAULT_TEST_PASSWORD: str = "Mcp#Test9!xK27zQ"
 
 # Container resource limits
 CONTAINER_DISK_SIZE: str = "16G"

@@ -92,10 +92,15 @@ def setup(dsm_version: str, admin_user: str, admin_password: str) -> None:
         click.echo("Aborted.")
         sys.exit(0)
 
-    # 3. Create storage directory
+    # 3. Create clean storage directory (must be empty for fresh DSM wizard)
+    import shutil as _shutil
+
     store = storage_path(dsm_version)
+    if store.exists():
+        _shutil.rmtree(store)
+        click.echo(f"\nCleared existing storage: {store}")
     store.mkdir(parents=True, exist_ok=True)
-    click.echo(f"\nStorage directory: {store}")
+    click.echo(f"Storage directory: {store}")
 
     # 4. Start virtual-dsm container
     click.echo(f"\nStarting virtual-dsm container (DSM {dsm_version})...")
@@ -115,9 +120,20 @@ def setup(dsm_version: str, admin_user: str, admin_password: str) -> None:
         click.echo("\nRunning DSM setup wizard (automated)...")
         complete_wizard(base_url, admin_user, admin_password)
 
-        # 7. Run post-wizard API configuration
+        # 7. Wait for DSM services to initialize after wizard
+        click.echo("\nWaiting 30s for DSM services to initialize after wizard...")
+        import time
+
+        time.sleep(30)
+
+        # 8. Run post-wizard API configuration
         click.echo("\nConfiguring DSM for integration testing...")
-        metadata = setup_dsm_for_testing(base_url, admin_password, admin_user=admin_user)
+        metadata = setup_dsm_for_testing(
+            base_url,
+            admin_password,
+            admin_user=admin_user,
+            container_id=container.container_id,
+        )
 
         # 8. Stop container gracefully
         click.echo("\nStopping container...")

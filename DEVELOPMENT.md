@@ -68,37 +68,71 @@ Virtual-DSM tests run the same integration test suite against a Docker container
 running full Synology DSM via QEMU/KVM. This enables testing across multiple DSM
 versions without a physical NAS.
 
+### Current Status
+
+**21 of 47 vdsm tests pass** on a bare DSM 7.2.2 instance (wizard completed, admin + test user created). The remaining 26 tests require shared folders on a properly configured storage volume. Virtual-dsm does not auto-create a storage volume during initial setup — this requires either manual Storage Manager configuration or additional automation (tracked as a follow-up).
+
+Tests that pass without a volume: connection (3), system info (1), resource usage (2), error handling (3), empty search cases (2), and several listing/metadata/transfer tests that validate error responses.
+
 ### Requirements
 
-- Linux host with KVM support (`/dev/kvm` must exist)
-- Docker installed and running
+- **Linux host with KVM** — `/dev/kvm` must exist. macOS is not supported (KVM is Linux-only); use the real NAS integration tests on macOS.
+- **Podman (recommended)** or native Docker Engine — Docker Desktop runs containers inside a VM that lacks `/dev/kvm` passthrough. Podman runs natively on the host with direct KVM access.
 - ~2 GB disk per DSM version (golden images)
 
-macOS is not currently supported — KVM is Linux-only. Use the real NAS integration
-tests on macOS.
+#### Podman Setup
+
+```bash
+# Enable the Podman API socket (one-time)
+systemctl --user enable --now podman.socket
+```
+
+The test infrastructure auto-detects the Podman socket at `/run/user/$UID/podman/podman.sock` and prefers it over Docker Desktop. No `DOCKER_HOST` configuration needed.
 
 ### First-Time Setup
 
-Each DSM version needs a one-time golden image creation (~15 min):
+Each DSM version needs a one-time golden image creation (~5 min):
 
 ```bash
 uv sync --extra dev --extra vdsm
-python scripts/vdsm_setup.py --version 7.2.2
+uv run playwright install chromium
+echo y | uv run python scripts/vdsm_setup.py --version 7.2.2 \
+    --admin-user mcpadmin --admin-password 'McpTest123!'
 ```
 
-The script boots a fresh virtual-dsm container. Complete the DSM setup
-wizard in your browser (set admin password, basic storage). The script then
-automatically creates test users, shared folders, and seed data via the DSM API.
+The setup script:
+1. Boots a fresh virtual-dsm container via Podman/Docker
+2. Automates the DSM first-boot wizard via headless Playwright (account, updates, analytics)
+3. Dismisses post-login popups (2FA, MFA promotions) by force-removing them from the DOM
+4. Creates the `mcptest` test user via the Control Panel User Creation Wizard (Playwright)
+5. Creates test directories and seed data via `docker exec`
+6. Saves a compressed golden image to `.vdsm/golden/`
 
-Golden images are stored in `.vdsm/golden/` (~2 GB each, gitignored).
+Golden images are stored in `.vdsm/golden/` (~865 MB each, gitignored).
+
+#### Manual Storage Volume Setup (for full 47-test suite)
+
+After the automated setup, the golden image has no DSM storage volume. To enable shared folder tests:
+
+1. Boot the golden image: run `vdsm_setup.py` but stop it before the "Stopping container" step (or boot manually)
+2. Open the DSM web UI at the container's URL
+3. Open **Storage Manager** → create a **Storage Pool** (Basic/SHR) on the virtual disk → create a **Volume**
+4. Open **Control Panel** → **Shared Folder** → create `testshare` and `writable`
+5. Set read/write permissions for `mcptest` on both shares
+6. Upload test files to `/testshare/Documents/` (report.txt, search_target.txt) and `/testshare/Media/` (sample.mkv)
+7. Stop the container and re-save the golden image
+
+This manual step is a one-time investment per DSM version. Automating Storage Manager via Playwright is a planned follow-up.
 
 ### Running
 
 ```bash
-uv run pytest -m vdsm -v --log-cli-level=INFO          # Default (7.2.2)
-uv run pytest -m vdsm -v --dsm-version 7.1             # Specific version
-uv run pytest -m vdsm -v -k "TestSearch"                # Single test class
+uv run pytest -m vdsm -v --log-cli-level=INFO --no-cov   # Default (7.2.2)
+uv run pytest -m vdsm -v --dsm-version 7.1 --no-cov      # Specific version
+uv run pytest -m vdsm -v -k "TestConnection" --no-cov     # Single test class
 ```
+
+Note: `--no-cov` is recommended for vdsm runs since the coverage floor (95%) applies globally and vdsm tests alone won't meet it.
 
 ### Supported DSM Versions
 
@@ -113,9 +147,16 @@ uv run pytest -m vdsm -v -k "TestSearch"                # Single test class
 ### How It Works
 
 1. Restores a golden image (pre-configured DSM) to a temp storage directory
-2. Boots the virtual-dsm Docker container (~2 min)
+2. Boots the virtual-dsm container via Podman/Docker (~30s from golden image)
 3. Runs the same test functions as the real NAS integration tests
 4. Container is stopped and cleaned up automatically
+
+### Known Limitations
+
+- **No auto-volume** — virtual-dsm's QEMU disk is visible to DSM but requires manual Storage Manager configuration to create a storage pool and volume. The `DISK_SIZE` env var controls disk size but does not trigger DSM-level volume creation.
+- **Undocumented APIs fail** — `SYNO.Core.User`, `SYNO.Core.Share`, and `SYNO.Core.Share.Permission` return error 105/403 on virtual-dsm even with valid admin sessions. User creation is done via Playwright web UI automation instead.
+- **DSM password policy** — DSM 7.2.2 requires "Strong" passwords (blocks "Moderate"). The test user password is `Mcp#Test9!xK27zQ`.
+- **Boot time** — first boot from PAT download takes ~2 min; subsequent boots from golden image take ~30s.
 
 ## Design Docs
 
