@@ -192,13 +192,12 @@ class VirtualDsmContainer:
         raise TimeoutError(msg)
 
     @property
-    def container_id(self) -> str:
-        """Docker container ID (short hash)."""
+    def host(self) -> str:
+        """Container host IP address."""
         if self._container is None:
             msg = "Container is not started"
             raise RuntimeError(msg)
-        cid: str = self._container._container.id  # type: ignore[union-attr]
-        return cid[:12]
+        return self._container.get_container_host_ip()  # type: ignore[no-any-return]
 
     @property
     def ssh_port(self) -> int:
@@ -214,9 +213,8 @@ class VirtualDsmContainer:
         if self._container is None:
             msg = "Container is not started"
             raise RuntimeError(msg)
-        host = self._container.get_container_host_ip()
         port = self._container.get_exposed_port(5000)
-        return f"http://{host}:{port}"
+        return f"http://{self.host}:{port}"
 
     def stop(self) -> None:
         """Stop the container if it is running."""
