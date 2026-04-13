@@ -372,7 +372,11 @@ class TestSearch:
             result = await search_files(client, folder_path=share_root, pattern=keyword)
             logger.info(
                 "search_files(%s, pattern=%s) attempt %d/%d:\n%s",
-                share_root, keyword, attempt, max_attempts, result,
+                share_root,
+                keyword,
+                attempt,
+                max_attempts,
+                result,
             )
             if "0 results found" not in result:
                 break
