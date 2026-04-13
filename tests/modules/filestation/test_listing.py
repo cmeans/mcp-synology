@@ -232,3 +232,16 @@ class TestListRecycleBin:
         )
         with pytest.raises(ToolError):
             await list_recycle_bin(mock_client, share="video")
+
+    async def test_recycle_bin_non_json_toolerror_propagates(
+        self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """ToolError with non-JSON body should propagate (JSONDecodeError branch)."""
+        from mcp_synology.modules.filestation import listing
+
+        async def _raise_non_json(*args: object, **kwargs: object) -> str:
+            raise ToolError("plain text error, not JSON")
+
+        monkeypatch.setattr(listing, "list_files", _raise_non_json)
+        with pytest.raises(ToolError, match="plain text error"):
+            await list_recycle_bin(mock_client, share="video")
