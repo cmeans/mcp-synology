@@ -182,6 +182,30 @@ class TestGetDirSize:
         assert body["error"]["code"] == "filestation_error"
 
     @respx.mock
+    async def test_dir_size_error_599_instant_completion(self, mock_client: DsmClient) -> None:
+        """Error 599 on status poll means the task completed before we could read it.
+
+        Common on Virtual DSM where tiny directories finish instantly.
+        Should return a best-effort result instead of raising.
+        """
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            method = params.get("method", "")
+            if method == "start":
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "ds-fast"}})
+            if method == "status":
+                return httpx.Response(200, json={"success": False, "error": {"code": 599}})
+            # stop/clean
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+
+        result = await get_dir_size(mock_client, path="/small/dir")
+        assert "Total size" in result
+        assert "completed" in result
+
+    @respx.mock
     async def test_dir_size_timeout(self, mock_client: DsmClient) -> None:
         """Polling never returns finished → timeout error, retryable=True."""
 

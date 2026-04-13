@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import json
+import logging
 from typing import TYPE_CHECKING, Any
+
+from mcp.server.fastmcp.exceptions import ToolError
 
 from mcp_synology.core.errors import SynologyError
 from mcp_synology.core.formatting import (
@@ -15,6 +19,8 @@ from mcp_synology.modules.filestation.helpers import (
     file_type_icon,
     normalize_path,
 )
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from mcp_synology.core.client import DsmClient
@@ -201,13 +207,29 @@ async def list_recycle_bin(
 
     recycle_path = f"/{share_name}/#recycle"
 
-    return await list_files(
-        client,
-        path=recycle_path,
-        pattern=pattern,
-        sort_by=sort_by,
-        sort_direction=sort_direction,
-        limit=limit,
-        hide_recycle=False,
-        file_type_indicator=file_type_indicator,
-    )
+    try:
+        return await list_files(
+            client,
+            path=recycle_path,
+            pattern=pattern,
+            sort_by=sort_by,
+            sort_direction=sort_direction,
+            limit=limit,
+            hide_recycle=False,
+            file_type_indicator=file_type_indicator,
+        )
+    except ToolError as e:
+        # list_files converts SynologyError to ToolError with a JSON envelope.
+        # DSM error 408 = "No such file or directory" — the #recycle folder
+        # doesn't exist when the recycle bin is disabled on this share.
+        try:
+            body = json.loads(str(e))
+            if body.get("error", {}).get("code") == "not_found":
+                logger.debug("Recycle bin path %s not found", recycle_path)
+                return (
+                    f"Recycle bin is not enabled on /{share_name}. "
+                    "Deleted files cannot be recovered."
+                )
+        except (json.JSONDecodeError, TypeError):
+            pass
+        raise

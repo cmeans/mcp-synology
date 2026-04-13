@@ -485,6 +485,14 @@ def _create_shared_folders_via_ssh(
             msg = f"synoshare --add {name} failed (rc={rc}): {out}"
             raise RuntimeError(msg)
 
+    # Enable recycle bin on shares (synoshare --add creates them disabled)
+    for name in ["testshare", "writable"]:
+        rc, out = ssh(f"{_SYNOSHARE} --setopt {name} enable_recycle_bin=yes")
+        if rc == 0:
+            print(f"    Recycle bin enabled on {name}")
+        else:
+            print(f"    Warning: enable_recycle_bin on {name} rc={rc}: {out}")
+
     # Verify shares registered
     rc, out = ssh(f"{_SYNOSHARE} --enum ALL")
     print(f"    Shares: {out}")
@@ -493,7 +501,14 @@ def _create_shared_folders_via_ssh(
     ssh("chmod -R 777 /volume1/testshare /volume1/writable")
 
     # Create test directories and data (no sudo — dirs are 777)
-    ssh("mkdir -p /volume1/testshare/Documents /volume1/testshare/Media", sudo=False)
+    # Note: DSM search matches file/directory *names*, not content.
+    # "Bambu Studio" directory ensures the search_keyword "Bambu" finds a result.
+    ssh(
+        "mkdir -p /volume1/testshare/Documents"
+        " '/volume1/testshare/Documents/Bambu Studio'"
+        " /volume1/testshare/Media",
+        sudo=False,
+    )
     ssh(
         "echo 'This is a sample report for MCP integration testing.'"
         " > /volume1/testshare/Documents/report.txt",
@@ -501,7 +516,7 @@ def _create_shared_folders_via_ssh(
     )
     ssh(
         "echo 'Bambu Lab X1C 3D printer configuration notes.'"
-        " > /volume1/testshare/Documents/search_target.txt",
+        " > '/volume1/testshare/Documents/Bambu Studio/config.txt'",
         sudo=False,
     )
     ssh("printf '\\x1a\\x45\\xdf\\xa3' > /volume1/testshare/Media/sample.mkv", sudo=False)
