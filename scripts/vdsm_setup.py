@@ -126,26 +126,27 @@ def setup(dsm_version: str, admin_user: str, admin_password: str) -> None:
 
         time.sleep(30)
 
-        # 8. Run post-wizard API configuration
+        # 8. Run post-wizard configuration (user creation, SSH, shares)
         click.echo("\nConfiguring DSM for integration testing...")
         metadata = setup_dsm_for_testing(
             base_url,
             admin_password,
             admin_user=admin_user,
-            container_id=container.container_id,
+            ssh_host=container.host,
+            ssh_port=container.ssh_port,
         )
 
-        # 8. Stop container gracefully
+        # 9. Stop container gracefully
         click.echo("\nStopping container...")
         container.stop()
         container = None  # type: ignore[assignment]
 
-        # 9. Save golden image
+        # 10. Save golden image
         click.echo(f"\nSaving golden image for DSM {dsm_version}...")
         image_path = save_golden_image(dsm_version, metadata=metadata)
         image_size_mb = image_path.stat().st_size / (1024 * 1024)
 
-        # 10. Print success
+        # 11. Print success
         click.echo(f"\n{'=' * 60}")
         click.echo("Golden image created successfully!")
         click.echo(f"{'=' * 60}")

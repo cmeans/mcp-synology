@@ -120,7 +120,7 @@ class VirtualDsmContainer:
         container.with_env("URL", self.version_info.pat_url)
         container.with_env("RAM_SIZE", CONTAINER_RAM)
         container.with_env("CPU_CORES", CONTAINER_CPU_CORES)
-        container.with_exposed_ports(5000)
+        container.with_exposed_ports(5000, 22)
         # :Z flag is required on SELinux-enforcing systems (Fedora, RHEL)
         # so the container process can write to the bind mount.
         container.with_volume_mapping(str(self.storage_dir), "/storage", mode="Z")
@@ -192,13 +192,20 @@ class VirtualDsmContainer:
         raise TimeoutError(msg)
 
     @property
-    def container_id(self) -> str:
-        """Docker container ID (short hash)."""
+    def host(self) -> str:
+        """Container host IP address."""
         if self._container is None:
             msg = "Container is not started"
             raise RuntimeError(msg)
-        cid: str = self._container._container.id  # type: ignore[union-attr]
-        return cid[:12]
+        return self._container.get_container_host_ip()  # type: ignore[no-any-return]
+
+    @property
+    def ssh_port(self) -> int:
+        """Mapped SSH port for the running DSM instance."""
+        if self._container is None:
+            msg = "Container is not started"
+            raise RuntimeError(msg)
+        return int(self._container.get_exposed_port(22))
 
     @property
     def base_url(self) -> str:
@@ -206,9 +213,8 @@ class VirtualDsmContainer:
         if self._container is None:
             msg = "Container is not started"
             raise RuntimeError(msg)
-        host = self._container.get_container_host_ip()
         port = self._container.get_exposed_port(5000)
-        return f"http://{host}:{port}"
+        return f"http://{self.host}:{port}"
 
     def stop(self) -> None:
         """Stop the container if it is running."""
