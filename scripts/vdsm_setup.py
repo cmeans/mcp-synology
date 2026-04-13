@@ -132,7 +132,8 @@ def setup(dsm_version: str, admin_user: str, admin_password: str) -> None:
             base_url,
             admin_password,
             admin_user=admin_user,
-            container_id=container.container_id,
+            ssh_host=container._container.get_container_host_ip(),  # type: ignore[union-attr]
+            ssh_port=container.ssh_port,
         )
 
         # 8. Stop container gracefully

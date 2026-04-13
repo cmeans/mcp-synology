@@ -20,6 +20,7 @@ JavaScript dispatch or Playwright's force=True to bypass overlay interception.
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -357,51 +358,144 @@ def _create_user_via_ui(page: Any, username: str, password: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Shared folders and test data via docker exec
+# Shared folders and test data via SSH into DSM guest
 # ---------------------------------------------------------------------------
 
+_SYNOSHARE = "/usr/syno/sbin/synoshare"
 
-def _create_shared_folders_via_cli(container_id: str) -> None:
-    """Create shared folders and test data via docker exec.
+_SSH_OPTS = (
+    "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
+    "-o PreferredAuthentications=password -o PubkeyAuthentication=no "
+    "-o ConnectTimeout=10"
+)
 
-    Virtual-dsm does not auto-create a storage volume during initial setup,
-    and the undocumented SYNO.Core.Share API returns error 403. As a
-    workaround, we create directories directly on the filesystem.
 
-    TODO: Automate Storage Manager to create a proper volume first, then
-    use synoshare CLI or the web UI to register proper shared folders.
-    Without a volume, FileStation APIs cannot see these directories.
+def _enable_ssh(base_url: str, admin_user: str, admin_password: str) -> None:
+    """Enable SSH service on the DSM guest via API."""
+    resp = httpx.get(
+        f"{base_url}/webapi/entry.cgi",
+        params={
+            "api": "SYNO.API.Auth",
+            "version": "6",
+            "method": "login",
+            "account": admin_user,
+            "passwd": admin_password,
+            "format": "sid",
+            "session": "setup",
+            "enable_syno_token": "yes",
+        },
+        timeout=30,
+        verify=False,  # noqa: S501
+    )
+    data = resp.json()["data"]
+    httpx.post(
+        f"{base_url}/webapi/entry.cgi",
+        data={
+            "api": "SYNO.Core.Terminal",
+            "version": "3",
+            "method": "set",
+            "enable_ssh": "true",
+            "ssh_port": "22",
+            "_sid": data["sid"],
+        },
+        headers={"X-SYNO-TOKEN": data.get("synotoken", "")},
+        timeout=30,
+        verify=False,  # noqa: S501
+    )
+    print("    SSH enabled, waiting for sshd...")
+    time.sleep(12)
+
+
+def _ssh(
+    host: str,
+    port: int,
+    password: str,
+    cmd: str,
+    *,
+    sudo: bool = True,
+) -> tuple[int, str]:
+    """Run a command inside the DSM guest via SSH."""
+    env = os.environ.copy()
+    env["SSHPASS"] = password
+    remote_cmd = f"echo '{password}' | sudo -S {cmd} 2>&1" if sudo else f"{cmd} 2>&1"
+    result = subprocess.run(
+        f'sshpass -e ssh {_SSH_OPTS} -p {port} mcpadmin@{host} "{remote_cmd}"',
+        shell=True,  # noqa: S602
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=env,
+    )
+    # Strip sudo lecture and password prompt from output
+    lines = result.stdout.strip().split("\n")
+    filtered = [
+        ln
+        for ln in lines
+        if not ln.startswith("Password:")
+        and "lecture" not in ln
+        and not ln.strip().startswith("#")
+        and "Respect the privacy" not in ln
+        and "Think before you type" not in ln
+        and "great power" not in ln
+    ]
+    return result.returncode, "\n".join(filtered).strip()
+
+
+def _create_shared_folders_via_ssh(
+    host: str,
+    ssh_port: int,
+    admin_password: str,
+    test_user: str,
+) -> None:
+    """Create shared folders and test data via SSH into the DSM guest.
+
+    Uses /usr/syno/sbin/synoshare to register proper DSM shared folders
+    on the auto-created Volume 1. Files created this way are visible to
+    FileStation and all DSM APIs.
     """
 
-    def _exec(cmd: str) -> tuple[int, str]:
-        result = subprocess.run(
-            ["docker", "exec", container_id, "bash", "-c", cmd],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        return result.returncode, result.stdout.strip()
+    def ssh(cmd: str, *, sudo: bool = True) -> tuple[int, str]:
+        return _ssh(host, ssh_port, admin_password, cmd, sudo=sudo)
 
-    # Create directories on the filesystem
+    # Create shared folders with synoshare (requires sudo)
+    for name, desc in [("testshare", "MCP test"), ("writable", "MCP writable")]:
+        rc, out = ssh(f"{_SYNOSHARE} --add {name} '{desc}' /volume1/{name} '' '' '' 0 0")
+        if rc == 0:
+            print(f"    Created share: {name}")
+        else:
+            print(f"    Warning: synoshare --add {name} rc={rc}: {out}")
+
+    # Verify shares registered
+    rc, out = ssh(f"{_SYNOSHARE} --enum ALL")
+    print(f"    Shares: {out}")
+
+    # Make shares world-writable so test data can be created without sudo
+    ssh("chmod -R 777 /volume1/testshare /volume1/writable")
+
+    # Create test directories and data (no sudo — dirs are 777)
+    ssh("mkdir -p /volume1/testshare/Documents /volume1/testshare/Media", sudo=False)
+    ssh(
+        "echo 'This is a sample report for MCP integration testing.'"
+        " > /volume1/testshare/Documents/report.txt",
+        sudo=False,
+    )
+    ssh(
+        "echo 'Bambu Lab X1C 3D printer configuration notes.'"
+        " > /volume1/testshare/Documents/search_target.txt",
+        sudo=False,
+    )
+    ssh("printf '\\x1a\\x45\\xdf\\xa3' > /volume1/testshare/Media/sample.mkv", sudo=False)
+
+    rc, out = ssh("ls -la /volume1/testshare/Documents/", sudo=False)
+    print(f"    Test data:\n{out}")
+
+    # Set ACL permissions for test user (requires sudo)
     for name in ["testshare", "writable"]:
-        _exec(f"mkdir -p /volume1/{name}")
-        print(f"    Created /volume1/{name}")
-
-    # Create test data
-    _exec("mkdir -p /volume1/testshare/Documents /volume1/testshare/Media")
-    _exec(
-        "echo 'This is a sample report for MCP integration testing.' > "
-        "/volume1/testshare/Documents/report.txt"
-    )
-    _exec(
-        "echo 'Bambu Lab X1C 3D printer configuration notes.' > "
-        "/volume1/testshare/Documents/search_target.txt"
-    )
-    _exec("printf '\\x1a\\x45\\xdf\\xa3' > /volume1/testshare/Media/sample.mkv")
-    _exec("chmod -R 777 /volume1/testshare /volume1/writable")
-
-    rc, out = _exec("ls -la /volume1/testshare/Documents/")
-    print(f"    Test data: {out}")
+        rc, out = ssh(f"{_SYNOSHARE} --setuser {name} RW + {test_user}")
+        if rc == 0:
+            print(f"    Permissions set on {name} for {test_user}")
+        else:
+            print(f"    Warning: setuser {name} rc={rc}: {out}")
 
 
 # ---------------------------------------------------------------------------
@@ -418,6 +512,7 @@ def _verify_setup_via_api(base_url: str, username: str, password: str) -> bool:
         "account": username,
         "passwd": password,
         "format": "sid",
+        "session": "FileStation",
     }
     try:
         resp = httpx.get(
@@ -470,12 +565,14 @@ def setup_dsm_for_testing(
     admin_password: str,
     *,
     admin_user: str = DEFAULT_ADMIN_USER,
-    container_id: str = "",
+    ssh_host: str = "localhost",
+    ssh_port: int = 0,
 ) -> dict[str, Any]:
     """Run the full post-wizard setup.
 
-    Uses Playwright for user creation (requires web UI), and docker exec
-    for shared folders and test data (more reliable than UI automation).
+    Uses Playwright for user creation (requires web UI), then SSH into the
+    DSM guest VM (via QEMU) for shared folder creation with synoshare CLI,
+    test data, and permissions.
 
     Returns metadata dict for the golden image sidecar.
     """
@@ -493,10 +590,10 @@ def setup_dsm_for_testing(
         page = browser.new_page(viewport={"width": 1280, "height": 900})
 
         try:
-            print("\n  [1/3] Logging in to DSM...")
+            print("\n  [1/4] Logging in to DSM...")
             _dsm_login(page, base_url, admin_user, admin_password)
 
-            print("\n  [2/3] Creating test user...")
+            print("\n  [2/4] Creating test user...")
             _open_control_panel(page)
             _create_user_via_ui(page, DEFAULT_TEST_USER, DEFAULT_TEST_PASSWORD)
 
@@ -506,12 +603,20 @@ def setup_dsm_for_testing(
         finally:
             browser.close()
 
-    # 2. Create shared folders and test data via docker exec
-    if container_id:
-        print("\n  [3/3] Creating shared folders and test data via CLI...")
-        _create_shared_folders_via_cli(container_id)
+    # 2. Enable SSH and create shared folders via synoshare in the DSM guest
+    if ssh_port:
+        print("\n  [3/4] Enabling SSH...")
+        _enable_ssh(base_url, admin_user, admin_password)
+
+        print("\n  [4/4] Creating shared folders and test data via SSH...")
+        _create_shared_folders_via_ssh(
+            ssh_host,
+            ssh_port,
+            admin_password,
+            DEFAULT_TEST_USER,
+        )
     else:
-        print("\n  [3/3] No container_id — skipping CLI share creation")
+        print("\n  [3/4] No SSH port — skipping share creation")
 
     # Verify
     print("\n  Verifying setup...")
