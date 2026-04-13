@@ -364,6 +364,7 @@ class TestSearch:
         # Allow the search service to recover from prior test activity
         # (DirSize tasks, delete operations, etc.). On Virtual DSM, the
         # search service can be easily exhausted by rapid-fire requests.
+        # Worst-case retry budget: 3s + 10 + 10 + 15 + 15 + 15 = ~68s.
         await asyncio.sleep(3)
 
         max_attempts = 6

@@ -485,13 +485,15 @@ def _create_shared_folders_via_ssh(
             msg = f"synoshare --add {name} failed (rc={rc}): {out}"
             raise RuntimeError(msg)
 
-    # Enable recycle bin on shares (synoshare --add creates them disabled)
+    # Enable recycle bin on shares (synoshare --add creates them disabled).
+    # This is a prerequisite for test_02_list_recycle_bin — failure is fatal.
     for name in ["testshare", "writable"]:
         rc, out = ssh(f"{_SYNOSHARE} --setopt {name} enable_recycle_bin=yes")
         if rc == 0:
             print(f"    Recycle bin enabled on {name}")
         else:
-            print(f"    Warning: enable_recycle_bin on {name} rc={rc}: {out}")
+            msg = f"synoshare --setopt {name} enable_recycle_bin=yes failed (rc={rc}): {out}"
+            raise RuntimeError(msg)
 
     # Verify shares registered
     rc, out = ssh(f"{_SYNOSHARE} --enum ALL")
