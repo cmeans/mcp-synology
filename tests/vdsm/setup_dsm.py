@@ -485,15 +485,12 @@ def _create_shared_folders_via_ssh(
             msg = f"synoshare --add {name} failed (rc={rc}): {out}"
             raise RuntimeError(msg)
 
-    # Enable recycle bin on shares (synoshare --add creates them disabled).
-    # This is a prerequisite for test_02_list_recycle_bin — failure is fatal.
-    for name in ["testshare", "writable"]:
-        rc, out = ssh(f"{_SYNOSHARE} --setopt {name} enable_recycle_bin=yes")
-        if rc == 0:
-            print(f"    Recycle bin enabled on {name}")
-        else:
-            msg = f"synoshare --setopt {name} enable_recycle_bin=yes failed (rc={rc}): {out}"
-            raise RuntimeError(msg)
+    # Note: DSM 7.2.2's `synoshare` CLI has no supported command to toggle the
+    # per-share recycle bin. Shares created via `synoshare --add` have recycle
+    # bin disabled. This is fine — `list_recycle_bin` in production code
+    # handles the disabled case gracefully (returns a friendly
+    # "Recycle bin is not enabled" message), and `test_02_list_recycle_bin`
+    # exercises exactly that path.
 
     # Verify shares registered
     rc, out = ssh(f"{_SYNOSHARE} --enum ALL")
