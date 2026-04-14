@@ -1,0 +1,74 @@
+name: vdsm
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  DSM_VERSION: "7.2.2"
+  # Default admin credentials used inside vdsm setup. NOT secrets — the
+  # VM is ephemeral and exposed only to the test runner.
+  VDSM_ADMIN_USER: mcpadmin
+  VDSM_ADMIN_PASSWORD: "McpTest123!"
+
+jobs:
+  vdsm:
+    name: vdsm integration tests
+    runs-on: ubuntu-24.04
+    # Non-blocking while the job stabilizes. Promote to required check
+    # after the job is green on main for several consecutive runs.
+    continue-on-error: true
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify /dev/kvm is available
+        run: |
+          ls -la /dev/kvm
+          sudo chmod 666 /dev/kvm
+          echo "KVM available"
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install project with vdsm extras
+        run: uv sync --extra dev --extra vdsm
+
+      - name: Install Playwright Chromium
+        run: uv run playwright install --with-deps chromium
+
+      - name: Restore golden image cache
+        id: cache-golden
+        uses: actions/cache@v4
+        with:
+          path: |
+            .vdsm/golden/dsm-${{ env.DSM_VERSION }}.tar.gz
+            .vdsm/golden/dsm-${{ env.DSM_VERSION }}.meta.json
+          key: vdsm-golden-${{ env.DSM_VERSION }}-${{ hashFiles('scripts/vdsm_setup.py', 'tests/vdsm/setup_dsm.py', 'tests/vdsm/config.py', 'tests/vdsm/golden_image.py', 'tests/vdsm/container.py') }}
+
+      - name: Build golden image (cache miss)
+        if: steps.cache-golden.outputs.cache-hit != 'true'
+        run: |
+          uv run python scripts/vdsm_setup.py \
+            --version "${DSM_VERSION}" \
+            --admin-user "${VDSM_ADMIN_USER}" \
+            --admin-password "${VDSM_ADMIN_PASSWORD}" \
+            --yes
+
+      - name: Run vdsm integration tests
+        run: uv run pytest -m vdsm -v --no-cov --log-cli-level=INFO
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vdsm-failure-logs
+          path: |
+            .vdsm/storage/**/log/
+            /tmp/vdsm-*.log
+          if-no-files-found: ignore
+          retention-days: 7
