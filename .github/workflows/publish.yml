@@ -48,6 +48,50 @@ jobs:
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
 
+  publish-registry:
+    # Publish (or update) the server entry in the official MCP registry.
+    # Runs after publish-pypi because the registry validates that the
+    # referenced PyPI package+version exists before accepting the entry.
+    needs: publish-pypi
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install mcp-publisher
+        run: |
+          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" \
+            | tar xz mcp-publisher
+          ./mcp-publisher --version
+
+      - name: Authenticate to MCP registry (GitHub OIDC)
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish server.json to MCP registry
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          # Idempotent: the registry rejects re-publishing an existing
+          # version (see docs/modelcontextprotocol-io/versioning.mdx:
+          # "The version string MUST be unique for each publication").
+          # If the tag's workflow is re-run after a successful registry
+          # publish, treat the duplicate-version error as a non-fatal
+          # warning rather than failing the whole release.
+          set +e
+          output=$(./mcp-publisher publish 2>&1)
+          status=$?
+          echo "$output"
+          if [ $status -eq 0 ]; then
+            exit 0
+          fi
+          if echo "$output" | grep -iE 'already (exists|published)|duplicate version|version.*conflict' >/dev/null; then
+            echo "::warning::Version $TAG already exists in MCP registry — treating as no-op"
+            exit 0
+          fi
+          exit $status
+
   github-release:
     needs: publish-pypi
     runs-on: ubuntu-latest
