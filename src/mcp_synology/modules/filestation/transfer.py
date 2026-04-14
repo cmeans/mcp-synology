@@ -208,6 +208,8 @@ async def download_file(
             ErrorCode.FILESYSTEM_ERROR,
             f"Download failed: Failed to write local file: {e}",
             retryable=False,
+            param="dest_folder",
+            value=dest_folder,
             suggestion=(
                 "The filename may contain characters not allowed on this OS. "
                 "Use the filename parameter to specify a compatible name."

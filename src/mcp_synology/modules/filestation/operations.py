@@ -244,6 +244,8 @@ async def _copy_move(
             ErrorCode.TIMEOUT,
             f"{operation} files failed: timed out after {timeout}s.",
             retryable=True,
+            param="timeout",
+            value=timeout,
             suggestion="The operation may still be running on the NAS.",
         )
 
@@ -350,6 +352,8 @@ async def delete_files(
             ErrorCode.TIMEOUT,
             f"Delete files failed: timed out after {timeout}s.",
             retryable=True,
+            param="timeout",
+            value=timeout,
             suggestion="The operation may still be running on the NAS.",
         )
 

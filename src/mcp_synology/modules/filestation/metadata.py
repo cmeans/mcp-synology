@@ -76,6 +76,8 @@ async def get_file_info(
             ErrorCode.NOT_FOUND,
             "Get file info failed: No file information returned.",
             retryable=False,
+            param="paths",
+            value=paths,
             suggestion="Check that the paths exist.",
         )
 
@@ -221,5 +223,7 @@ async def get_dir_size(
         ErrorCode.TIMEOUT,
         f"Get directory size failed: timed out after {timeout}s.",
         retryable=True,
+        param="timeout",
+        value=timeout,
         suggestion="The directory may be very large. Try a subdirectory.",
     )

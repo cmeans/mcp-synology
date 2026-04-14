@@ -107,6 +107,9 @@ class TestGetFileInfo:
         body = json.loads(str(exc_info.value))
         assert body["error"]["code"] == "not_found"
         assert body["error"]["retryable"] is False
+        # F17: envelope names the offending argument so clients can dispatch
+        assert body["error"]["param"] == "paths"
+        assert body["error"]["value"] == ["/video/missing1", "/video/missing2"]
 
 
 class TestGetDirSize:
@@ -228,3 +231,5 @@ class TestGetDirSize:
         body = json.loads(str(exc_info.value))
         assert body["error"]["code"] == "timeout"
         assert body["error"]["retryable"] is True
+        assert body["error"]["param"] == "timeout"
+        assert body["error"]["value"] == 1.0

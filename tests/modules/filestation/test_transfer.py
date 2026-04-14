@@ -304,6 +304,8 @@ class TestDownloadFile:
             body = json.loads(str(exc_info.value))
             assert body["status"] == "error"
             assert body["error"]["code"] == "filesystem_error"
+            assert body["error"]["param"] == "dest_folder"
+            assert body["error"]["value"] == str(readonly_dir)
         finally:
             # Restore permissions for cleanup
             readonly_dir.chmod(0o755)

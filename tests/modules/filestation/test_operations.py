@@ -253,6 +253,8 @@ class TestBackgroundTaskErrors:
         assert body["error"]["code"] == "timeout"
         assert body["error"]["retryable"] is True
         assert "Copy files" in body["error"]["message"]
+        assert body["error"]["param"] == "timeout"
+        assert body["error"]["value"] == 1.0
 
     @respx.mock
     async def test_copy_task_completes_with_error(self, mock_client: DsmClient) -> None:
@@ -343,6 +345,8 @@ class TestBackgroundTaskErrors:
         assert body["error"]["code"] == "timeout"
         assert body["error"]["retryable"] is True
         assert "Delete files" in body["error"]["message"]
+        assert body["error"]["param"] == "timeout"
+        assert body["error"]["value"] == 1.0
 
     @respx.mock
     async def test_delete_poll_error_mid_operation(self, mock_client: DsmClient) -> None:
