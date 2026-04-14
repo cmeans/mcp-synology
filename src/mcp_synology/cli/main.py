@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 
 import click
+import yaml
 
 from mcp_synology import __version__
 from mcp_synology.cli.logging_ import _configure_logging, _init_early_logging
@@ -109,7 +110,7 @@ def serve(config: str | None) -> None:
 
     try:
         app_config = load_config(config)
-    except (FileNotFoundError, ValueError) as e:
+    except (FileNotFoundError, ValueError, yaml.YAMLError) as e:
         click.echo(click.style(f"Error: {e}", fg="red"), err=True)
         sys.exit(1)
 
