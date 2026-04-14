@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed
+
+- **Structured error envelopes now include `param`/`value` on five more call sites** (#29) — addresses F17 from the PR #9 self-audit. Five `error_response()` call sites in `modules/filestation/*.py` previously emitted envelopes without the `param`/`value` fields that smart clients could dispatch on: `metadata.py:76` (`get_file_info` multi-path empty-result → `param="paths"`, `value=<paths>`), `metadata.py:222` (`get_dir_size` timeout → `param="timeout"`, `value=<timeout>`), `operations.py:245` (copy/move timeout), `operations.py:353` (delete timeout), and `transfer.py:209` (download local-write `OSError` → `param="dest_folder"`, `value=<dest_folder>`). Existing `message` text is unchanged. Regression assertions added to `test_empty_files_list_returns_not_found`, `test_dir_size_timeout`, `test_copy_timeout`, `test_delete_timeout`, and `test_download_write_permission_error`.
+
 ### Added
 
 - **Auto-publish to MCP registry on release** (#27) — adds a `publish-registry` job to `.github/workflows/publish.yml` that runs after `publish-pypi` and publishes `server.json` to `registry.modelcontextprotocol.io` via [`mcp-publisher`](https://github.com/modelcontextprotocol/registry). Uses GitHub OIDC authentication (`permissions: id-token: write`) so no long-lived registry token is needed. The step is idempotent — if the tag's workflow is re-run after a successful registry publish, the duplicate-version error (registry requires every version string to be unique per [its versioning docs](https://github.com/modelcontextprotocol/registry/blob/main/docs/modelcontextprotocol-io/versioning.mdx)) is caught and downgraded to a `::warning::` rather than failing the release. Also adds a `validate-server-json` job to `.github/workflows/ci.yml` that runs `mcp-publisher validate server.json` on every PR so schema breakage is caught before a tag push, complementing the existing `version-sync` check which enforces alignment with `pyproject.toml`.
