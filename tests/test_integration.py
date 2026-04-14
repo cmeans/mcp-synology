@@ -628,8 +628,12 @@ class TestWriteOperations:
 class TestRecycleBin:
     """Test recycle bin listing after delete.
 
-    Requires the writable_folder's share to have recycle bin enabled.
-    Creates a folder, deletes it, checks recycle bin, then cleans up.
+    Works whether or not the writable_folder's share has recycle bin enabled:
+    when enabled, the deleted folder shows up in `#recycle`; when disabled,
+    `list_recycle_bin` returns a friendly "not enabled" message. Both paths
+    are valid and the test verifies `list_recycle_bin` returns a string in
+    either case. Creates a folder, deletes it, checks recycle bin, then
+    cleans up.
     """
 
     _RECYCLE_TEST = "_recycle_bin_test"

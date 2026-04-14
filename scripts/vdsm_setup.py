@@ -72,7 +72,15 @@ def _check_prerequisites() -> None:
     confirmation_prompt=True,
     help="Admin password for DSM setup wizard.",
 )
-def setup(dsm_version: str, admin_user: str, admin_password: str) -> None:
+@click.option(
+    "--yes",
+    "-y",
+    "assume_yes",
+    is_flag=True,
+    default=False,
+    help="Skip confirmation prompts (e.g. overwrite existing golden image). Required for CI use.",
+)
+def setup(dsm_version: str, admin_user: str, admin_password: str, assume_yes: bool) -> None:
     """Create a golden image for virtual-dsm testing.
 
     This command starts a virtual-dsm container, waits for you to complete
@@ -86,8 +94,9 @@ def setup(dsm_version: str, admin_user: str, admin_password: str) -> None:
     click.echo("  Docker: OK")
 
     # 2. Check if golden image already exists
-    if has_golden_image(dsm_version) and not click.confirm(
-        f"\nGolden image for DSM {dsm_version} already exists. Overwrite?"
+    if has_golden_image(dsm_version) and not (
+        assume_yes
+        or click.confirm(f"\nGolden image for DSM {dsm_version} already exists. Overwrite?")
     ):
         click.echo("Aborted.")
         sys.exit(0)
