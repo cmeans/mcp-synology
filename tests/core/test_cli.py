@@ -91,6 +91,21 @@ class TestCli:
         assert "Error:" in result.output
         assert "Traceback" not in result.output
 
+    def test_setup_discovery_malformed_yaml_clean_error(self, tmp_path: Path) -> None:
+        """setup (no -c) with a malformed discovered config should exit cleanly.
+
+        Exercises the discovery path in setup.py that uses load_config(None).
+        Uses MCP_SYNOLOGY_CONFIG to force discovery to point at the bad file.
+        """
+        config_file = tmp_path / "discovered.yaml"
+        config_file.write_text("schema_version: 1\nconnection: {host: 1.2.3.4\n")
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["setup"], env={"MCP_SYNOLOGY_CONFIG": str(config_file)})
+        assert result.exit_code == 1
+        assert "Error:" in result.output
+        assert "Traceback" not in result.output
+
     def test_short_config_flag_serve(self) -> None:
         runner = CliRunner()
         result = runner.invoke(main, ["serve", "-c", "/nonexistent/config.yaml"])

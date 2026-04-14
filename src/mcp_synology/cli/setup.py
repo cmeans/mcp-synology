@@ -44,7 +44,7 @@ def setup(config: str | None, list_configs: bool, verbose: bool) -> None:
         # No config file found — enter interactive creation mode
         _setup_interactive(verbose)
         return
-    except ValueError as e:
+    except (ValueError, yaml.YAMLError) as e:
         click.echo(click.style(f"Error: {e}", fg="red"), err=True)
         sys.exit(1)
 
