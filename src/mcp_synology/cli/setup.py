@@ -186,7 +186,7 @@ def _setup_with_config(config_path_str: str, verbose: bool) -> None:
 
     try:
         app_config = load_config(config_path_str)
-    except (FileNotFoundError, ValueError) as e:
+    except (FileNotFoundError, ValueError, yaml.YAMLError) as e:
         click.echo(click.style(f"Error: {e}", fg="red"), err=True)
         sys.exit(1)
 

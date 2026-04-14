@@ -69,6 +69,28 @@ class TestCli:
         # Error goes to stderr
         assert "not found" in (result.output + (result.stderr if hasattr(result, "stderr") else ""))
 
+    def test_serve_malformed_yaml_clean_error(self, tmp_path: Path) -> None:
+        """serve with a malformed YAML config should exit 1 with a clean Error: line."""
+        config_file = tmp_path / "malformed.yaml"
+        config_file.write_text("schema_version: 1\nconnection: {host: 1.2.3.4\n")
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["serve", "-c", str(config_file)])
+        assert result.exit_code == 1
+        assert "Error:" in result.output
+        assert "Traceback" not in result.output
+
+    def test_setup_malformed_yaml_clean_error(self, tmp_path: Path) -> None:
+        """setup with a malformed YAML config should exit 1 with a clean Error: line."""
+        config_file = tmp_path / "malformed.yaml"
+        config_file.write_text("schema_version: 1\nconnection: {host: 1.2.3.4\n")
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["setup", "-c", str(config_file)])
+        assert result.exit_code == 1
+        assert "Error:" in result.output
+        assert "Traceback" not in result.output
+
     def test_short_config_flag_serve(self) -> None:
         runner = CliRunner()
         result = runner.invoke(main, ["serve", "-c", "/nonexistent/config.yaml"])
@@ -733,6 +755,25 @@ class TestCheckLogin:
         result = runner.invoke(main, ["check", "-c", str(config_file)])
         assert result.exit_code == 1
         assert "Error" in result.output
+
+    def test_check_command_malformed_yaml_clean_error(self, tmp_path: Path) -> None:
+        """check with a malformed YAML file should exit 1 with a clean Error: line.
+
+        Regression test — a typo or indentation error in the user's config
+        used to surface as a raw yaml.ScannerError traceback because
+        check.py only caught (FileNotFoundError, ValueError).
+        """
+        config_file = tmp_path / "malformed.yaml"
+        # Unclosed brace — pyyaml raises ScannerError/ParserError
+        config_file.write_text("schema_version: 1\nconnection: {host: 1.2.3.4\n")
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["check", "-c", str(config_file)])
+        assert result.exit_code == 1
+        assert "Error:" in result.output
+        # The raw traceback leaks "Traceback (most recent call last)"; our
+        # clean handler should not.
+        assert "Traceback" not in result.output
 
     def test_check_command_verbose_flag(self, tmp_path: Path) -> None:
         """--verbose enables debug logging early."""
