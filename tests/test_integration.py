@@ -332,18 +332,65 @@ class TestSearch:
         - GET (not POST) for the Search API
         - Wildcard wrapping: bare "Bambu" becomes *Bambu*, matching "Bambu Studio"
         - filetype=all: directories are included in results
+
+        Creates a directory matching the search keyword via the API to ensure
+        the test is self-contained. Retries to allow the DSM search indexer
+        to discover the new directory.
         """
         client, _, _, paths = _unpack(nas_client)
         folder = paths["search_folder"]
         keyword = paths["search_keyword"]
 
-        result = await search_files(client, folder_path=folder, pattern=keyword)
+        # Ensure a directory with the keyword in its name exists.
+        # DSM search matches file/directory names, not content.
+        # On real NAS the search_folder likely already has matching content;
+        # on vdsm we create it here. Non-fatal if the folder is read-only.
+        search_dir = f"{folder}/{keyword} Studio"
+        try:
+            await create_folder(client, paths=[search_dir])
+            logger.info("Created search target directory: %s", search_dir)
+        except ToolError as e:
+            logger.info("Could not create search target (may already exist): %s", e)
 
-        logger.info("search_files(%s, pattern=%s):\n%s", folder, keyword, result)
+        # Verify the target is visible to FileStation before searching
+        listing = await list_files(client, path=folder)
+        logger.info("Contents of %s before search:\n%s", folder, listing)
+
+        # Search from the share root (parent of search_folder) for broader scope.
+        # DSM search on non-indexed shares can miss recently created items in
+        # narrow scopes. Extract the share root from search_folder.
+        share_root = "/" + folder.strip("/").split("/")[0]
+
+        # Allow the search service to recover from prior test activity
+        # (DirSize tasks, delete operations, etc.). On Virtual DSM, the
+        # search service can be easily exhausted by rapid-fire requests.
+        # Worst-case retry budget: 3s + 10 + 10 + 15 + 15 + 15 = ~68s.
+        await asyncio.sleep(3)
+
+        max_attempts = 6
+        result = ""
+        for attempt in range(1, max_attempts + 1):
+            result = await search_files(client, folder_path=share_root, pattern=keyword)
+            logger.info(
+                "search_files(%s, pattern=%s) attempt %d/%d:\n%s",
+                share_root,
+                keyword,
+                attempt,
+                max_attempts,
+                result,
+            )
+            if "0 results found" not in result:
+                break
+            if attempt < max_attempts:
+                delay = 10 if attempt <= 2 else 15
+                logger.info("Search returned 0 results, waiting %ds for indexer...", delay)
+                await asyncio.sleep(delay)
+
         assert "0 results found" not in result, (
-            f"Search for '{keyword}' in {folder} returned 0 results. "
-            "Verify the search_keyword and search_folder in integration_config.yaml. "
-            "Also check that DSM's search service is not overloaded from prior test runs."
+            f"Search for '{keyword}' in {share_root} returned 0 results after {max_attempts} "
+            "attempts. Verify the search_keyword and search_folder in "
+            "integration_config.yaml. Also check that DSM's search service is not "
+            "overloaded from prior test runs."
         )
 
     async def test_search_by_extension(self, nas_client: Any) -> None:
@@ -884,14 +931,16 @@ class TestSystemInfo:
     """Test system info tool (works for all users via SYNO.DSM.Info)."""
 
     async def test_get_system_info(self, nas_client: Any) -> None:
-        """Should return model, firmware, temperature, uptime."""
+        """Should return model, firmware, uptime; temperature only on physical hardware."""
         client, _, _, _ = _unpack(nas_client)
         result = await get_system_info(client)
         logger.info("get_system_info:\n%s", result)
         assert "Model" in result
         assert "Firmware" in result
-        assert "Temperature" in result
         assert "Uptime" in result
+        # Virtual DSM has no hardware temp sensor — temperature is optional
+        if "VirtualDSM" not in result:
+            assert "Temperature" in result
 
     async def test_system_info_has_ram(self, nas_client: Any) -> None:
         """Should report RAM size."""
@@ -937,6 +986,10 @@ class TestResourceUsage:
         1. Check CPU is not already pegged (baseline)
         2. Start a DirSize task on a large folder to generate load
         3. Check CPU again — should still return valid data
+
+        The DirSize task is only a load generator — its success or failure
+        doesn't affect the test outcome. On Virtual DSM, the task may complete
+        instantly (error 599) before generating measurable load.
         """
         client, _, _, paths = _unpack(admin_client)
 
@@ -945,7 +998,7 @@ class TestResourceUsage:
         logger.info("Baseline utilization:\n%s", baseline)
         assert "CPU" in baseline, "Baseline should include CPU data"
 
-        # Start a heavy operation concurrently
+        # Start a heavy operation concurrently (best-effort load generator)
         dir_task = asyncio.create_task(get_dir_size(client, path=paths["existing_share"]))
 
         # Wait for the operation to start consuming resources
@@ -955,8 +1008,12 @@ class TestResourceUsage:
         during_load = await get_resource_usage(client)
         logger.info("During-load utilization:\n%s", during_load)
 
-        # Wait for dir_size to complete (cleanup)
-        await dir_task
+        # Wait for dir_size to complete (cleanup). Tolerate failure —
+        # on Virtual DSM the task may finish instantly or error out.
+        try:
+            await dir_task
+        except ToolError:
+            logger.info("DirSize load generator failed (expected on Virtual DSM)")
 
         # Both readings should be valid
         assert "CPU" in during_load

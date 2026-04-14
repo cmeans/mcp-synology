@@ -209,3 +209,39 @@ class TestListRecycleBin:
             recycle_bin_status={"docker": False},
         )
         assert "not enabled" in result
+
+    @respx.mock
+    async def test_recycle_bin_not_found_error_408(self, mock_client: DsmClient) -> None:
+        """DSM error 408 on the #recycle path means recycle bin is disabled.
+
+        list_recycle_bin should catch the ToolError and return a friendly
+        message instead of crashing.
+        """
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 408}}
+        )
+        result = await list_recycle_bin(mock_client, share="writable")
+        assert "not enabled" in result
+        assert "writable" in result
+
+    @respx.mock
+    async def test_recycle_bin_other_error_propagates(self, mock_client: DsmClient) -> None:
+        """Non-408 errors from list_files should still propagate as ToolError."""
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 402}}
+        )
+        with pytest.raises(ToolError):
+            await list_recycle_bin(mock_client, share="video")
+
+    async def test_recycle_bin_non_json_toolerror_propagates(
+        self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """ToolError with non-JSON body should propagate (JSONDecodeError branch)."""
+        from mcp_synology.modules.filestation import listing
+
+        async def _raise_non_json(*args: object, **kwargs: object) -> str:
+            raise ToolError("plain text error, not JSON")
+
+        monkeypatch.setattr(listing, "list_files", _raise_non_json)
+        with pytest.raises(ToolError, match="plain text error"):
+            await list_recycle_bin(mock_client, share="video")

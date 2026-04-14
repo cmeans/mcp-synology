@@ -173,6 +173,22 @@ async def get_dir_size(
                     params={"taskid": taskid},
                 )
             except SynologyError as e:
+                if e.code == 599:
+                    # Task completed and was cleaned up before we could read
+                    # status. Common on Virtual DSM where tiny directories
+                    # finish instantly. Return a best-effort result.
+                    logger.debug(
+                        "DirSize task %s completed before status check (error 599)", taskid
+                    )
+                    result = format_key_value(
+                        [
+                            ("Total size", "completed (too fast to measure)"),
+                            ("Files", "unknown"),
+                            ("Directories", "unknown"),
+                        ],
+                        title=f"Directory Size: {normalized}",
+                    )
+                    break
                 poll_error = e
                 break
 
