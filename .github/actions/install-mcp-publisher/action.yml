@@ -1,0 +1,22 @@
+name: Install mcp-publisher
+description: Download a pinned release of mcp-publisher from the official MCP registry repo
+
+inputs:
+  version:
+    description: "mcp-publisher release tag (e.g. v1.5.0). Bump when a new release is needed."
+    required: false
+    default: v1.5.0
+
+runs:
+  using: composite
+  steps:
+    - name: Download and extract mcp-publisher
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+      run: |
+        os=$(uname -s | tr '[:upper:]' '[:lower:]')
+        arch=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+        curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/download/${VERSION}/mcp-publisher_${os}_${arch}.tar.gz" \
+          | tar xz mcp-publisher
+        ./mcp-publisher --version

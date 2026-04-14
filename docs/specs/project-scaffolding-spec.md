@@ -491,6 +491,17 @@ uvx --from git+https://github.com/cmeans/mcp-synology mcp-synology serve
 
 Once stable enough for versioned releases: `uvx mcp-synology serve`
 
+### Automated release pipeline
+
+Tagging `v*` triggers `.github/workflows/publish.yml`, which runs four jobs:
+
+1. `build` — runs the unit test suite and builds sdist + wheel.
+2. `publish-pypi` — uploads the built distributions to PyPI via Trusted Publishing (OIDC, no long-lived token).
+3. `publish-registry` — installs [`mcp-publisher`](https://github.com/modelcontextprotocol/registry), authenticates via GitHub OIDC (`id-token: write`), and publishes `server.json` to `registry.modelcontextprotocol.io`. Idempotent on re-run: the registry's "version already exists" error is caught and downgraded to a workflow warning.
+4. `github-release` — extracts the release notes for the tag from `CHANGELOG.md` (via `awk` on the `## <version>` heading) and either creates a new GitHub Release or updates the existing one (`gh release create` / `gh release edit`).
+
+`server.json` is validated on every PR by the `validate-server-json` job in `ci.yml`, which runs `mcp-publisher validate` against the current schema. The `version-sync` job in the same workflow enforces that `server.json`'s version fields stay aligned with `[project].version` in `pyproject.toml` via `scripts/sync-server-json.py --check`.
+
 ### Future: Docker
 
 ```dockerfile

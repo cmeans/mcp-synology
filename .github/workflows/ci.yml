@@ -31,6 +31,14 @@ jobs:
       - name: Verify server.json matches pyproject.toml
         run: python scripts/sync-server-json.py --check
 
+  validate-server-json:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/install-mcp-publisher
+      - name: Validate server.json against registry schema
+        run: ./mcp-publisher validate server.json
+
   typecheck:
     runs-on: ubuntu-latest
     steps:

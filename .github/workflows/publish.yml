@@ -48,6 +48,51 @@ jobs:
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
 
+  publish-registry:
+    # Publish (or update) the server entry in the official MCP registry.
+    # Runs after publish-pypi because the registry validates that the
+    # referenced PyPI package+version exists before accepting the entry.
+    needs: publish-pypi
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/install-mcp-publisher
+
+      - name: Authenticate to MCP registry (GitHub OIDC)
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish server.json to MCP registry
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          # Idempotent: the registry rejects re-publishing an existing
+          # version (see docs/modelcontextprotocol-io/versioning.mdx:
+          # "The version string MUST be unique for each publication").
+          # The match string is anchored to the upstream error constant
+          # `ErrInvalidVersion` in internal/database/database.go:
+          #   "invalid version: cannot publish duplicate version"
+          # (verified against tag v1.5.0). The publisher surfaces this as
+          # part of the 400 response body from POST /v0/publish. If the
+          # upstream error text changes, this step will fall through to
+          # `exit $status` and fail loudly — preferable to silently
+          # swallowing a real publish error.
+          set +e
+          output=$(./mcp-publisher publish 2>&1)
+          status=$?
+          echo "$output"
+          if [ $status -eq 0 ]; then
+            exit 0
+          fi
+          if echo "$output" | grep -qF 'cannot publish duplicate version'; then
+            echo "::warning::Version $TAG already exists in MCP registry — treating as no-op"
+            exit 0
+          fi
+          exit $status
+
   github-release:
     needs: publish-pypi
     runs-on: ubuntu-latest
