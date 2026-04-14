@@ -60,11 +60,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install mcp-publisher
-        run: |
-          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" \
-            | tar xz mcp-publisher
-          ./mcp-publisher --version
+      - uses: ./.github/actions/install-mcp-publisher
 
       - name: Authenticate to MCP registry (GitHub OIDC)
         run: ./mcp-publisher login github-oidc
@@ -76,9 +72,14 @@ jobs:
           # Idempotent: the registry rejects re-publishing an existing
           # version (see docs/modelcontextprotocol-io/versioning.mdx:
           # "The version string MUST be unique for each publication").
-          # If the tag's workflow is re-run after a successful registry
-          # publish, treat the duplicate-version error as a non-fatal
-          # warning rather than failing the whole release.
+          # The match string is anchored to the upstream error constant
+          # `ErrInvalidVersion` in internal/database/database.go:
+          #   "invalid version: cannot publish duplicate version"
+          # (verified against tag v1.5.0). The publisher surfaces this as
+          # part of the 400 response body from POST /v0/publish. If the
+          # upstream error text changes, this step will fall through to
+          # `exit $status` and fail loudly — preferable to silently
+          # swallowing a real publish error.
           set +e
           output=$(./mcp-publisher publish 2>&1)
           status=$?
@@ -86,7 +87,7 @@ jobs:
           if [ $status -eq 0 ]; then
             exit 0
           fi
-          if echo "$output" | grep -iE 'already (exists|published)|duplicate version|version.*conflict' >/dev/null; then
+          if echo "$output" | grep -qF 'cannot publish duplicate version'; then
             echo "::warning::Version $TAG already exists in MCP registry — treating as no-op"
             exit 0
           fi
