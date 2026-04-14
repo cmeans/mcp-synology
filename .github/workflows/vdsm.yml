@@ -7,6 +7,10 @@ on:
     branches: [main]
 
 env:
+  # Pins JavaScript-action Node runtime to Node 24 across all JS-based
+  # GitHub Actions in this workflow. Matches the pattern used by the
+  # other workflows in .github/workflows/ so CI behavior is consistent
+  # across runners during GitHub's staged Node runtime rollouts.
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   DSM_VERSION: "7.2.2"
   # Default admin credentials used inside vdsm setup. NOT secrets — the
@@ -41,6 +45,13 @@ jobs:
       - name: Install Playwright Chromium
         run: uv run playwright install --with-deps chromium
 
+      # Cache key deliberately hashes only the DSM version and the Python
+      # files that drive image construction. `pyproject.toml` and `uv.lock`
+      # are NOT in the key because the image content is DSM-determined — a
+      # testcontainers or playwright dependency upgrade doesn't change the
+      # bits inside the saved tarball. If that assumption ever changes
+      # (e.g., a dep upgrade affects bind-mount format or timing), bump the
+      # cache key manually or add the manifest to hashFiles.
       - name: Restore golden image cache
         id: cache-golden
         uses: actions/cache@v4
