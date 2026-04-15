@@ -6,7 +6,7 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
-from mcp_synology.core.errors import ErrorCode, SynologyError
+from mcp_synology.core.errors import ErrorCode, SynologyError, error_from_code
 from mcp_synology.core.formatting import (
     error_response,
     format_size,
@@ -254,11 +254,18 @@ async def _copy_move(
         err = status["error"]
         err_code = err.get("code", 0) if isinstance(err, dict) else err
         err_path = status.get("path", "")
+        # Route err_code through error_from_code so callers see a specific
+        # envelope (e.g. not_found, disk_full) matching the synchronous error
+        # paths in this module. Unknown codes fall back to DSM_ERROR.
+        mapped = error_from_code(err_code, "SYNO.FileStation.CopyMove")
         error_response(
-            ErrorCode.DSM_ERROR,
+            mapped.error_code,
             f"{operation} files failed: DSM error code {err_code} on path: {err_path}",
-            retryable=False,
-            suggestion="Check that source paths exist and you have permission to access them.",
+            retryable=mapped.retryable,
+            suggestion=(
+                mapped.suggestion
+                or "Check that source paths exist and you have permission to access them."
+            ),
         )
 
     # Build response
@@ -362,11 +369,18 @@ async def delete_files(
         err = status["error"]
         err_code = err.get("code", 0) if isinstance(err, dict) else err
         err_path = status.get("path", "")
+        # Route err_code through error_from_code so callers see a specific
+        # envelope (e.g. permission_denied, not_found) matching the synchronous
+        # error paths in this module. Unknown codes fall back to DSM_ERROR.
+        mapped = error_from_code(err_code, "SYNO.FileStation.Delete")
         error_response(
-            ErrorCode.DSM_ERROR,
+            mapped.error_code,
             f"Delete files failed: DSM error code {err_code} on path: {err_path}",
-            retryable=False,
-            suggestion="Check that paths exist and you have permission to delete them.",
+            retryable=mapped.retryable,
+            suggestion=(
+                mapped.suggestion
+                or "Check that paths exist and you have permission to delete them."
+            ),
         )
 
     # Determine recycle bin status per share

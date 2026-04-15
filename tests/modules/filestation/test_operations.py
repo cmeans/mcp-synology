@@ -258,7 +258,13 @@ class TestBackgroundTaskErrors:
 
     @respx.mock
     async def test_copy_task_completes_with_error(self, mock_client: DsmClient) -> None:
-        """Copy task finishes but status has an ``error`` key → dsm_error."""
+        """Copy task finishes with FileStation code 1100 → filestation_error.
+
+        Asserts the envelope is routed through ``error_from_code`` so callers
+        see the specific envelope code (``filestation_error``) and the per-code
+        suggestion from FILESTATION_ERROR_CODES instead of the old generic
+        ``dsm_error`` fallback.
+        """
 
         def side_effect(request: httpx.Request) -> httpx.Response:
             params = dict(request.url.params)
@@ -288,9 +294,118 @@ class TestBackgroundTaskErrors:
                 dest_folder="/video/Archive",
             )
         body = json.loads(str(exc_info.value))
-        assert body["error"]["code"] == "dsm_error"
+        assert body["error"]["code"] == "filestation_error"
         assert "1100" in body["error"]["message"]
         assert "/video/restricted/file.mkv" in body["error"]["message"]
+        # Suggestion now comes from the per-code mapping, not the generic fallback.
+        assert "shared folder" in body["error"]["suggestion"].lower()
+
+    @respx.mock
+    async def test_copy_task_error_maps_408_to_not_found(self, mock_client: DsmClient) -> None:
+        """Copy task error 408 → ``not_found`` envelope (not ``dsm_error``)."""
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            method = params.get("method", "")
+            if method == "start":
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "cm-408"}})
+            if method == "status":
+                return httpx.Response(
+                    200,
+                    json={
+                        "success": True,
+                        "data": {
+                            "finished": True,
+                            "error": {"code": 408},
+                            "path": "/video/missing/file.mkv",
+                        },
+                    },
+                )
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+
+        with pytest.raises(ToolError) as exc_info:
+            await copy_files(
+                mock_client,
+                paths=["/video/missing/file.mkv"],
+                dest_folder="/video/Archive",
+            )
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "not_found"
+
+    @respx.mock
+    async def test_copy_task_error_maps_416_to_disk_full_retryable(
+        self, mock_client: DsmClient
+    ) -> None:
+        """Copy task error 416 → ``disk_full`` envelope, retryable=True."""
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            method = params.get("method", "")
+            if method == "start":
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "cm-416"}})
+            if method == "status":
+                return httpx.Response(
+                    200,
+                    json={
+                        "success": True,
+                        "data": {
+                            "finished": True,
+                            "error": {"code": 416},
+                            "path": "/video/big/file.mkv",
+                        },
+                    },
+                )
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+
+        with pytest.raises(ToolError) as exc_info:
+            await copy_files(
+                mock_client,
+                paths=["/video/big/file.mkv"],
+                dest_folder="/video/Archive",
+            )
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "disk_full"
+        assert body["error"]["retryable"] is True
+
+    @respx.mock
+    async def test_copy_task_error_unknown_code_falls_back(self, mock_client: DsmClient) -> None:
+        """Unknown/unmapped error code still yields ``dsm_error`` + generic suggestion."""
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            method = params.get("method", "")
+            if method == "start":
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "cm-999"}})
+            if method == "status":
+                return httpx.Response(
+                    200,
+                    json={
+                        "success": True,
+                        "data": {
+                            "finished": True,
+                            "error": {"code": 9999},
+                            "path": "/video/file.mkv",
+                        },
+                    },
+                )
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+
+        with pytest.raises(ToolError) as exc_info:
+            await copy_files(
+                mock_client,
+                paths=["/video/file.mkv"],
+                dest_folder="/video/Archive",
+            )
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "dsm_error"
+        assert "9999" in body["error"]["message"]
+        assert "source paths exist" in body["error"]["suggestion"]
 
     @respx.mock
     async def test_copy_poll_error_mid_operation(self, mock_client: DsmClient) -> None:
@@ -375,7 +490,7 @@ class TestBackgroundTaskErrors:
 
     @respx.mock
     async def test_delete_task_completes_with_error(self, mock_client: DsmClient) -> None:
-        """Delete task finishes with an error dict → dsm_error."""
+        """Delete task error 1100 → ``filestation_error`` via error_from_code."""
 
         def side_effect(request: httpx.Request) -> httpx.Response:
             params = dict(request.url.params)
@@ -401,8 +516,41 @@ class TestBackgroundTaskErrors:
         with pytest.raises(ToolError) as exc_info:
             await delete_files(mock_client, paths=["/video/locked/file.mkv"])
         body = json.loads(str(exc_info.value))
-        assert body["error"]["code"] == "dsm_error"
+        assert body["error"]["code"] == "filestation_error"
         assert "1100" in body["error"]["message"]
+
+    @respx.mock
+    async def test_delete_task_error_maps_105_to_permission_denied(
+        self, mock_client: DsmClient
+    ) -> None:
+        """Delete task error 105 (common) → ``permission_denied`` envelope."""
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            method = params.get("method", "")
+            if method == "start":
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "del-105"}})
+            if method == "status":
+                return httpx.Response(
+                    200,
+                    json={
+                        "success": True,
+                        "data": {
+                            "finished": True,
+                            "error": {"code": 105},
+                            "path": "/video/locked/file.mkv",
+                        },
+                    },
+                )
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+
+        with pytest.raises(ToolError) as exc_info:
+            await delete_files(mock_client, paths=["/video/locked/file.mkv"])
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "permission_denied"
+        assert "105" in body["error"]["message"]
 
 
 class TestRestoreFromRecycleBin:
