@@ -33,20 +33,22 @@ jobs:
       - name: Promote to Ready for QA
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
         run: |
-          REPO=${{ github.repository }}
-
           # Look up the associated PR.
           # The API can 404 after a force-push (orphaned run).
           # Capture output only on success so 404 body doesn't leak into $PR.
           PR=""
-          API_OUT=$(gh api "repos/$REPO/actions/runs/${{ github.event.workflow_run.id }}/pull_requests" \
+          API_OUT=$(gh api "repos/$REPO/actions/runs/$RUN_ID/pull_requests" \
             --jq '.[0].number // empty' 2>&1) && PR="$API_OUT" || true
 
           # Fallback: pull_requests array is empty for dependabot PRs.
-          # Search by head branch instead.
+          # Search by head branch instead. HEAD_BRANCH comes via env
+          # (not a direct GHA expression) because fork PR branch names
+          # are contributor-controlled and allow shell metacharacters.
           if [ -z "$PR" ]; then
-            HEAD_BRANCH=${{ github.event.workflow_run.head_branch }}
             PR=$(gh pr list --repo "$REPO" --head "$HEAD_BRANCH" --state open \
               --json number --jq '.[0].number // empty' 2>/dev/null) || true
           fi
@@ -87,15 +89,17 @@ jobs:
       - name: Set CI Failed
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
         run: |
-          REPO=${{ github.repository }}
-
           PR=""
-          API_OUT=$(gh api "repos/$REPO/actions/runs/${{ github.event.workflow_run.id }}/pull_requests" \
+          API_OUT=$(gh api "repos/$REPO/actions/runs/$RUN_ID/pull_requests" \
             --jq '.[0].number // empty' 2>&1) && PR="$API_OUT" || true
 
+          # HEAD_BRANCH comes via env (not a direct GHA expression)
+          # because fork PR branch names are contributor-controlled.
           if [ -z "$PR" ]; then
-            HEAD_BRANCH=${{ github.event.workflow_run.head_branch }}
             PR=$(gh pr list --repo "$REPO" --head "$HEAD_BRANCH" --state open \
               --json number --jq '.[0].number // empty' 2>/dev/null) || true
           fi
