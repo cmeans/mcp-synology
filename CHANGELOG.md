@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed
+
+- **Bump uv group: pytest 9.0.2→9.0.3, cryptography 46.0.5→46.0.7, python-multipart 0.0.22→0.0.26, requests 2.32.5→2.33.0** (#55) — first Dependabot-authored PR on the repo. Direct dev dep: `pytest`. Transitive bumps (no `pyproject.toml` constraints widened): `cryptography` via `pyjwt` + `secretstorage`, `python-multipart` via `mcp`, `requests` via `docker` (vdsm extra only). Picks up [CVE-2026-39892](https://github.com/pyca/cryptography/security/advisories) (cryptography buffer overflow; 46.0.7 wheels also ship OpenSSL 3.5.6) and [CVE-2025-71176](https://github.com/pytest-dev/pytest/security/advisories) (pytest insecure tmpdir). `requests` 2.33.0 drops Python 3.9 support — irrelevant for this project (`requires-python = ">=3.11"`). All 499 unit tests pass at 96.04% coverage on the bumped lockfile.
+
 ### Fixed
 
 - **Harden `pr-labels-ci.yml` against shell injection via fork-PR branch names** (#53) — closes #52. Cascades the `env:` pattern from `cmeans/mcp-clipboard#88` into this repo's `.github/workflows/pr-labels-ci.yml`. Both the `on-ci-pass` and `on-ci-fail` jobs previously inlined `${{ github.event.workflow_run.head_branch }}` directly inside `run:` blocks. `head_branch` is contributor-controlled on fork PRs and git refnames allow shell metacharacters (`$`, backtick, `;`, `&`, `|`, etc.), so a malicious fork branch name would render as directly-executed shell once the expression was substituted. `REPO`, `RUN_ID`, and `HEAD_BRANCH` now come through step-level `env:` blocks and the shell references them as `$REPO` / `$RUN_ID` / `$HEAD_BRANCH`. Also avoids the latent parser trap documented in `cmeans/yt-dont-recommend#28`: GHA substitutes `${{ ... }}` inside `run:` blocks before the shell sees them *including within shell comments*, and the queue-time parser rejects an empty expression on `workflow_dispatch` — the explanatory comments therefore describe the concept ("not a direct GHA expression") rather than showing the literal sequence. Verified locally that `yaml.safe_load` parses cleanly and that no `${{ ... }}` substitution survives inside any `run:` body.
