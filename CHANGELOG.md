@@ -4,7 +4,7 @@
 
 ### Changed
 
-- **Dogfood download badge: swap shields.io built-in for `pypi-badges.intfar.com`** (#TBD) — replaces `https://img.shields.io/pypi/dm/mcp-synology` with `https://img.shields.io/endpoint?url=https%3A%2F%2Fpypi-badges.intfar.com%2Fmcp-synology%2Fdownloads-30d-non-ci.json` in `README.md` line 16. Badge endpoint is the dogfooded service from [`cmeans/pypi-winnow-downloads`](https://github.com/cmeans/pypi-winnow-downloads), which winnows out CI traffic from the BigQuery PyPI download data. Badge link target updated to the upstream repo so the "powered by" attribution is implicit (no acknowledgements-section bloat). Resulting label reads "pip*/uv/poetry/pdm (30d)" instead of the generic "Downloads" — accurately reflecting the non-CI scope.
+- **Dogfood download badge: swap shields.io built-in for `pypi-badges.intfar.com`** (#62) — replaces `https://img.shields.io/pypi/dm/mcp-synology` with `https://img.shields.io/endpoint?url=https%3A%2F%2Fpypi-badges.intfar.com%2Fmcp-synology%2Fdownloads-30d-non-ci.json` in `README.md` line 16. Badge endpoint is the dogfooded service from [`cmeans/pypi-winnow-downloads`](https://github.com/cmeans/pypi-winnow-downloads), which winnows out CI traffic from the BigQuery PyPI download data. Badge link target updated to the upstream repo so the "powered by" attribution is implicit (no acknowledgements-section bloat). Resulting label reads "pip*/uv/poetry/pdm (30d)" instead of the generic "Downloads" — accurately reflecting the non-CI scope.
 
 ### Fixed
 
