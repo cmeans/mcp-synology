@@ -166,10 +166,20 @@ jobs:
                       insert_at += 1
                   lines.insert(insert_at, entry)
               else:
-                  # `### Changed` doesn't exist within Unreleased — create it.
-                  insert_at = unreleased_idx + 1
-                  if insert_at < end_idx and lines[insert_at].strip() == "":
-                      insert_at += 1
+                  # `### Changed` doesn't exist within Unreleased — create it
+                  # at the right position per Keep-a-Changelog v1.1.0 ordering:
+                  # Added → Changed → Deprecated → Removed → Fixed → Security.
+                  # Walk forward from `## Unreleased` to find either the first
+                  # subsection that should sort AFTER `### Changed`, or the next
+                  # `## ` release heading; insert immediately before whichever
+                  # comes first. Default insertion point is the end of the
+                  # Unreleased section (just before the next `## ` heading).
+                  after_changed = {"### Deprecated", "### Removed", "### Fixed", "### Security"}
+                  insert_at = end_idx
+                  for j in range(unreleased_idx + 1, end_idx):
+                      if lines[j].strip() in after_changed:
+                          insert_at = j
+                          break
                   block = ["### Changed\n", "\n", entry, "\n"]
                   for k, ln in enumerate(block):
                       lines.insert(insert_at + k, ln)
