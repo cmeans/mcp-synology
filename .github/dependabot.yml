@@ -1,0 +1,68 @@
+# Dependabot version-update configuration for mcp-synology.
+#
+# Two ecosystems are tracked:
+#   - pip:            runtime + dev dependencies declared in
+#                     pyproject.toml (also picks up uv.lock so bumps
+#                     stay reproducible)
+#   - github-actions: workflow files under .github/workflows/
+#                     (CI matrix, vdsm, publish, label automation)
+#
+# Schedule is weekly (Monday 06:00 America/Chicago) so PRs don't pile
+# up faster than they can be reviewed solo. Each ecosystem groups its
+# updates into a single PR per week to reduce notification noise.
+#
+# Labels named here are applied only if they already exist on the
+# repo; Dependabot does not auto-create labels. The label-automation
+# workflows handle the QA-flow labels separately.
+#
+# Docs:
+# https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+
+version: 2
+updates:
+  # Python deps: pyproject.toml + uv.lock at the repo root.
+  # Covers runtime (mcp, httpx, keyring, pydantic, PyYAML, click),
+  # the [dev] extra (pytest, pytest-cov, pytest-asyncio, respx,
+  # ruff, mypy, types-PyYAML), and the [vdsm] extra (testcontainers,
+  # playwright). Dependabot picks up every package referenced in
+  # pyproject.toml regardless of which extra it lives under.
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "America/Chicago"
+    open-pull-requests-limit: 5
+    groups:
+      python:
+        patterns:
+          - "*"
+    labels:
+      - "dependencies"
+      - "python"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+
+  # GitHub Actions used by .github/workflows/*.yml (ci, vdsm, publish,
+  # test-publish, qa-gate, pr-labels, pr-labels-ci, dependabot-changelog)
+  # and the local composite action at .github/actions/install-mcp-publisher.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "America/Chicago"
+    open-pull-requests-limit: 5
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    labels:
+      - "dependencies"
+      - "github-actions"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
