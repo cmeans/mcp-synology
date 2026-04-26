@@ -122,7 +122,7 @@ Two required sections:
 
     A checklist the maintainer can walk to verify the change:
 
-    - [ ] Run `uv run pytest tests/modules/<area>/test_<module>.py::test_<name>` — passes
+    - [ ] Run `uv run pytest tests/modules/<area>/test_<file>.py::test_<name>` — passes
     - [ ] `uv run ruff check src/ tests/ scripts/` — clean
     - [ ] `uv run ruff format --check src/ tests/ scripts/` — clean
     - [ ] `uv run mypy src/ scripts/` — clean

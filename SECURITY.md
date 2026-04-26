@@ -69,11 +69,13 @@ a private channel.
 - Session-error retry logic in the DSM client
   (`src/mcp_synology/core/client.py` + `src/mcp_synology/core/errors.py`)
   — DSM error codes 106 / 107 / 119 trigger transparent re-auth and
-  exactly-one retry. The codes and the `is_session_error` helper live
-  in `errors.py`; the retry path lives in `client.py`
-  (`_SESSION_ERROR_CODES` set plus the call sites that consult it).
-  Bypasses, missed retry sites, leaked credentials during re-auth, or
-  re-auth-on-105 (permission-denied) regressions would be in scope.
+  exactly-one retry. The codes are defined in `errors.py` (the
+  100-series lookup table and the `SessionExpiredError` exception
+  produced by the `error_from_code()` factory). The retry path lives
+  in `client.py` (`_SESSION_ERROR_CODES` set plus the call sites that
+  consult it). Bypasses, missed retry sites, leaked credentials
+  during re-auth, or re-auth-on-105 (permission-denied) regressions
+  would be in scope.
 - DSM session token leakage — passwords are masked in DEBUG logs;
   regressions where a session token, password, or 2FA OTP appears in
   log output, error messages, or persisted state would be in scope.
