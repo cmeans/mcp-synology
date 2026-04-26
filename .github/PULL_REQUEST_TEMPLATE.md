@@ -14,10 +14,10 @@
 
 <!-- Checklist the maintainer can walk to verify the change. -->
 
-- [ ] `uv run pytest tests/<module>/test_<file>.py::test_<name>` — passes
-- [ ] `uv run ruff check src/ tests/` — clean
-- [ ] `uv run ruff format --check src/ tests/` — clean
-- [ ] `uv run mypy src/` — clean
+- [ ] `uv run pytest tests/modules/<area>/test_<file>.py::test_<name>` — passes
+- [ ] `uv run ruff check src/ tests/ scripts/` — clean
+- [ ] `uv run ruff format --check src/ tests/ scripts/` — clean
+- [ ] `uv run mypy src/ scripts/` — clean
 - [ ] Confirm no regression in the affected module
 
 ## CHANGELOG
@@ -28,6 +28,6 @@
   Categories: Added / Changed / Fixed.
 -->
 
-- [ ] Added a `## Unreleased` entry to `CHANGELOG.md`
+- [ ] Added a `## Unreleased` entry to `CHANGELOG.md` under the appropriate Keep-a-Changelog category (Added / Changed / Fixed)
 
 Closes #
