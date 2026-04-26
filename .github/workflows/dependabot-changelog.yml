@@ -8,8 +8,21 @@ name: Dependabot CHANGELOG
 # branch's context with write permissions (Dependabot's pull_request
 # event runs with read-only GITHUB_TOKEN).
 #
+# IMPORTANT: pushes back via a GitHub App installation token rather
+# than secrets.GITHUB_TOKEN. Pushes authenticated with GITHUB_TOKEN
+# do NOT trigger downstream `pull_request` workflows (GitHub's
+# anti-loop policy), which would leave required status checks
+# (lint, typecheck, test, version-sync) unsatisfied on the bot's
+# follow-up commit and block merge under the repo's main-branch
+# ruleset. App-token-authored pushes do trigger those workflows
+# normally.
+#
+# Required repo secrets (operator must configure once):
+#   BOT_APP_ID         — GitHub App ID (numeric)
+#   BOT_APP_PRIVATE_KEY — PEM contents of the App's private key
+#
 # Loop guard: skips if the latest commit on the head branch was
-# authored by `github-actions[bot]` — i.e. our own previous run.
+# authored by the bot itself — i.e. our own previous run.
 #
 # Idempotency: skips if a CHANGELOG entry referencing the PR number
 # already exists.
@@ -19,7 +32,7 @@ on:
     types: [opened, synchronize, reopened]
 
 permissions:
-  contents: write
+  contents: read
   pull-requests: read
 
 jobs:
@@ -27,12 +40,19 @@ jobs:
     if: github.event.pull_request.user.login == 'dependabot[bot]'
     runs-on: ubuntu-latest
     steps:
+      - name: Mint GitHub App installation token
+        id: app-token
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
+        with:
+          app-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+
       - name: Checkout PR branch
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.ref }}
           repository: ${{ github.event.pull_request.head.repo.full_name }}
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ steps.app-token.outputs.token }}
           fetch-depth: 2
 
       - name: Loop guard — skip if last commit was ours
@@ -42,8 +62,8 @@ jobs:
         run: |
           LAST_AUTHOR=$(git log -1 --pretty=%an)
           echo "last_author=$LAST_AUTHOR" >> "$GITHUB_OUTPUT"
-          if [ "$LAST_AUTHOR" = "github-actions[bot]" ]; then
-            echo "Last commit authored by github-actions[bot]; skipping to avoid loop."
+          if [ "$LAST_AUTHOR" = "cmeans-claude-dev[bot]" ]; then
+            echo "Last commit authored by the bot; skipping to avoid loop."
             echo "skip=true" >> "$GITHUB_OUTPUT"
           elif grep -qE "\(#${PR_NUMBER}\)" CHANGELOG.md; then
             echo "CHANGELOG.md already references (#${PR_NUMBER}); skipping."
@@ -55,9 +75,9 @@ jobs:
       - name: Fetch Dependabot metadata
         if: steps.guard.outputs.skip != 'true'
         id: meta
-        uses: dependabot/fetch-metadata@v2
+        uses: dependabot/fetch-metadata@21025c705c08248db411dc16f3619e6b5f9ea21a # v2.5.0
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ steps.app-token.outputs.token }}
 
       - name: Compose and prepend CHANGELOG entry
         if: steps.guard.outputs.skip != 'true'
@@ -65,6 +85,7 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           DEPS_JSON: ${{ steps.meta.outputs.updated-dependencies-json }}
+          DEPENDENCY_GROUP: ${{ steps.meta.outputs.dependency-group }}
           ECOSYSTEM: ${{ steps.meta.outputs.package-ecosystem }}
           UPDATE_TYPE: ${{ steps.meta.outputs.update-type }}
         run: |
@@ -75,7 +96,12 @@ jobs:
 
           pr_number = os.environ["PR_NUMBER"]
           deps_json = os.environ.get("DEPS_JSON") or "[]"
-          ecosystem = os.environ.get("ECOSYSTEM") or "deps"
+          # Prefer the named Dependabot group (matches PR title:
+          # "Bump the <group> group across N directories with M updates").
+          # Fall back to the ecosystem identifier (pip / github-actions / ...).
+          group = (os.environ.get("DEPENDENCY_GROUP") or "").strip()
+          ecosystem = (os.environ.get("ECOSYSTEM") or "deps").strip()
+          label = group if group else ecosystem
           update_type = os.environ.get("UPDATE_TYPE") or "version-update"
 
           deps = json.loads(deps_json)
@@ -97,7 +123,7 @@ jobs:
               tag = " — picks up upstream security advisory; see PR body for CVE links."
 
           entry = (
-              f"- **Bump {ecosystem} group: {summary}** (#{pr_number}){tag}\n"
+              f"- **Bump {label} group: {summary}** (#{pr_number}){tag}\n"
           )
 
           path = pathlib.Path("CHANGELOG.md")
@@ -114,8 +140,6 @@ jobs:
                   break
           if unreleased_idx is None:
               # Insert a fresh `## Unreleased` section after the title.
-              # CHANGELOG.md starts with `# Changelog\n\n`; place the
-              # block between the title and whatever comes next.
               insert_at = 0
               for i, line in enumerate(lines):
                   if line.startswith("# "):
@@ -154,17 +178,23 @@ jobs:
           print(f"Inserted CHANGELOG entry: {entry.strip()}")
           PY
 
-      - name: Commit and push
+      - name: Commit and push (via App token so CI re-fires)
         if: steps.guard.outputs.skip != 'true'
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_BOT_USER_ID: '272174644'
         run: |
           if git diff --quiet CHANGELOG.md; then
             echo "No changes to commit."
             exit 0
           fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Commit author/committer aligns with the App's bot account so
+          # commits are attributed to cmeans-claude-dev[bot]. The numeric
+          # user id is required for GitHub's noreply-email format to
+          # resolve back to the bot account; otherwise commits show up
+          # under the App ID rather than the bot user.
+          git config user.name "cmeans-claude-dev[bot]"
+          git config user.email "${GH_BOT_USER_ID}+cmeans-claude-dev[bot]@users.noreply.github.com"
           git add CHANGELOG.md
           git commit -m "chore(changelog): record dep bumps from #${PR_NUMBER}"
           git push
