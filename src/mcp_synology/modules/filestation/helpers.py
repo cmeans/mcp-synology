@@ -5,6 +5,7 @@ from __future__ import annotations
 import fnmatch
 import logging
 import re
+from datetime import UTC, datetime
 
 from mcp_synology.core.client import DsmClient
 
@@ -109,6 +110,32 @@ def parse_human_size(value: str | int) -> int:
     number = float(match.group(1))
     unit = match.group(2).upper()
     return int(number * _SIZE_UNITS[unit])
+
+
+def parse_mtime(value: str) -> int:
+    """Parse an mtime filter into Unix epoch seconds.
+
+    Accepts ``YYYY-MM-DD``, ISO 8601 datetime (with or without
+    timezone offset), or a numeric epoch-seconds string. Naive
+    datetimes are treated as UTC for stable cross-host behavior.
+
+    Raises ValueError for unrecognized input.
+    """
+    s = value.strip()
+    if s.lstrip("-").isdigit():
+        return int(s)
+    try:
+        dt = datetime.fromisoformat(s)
+    except ValueError as e:
+        msg = (
+            f"Invalid mtime value {value!r}. "
+            "Use ISO 8601 (e.g. '2026-04-01T12:00:00+00:00'), "
+            "a calendar date ('YYYY-MM-DD'), or Unix epoch seconds."
+        )
+        raise ValueError(msg) from e
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return int(dt.timestamp())
 
 
 def file_type_icon(is_dir: bool, filename: str = "", style: str = "emoji") -> str:

@@ -10,6 +10,7 @@ from mcp_synology.modules.filestation.helpers import (
     matches_pattern,
     normalize_path,
     parse_human_size,
+    parse_mtime,
     validate_share_path,
 )
 
@@ -96,6 +97,38 @@ class TestParseHumanSize:
     def test_invalid_unit(self) -> None:
         with pytest.raises(ValueError, match="Invalid size"):
             parse_human_size("500PB")
+
+
+class TestParseMtime:
+    def test_calendar_date_treated_as_utc(self) -> None:
+        # 2026-04-01 00:00:00 UTC = epoch 1775001600
+        assert parse_mtime("2026-04-01") == 1775001600
+
+    def test_iso_8601_with_offset(self) -> None:
+        # 2026-04-01 12:00:00 UTC = epoch 1775044800
+        assert parse_mtime("2026-04-01T12:00:00+00:00") == 1775044800
+
+    def test_iso_8601_with_non_utc_offset(self) -> None:
+        # 2026-04-01 12:00:00 UTC-05:00 = 17:00:00 UTC = epoch 1775062800
+        assert parse_mtime("2026-04-01T12:00:00-05:00") == 1775062800
+
+    def test_naive_iso_8601_treated_as_utc(self) -> None:
+        # No tzinfo → UTC. Same epoch as the +00:00 case.
+        assert parse_mtime("2026-04-01T12:00:00") == 1775044800
+
+    def test_numeric_epoch_string_passthrough(self) -> None:
+        assert parse_mtime("1775044800") == 1775044800
+
+    def test_strips_whitespace(self) -> None:
+        assert parse_mtime("  2026-04-01  ") == 1775001600
+
+    def test_invalid_input(self) -> None:
+        with pytest.raises(ValueError, match="Invalid mtime"):
+            parse_mtime("not_a_date")
+
+    def test_empty_string(self) -> None:
+        with pytest.raises(ValueError, match="Invalid mtime"):
+            parse_mtime("")
 
 
 class TestFileTypeIcon:

@@ -92,10 +92,14 @@ MODULE_INFO = ModuleInfo(
         ToolInfo(
             name="search_files",
             description=(
-                "Search recursively for files by keyword, extension, or size range. "
-                "The pattern parameter is a keyword/substring match on filenames (not glob). "
+                "Search recursively for files by keyword, extension, size, or "
+                "modification date. The pattern parameter is a keyword/substring "
+                "match on filenames (not glob). "
                 'Use extension for file type filtering (e.g., extension="mkv"). '
                 'Accepts human-readable sizes like "500MB". '
+                'mtime_from / mtime_to accept ISO 8601 ("2026-04-01T12:00:00+00:00"), '
+                'a calendar date ("YYYY-MM-DD"), or Unix epoch seconds; naive dates '
+                "are treated as UTC. "
                 "For directory contents or sizes, use list_files or get_dir_size instead."
             ),
             permission_tier=PermissionTier.READ,
@@ -341,6 +345,8 @@ def register(ctx: RegisterContext) -> None:
             filetype: str = "all",
             size_from: str | None = None,
             size_to: str | None = None,
+            mtime_from: str | None = None,
+            mtime_to: str | None = None,
             exclude_pattern: str | None = None,
             recursive: bool = True,
             limit: int = 500,
@@ -355,6 +361,8 @@ def register(ctx: RegisterContext) -> None:
                     filetype=filetype,
                     size_from=size_from,
                     size_to=size_to,
+                    mtime_from=mtime_from,
+                    mtime_to=mtime_to,
                     exclude_pattern=exclude_pattern,
                     recursive=recursive,
                     limit=limit,
