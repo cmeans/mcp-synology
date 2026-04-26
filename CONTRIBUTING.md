@@ -59,13 +59,13 @@ For anything bigger than a one-line fix:
 ## Development setup
 
 ```bash
-uv sync --extra dev                          # install runtime + dev dependencies
-uv run pytest                                # run unit + module tests
+uv sync --extra dev                                      # install runtime + dev dependencies
+uv run pytest                                            # run unit + module tests
 uv run pytest tests/modules/filestation/test_listing.py  # single test file
-uv run pytest -k "test_list_shares"          # single test by name
-uv run ruff check src/ tests/                # lint
-uv run ruff format --check src/ tests/       # format check
-uv run mypy src/                             # typecheck (strict mode)
+uv run pytest -k "test_list_shares"                      # single test by name
+uv run ruff check src/ tests/ scripts/                   # lint
+uv run ruff format --check src/ tests/ scripts/          # format check
+uv run mypy src/ scripts/                                # typecheck (strict mode)
 ```
 
 Tests are mocked at the HTTP boundary (`respx`), so they don't reach
@@ -103,8 +103,8 @@ Every PR must:
 - **Link the issue** with `Closes #N` in the PR body so merging
   auto-closes it.
 - **Pass CI locally first** — run `uv run pytest`, `uv run ruff
-  check src/ tests/`, and `uv run mypy src/` and confirm green
-  before pushing.
+  check src/ tests/ scripts/`, and `uv run mypy src/ scripts/`
+  and confirm green before pushing.
 - **Write a clear commit message.** PRs are squash-merged, so your
   PR title becomes the commit subject and your PR body becomes the
   commit body. Write both as if someone reading `git log` a year
@@ -123,9 +123,15 @@ Two required sections:
     A checklist the maintainer can walk to verify the change:
 
     - [ ] Run `uv run pytest tests/modules/<area>/test_<module>.py::test_<name>` — passes
-    - [ ] `uv run ruff check src/ tests/` — clean
-    - [ ] `uv run mypy src/` — clean
+    - [ ] `uv run ruff check src/ tests/ scripts/` — clean
+    - [ ] `uv run ruff format --check src/ tests/ scripts/` — clean
+    - [ ] `uv run mypy src/ scripts/` — clean
     - [ ] Confirm no regression in the affected module
+
+    ## CHANGELOG
+
+    - [ ] Added a `## Unreleased` entry to `CHANGELOG.md` under the
+      appropriate Keep-a-Changelog category (Added / Changed / Fixed)
 
     Closes #N
 
