@@ -1,0 +1,200 @@
+name: Dependabot CHANGELOG
+
+# Auto-appends a CHANGELOG entry to Dependabot-authored PRs so they
+# satisfy the project rule documented in CLAUDE.md § "Adding a
+# CHANGELOG entry on every PR" without manual intervention.
+#
+# Triggered on pull_request_target so the workflow runs in the base
+# branch's context with write permissions (Dependabot's pull_request
+# event runs with read-only GITHUB_TOKEN).
+#
+# IMPORTANT: pushes back via a GitHub App installation token rather
+# than secrets.GITHUB_TOKEN. Pushes authenticated with GITHUB_TOKEN
+# do NOT trigger downstream `pull_request` workflows (GitHub's
+# anti-loop policy), which would leave required status checks
+# (lint, typecheck, test, version-sync) unsatisfied on the bot's
+# follow-up commit and block merge under the repo's main-branch
+# ruleset. App-token-authored pushes do trigger those workflows
+# normally.
+#
+# Required repo secrets (operator must configure once):
+#   BOT_APP_ID         — GitHub App ID (numeric)
+#   BOT_APP_PRIVATE_KEY — PEM contents of the App's private key
+#
+# Loop guard: skips if the latest commit on the head branch was
+# authored by the bot itself — i.e. our own previous run.
+#
+# Idempotency: skips if a CHANGELOG entry referencing the PR number
+# already exists.
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  changelog:
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mint GitHub App installation token
+        id: app-token
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
+        with:
+          app-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+
+      - name: Checkout PR branch
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          token: ${{ steps.app-token.outputs.token }}
+          fetch-depth: 2
+
+      - name: Loop guard — skip if last commit was ours
+        id: guard
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          LAST_AUTHOR=$(git log -1 --pretty=%an)
+          echo "last_author=$LAST_AUTHOR" >> "$GITHUB_OUTPUT"
+          if [ "$LAST_AUTHOR" = "cmeans-claude-dev[bot]" ]; then
+            echo "Last commit authored by the bot; skipping to avoid loop."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          elif grep -qE "\(#${PR_NUMBER}\)" CHANGELOG.md; then
+            echo "CHANGELOG.md already references (#${PR_NUMBER}); skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Fetch Dependabot metadata
+        if: steps.guard.outputs.skip != 'true'
+        id: meta
+        uses: dependabot/fetch-metadata@21025c705c08248db411dc16f3619e6b5f9ea21a # v2.5.0
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+
+      - name: Compose and prepend CHANGELOG entry
+        if: steps.guard.outputs.skip != 'true'
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          DEPS_JSON: ${{ steps.meta.outputs.updated-dependencies-json }}
+          DEPENDENCY_GROUP: ${{ steps.meta.outputs.dependency-group }}
+          ECOSYSTEM: ${{ steps.meta.outputs.package-ecosystem }}
+          UPDATE_TYPE: ${{ steps.meta.outputs.update-type }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import pathlib
+
+          pr_number = os.environ["PR_NUMBER"]
+          deps_json = os.environ.get("DEPS_JSON") or "[]"
+          # Prefer the named Dependabot group (matches PR title:
+          # "Bump the <group> group across N directories with M updates").
+          # Fall back to the ecosystem identifier (pip / github-actions / ...).
+          group = (os.environ.get("DEPENDENCY_GROUP") or "").strip()
+          ecosystem = (os.environ.get("ECOSYSTEM") or "deps").strip()
+          label = group if group else ecosystem
+          update_type = os.environ.get("UPDATE_TYPE") or "version-update"
+
+          deps = json.loads(deps_json)
+          if not deps:
+              # Nothing to record — exit cleanly.
+              print("No dependencies in metadata; skipping.")
+              raise SystemExit(0)
+
+          parts = [
+              f"{d['dependencyName']} {d.get('prevVersion', '?')}→{d.get('newVersion', '?')}"
+              for d in deps
+          ]
+          summary = ", ".join(parts)
+
+          # Severity hint from update-type — security updates are the
+          # interesting category at release time.
+          tag = ""
+          if "security" in update_type:
+              tag = " — picks up upstream security advisory; see PR body for CVE links."
+
+          entry = (
+              f"- **Bump {label} group: {summary}** (#{pr_number}){tag}\n"
+          )
+
+          path = pathlib.Path("CHANGELOG.md")
+          text = path.read_text()
+          lines = text.splitlines(keepends=True)
+
+          # Locate `## Unreleased` block and the `### Changed` subsection
+          # within it. If `### Changed` is absent, create it right after
+          # `## Unreleased`.
+          unreleased_idx = None
+          for i, line in enumerate(lines):
+              if line.strip() == "## Unreleased":
+                  unreleased_idx = i
+                  break
+          if unreleased_idx is None:
+              # Insert a fresh `## Unreleased` section after the title.
+              insert_at = 0
+              for i, line in enumerate(lines):
+                  if line.startswith("# "):
+                      insert_at = i + 1
+                      break
+              new_block = ["\n", "## Unreleased\n", "\n", "### Changed\n", "\n", entry]
+              lines = lines[:insert_at] + new_block + lines[insert_at:]
+          else:
+              # Search for `### Changed` between Unreleased and next `## ` heading.
+              changed_idx = None
+              end_idx = len(lines)
+              for j in range(unreleased_idx + 1, len(lines)):
+                  if lines[j].startswith("## "):
+                      end_idx = j
+                      break
+                  if lines[j].strip() == "### Changed":
+                      changed_idx = j
+                      break
+              if changed_idx is not None:
+                  # Insert entry directly after the `### Changed` header
+                  # (after the blank line that follows it, if present).
+                  insert_at = changed_idx + 1
+                  if insert_at < end_idx and lines[insert_at].strip() == "":
+                      insert_at += 1
+                  lines.insert(insert_at, entry)
+              else:
+                  # `### Changed` doesn't exist within Unreleased — create it.
+                  insert_at = unreleased_idx + 1
+                  if insert_at < end_idx and lines[insert_at].strip() == "":
+                      insert_at += 1
+                  block = ["### Changed\n", "\n", entry, "\n"]
+                  for k, ln in enumerate(block):
+                      lines.insert(insert_at + k, ln)
+
+          path.write_text("".join(lines))
+          print(f"Inserted CHANGELOG entry: {entry.strip()}")
+          PY
+
+      - name: Commit and push (via App token so CI re-fires)
+        if: steps.guard.outputs.skip != 'true'
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_BOT_USER_ID: '272174644'
+        run: |
+          if git diff --quiet CHANGELOG.md; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          # Commit author/committer aligns with the App's bot account so
+          # commits are attributed to cmeans-claude-dev[bot]. The numeric
+          # user id is required for GitHub's noreply-email format to
+          # resolve back to the bot account; otherwise commits show up
+          # under the App ID rather than the bot user.
+          git config user.name "cmeans-claude-dev[bot]"
+          git config user.email "${GH_BOT_USER_ID}+cmeans-claude-dev[bot]@users.noreply.github.com"
+          git add CHANGELOG.md
+          git commit -m "chore(changelog): record dep bumps from #${PR_NUMBER}"
+          git push
