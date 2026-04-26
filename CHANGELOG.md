@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed
+
+- **Dogfood download badge: swap shields.io built-in for `pypi-badges.intfar.com`** (#62) — replaces `https://img.shields.io/pypi/dm/mcp-synology` with `https://img.shields.io/endpoint?url=https%3A%2F%2Fpypi-badges.intfar.com%2Fmcp-synology%2Fdownloads-30d-non-ci.json` in `README.md` line 16. Badge endpoint is the dogfooded service from [`cmeans/pypi-winnow-downloads`](https://github.com/cmeans/pypi-winnow-downloads), which winnows out CI traffic from the BigQuery PyPI download data. Badge link target updated to the upstream repo so the "powered by" attribution is implicit (no acknowledgements-section bloat). Resulting label reads "pip*/uv/poetry/pdm (30d)" instead of the generic "Downloads" — accurately reflecting the non-CI scope.
+
 ### Fixed
 
 - **Auto-CHANGELOG workflow now records correct versions on grouped Dependabot PRs** (#60) — bumps `dependabot/fetch-metadata` from `v2.5.0` (SHA `21025c70…`) to `v3.1.0` (SHA `25dd0e34…`). Surfaced by live PR #59 (github-actions group, 8 updates), which produced an entry with empty version arrows: `actions/checkout →, astral-sh/setup-uv →, ...`. Root cause: `fetch-metadata@v2.5.0` returns empty-string `prevVersion`/`newVersion` for every package in a grouped update, so the `.get(key, '?')` fallback in the workflow's inline Python didn't trigger (the keys were present, just empty). [Upstream PR #632](https://github.com/dependabot/fetch-metadata/pull/632) (shipped in v3.0.0, refined in v3.1.0) added body-metadata parsing for multi-dependency PRs, which is exactly the fix for this gap. SHA pin updated; no inline-Python changes needed. v3 also requires Node.js 24, which addresses the deprecation warning the v2 line was emitting on every run.
