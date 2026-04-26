@@ -14,6 +14,7 @@
 
 ### Changed
 
+- **Bump github-actions group: actions/checkout 4→6, astral-sh/setup-uv 5→7, actions/setup-python 5→6, codecov/codecov-action 4→6, actions/upload-artifact 4→7, actions/download-artifact 4→8, actions/cache 4→5** (#61)
 - **Bump uv group: pytest 9.0.2→9.0.3, cryptography 46.0.5→46.0.7, python-multipart 0.0.22→0.0.26, requests 2.32.5→2.33.0** (#55) — first Dependabot-authored PR on the repo. Direct dev dep: `pytest`. Transitive bumps (no `pyproject.toml` constraints widened): `cryptography` via `pyjwt` + `secretstorage`, `python-multipart` via `mcp`, `requests` via `docker` (vdsm extra only). Picks up [CVE-2026-39892](https://github.com/pyca/cryptography/security/advisories) (cryptography buffer overflow; 46.0.7 wheels also ship OpenSSL 3.5.6) and [CVE-2025-71176](https://github.com/pytest-dev/pytest/security/advisories) (pytest insecure tmpdir). `requests` 2.33.0 drops Python 3.9 support — irrelevant for this project (`requires-python = ">=3.11"`). All 499 unit tests pass at 96.04% coverage on the bumped lockfile.
 
 ### Fixed
