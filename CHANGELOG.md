@@ -4,7 +4,7 @@
 
 ### Added
 
-- **Dependabot config: weekly grouped updates for pip + github-actions** (#TBD) — adds `.github/dependabot.yml` covering Python deps (pyproject.toml + uv.lock) and GitHub Actions referenced from `.github/workflows/*.yml`. Schedule is weekly Monday 06:00 America/Chicago, single grouped PR per ecosystem, labels `dependencies` + `python` / `github-actions`, commit prefix `chore(deps)`. No `docker` ecosystem because mcp-synology has no Dockerfile. Pattern ported from `cmeans/pypi-winnow-downloads#21`.
+- **Dependabot config: weekly grouped updates for pip + github-actions** (#57) — adds `.github/dependabot.yml` covering Python deps (pyproject.toml + uv.lock) and GitHub Actions referenced from `.github/workflows/*.yml`. Schedule is weekly Monday 06:00 America/Chicago, single grouped PR per ecosystem, labels `dependencies` + `python` / `github-actions`, commit prefix `chore(deps)`. No `docker` ecosystem because mcp-synology has no Dockerfile. Pattern ported from `cmeans/pypi-winnow-downloads#21`.
 
 ### Fixed
 
