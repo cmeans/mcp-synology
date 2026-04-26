@@ -21,9 +21,11 @@
 version: 2
 updates:
   # Python deps: pyproject.toml + uv.lock at the repo root.
-  # Covers runtime (mcp, httpx, keyring, pydantic, PyYAML, click) and
-  # dev extras (pytest, pytest-cov, pytest-asyncio, respx, ruff,
-  # mypy, types-PyYAML).
+  # Covers runtime (mcp, httpx, keyring, pydantic, PyYAML, click),
+  # the [dev] extra (pytest, pytest-cov, pytest-asyncio, respx,
+  # ruff, mypy, types-PyYAML), and the [vdsm] extra (testcontainers,
+  # playwright). Dependabot picks up every package referenced in
+  # pyproject.toml regardless of which extra it lives under.
   - package-ecosystem: "pip"
     directory: "/"
     schedule:
@@ -44,8 +46,8 @@ updates:
       include: "scope"
 
   # GitHub Actions used by .github/workflows/*.yml (ci, vdsm, publish,
-  # test-publish, qa-gate, pr-labels, pr-labels-ci) and any
-  # composite/local actions under .github/actions/.
+  # test-publish, qa-gate, pr-labels, pr-labels-ci) and the local
+  # composite action at .github/actions/install-mcp-publisher.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
