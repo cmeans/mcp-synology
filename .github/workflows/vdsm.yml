@@ -27,7 +27,7 @@ jobs:
     continue-on-error: true
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Verify /dev/kvm is available
         run: |
@@ -35,7 +35,7 @@ jobs:
           sudo chmod 666 /dev/kvm
           echo "KVM available"
 
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.12"
 
@@ -54,7 +54,7 @@ jobs:
       # cache key manually or add the manifest to hashFiles.
       - name: Restore golden image cache
         id: cache-golden
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             .vdsm/golden/dsm-${{ env.DSM_VERSION }}.tar.gz
@@ -75,7 +75,7 @@ jobs:
 
       - name: Upload logs on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: vdsm-failure-logs
           path: |
