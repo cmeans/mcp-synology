@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- **Dependabot config: weekly grouped updates for pip + github-actions** (#TBD) — adds `.github/dependabot.yml` covering Python deps (pyproject.toml + uv.lock) and GitHub Actions referenced from `.github/workflows/*.yml`. Schedule is weekly Monday 06:00 America/Chicago, single grouped PR per ecosystem, labels `dependencies` + `python` / `github-actions`, commit prefix `chore(deps)`. No `docker` ecosystem because mcp-synology has no Dockerfile. Pattern ported from `cmeans/pypi-winnow-downloads#21`.
+
 ### Fixed
 
 - **Harden `pr-labels-ci.yml` against shell injection via fork-PR branch names** (#53) — closes #52. Cascades the `env:` pattern from `cmeans/mcp-clipboard#88` into this repo's `.github/workflows/pr-labels-ci.yml`. Both the `on-ci-pass` and `on-ci-fail` jobs previously inlined `${{ github.event.workflow_run.head_branch }}` directly inside `run:` blocks. `head_branch` is contributor-controlled on fork PRs and git refnames allow shell metacharacters (`$`, backtick, `;`, `&`, `|`, etc.), so a malicious fork branch name would render as directly-executed shell once the expression was substituted. `REPO`, `RUN_ID`, and `HEAD_BRANCH` now come through step-level `env:` blocks and the shell references them as `$REPO` / `$RUN_ID` / `$HEAD_BRANCH`. Also avoids the latent parser trap documented in `cmeans/yt-dont-recommend#28`: GHA substitutes `${{ ... }}` inside `run:` blocks before the shell sees them *including within shell comments*, and the queue-time parser rejects an empty expression on `workflow_dispatch` — the explanatory comments therefore describe the concept ("not a direct GHA expression") rather than showing the literal sequence. Verified locally that `yaml.safe_load` parses cleanly and that no `${{ ... }}` substitution survives inside any `run:` body.
