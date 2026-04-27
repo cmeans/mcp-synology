@@ -120,6 +120,54 @@ def integration_config(
 
 
 @pytest.fixture
+async def refresh_search_index(
+    vdsm_container: VirtualDsmContainer,
+    dsm_version: str,
+) -> Any:
+    """Override the no-op fixture from test_integration.py.
+
+    Invokes `synoindex -A -d <path>` via SSH on the vdsm container so
+    runtime-created directories are immediately discoverable by DSM's
+    search service. Without this, DSM Universal Search on non-indexed
+    shares takes several minutes (sometimes longer than any reasonable
+    test retry budget) to crawl freshly-created subdirectories.
+
+    Best-effort: a non-zero return from synoindex is logged but not
+    raised — the test's existing retry loop is the safety net for
+    indexer hiccups.
+    """
+    import asyncio
+
+    from tests.vdsm.ssh import ssh_exec
+
+    meta = load_golden_meta(dsm_version)
+    admin_password = str(meta.get("admin_password", ""))
+    host = vdsm_container.host
+    port = vdsm_container.ssh_port
+
+    async def _refresh(path: str) -> None:
+        # Translate the share-relative path the test uses (e.g.
+        # "/testshare/Documents/Bambu Studio") into the on-volume path
+        # synoindex needs (e.g. "/volume1/testshare/Documents/Bambu Studio").
+        on_volume = f"/volume1{path}"
+        cmd = f"/usr/syno/bin/synoindex -A -d '{on_volume}'"
+        rc, out = await asyncio.to_thread(
+            ssh_exec, host, port, admin_password, cmd, sudo=True, timeout=20
+        )
+        if rc != 0:
+            logger.warning(
+                "synoindex -A -d %r returned rc=%d (output: %s) — relying on test retries",
+                on_volume,
+                rc,
+                out,
+            )
+        else:
+            logger.info("synoindex registered %s with DSM search index", on_volume)
+
+    return _refresh
+
+
+@pytest.fixture
 async def nas_client(
     vdsm_config: tuple[AppConfig, dict[str, str]],
     dsm_version: str,
