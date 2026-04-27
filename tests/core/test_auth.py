@@ -132,6 +132,117 @@ class TestCredentialResolution:
         ):
             auth._resolve_credentials()
 
+    # --- Empty / whitespace-only credentials at each strategy level (closes #35) ---
+    #
+    # The bug was that whitespace-only credentials (e.g. `auth: {username: "   "}`
+    # mid-edit) flowed straight into login() as bogus values, surfacing as a
+    # generic DSM 400. Empty strings already fell through correctly; whitespace
+    # did not. The fix normalizes empty + whitespace at every read site
+    # (env / config / keyring) via _present_or_none.
+
+    def test_whitespace_config_credentials_fall_through(self) -> None:
+        """Whitespace-only plaintext config credentials fall through, raise clean error."""
+        config = _make_config(auth={"username": "   ", "password": "\t"})
+        client = _make_client()
+        auth = AuthManager(config, client)
+
+        with (
+            patch.dict(os.environ, _clean_env(), clear=True),
+            patch("mcp_synology.core.auth.kr", _no_keyring()),
+            pytest.raises(AuthenticationError, match="No credentials"),
+        ):
+            auth._resolve_credentials()
+
+    def test_whitespace_env_credentials_fall_through(self) -> None:
+        """Whitespace-only env credentials are ignored, fall through to next strategy."""
+        config = _make_config()
+        client = _make_client()
+        auth = AuthManager(config, client)
+
+        env = {
+            **_clean_env(),
+            "SYNOLOGY_USERNAME": "   ",
+            "SYNOLOGY_PASSWORD": "\t\n",
+        }
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch("mcp_synology.core.auth.kr", _no_keyring()),
+            pytest.raises(AuthenticationError, match="No credentials"),
+        ):
+            auth._resolve_credentials()
+
+    def test_whitespace_keyring_credentials_fall_through(self) -> None:
+        """Whitespace-only keyring values are ignored, raise clean error."""
+        config = _make_config()
+        client = _make_client()
+        auth = AuthManager(config, client)
+
+        with (
+            patch.dict(os.environ, _clean_env(), clear=True),
+            patch("mcp_synology.core.auth.kr", _keyring_with("   ", "\t", "  ")),
+            pytest.raises(AuthenticationError, match="No credentials"),
+        ):
+            auth._resolve_credentials()
+
+    def test_empty_string_env_credentials_fall_through(self) -> None:
+        """Empty-string env credentials fall through (regression coverage)."""
+        config = _make_config(auth={"username": "", "password": ""})
+        client = _make_client()
+        auth = AuthManager(config, client)
+
+        env = {
+            **_clean_env(),
+            "SYNOLOGY_USERNAME": "",
+            "SYNOLOGY_PASSWORD": "",
+        }
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch("mcp_synology.core.auth.kr", _no_keyring()),
+            pytest.raises(AuthenticationError, match="No credentials"),
+        ):
+            auth._resolve_credentials()
+
+    def test_whitespace_env_falls_through_to_valid_keyring(self) -> None:
+        """Whitespace-only env doesn't shadow a valid keyring entry."""
+        config = _make_config()
+        client = _make_client()
+        auth = AuthManager(config, client)
+
+        env = {
+            **_clean_env(),
+            "SYNOLOGY_USERNAME": "   ",
+        }
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch(
+                "mcp_synology.core.auth.kr",
+                _keyring_with("kr_user", "kr_pass", "kr_device"),
+            ),
+        ):
+            username, password, device_id = auth._resolve_credentials()
+
+        assert username == "kr_user"
+        assert password == "kr_pass"
+        assert device_id == "kr_device"
+
+    def test_valid_credentials_with_internal_padding_preserved(self) -> None:
+        """Credentials with leading/trailing spaces but real content are NOT stripped."""
+        # If a user's actual password has padding, _present_or_none keeps it.
+        config = _make_config(auth={"username": "  alice  ", "password": "  pwd123  "})
+        client = _make_client()
+        auth = AuthManager(config, client)
+
+        with (
+            patch.dict(os.environ, _clean_env(), clear=True),
+            patch("mcp_synology.core.auth.kr", _no_keyring()),
+        ):
+            username, password, _ = auth._resolve_credentials()
+
+        # Original padding is preserved — we filter out empty/whitespace-only,
+        # we don't strip meaningful values.
+        assert username == "  alice  "
+        assert password == "  pwd123  "
+
 
 class TestLogin:
     @respx.mock

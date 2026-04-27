@@ -27,6 +27,17 @@ logger = logging.getLogger(__name__)
 _ERROR_2FA_REQUIRED = 403
 
 
+def _present_or_none(value: str | None) -> str | None:
+    """Return value unchanged if it contains non-whitespace content; else None.
+
+    Used to filter empty / whitespace-only credentials at every read site
+    (env vars, plaintext config, OS keyring) so they fall through the
+    resolution chain instead of flowing into `login()` as bogus credentials
+    that surface as a generic DSM 400.
+    """
+    return value if (value and value.strip()) else None
+
+
 class AuthManager:
     """Manages DSM authentication and session lifecycle."""
 
@@ -62,25 +73,27 @@ class AuthManager:
         device_id: str | None = None
 
         # 1. Environment variables (highest priority — explicit override)
-        username = os.environ.get("SYNOLOGY_USERNAME")
+        # _present_or_none normalizes empty / whitespace-only to None so they
+        # fall through to the next strategy instead of becoming bogus creds.
+        username = _present_or_none(os.environ.get("SYNOLOGY_USERNAME"))
         if username:
             logger.debug("Username from env var SYNOLOGY_USERNAME: %s", username)
-        password = os.environ.get("SYNOLOGY_PASSWORD")
+        password = _present_or_none(os.environ.get("SYNOLOGY_PASSWORD"))
         if password:
             logger.debug("Password from env var SYNOLOGY_PASSWORD")
-        device_id = os.environ.get("SYNOLOGY_DEVICE_ID")
+        device_id = _present_or_none(os.environ.get("SYNOLOGY_DEVICE_ID"))
         if device_id:
             logger.debug("Device ID from env var SYNOLOGY_DEVICE_ID")
 
         # 2. Config file (explicit, if present)
-        if not username and self._config.auth.username:
-            username = self._config.auth.username
+        if not username and (cfg_user := _present_or_none(self._config.auth.username)):
+            username = cfg_user
             logger.debug("Username from config file: %s", username)
-        if not password and self._config.auth.password:
-            password = self._config.auth.password
+        if not password and (cfg_pass := _present_or_none(self._config.auth.password)):
+            password = cfg_pass
             logger.debug("Password from config file (plaintext)")
-        if not device_id and self._config.auth.device_id:
-            device_id = self._config.auth.device_id
+        if not device_id and (cfg_dev := _present_or_none(self._config.auth.device_id)):
+            device_id = cfg_dev
             logger.debug("Device ID from config file")
 
         # 3. OS keyring (implicit default — set by 'mcp-synology setup')
@@ -102,9 +115,9 @@ class AuthManager:
             try:
                 service = f"mcp-synology/{self._config.instance_id or 'default'}"
                 logger.debug("Trying keyring service: %s", service)
-                kr_user = kr.get_password(service, "username")
-                kr_pass = kr.get_password(service, "password")
-                kr_device = kr.get_password(service, "device_id")
+                kr_user = _present_or_none(kr.get_password(service, "username"))
+                kr_pass = _present_or_none(kr.get_password(service, "password"))
+                kr_device = _present_or_none(kr.get_password(service, "device_id"))
                 if kr_user and not username:
                     username = kr_user
                     logger.debug("Username from keyring: %s", username)
