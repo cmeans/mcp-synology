@@ -199,3 +199,37 @@ class TestSearchFiles:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
 
         await search_files(mock_client, folder_path="/video", size_from="500MB")
+
+    @respx.mock
+    async def test_search_with_mtime_filter(self, mock_client: DsmClient) -> None:
+        captured: dict[str, str] = {}
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            if params.get("method") == "start":
+                # Capture so the assertions can verify epoch conversion.
+                captured.update(params)
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "search-5"}})
+            if params.get("method") == "list":
+                return httpx.Response(
+                    200,
+                    json={
+                        "success": True,
+                        "data": {"files": [], "finished": True, "total": 0},
+                    },
+                )
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+
+        # Calendar date for mtime_from, full ISO 8601 with offset for mtime_to.
+        await search_files(
+            mock_client,
+            folder_path="/video",
+            mtime_from="2026-04-01",
+            mtime_to="2026-04-01T12:00:00+00:00",
+        )
+
+        # Both lands as Unix-epoch-seconds strings in DSM start params.
+        assert captured.get("mtime_from") == "1775001600"  # 2026-04-01 00:00 UTC
+        assert captured.get("mtime_to") == "1775044800"  # 2026-04-01 12:00 UTC

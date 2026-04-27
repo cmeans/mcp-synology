@@ -19,6 +19,7 @@ from mcp_synology.modules.filestation.helpers import (
     matches_pattern,
     normalize_path,
     parse_human_size,
+    parse_mtime,
 )
 
 if TYPE_CHECKING:
@@ -102,9 +103,9 @@ async def search_files(
     if size_to is not None:
         start_params["size_to"] = str(parse_human_size(size_to))
     if mtime_from:
-        start_params["mtime_from"] = mtime_from
+        start_params["mtime_from"] = str(parse_mtime(mtime_from))
     if mtime_to:
-        start_params["mtime_to"] = mtime_to
+        start_params["mtime_to"] = str(parse_mtime(mtime_to))
 
     try:
         start_data = await client.request(
