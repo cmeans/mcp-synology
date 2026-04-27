@@ -275,6 +275,28 @@ def _synthesize_env_config() -> AppConfig | None:
     return config
 
 
+def format_validation_error(exc: Any) -> str:
+    """Render a pydantic.ValidationError as a multi-line user-friendly block.
+
+    Replaces pydantic's default multi-line traceback-style block with a
+    list of `<dotted.location>: <message>` lines under a one-line header.
+    Caller still wraps in a `click.echo(... fg='red')` + `sys.exit(1)` to
+    match the project's standard CLI error envelope.
+    """
+    errors = exc.errors()
+    if not errors:
+        return f"Configuration validation failed: {exc}"
+    lines = [f"Configuration validation failed ({len(errors)} error(s)):"]
+    for err in errors:
+        loc_parts = [str(p) for p in err.get("loc", ())]
+        loc = ".".join(loc_parts) if loc_parts else "<root>"
+        msg = err.get("msg", "validation error")
+        input_value = err.get("input")
+        suffix = f" (got {input_value!r})" if input_value not in (None, "") else ""
+        lines.append(f"  - {loc}: {msg}{suffix}")
+    return "\n".join(lines)
+
+
 def load_config(path: str | Path | None = None) -> AppConfig:
     """Load, merge, validate, and return the application config.
 

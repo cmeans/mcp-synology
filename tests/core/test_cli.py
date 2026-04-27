@@ -106,6 +106,72 @@ class TestCli:
         assert "Error:" in result.output
         assert "Traceback" not in result.output
 
+    # --- Pydantic ValidationError handling (closes #34) ---
+    #
+    # Same pattern as the malformed-YAML tests above, exercised at all four
+    # load_config() call sites. The reproducer is a config that parses as
+    # valid YAML but fails AppConfig's top-level Pydantic validation —
+    # AppConfig declares `extra="forbid"`, so an unknown top-level key
+    # triggers a ValidationError reliably regardless of which fields the
+    # config sets.
+
+    _BAD_VALIDATION_CONFIG = (
+        "schema_version: 1\n"
+        "connection:\n"
+        "  host: 1.2.3.4\n"
+        "modules:\n"
+        "  filestation: {}\n"
+        "totally_unknown_top_level_field: oops\n"
+    )
+
+    def test_serve_validation_error_clean_error(self, tmp_path: Path) -> None:
+        """serve with a Pydantic-invalid config exits 1 with no traceback."""
+        config_file = tmp_path / "bad.yaml"
+        config_file.write_text(self._BAD_VALIDATION_CONFIG)
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["serve", "-c", str(config_file)])
+        assert result.exit_code == 1
+        assert "Error: Configuration validation failed" in result.output
+        assert "totally_unknown_top_level_field" in result.output
+        assert "Traceback" not in result.output
+
+    def test_check_validation_error_clean_error(self, tmp_path: Path) -> None:
+        """check with a Pydantic-invalid config exits 1 with no traceback."""
+        config_file = tmp_path / "bad.yaml"
+        config_file.write_text(self._BAD_VALIDATION_CONFIG)
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["check", "-c", str(config_file)])
+        assert result.exit_code == 1
+        assert "Error: Configuration validation failed" in result.output
+        assert "totally_unknown_top_level_field" in result.output
+        assert "Traceback" not in result.output
+
+    def test_setup_validation_error_clean_error(self, tmp_path: Path) -> None:
+        """setup -c with a Pydantic-invalid config exits 1 with no traceback."""
+        config_file = tmp_path / "bad.yaml"
+        config_file.write_text(self._BAD_VALIDATION_CONFIG)
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["setup", "-c", str(config_file)])
+        assert result.exit_code == 1
+        assert "Error: Configuration validation failed" in result.output
+        assert "totally_unknown_top_level_field" in result.output
+        assert "Traceback" not in result.output
+
+    def test_setup_discovery_validation_error_clean_error(self, tmp_path: Path) -> None:
+        """setup (no -c) discovery path: Pydantic-invalid config exits cleanly."""
+        config_file = tmp_path / "discovered.yaml"
+        config_file.write_text(self._BAD_VALIDATION_CONFIG)
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["setup"], env={"MCP_SYNOLOGY_CONFIG": str(config_file)})
+        assert result.exit_code == 1
+        assert "Error: Configuration validation failed" in result.output
+        assert "totally_unknown_top_level_field" in result.output
+        assert "Traceback" not in result.output
+
     def test_short_config_flag_serve(self) -> None:
         runner = CliRunner()
         result = runner.invoke(main, ["serve", "-c", "/nonexistent/config.yaml"])
