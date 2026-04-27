@@ -105,11 +105,17 @@ def serve(config: str | None) -> None:
     """Start the MCP server (launched by Claude Desktop)."""
     _init_early_logging()
 
-    from mcp_synology.core.config import load_config
+    from pydantic import ValidationError
+
+    from mcp_synology.core.config import format_validation_error, load_config
     from mcp_synology.server import create_server
 
     try:
         app_config = load_config(config)
+    except ValidationError as e:
+        # Must precede ValueError — pydantic.ValidationError subclasses it.
+        click.echo(click.style(f"Error: {format_validation_error(e)}", fg="red"), err=True)
+        sys.exit(1)
     except (FileNotFoundError, ValueError, yaml.YAMLError) as e:
         click.echo(click.style(f"Error: {e}", fg="red"), err=True)
         sys.exit(1)
