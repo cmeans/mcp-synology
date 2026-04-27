@@ -18,8 +18,6 @@ JavaScript dispatch or Playwright's force=True to bypass overlay interception.
 from __future__ import annotations
 
 import logging
-import os
-import subprocess
 import time
 from pathlib import Path
 from typing import Any
@@ -361,11 +359,7 @@ def _create_user_via_ui(page: Any, username: str, password: str) -> None:
 
 _SYNOSHARE = "/usr/syno/sbin/synoshare"
 
-_SSH_OPTS = (
-    "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
-    "-o PreferredAuthentications=password -o PubkeyAuthentication=no "
-    "-o ConnectTimeout=10"
-)
+from tests.vdsm.ssh import ssh_exec as _ssh_exec  # noqa: E402
 
 
 def _enable_ssh(base_url: str, admin_user: str, admin_password: str) -> None:
@@ -426,37 +420,10 @@ def _ssh(
 ) -> tuple[int, str]:
     """Run a command inside the DSM guest via SSH.
 
-    Password is passed via SSHPASS env var (for sshpass) and piped to
-    sudo -S via stdin when sudo=True.  shlex.quote is used on the password
-    to prevent shell injection if the password contains special characters.
+    Thin wrapper for the shared helper in tests/vdsm/ssh.py — kept so
+    callers in this module don't have to change.
     """
-    import shlex
-
-    env = os.environ.copy()
-    env["SSHPASS"] = password
-    quoted_pw = shlex.quote(password)
-    remote_cmd = f"echo {quoted_pw} | sudo -S {cmd} 2>&1" if sudo else f"{cmd} 2>&1"
-    result = subprocess.run(
-        f'sshpass -e ssh {_SSH_OPTS} -p {port} mcpadmin@{host} "{remote_cmd}"',
-        shell=True,  # noqa: S602
-        capture_output=True,
-        text=True,
-        timeout=30,
-        env=env,
-    )
-    # Strip sudo lecture and password prompt from output
-    lines = result.stdout.strip().split("\n")
-    filtered = [
-        ln
-        for ln in lines
-        if not ln.startswith("Password:")
-        and "lecture" not in ln
-        and not ln.strip().startswith("#")
-        and "Respect the privacy" not in ln
-        and "Think before you type" not in ln
-        and "great power" not in ln
-    ]
-    return result.returncode, "\n".join(filtered).strip()
+    return _ssh_exec(host, port, password, cmd, sudo=sudo)
 
 
 def _create_shared_folders_via_ssh(
@@ -522,6 +489,26 @@ def _create_shared_folders_via_ssh(
 
     rc, out = ssh("ls -la /volume1/testshare/Documents/", sudo=False)
     print(f"    Test data:\n{out}")
+
+    # Force DSM's file indexer to register the test data immediately.
+    # Without this, search tests against /testshare/Documents/Bambu Studio
+    # are flaky on freshly-booted vdsm — DSM Universal Search doesn't crawl
+    # non-indexed shares promptly, so search_files returns "0 results found"
+    # for up to several minutes after the data is created. Calling
+    # `synoindex -A -d <path>` adds the directory subtree to the search
+    # index immediately. Best-effort: if synoindex isn't available on this
+    # DSM build, log a warning and continue — the failure mode is just the
+    # pre-existing search-flake, not a setup blocker.
+    rc, out = ssh("/usr/syno/bin/synoindex -A -d /volume1/testshare/Documents")
+    if rc == 0:
+        print("    Search index: refreshed via synoindex -A -d /testshare/Documents")
+    else:
+        print(f"    Warning: synoindex -A -d returned rc={rc}: {out}")
+    rc, out = ssh("/usr/syno/bin/synoindex -A -d /volume1/testshare/Media")
+    if rc == 0:
+        print("    Search index: refreshed via synoindex -A -d /testshare/Media")
+    else:
+        print(f"    Warning: synoindex -A -d /testshare/Media returned rc={rc}: {out}")
 
     # Set ACL permissions for test user (requires sudo)
     for name in ["testshare", "writable"]:

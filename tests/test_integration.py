@@ -83,6 +83,23 @@ def integration_config() -> tuple[AppConfig, dict[str, str]]:
 
 
 @pytest.fixture
+async def refresh_search_index() -> Any:
+    """Async callback to register a runtime-created path with the search index.
+
+    Default no-op for real-NAS integration runs — Synology NAS shares are
+    typically indexed and the indexer picks up changes within seconds.
+    Overridden in tests/vdsm/conftest.py to invoke `synoindex -A -d` via
+    SSH on the vdsm container, where DSM Universal Search on non-indexed
+    shares can take several minutes to crawl runtime-created subdirectories.
+    """
+
+    async def _noop(_path: str) -> None:
+        return None
+
+    return _noop
+
+
+@pytest.fixture
 async def nas_client(
     integration_config: tuple[AppConfig, dict[str, str]],
 ) -> Any:
@@ -325,7 +342,9 @@ class TestSearch:
     the delay or run fewer search tests at once.
     """
 
-    async def test_search_keyword_finds_directory(self, nas_client: Any) -> None:
+    async def test_search_keyword_finds_directory(
+        self, nas_client: Any, refresh_search_index: Any
+    ) -> None:
         """A bare keyword should find matching directories via wildcard wrapping.
 
         Verifies three fixes at once:
@@ -351,6 +370,12 @@ class TestSearch:
             logger.info("Created search target directory: %s", search_dir)
         except ToolError as e:
             logger.info("Could not create search target (may already exist): %s", e)
+
+        # Register the (possibly just-created) directory with DSM's search
+        # index. No-op on real-NAS runs; on vdsm, calls synoindex via SSH
+        # so the runtime-created subdirectory is discoverable on the first
+        # search attempt instead of waiting for the periodic indexer.
+        await refresh_search_index(search_dir)
 
         # Verify the target is visible to FileStation before searching
         listing = await list_files(client, path=folder)
