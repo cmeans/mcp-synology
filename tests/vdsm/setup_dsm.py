@@ -523,6 +523,26 @@ def _create_shared_folders_via_ssh(
     rc, out = ssh("ls -la /volume1/testshare/Documents/", sudo=False)
     print(f"    Test data:\n{out}")
 
+    # Force DSM's file indexer to register the test data immediately.
+    # Without this, search tests against /testshare/Documents/Bambu Studio
+    # are flaky on freshly-booted vdsm — DSM Universal Search doesn't crawl
+    # non-indexed shares promptly, so search_files returns "0 results found"
+    # for up to several minutes after the data is created. Calling
+    # `synoindex -A -d <path>` adds the directory subtree to the search
+    # index immediately. Best-effort: if synoindex isn't available on this
+    # DSM build, log a warning and continue — the failure mode is just the
+    # pre-existing search-flake, not a setup blocker.
+    rc, out = ssh("/usr/syno/bin/synoindex -A -d /volume1/testshare/Documents")
+    if rc == 0:
+        print("    Search index: refreshed via synoindex -A -d /testshare/Documents")
+    else:
+        print(f"    Warning: synoindex -A -d returned rc={rc}: {out}")
+    rc, out = ssh("/usr/syno/bin/synoindex -A -d /volume1/testshare/Media")
+    if rc == 0:
+        print("    Search index: refreshed via synoindex -A -d /testshare/Media")
+    else:
+        print(f"    Warning: synoindex -A -d /testshare/Media returned rc={rc}: {out}")
+
     # Set ACL permissions for test user (requires sudo)
     for name in ["testshare", "writable"]:
         rc, out = ssh(f"{_SYNOSHARE} --setuser {name} RW + {test_user}")
