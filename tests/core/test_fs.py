@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from unittest.mock import patch
 
@@ -85,3 +86,57 @@ class TestAtomicWriteText:
         path = tmp_path / "out.yaml"
         atomic_write_text(path, "héllo\n", encoding="latin-1")
         assert path.read_bytes() == "héllo\n".encode("latin-1")
+
+    def test_write_failure_before_tmp_creation_swallows_filenotfound(self, tmp_path: Path) -> None:
+        """If `tmp.write_text` fails before the .tmp file exists, the cleanup
+        `tmp.unlink()` hits `FileNotFoundError`, which the helper silently
+        swallows so the original write exception propagates unmasked.
+        """
+        path = tmp_path / "out.yaml"
+
+        def fail_write_text(self: Path, *args: object, **kwargs: object) -> None:
+            raise PermissionError("simulated write failure")
+
+        with (
+            patch.object(Path, "write_text", fail_write_text),
+            pytest.raises(PermissionError, match="simulated write failure"),
+        ):
+            atomic_write_text(path, "hi\n")
+
+        # No .tmp was ever created, no target file was written.
+        assert not path.exists()
+        assert not (tmp_path / "out.yaml.tmp").exists()
+        assert list(tmp_path.iterdir()) == []
+
+    def test_unlink_failure_during_cleanup_logs_warning(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """If cleanup `tmp.unlink()` raises a non-`FileNotFoundError` `OSError`
+        (e.g. permission denied), the helper logs a WARNING and re-raises the
+        ORIGINAL exception (the one that triggered the except branch), not
+        the cleanup failure.
+        """
+        path = tmp_path / "out.yaml"
+
+        def fail_replace(self: Path, *args: object, **kwargs: object) -> None:
+            raise OSError("simulated rename failure")
+
+        def fail_unlink(self: Path, *args: object, **kwargs: object) -> None:
+            raise PermissionError("simulated unlink failure")
+
+        with (
+            caplog.at_level(logging.WARNING, logger="mcp_synology.core.fs"),
+            patch.object(Path, "replace", fail_replace),
+            patch.object(Path, "unlink", fail_unlink),
+            pytest.raises(OSError, match="simulated rename failure"),
+        ):
+            atomic_write_text(path, "hi\n")
+
+        # Cleanup-failure warning was emitted with both the path and the
+        # underlying OSError text — operator visibility into the leaked .tmp.
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert any(
+            "Failed to clean up temp file" in r.getMessage()
+            and "simulated unlink failure" in r.getMessage()
+            for r in warnings
+        ), f"expected cleanup-failure warning, got: {[r.getMessage() for r in warnings]}"
