@@ -152,6 +152,22 @@ class TestGetFileInfo:
         # back to the single-call form that #68 surfaced.
         assert "/video/a.mkv,/video/b.srt" not in result
 
+    async def test_empty_paths_list_returns_not_found(self, mock_client: DsmClient) -> None:
+        """Empty paths list short-circuits to a not_found error before any
+        DSM call is attempted. Defensive guard added with the per-path
+        serial refactor — without it, the for-loop would simply do nothing
+        and the downstream `if not files:` branch would fire with a less
+        precise message about missing file information.
+        """
+        with pytest.raises(ToolError) as exc_info:
+            await get_file_info(mock_client, paths=[])
+        body = json.loads(str(exc_info.value))
+        assert body["status"] == "error"
+        assert body["error"]["code"] == "not_found"
+        assert "No paths provided" in body["error"]["message"]
+        assert body["error"]["param"] == "paths"
+        assert body["error"]["value"] == []
+
     @respx.mock
     async def test_empty_files_list_returns_not_found(self, mock_client: DsmClient) -> None:
         """getinfo succeeds but returns no files → not_found.

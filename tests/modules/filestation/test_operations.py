@@ -219,6 +219,21 @@ class TestDeleteFiles:
         assert "enabled" in result
         assert "NOT enabled" in result
 
+    async def test_delete_empty_paths_list_returns_not_found(self, mock_client: DsmClient) -> None:
+        """Empty paths list short-circuits to a not_found error before any
+        DSM call is attempted. Defensive guard added with the per-path
+        serial refactor — without it, the per-path for-loop would simply
+        do nothing and return an empty success message.
+        """
+        with pytest.raises(ToolError) as exc_info:
+            await delete_files(mock_client, paths=[])
+        body = json.loads(str(exc_info.value))
+        assert body["status"] == "error"
+        assert body["error"]["code"] == "not_found"
+        assert "No paths provided" in body["error"]["message"]
+        assert body["error"]["param"] == "paths"
+        assert body["error"]["value"] == []
+
     @respx.mock
     async def test_delete_lazily_probes_when_share_missing_from_cache(
         self, mock_client: DsmClient
