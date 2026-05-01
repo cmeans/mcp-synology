@@ -1,7 +1,7 @@
 """Filesystem utilities used across `core/`.
 
-Currently houses `atomic_write_text`, used by `core/state.py` and
-`cli/version.py` to persist runtime state without a torn-write window.
+Currently houses `atomic_write_text`, used by every site that persists
+runtime state or user config without a torn-write window.
 """
 
 from __future__ import annotations
