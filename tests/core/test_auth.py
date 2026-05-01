@@ -39,9 +39,19 @@ def _make_client() -> DsmClient:
 
 
 def _no_keyring() -> MagicMock:
-    """Return a mock keyring module where get_password raises."""
+    """Return a mock keyring module where get_password raises a realistic
+    `keyring.errors.NoKeyringError`.
+
+    Pre-#38 this used bare `Exception("No keyring backend")` and the
+    production code's bare `except Exception` swallowed it. After #38 the
+    handler narrowed to `KeyringError`/`OSError`, so the realistic typed
+    error is also what the tests should mock — keeps the production-shaped
+    error path exercised everywhere this fixture is used.
+    """
+    from keyring.errors import NoKeyringError
+
     mock = MagicMock()
-    mock.get_password.side_effect = Exception("No keyring backend")
+    mock.get_password.side_effect = NoKeyringError("No keyring backend")
     return mock
 
 
@@ -609,8 +619,22 @@ class TestSessionNaming:
 
 
 class TestDbusSocketMissing:
-    def test_dbus_not_set_when_socket_missing_on_linux(self) -> None:
-        """Linux + DBUS unset + socket missing → log debug, do not set env var."""
+    def test_dbus_not_set_when_socket_missing_on_linux(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Linux + DBUS unset + socket missing → log INFO with remediation hint
+        and do not set env var.
+
+        Closes #38 (the operator-actionable hint half). Pre-fix this branch
+        only logged at DEBUG ("D-Bus socket not found at %s; keyring may not
+        work"), so an operator running `mcp-synology check` (without -v) saw
+        a generic "no credentials" error with no clue that the missing D-Bus
+        socket was the root cause. INFO-level message names the socket path
+        AND points at three concrete remediations: run setup from a real
+        session, wrap with `dbus-run-session`, or use SYNOLOGY_* env vars.
+        """
+        import logging
+
         config = _make_config(auth={"username": "admin", "password": "secret"})
         client = _make_client()
         auth = AuthManager(config, client)
@@ -624,14 +648,136 @@ class TestDbusSocketMissing:
             patch("sys.platform", "linux"),
             patch("pathlib.Path.exists", return_value=False),
             patch("os.getuid", return_value=1000),
+            caplog.at_level(logging.INFO, logger="mcp_synology.core.auth"),
         ):
             username, _, _ = auth._resolve_credentials()
-            # Falls back to config-file credentials; the missing-socket branch
-            # logs at debug and does NOT set the env var (assert inside the
-            # patch.dict block so the assertion sees the patched env, not the
-            # restored one)
             assert "DBUS_SESSION_BUS_ADDRESS" not in os.environ
         assert username == "admin"
+        # INFO record carries actionable remediation, not just a description.
+        info_messages = [r.getMessage() for r in caplog.records if r.levelname == "INFO"]
+        assert any(
+            "D-Bus socket not found" in msg
+            and "/run/user/1000/bus" in msg
+            and "mcp-synology setup" in msg
+            and "SYNOLOGY_USERNAME" in msg
+            for msg in info_messages
+        ), f"expected actionable INFO hint, got: {info_messages}"
+
+
+class TestKeyringErrorHandling:
+    """Closes #38 — narrow keyring exception handler + log root cause.
+
+    Pre-fix `core/auth.py:147-148` caught bare `except Exception` with a flat
+    `logger.debug("Keyring not available.")`, hiding the actual failure
+    (locked macOS keychain, NoKeyringError on a headless host, OSError on
+    D-Bus socket reach issues, library bugs). Now narrows to
+    `keyring.errors.KeyringError` + `OSError` and logs each at DEBUG with
+    `exc_info=True` so `mcp-synology check -v` surfaces the real cause.
+    """
+
+    def _make_keyring_that_raises(self, exc: Exception) -> MagicMock:
+        mock = MagicMock()
+        mock.get_password.side_effect = exc
+        return mock
+
+    def test_keyring_error_logged_with_exc_info_at_debug(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Typed `KeyringError` (e.g. macOS locked keychain) is logged with
+        the exception message and traceback at DEBUG, NOT swallowed.
+        """
+        import logging
+
+        from keyring.errors import KeyringLocked
+
+        config = _make_config(auth={"username": "admin", "password": "secret"})
+        client = _make_client()
+        auth = AuthManager(config, client)
+
+        with (
+            patch.dict(os.environ, _clean_env(), clear=True),
+            patch(
+                "mcp_synology.core.auth.kr",
+                self._make_keyring_that_raises(KeyringLocked("Keychain is locked")),
+            ),
+            caplog.at_level(logging.DEBUG, logger="mcp_synology.core.auth"),
+        ):
+            auth._resolve_credentials()
+
+        debug_records = [r for r in caplog.records if r.levelname == "DEBUG"]
+        # Failure log carries the exception text and exc_info traceback.
+        matching = [
+            r
+            for r in debug_records
+            if "Keyring access failed" in r.getMessage() and "Keychain is locked" in r.getMessage()
+        ]
+        assert matching, (
+            f"expected DEBUG log with KeyringError message, got: "
+            f"{[r.getMessage() for r in debug_records]}"
+        )
+        assert matching[0].exc_info is not None, (
+            "expected exc_info traceback on the keyring failure log"
+        )
+        # The pre-fix flat "Keyring not available." string must NOT appear.
+        assert not any(r.getMessage() == "Keyring not available." for r in caplog.records), (
+            "regression: legacy flat 'Keyring not available.' message reappeared"
+        )
+
+    def test_keyring_oserror_logged_with_exc_info_at_debug(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """OS-level keyring failure (D-Bus reach errors, permission denied
+        on macOS keychain DB, etc.) is logged with the exception message
+        and traceback at DEBUG, separate from the typed-error branch.
+        """
+        import logging
+
+        config = _make_config(auth={"username": "admin", "password": "secret"})
+        client = _make_client()
+        auth = AuthManager(config, client)
+
+        with (
+            patch.dict(os.environ, _clean_env(), clear=True),
+            patch(
+                "mcp_synology.core.auth.kr",
+                self._make_keyring_that_raises(OSError("Connection refused: /run/user/1000/bus")),
+            ),
+            caplog.at_level(logging.DEBUG, logger="mcp_synology.core.auth"),
+        ):
+            auth._resolve_credentials()
+
+        debug_records = [r for r in caplog.records if r.levelname == "DEBUG"]
+        matching = [
+            r
+            for r in debug_records
+            if "Keyring OS-level error" in r.getMessage() and "Connection refused" in r.getMessage()
+        ]
+        assert matching, (
+            f"expected DEBUG log with OSError message, got: "
+            f"{[r.getMessage() for r in debug_records]}"
+        )
+        assert matching[0].exc_info is not None
+
+    def test_keyring_failure_does_not_block_config_credentials(self) -> None:
+        """A keyring blow-up must not prevent the resolver from returning
+        credentials sourced from the config file (or env). Defense in depth.
+        """
+        from keyring.errors import NoKeyringError
+
+        config = _make_config(auth={"username": "admin", "password": "secret"})
+        client = _make_client()
+        auth = AuthManager(config, client)
+
+        with (
+            patch.dict(os.environ, _clean_env(), clear=True),
+            patch(
+                "mcp_synology.core.auth.kr",
+                self._make_keyring_that_raises(NoKeyringError("No backend")),
+            ),
+        ):
+            username, password, _ = auth._resolve_credentials()
+        assert username == "admin"
+        assert password == "secret"
 
 
 class TestLoginErrorPaths:

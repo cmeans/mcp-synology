@@ -14,6 +14,7 @@ import uuid
 from typing import TYPE_CHECKING, Any
 
 import keyring as kr
+from keyring.errors import KeyringError
 
 from mcp_synology.core.errors import AuthenticationError, SynologyError
 
@@ -127,7 +128,17 @@ class AuthManager:
                     os.environ["DBUS_SESSION_BUS_ADDRESS"] = dbus_addr
                     logger.debug("Set DBUS_SESSION_BUS_ADDRESS=%s for keyring access", dbus_addr)
                 else:
-                    logger.debug("D-Bus socket not found at %s; keyring may not work", socket_path)
+                    # INFO not DEBUG — without D-Bus the keyring path is dead
+                    # for this session; the operator needs to know how to
+                    # recover. Closes #38 (the operator-actionable hint).
+                    logger.info(
+                        "D-Bus socket not found at %s; OS keyring is unavailable. "
+                        "Run 'mcp-synology setup' from a real desktop session "
+                        "(or under 'dbus-run-session'), or set credentials via the "
+                        "SYNOLOGY_USERNAME / SYNOLOGY_PASSWORD / SYNOLOGY_DEVICE_ID "
+                        "env vars to bypass the keyring entirely.",
+                        socket_path,
+                    )
 
             try:
                 service = f"mcp-synology/{self._config.instance_id or 'default'}"
@@ -144,8 +155,25 @@ class AuthManager:
                 if kr_device and not device_id:
                     device_id = kr_device
                     logger.debug("Device ID from keyring")
-            except Exception:
-                logger.debug("Keyring not available.")
+            except KeyringError as e:
+                # Typed keyring failure (NoKeyringError, InitError,
+                # KeyringLocked, PasswordSetError, etc.). Log at DEBUG with
+                # `exc_info` so `mcp-synology check -v` surfaces the actual
+                # cause (locked keychain on macOS is operator-actionable;
+                # NoKeyringError on a headless host signals a config issue).
+                # Closes #38 — previously caught by a bare `except Exception`
+                # with a flat "Keyring not available." line that hid all of
+                # these. Falls through to the no-credentials check below;
+                # the resolver chain still works without keyring.
+                logger.debug("Keyring access failed: %s", e, exc_info=True)
+            except OSError as e:
+                # D-Bus socket present but unreachable, permission errors on
+                # the OS keychain backend, etc. Same DEBUG-with-exc_info
+                # treatment as the typed-error case above. The pre-check at
+                # line 123-131 already emitted an INFO hint if the D-Bus
+                # socket was missing entirely; this branch covers the
+                # reach-but-fail variant.
+                logger.debug("Keyring OS-level error: %s", e, exc_info=True)
 
         if not username or not password:
             msg = (
