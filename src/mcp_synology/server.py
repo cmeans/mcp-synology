@@ -179,7 +179,24 @@ class SharedClientManager:
             asyncio.run(_logout())
 
     async def _bg_update_check(self) -> None:
-        """Background update check — appends notice on first tool result."""
+        """Background update check — appends notice on first tool result.
+
+        Closes #39. Two pre-fix gaps:
+
+        1. The `(OSError, ValueError, KeyError)` handler used a bare `pass`,
+           so a failed PyPI check (DNS down, malformed version string,
+           state-file KeyError) left no breadcrumb anywhere — even with
+           `SYNOLOGY_LOG_LEVEL=debug`. Now logs at DEBUG with `exc_info=True`
+           so the actual exception type, message, and traceback land in
+           verbose output.
+
+        2. The `run_in_executor()` call was unbounded. The inner
+           `urlopen(timeout=5)` covered the socket, but a thread stuck after
+           `urlopen` returned (pathological YAML parsing, slow disk) would
+           keep this coroutine alive forever and delay session shutdown.
+           Now wrapped in `asyncio.timeout(10)`; on timeout we log at DEBUG
+           and exit cleanly so the tool flow is never blocked.
+        """
         try:
             from mcp_synology.cli import (
                 _check_for_update,
@@ -189,8 +206,13 @@ class SharedClientManager:
 
             loop = asyncio.get_running_loop()
             gstate = _load_global_state()
-            # Run the blocking PyPI check in a thread
-            latest = await loop.run_in_executor(None, _check_for_update, gstate)
+            # Run the blocking PyPI check in a thread, bounded so a stuck
+            # executor (slow socket, slow YAML parse, hung disk) can't
+            # keep this coroutine alive forever. The inner urlopen has
+            # its own 5s timeout; the 10s outer bound is a safety margin
+            # for everything else _check_for_update does.
+            async with asyncio.timeout(10):
+                latest = await loop.run_in_executor(None, _check_for_update, gstate)
             _save_global_state(gstate)
             if latest:
                 from mcp_synology import __version__
@@ -200,8 +222,17 @@ class SharedClientManager:
                     f"(current: {__version__}). "
                     f"Run: mcp-synology --check-update"
                 )
+        except TimeoutError:
+            # asyncio.timeout raises builtins.TimeoutError on 3.11+. Treat
+            # as a non-event for the user-facing flow — they just don't
+            # get an "update available" notice this session.
+            logger.debug("Update check timed out after 10s; skipping notice", exc_info=True)
         except (OSError, ValueError, KeyError):
-            pass  # Never let update check break tool functionality
+            # Closes #39: surfaces the actual exception under
+            # `SYNOLOGY_LOG_LEVEL=debug`. Update check is best-effort, so
+            # we still don't propagate — the tool flow runs fine without
+            # an update notice.
+            logger.debug("Update check failed", exc_info=True)
 
 
 def create_server(config: AppConfig) -> FastMCP:
