@@ -285,28 +285,26 @@ async def _copy_move(
     return "\n".join(lines)
 
 
-async def delete_files(
+async def _delete_one_path(
     client: DsmClient,
+    path: str,
     *,
-    paths: list[str],
-    recursive: bool = True,
-    recycle_bin_status: dict[str, bool] | None = None,
-    timeout: float = 120.0,
-) -> str:
-    """Delete files or folders."""
-    normalized = [normalize_path(p) for p in paths]
-    path_param = escape_multi_path(normalized)
+    recursive: bool,
+    delete_version: int,
+    timeout: float,
+) -> None:
+    """Delete a single path via DSM async-task pattern.
 
-    # Pin to version 2 — v3 uses JSON request format with different parameter encoding.
-    delete_version = min(2, client.negotiate_version("SYNO.FileStation.Delete", max_version=2))
-
+    Raises ToolError (via error_response/synology_error_response) on failure;
+    returns None on success. Always stops the background task on exit.
+    """
     try:
         start_data = await client.request(
             "SYNO.FileStation.Delete",
             "start",
             version=delete_version,
             params={
-                "path": path_param,
+                "path": path,
                 "recursive": str(recursive).lower(),
             },
         )
@@ -315,7 +313,6 @@ async def delete_files(
 
     taskid = start_data.get("taskid", "")
 
-    # Poll for completion. Use try/finally to ensure task is always stopped.
     elapsed = 0.0
     interval = 0.5
     status: dict[str, Any] = {}
@@ -335,7 +332,7 @@ async def delete_files(
                 poll_error = e
                 break
 
-            logger.debug("Delete status: %s", status)
+            logger.debug("Delete status (%s): %s", path, status)
 
             if status.get("finished", False):
                 break
@@ -358,21 +355,17 @@ async def delete_files(
     if timed_out:
         error_response(
             ErrorCode.TIMEOUT,
-            f"Delete files failed: timed out after {timeout}s.",
+            f"Delete files failed: timed out after {timeout}s on path: {path}",
             retryable=True,
             param="timeout",
             value=timeout,
             suggestion="The operation may still be running on the NAS.",
         )
 
-    # Check for errors in the completed task
     if "error" in status:
         err = status["error"]
         err_code = err.get("code", 0) if isinstance(err, dict) else err
-        err_path = status.get("path", "")
-        # Route err_code through error_from_code so callers see a specific
-        # envelope (e.g. permission_denied, not_found) matching the synchronous
-        # error paths in this module. Unknown codes fall back to DSM_ERROR.
+        err_path = status.get("path", path)
         mapped = error_from_code(err_code, "SYNO.FileStation.Delete")
         error_response(
             mapped.error_code,
@@ -382,6 +375,54 @@ async def delete_files(
                 mapped.suggestion
                 or "Check that paths exist and you have permission to delete them."
             ),
+        )
+
+
+async def delete_files(
+    client: DsmClient,
+    *,
+    paths: list[str],
+    recursive: bool = True,
+    recycle_bin_status: dict[str, bool] | None = None,
+    timeout: float = 120.0,
+) -> str:
+    """Delete files or folders.
+
+    Closes #68 (the `delete_files` half). DSM 7.x's
+    `SYNO.FileStation.Delete start` does not honor the documented
+    comma-joined multi-path format on v2 — the user reported that
+    `delete_files(paths=[a, b, ..., l])` returns success but no paths
+    are actually deleted, while single-path calls work. The verified
+    parallel symptom on `get_file_info` (vdsm CI proves a v2-style
+    `path=/a,/b` returns one synthetic record with the literal
+    comma-joined string as its `path`) makes the same root cause near
+    certain on Delete. Fix matches the user's documented workaround:
+    one DSM Delete task per input path. Per-path serial means N
+    round-trips for N paths, which is fine for typical small-N usage
+    and trivially correct.
+    """
+    if not paths:
+        error_response(
+            ErrorCode.NOT_FOUND,
+            "Delete files failed: No paths provided.",
+            retryable=False,
+            param="paths",
+            value=paths,
+            suggestion="Pass at least one path.",
+        )
+
+    normalized = [normalize_path(p) for p in paths]
+
+    # Pin to v2 — v3 uses JSON request format with different parameter encoding.
+    delete_version = min(2, client.negotiate_version("SYNO.FileStation.Delete", max_version=2))
+
+    for p in normalized:
+        await _delete_one_path(
+            client,
+            p,
+            recursive=recursive,
+            delete_version=delete_version,
+            timeout=timeout,
         )
 
     # Determine recycle bin status per share. Probes lazily on first observation

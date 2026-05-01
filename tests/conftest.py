@@ -43,7 +43,11 @@ def make_api_cache() -> dict[str, ApiInfoEntry]:
     return {
         "SYNO.API.Auth": ApiInfoEntry(path="entry.cgi", min_version=1, max_version=7),
         "SYNO.FileStation.Info": ApiInfoEntry(path="entry.cgi", min_version=1, max_version=2),
-        "SYNO.FileStation.List": ApiInfoEntry(path="entry.cgi", min_version=1, max_version=2),
+        # max_version=3 matches DSM 7.x (where #68 surfaced); production code
+        # MUST pin to v2 explicitly via `negotiate_version(..., max_version=2)`
+        # because v3 reinterprets multi-path semantics and silently breaks
+        # comma-joined `path` queries.
+        "SYNO.FileStation.List": ApiInfoEntry(path="entry.cgi", min_version=1, max_version=3),
         "SYNO.FileStation.Search": ApiInfoEntry(path="entry.cgi", min_version=1, max_version=2),
         "SYNO.FileStation.DirSize": ApiInfoEntry(path="entry.cgi", min_version=1, max_version=2),
         "SYNO.FileStation.CreateFolder": ApiInfoEntry(

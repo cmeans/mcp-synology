@@ -16,7 +16,6 @@ from mcp_synology.core.formatting import (
     synology_error_response,
 )
 from mcp_synology.modules.filestation.helpers import (
-    escape_multi_path,
     normalize_path,
 )
 
@@ -46,31 +45,62 @@ async def get_file_info(
     paths: list[str],
     additional: list[str] | None = None,
 ) -> str:
-    """Get detailed metadata for specific files or folders."""
+    """Get detailed metadata for specific files or folders.
+
+    Closes #68 (the `get_file_info` half). DSM 7.x's
+    `SYNO.FileStation.List getinfo` does not honor the documented
+    comma-joined multi-path format on v2 — verified against vdsm DSM
+    7.2.2 in CI: a request with `path=/a,/b` returns a single synthetic
+    record whose `path` field IS the literal `/a,/b` string. v3 has the
+    same problem (verified by the round-1 v2-pin attempt that didn't
+    fix the bug). The user's documented workaround on #68 was to loop
+    one path at a time, and that's what this function now does
+    internally: one DSM call per input path, results aggregated into
+    the response shape callers already expect (single-info card for one
+    path, table for multiple). Trade-off is N round-trips for N paths,
+    which is fine for the typical small-N usage and trivially correct.
+    """
     if additional is None:
         additional = ["real_path", "size", "owner", "time", "perm"]
 
-    normalized = [normalize_path(p) for p in paths]
-    path_param = escape_multi_path(normalized)
-
-    try:
-        data = await client.request(
-            "SYNO.FileStation.List",
-            "getinfo",
-            params={
-                "path": path_param,
-                "additional": '["' + '","'.join(additional) + '"]',
-            },
+    if not paths:
+        error_response(
+            ErrorCode.NOT_FOUND,
+            "Get file info failed: No paths provided.",
+            retryable=False,
+            param="paths",
+            value=paths,
+            suggestion="Pass at least one path.",
         )
-    except SynologyError as e:
-        synology_error_response("Get file info", e)
 
-    files = data.get("files", [])
+    normalized = [normalize_path(p) for p in paths]
+
+    # Pin to v2 for parallelism with Delete / CopyMove / Search. v3 doesn't
+    # buy us anything for getinfo and adds risk of further multi-path quirks.
+    getinfo_version = min(2, client.negotiate_version("SYNO.FileStation.List", max_version=2))
+    additional_param = '["' + '","'.join(additional) + '"]'
+
+    files: list[dict[str, Any]] = []
+    for p in normalized:
+        try:
+            data = await client.request(
+                "SYNO.FileStation.List",
+                "getinfo",
+                version=getinfo_version,
+                params={
+                    "path": p,
+                    "additional": additional_param,
+                },
+            )
+        except SynologyError as e:
+            synology_error_response("Get file info", e)
+        per_path_files = data.get("files", [])
+        if per_path_files:
+            files.extend(per_path_files)
 
     if len(files) == 1:
         return _format_single_info(files[0])
 
-    # Multiple files: table format
     if not files:
         error_response(
             ErrorCode.NOT_FOUND,

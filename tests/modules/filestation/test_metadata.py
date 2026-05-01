@@ -89,6 +89,86 @@ class TestGetFileInfo:
         assert body["error"]["code"] == "not_found"
 
     @respx.mock
+    async def test_multipath_uses_per_path_serial_calls(self, mock_client: DsmClient) -> None:
+        """Closes #68 (the get_file_info half): DSM 7.x's
+        `SYNO.FileStation.List getinfo` doesn't honor the documented
+        comma-joined multi-path format on v2 (vdsm 7.2.2 verified — the
+        comma-joined string lands as a literal single path, returning one
+        synthetic record). Production therefore issues ONE DSM call per
+        input path. Test asserts (a) N requests for N paths, (b) each
+        request carries a single path (no commas), (c) all pinned to
+        v2, (d) results aggregate into the table-format response.
+        """
+        captured: list[dict[str, str]] = []
+        per_path_files = {
+            "/video/a.mkv": {
+                "name": "a.mkv",
+                "path": "/video/a.mkv",
+                "isdir": False,
+                "additional": {"size": 1, "time": {"mtime": 1710000000}},
+            },
+            "/video/b.srt": {
+                "name": "b.srt",
+                "path": "/video/b.srt",
+                "isdir": False,
+                "additional": {"size": 1, "time": {"mtime": 1710000000}},
+            },
+        }
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            captured.append(params)
+            requested_path = params.get("path", "")
+            return httpx.Response(
+                200,
+                json={
+                    "success": True,
+                    "data": {"files": [per_path_files[requested_path]]},
+                },
+            )
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        result = await get_file_info(mock_client, paths=["/video/a.mkv", "/video/b.srt"])
+
+        # Two paths → two DSM calls.
+        assert len(captured) == 2, f"expected two DSM calls (one per path), got {len(captured)}"
+        for params in captured:
+            assert params["api"] == "SYNO.FileStation.List"
+            assert params["method"] == "getinfo"
+            assert params["version"] == "2", (
+                f"expected version=2, got version={params['version']!r}"
+            )
+            assert "," not in params["path"], (
+                f"each request must carry a single path (no comma-joined multipath), "
+                f"got path={params['path']!r}"
+            )
+        # Each input path appears in exactly one request.
+        sent_paths = sorted(p["path"] for p in captured)
+        assert sent_paths == ["/video/a.mkv", "/video/b.srt"]
+        # And the aggregated response renders both files in tabular form.
+        assert "a.mkv" in result
+        assert "b.srt" in result
+        # No comma-joined string in the result — that would indicate a regression
+        # back to the single-call form that #68 surfaced.
+        assert "/video/a.mkv,/video/b.srt" not in result
+
+    async def test_empty_paths_list_returns_not_found(self, mock_client: DsmClient) -> None:
+        """Empty paths list short-circuits to a not_found error before any
+        DSM call is attempted. Defensive guard added with the per-path
+        serial refactor — without it, the for-loop would simply do nothing
+        and the downstream `if not files:` branch would fire with a less
+        precise message about missing file information.
+        """
+        with pytest.raises(ToolError) as exc_info:
+            await get_file_info(mock_client, paths=[])
+        body = json.loads(str(exc_info.value))
+        assert body["status"] == "error"
+        assert body["error"]["code"] == "not_found"
+        assert "No paths provided" in body["error"]["message"]
+        assert body["error"]["param"] == "paths"
+        assert body["error"]["value"] == []
+
+    @respx.mock
     async def test_empty_files_list_returns_not_found(self, mock_client: DsmClient) -> None:
         """getinfo succeeds but returns no files → not_found.
 
