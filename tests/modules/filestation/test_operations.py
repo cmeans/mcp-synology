@@ -143,6 +143,72 @@ class TestCopyFiles:
         assert body["status"] == "error"
         assert body["error"]["code"] == "already_exists"
 
+    @respx.mock
+    async def test_multipath_uses_per_path_serial_calls(self, mock_client: DsmClient) -> None:
+        """Closes #84 (the copy_files half via _copy_move): DSM 7.x's
+        `SYNO.FileStation.CopyMove start` doesn't honor the documented
+        comma-joined multi-path format on v2 — a request with
+        `path=/a,/b` is treated as a single literal path and silently
+        no-ops. Production therefore issues ONE DSM CopyMove task per
+        input path. Test asserts (a) N start requests for N paths,
+        (b) each start request carries a single path (no commas),
+        (c) all CopyMove calls pinned to v2, (d) the aggregated
+        response names every input file.
+        """
+        starts: list[dict[str, str]] = []
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            if params.get("api") == "SYNO.FileStation.CopyMove" and params.get("method") == "start":
+                starts.append(params)
+                return httpx.Response(
+                    200, json={"success": True, "data": {"taskid": f"task-{len(starts)}"}}
+                )
+            if params.get("method") == "status":
+                return httpx.Response(
+                    200,
+                    json={"success": True, "data": {"finished": True, "processed_size": 100}},
+                )
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+
+        result = await copy_files(
+            mock_client,
+            paths=["/video/a.mkv", "/video/b.srt"],
+            dest_folder="/video/dest",
+        )
+
+        # Two paths → two CopyMove start requests.
+        assert len(starts) == 2, (
+            f"expected two CopyMove start calls (one per path), got {len(starts)}"
+        )
+        for params in starts:
+            assert params["api"] == "SYNO.FileStation.CopyMove"
+            assert params["version"] == "2", f"expected version=2, got {params['version']!r}"
+            assert "," not in params["path"], (
+                f"each request must carry a single path (no comma-joined multipath), "
+                f"got path={params['path']!r}"
+            )
+        sent_paths = sorted(p["path"] for p in starts)
+        assert sent_paths == ["/video/a.mkv", "/video/b.srt"]
+        assert "a.mkv" in result
+        assert "b.srt" in result
+        # Per-path sizes summed: 2 paths × 100 bytes = 200 → "200 B".
+        assert "200 B" in result, result
+
+    async def test_copy_empty_paths_returns_not_found(self, mock_client: DsmClient) -> None:
+        """Empty paths list short-circuits before any DSM call. Without this
+        guard the per-path loop simply does nothing and returns a misleading
+        success message claiming '0 item(s)' were copied.
+        """
+        with pytest.raises(ToolError) as exc_info:
+            await copy_files(mock_client, paths=[], dest_folder="/video/dest")
+        body = json.loads(str(exc_info.value))
+        assert body["status"] == "error"
+        assert body["error"]["code"] == "not_found"
+        assert "No paths provided" in body["error"]["message"]
+
 
 class TestMoveFiles:
     @respx.mock
@@ -171,6 +237,66 @@ class TestMoveFiles:
         body = json.loads(str(exc_info.value))
         assert body["status"] == "error"
         assert body["error"]["code"] == "already_exists"
+
+    @respx.mock
+    async def test_multipath_uses_per_path_serial_calls(self, mock_client: DsmClient) -> None:
+        """Closes #84: DSM 7.x's `SYNO.FileStation.CopyMove start` silently
+        no-ops on comma-joined multi-path input — `move_files` returns
+        `Moved N item(s) ... Source files have been removed` while no
+        files actually move on disk. Production now issues ONE CopyMove
+        task per source path so the comma-join is never constructed.
+        """
+        starts: list[dict[str, str]] = []
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            if params.get("api") == "SYNO.FileStation.CopyMove" and params.get("method") == "start":
+                starts.append(params)
+                return httpx.Response(
+                    200, json={"success": True, "data": {"taskid": f"task-{len(starts)}"}}
+                )
+            if params.get("method") == "status":
+                return httpx.Response(
+                    200,
+                    json={"success": True, "data": {"finished": True, "processed_size": 0}},
+                )
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+
+        result = await move_files(
+            mock_client,
+            paths=[
+                "/video/Bellevue.S01E07.mkv",
+                "/video/Bellevue.S01E06.mkv",
+            ],
+            dest_folder="/video/__movetest__",
+        )
+
+        # Two paths → two CopyMove start requests, each with remove_src=true.
+        assert len(starts) == 2, (
+            f"expected two CopyMove start calls (one per path), got {len(starts)}"
+        )
+        for params in starts:
+            assert params["remove_src"] == "true"
+            assert "," not in params["path"], (
+                f"each request must carry a single path (no comma-joined multipath), "
+                f"got path={params['path']!r}"
+            )
+        sent_paths = sorted(p["path"] for p in starts)
+        assert sent_paths == [
+            "/video/Bellevue.S01E06.mkv",
+            "/video/Bellevue.S01E07.mkv",
+        ]
+        assert "Moved" in result
+        assert "Source files have been removed" in result
+
+    async def test_move_empty_paths_returns_not_found(self, mock_client: DsmClient) -> None:
+        with pytest.raises(ToolError) as exc_info:
+            await move_files(mock_client, paths=[], dest_folder="/video/dest")
+        body = json.loads(str(exc_info.value))
+        assert body["status"] == "error"
+        assert body["error"]["code"] == "not_found"
 
 
 class TestDeleteFiles:
