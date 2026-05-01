@@ -16,6 +16,8 @@ from mcp_synology.core.formatting import (
     synology_error_response,
 )
 from mcp_synology.modules.filestation.helpers import (
+    correct_recycle_status_from_observation,
+    ensure_recycle_status,
     file_type_icon,
     normalize_path,
 )
@@ -201,14 +203,20 @@ async def list_recycle_bin(
     # Normalize share name
     share_name = share.strip("/").split("/")[0]
 
-    # Check recycle bin status
-    if recycle_bin_status and not recycle_bin_status.get(share_name, True):
-        return f"Recycle bin is not enabled on /{share_name}. Deleted files cannot be recovered."
+    # Probe (or hit cache) for recycle-bin status before issuing the actual list
+    # call. Pre-#37 the cache was always empty, so this fast-path early-return
+    # never fired and every share fell into the list-and-catch-408 path below.
+    if recycle_bin_status is not None:
+        enabled = await ensure_recycle_status(client, share_name, recycle_bin_status)
+        if not enabled:
+            return (
+                f"Recycle bin is not enabled on /{share_name}. Deleted files cannot be recovered."
+            )
 
     recycle_path = f"/{share_name}/#recycle"
 
     try:
-        return await list_files(
+        result = await list_files(
             client,
             path=recycle_path,
             pattern=pattern,
@@ -226,6 +234,12 @@ async def list_recycle_bin(
             body = json.loads(str(e))
             if body.get("error", {}).get("code") == "not_found":
                 logger.debug("Recycle bin path %s not found", recycle_path)
+                # Self-correct: cache may have said enabled (or been empty);
+                # the live DSM call just contradicted it.
+                if recycle_bin_status is not None:
+                    correct_recycle_status_from_observation(
+                        share_name, observed_enabled=False, recycle_status=recycle_bin_status
+                    )
                 return (
                     f"Recycle bin is not enabled on /{share_name}. "
                     "Deleted files cannot be recovered."
@@ -233,3 +247,10 @@ async def list_recycle_bin(
         except (json.JSONDecodeError, TypeError):
             pass
         raise
+
+    # Successful list confirms recycle is enabled — self-correct if cache disagreed.
+    if recycle_bin_status is not None:
+        correct_recycle_status_from_observation(
+            share_name, observed_enabled=True, recycle_status=recycle_bin_status
+        )
+    return result

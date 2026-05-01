@@ -219,6 +219,46 @@ class TestDeleteFiles:
         assert "enabled" in result
         assert "NOT enabled" in result
 
+    @respx.mock
+    async def test_delete_lazily_probes_when_share_missing_from_cache(
+        self, mock_client: DsmClient
+    ) -> None:
+        """Closes #37: an empty recycle_bin_status dict triggers the per-share
+        probe via ensure_recycle_status. Pre-#37 the dict was always empty AND
+        nothing populated it, so every delete reported recycle-on. Now the
+        delete path probes lazily — a 408 on `/share/#recycle` flips messaging
+        to the permanent-delete variant for that share.
+        """
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            api = params.get("api")
+            method = params.get("method")
+            # Probe call: SYNO.FileStation.List on `/scratch/#recycle` → 408
+            if api == "SYNO.FileStation.List" and method == "list":
+                if params.get("folder_path") == "/scratch/#recycle":
+                    return httpx.Response(200, json={"success": False, "error": {"code": 408}})
+                return httpx.Response(
+                    200, json={"success": True, "data": {"files": [], "total": 0}}
+                )
+            # Otherwise fall through to the standard async-task fixture.
+            return _async_task_side_effect()(request)
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+
+        recycle_status: dict[str, bool] = {}
+        result = await delete_files(
+            mock_client,
+            paths=["/scratch/temp.bin"],
+            recycle_bin_status=recycle_status,
+        )
+
+        assert "Permanently deleted" in result
+        assert "NOT enabled" in result
+        # Probe result was cached so a subsequent delete in the same share
+        # would not re-probe.
+        assert recycle_status == {"scratch": False}
+
 
 class TestBackgroundTaskErrors:
     """Error paths shared across CopyMove and Delete background tasks.

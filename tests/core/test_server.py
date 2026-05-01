@@ -410,3 +410,80 @@ class TestSharedClientManagerLifecycle:
         ):
             await manager._bg_update_check()  # must not raise
         assert manager._update_notice is None
+
+
+class TestSharedClientManagerSubscribeOnReauth:
+    """Reauth-callback subscription works pre-auth (queued) and post-auth (direct).
+
+    Closes #37 — modules use this hook to invalidate caches that may have
+    drifted on the NAS between sessions (e.g. filestation's recycle-bin
+    probe cache).
+    """
+
+    def test_pre_auth_subscription_is_queued(self) -> None:
+        """Subscribing before AuthManager exists queues the callback."""
+        config = make_test_config()
+        manager = SharedClientManager(config)
+
+        cb = MagicMock()
+        manager.subscribe_on_reauth(cb)
+
+        assert manager._auth is None
+        assert cb in manager._pending_reauth_callbacks
+
+    async def test_pending_callbacks_flush_on_get_client(self) -> None:
+        """Once `get_client` lazily creates the AuthManager, queued callbacks
+        are forwarded and the pending list is cleared.
+        """
+        config = make_test_config()
+        manager = SharedClientManager(config)
+
+        cb1 = MagicMock()
+        cb2 = MagicMock()
+        manager.subscribe_on_reauth(cb1)
+        manager.subscribe_on_reauth(cb2)
+
+        fake_client = MagicMock()
+        fake_client.__aenter__ = AsyncMock(return_value=fake_client)
+        fake_client.query_api_info = AsyncMock(return_value={})
+
+        forwarded_callbacks: list[object] = []
+        fake_auth = MagicMock()
+        fake_auth.login = AsyncMock(return_value="sid")
+        fake_auth.add_on_reauth_callback = MagicMock(side_effect=forwarded_callbacks.append)
+
+        with (
+            patch("mcp_synology.server.DsmClient", return_value=fake_client),
+            patch("mcp_synology.server.AuthManager", return_value=fake_auth),
+        ):
+            await manager.get_client()
+
+        # Both callbacks were forwarded to the AuthManager in the order
+        # they were subscribed, and the pending queue was cleared.
+        assert forwarded_callbacks == [cb1, cb2]
+        assert manager._pending_reauth_callbacks == []
+
+    async def test_post_auth_subscription_attaches_directly(self) -> None:
+        """Subscribing after AuthManager exists skips the queue."""
+        config = make_test_config()
+        manager = SharedClientManager(config)
+
+        fake_client = MagicMock()
+        fake_client.__aenter__ = AsyncMock(return_value=fake_client)
+        fake_client.query_api_info = AsyncMock(return_value={})
+        fake_auth = MagicMock()
+        fake_auth.login = AsyncMock(return_value="sid")
+        fake_auth.add_on_reauth_callback = MagicMock()
+
+        with (
+            patch("mcp_synology.server.DsmClient", return_value=fake_client),
+            patch("mcp_synology.server.AuthManager", return_value=fake_auth),
+        ):
+            await manager.get_client()
+
+        cb = MagicMock()
+        manager.subscribe_on_reauth(cb)
+
+        # Attached directly — no queueing.
+        fake_auth.add_on_reauth_callback.assert_called_once_with(cb)
+        assert manager._pending_reauth_callbacks == []

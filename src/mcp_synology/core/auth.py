@@ -18,6 +18,8 @@ import keyring as kr
 from mcp_synology.core.errors import AuthenticationError, SynologyError
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from mcp_synology.core.client import DsmClient
     from mcp_synology.core.config import AppConfig
 
@@ -46,10 +48,25 @@ class AuthManager:
         self._client = client
         self._lock = asyncio.Lock()
         self._session_name = self._build_session_name()
+        # Subscriber list — fired after a successful re-auth so module-owned
+        # caches (e.g. filestation's `recycle_status`) can invalidate any
+        # state that may have changed on the NAS between sessions. See #37.
+        self._on_reauth_callbacks: list[Callable[[], None]] = []
 
         # Register ourselves as the re-auth callback
         self._client.set_re_auth_callback(self._re_authenticate)
         logger.debug("AuthManager initialized, session name: %s", self._session_name)
+
+    def add_on_reauth_callback(self, cb: Callable[[], None]) -> None:
+        """Register a callback to fire after each successful session re-auth.
+
+        Modules that cache NAS state which can drift mid-session (the canonical
+        case is filestation's recycle-bin probe cache) subscribe here so they
+        can clear the cache and let the next operation re-probe against fresh
+        DSM state. Callbacks must be cheap and synchronous; an exception
+        from one callback is logged and does not prevent the rest from firing.
+        """
+        self._on_reauth_callbacks.append(cb)
 
     def _build_session_name(self) -> str:
         """Build a unique DSM session name: MCPSynology_{instance_id}_{uuid}."""
@@ -217,9 +234,17 @@ class AuthManager:
         """Re-authenticate transparently (called by DsmClient on session errors).
 
         Uses asyncio.Lock to prevent concurrent re-auth from multiple requests.
+        Fires every registered ``on_reauth`` callback after the new session is
+        live so module-owned caches (filestation's recycle-bin probe, etc.)
+        can drop entries that may have drifted while the session was down.
         """
         async with self._lock:
             # Another coroutine may have already re-authenticated
             logger.info("Re-authenticating session '%s'.", self._session_name)
             self._client.sid = None
             await self.login()
+            for cb in self._on_reauth_callbacks:
+                try:
+                    cb()
+                except Exception as e:  # noqa: BLE001 — best-effort dispatch
+                    logger.warning("on_reauth callback %r raised: %s", cb, e)

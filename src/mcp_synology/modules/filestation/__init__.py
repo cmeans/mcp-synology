@@ -235,10 +235,20 @@ def register(ctx: RegisterContext) -> None:
     search_poll_interval = settings.search_poll_interval
     hide_recycle = settings.hide_recycle_in_listings
 
+    # Closure-shared cache of per-share recycle-bin enabled-ness. Populated
+    # lazily by `ensure_recycle_status` on first observation per share, and
+    # cleared on session re-auth so admin-side toggles get picked up next
+    # time. See helpers.py for the probe and self-correct logic. Closes #37.
     recycle_status: dict[str, bool] = {}
     hostname = ctx.display_name
     server = ctx.server
     manager = ctx.manager
+
+    # Subscribe a cache-invalidator that fires after every successful
+    # AuthManager re-auth. Safe to call before the AuthManager exists —
+    # SharedClientManager queues the callback and flushes on first
+    # `get_client`.
+    manager.subscribe_on_reauth(recycle_status.clear)
 
     # Build a lookup for tool annotations
     _tool_annos: dict[str, ToolAnnotations] = {}

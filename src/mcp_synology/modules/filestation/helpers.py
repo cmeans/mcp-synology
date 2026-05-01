@@ -8,6 +8,7 @@ import re
 from datetime import UTC, datetime
 
 from mcp_synology.core.client import DsmClient
+from mcp_synology.core.errors import SynologyError
 
 logger = logging.getLogger(__name__)
 
@@ -167,3 +168,90 @@ def escape_multi_path(paths: list[str]) -> str:
 def matches_pattern(filename: str, pattern: str) -> bool:
     """Check if a filename matches a glob pattern (case-insensitive)."""
     return fnmatch.fnmatch(filename.lower(), pattern.lower())
+
+
+# Closes #37. Lazy per-share recycle-bin probe + observation-based self-correction.
+#
+# `recycle_status` is a closure-captured `dict[str, bool]` shared across every
+# tool handler in the filestation module (see modules/filestation/__init__.py
+# where it's created and threaded through the `recycle_bin_status=` kwarg).
+# Before this helper landed, the dict was created empty and never populated:
+# every share looked like recycle-on by default, so `delete_files` always told
+# the user their files were recoverable from `#recycle` even when the share
+# had recycle disabled and the data was actually gone.
+#
+# Strategy: probe lazily per share on first observation, cache the result for
+# the life of the session, and let the auth manager invalidate the cache on
+# session re-auth (since admin could toggle `#recycle` between sessions).
+#
+# Probe: `SYNO.FileStation.List` on `/{share}/#recycle/` with `limit=0`. Cheap;
+# only fetches the directory entry, not its contents.
+#   - Success                     -> recycle bin enabled  (True)
+#   - DSM 408 (path not found)    -> recycle bin disabled (False)
+#   - DSM 105 (permission denied) -> unknown; default True + WARN so the
+#       message stays optimistic about recoverability and the operator sees a
+#       diagnostic in the log
+#   - Other errors                -> unknown; same optimistic-True + WARN
+async def ensure_recycle_status(
+    client: DsmClient,
+    share_name: str,
+    recycle_status: dict[str, bool],
+) -> bool:
+    """Return cached recycle-bin status for `share_name`, probing on first call.
+
+    Caches the result in `recycle_status` in-place so subsequent calls hit the
+    dict and skip the probe. Probe failures fall back to True (the optimistic
+    default that preserves prior messaging behavior) and emit a WARNING.
+    """
+    if share_name in recycle_status:
+        return recycle_status[share_name]
+
+    try:
+        await client.request(
+            "SYNO.FileStation.List",
+            "list",
+            params={"folder_path": f"/{share_name}/#recycle", "limit": 0},
+        )
+        recycle_status[share_name] = True
+        logger.debug("Probed recycle bin on /%s: enabled", share_name)
+    except SynologyError as e:
+        if e.code == 408:
+            recycle_status[share_name] = False
+            logger.debug("Probed recycle bin on /%s: disabled (#recycle missing)", share_name)
+        else:
+            recycle_status[share_name] = True
+            logger.warning(
+                "Recycle-bin probe on /%s returned DSM error %s; assuming enabled. "
+                "Delete-files messaging may be incorrect for this share until re-auth.",
+                share_name,
+                e.code,
+            )
+
+    return recycle_status[share_name]
+
+
+def correct_recycle_status_from_observation(
+    share_name: str,
+    observed_enabled: bool,
+    recycle_status: dict[str, bool],
+) -> None:
+    """Update the cache when a tool observes DSM behavior that contradicts it.
+
+    For example, `list_recycle_bin` may catch a DSM 408 ``not_found`` on
+    `/share/#recycle` when the cache says the share has recycle enabled —
+    which means the cache is stale (admin disabled it mid-session). Flip the
+    bit, log it, and let subsequent calls see the corrected state without
+    waiting for re-auth invalidation.
+    """
+    cached = recycle_status.get(share_name)
+    if cached is None or cached == observed_enabled:
+        # Nothing to correct; let `ensure_recycle_status` populate normally.
+        recycle_status.setdefault(share_name, observed_enabled)
+        return
+    logger.info(
+        "Self-correcting recycle-bin cache on /%s: cached=%s, observed=%s",
+        share_name,
+        cached,
+        observed_enabled,
+    )
+    recycle_status[share_name] = observed_enabled

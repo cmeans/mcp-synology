@@ -354,6 +354,101 @@ class TestReAuth:
         assert sid == "fresh-sid"
 
 
+class TestOnReauthCallbacks:
+    """`add_on_reauth_callback` + dispatch from `_re_authenticate` (closes #37)."""
+
+    @respx.mock
+    async def test_callback_fires_after_reauth(self) -> None:
+        """A registered callback runs once after a successful re-auth."""
+        call_count = 0
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            nonlocal call_count
+            call_count += 1
+            params = dict(request.url.params)
+            if params.get("method") == "list_share" and call_count == 1:
+                return httpx.Response(200, json={"success": False, "error": {"code": 106}})
+            if params.get("method") == "login":
+                return httpx.Response(200, json={"success": True, "data": {"sid": "new-sid"}})
+            return httpx.Response(200, json={"success": True, "data": {"shares": []}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+
+        invocations: list[str] = []
+
+        config = _make_config(auth={"username": "admin", "password": "secret"})
+        async with _make_client() as client:
+            auth = AuthManager(config, client)
+            auth.add_on_reauth_callback(lambda: invocations.append("fired"))
+            client.sid = "old-sid"
+
+            with (
+                patch.dict(os.environ, _clean_env(), clear=True),
+                patch("mcp_synology.core.auth.kr", _no_keyring()),
+            ):
+                await client.request("SYNO.FileStation.List", "list_share", version=2)
+
+        assert invocations == ["fired"]
+
+    @respx.mock
+    async def test_callback_exception_is_logged_and_does_not_block_others(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A raising callback must not stop later callbacks from firing."""
+        call_count = 0
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            nonlocal call_count
+            call_count += 1
+            params = dict(request.url.params)
+            if params.get("method") == "list_share" and call_count == 1:
+                return httpx.Response(200, json={"success": False, "error": {"code": 106}})
+            if params.get("method") == "login":
+                return httpx.Response(200, json={"success": True, "data": {"sid": "new-sid"}})
+            return httpx.Response(200, json={"success": True, "data": {"shares": []}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+
+        invocations: list[str] = []
+
+        def boom() -> None:
+            raise RuntimeError("simulated callback failure")
+
+        config = _make_config(auth={"username": "admin", "password": "secret"})
+        async with _make_client() as client:
+            auth = AuthManager(config, client)
+            auth.add_on_reauth_callback(boom)
+            auth.add_on_reauth_callback(lambda: invocations.append("after-boom"))
+            client.sid = "old-sid"
+
+            import logging
+
+            with (
+                patch.dict(os.environ, _clean_env(), clear=True),
+                patch("mcp_synology.core.auth.kr", _no_keyring()),
+                caplog.at_level(logging.WARNING, logger="mcp_synology.core.auth"),
+            ):
+                await client.request("SYNO.FileStation.List", "list_share", version=2)
+
+        # Second callback fired even though the first raised.
+        assert invocations == ["after-boom"]
+        # Warning was logged about the callback failure.
+        warning_messages = [r.getMessage() for r in caplog.records]
+        assert any(
+            "on_reauth callback" in msg and "simulated callback failure" in msg
+            for msg in warning_messages
+        )
+
+    def test_callback_can_be_added_pre_reauth(self) -> None:
+        """Just verifies the registration API is non-coroutine and accepts a callable."""
+        config = _make_config(auth={"username": "admin", "password": "secret"})
+        client = _make_client()
+        auth = AuthManager(config, client)
+        auth.add_on_reauth_callback(lambda: None)
+        # No exception, internal list now has one entry.
+        assert len(auth._on_reauth_callbacks) == 1
+
+
 class TestCredentialPriority:
     """Test that credential resolution follows: env > config > keyring."""
 

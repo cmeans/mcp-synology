@@ -21,6 +21,7 @@ from mcp_synology.modules import filestation as _filestation_mod
 from mcp_synology.modules import system as _system_mod
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from types import ModuleType
 
     from mcp_synology.core.config import AppConfig
@@ -84,6 +85,10 @@ class SharedClientManager:
         self._update_notice: str | None = None
         self._bg_task: asyncio.Task[None] | None = None
         self._cleanup_task: asyncio.Task[None] | None = None
+        # Re-auth callbacks queued by modules during sync `register()` — flushed
+        # to the AuthManager once it's lazily created in `get_client`. Modules
+        # use `subscribe_on_reauth` to register cache invalidators (see #37).
+        self._pending_reauth_callbacks: list[Callable[[], None]] = []
 
     async def get_client(self) -> DsmClient:
         """Lazily initialize and return the DSM client."""
@@ -104,6 +109,12 @@ class SharedClientManager:
             auth = AuthManager(self._config, client)
             await auth.login()
 
+            # Flush any reauth callbacks that modules queued during sync
+            # `register()` (before the AuthManager existed).
+            for cb in self._pending_reauth_callbacks:
+                auth.add_on_reauth_callback(cb)
+            self._pending_reauth_callbacks.clear()
+
             self._client = client
             self._auth = auth
 
@@ -114,6 +125,18 @@ class SharedClientManager:
         if self._client is None:
             raise RuntimeError("Client initialization failed")
         return self._client
+
+    def subscribe_on_reauth(self, cb: Callable[[], None]) -> None:
+        """Register an on-reauth callback at any point in the lifecycle.
+
+        Safe to call from sync `register()` before the AuthManager exists —
+        the callback is queued and forwarded once the manager comes up.
+        Subsequent calls (e.g. after `get_client`) attach directly.
+        """
+        if self._auth is not None:
+            self._auth.add_on_reauth_callback(cb)
+        else:
+            self._pending_reauth_callbacks.append(cb)
 
     def with_update_notice(self, result: str) -> str:
         """Append update notice to tool result (first call only, then clears)."""

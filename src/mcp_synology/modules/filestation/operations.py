@@ -14,6 +14,7 @@ from mcp_synology.core.formatting import (
     synology_error_response,
 )
 from mcp_synology.modules.filestation.helpers import (
+    ensure_recycle_status,
     escape_multi_path,
     normalize_path,
 )
@@ -383,19 +384,34 @@ async def delete_files(
             ),
         )
 
-    # Determine recycle bin status per share
+    # Determine recycle bin status per share. Probes lazily on first observation
+    # via `ensure_recycle_status` so the dict stays empty until we actually need
+    # the answer; pre-#37 the dict was never populated and every share was
+    # incorrectly reported as recycle-on. The dict is shared across all tool
+    # handlers (closure-captured in modules/filestation/__init__.py) and cleared
+    # on session re-auth (see `_register_recycle_status_invalidator` in __init__).
     shares_with_recycle: set[str] = set()
     shares_without_recycle: set[str] = set()
-    for p in normalized:
-        parts = p.split("/")
-        share_name = parts[1] if len(parts) > 1 else ""
-        if recycle_bin_status and share_name in recycle_bin_status:
-            if recycle_bin_status[share_name]:
+    if recycle_bin_status is None:
+        # Defensive: caller passed nothing. Skip probing; preserve prior
+        # default-true messaging for the touched shares.
+        for p in normalized:
+            parts = p.split("/")
+            share_name = parts[1] if len(parts) > 1 else ""
+            shares_with_recycle.add(share_name)
+    else:
+        seen: set[str] = set()
+        for p in normalized:
+            parts = p.split("/")
+            share_name = parts[1] if len(parts) > 1 else ""
+            if share_name in seen:
+                continue
+            seen.add(share_name)
+            enabled = await ensure_recycle_status(client, share_name, recycle_bin_status)
+            if enabled:
                 shares_with_recycle.add(share_name)
             else:
                 shares_without_recycle.add(share_name)
-        else:
-            shares_with_recycle.add(share_name)  # Assume recycle bin by default
 
     has_recycle = bool(shares_with_recycle)
     verb = "Deleted" if has_recycle else "Permanently deleted"
