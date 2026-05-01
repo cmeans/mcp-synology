@@ -89,6 +89,56 @@ class TestGetFileInfo:
         assert body["error"]["code"] == "not_found"
 
     @respx.mock
+    async def test_request_pinned_to_v2(self, mock_client: DsmClient) -> None:
+        """Closes #68 (the get_file_info half): the request must be pinned to
+        v2 of `SYNO.FileStation.List`. v3 silently misinterprets a v2-style
+        request — DSM treats the comma-joined `path` as one literal path,
+        returns a single synthetic record, and our `len(files) == 1` branch
+        renders it as a single info card. This caused multi-path
+        `get_file_info` calls to collapse into a single bogus record on real
+        NAS hardware after the project's last v2-pin sweep missed `getinfo`.
+        """
+        captured: list[dict[str, str]] = []
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            captured.append(dict(request.url.params))
+            return httpx.Response(
+                200,
+                json={
+                    "success": True,
+                    "data": {
+                        "files": [
+                            {
+                                "name": "a.mkv",
+                                "path": "/video/a.mkv",
+                                "isdir": False,
+                                "additional": {"size": 1, "time": {"mtime": 1710000000}},
+                            },
+                            {
+                                "name": "b.srt",
+                                "path": "/video/b.srt",
+                                "isdir": False,
+                                "additional": {"size": 1, "time": {"mtime": 1710000000}},
+                            },
+                        ]
+                    },
+                },
+            )
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        await get_file_info(mock_client, paths=["/video/a.mkv", "/video/b.srt"])
+
+        assert len(captured) == 1, f"expected exactly one DSM call, got {len(captured)}"
+        params = captured[0]
+        assert params["api"] == "SYNO.FileStation.List"
+        assert params["method"] == "getinfo"
+        assert params["version"] == "2", (
+            f"expected version=2 (v3 misinterprets multi-path), got version={params['version']!r}"
+        )
+        # And the multi-path is comma-joined as v2 expects.
+        assert params["path"] == "/video/a.mkv,/video/b.srt"
+
+    @respx.mock
     async def test_empty_files_list_returns_not_found(self, mock_client: DsmClient) -> None:
         """getinfo succeeds but returns no files → not_found.
 

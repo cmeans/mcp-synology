@@ -53,10 +53,20 @@ async def get_file_info(
     normalized = [normalize_path(p) for p in paths]
     path_param = escape_multi_path(normalized)
 
+    # Pin to v2. v3 changes the multi-path encoding (expects a JSON array via
+    # POST/JSON-body rather than the comma-joined `path` query param v2 takes),
+    # which silently misinterprets a v2-style request: DSM treats the entire
+    # comma-joined string as ONE literal path, returns a single synthetic
+    # record with that bogus path, and our `len(files) == 1` branch renders it
+    # as a single info card. Closes #68 (the `get_file_info` half).
+    # Same pattern Delete/CopyMove/Search already use.
+    getinfo_version = min(2, client.negotiate_version("SYNO.FileStation.List", max_version=2))
+
     try:
         data = await client.request(
             "SYNO.FileStation.List",
             "getinfo",
+            version=getinfo_version,
             params={
                 "path": path_param,
                 "additional": '["' + '","'.join(additional) + '"]',

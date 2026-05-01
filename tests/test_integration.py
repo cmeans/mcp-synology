@@ -462,13 +462,38 @@ class TestMetadata:
         logger.info("get_file_info(%s):\n%s", paths["existing_share"], result)
 
     async def test_get_file_info_multiple_paths(self, nas_client: Any) -> None:
-        """Get info about multiple paths at once."""
+        """Get info about multiple paths at once.
+
+        Closes #68 (the get_file_info half): pre-fix, `metadata.py` did not
+        pin to v2 of `SYNO.FileStation.List`, so on real DSM 7.x (which
+        advertises v3) the comma-joined `path` was treated as a single
+        literal path and the response collapsed to one synthetic record
+        with the comma-joined string as its `path`. The handler's
+        `len(files) == 1` branch then rendered it as a single info card.
+        Asserting BOTH paths appear in the rendered output catches that
+        regression — a single-record collapse can only show one of them.
+        """
         client, _, _, paths = _unpack(nas_client)
-        result = await get_file_info(
-            client,
-            paths=[paths["existing_share"], paths["writable_folder"]],
-        )
+        a = paths["existing_share"]
+        b = paths["writable_folder"]
+        # Skip when the test config happens to alias both to the same path.
+        if a == b:
+            pytest.skip("existing_share and writable_folder are the same path")
+        result = await get_file_info(client, paths=[a, b])
         logger.info("get_file_info(multiple):\n%s", result)
+        # Tabular output for >1 file uses the table headers; single-record
+        # output uses "File Info:" followed by the path. Assert tabular shape.
+        assert "File Info" in result
+        # Both paths must appear individually — the comma-joined form
+        # `<a>,<b>` would only appear if we'd regressed to v3 semantics.
+        comma_joined = f"{a},{b}"
+        assert comma_joined not in result, (
+            "v2 pin regression: response contains the comma-joined path string, "
+            "indicating DSM treated the input as a single literal path. "
+            f"Got: {result!r}"
+        )
+        assert a in result
+        assert b in result
 
     async def test_get_file_info_invalid_path(self, nas_client: Any) -> None:
         """Get info about a non-existent path — should not crash.
@@ -642,6 +667,85 @@ class TestWriteOperations:
         listing = await list_files(client, path=paths["writable_folder"])
         assert self._TEST_DIR not in listing
         logger.info("Verified %s is deleted", self._TEST_DIR)
+
+
+# ---------------------------------------------------------------------------
+# Multi-path regression coverage (closes #68)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+class TestMultiPathDelete:
+    """Closes #68 (the delete_files half).
+
+    The user reported that ``delete_files(paths=[a, b, ..., l])`` returned
+    ``[+] Deleted N item(s)`` listing every input — but none were actually
+    removed on the NAS. Single-element calls worked. Symptom was a
+    silent-no-op masquerading as success.
+
+    This test creates two real folders, calls ``delete_files`` with both in
+    a single multi-path invocation, then asserts via ``list_files`` that
+    BOTH are gone. A pre-fix code path that no-ops on multi-path would fail
+    at the post-delete listing check, not at the delete call itself.
+    """
+
+    _MULTI_DIR = "_integration_test_multipath"
+    _A = "alpha"
+    _B = "bravo"
+
+    async def test_01_setup_multipath_dirs(self, nas_client: Any) -> None:
+        """Create two sibling folders to delete in one call."""
+        client, _, config, paths = _unpack(nas_client)
+        _skip_unless_write(config)
+
+        base = f"{paths['writable_folder']}/{self._MULTI_DIR}"
+        for sub in (self._A, self._B):
+            try:
+                await create_folder(client, paths=[f"{base}/{sub}"])
+            except ToolError as e:
+                body = json.loads(str(e))
+                assert body["error"]["code"] == "already_exists", f"Unexpected error: {e}"
+
+    async def test_02_multipath_delete_actually_deletes(self, nas_client: Any) -> None:
+        """Delete both folders in a single multi-path call. Verify by listing."""
+        client, _, config, paths = _unpack(nas_client)
+        _skip_unless_write(config)
+
+        base = f"{paths['writable_folder']}/{self._MULTI_DIR}"
+        a_path = f"{base}/{self._A}"
+        b_path = f"{base}/{self._B}"
+
+        # Pre-condition: both folders should exist before the multi-path delete.
+        pre = await list_files(client, path=base)
+        assert self._A in pre, f"setup failed: {self._A} not present pre-delete"
+        assert self._B in pre, f"setup failed: {self._B} not present pre-delete"
+
+        result = await delete_files(client, paths=[a_path, b_path], recursive=True)
+        logger.info("multi-path delete result:\n%s", result)
+
+        # Post-condition: BOTH folders must actually be gone. The reported
+        # bug (#68) was that delete returned "[+] Deleted 2 item(s)" with
+        # both listed but the entries remained. A passing test here proves
+        # the multi-path code path actually deletes on real DSM.
+        post = await list_files(client, path=base)
+        assert self._A not in post, (
+            f"#68 regression: delete returned success but {self._A!r} still present.\n"
+            f"Post-delete listing:\n{post}"
+        )
+        assert self._B not in post, (
+            f"#68 regression: delete returned success but {self._B!r} still present.\n"
+            f"Post-delete listing:\n{post}"
+        )
+
+    async def test_03_cleanup(self, nas_client: Any) -> None:
+        """Remove the parent directory we created (best effort)."""
+        import contextlib
+
+        client, _, config, paths = _unpack(nas_client)
+        _skip_unless_write(config)
+        base = f"{paths['writable_folder']}/{self._MULTI_DIR}"
+        with contextlib.suppress(ToolError):
+            await delete_files(client, paths=[base], recursive=True)
 
 
 # ---------------------------------------------------------------------------
