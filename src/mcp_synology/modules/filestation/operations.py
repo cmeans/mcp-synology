@@ -163,32 +163,31 @@ async def move_files(
     )
 
 
-async def _copy_move(
+async def _copy_move_one_path(
     client: DsmClient,
+    path: str,
     *,
-    paths: list[str],
-    dest_folder: str,
+    dest: str,
     overwrite: bool,
     remove_src: bool,
     operation: str,
-    timeout: float = 120.0,
-) -> str:
-    """Shared implementation for copy and move operations."""
-    normalized = [normalize_path(p) for p in paths]
-    dest = normalize_path(dest_folder)
-    path_param = escape_multi_path(normalized)
+    copymove_version: int,
+    timeout: float,
+) -> int:
+    """Copy or move a single path via DSM async-task pattern.
 
-    # Pin to version 2 — v3 uses JSON request format with different
-    # parameter encoding that our comma-separated path format doesn't support.
-    copymove_version = min(2, client.negotiate_version("SYNO.FileStation.CopyMove", max_version=2))
-
+    Returns the `processed_size` byte count from the completed task so the
+    caller can sum sizes across all per-path tasks. Raises ToolError on
+    failure (via error_response/synology_error_response). Always stops the
+    background task on exit so orphaned tasks can't accumulate on the NAS.
+    """
     try:
         start_data = await client.request(
             "SYNO.FileStation.CopyMove",
             "start",
             version=copymove_version,
             params={
-                "path": path_param,
+                "path": path,
                 "dest_folder_path": dest,
                 "overwrite": str(overwrite).lower(),
                 "remove_src": str(remove_src).lower(),
@@ -199,8 +198,6 @@ async def _copy_move(
 
     taskid = start_data.get("taskid", "")
 
-    # Poll for completion. Use try/finally to ensure task is always stopped,
-    # preventing orphaned processes that consume CPU on the NAS.
     elapsed = 0.0
     interval = 0.5
     status: dict[str, Any] = {}
@@ -220,7 +217,7 @@ async def _copy_move(
                 poll_error = e
                 break
 
-            logger.debug("%s status: %s", operation, status)
+            logger.debug("%s status (%s): %s", operation, path, status)
 
             if status.get("finished", False):
                 break
@@ -243,21 +240,17 @@ async def _copy_move(
     if timed_out:
         error_response(
             ErrorCode.TIMEOUT,
-            f"{operation} files failed: timed out after {timeout}s.",
+            f"{operation} files failed: timed out after {timeout}s on path: {path}",
             retryable=True,
             param="timeout",
             value=timeout,
             suggestion="The operation may still be running on the NAS.",
         )
 
-    # Check for errors in the completed task
     if "error" in status:
         err = status["error"]
         err_code = err.get("code", 0) if isinstance(err, dict) else err
-        err_path = status.get("path", "")
-        # Route err_code through error_from_code so callers see a specific
-        # envelope (e.g. not_found, disk_full) matching the synchronous error
-        # paths in this module. Unknown codes fall back to DSM_ERROR.
+        err_path = status.get("path", path)
         mapped = error_from_code(err_code, "SYNO.FileStation.CopyMove")
         error_response(
             mapped.error_code,
@@ -269,14 +262,71 @@ async def _copy_move(
             ),
         )
 
-    # Build response
-    processed_size = status.get("processed_size", 0)
+    size = status.get("processed_size", 0)
+    return int(size) if isinstance(size, int | float) else 0
+
+
+async def _copy_move(
+    client: DsmClient,
+    *,
+    paths: list[str],
+    dest_folder: str,
+    overwrite: bool,
+    remove_src: bool,
+    operation: str,
+    timeout: float = 120.0,
+) -> str:
+    """Shared implementation for copy and move operations.
+
+    Closes #84 (the `move_files` half — `copy_files` and the multi-path
+    `restore_from_recycle_bin` flow share this code path). DSM 7.x's
+    `SYNO.FileStation.CopyMove start` does not honor the documented
+    comma-joined multi-path format on v2 — a request with
+    `path=/a,/b` is treated as a single literal path and silently no-ops
+    while the task reports success. Same root-cause family as #68
+    (delete + getinfo); fix matches that pattern: one DSM CopyMove task
+    per input path. Per-path serial means N round-trips for N paths,
+    which is fine for typical small-N usage and trivially correct.
+
+    `escape_multi_path` is no longer called here — the per-path loop
+    sends each path raw, sidestepping the comma-join entirely.
+    """
+    if not paths:
+        error_response(
+            ErrorCode.NOT_FOUND,
+            f"{operation} files failed: No paths provided.",
+            retryable=False,
+            param="paths",
+            value=paths,
+            suggestion="Pass at least one path.",
+        )
+
+    normalized = [normalize_path(p) for p in paths]
+    dest = normalize_path(dest_folder)
+
+    # Pin to version 2 — v3 uses JSON request format with different
+    # parameter encoding that our path-as-form-param shape doesn't support.
+    copymove_version = min(2, client.negotiate_version("SYNO.FileStation.CopyMove", max_version=2))
+
+    total_processed = 0
+    for p in normalized:
+        total_processed += await _copy_move_one_path(
+            client,
+            p,
+            dest=dest,
+            overwrite=overwrite,
+            remove_src=remove_src,
+            operation=operation,
+            copymove_version=copymove_version,
+            timeout=timeout,
+        )
+
     verb = "Copied" if not remove_src else "Moved"
     lines = [format_status(f"{verb} {len(normalized)} item(s) to {dest}/:")]
     lines.extend(f"  {p.split('/')[-1]}" for p in normalized)
 
-    if processed_size > 0:
-        lines.append(f"\nTotal size: {format_size(processed_size)}")
+    if total_processed > 0:
+        lines.append(f"\nTotal size: {format_size(total_processed)}")
 
     if remove_src:
         src_dirs = sorted({"/".join(p.split("/")[:-1]) for p in normalized})

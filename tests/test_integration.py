@@ -622,7 +622,13 @@ class TestWriteOperations:
         assert "Moved" in result
 
     async def test_07_verify_move(self, nas_client: Any) -> None:
-        """Verify the moved folder is in the new location and gone from old."""
+        """Verify the moved folder is in the new location AND gone from the old.
+
+        Asserts BOTH sides of the move because a silent-no-op (#84 family)
+        appears as success-string + present-at-dest. The source-side
+        assertion is what catches "moved" tools that didn't actually
+        remove the source.
+        """
         client, _, config, paths = _unpack(nas_client)
         _skip_unless_write(config)
 
@@ -633,11 +639,18 @@ class TestWriteOperations:
         logger.info("Move destination listing:\n%s", dest_listing)
         assert "original" in dest_listing
 
-        # Should be gone from the copy destination
+        # MUST be gone from the source. The previously-soft "should not be
+        # in this listing" comment is now an assertion — silent-no-op moves
+        # leave the source untouched and would slip past dest-only checks.
         src_listing = await list_files(client, path=f"{base}/{self._TEST_DIR}")
-        logger.info("Copy source listing after move:\n%s", src_listing)
-        # "original" should not be in this listing (it was moved)
-        # But "moved" dir will be here since it's under _TEST_DIR
+        logger.info("Source listing after move:\n%s", src_listing)
+        # `list_files` renders directories with a trailing slash on the name
+        # column (`original/`), so checking for that token avoids matching
+        # the `moved/` parent that legitimately remains in this listing.
+        assert "original/" not in src_listing, (
+            f"#84-family regression: move returned success but 'original/' "
+            f"still present at source.\nSource listing:\n{src_listing}"
+        )
 
     async def test_08_rename(self, nas_client: Any) -> None:
         """Rename a folder."""
@@ -739,6 +752,190 @@ class TestMultiPathDelete:
 
     async def test_03_cleanup(self, nas_client: Any) -> None:
         """Remove the parent directory we created (best effort)."""
+        import contextlib
+
+        client, _, config, paths = _unpack(nas_client)
+        _skip_unless_write(config)
+        base = f"{paths['writable_folder']}/{self._MULTI_DIR}"
+        with contextlib.suppress(ToolError):
+            await delete_files(client, paths=[base], recursive=True)
+
+
+@pytest.mark.integration
+class TestMultiPathMove:
+    """Closes #84.
+
+    The user reported that ``move_files(paths=[a, b])`` returns
+    ``[+] Moved 2 item(s) ... Source files have been removed.`` while
+    no files actually move on disk — a silent no-op masquerading as
+    success. Single-path moves work in v0.5.1; the multi-path branch
+    of the same code never moves anything because DSM 7.x's CopyMove
+    API treats a comma-joined ``path=/a,/b`` as one literal path.
+
+    This test creates two real folders, moves both in one
+    multi-path call, then asserts (a) BOTH appear at the destination
+    and (b) BOTH are gone from the source. Either half failing means
+    the silent-no-op regression is back.
+    """
+
+    _MULTI_DIR = "_integration_test_multipath_move"
+    _SRC = "src"
+    _DEST = "dest"
+    _A = "alpha"
+    _B = "bravo"
+
+    async def test_01_setup_multipath_dirs(self, nas_client: Any) -> None:
+        """Create two source folders inside a clean parent."""
+        client, _, config, paths = _unpack(nas_client)
+        _skip_unless_write(config)
+
+        base = f"{paths['writable_folder']}/{self._MULTI_DIR}"
+        for sub in (self._A, self._B):
+            try:
+                await create_folder(client, paths=[f"{base}/{self._SRC}/{sub}"])
+            except ToolError as e:
+                body = json.loads(str(e))
+                assert body["error"]["code"] == "already_exists", f"Unexpected error: {e}"
+
+        # Pre-create empty destination so move can land cleanly.
+        try:
+            await create_folder(client, paths=[f"{base}/{self._DEST}"])
+        except ToolError as e:
+            body = json.loads(str(e))
+            assert body["error"]["code"] == "already_exists", f"Unexpected error: {e}"
+
+    async def test_02_multipath_move_actually_moves(self, nas_client: Any) -> None:
+        """Move both folders in a single multi-path call. Verify both sides."""
+        client, _, config, paths = _unpack(nas_client)
+        _skip_unless_write(config)
+
+        base = f"{paths['writable_folder']}/{self._MULTI_DIR}"
+        src_dir = f"{base}/{self._SRC}"
+        dest_dir = f"{base}/{self._DEST}"
+        a_path = f"{src_dir}/{self._A}"
+        b_path = f"{src_dir}/{self._B}"
+
+        # Pre-condition: both at source, neither at dest.
+        pre_src = await list_files(client, path=src_dir)
+        assert f"{self._A}/" in pre_src, f"setup failed: {self._A!r} missing from source"
+        assert f"{self._B}/" in pre_src, f"setup failed: {self._B!r} missing from source"
+        pre_dest = await list_files(client, path=dest_dir)
+        assert f"{self._A}/" not in pre_dest
+        assert f"{self._B}/" not in pre_dest
+
+        result = await move_files(client, paths=[a_path, b_path], dest_folder=dest_dir)
+        logger.info("multi-path move result:\n%s", result)
+        assert "Moved" in result
+        assert "Source files have been removed" in result
+
+        # Post-condition: both AT DEST and gone from source. The pre-fix
+        # bug returned the success string with neither side actually moved.
+        post_dest = await list_files(client, path=dest_dir)
+        assert f"{self._A}/" in post_dest, (
+            f"#84 regression: move returned success but {self._A!r} not at dest.\n"
+            f"Dest listing:\n{post_dest}"
+        )
+        assert f"{self._B}/" in post_dest, (
+            f"#84 regression: move returned success but {self._B!r} not at dest.\n"
+            f"Dest listing:\n{post_dest}"
+        )
+
+        post_src = await list_files(client, path=src_dir)
+        assert f"{self._A}/" not in post_src, (
+            f"#84 regression: move returned success but {self._A!r} still at source.\n"
+            f"Source listing:\n{post_src}"
+        )
+        assert f"{self._B}/" not in post_src, (
+            f"#84 regression: move returned success but {self._B!r} still at source.\n"
+            f"Source listing:\n{post_src}"
+        )
+
+    async def test_03_cleanup(self, nas_client: Any) -> None:
+        """Remove the parent directory we created (best effort)."""
+        import contextlib
+
+        client, _, config, paths = _unpack(nas_client)
+        _skip_unless_write(config)
+        base = f"{paths['writable_folder']}/{self._MULTI_DIR}"
+        with contextlib.suppress(ToolError):
+            await delete_files(client, paths=[base], recursive=True)
+
+
+@pytest.mark.integration
+class TestMultiPathCopy:
+    """Closes #84 (the copy_files half — same `_copy_move` code path).
+
+    Mirrors `TestMultiPathMove` but with `copy_files` (remove_src=False).
+    Asserts both folders appear at the destination AND both remain at
+    the source after the call. Sources remaining is the copy invariant
+    that distinguishes a real copy from an accidental move.
+    """
+
+    _MULTI_DIR = "_integration_test_multipath_copy"
+    _SRC = "src"
+    _DEST = "dest"
+    _A = "alpha"
+    _B = "bravo"
+
+    async def test_01_setup_multipath_dirs(self, nas_client: Any) -> None:
+        client, _, config, paths = _unpack(nas_client)
+        _skip_unless_write(config)
+
+        base = f"{paths['writable_folder']}/{self._MULTI_DIR}"
+        for sub in (self._A, self._B):
+            try:
+                await create_folder(client, paths=[f"{base}/{self._SRC}/{sub}"])
+            except ToolError as e:
+                body = json.loads(str(e))
+                assert body["error"]["code"] == "already_exists", f"Unexpected error: {e}"
+
+        try:
+            await create_folder(client, paths=[f"{base}/{self._DEST}"])
+        except ToolError as e:
+            body = json.loads(str(e))
+            assert body["error"]["code"] == "already_exists", f"Unexpected error: {e}"
+
+    async def test_02_multipath_copy_actually_copies(self, nas_client: Any) -> None:
+        """Copy both folders in a single multi-path call. Verify both
+        appear at dest AND both remain at source.
+        """
+        client, _, config, paths = _unpack(nas_client)
+        _skip_unless_write(config)
+
+        base = f"{paths['writable_folder']}/{self._MULTI_DIR}"
+        src_dir = f"{base}/{self._SRC}"
+        dest_dir = f"{base}/{self._DEST}"
+        a_path = f"{src_dir}/{self._A}"
+        b_path = f"{src_dir}/{self._B}"
+
+        result = await copy_files(client, paths=[a_path, b_path], dest_folder=dest_dir)
+        logger.info("multi-path copy result:\n%s", result)
+        assert "Copied" in result
+        # Copy must NOT report source-removal text.
+        assert "Source files have been removed" not in result
+
+        post_dest = await list_files(client, path=dest_dir)
+        assert f"{self._A}/" in post_dest, (
+            f"#84 regression: copy returned success but {self._A!r} not at dest.\n"
+            f"Dest listing:\n{post_dest}"
+        )
+        assert f"{self._B}/" in post_dest, (
+            f"#84 regression: copy returned success but {self._B!r} not at dest.\n"
+            f"Dest listing:\n{post_dest}"
+        )
+
+        # Sources MUST remain — the copy invariant.
+        post_src = await list_files(client, path=src_dir)
+        assert f"{self._A}/" in post_src, (
+            f"copy_files appears to have moved (not copied) {self._A!r}.\n"
+            f"Source listing:\n{post_src}"
+        )
+        assert f"{self._B}/" in post_src, (
+            f"copy_files appears to have moved (not copied) {self._B!r}.\n"
+            f"Source listing:\n{post_src}"
+        )
+
+    async def test_03_cleanup(self, nas_client: Any) -> None:
         import contextlib
 
         client, _, config, paths = _unpack(nas_client)
