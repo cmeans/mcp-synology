@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import asyncio
+from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -401,15 +402,100 @@ class TestSharedClientManagerLifecycle:
             await manager._bg_update_check()
         assert manager._update_notice is None
 
-    async def test_bg_update_check_swallows_errors(self) -> None:
-        """OSError/ValueError/KeyError during update check must not raise."""
+    async def test_bg_update_check_swallows_errors(self, caplog: pytest.LogCaptureFixture) -> None:
+        """OSError/ValueError/KeyError during update check must not raise,
+        AND the actual exception must be logged at DEBUG with exc_info so
+        `SYNOLOGY_LOG_LEVEL=debug` surfaces the cause (closes #39, half 1).
+        """
+        import logging
+
         config = make_test_config(check_for_updates=True)
         manager = SharedClientManager(config)
         with (
             patch("mcp_synology.cli._load_global_state", side_effect=OSError("disk full")),
+            caplog.at_level(logging.DEBUG, logger="mcp_synology.server"),
         ):
             await manager._bg_update_check()  # must not raise
         assert manager._update_notice is None
+        # The actual exception is logged at DEBUG with exc_info — pre-#39
+        # this branch was a bare `pass` and left no breadcrumb.
+        matching = [
+            r
+            for r in caplog.records
+            if r.levelname == "DEBUG" and "Update check failed" in r.getMessage()
+        ]
+        assert matching, (
+            f"expected DEBUG log on update-check failure, got: "
+            f"{[r.getMessage() for r in caplog.records]}"
+        )
+        assert matching[0].exc_info is not None, (
+            "expected exc_info traceback on the update-check failure log"
+        )
+
+    async def test_bg_update_check_timeout_logged_and_swallowed(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A stuck executor task is bounded by asyncio.timeout(10); the
+        coroutine returns normally with a DEBUG log noting the timeout.
+        Closes #39 (half 2). Pre-fix, an executor that hung after the
+        urlopen 5s socket timeout (e.g. pathological YAML parsing, slow
+        disk) would keep this coroutine alive indefinitely.
+        """
+        import logging
+
+        config = make_test_config(check_for_updates=True)
+        manager = SharedClientManager(config)
+
+        # Simulate a hung executor by patching asyncio.timeout to raise
+        # TimeoutError immediately (the inner await still runs but the
+        # context manager is what enforces the bound; raising on enter
+        # exercises the same except-arm a real timeout would).
+        async def _slow_check(*args: object, **kwargs: object) -> None:
+            # Use a sleep longer than the 10s timeout. We patch
+            # asyncio.timeout to use a tiny window so this test is fast.
+            await asyncio.sleep(5)
+
+        # Patch the inner executor call to a slow coroutine, AND tighten
+        # the timeout window to make the test fast. Easier path: patch
+        # `loop.run_in_executor` to return a never-completing future and
+        # reduce the timeout to ~0.05s so the test completes quickly.
+        original_timeout = asyncio.timeout
+
+        def _quick_timeout(_seconds: float) -> Any:
+            # Force a tight 50ms window regardless of caller's argument so
+            # the test isn't waiting 10s of real time.
+            return original_timeout(0.05)
+
+        async def _stuck_executor(*args: object, **kwargs: object) -> str:
+            await asyncio.sleep(5)
+            return "9.9.9"
+
+        async def _stub_run_in_executor(*args: object, **kwargs: object) -> str:
+            return await _stuck_executor()
+
+        with (
+            patch("mcp_synology.cli._load_global_state", return_value={}),
+            patch("mcp_synology.cli._save_global_state"),
+            patch("asyncio.timeout", side_effect=_quick_timeout),
+            patch.object(
+                asyncio.get_event_loop(),
+                "run_in_executor",
+                side_effect=_stub_run_in_executor,
+            ),
+            caplog.at_level(logging.DEBUG, logger="mcp_synology.server"),
+        ):
+            await manager._bg_update_check()  # must not raise
+
+        assert manager._update_notice is None  # no notice on timeout
+        matching = [
+            r
+            for r in caplog.records
+            if r.levelname == "DEBUG" and "Update check timed out" in r.getMessage()
+        ]
+        assert matching, (
+            f"expected DEBUG log on update-check timeout, got: "
+            f"{[r.getMessage() for r in caplog.records]}"
+        )
 
 
 class TestSharedClientManagerSubscribeOnReauth:
