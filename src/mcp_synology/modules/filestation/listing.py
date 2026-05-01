@@ -92,7 +92,16 @@ async def list_shares(
         owner = add_info.get("owner", {}).get("user", "—")
         row = [name, path, size, owner]
         if recycle_bin_status:
-            row.append("enabled" if recycle_bin_status.get(name, False) else "disabled")
+            # Distinguish unprobed-yet from observed-disabled. Pre-#37 the
+            # cache was always empty so this column never appeared at all;
+            # post-fix the cache fills lazily as `delete_files` /
+            # `list_recycle_bin` touch shares, so a `list_shares` after
+            # touching only some shares would otherwise render unprobed
+            # shares as "disabled" when their actual state is just unknown.
+            if name in recycle_bin_status:
+                row.append("enabled" if recycle_bin_status[name] else "disabled")
+            else:
+                row.append("unknown")
         rows.append(row)
 
     total = data.get("total", len(shares))

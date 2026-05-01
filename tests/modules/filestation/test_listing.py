@@ -83,6 +83,59 @@ class TestListShares:
         assert "enabled" in result
 
     @respx.mock
+    async def test_list_shares_renders_unknown_for_unprobed_shares(
+        self, mock_client: DsmClient
+    ) -> None:
+        """F3 regression (#73 round 1): once the cache fills lazily, the
+        Recycle Bin column appears — but shares that haven't been probed
+        must render as "unknown", not falsely as "disabled". Otherwise
+        list_shares is *worse* than pre-#37 (which simply omitted the
+        column when the dict was empty) because partial correctness has
+        the appearance of full correctness.
+        """
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={
+                "success": True,
+                "data": {
+                    "shares": [
+                        {
+                            "name": "video",
+                            "path": "/video",
+                            "isdir": True,
+                            "additional": {"size": {"total_size": 0}, "owner": {"user": "admin"}},
+                        },
+                        {
+                            "name": "music",
+                            "path": "/music",
+                            "isdir": True,
+                            "additional": {"size": {"total_size": 0}, "owner": {"user": "admin"}},
+                        },
+                        {
+                            "name": "scratch",
+                            "path": "/scratch",
+                            "isdir": True,
+                            "additional": {"size": {"total_size": 0}, "owner": {"user": "admin"}},
+                        },
+                    ],
+                    "total": 3,
+                },
+            }
+        )
+        # /video has been probed (enabled); /scratch has been probed (disabled);
+        # /music is NOT in the cache — must render as unknown, not disabled.
+        result = await list_shares(
+            mock_client,
+            recycle_bin_status={"video": True, "scratch": False},
+        )
+        # Tabular output — find the per-row recycle-bin cell. Order in shares
+        # is video, music, scratch; the column is the last one in each row.
+        # We can't anchor on column position alone (table renderer pads), so
+        # assert presence of the three distinct values.
+        assert "enabled" in result
+        assert "disabled" in result
+        assert "unknown" in result
+
+    @respx.mock
     async def test_list_shares_empty(self, mock_client: DsmClient) -> None:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
             json={"success": True, "data": {"shares": [], "total": 0}}

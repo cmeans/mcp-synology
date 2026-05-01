@@ -243,6 +243,11 @@ class AuthManager:
             logger.info("Re-authenticating session '%s'.", self._session_name)
             self._client.sid = None
             await self.login()
+            # NOTE: callbacks fire INSIDE `self._lock`. Per `add_on_reauth_callback`'s
+            # contract they must be cheap and synchronous — anything heavy here would
+            # block every other coroutine waiting to re-auth. Today's only subscriber
+            # is `recycle_status.clear` (O(n_shares)); keep new callbacks similarly
+            # trivial or move the work to a deferred task.
             for cb in self._on_reauth_callbacks:
                 try:
                     cb()

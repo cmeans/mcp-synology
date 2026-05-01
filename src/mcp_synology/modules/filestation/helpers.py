@@ -218,6 +218,20 @@ async def ensure_recycle_status(
         if e.code == 408:
             recycle_status[share_name] = False
             logger.debug("Probed recycle bin on /%s: disabled (#recycle missing)", share_name)
+        elif e.code == 105:
+            # Permission denied — the bot user lacks read access on
+            # `/{share}/#recycle`. Operator-actionable: grant the MCP
+            # service account read on the recycle subfolder. We can't
+            # tell whether the bin is on or off from here; default to
+            # enabled so messaging stays optimistic.
+            recycle_status[share_name] = True
+            logger.warning(
+                "Recycle-bin probe on /%s returned DSM 105 (permission denied); "
+                "assuming enabled. Grant the MCP service account read access on "
+                "/%s/#recycle for accurate delete-files messaging.",
+                share_name,
+                share_name,
+            )
         else:
             recycle_status[share_name] = True
             logger.warning(

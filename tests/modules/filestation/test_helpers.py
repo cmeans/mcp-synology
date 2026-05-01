@@ -244,7 +244,8 @@ class TestEnsureRecycleStatus:
         assert recycle_status == {"admin_only": True}
         assert any(
             "Recycle-bin probe on /admin_only" in r.getMessage()
-            and "DSM error 105" in r.getMessage()
+            and "DSM 105 (permission denied)" in r.getMessage()
+            and "Grant the MCP service account" in r.getMessage()
             for r in caplog.records
         )
 
