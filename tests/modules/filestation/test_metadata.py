@@ -89,54 +89,68 @@ class TestGetFileInfo:
         assert body["error"]["code"] == "not_found"
 
     @respx.mock
-    async def test_request_pinned_to_v2(self, mock_client: DsmClient) -> None:
-        """Closes #68 (the get_file_info half): the request must be pinned to
-        v2 of `SYNO.FileStation.List`. v3 silently misinterprets a v2-style
-        request — DSM treats the comma-joined `path` as one literal path,
-        returns a single synthetic record, and our `len(files) == 1` branch
-        renders it as a single info card. This caused multi-path
-        `get_file_info` calls to collapse into a single bogus record on real
-        NAS hardware after the project's last v2-pin sweep missed `getinfo`.
+    async def test_multipath_uses_per_path_serial_calls(self, mock_client: DsmClient) -> None:
+        """Closes #68 (the get_file_info half): DSM 7.x's
+        `SYNO.FileStation.List getinfo` doesn't honor the documented
+        comma-joined multi-path format on v2 (vdsm 7.2.2 verified — the
+        comma-joined string lands as a literal single path, returning one
+        synthetic record). Production therefore issues ONE DSM call per
+        input path. Test asserts (a) N requests for N paths, (b) each
+        request carries a single path (no commas), (c) all pinned to
+        v2, (d) results aggregate into the table-format response.
         """
         captured: list[dict[str, str]] = []
+        per_path_files = {
+            "/video/a.mkv": {
+                "name": "a.mkv",
+                "path": "/video/a.mkv",
+                "isdir": False,
+                "additional": {"size": 1, "time": {"mtime": 1710000000}},
+            },
+            "/video/b.srt": {
+                "name": "b.srt",
+                "path": "/video/b.srt",
+                "isdir": False,
+                "additional": {"size": 1, "time": {"mtime": 1710000000}},
+            },
+        }
 
         def side_effect(request: httpx.Request) -> httpx.Response:
-            captured.append(dict(request.url.params))
+            params = dict(request.url.params)
+            captured.append(params)
+            requested_path = params.get("path", "")
             return httpx.Response(
                 200,
                 json={
                     "success": True,
-                    "data": {
-                        "files": [
-                            {
-                                "name": "a.mkv",
-                                "path": "/video/a.mkv",
-                                "isdir": False,
-                                "additional": {"size": 1, "time": {"mtime": 1710000000}},
-                            },
-                            {
-                                "name": "b.srt",
-                                "path": "/video/b.srt",
-                                "isdir": False,
-                                "additional": {"size": 1, "time": {"mtime": 1710000000}},
-                            },
-                        ]
-                    },
+                    "data": {"files": [per_path_files[requested_path]]},
                 },
             )
 
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
-        await get_file_info(mock_client, paths=["/video/a.mkv", "/video/b.srt"])
+        result = await get_file_info(mock_client, paths=["/video/a.mkv", "/video/b.srt"])
 
-        assert len(captured) == 1, f"expected exactly one DSM call, got {len(captured)}"
-        params = captured[0]
-        assert params["api"] == "SYNO.FileStation.List"
-        assert params["method"] == "getinfo"
-        assert params["version"] == "2", (
-            f"expected version=2 (v3 misinterprets multi-path), got version={params['version']!r}"
-        )
-        # And the multi-path is comma-joined as v2 expects.
-        assert params["path"] == "/video/a.mkv,/video/b.srt"
+        # Two paths → two DSM calls.
+        assert len(captured) == 2, f"expected two DSM calls (one per path), got {len(captured)}"
+        for params in captured:
+            assert params["api"] == "SYNO.FileStation.List"
+            assert params["method"] == "getinfo"
+            assert params["version"] == "2", (
+                f"expected version=2, got version={params['version']!r}"
+            )
+            assert "," not in params["path"], (
+                f"each request must carry a single path (no comma-joined multipath), "
+                f"got path={params['path']!r}"
+            )
+        # Each input path appears in exactly one request.
+        sent_paths = sorted(p["path"] for p in captured)
+        assert sent_paths == ["/video/a.mkv", "/video/b.srt"]
+        # And the aggregated response renders both files in tabular form.
+        assert "a.mkv" in result
+        assert "b.srt" in result
+        # No comma-joined string in the result — that would indicate a regression
+        # back to the single-call form that #68 surfaced.
+        assert "/video/a.mkv,/video/b.srt" not in result
 
     @respx.mock
     async def test_empty_files_list_returns_not_found(self, mock_client: DsmClient) -> None:
