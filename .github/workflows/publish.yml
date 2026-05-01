@@ -75,11 +75,12 @@ jobs:
           # The match string is anchored to the upstream error constant
           # `ErrInvalidVersion` in internal/database/database.go:
           #   "invalid version: cannot publish duplicate version"
-          # (verified against tag v1.5.0). The publisher surfaces this as
-          # part of the 400 response body from POST /v0/publish. If the
-          # upstream error text changes, this step will fall through to
-          # `exit $status` and fail loudly — preferable to silently
-          # swallowing a real publish error.
+          # (verified upstream against the currently-pinned mcp-publisher
+          # tag in .github/actions/install-mcp-publisher/action.yml). The
+          # publisher surfaces this as part of the 400 response body from
+          # POST /v0/publish. If the upstream error text changes, this
+          # step will fall through to `exit $status` and fail loudly —
+          # preferable to silently swallowing a real publish error.
           set +e
           output=$(./mcp-publisher publish 2>&1)
           status=$?
