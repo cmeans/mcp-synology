@@ -3,9 +3,18 @@ description: Download a pinned release of mcp-publisher from the official MCP re
 
 inputs:
   version:
-    description: "mcp-publisher release tag (e.g. v1.5.0). Bump when a new release is needed."
+    description: "mcp-publisher release tag (e.g. v1.7.6). Bump when a new release is needed."
     required: false
-    default: v1.5.0
+    # v1.7.6 is required: the registry server in v1.7.6 binds GitHub OIDC
+    # token exchange to a per-deployment audience
+    # (registry PR #1229, deployed prod 2026-04-30). Older mcp-publisher
+    # versions send audience `mcp-registry`, which the new registry rejects
+    # with a 401: `invalid audience: expected
+    # https://registry.modelcontextprotocol.io, got [mcp-registry]`. v0.5.1
+    # release ran with the previous v1.5.0 pin and got bitten — PyPI
+    # published cleanly but the registry leg failed. v1.7.6 sends the new
+    # audience and authenticates against the current prod deployment.
+    default: v1.7.6
 
 runs:
   using: composite

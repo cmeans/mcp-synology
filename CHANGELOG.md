@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- **publish.yml: bump pinned `mcp-publisher` v1.5.0 → v1.7.6 to match the new registry OIDC audience** (#79) — the v0.5.1 release ran with `mcp-publisher v1.5.0` (the pin in `.github/actions/install-mcp-publisher/action.yml`); PyPI publish succeeded but the `publish-registry` job failed at GitHub OIDC login with `invalid audience: expected https://registry.modelcontextprotocol.io, got [mcp-registry]` (HTTP 401). Root cause: the registry deployed [`modelcontextprotocol/registry#1229`](https://github.com/modelcontextprotocol/registry/pull/1229) ("auth: bind GitHub OIDC token exchange to a per-deployment audience") in `v1.7.6` on 2026-04-30 — one day before our 2026-05-01 release. v1.5.0's `login github-oidc` flow sends audience `mcp-registry`; v1.7.6's flow sends audience `https://registry.modelcontextprotocol.io`, which is what the new registry server validates against. Bumped the action's `default` from `v1.5.0` to `v1.7.6` (and added an explanatory comment so the next bump prompt has the rationale at hand). Re-running the failed `publish-registry` job on the existing v0.5.1 tag won't pick up this fix because `actions/checkout@v6` resolves to the tag's commit; the next release tag will exercise the fix end-to-end. v0.5.1 itself is on PyPI as expected and is the install path users actually hit; the missed registry entry is purely directory metadata.
+
 ## 0.5.1 (2026-05-01)
 
 ### Fixed
