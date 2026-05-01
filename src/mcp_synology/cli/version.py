@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json as json_mod
+import re
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
@@ -16,6 +17,26 @@ from mcp_synology import __version__
 
 _PYPI_PACKAGE = "mcp-synology"
 _VERSION_CHECK_INTERVAL = 86400  # 24 hours
+
+# Loose PEP 440-ish: requires X.Y.Z and optionally trailing pre/post/dev/local
+# segments separated by `-` or `.` (e.g. `0.5.1`, `0.5.1-rc1`, `1.2.3.post4`).
+# Tight enough to reject `latest`, `1.2`, whitespace, or shell metacharacters
+# before the value reaches `pip install mcp-synology==<value>`.
+_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+([-.]?[a-zA-Z0-9]+)*$")
+
+
+def _validate_version_string(value: str) -> None:
+    """Reject malformed version strings before they flow into a pip command.
+
+    Raises click.ClickException so click renders the standard `Error: ...`
+    line and exits 1 — same shape as the other CLI error paths.
+    """
+    if not isinstance(value, str) or not _VERSION_RE.match(value):
+        raise click.ClickException(
+            f"Invalid version string: {value!r}. "
+            "Expected MAJOR.MINOR.PATCH with optional pre/post suffix "
+            "(e.g. 0.5.1, 0.5.1-rc1, 1.2.3.post4)."
+        )
 
 
 def _get_current_version() -> str:
@@ -155,6 +176,8 @@ def _do_revert(target_version: str | None = None) -> None:
             click.echo("No previous version recorded — nothing to revert to.")
             click.echo(f"Tip: specify a version explicitly: {_PYPI_PACKAGE} --revert 0.1.0")
             return
+
+    _validate_version_string(prev)
 
     if prev == current:
         click.echo(f"Already running {current} — nothing to do.")

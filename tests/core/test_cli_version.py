@@ -17,6 +17,8 @@ import subprocess
 from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock, patch
 
+import click
+import pytest
 import yaml
 
 from mcp_synology.cli import version as v
@@ -319,6 +321,52 @@ class TestDoAutoUpgrade:
         assert "previous_version" not in state
 
 
+# ---------- _validate_version_string ----------
+
+
+class TestValidateVersionString:
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "0.5.0",
+            "0.5.1",
+            "0.5.1-rc1",
+            "0.5.0a1",
+            "1.2.3.post4",
+            "0.5.1.dev1",
+            "1.2.3-alpha.1",
+            "10.20.30",
+        ],
+    )
+    def test_accepts_valid_versions(self, value: str) -> None:
+        v._validate_version_string(value)  # no exception
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "latest",
+            "1.2",  # too few segments
+            "",
+            " ",
+            "   ",
+            "1.0.0; whatever",
+            "1.0.0 --extra",
+            "1.2.3 ",  # trailing whitespace
+            " 1.2.3",  # leading whitespace
+            "1.2.3-",  # trailing separator with no suffix
+            "v1.2.3",  # leading letter prefix
+            "1.2.3/../etc/passwd",
+            "==1.2.3",
+        ],
+    )
+    def test_rejects_invalid_versions(self, value: str) -> None:
+        with pytest.raises(click.ClickException) as exc:
+            v._validate_version_string(value)
+        # Exception message names the bad value and the expected shape
+        assert "Invalid version string" in exc.value.message
+        assert "MAJOR.MINOR.PATCH" in exc.value.message
+
+
 # ---------- _do_revert ----------
 
 
@@ -407,6 +455,32 @@ class TestDoRevert:
         ):
             # Just verify it doesn't crash; the function returns None either way
             v._do_revert("0.4.1")
+
+    def test_revert_rejects_invalid_explicit_version(self, tmp_path: Path) -> None:
+        """Malformed --revert <VER> raises ClickException and never shells out."""
+        with (
+            patch("pathlib.Path.home", return_value=tmp_path),
+            patch("mcp_synology.cli.version._get_current_version", return_value="0.5.0"),
+            patch("subprocess.run") as run,
+            pytest.raises(click.ClickException),
+        ):
+            v._do_revert("latest")
+        run.assert_not_called()
+
+    def test_revert_rejects_invalid_state_previous_version(self, tmp_path: Path) -> None:
+        """Corrupt previous_version in global state is rejected, not handed to pip."""
+        state_dir = tmp_path / ".local" / "state" / "mcp-synology"
+        state_dir.mkdir(parents=True)
+        (state_dir / "global.yaml").write_text("previous_version: '1.0.0; rm -rf /'\n")
+
+        with (
+            patch("pathlib.Path.home", return_value=tmp_path),
+            patch("mcp_synology.cli.version._get_current_version", return_value="0.5.0"),
+            patch("subprocess.run") as run,
+            pytest.raises(click.ClickException),
+        ):
+            v._do_revert(None)
+        run.assert_not_called()
 
     def test_revert_success_clears_previous_and_disables_auto_upgrade(self, tmp_path: Path) -> None:
         state_dir = tmp_path / ".local" / "state" / "mcp-synology"
