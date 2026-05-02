@@ -38,6 +38,30 @@ def make_test_config(**overrides: Any) -> AppConfig:
     return AppConfig(**raw)
 
 
+def make_client(api_cache: dict[str, ApiInfoEntry] | None = None) -> DsmClient:
+    """Build a sync `DsmClient` for tests that don't need the async `mock_client` fixture.
+
+    Pass `api_cache` to seed `client._api_cache`; omit for an empty cache.
+    """
+    client = DsmClient(base_url=BASE_URL)
+    if api_cache:
+        client._api_cache = api_cache
+    return client
+
+
+def make_minimal_api_cache() -> dict[str, ApiInfoEntry]:
+    """Tiny cache for testing version negotiation behavior in isolation.
+
+    Distinct from `make_api_cache()` — this exposes only Auth + List so a test
+    can verify behavior on uncached APIs without conftest's full FileStation
+    surface getting in the way.
+    """
+    return {
+        "SYNO.API.Auth": ApiInfoEntry(path="entry.cgi", min_version=1, max_version=7),
+        "SYNO.FileStation.List": ApiInfoEntry(path="entry.cgi", min_version=1, max_version=2),
+    }
+
+
 def make_api_cache() -> dict[str, ApiInfoEntry]:
     """Create a mock API info cache with File Station APIs."""
     return {

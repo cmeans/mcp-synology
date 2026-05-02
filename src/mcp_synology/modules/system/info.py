@@ -92,21 +92,24 @@ async def get_system_info(client: DsmClient) -> str:
         pairs.append(("CPU", cpu_str))
 
     # RAM
-    ram = dsm.get("ram") or core.get("ram_size", 0)
+    # Use explicit None-check so a (theoretical) 0 value isn't misread as missing.
+    ram = dsm["ram"] if dsm.get("ram") is not None else core.get("ram_size")
     if ram:
         pairs.append(("RAM", f"{ram} MB"))
 
-    # Temperature
-    temp = dsm.get("temperature") or core.get("sys_temp", 0)
-    temp_warn = dsm.get("temperature_warn", False) or core.get("temperature_warn", False)
-    if temp:
+    # Temperature — 0°C is technically a valid reading (cold-room install),
+    # so distinguish missing from zero with explicit None-checks.
+    temp = dsm["temperature"] if dsm.get("temperature") is not None else core.get("sys_temp")
+    temp_warn_dsm = dsm.get("temperature_warn")
+    temp_warn = temp_warn_dsm if temp_warn_dsm is not None else core.get("temperature_warn", False)
+    if temp is not None:
         temp_str = f"{temp}°C"
         if temp_warn:
             temp_str += " ⚠ WARNING"
         pairs.append(("Temperature", temp_str))
 
     # Uptime
-    uptime = dsm.get("uptime") or core.get("up_time", 0)
+    uptime = dsm["uptime"] if dsm.get("uptime") is not None else core.get("up_time")
     if uptime:
         pairs.append(("Uptime", _format_uptime(uptime)))
 

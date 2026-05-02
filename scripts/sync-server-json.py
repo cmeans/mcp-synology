@@ -42,7 +42,10 @@ def read_pyproject_version(path: Path = PYPROJECT) -> str:
         raise SystemExit(f"error: {path} not found") from None
     except tomllib.TOMLDecodeError as exc:
         raise SystemExit(f"error: {path} is not valid TOML: {exc}") from None
-    version = data.get("project", {}).get("version")
+    project = data.get("project")
+    if not isinstance(project, dict):
+        raise SystemExit(f"error: [project] section missing from {path}")
+    version = project.get("version")
     if not isinstance(version, str):
         raise SystemExit(f"error: [project].version not found or not a string in {path}")
     return version
