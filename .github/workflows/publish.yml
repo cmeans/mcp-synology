@@ -32,8 +32,28 @@ jobs:
           name: dist
           path: dist/
 
+  validate-server-json:
+    # Closes #44. Gate PyPI publish on registry-schema validation so a
+    # malformed server.json can't half-publish: PyPI accepts everything,
+    # but the registry rejects schema drift (new required fields, type
+    # changes) — without this gate, PyPI ships and the registry leg fails,
+    # leaving a discoverable PyPI release that isn't in the MCP registry.
+    # Re-running the failed job can't fix PyPI, so the cleanup is manual
+    # (yank, fix, re-tag). Validating up-front with the SAME pinned
+    # mcp-publisher version that actually publishes (`./.github/actions/
+    # install-mcp-publisher`) means schema drift surfaces before any
+    # external side-effect lands. ci.yml runs the same check on every PR;
+    # this job is the release-time backstop in case the registry schema
+    # or publisher version changes between merge and tag-push.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/install-mcp-publisher
+      - name: Validate server.json against registry schema
+        run: ./mcp-publisher validate server.json
+
   publish-pypi:
-    needs: build
+    needs: [build, validate-server-json]
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
