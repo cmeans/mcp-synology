@@ -13,23 +13,11 @@ from mcp_synology.core.errors import (
     SessionExpiredError,
     SynologyError,
 )
-from mcp_synology.core.state import ApiInfoEntry
+from tests.conftest import BASE_URL, make_client, make_minimal_api_cache
 
-BASE_URL = "http://nas:5000"
-
-
-def _make_client(api_cache: dict[str, ApiInfoEntry] | None = None) -> DsmClient:
-    client = DsmClient(base_url=BASE_URL)
-    if api_cache:
-        client._api_cache = api_cache
-    return client
-
-
-def _default_cache() -> dict[str, ApiInfoEntry]:
-    return {
-        "SYNO.API.Auth": ApiInfoEntry(path="entry.cgi", min_version=1, max_version=7),
-        "SYNO.FileStation.List": ApiInfoEntry(path="entry.cgi", min_version=1, max_version=2),
-    }
+# Local aliases so the existing test bodies don't need a wholesale rename.
+_make_client = make_client
+_default_cache = make_minimal_api_cache
 
 
 class TestQueryApiInfo:

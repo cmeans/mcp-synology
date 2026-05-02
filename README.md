@@ -115,7 +115,7 @@ uvx mcp-synology setup --list         # Shows all configured NAS instances
 
 ### Alternative: global install
 
-If you prefer a persistent install (avoids download on each invocation):
+If you prefer a persistent install (avoids download on each invocation). Requires [uv](https://docs.astral.sh/uv/getting-started/installation/) — install with `curl -LsSf https://astral.sh/uv/install.sh | sh` (macOS/Linux) or see the [installation guide](https://docs.astral.sh/uv/getting-started/installation/) for other options.
 
 ```bash
 uv tool install mcp-synology

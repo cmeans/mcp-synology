@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json as json_mod
+import logging
 import re
 import subprocess
 from datetime import UTC, datetime
@@ -14,6 +15,8 @@ import click
 import yaml
 
 from mcp_synology import __version__
+
+logger = logging.getLogger(__name__)
 
 _PYPI_PACKAGE = "mcp-synology"
 _VERSION_CHECK_INTERVAL = 86400  # 24 hours
@@ -65,11 +68,18 @@ def _get_latest_pypi_version() -> str | None:
         return None
 
 
-def _version_tuple(v: str) -> tuple[int, ...]:
+def _version_tuple(v: str) -> tuple[int, ...] | None:
+    """Parse a `MAJOR.MINOR.PATCH` string into a comparable tuple.
+
+    Returns None on parse failure (non-numeric segments, missing pieces, etc.)
+    so callers must explicitly handle the case rather than have a `(0,)`
+    sentinel silently compare less than every real version.
+    """
     try:
         return tuple(int(x) for x in v.split("."))
     except (ValueError, AttributeError):
-        return (0,)
+        logger.debug("_version_tuple: failed to parse %r", v)
+        return None
 
 
 def _detect_installer() -> str | None:
@@ -116,8 +126,11 @@ def _check_for_update(state: dict[str, Any], *, force: bool = False) -> str | No
                 if elapsed < _VERSION_CHECK_INTERVAL:
                     latest: str | None = state.get("latest_known_version")
                     current = _get_current_version()
-                    if latest and _version_tuple(latest) > _version_tuple(current):
-                        return latest
+                    if latest:
+                        latest_t = _version_tuple(latest)
+                        current_t = _version_tuple(current)
+                        if latest_t is not None and current_t is not None and latest_t > current_t:
+                            return latest
                     return None
             except (ValueError, TypeError, AttributeError):
                 pass
@@ -130,7 +143,9 @@ def _check_for_update(state: dict[str, Any], *, force: bool = False) -> str | No
     state["latest_known_version"] = latest
     current = _get_current_version()
 
-    if _version_tuple(latest) > _version_tuple(current):
+    latest_t = _version_tuple(latest)
+    current_t = _version_tuple(current)
+    if latest_t is not None and current_t is not None and latest_t > current_t:
         return latest
     return None
 

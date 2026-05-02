@@ -92,12 +92,15 @@ class TestVersionTuple:
     def test_two_part(self) -> None:
         assert v._version_tuple("0.5") == (0, 5)
 
-    def test_invalid_returns_zero_tuple(self) -> None:
-        assert v._version_tuple("not.a.version") == (0,)
+    def test_invalid_returns_none(self) -> None:
+        # Pre-#45 returned `(0,)` sentinel, which silently compared less than
+        # every real version. Now returns None so callers must handle parse
+        # failure explicitly (see _check_for_update).
+        assert v._version_tuple("not.a.version") is None
 
-    def test_empty_returns_zero_tuple(self) -> None:
+    def test_empty_returns_none(self) -> None:
         # int("") raises ValueError
-        assert v._version_tuple("") == (0,)
+        assert v._version_tuple("") is None
 
 
 # ---------- _detect_installer ----------

@@ -140,7 +140,7 @@ def _setup_interactive(verbose: bool) -> None:
 
     # Prompt for credentials
     click.echo()
-    username = click.prompt("DSM username")
+    username = click.prompt("DSM username").strip()
     password = click.prompt("DSM password", hide_input=True)
 
     # Store in keyring
@@ -223,7 +223,7 @@ def _setup_credential_flow(app_config: Any, verbose: bool) -> None:
     click.echo(f"  Instance: {app_config.instance_id}")
     click.echo()
 
-    username = click.prompt("DSM username")
+    username = click.prompt("DSM username").strip()
     password = click.prompt("DSM password", hide_input=True)
 
     service = f"mcp-synology/{app_config.instance_id}"
