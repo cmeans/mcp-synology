@@ -20,6 +20,7 @@ from mcp_synology.modules.filestation.helpers import (
     normalize_path,
     parse_human_size,
     parse_mtime,
+    validate_additional,
 )
 
 if TYPE_CHECKING:
@@ -64,6 +65,7 @@ async def search_files(
     poll_interval: float = 1.0,
 ) -> str:
     """Search for files by name, type, size, or modification date."""
+    validate_additional(additional, tool_name="Search files")
     if additional is None:
         additional = ["size", "time"]
 

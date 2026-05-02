@@ -20,6 +20,7 @@ from mcp_synology.modules.filestation.helpers import (
     ensure_recycle_status,
     file_type_icon,
     normalize_path,
+    validate_additional,
 )
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,7 @@ async def list_shares(
     file_type_indicator: str = "emoji",
 ) -> str:
     """List all shared folders on the NAS."""
+    validate_additional(additional, tool_name="List shares")
     if additional is None:
         additional = ["real_path", "size", "owner", "perm"]
 
@@ -129,6 +131,7 @@ async def list_files(
     file_type_indicator: str = "emoji",
 ) -> str:
     """List files and folders within a directory path."""
+    validate_additional(additional, tool_name="List files")
     if additional is None:
         additional = ["size", "time"]
 

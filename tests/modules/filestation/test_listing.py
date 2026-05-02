@@ -155,6 +155,38 @@ class TestListShares:
         assert body["status"] == "error"
         assert body["error"]["code"] == "permission_denied"
 
+    @respx.mock
+    async def test_list_shares_additional_round_trips(self, mock_client: DsmClient) -> None:
+        """Closes #41: caller-supplied `additional` reaches DSM verbatim.
+
+        The pre-fix tool registration didn't surface `additional`, so callers
+        could not request fields like `mount_point_type` / `volume_status`.
+        Round-trip test: pass a non-default list and confirm the DSM request
+        carries the values in the documented `["a","b"]` form.
+        """
+        captured: list[dict[str, str]] = []
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            captured.append(dict(request.url.params))
+            return httpx.Response(200, json={"success": True, "data": {"shares": [], "total": 0}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        await list_shares(
+            mock_client,
+            additional=["mount_point_type", "volume_status"],
+        )
+        assert len(captured) == 1
+        assert captured[0]["additional"] == '["mount_point_type","volume_status"]'
+
+    async def test_list_shares_rejects_unknown_additional(self, mock_client: DsmClient) -> None:
+        """Unknown `additional` field is rejected before any DSM round-trip."""
+        with pytest.raises(ToolError) as exc_info:
+            await list_shares(mock_client, additional=["sze"])
+        body = json.loads(str(exc_info.value))
+        assert body["status"] == "error"
+        assert body["error"]["code"] == "invalid_parameter"
+        assert "sze" in body["error"]["message"]
+
 
 class TestListFiles:
     @respx.mock
@@ -233,6 +265,32 @@ class TestListFiles:
         body = json.loads(str(exc_info.value))
         assert body["status"] == "error"
         assert body["error"]["code"] == "not_found"
+
+    @respx.mock
+    async def test_list_files_additional_round_trips(self, mock_client: DsmClient) -> None:
+        """Closes #41: caller-supplied `additional` reaches DSM verbatim."""
+        captured: list[dict[str, str]] = []
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            captured.append(dict(request.url.params))
+            return httpx.Response(200, json={"success": True, "data": {"files": [], "total": 0}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        await list_files(
+            mock_client,
+            path="/video",
+            additional=["real_path", "size", "owner", "time", "perm"],
+        )
+        assert len(captured) == 1
+        assert captured[0]["additional"] == '["real_path","size","owner","time","perm"]'
+
+    async def test_list_files_rejects_unknown_additional(self, mock_client: DsmClient) -> None:
+        with pytest.raises(ToolError) as exc_info:
+            await list_files(mock_client, path="/video", additional=["junk"])
+        body = json.loads(str(exc_info.value))
+        assert body["status"] == "error"
+        assert body["error"]["code"] == "invalid_parameter"
+        assert "junk" in body["error"]["message"]
 
 
 class TestListRecycleBin:

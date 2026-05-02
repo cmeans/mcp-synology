@@ -8,9 +8,52 @@ import re
 from datetime import UTC, datetime
 
 from mcp_synology.core.client import DsmClient
-from mcp_synology.core.errors import SynologyError
+from mcp_synology.core.errors import ErrorCode, SynologyError
+from mcp_synology.core.formatting import error_response
 
 logger = logging.getLogger(__name__)
+
+# Union of `additional` field values DSM 7.x accepts across SYNO.FileStation.List
+# and SYNO.FileStation.Search. Tighter per-API whitelisting isn't worth the
+# maintenance cost — DSM silently ignores values that don't apply to a given
+# endpoint (e.g. `mount_point_type` on a non-share path simply doesn't appear
+# in the response), so the union acts as a typo-and-injection guard without
+# blocking valid use cases. Documented in `docs/specs/filestation-module-spec.md`.
+_VALID_ADDITIONAL_FIELDS: frozenset[str] = frozenset(
+    {
+        "real_path",
+        "size",
+        "owner",
+        "time",
+        "perm",
+        "type",
+        "mount_point_type",
+        "volume_status",
+    }
+)
+
+
+def validate_additional(values: list[str] | None, *, tool_name: str) -> None:
+    """Reject unknown `additional` field names before they hit DSM.
+
+    DSM accepts unknown values silently (the field just doesn't appear in the
+    response), which makes typos invisible to callers. Validating up-front
+    surfaces the typo as a clear ToolError naming the bad value and listing
+    the supported set.
+    """
+    if not values:
+        return
+    unknown = [v for v in values if v not in _VALID_ADDITIONAL_FIELDS]
+    if unknown:
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            f"{tool_name} failed: unknown 'additional' field(s): {sorted(set(unknown))!r}.",
+            retryable=False,
+            param="additional",
+            value=values,
+            suggestion=("Supported fields: " + ", ".join(sorted(_VALID_ADDITIONAL_FIELDS)) + "."),
+        )
+
 
 # Size unit multipliers (binary: 1 KB = 1024 bytes)
 _SIZE_UNITS: dict[str, int] = {
