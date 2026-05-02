@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed
+
+- **Remove Glama integration** (#88) — drops the Glama score badge from `README.md` and deletes the `glama.json` config file at the repo root. Glama's "Maintenance" sub-score is driven primarily by `issues responded to in the last N months`, which conflicts with this project's use of GitHub issues as a planned roadmap (the baggage tracker #51 + per-item issues are TODOs, not unanswered support requests). The badge therefore mis-represents project health to anyone landing on the README, and the heuristic isn't tunable from our side. Removing both rather than gaming the metric or adding a workflow note. PyPI / GitHub release / MCP registry remain the canonical distribution and discovery surfaces; the README still carries the standard PyPI / Python-versions / License / Tests / Coverage / Downloads badges plus per-installer and per-OS download breakdowns from `cmeans/pypi-winnow-downloads`.
+
 ## 0.5.2 (2026-05-01)
 
 ### Fixed
