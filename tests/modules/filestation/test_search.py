@@ -233,3 +233,45 @@ class TestSearchFiles:
         # Both lands as Unix-epoch-seconds strings in DSM start params.
         assert captured.get("mtime_from") == "1775001600"  # 2026-04-01 00:00 UTC
         assert captured.get("mtime_to") == "1775044800"  # 2026-04-01 12:00 UTC
+
+    @respx.mock
+    async def test_search_additional_round_trips(self, mock_client: DsmClient) -> None:
+        """Closes #41: caller-supplied `additional` reaches DSM verbatim.
+
+        For Search, `additional` is sent on the `list` (poll) request, not on
+        `start` — DSM returns the full file metadata at poll time.
+        """
+        captured_list: dict[str, str] = {}
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            if params.get("method") == "start":
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "s-add"}})
+            if params.get("method") == "list":
+                captured_list.update(params)
+                return httpx.Response(
+                    200,
+                    json={"success": True, "data": {"files": [], "finished": True, "total": 0}},
+                )
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+
+        await search_files(
+            mock_client,
+            folder_path="/video",
+            additional=["size", "time", "perm"],
+        )
+        assert captured_list.get("additional") == '["size","time","perm"]'
+
+    async def test_search_rejects_unknown_additional(self, mock_client: DsmClient) -> None:
+        with pytest.raises(ToolError) as exc_info:
+            await search_files(
+                mock_client,
+                folder_path="/video",
+                additional=["nope"],
+            )
+        body = json.loads(str(exc_info.value))
+        assert body["status"] == "error"
+        assert body["error"]["code"] == "invalid_parameter"
+        assert "nope" in body["error"]["message"]

@@ -6,6 +6,7 @@ import logging
 from unittest.mock import AsyncMock
 
 import pytest
+from mcp.server.fastmcp.exceptions import ToolError
 
 from mcp_synology.core.errors import SynologyError
 from mcp_synology.modules.filestation.helpers import (
@@ -17,6 +18,7 @@ from mcp_synology.modules.filestation.helpers import (
     normalize_path,
     parse_human_size,
     parse_mtime,
+    validate_additional,
     validate_share_path,
 )
 
@@ -168,6 +170,55 @@ class TestEscapeMultiPath:
     def test_comma_escape(self) -> None:
         result = escape_multi_path(["/video/a,b"])
         assert result == "/video/a\\,b"
+
+
+class TestValidateAdditional:
+    """Closes #41: `additional` field whitelist enforcement.
+
+    DSM silently accepts unknown values (the field just doesn't appear in the
+    response), so a typo like `"sze"` would never produce a visible error.
+    `validate_additional` rejects unknown values up-front with a clear
+    ToolError naming the bad value and listing the supported set.
+    """
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            None,
+            [],
+            ["size"],
+            ["size", "time"],
+            ["real_path", "size", "owner", "perm"],
+            ["mount_point_type", "volume_status"],
+            ["type"],
+        ],
+    )
+    def test_accepts_valid_or_empty(self, value: list[str] | None) -> None:
+        validate_additional(value, tool_name="List shares")  # no exception
+
+    @pytest.mark.parametrize(
+        "value,bad",
+        [
+            (["sze"], "sze"),
+            (["size", "tme"], "tme"),
+            (["mount_point_type", "junk"], "junk"),
+            (["", "size"], ""),
+        ],
+    )
+    def test_rejects_unknown(self, value: list[str], bad: str) -> None:
+        with pytest.raises(ToolError) as exc:
+            validate_additional(value, tool_name="List shares")
+        body = str(exc.value)
+        assert "List shares failed" in body
+        assert bad in body
+        # Suggestion lists every supported field.
+        for field in ("real_path", "size", "owner", "time", "perm", "type"):
+            assert field in body
+
+    def test_tool_name_appears_in_error(self) -> None:
+        with pytest.raises(ToolError) as exc:
+            validate_additional(["bogus"], tool_name="Search files")
+        assert "Search files failed" in str(exc.value)
 
 
 class TestMatchesPattern:
