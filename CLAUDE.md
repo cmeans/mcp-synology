@@ -71,8 +71,9 @@ uv run pytest --cov=mcp_synology           # Tests with coverage
 - **DEBUG**: detailed operational trace — every DSM request/response (passwords masked), credential resolution steps, config discovery, version negotiation, API cache contents, session lifecycle, module registration
 - **INFO**: significant lifecycle events only — successful auth, re-auth, security config notes
 - **WARNING/ERROR**: configuration issues, failures
-- Three ways to enable debug: `mcp-synology check -v` (flag), `SYNOLOGY_LOG_LEVEL=debug` (env var), `logging.level: debug` (config)
-- The `setup` and `check` commands accept `-v`/`--verbose`; `serve` uses config/env var (no interactive flag since it's launched by Claude Desktop)
+- **Enabling debug logging** depends on the subcommand:
+  - For `serve` (launched by Claude Desktop, no interactive flag available): set `SYNOLOGY_LOG_LEVEL=debug` env var OR `logging.level: debug` in the instance config
+  - For `setup` / `check` (interactive CLI): pass `-v` / `--verbose`, or use either of the above
 - Logging is initialized *before* config loading so config discovery is visible at debug level
 
 ### Error Handling
