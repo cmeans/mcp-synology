@@ -92,7 +92,7 @@ uv run pytest --cov=mcp_synology           # Tests with coverage
 - Thin wrapper — knows DSM request/response conventions, nothing about specific APIs
 - **Always use GET** — never POST. DSM reports `requestFormat=JSON` on all FileStation APIs (even v2), but this is metadata not a mandate. POST causes silent failures on DSM 7.1
 - Calls `SYNO.API.Info` with `query=ALL` at startup; caches API name → path/version map
-- **Version pinning:** CopyMove, Delete, and Search are pinned to v2 (`negotiate_version(..., max_version=2)`) to avoid v3 JSON request format issues
+- **Version pinning:** CopyMove, Delete, Search, Upload, and `List getinfo` are pinned to v2 to avoid v3 JSON request format issues. CopyMove/Delete/Search use `negotiate_version(..., max_version=2)` from their handlers; Upload's pin lives in `core/client.py::upload_file` (`min(info.max_version, 2)` default) because Upload is a special-case multipart POST not routed through `request()`; `List getinfo` is pinned in `modules/filestation/metadata.py` (added by #77 to dodge the v3 multipath quirk that surfaced as #68). Removing any of these pins will reintroduce silent failures on DSM 7.x — the v3 request format DSM advertises is metadata, not a mandate
 - Session ID injection and comma/backslash escaping in multi-path params are transparent to modules
 
 ### Config
