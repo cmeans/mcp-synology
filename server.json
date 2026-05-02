@@ -3,7 +3,7 @@
   "name": "io.github.cmeans/mcp-synology",
   "title": "Synology NAS",
   "description": "MCP server for Synology NAS — browse files, monitor health, and automate operations",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "repository": {
     "url": "https://github.com/cmeans/mcp-synology",
     "source": "github"
@@ -12,7 +12,7 @@
     {
       "registryType": "pypi",
       "identifier": "mcp-synology",
-      "version": "0.5.1",
+      "version": "0.5.2",
       "transport": {
         "type": "stdio"
       }
