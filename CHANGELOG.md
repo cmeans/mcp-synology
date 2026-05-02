@@ -10,7 +10,7 @@
 
 ### Fixed
 
-- **Tidy-up bundle: seven small items from the 2026-04-16 review** (#XX) — addresses 7 of 8 items on #45.
+- **Tidy-up bundle: seven small items from the 2026-04-16 review** (#92) — addresses 7 of 8 items on #45.
   - **`setup.py` username inputs now stripped** (`cli/setup.py:143` and `:226`) — `alias` was already stripped, but `username` was not, so a pasted trailing space produced a confusing DSM 400 on login. Both prompts now `.strip()` the username before storing.
   - **`system/info.py` falls back with `is not None` instead of `or` on numeric fields** (`modules/system/info.py:95-114`) — RAM, temperature, and uptime previously used `dsm.get(field) or core.get(field, 0)`, treating a (theoretical) `0` value as missing. A 0°C reading or a fresh-boot uptime would silently fall through to the secondary source. Now uses explicit None-checks so a real 0 is preserved. Same fix for the `temperature_warn` boolean: `False` is a real "no warning" answer that should be respected, not treated as missing.
   - **`_version_tuple()` returns `None` on parse failure** (`cli/version.py:68`) — pre-fix returned `(0,)` sentinel, which silently compared less than every real version, so a corrupt PyPI response or hand-edited `latest_known_version` would just get treated as "no update available" with no breadcrumb. Now returns `None` and logs at DEBUG; both `_check_for_update` call sites handle the None case explicitly. Tests updated to assert the new contract.
