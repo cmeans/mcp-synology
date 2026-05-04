@@ -74,6 +74,68 @@ class TestCreateFolder:
         assert body["status"] == "error"
         assert body["error"]["code"] == "invalid_parameter"
 
+    @respx.mock
+    async def test_multipath_uses_per_path_serial_calls(self, mock_client: DsmClient) -> None:
+        """Closes #95: DSM 7.x's `SYNO.FileStation.CreateFolder create` does
+        not honor the documented comma-joined multi-path format on v2 — a
+        request with `name=a,b` is treated as a single literal name and
+        creates one folder named `a,b` while the tool reports
+        `Created 1 folder(s)`. Same root-cause family as #68 (delete +
+        getinfo) and #84 (move/copy); fix matches that pattern: one DSM
+        CreateFolder call per input path. Test asserts (a) N create
+        requests for N paths, (b) each request carries a single bare
+        `name` (no commas) and a single `folder_path` parent, and
+        (c) the aggregated response names every input folder.
+        """
+        creates: list[dict[str, str]] = []
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            if (
+                params.get("api") == "SYNO.FileStation.CreateFolder"
+                and params.get("method") == "create"
+            ):
+                creates.append(params)
+                folder_path = params["folder_path"]
+                name = params["name"]
+                return httpx.Response(
+                    200,
+                    json={
+                        "success": True,
+                        "data": {
+                            "folders": [{"path": f"{folder_path.rstrip('/')}/{name}", "name": name}]
+                        },
+                    },
+                )
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+
+        result = await create_folder(
+            mock_client,
+            paths=["/video/Show/Season 1", "/video/Show/Season 2"],
+        )
+
+        assert len(creates) == 2, (
+            f"expected two CreateFolder calls (one per path), got {len(creates)}"
+        )
+        for params in creates:
+            assert "," not in params["name"], (
+                f"each request must carry a single bare name (no comma-joined multipath), "
+                f"got name={params['name']!r}"
+            )
+            assert "," not in params["folder_path"], (
+                f"each request must carry a single folder_path parent, "
+                f"got folder_path={params['folder_path']!r}"
+            )
+        sent_names = sorted(p["name"] for p in creates)
+        assert sent_names == ["Season 1", "Season 2"]
+        sent_parents = sorted(p["folder_path"] for p in creates)
+        assert sent_parents == ["/video/Show", "/video/Show"]
+        assert "Season 1" in result
+        assert "Season 2" in result
+        assert "Created 2 folder(s)" in result
+
 
 class TestRename:
     @respx.mock

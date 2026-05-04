@@ -15,7 +15,6 @@ from mcp_synology.core.formatting import (
 )
 from mcp_synology.modules.filestation.helpers import (
     ensure_recycle_status,
-    escape_multi_path,
     normalize_path,
 )
 
@@ -47,32 +46,37 @@ async def create_folder(
     paths: list[str],
     force_parent: bool = True,
 ) -> str:
-    """Create one or more new folders."""
+    """Create one or more new folders.
+
+    Closes #95. DSM 7.x's `SYNO.FileStation.CreateFolder create` does not
+    honor the documented comma-joined multi-path format — a request with
+    `name=a,b` and `folder_path=/X,/X` is treated as a single literal name
+    and creates one mangled folder while the tool reports
+    `Created 1 folder(s)`. Same root-cause family as #68 (delete + getinfo)
+    and #84 (move/copy); fix matches that pattern: one DSM CreateFolder
+    call per input path. Per-path serial means N round-trips for N paths,
+    which is fine for typical small-N usage and trivially correct.
+    """
     normalized = [normalize_path(p) for p in paths]
 
-    # Build folder_path and name params from the paths
-    folder_paths: list[str] = []
-    names: list[str] = []
+    folders: list[dict[str, Any]] = []
     for p in normalized:
         parent = "/".join(p.split("/")[:-1]) or "/"
         name = p.split("/")[-1]
-        folder_paths.append(parent)
-        names.append(name)
+        try:
+            data = await client.request(
+                "SYNO.FileStation.CreateFolder",
+                "create",
+                params={
+                    "folder_path": parent,
+                    "name": name,
+                    "force_parent": str(force_parent).lower(),
+                },
+            )
+        except SynologyError as e:
+            synology_error_response("Create folder", e)
+        folders.extend(data.get("folders", []))
 
-    try:
-        data = await client.request(
-            "SYNO.FileStation.CreateFolder",
-            "create",
-            params={
-                "folder_path": escape_multi_path(folder_paths),
-                "name": escape_multi_path(names),
-                "force_parent": str(force_parent).lower(),
-            },
-        )
-    except SynologyError as e:
-        synology_error_response("Create folder", e)
-
-    folders = data.get("folders", [])
     lines = [format_status(f"Created {len(folders)} folder(s):")]
     for f in folders:
         path = f.get("path", "")
