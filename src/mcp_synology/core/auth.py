@@ -69,11 +69,23 @@ class AuthManager:
         """
         self._on_reauth_callbacks.append(cb)
 
-    def _build_session_name(self) -> str:
-        """Build a unique DSM session name: MCPSynology_{instance_id}_{uuid}."""
+    def _build_session_name(self, session_key: str | None = None) -> str:
+        """Build a DSM session name.
+
+        ``session_key=None`` (current default) produces
+        ``MCPSynology_{instance_id}_{uuid8}`` — one shared session per
+        ``AuthManager`` instance, which is the only mode exercised today
+        under the stdio transport.
+
+        ``session_key=<str>`` produces ``MCPSynology_{instance_id}_{session_key}``
+        for the planned per-client session model under Streamable HTTP. The
+        helper accepts a key now so a future per-client session pool can derive
+        names without changing this method's contract; no production code path
+        invokes it with a non-None key today. See ADR 0001.
+        """
         instance_id = self._config.instance_id or "default"
-        unique_id = uuid.uuid4().hex[:8]
-        return f"MCPSynology_{instance_id}_{unique_id}"
+        suffix = session_key if session_key is not None else uuid.uuid4().hex[:8]
+        return f"MCPSynology_{instance_id}_{suffix}"
 
     def _resolve_credentials(self) -> tuple[str, str, str | None]:
         """Resolve credentials from the storage hierarchy.
