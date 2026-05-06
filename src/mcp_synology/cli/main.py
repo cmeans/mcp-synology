@@ -17,6 +17,7 @@ from mcp_synology.cli.version import (
     _get_current_version,
     _load_global_state,
     _save_global_state,
+    _with_global_state_lock,
 )
 
 _PYPI_PACKAGE = "mcp-synology"
@@ -49,9 +50,10 @@ def main(
 ) -> None:
     """mcp-synology — MCP server for Synology NAS."""
     if check_update:
-        state = _load_global_state()
-        latest = _check_for_update(state, force=True)
-        _save_global_state(state)
+        with _with_global_state_lock():
+            state = _load_global_state()
+            latest = _check_for_update(state, force=True)
+            _save_global_state(state)
         current = _get_current_version()
         if latest:
             click.echo(f"Update available: {current} -> {latest}")
@@ -67,9 +69,10 @@ def main(
         ctx.exit()
 
     if auto_upgrade is not None:
-        state = _load_global_state()
-        state["auto_upgrade"] = auto_upgrade == "enable"
-        _save_global_state(state)
+        with _with_global_state_lock():
+            state = _load_global_state()
+            state["auto_upgrade"] = auto_upgrade == "enable"
+            _save_global_state(state)
         status = "enabled" if state["auto_upgrade"] else "disabled"
         click.echo(f"Auto-upgrade {status}.")
         ctx.exit()
@@ -79,21 +82,24 @@ def main(
         ctx.exit()
 
     # Track version changes for --revert
-    state = _load_global_state()
-    current = _get_current_version()
-    last_known = state.get("running_version")
-    if last_known and last_known != current:
-        state["previous_version"] = last_known
-    state["running_version"] = current
-    _save_global_state(state)
+    with _with_global_state_lock():
+        state = _load_global_state()
+        current = _get_current_version()
+        last_known = state.get("running_version")
+        if last_known and last_known != current:
+            state["previous_version"] = last_known
+        state["running_version"] = current
+        _save_global_state(state)
 
     # Auto-upgrade check — only on interactive commands, not serve
     # (serve is launched by Claude Desktop; upgrading mid-launch is risky)
     if state.get("auto_upgrade") and ctx.invoked_subcommand != "serve":
-        latest = _check_for_update(state)
-        _save_global_state(state)
+        with _with_global_state_lock():
+            fresh = _load_global_state()
+            latest = _check_for_update(fresh)
+            _save_global_state(fresh)
         if latest:
-            _do_auto_upgrade(state)
+            _do_auto_upgrade()
 
     if ctx.invoked_subcommand is None:
         click.echo(ctx.get_help())

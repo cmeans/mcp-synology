@@ -202,18 +202,31 @@ class SharedClientManager:
                 _check_for_update,
                 _load_global_state,
                 _save_global_state,
+                _with_global_state_lock,
             )
 
             loop = asyncio.get_running_loop()
-            gstate = _load_global_state()
+
             # Run the blocking PyPI check in a thread, bounded so a stuck
             # executor (slow socket, slow YAML parse, hung disk) can't
             # keep this coroutine alive forever. The inner urlopen has
             # its own 5s timeout; the 10s outer bound is a safety margin
             # for everything else _check_for_update does.
+            #
+            # The full load → check → save sequence runs inside the executor
+            # so the synchronous fcntl.flock never spans an `await`. Holding
+            # a sync lock across an await would be a deadlock footgun for any
+            # future async caller of `_with_global_state_lock` on this event
+            # loop (e.g. #75's ServerState lifecycle).
+            def _check_under_lock() -> str | None:
+                with _with_global_state_lock():
+                    gstate = _load_global_state()
+                    result = _check_for_update(gstate)
+                    _save_global_state(gstate)
+                    return result
+
             async with asyncio.timeout(10):
-                latest = await loop.run_in_executor(None, _check_for_update, gstate)
-            _save_global_state(gstate)
+                latest = await loop.run_in_executor(None, _check_under_lock)
             if latest:
                 from mcp_synology import __version__
 

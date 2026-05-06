@@ -13,6 +13,7 @@ from mcp_synology.cli.version import (
     _check_for_update,
     _load_global_state,
     _save_global_state,
+    _with_global_state_lock,
 )
 
 __all__ = [
@@ -21,5 +22,6 @@ __all__ = [
     "_load_global_state",
     "_save_global_state",
     "_store_keyring",
+    "_with_global_state_lock",
     "main",
 ]

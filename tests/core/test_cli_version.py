@@ -174,6 +174,51 @@ class TestGlobalState:
             assert v._load_global_state() == original
 
 
+# ---------- _with_global_state_lock ----------
+
+
+class TestGlobalStateLock:
+    def test_concurrent_writers_preserve_both_updates(self, tmp_path: Path) -> None:
+        """Regression test for #93 — load/mutate/save under the lock prevents lost updates.
+
+        Two threads each increment a distinct counter 50 times. Without the lock,
+        interleaved load/save sequences cause lost updates and at least one
+        counter ends below 50. With the lock, both counters reach exactly 50.
+        """
+        import threading
+
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            v._save_global_state({"counter_a": 0, "counter_b": 0})
+
+            def writer(key: str) -> None:
+                for _ in range(50):
+                    with v._with_global_state_lock():
+                        state = v._load_global_state()
+                        state[key] = state.get(key, 0) + 1
+                        v._save_global_state(state)
+
+            t1 = threading.Thread(target=writer, args=("counter_a",))
+            t2 = threading.Thread(target=writer, args=("counter_b",))
+            t1.start()
+            t2.start()
+            t1.join()
+            t2.join()
+
+            final = v._load_global_state()
+
+        assert final["counter_a"] == 50
+        assert final["counter_b"] == 50
+
+    def test_lock_creates_state_dir_if_missing(self, tmp_path: Path) -> None:
+        """Lockfile location is `.../mcp-synology/global.yaml.lock`; the parent
+        dir must be created on first use even if no save has happened yet."""
+        with patch("pathlib.Path.home", return_value=tmp_path), v._with_global_state_lock():
+            pass
+        lock_dir = tmp_path / ".local" / "state" / "mcp-synology"
+        assert lock_dir.is_dir()
+        assert (lock_dir / "global.yaml.lock").exists()
+
+
 # ---------- _check_for_update ----------
 
 
@@ -279,49 +324,48 @@ class TestDoAutoUpgrade:
         )
 
     def test_uv_installer_success(self, tmp_path: Path) -> None:
-        state: dict[str, Any] = {}
         with (
             patch("pathlib.Path.home", return_value=tmp_path),
             patch("mcp_synology.cli.version._detect_installer", return_value="uv"),
             patch("mcp_synology.cli.version._get_current_version", return_value="0.5.0"),
             patch("subprocess.run", return_value=self._fake_completed(0)) as run,
         ):
-            assert v._do_auto_upgrade(state) is True
+            assert v._do_auto_upgrade() is True
+            saved = v._load_global_state()
         cmd = run.call_args.args[0]
         assert cmd[:3] == ["uv", "tool", "install"]
         assert "mcp-synology@latest" in cmd
-        assert state["previous_version"] == "0.5.0"
+        assert saved["previous_version"] == "0.5.0"
 
     def test_pipx_installer_success(self, tmp_path: Path) -> None:
-        state: dict[str, Any] = {}
         with (
             patch("pathlib.Path.home", return_value=tmp_path),
             patch("mcp_synology.cli.version._detect_installer", return_value="pipx"),
             patch("mcp_synology.cli.version._get_current_version", return_value="0.5.0"),
             patch("subprocess.run", return_value=self._fake_completed(0)),
         ):
-            assert v._do_auto_upgrade(state) is True
-        assert state["previous_version"] == "0.5.0"
+            assert v._do_auto_upgrade() is True
+            saved = v._load_global_state()
+        assert saved["previous_version"] == "0.5.0"
 
-    def test_unknown_installer_returns_false(self) -> None:
-        state: dict[str, Any] = {}
+    def test_unknown_installer_returns_false(self, tmp_path: Path) -> None:
         with (
+            patch("pathlib.Path.home", return_value=tmp_path),
             patch("mcp_synology.cli.version._detect_installer", return_value=None),
             patch("mcp_synology.cli.version._get_current_version", return_value="0.5.0"),
         ):
-            assert v._do_auto_upgrade(state) is False
-        assert "previous_version" not in state
+            assert v._do_auto_upgrade() is False
+            assert "previous_version" not in v._load_global_state()
 
     def test_subprocess_failure_returns_false(self, tmp_path: Path) -> None:
-        state: dict[str, Any] = {}
         with (
             patch("pathlib.Path.home", return_value=tmp_path),
             patch("mcp_synology.cli.version._detect_installer", return_value="uv"),
             patch("mcp_synology.cli.version._get_current_version", return_value="0.5.0"),
             patch("subprocess.run", return_value=self._fake_completed(1, stderr="boom")),
         ):
-            assert v._do_auto_upgrade(state) is False
-        assert "previous_version" not in state
+            assert v._do_auto_upgrade() is False
+            assert "previous_version" not in v._load_global_state()
 
 
 # ---------- _validate_version_string ----------
