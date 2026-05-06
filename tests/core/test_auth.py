@@ -617,6 +617,50 @@ class TestSessionNaming:
         uuid_part = auth._session_name.split("_")[-1]
         assert len(uuid_part) == 8
 
+    def test_build_session_name_without_key_uses_uuid(self) -> None:
+        """Helper called with no key keeps the current uuid-suffix shape.
+
+        Pinning the no-arg behavior so the deferred-stub argument addition
+        (ADR 0001) cannot silently change the default session-name format.
+        """
+        config = _make_config(instance_id="nas-a")
+        client = _make_client()
+        auth = AuthManager(config, client)
+        name = auth._build_session_name()
+        assert name.startswith("MCPSynology_nas-a_")
+        suffix = name.rsplit("_", 1)[-1]
+        assert len(suffix) == 8
+        # uuid4().hex is lowercase hex
+        assert all(c in "0123456789abcdef" for c in suffix)
+
+    def test_build_session_name_with_key_uses_key_as_suffix(self) -> None:
+        """Helper called with an explicit key derives the per-key form.
+
+        This is the deferred-stub surface for the Streamable HTTP per-client
+        session model (ADR 0001). No production code path passes a key today;
+        the test pins the helper's contract so a future per-client session
+        pool can build on it without re-deriving the name format.
+        """
+        config = _make_config(instance_id="nas-b")
+        client = _make_client()
+        auth = AuthManager(config, client)
+        name = auth._build_session_name(session_key="mcp-client-xyz")
+        assert name == "MCPSynology_nas-b_mcp-client-xyz"
+
+    def test_build_session_name_with_empty_key_uses_empty_suffix(self) -> None:
+        """An explicit empty-string key is honored as-is, not treated as None.
+
+        Pins the None-vs-empty distinction so a future pool that uses sentinel
+        values cannot accidentally collide with the no-key default. Empty-string
+        is a degenerate case but the contract treats `None` (use uuid) and
+        `""` (use the empty string literally) as different.
+        """
+        config = _make_config(instance_id="nas-c")
+        client = _make_client()
+        auth = AuthManager(config, client)
+        name = auth._build_session_name(session_key="")
+        assert name == "MCPSynology_nas-c_"
+
 
 class TestDbusSocketMissing:
     def test_dbus_not_set_when_socket_missing_on_linux(

@@ -61,15 +61,12 @@ Owns session lifecycle and credential retrieval. See [Auth Architecture](#auth-a
 
 ```python
 class AuthManager:
-    async def get_session(self, session_key: str | None = None) -> str:
-        """Get a valid DSM session ID.
-
-        session_key: Optional key to scope DSM sessions.
-        If None, uses the default (shared) session.
-        For Streamable HTTP, pass the MCP session_id for per-client sessions.
-        """
+    async def get_session(self) -> str:
+        """Get a valid DSM session ID, logging in if needed."""
         ...
 ```
+
+The current signature is single-session, matching the stdio transport's one-process-per-client model. A `session_key: str | None = None` parameter is reserved for the future per-client session model under Streamable HTTP — see [Planned: Per-Client Sessions](#planned-per-client-sessions-streamable-http) below and [ADR 0001](../adr/0001-per-client-dsm-sessions.md) for the deferral decision and revisit triggers.
 
 #### Config System (`core/config.py`)
 
@@ -309,21 +306,23 @@ When a module makes an API call and the DSM client receives a session error, re-
 
 **Keepalive strategy:** Lazy re-auth (let sessions expire, re-authenticate on next request) rather than proactive keepalive pings. Simpler, no unnecessary traffic, and re-auth is fast (single HTTP call).
 
-#### Future: Per-Client Sessions (Streamable HTTP)
+#### Planned: Per-Client Sessions (Streamable HTTP)
 
 Under stdio transport, one process = one MCP session = one DSM session shared across all chats. This is fine — DSM sessions handle concurrent API calls.
 
-Under Streamable HTTP (roadmapped), multiple MCP clients connect to one server, each with its own MCP session and `session_id`. The auth manager's `session_key` parameter enables per-client DSM sessions:
+Under Streamable HTTP (planned, not yet implemented), multiple MCP clients would connect to one server, each with its own MCP session and `session_id`. The auth manager would scope DSM sessions per client via a `session_key` parameter on `get_session()`:
 
 ```python
 # Stdio (current): single shared session
 sid = await auth_manager.get_session()
 
-# Streamable HTTP (future): per-MCP-client session
+# Streamable HTTP (planned): per-MCP-client session
 sid = await auth_manager.get_session(session_key=ctx.session_id)
 ```
 
-The DSM session name becomes `MCPSynology_{instance_id}_{mcp_session_id}`, giving each connecting client its own isolated DSM session.
+The DSM session name would become `MCPSynology_{instance_id}_{mcp_session_id}`, giving each connecting client its own isolated DSM session. The session-name helper (`AuthManager._build_session_name`) already accepts an optional `session_key` argument so the future change is bounded; the public `get_session()` signature, the session pool, and the lifecycle (login/logout/GC) per key are deferred until a transport or multi-tenant trigger lands.
+
+This is a deliberate deferral, not an oversight. See [ADR 0001 — Per-Client DSM Sessions](../adr/0001-per-client-dsm-sessions.md) for the question, options considered, decision, and the trigger conditions that would re-open it.
 
 ### Setup / Bootstrap Flow
 
