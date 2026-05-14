@@ -29,6 +29,26 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
+      # GitHub-hosted Ubuntu runners ship ~14 GB free of ~75 GB. The vdsm
+      # workflow needs significantly more: 877 MB compressed golden image
+      # tarball + ~3 GB extracted storage + testcontainers spawning a vdsm
+      # container with its own /storage bind-mount + Python venv + Playwright
+      # Chromium download. CI on 550f445 hit
+      # `System.IO.IOException: No space left on device` after the bake
+      # succeeded but during the test step. Free the runner-pre-installed
+      # software we don't need (dotnet, Android SDK, Haskell, large
+      # *-large packages) to recover ~30 GB before the heavy work.
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
+        with:
+          tool-cache: false  # keep Python toolchain; uv depends on it
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: false  # keep — testcontainers re-pulls otherwise
+          swap-storage: true
+
       - name: Verify /dev/kvm is available
         run: |
           ls -la /dev/kvm
