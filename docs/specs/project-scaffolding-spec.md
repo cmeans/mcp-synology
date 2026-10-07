@@ -120,7 +120,7 @@ classifiers = [
     "Topic :: System :: Systems Administration",
 ]
 dependencies = [
-    "mcp>=1.0",               # Official MCP Python SDK (includes FastMCP)
+    "mcp>=1.15.0,<2",         # Official MCP Python SDK v1 (includes FastMCP; 2.x removed it)
     "httpx>=0.27",             # Async HTTP client for DSM API calls
     "pyyaml>=6.0",             # YAML config parsing (safe_load only)
     "keyring>=25.0",           # OS-native credential storage
@@ -180,7 +180,7 @@ addopts = "-m 'not integration'"
 
 ### Dependency Notes
 
-- **`mcp>=1.0`**: The official Python MCP SDK. Provides `mcp.server.fastmcp.FastMCP`, `Context`, type definitions, and stdio transport. We do NOT use the standalone `fastmcp` package by PrefectHQ.
+- **`mcp>=1.15.0,<2`**: The official Python MCP SDK. Floor is 1.15.0 (first release with `mcp.types.Icon`); capped below 2.0 because mcp 2.0.0 removed `mcp.server.fastmcp`. Provides `mcp.server.fastmcp.FastMCP`, `Context`, type definitions, and stdio transport. We do NOT use the standalone `fastmcp` package by PrefectHQ.
 - **`httpx>=0.27`**: Async HTTP client. Used by the DSM API client for all NAS communication. Cleaner API than `aiohttp`, better testing story via `respx`.
 - **`keyring>=25.0`**: OS-native credential storage. Auto-detects macOS Keychain, Windows Credential Manager, or Linux Secret Service.
 - **`pydantic>=2.0`**: Config validation, module settings schemas, type coercion.
