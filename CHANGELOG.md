@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.5.3 (2026-10-07)
+
+### Fixed
+
+- **Cap the `mcp` dependency at `>=1.15.0,<2` so fresh installs start again** (#117) — closes #113. Released v0.5.2 declared `mcp>=1.0` with no upper bound; mcp 2.0.0 (2026-07-28) removed `mcp.server.fastmcp`, so every fresh PyPI/`uvx`/`uv tool` install resolved mcp 2.x and crashed on startup with `ModuleNotFoundError: No module named 'mcp.server.fastmcp'`. CI stayed green because it syncs from the committed `uv.lock`, which pins mcp 1.26.0. The floor was also wrong: the server imports `mcp.types.Icon`, first shipped in mcp 1.15.0. Verified locally: the full suite passes on mcp 1.15.0 and 1.30.0 (newest `<2`), and the resolver now refuses both 1.14.1 and 2.3.0. `uv.lock` refreshed (locked mcp 1.26.0 unchanged); `docs/specs/project-scaffolding-spec.md` updated to match. Users with a `uv tool` install need `uv tool upgrade mcp-synology` once the patch release ships. Same bug class as cmeans/mcp-clipboard#153.
+
 ## 0.5.2 (2026-05-01)
 
 ### Fixed
