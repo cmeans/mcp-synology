@@ -32,6 +32,7 @@
 
 ### Changed
 
+- **Bump uv group: idna 3.11→3.15, urllib3 2.6.3→2.7.0** (#109)
 - **Bump github-actions group: actions/cache 5.0.5→6.1.0, actions/checkout 6.0.2→7.0.1, actions/create-github-app-token 3.1.1→3.2.0, actions/setup-python 6.2.0→7.0.0, astral-sh/setup-uv 8.1.0→10.2.0, codecov/codecov-action 6.0.0→7.1.1, pypa/gh-action-pypi-publish 1.14.0→1.14.2** (#112)
 - **Bump uv group: python-multipart 0.0.26→0.0.27** (#102)
 - **Bump github-actions group: astral-sh/setup-uv 7.6.0→8.1.0** (#98)
