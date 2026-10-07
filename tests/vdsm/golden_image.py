@@ -60,6 +60,7 @@ def save_golden_image(
             "admin_user": DEFAULT_ADMIN_USER,
             "test_user": DEFAULT_TEST_USER,
             "test_password": DEFAULT_TEST_PASSWORD,
+            "dsm_packages": ["DownloadStation"],
             "test_paths": {
                 "existing_share": "/testshare",
                 "search_folder": "/testshare/Documents",

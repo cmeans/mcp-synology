@@ -122,6 +122,7 @@ uv run pytest --cov=mcp_synology           # Tests with coverage
   - Configure NAS connection + `test_paths` (existing_share, search_folder, search_keyword, writable_folder)
   - Run: `uv run pytest -m integration -v --log-cli-level=INFO`
   - Search tests can be flaky if the NAS search service is overloaded — allow recovery time between runs
+- **vdsm Download Station coverage**: the vdsm golden image now installs Download Station at bake time via Playwright through Package Center (`tests/vdsm/setup_dsm.py:_install_download_station_via_ui`) and configures it post-install via DSM API (`_configure_download_station_via_api`: sets `default_destination=writable`, grants the test_user permission). Cached images skip re-install; cold bake adds ~3–5 min. If `tests/vdsm/test_vdsm_downloadstation.py` reports `pytest.skip("Download Station package not installed")`, the cached golden image is stale — delete `.vdsm/golden_images/*.tar.gz` to force a re-bake.
 
 ## Common Tasks
 

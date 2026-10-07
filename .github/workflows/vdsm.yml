@@ -29,6 +29,26 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # GitHub-hosted Ubuntu runners ship ~14 GB free of ~75 GB. The vdsm
+      # workflow needs significantly more: 877 MB compressed golden image
+      # tarball + ~3 GB extracted storage + testcontainers spawning a vdsm
+      # container with its own /storage bind-mount + Python venv + Playwright
+      # Chromium download. CI on 550f445 hit
+      # `System.IO.IOException: No space left on device` after the bake
+      # succeeded but during the test step. Free the runner-pre-installed
+      # software we don't need (dotnet, Android SDK, Haskell, large
+      # *-large packages) to recover ~30 GB before the heavy work.
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
+        with:
+          tool-cache: false  # keep Python toolchain; uv depends on it
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: false  # keep — testcontainers re-pulls otherwise
+          swap-storage: true
+
       - name: Verify /dev/kvm is available
         run: |
           ls -la /dev/kvm
@@ -81,5 +101,14 @@ jobs:
           path: |
             .vdsm/storage/**/log/
             /tmp/vdsm-*.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload Playwright screenshots on failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vdsm-failure-screenshots
+          path: .vdsm/screenshots/
           if-no-files-found: ignore
           retention-days: 7

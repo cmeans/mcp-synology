@@ -577,6 +577,255 @@ def _verify_setup_via_api(base_url: str, username: str, password: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Download Station install via synopkg (SSH)
+# ---------------------------------------------------------------------------
+
+
+def _install_download_station_via_ssh(
+    host: str,
+    ssh_port: int,
+    admin_password: str,
+    base_url: str,
+    *,
+    install_timeout_sec: int = 300,
+) -> None:
+    """Install Download Station via synopkg over SSH.
+
+    Replaces the original Playwright/Package-Center UI flow, which proved
+    unautomatable against Synology's heavily customized DSM 7 Package
+    Center (Ext 3.4.1 + syno-ux checkbox = no synthetic-click path
+    dismisses the ToS modal). SSH bypasses the UI entirely and reuses
+    the `_ssh` helper proven for share creation.
+
+    Three-step start:
+      1. `synopkg install_from_server` to install (~3s)
+      2. `synopkg start` is a no-op on vDSM — systemd-unit lookup fails
+         with status_code 263 even though install succeeded
+      3. `/var/packages/DownloadStation/scripts/start-stop-status start`
+         runs the package's own SysV-style start script which actually
+         starts the DS services (synopkg/synosystemd is the misleading
+         layer; the package internals work fine)
+
+    Gate is the DSM API cache (SYNO.API.Info query for
+    SYNO.DownloadStation.Task), NOT `synopkg status` — the latter keeps
+    reporting stopped on vDSM regardless of actual service state.
+
+    Idempotent on cached golden images: returns early if the API is
+    already registered.
+    """
+
+    def ssh(cmd: str, *, sudo: bool = True) -> tuple[int, str]:
+        return _ssh(host, ssh_port, admin_password, cmd, sudo=sudo)
+
+    # All DS APIs the downstream bake steps + the vdsm tests touch.
+    # Different DS APIs register at different times after start —
+    # Task tends to appear first, Info (used by setconfig at [6/6]) lags.
+    # Gating on the full set avoids the "Task registered but Info isn't"
+    # race that bit CI on 43a2526.
+    required_apis = (
+        "SYNO.DownloadStation.Task",
+        "SYNO.DownloadStation.Info",
+        "SYNO.DownloadStation.Statistic",
+        "SYNO.DownloadStation.Schedule",
+    )
+
+    def missing_ds_apis() -> list[str]:
+        """Return the subset of required DS APIs NOT yet in the API cache."""
+        try:
+            resp = httpx.get(
+                f"{base_url}/webapi/query.cgi",
+                params={
+                    "api": "SYNO.API.Info",
+                    "version": "1",
+                    "method": "query",
+                    "query": ",".join(required_apis),
+                },
+                timeout=10,
+                verify=False,  # noqa: S501
+            )
+            data = resp.json().get("data", {})
+            return [api for api in required_apis if not data.get(api)]
+        except (httpx.HTTPError, ValueError):
+            return list(required_apis)
+
+    # Idempotency: a cached golden image rebuilt against an already-DS
+    # image will have all APIs registered already.
+    if not missing_ds_apis():
+        print("    Download Station already running (all DS APIs in cache)")
+        return
+    # Install (~3s on a warm Synology package server, 30-60s on cold cache).
+    print("    Running synopkg install_from_server DownloadStation...")
+    start = time.monotonic()
+    rc, out = ssh(
+        "/usr/syno/bin/synopkg install_from_server DownloadStation",
+        sudo=True,
+    )
+    elapsed = int(time.monotonic() - start)
+    if rc != 0:
+        msg = f"synopkg install_from_server failed after {elapsed}s (rc={rc}): {out.strip()}"
+        raise RuntimeError(msg)
+    print(f"    synopkg install completed in {elapsed}s")
+    # Verify install via the package list (cheap sanity check).
+    rc, out = ssh("/usr/syno/bin/synopkg list --name DownloadStation", sudo=False)
+    if "DownloadStation" not in out:
+        msg = f"DownloadStation not in package list after install: {out.strip()[:200]}"
+        raise RuntimeError(msg)
+    # Run synopkg start (typically a no-op on vDSM but harmless on real DSM)
+    # then the package's own start script which actually starts the DS
+    # services on vDSM. start-stop-status emits benign warnings about
+    # python2 (eMule plugin only) and a missing amule statistics file —
+    # both are unrelated to the core download/list/edit task surface.
+    ssh("/usr/syno/bin/synopkg start DownloadStation", sudo=True)
+    rc, out = ssh(
+        "/var/packages/DownloadStation/scripts/start-stop-status start 2>&1",
+        sudo=True,
+    )
+    print(f"    start-stop-status start: rc={rc}")
+    if "active" not in out.lower() and "started" not in out.lower():
+        # No "active" marker — likely failed to start. Surface the output
+        # so we can debug; don't silently swallow.
+        print(f"    start-stop-status output:\n{out.strip()[:600]}")
+    # Poll the API cache for ALL required DS APIs — gating on Task alone
+    # is insufficient because Info (used by setconfig at [6/6]) registers
+    # on a different timeline. synopkg status keeps reporting stopped on
+    # vDSM regardless of actual service state, so it's not a useful gate.
+    deadline = time.monotonic() + 120
+    missing: list[str] = list(required_apis)
+    while time.monotonic() < deadline:
+        missing = missing_ds_apis()
+        if not missing:
+            print(f"    All {len(required_apis)} DS APIs registered in DSM API cache.")
+            break
+        time.sleep(3)
+    else:
+        msg = (
+            f"DS APIs still missing from cache after 120s: {missing}. "
+            "Package services may not have started — check "
+            "/var/log/synopkg.log on the NAS."
+        )
+        raise RuntimeError(msg)
+    print("    Download Station installed, started, and API-verified.")
+
+
+# ---------------------------------------------------------------------------
+# Download Station configuration via API
+# ---------------------------------------------------------------------------
+
+
+def _configure_download_station_via_api(
+    base_url: str,
+    admin_user: str,
+    admin_password: str,
+    test_user: str,
+    default_destination: str = "writable",
+) -> None:
+    """Configure Download Station after install: default destination + permissions.
+
+    Runs once at golden-image bake time. Uses DSM admin session to:
+      1. Set DS default destination to an existing share
+      2. Grant the test_user permission to use DS (via the DSM
+         Application Privileges system)
+
+    All calls go through the DSM web API (login -> admin session -> operation).
+    The permission-grant API name may differ across DSM versions; a failure
+    on that call logs a warning rather than failing the bake — test failures
+    from a 105 on DS calls will surface the gap clearly in CI logs.
+    """
+    print("    Configuring Download Station (admin session)...")
+
+    with httpx.Client(base_url=base_url, timeout=30, verify=False) as client:  # noqa: S501
+        # Admin login
+        login_resp = client.get(
+            "/webapi/auth.cgi",
+            params={
+                "api": "SYNO.API.Auth",
+                "version": "3",
+                "method": "login",
+                "account": admin_user,
+                "passwd": admin_password,
+                "session": "DownloadStation",
+                "format": "cookie",
+            },
+        )
+        login_data = login_resp.json()
+        if not login_data.get("success"):
+            msg = f"Admin login failed: {login_data.get('error')}"
+            raise RuntimeError(msg)
+        sid = login_data["data"]["sid"]
+
+        try:
+            # 1. Set DS default destination
+            # DSM 7.2.2 DS Info API only dispatches via /webapi/DownloadStation/info.cgi,
+            # NOT the generic /webapi/entry.cgi (which returns error 102 for ALL
+            # DS API calls). The method name is `setserverconfig`, NOT the
+            # `setconfig` published in some older DSM API docs — `setconfig`
+            # returns error 103 (method does not exist). Discovered by probing
+            # local vdsm 7.2.2 with both endpoints x [setconfig/setserverconfig/
+            # set/config/update] x [v1/v2]; only setserverconfig at
+            # info.cgi succeeded.
+            print(f"    Setting DS default_destination = {default_destination}")
+            setconfig_resp = client.get(
+                "/webapi/DownloadStation/info.cgi",
+                params={
+                    "api": "SYNO.DownloadStation.Info",
+                    "version": "1",
+                    "method": "setserverconfig",
+                    "default_destination": default_destination,
+                    "_sid": sid,
+                },
+            )
+            setconfig_data = setconfig_resp.json()
+            if not setconfig_data.get("success"):
+                err = setconfig_data.get("error", {}).get("code", "?")
+                msg = f"DS setserverconfig failed: code {err}"
+                raise RuntimeError(msg)
+
+            # 2. Grant test_user permission for DS
+            # DSM uses SYNO.Core.Package.Setting.User to manage per-user package
+            # access. The exact API call shape varies by DSM version — use the
+            # most widely supported form. If this returns 105/403 (no permission
+            # via API on vdsm — the SYNO.Core.* surface is restricted on
+            # virtual-dsm), don't fail the bake; log a warning. A test failure
+            # with code 105 on DS calls will surface the missing permission
+            # clearly enough that the operator can fall back to a UI grant.
+            print(f"    Granting {test_user} permission for DownloadStation...")
+            perm_resp = client.get(
+                "/webapi/entry.cgi",
+                params={
+                    "api": "SYNO.Core.Package.Setting.User",
+                    "version": "1",
+                    "method": "set",
+                    "package": "DownloadStation",
+                    "users": '[{"name":"' + test_user + '","allowed":true}]',
+                    "_sid": sid,
+                },
+            )
+            perm_data = perm_resp.json()
+            if not perm_data.get("success"):
+                code = perm_data.get("error", {}).get("code", "?")
+                logger.warning(
+                    "DS permission grant for %s returned code %s — test_user may "
+                    "lack DS access. May need manual UI grant.",
+                    test_user,
+                    code,
+                )
+        finally:
+            # Logout regardless of success
+            client.get(
+                "/webapi/auth.cgi",
+                params={
+                    "api": "SYNO.API.Auth",
+                    "version": "1",
+                    "method": "logout",
+                    "session": "DownloadStation",
+                    "_sid": sid,
+                },
+            )
+
+    print("    Download Station configured.")
+
+
+# ---------------------------------------------------------------------------
 # Main setup entry point
 # ---------------------------------------------------------------------------
 
@@ -611,10 +860,10 @@ def setup_dsm_for_testing(
         page = browser.new_page(viewport={"width": 1280, "height": 900})
 
         try:
-            print("\n  [1/4] Logging in to DSM...")
+            print("\n  [1/6] Logging in to DSM...")
             _dsm_login(page, base_url, admin_user, admin_password)
 
-            print("\n  [2/4] Creating test user...")
+            print("\n  [2/6] Creating test user...")
             _open_control_panel(page)
             _create_user_via_ui(page, DEFAULT_TEST_USER, DEFAULT_TEST_PASSWORD)
 
@@ -624,20 +873,39 @@ def setup_dsm_for_testing(
         finally:
             browser.close()
 
-    # 2. Enable SSH and create shared folders via synoshare in the DSM guest
+    # 2. Enable SSH, install Download Station, create shared folders,
+    # configure DS — all via the SSH/CLI surface so we never touch
+    # Synology's customized Package Center UI (which proved unautomatable
+    # over Ext 3.4.1's component model in 8 local iterations — see
+    # _install_download_station_via_ssh docstring).
     if ssh_port:
-        print("\n  [3/4] Enabling SSH...")
+        print("\n  [3/6] Enabling SSH...")
         _enable_ssh(base_url, admin_user, admin_password)
 
-        print("\n  [4/4] Creating shared folders and test data via SSH...")
+        print("\n  [4/6] Installing Download Station via synopkg (SSH)...")
+        _install_download_station_via_ssh(ssh_host, ssh_port, admin_password, base_url)
+
+        print("\n  [5/6] Creating shared folders and test data via SSH...")
         _create_shared_folders_via_ssh(
             ssh_host,
             ssh_port,
             admin_password,
             DEFAULT_TEST_USER,
         )
+
+        print("\n  [6/6] Configuring Download Station...")
+        _configure_download_station_via_api(
+            base_url=base_url,
+            admin_user=admin_user,
+            admin_password=admin_password,
+            test_user=DEFAULT_TEST_USER,
+            default_destination="writable",
+        )
     else:
-        print("\n  [3/4] No SSH port — skipping share creation")
+        print("\n  [3/6] No SSH port — skipping SSH setup")
+        print("  [4/6] No SSH port — skipping DS install")
+        print("  [5/6] No SSH port — skipping shares")
+        print("  [6/6] No SSH port — skipping DS config")
 
     # Verify — check both admin and test user can see shares
     print("\n  Verifying setup...")
@@ -653,6 +921,7 @@ def setup_dsm_for_testing(
         "admin_password": admin_password,
         "test_user": DEFAULT_TEST_USER,
         "test_password": DEFAULT_TEST_PASSWORD,
+        "dsm_packages": ["DownloadStation"],
         "test_paths": {
             "existing_share": "/testshare",
             "search_folder": "/testshare/Documents",
