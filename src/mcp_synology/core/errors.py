@@ -117,6 +117,30 @@ class ApiNotFoundError(SynologyError):
     error_code = ErrorCode.API_NOT_FOUND
 
 
+class RequestTooLongError(SynologyError):
+    """DSM rejected the request URL as too long (HTTP 414).
+
+    ``code`` stays None: 414 here is an HTTP status, not a DSM error code
+    (File Station's DSM code 414 means "file already exists").
+    """
+
+    error_code = ErrorCode.INVALID_PARAMETER
+
+
+class DsmUnavailableError(SynologyError):
+    """DSM answered with a non-2xx HTTP status (e.g. a 502 from its web server)."""
+
+    error_code = ErrorCode.UNAVAILABLE
+    retryable = True
+
+
+class DsmTimeoutError(SynologyError):
+    """The HTTP request to DSM timed out."""
+
+    error_code = ErrorCode.TIMEOUT
+    retryable = True
+
+
 class FileStationError(SynologyError):
     """Base exception for File Station API errors."""
 
@@ -168,6 +192,11 @@ COMMON_ERROR_CODES: dict[int, tuple[str, str]] = {
         "Another session displaced this one. Consider using a dedicated DSM service account.",
     ),
     119: ("Invalid session", "Session ID is invalid. Re-authentication will be attempted."),
+    120: (
+        "Invalid parameter (JSON-format API)",
+        "A JSON-format DSM API (requestFormat=JSON, e.g. SYNO.DownloadStation2.*) "
+        "rejected a parameter. String values may need JSON encoding.",
+    ),
 }
 
 # Auth API error codes (400-series for SYNO.API.Auth).

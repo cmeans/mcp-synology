@@ -193,26 +193,234 @@ class TestEscapePathParam:
         assert result == "/video/path\\\\file"
 
 
-class TestCreateDownloadTaskWithFile:
-    """Multipart-upload form of SYNO.DownloadStation.Task.create."""
+class TestRequestHttp414:
+    """#123 bug 14: DSM answers an over-long GET URL with HTTP 414."""
 
     @respx.mock
-    async def test_uploads_torrent_and_returns_data(self, tmp_path: Path) -> None:
+    async def test_get_414_raises_structured_request_too_long(self) -> None:
+        from mcp_synology.core.errors import ErrorCode, RequestTooLongError
+
         client = make_client(make_api_cache())
+        respx.get(f"{BASE_URL}/webapi/DownloadStation/task.cgi").respond(status_code=414)
+        async with client:
+            with pytest.raises(RequestTooLongError) as exc:
+                await client.request("SYNO.DownloadStation.Task", "list", version=1)
+        assert exc.value.error_code == ErrorCode.INVALID_PARAMETER
+        assert exc.value.code is None  # HTTP status, not a DSM error code
+        assert "414" in str(exc.value)
+
+
+class TestRequestFormPost:
+    """Form-POST variant of request() — the scoped exception to the GET-only
+    rule, used only for DS URI Task.create (#123 item 9a)."""
+
+    @respx.mock
+    async def test_params_in_body_sid_in_query(self) -> None:
+        client = make_client(make_api_cache())
+        client.sid = "the-sid"
+        route = respx.post(f"{BASE_URL}/webapi/DownloadStation/task.cgi").respond(
+            json={"success": True}
+        )
+        async with client:
+            data = await client.request_form_post(
+                "SYNO.DownloadStation.Task",
+                "create",
+                version=1,
+                params={"uri": "magnet:?xt=a", "password": "s3cret"},
+            )
+        assert data == {}
+        request = route.calls.last.request
+        assert dict(request.url.params) == {"_sid": "the-sid"}
+        body = request.content.decode()
+        assert "api=SYNO.DownloadStation.Task" in body
+        assert "method=create" in body
+        assert "version=1" in body
+        assert "s3cret" in body
+        assert "s3cret" not in str(request.url)
+
+    @respx.mock
+    async def test_password_and_sid_masked_in_debug_log(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import logging
+
+        client = make_client(make_api_cache())
+        client.sid = "the-sid"
+        respx.post(f"{BASE_URL}/webapi/DownloadStation/task.cgi").respond(json={"success": True})
+        caplog.set_level(logging.DEBUG, logger="mcp_synology.core.client")
+        async with client:
+            await client.request_form_post(
+                "SYNO.DownloadStation.Task", "create", version=1, params={"password": "s3cret"}
+            )
+        assert "s3cret" not in caplog.text
+        assert "the-sid" not in caplog.text
+
+    @respx.mock
+    async def test_dsm_error_raises_typed_exception(self) -> None:
+        client = make_client(make_api_cache())
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 102}}
+        )
+        async with client:
+            with pytest.raises(ApiNotFoundError):
+                await client.request_form_post("SYNO.DownloadStation2.Task", "create", version=2)
+
+    @respx.mock
+    async def test_session_error_reauths_once_and_retries(self) -> None:
+        client = make_client(make_api_cache())
+        reauths = 0
+
+        async def fake_reauth() -> None:
+            nonlocal reauths
+            reauths += 1
+            client.sid = "new-sid"
+
+        client.set_re_auth_callback(fake_reauth)
+        route = respx.post(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=[
+                httpx.Response(200, json={"success": False, "error": {"code": 119}}),
+                httpx.Response(200, json={"success": True, "data": {"task_id": ["dbid_1"]}}),
+            ]
+        )
+        async with client:
+            data = await client.request_form_post("SYNO.DownloadStation2.Task", "create", version=2)
+        assert data == {"task_id": ["dbid_1"]}
+        assert reauths == 1
+        assert dict(route.calls.last.request.url.params) == {"_sid": "new-sid"}
+
+    @respx.mock
+    async def test_permission_denied_never_reauths(self) -> None:
+        """CLAUDE.md invariant: 105 is not a session error."""
+        from mcp_synology.core.errors import SynologyPermissionError
+
+        client = make_client(make_api_cache())
+        reauths = 0
+
+        async def fake_reauth() -> None:
+            nonlocal reauths
+            reauths += 1
+
+        client.set_re_auth_callback(fake_reauth)
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 105}}
+        )
+        async with client:
+            with pytest.raises(SynologyPermissionError):
+                await client.request_form_post("SYNO.DownloadStation2.Task", "create", version=2)
+        assert reauths == 0
+
+    @respx.mock
+    async def test_http_5xx_raises_structured_error(self) -> None:
+        from mcp_synology.core.errors import ErrorCode
+
+        client = make_client(make_api_cache())
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(status_code=502)
+        async with client:
+            with pytest.raises(SynologyError) as exc:
+                await client.request_form_post("SYNO.DownloadStation2.Task", "create", version=2)
+        assert exc.value.error_code == ErrorCode.UNAVAILABLE
+        assert "502" in str(exc.value)
+
+    @respx.mock
+    async def test_timeout_raises_structured_error(self) -> None:
+        from mcp_synology.core.errors import ErrorCode
+
+        client = make_client(make_api_cache())
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=httpx.ReadTimeout("slow"))
+        async with client:
+            with pytest.raises(SynologyError) as exc:
+                await client.request_form_post("SYNO.DownloadStation2.Task", "create", version=2)
+        assert exc.value.error_code == ErrorCode.TIMEOUT
+
+    @respx.mock
+    async def test_post_414_raises_structured_request_too_long(self) -> None:
+        from mcp_synology.core.errors import RequestTooLongError
+
+        client = make_client(make_api_cache())
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(status_code=414)
+        async with client:
+            with pytest.raises(RequestTooLongError):
+                await client.request_form_post("SYNO.DownloadStation2.Task", "create", version=2)
+
+    @respx.mock
+    async def test_failed_reauth_raises_original_session_error(self) -> None:
+        client = make_client(make_api_cache())
+
+        async def failing_reauth() -> None:
+            raise SynologyError("login failed")
+
+        client.set_re_auth_callback(failing_reauth)
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 106}}
+        )
+        async with client:
+            with pytest.raises(SessionExpiredError):
+                await client.request_form_post("SYNO.DownloadStation2.Task", "create", version=2)
+
+    async def test_unknown_api_raises_api_not_found(self) -> None:
+        client = make_client(make_api_cache())
+        async with client:
+            with pytest.raises(ApiNotFoundError):
+                await client.request_form_post("SYNO.Nope", "create", version=1)
+
+
+class TestCreateDownloadTaskWithFile:
+    """Multipart torrent upload via SYNO.DownloadStation2.Task.create (#123 bug 6:
+    the v1 multipart path returns 101 on DSM 7.2.2 in every variant)."""
+
+    @respx.mock
+    async def test_ds2_multipart_shape(self, tmp_path: Path) -> None:
+        client = make_client(make_api_cache())
+        client.sid = "the-sid"
         torrent = tmp_path / "ubuntu.torrent"
         torrent.write_bytes(b"d4:infod6:lengthi100eee")
-
-        respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(
-            json={"success": True, "data": {"task_id": "dbid_new_001"}},
+        route = respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": True, "data": {"list_id": [], "task_id": ["dbid_1"]}}
         )
-
         async with client:
-            result = await client.create_download_task_with_file(
-                file_path=torrent,
-                filename="ubuntu.torrent",
-                destination="downloads",
+            data = await client.create_download_task_with_file(
+                file_path=torrent, filename="ubuntu.torrent", destination="writable"
             )
-            assert result == {"task_id": "dbid_new_001"}
+        assert data == {"list_id": [], "task_id": ["dbid_1"]}
+        request = route.calls.last.request
+        assert dict(request.url.params) == {"_sid": "the-sid"}
+        body = request.content
+        for name, value in [
+            ("api", b"SYNO.DownloadStation2.Task"),
+            ("version", b"2"),
+            ("method", b"create"),
+            ("type", b'"file"'),
+            ("file", b'["torrent"]'),
+            ("destination", b'"writable"'),
+            ("create_list", b"false"),
+            ("size", str(torrent.stat().st_size).encode()),
+        ]:
+            assert f'name="{name}"\r\n\r\n'.encode() + value in body, name
+        assert b'name="torrent"; filename="ubuntu.torrent"' in body
+        # DSM reads multipart fields in order; the file part must be last.
+        assert body.rindex(b'name="torrent"') > body.rindex(b'name="size"')
+
+    @respx.mock
+    async def test_destination_omitted_when_not_given(self, tmp_path: Path) -> None:
+        client = make_client(make_api_cache())
+        torrent = tmp_path / "x.torrent"
+        torrent.write_bytes(b"x")
+        route = respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": True, "data": {"list_id": [], "task_id": ["dbid_2"]}}
+        )
+        async with client:
+            await client.create_download_task_with_file(file_path=torrent, filename="x.torrent")
+        assert b'name="destination"' not in route.calls.last.request.content
+
+    async def test_ds2_task_absent_raises_api_not_found(self, tmp_path: Path) -> None:
+        cache = make_api_cache()
+        del cache["SYNO.DownloadStation2.Task"]
+        client = make_client(cache)
+        torrent = tmp_path / "x.torrent"
+        torrent.write_bytes(b"x")
+        async with client:
+            with pytest.raises(ApiNotFoundError):
+                await client.create_download_task_with_file(file_path=torrent, filename="x.torrent")
 
     @respx.mock
     async def test_dsm_error_raises_typed_exception(self, tmp_path: Path) -> None:
@@ -221,47 +429,37 @@ class TestCreateDownloadTaskWithFile:
         client = make_client(make_api_cache())
         torrent = tmp_path / "bad.torrent"
         torrent.write_bytes(b"not a torrent")
-
         respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(
-            json={"success": False, "error": {"code": 400}},
+            json={"success": False, "error": {"code": 400}}
         )
-
         async with client:
-            try:
+            with pytest.raises(DownloadStationError, match="upload"):
                 await client.create_download_task_with_file(
-                    file_path=torrent,
-                    filename="bad.torrent",
+                    file_path=torrent, filename="bad.torrent"
                 )
-            except DownloadStationError as e:
-                assert "upload" in str(e).lower()
-            else:
-                raise AssertionError("expected DownloadStationError on code 400")
 
     @respx.mock
     async def test_session_error_triggers_one_reauth_retry(self, tmp_path: Path) -> None:
         client = make_client(make_api_cache())
         torrent = tmp_path / "fine.torrent"
         torrent.write_bytes(b"d4:infod6:lengthi100eee")
-
-        reauth_count = 0
+        reauths = 0
 
         async def fake_reauth() -> None:
-            nonlocal reauth_count
-            reauth_count += 1
-            client._sid = "new_sid"  # noqa: SLF001 — test injection
+            nonlocal reauths
+            reauths += 1
+            client.sid = "new_sid"
 
-        client._re_auth_callback = fake_reauth  # noqa: SLF001
-
+        client.set_re_auth_callback(fake_reauth)
         respx.post(f"{BASE_URL}/webapi/entry.cgi").mock(
             side_effect=[
                 httpx.Response(200, json={"success": False, "error": {"code": 106}}),
-                httpx.Response(200, json={"success": True, "data": {"task_id": "dbid_002"}}),
+                httpx.Response(200, json={"success": True, "data": {"task_id": ["dbid_3"]}}),
             ]
         )
-
         async with client:
-            result = await client.create_download_task_with_file(
+            data = await client.create_download_task_with_file(
                 file_path=torrent, filename="fine.torrent"
             )
-            assert result == {"task_id": "dbid_002"}
-            assert reauth_count == 1
+        assert data == {"task_id": ["dbid_3"]}
+        assert reauths == 1

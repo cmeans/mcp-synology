@@ -4,58 +4,56 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import pytest
 import respx
+from mcp.server.fastmcp.exceptions import ToolError
 
 from mcp_synology.modules.downloadstation.stats import get_download_stats
-from tests.conftest import BASE_URL
+from tests.modules.downloadstation.dsm import captured, err, get_route, ok
 
 if TYPE_CHECKING:
     from mcp_synology.core.client import DsmClient
 
+STAT = "SYNO.DownloadStation.Statistic"
+
 
 class TestGetDownloadStats:
     @respx.mock
-    async def test_renders_total_speeds(self, mock_client: DsmClient) -> None:
-        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
-            json={
-                "success": True,
-                "data": {
-                    "speed_download": 5242880,
-                    "speed_upload": 1048576,
-                },
-            }
-        )
+    async def test_captured_idle_stats(self, mock_client: DsmClient) -> None:
+        get_route(STAT, "getinfo", version=1).respond(json=captured("statistic_getinfo"))
         result = await get_download_stats(mock_client)
-        assert "Download" in result
-        assert "Upload" in result
+        assert "Download (total)" in result
+        assert "Upload (total)" in result
         assert "eMule" not in result
 
     @respx.mock
+    async def test_renders_active_speeds(self, mock_client: DsmClient) -> None:
+        get_route(STAT, "getinfo", version=1).respond(
+            json=ok({"speed_download": 5242880, "speed_upload": 1048576})
+        )
+        result = await get_download_stats(mock_client)
+        assert "5 MB/s" in result
+        assert "1 MB/s" in result
+
+    @respx.mock
     async def test_includes_emule_when_present(self, mock_client: DsmClient) -> None:
-        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
-            json={
-                "success": True,
-                "data": {
+        # eMule keys are not in the vdsm capture (eMule disabled there); shape
+        # per the official DS Web API guide's Statistic.getinfo response.
+        get_route(STAT, "getinfo", version=1).respond(
+            json=ok(
+                {
                     "speed_download": 0,
                     "speed_upload": 0,
                     "emule_speed_download": 128 * 1024,
                     "emule_speed_upload": 64 * 1024,
-                },
-            }
+                }
+            )
         )
         result = await get_download_stats(mock_client)
-        assert "eMule" in result
+        assert "Download (eMule)" in result
 
     @respx.mock
     async def test_dsm_error_propagates_as_tool_error(self, mock_client: DsmClient) -> None:
-        from mcp.server.fastmcp.exceptions import ToolError
-
-        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
-            json={"success": False, "error": {"code": 105}},
-        )
-        try:
+        get_route(STAT, "getinfo", version=1).respond(json=err(105))
+        with pytest.raises(ToolError, match="Permission denied"):
             await get_download_stats(mock_client)
-        except ToolError as e:
-            assert "105" in str(e) or "permission" in str(e).lower()
-        else:
-            raise AssertionError("expected ToolError")

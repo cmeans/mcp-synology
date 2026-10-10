@@ -59,6 +59,11 @@ Common causes:
 - The shared folder ACL excludes this user.
 - The user has read-only access to a folder being written to.
 - The user is restricted to certain shares and the request targets a different one.
+- Download Station: the account has no Download Station application privilege,
+  or the operation needs a Download Station manager/admin (`set_download_config`,
+  and the weekly plan and limited-speed rates in `get_schedule` / `set_schedule`).
+  For `set_download_config` mcp-synology refuses on its own, because DSM answers
+  "success" to non-managers while ignoring the change.
 
 Fix:
 
@@ -74,6 +79,9 @@ Fix:
 4. If you are using a dedicated service account (recommended): each share you
    want to access needs explicit permission for that account. Service accounts
    start with no access.
+5. For Download Station: grant the application privilege via **Control Panel →
+   Application Privileges → Download Station**. Manager-only operations
+   additionally need an admin account.
 
 ## api_not_found
 
@@ -159,6 +167,13 @@ Common causes:
   allowed in rename — use copy/move to relocate a file).
 - A path is empty, all whitespace, or has no share component.
 - A search keyword normalizes to empty after wildcard processing.
+- The request was too large for DSM to accept (HTTP 414 "Request-URI Too Large").
+  Long magnet links and multi-URI lists are sent in the request body to avoid
+  this; if it still happens, split the request.
+- A Download Station `schedule_plan` is not exactly 168 characters of `0`, `1`
+  and `2`. DSM stores whatever it is given, so mcp-synology validates it first.
+- DSM error 120: a JSON-format DSM API (e.g. `SYNO.DownloadStation2.*`) rejected
+  a parameter's type.
 
 Fix:
 
@@ -219,10 +234,14 @@ Fix:
 
 ## timeout
 
-**A long-running DSM background task did not complete within the timeout window.**
+**A long-running DSM background task did not complete within the timeout window,
+or an HTTP request to DSM timed out.**
 
 Affects search, copy, move, delete, and `get_dir_size` — these all run as
-asynchronous DSM tasks that mcp-synology polls.
+asynchronous DSM tasks that mcp-synology polls. `create_download` can also time
+out on the HTTP request itself; DSM may still have created the task, so check
+`list_downloads` before retrying (mcp-synology never retries it automatically,
+to avoid duplicate downloads).
 
 Common causes:
 
@@ -251,7 +270,12 @@ Fix:
 ## unavailable
 
 **mcp-synology called DSM successfully, but DSM returned an empty payload
-where data was expected.**
+where data was expected — or DSM answered with an HTTP error status.**
+
+The HTTP-status case (e.g. `502 Bad Gateway` from DSM's web server while a
+package such as Download Station is still starting) is reported with the
+status in the message. As with `timeout`, a `create_download` that fails this
+way may still have been applied; check `list_downloads` before retrying.
 
 Affects `get_system_info`, `get_resource_usage`, and similar metric tools.
 The API responded `success=true` but the data block was missing or empty.

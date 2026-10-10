@@ -18,6 +18,9 @@ if TYPE_CHECKING:
 import httpx
 
 from mcp_synology.core.errors import (
+    DsmTimeoutError,
+    DsmUnavailableError,
+    RequestTooLongError,
     SynologyError,
     error_from_code,
 )
@@ -27,6 +30,9 @@ logger = logging.getLogger(__name__)
 
 # Session error codes that trigger transparent re-auth.
 _SESSION_ERROR_CODES = frozenset({106, 107, 119})
+
+# Request params masked as *** in debug logs.
+_SENSITIVE_PARAMS = frozenset({"passwd", "password", "_sid", "device_id", "otp_code"})
 
 # Type alias for transfer progress callbacks.
 # Called with (bytes_transferred, total_bytes_or_None).
@@ -274,8 +280,7 @@ class DsmClient:
             req_params["_sid"] = self._sid
 
         # Log request (mask password)
-        _sensitive = frozenset({"passwd", "_sid", "device_id", "otp_code"})
-        log_params = {k: ("***" if k in _sensitive else v) for k, v in req_params.items()}
+        log_params = {k: ("***" if k in _SENSITIVE_PARAMS else v) for k, v in req_params.items()}
         retry_tag = " (retry)" if _is_retry else ""
 
         # Always use GET with query params. DSM v2 APIs work with GET, and we
@@ -293,6 +298,11 @@ class DsmClient:
         )
 
         resp = await http.get(url, params=req_params)
+        if resp.status_code == 414:
+            raise RequestTooLongError(
+                f"{api}/{method}: DSM rejected the request with HTTP 414 (Request-URI Too Large).",
+                suggestion="Reduce the size of the request (e.g. fewer URIs per call).",
+            )
         resp.raise_for_status()
         body = resp.json()
 
@@ -319,6 +329,88 @@ class DsmClient:
             except SynologyError:
                 raise error_from_code(code, api) from None
             return await self.request(api, method, version, params, _is_retry=True)
+
+        raise error_from_code(code, api)
+
+    async def request_form_post(
+        self,
+        api: str,
+        method: str,
+        version: int,
+        params: dict[str, str] | None = None,
+        *,
+        _is_retry: bool = False,
+    ) -> dict[str, Any]:
+        """Make a DSM API request as a form-encoded POST.
+
+        A scoped exception to the GET-only rule (see ``request()``), used ONLY
+        for Download Station URI ``Task.create``: a magnet with many trackers,
+        or a list of URIs, pushes a GET URL past DSM's ~8 KB limit (HTTP 414),
+        and GET would also put source-URL credentials in access logs (#123).
+        Everything else stays on GET — POST caused silent failures on DSM 7.1
+        FileStation APIs.
+
+        Same envelope handling, typed errors, and one-shot re-auth on session
+        errors as ``request()``. ``_sid`` goes in the query string (as for the
+        Upload API); everything else goes in the body. Non-2xx HTTP statuses
+        and timeouts raise typed ``SynologyError``s rather than httpx errors.
+        """
+        http = self._get_http()
+
+        if api not in self._api_cache:
+            from mcp_synology.core.errors import ApiNotFoundError
+
+            raise ApiNotFoundError(
+                f"API '{api}' not found. Call query_api_info() first.",
+                code=102,
+            )
+
+        url = f"{self._base_url}/webapi/{self._api_cache[api].path}"
+        form_data: dict[str, str] = {"api": api, "version": str(version), "method": method}
+        if params:
+            form_data.update(params)
+        query_params: dict[str, str] = {}
+        if self._sid:
+            query_params["_sid"] = self._sid
+
+        log_data = {k: ("***" if k in _SENSITIVE_PARAMS else v) for k, v in form_data.items()}
+        retry_tag = " (retry)" if _is_retry else ""
+        logger.debug("DSM POST%s: %s/%s v%d — %s", retry_tag, api, method, version, log_data)
+
+        try:
+            resp = await http.post(url, params=query_params, data=form_data)
+        except httpx.TimeoutException as e:
+            raise DsmTimeoutError(
+                f"{api}/{method}: request to DSM timed out.",
+                suggestion="DSM may still have applied the request; check before retrying.",
+            ) from e
+        if resp.status_code == 414:
+            raise RequestTooLongError(
+                f"{api}/{method}: DSM rejected the request with HTTP 414 (Request-URI Too Large).",
+                suggestion="Reduce the size of the request (e.g. fewer URIs per call).",
+            )
+        if resp.status_code >= 400:
+            raise DsmUnavailableError(
+                f"{api}/{method}: DSM answered HTTP {resp.status_code}.",
+                suggestion="DSM may still have applied the request; check before retrying.",
+            )
+        body = resp.json()
+
+        if body.get("success"):
+            data: dict[str, Any] = body.get("data", {})
+            logger.debug("DSM response: %s/%s — success", api, method)
+            return data
+
+        code = body.get("error", {}).get("code", 0)
+        logger.debug("DSM response: %s/%s — error code %d", api, method, code)
+
+        if code in _SESSION_ERROR_CODES and not _is_retry and self._re_auth_callback:
+            logger.info("Session error %d on %s/%s, attempting re-auth.", code, api, method)
+            try:
+                await self._re_auth_callback()
+            except SynologyError:
+                raise error_from_code(code, api) from None
+            return await self.request_form_post(api, method, version, params, _is_retry=True)
 
         raise error_from_code(code, api)
 
@@ -438,49 +530,39 @@ class DsmClient:
         file_path: Path,
         filename: str,
         *,
-        uri: str | None = None,
         destination: str | None = None,
-        username: str | None = None,
-        password: str | None = None,
         timeout: float = 300.0,
         _is_retry: bool = False,
     ) -> dict[str, Any]:
         """Create a Download Station task by uploading a .torrent or .nzb file.
 
-        Multipart POST against SYNO.DownloadStation.Task.create v1. Modeled on
-        ``upload()`` — same re-auth-on-session-error retry semantics, same
-        debug logging with ``_sid`` masked. Returns the ``data`` dict from the
-        DSM response (typically ``{"task_id": "..."}`` or ``{}``).
+        Multipart POST against ``SYNO.DownloadStation2.Task.create`` v2. The
+        v1 ``SYNO.DownloadStation.Task`` multipart path returns DSM 101 on DSM
+        7.2.2 in every layout and version tried (#123), so there is no v1
+        fallback. DS2 is a JSON-format API: string fields are JSON-encoded,
+        the file part is named ``torrent`` (referenced by ``file=["torrent"]``)
+        and goes last. Same re-auth-on-session-error retry and ``_sid``
+        masking as ``upload()``. Returns the ``data`` dict
+        (``{"task_id": [...], "list_id": [...]}``).
         """
-        api = "SYNO.DownloadStation.Task"
+        api = "SYNO.DownloadStation2.Task"
         http = self._get_http()
 
-        if api not in self._api_cache:
-            from mcp_synology.core.errors import ApiNotFoundError
-
-            raise ApiNotFoundError(
-                f"API '{api}' not found. Call query_api_info() first.",
-                code=102,
-            )
-
-        info = self._api_cache[api]
-        # DS Task.create pins to v1 — no v2 multipart path documented.
-        resolved_version = 1
-        url = f"{self._base_url}/webapi/{info.path}"
+        # Raises ApiNotFoundError (102 absent / 104 no v2) — no fallback exists.
+        resolved_version = self.negotiate_version(api, min_version=2, max_version=2)
+        url = f"{self._base_url}/webapi/{self._api_cache[api].path}"
 
         form_data: dict[str, str] = {
             "api": api,
             "version": str(resolved_version),
             "method": "create",
+            "type": json.dumps("file"),
+            "file": json.dumps(["torrent"]),
+            "create_list": "false",
+            "size": str(file_path.stat().st_size),
         }
-        if uri is not None:
-            form_data["uri"] = uri
         if destination is not None:
-            form_data["destination"] = destination
-        if username is not None:
-            form_data["username"] = username
-        if password is not None:
-            form_data["password"] = password
+            form_data["destination"] = json.dumps(destination)
 
         # SID must be a query parameter, not a form field — same pattern as
         # the FileStation Upload API.
@@ -488,10 +570,7 @@ class DsmClient:
         if self._sid:
             query_params["_sid"] = self._sid
 
-        _sensitive = frozenset({"_sid", "password"})
-        log_data = {
-            k: ("***" if k in _sensitive else v) for k, v in {**form_data, **query_params}.items()
-        }
+        log_data = {k: ("***" if k in _SENSITIVE_PARAMS else v) for k, v in form_data.items()}
         retry_tag = " (retry)" if _is_retry else ""
         logger.debug(
             "DSM POST%s: %s/create v%d — %s, file=%s",
@@ -511,7 +590,7 @@ class DsmClient:
                 url,
                 params=query_params,
                 data=form_data,
-                files={"file": (filename, fh, "application/octet-stream")},
+                files={"torrent": (filename, fh, "application/x-bittorrent")},
                 timeout=httpx.Timeout(timeout),
             )
         finally:
@@ -538,10 +617,7 @@ class DsmClient:
             return await self.create_download_task_with_file(
                 file_path,
                 filename,
-                uri=uri,
                 destination=destination,
-                username=username,
-                password=password,
                 timeout=timeout,
                 _is_retry=True,
             )
