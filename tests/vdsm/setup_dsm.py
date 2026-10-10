@@ -43,14 +43,6 @@ _SCREENSHOT_DIR = Path(__file__).parent.parent.parent / ".vdsm" / "screenshots"
 # ---------------------------------------------------------------------------
 
 
-def _screenshot(page: Any, name: str) -> None:
-    """Save a debug screenshot."""
-    _SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
-    path = _SCREENSHOT_DIR / f"{name}.png"
-    page.screenshot(path=str(path))
-    print(f"    Screenshot: {path.name}")
-
-
 def _click_text(page: Any, text: str, *, timeout: int = 3) -> bool:
     """Click a visible element containing exact text via JavaScript.
 
@@ -175,186 +167,7 @@ def complete_wizard(base_url: str, admin_user: str, admin_password: str) -> None
 
 
 # ---------------------------------------------------------------------------
-# Post-wizard popups
-# ---------------------------------------------------------------------------
-
-
-def _dismiss_all_popups(page: Any) -> None:
-    """Dismiss all overlay popups: 2FA, MFA, tour, notifications.
-
-    DSM 7 shows persistent promotion dialogs after first login. Clicking
-    through the MFA confirmation flow is unreliable — the dialog can
-    reappear. Instead, we click the initial 2FA "No, thanks" then
-    force-remove all promotion windows and overlay masks from the DOM.
-    """
-    # Step 1: Dismiss initial popups via button clicks
-    for _round in range(3):
-        time.sleep(1)
-        if _click_text(page, "No, thanks", timeout=2):
-            print("    Dismissed: 2FA promotion")
-            continue
-        if _click_text(page, "No, Thanks", timeout=2):
-            print("    Dismissed: 2FA promotion (alt)")
-            continue
-        break
-
-    # Step 2: Force-remove ALL promotion/overlay windows from the DOM.
-    removed = page.evaluate("""() => {
-        let count = 0;
-        document.querySelectorAll(
-            '.syno-promotion-app, [syno-id="promotion-app-window"]'
-        ).forEach(el => { el.remove(); count++; });
-        document.querySelectorAll(
-            '.v-window-container-mask, .v-window-mask'
-        ).forEach(el => { el.remove(); count++; });
-        return count;
-    }""")
-    if removed:
-        print(f"    Force-removed {removed} promotion/overlay elements")
-    time.sleep(2)
-
-    # Step 3: Close notification toasts
-    page.evaluate("""() => {
-        document.querySelectorAll('.x-tool-close, .v-close-btn')
-            .forEach(btn => { if (btn.offsetParent !== null) btn.click(); });
-    }""")
-    time.sleep(1)
-
-
-# ---------------------------------------------------------------------------
-# Login
-# ---------------------------------------------------------------------------
-
-
-def _dsm_login(page: Any, base_url: str, username: str, password: str) -> None:
-    """Login to DSM desktop via the two-step login UI."""
-    page.goto(base_url, wait_until="networkidle", timeout=60000)
-    time.sleep(3)
-
-    # Step 1: Enter username and press Enter
-    user_field = page.wait_for_selector("input:visible", timeout=30000)
-    if user_field:
-        user_field.fill(username)
-    time.sleep(1)
-    page.keyboard.press("Enter")
-    time.sleep(3)
-
-    # Step 2: Enter password and press Enter
-    pass_field = page.wait_for_selector("input[type='password']:visible", timeout=10000)
-    if pass_field:
-        pass_field.fill(password)
-    time.sleep(1)
-    page.keyboard.press("Enter")
-
-    # Wait for desktop to load
-    time.sleep(10)
-    _dismiss_all_popups(page)
-    print("    Logged in to DSM desktop")
-    _screenshot(page, "02-desktop")
-
-
-# ---------------------------------------------------------------------------
-# Control Panel navigation
-# ---------------------------------------------------------------------------
-
-
-def _open_control_panel(page: Any) -> None:
-    """Open Control Panel from the DSM desktop."""
-    _dismiss_all_popups(page)
-
-    cp = page.query_selector("text='Control Panel'")
-    if cp and cp.is_visible():
-        cp.dblclick(force=True)
-        time.sleep(5)
-        _dismiss_all_popups(page)
-        print("    Opened Control Panel")
-        _screenshot(page, "03-control-panel")
-        return
-
-    print("    Warning: Could not find Control Panel shortcut")
-    _screenshot(page, "03-control-panel-missing")
-
-
-# ---------------------------------------------------------------------------
-# User creation via Playwright
-# ---------------------------------------------------------------------------
-
-
-def _create_user_via_ui(page: Any, username: str, password: str) -> None:
-    """Create a local user via Control Panel > User & Group wizard.
-
-    Uses Playwright's type() for form fields (not fill()) because DSM's
-    ExtJS framework requires keystroke events for internal validation.
-    The wizard buttons are <button class="x-btn-text"> elements.
-    """
-    print("    Creating user via web UI...")
-
-    _click_text(page, "User & Group", timeout=3)
-    _screenshot(page, "04-user-group")
-
-    # Click Create in the toolbar
-    page.locator("span:has-text('Create')").first.click(force=True)
-    time.sleep(3)
-    _screenshot(page, "05-user-wizard")
-
-    # Fill form fields using type() for proper ExtJS event dispatch
-    wizard = page.locator(".sds-wizard-window")
-
-    name_input = wizard.locator("input[aria-label='Name'], input[name='name']").first
-    name_input.click(force=True)
-    name_input.press("Control+a")
-    name_input.type(username, delay=50)
-    time.sleep(0.5)
-
-    pwd_field = wizard.locator("input[type='password']").first
-    pwd_field.click(force=True)
-    pwd_field.type(password, delay=30)
-    time.sleep(0.5)
-
-    confirm_field = wizard.locator("input[type='password']").nth(1)
-    confirm_field.click(force=True)
-    confirm_field.type(password, delay=30)
-    time.sleep(0.5)
-
-    _screenshot(page, "06-user-filled")
-
-    # Click through wizard steps
-    for step in range(10):
-        time.sleep(2)
-        _screenshot(page, f"06-user-step-{step}")
-
-        # Re-acquire wizard locator each step (class may change on final page)
-        wiz = page.locator(".sds-wizard-window, .x-window.active-win")
-
-        # Check for Apply/Done (final step buttons)
-        for final_text in ["Apply", "Done"]:
-            final_btn = wiz.locator(f"button:has-text('{final_text}')")
-            if final_btn.count() > 0 and final_btn.first.is_visible():
-                final_btn.first.click(force=True)
-                print(f"    User wizard: {final_text}")
-                time.sleep(5)
-                step = 99  # noqa: PLW2901
-                break
-        if step == 99:
-            break
-
-        # Click Next
-        nxt = wiz.locator("button:has-text('Next')")
-        if nxt.count() > 0 and nxt.first.is_visible():
-            nxt.first.click(force=True)
-            print(f"    User wizard: Next (step {step})")
-            continue
-
-        print(f"    User wizard: no buttons at step {step}")
-        break
-
-    time.sleep(3)
-    _screenshot(page, "07-user-created")
-    print(f"    User '{username}' creation completed")
-
-
-# ---------------------------------------------------------------------------
-# Shared folders and test data via SSH into DSM guest
+# Test user, shared folders and test data via SSH into DSM guest
 # ---------------------------------------------------------------------------
 
 _SYNOSHARE = "/usr/syno/sbin/synoshare"
@@ -424,6 +237,38 @@ def _ssh(
     callers in this module don't have to change.
     """
     return _ssh_exec(host, port, password, cmd, sudo=sudo)
+
+
+_SYNOUSER = "/usr/syno/sbin/synouser"
+
+
+def _create_user_via_ssh(
+    host: str,
+    ssh_port: int,
+    admin_password: str,
+    username: str,
+    password: str,
+) -> None:
+    """Create the local, non-admin test user with the synouser CLI.
+
+    Idempotent: an existing user is left in place (re-bakes on a reused
+    storage dir). Failure is fatal — every non-admin test depends on it.
+    """
+    rc, _ = _ssh(host, ssh_port, admin_password, f"{_SYNOUSER} --get {username}")
+    if rc == 0:
+        print(f"    Test user {username} already exists")
+        return
+    # synouser --add <user> <pwd> <full name> <expired 0|1> <mail> <app privilege>
+    rc, out = _ssh(
+        host,
+        ssh_port,
+        admin_password,
+        f"{_SYNOUSER} --add {username} '{password}' 'MCP test user' 0 '' 0",
+    )
+    if rc != 0:
+        msg = f"synouser --add {username} failed (rc={rc}): {out}"
+        raise RuntimeError(msg)
+    print(f"    Created test user: {username}")
 
 
 def _create_shared_folders_via_ssh(
@@ -840,52 +685,34 @@ def setup_dsm_for_testing(
 ) -> dict[str, Any]:
     """Run the full post-wizard setup.
 
-    Uses Playwright for user creation (requires web UI), then SSH into the
-    DSM guest VM (via QEMU) for shared folder creation with synoshare CLI,
-    test data, and permissions.
+    Enables SSH via the DSM API, then SSHes into the DSM guest VM (via QEMU)
+    to create the test user (synouser), install Download Station (synopkg),
+    and create shared folders, test data, and permissions (synoshare).
 
     Returns metadata dict for the golden image sidecar.
     """
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError as e:
-        msg = "Playwright is required: uv sync --extra vdsm"
-        raise ImportError(msg) from e
-
     print("\nConfiguring DSM for integration testing...")
 
-    # 1. Create test user via web UI (Control Panel wizard)
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page(viewport={"width": 1280, "height": 900})
-
-        try:
-            print("\n  [1/6] Logging in to DSM...")
-            _dsm_login(page, base_url, admin_user, admin_password)
-
-            print("\n  [2/6] Creating test user...")
-            _open_control_panel(page)
-            _create_user_via_ui(page, DEFAULT_TEST_USER, DEFAULT_TEST_PASSWORD)
-
-        except Exception:
-            _screenshot(page, "error-state")
-            raise
-        finally:
-            browser.close()
-
-    # 2. Enable SSH, install Download Station, create shared folders,
-    # configure DS — all via the SSH/CLI surface so we never touch
-    # Synology's customized Package Center UI (which proved unautomatable
-    # over Ext 3.4.1's component model in 8 local iterations — see
-    # _install_download_station_via_ssh docstring).
+    # Enable SSH, create the test user, install Download Station, create
+    # shared folders, configure DS — all via the SSH/CLI/API surface. The
+    # test user used to be created through the Control Panel UI, but on
+    # DSM 7.1 the desktop's Control Panel icon never opens the window under
+    # Playwright (tooltip only, deterministic across retries), and the
+    # Package Center UI proved unautomatable over Ext 3.4.1's component model
+    # (see _install_download_station_via_ssh docstring).
     if ssh_port:
-        print("\n  [3/6] Enabling SSH...")
+        print("\n  [1/5] Enabling SSH...")
         _enable_ssh(base_url, admin_user, admin_password)
 
-        print("\n  [4/6] Installing Download Station via synopkg (SSH)...")
+        print("\n  [2/5] Creating test user via synouser (SSH)...")
+        _create_user_via_ssh(
+            ssh_host, ssh_port, admin_password, DEFAULT_TEST_USER, DEFAULT_TEST_PASSWORD
+        )
+
+        print("\n  [3/5] Installing Download Station via synopkg (SSH)...")
         _install_download_station_via_ssh(ssh_host, ssh_port, admin_password, base_url)
 
-        print("\n  [5/6] Creating shared folders and test data via SSH...")
+        print("\n  [4/5] Creating shared folders and test data via SSH...")
         _create_shared_folders_via_ssh(
             ssh_host,
             ssh_port,
@@ -893,7 +720,7 @@ def setup_dsm_for_testing(
             DEFAULT_TEST_USER,
         )
 
-        print("\n  [6/6] Configuring Download Station...")
+        print("\n  [5/5] Configuring Download Station...")
         _configure_download_station_via_api(
             base_url=base_url,
             admin_user=admin_user,
@@ -902,10 +729,7 @@ def setup_dsm_for_testing(
             default_destination="writable",
         )
     else:
-        print("\n  [3/6] No SSH port — skipping SSH setup")
-        print("  [4/6] No SSH port — skipping DS install")
-        print("  [5/6] No SSH port — skipping shares")
-        print("  [6/6] No SSH port — skipping DS config")
+        print("\n  No SSH port — skipping all setup steps (SSH, test user, DS, shares)")
 
     # Verify — check both admin and test user can see shares
     print("\n  Verifying setup...")
