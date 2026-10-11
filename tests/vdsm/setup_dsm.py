@@ -20,18 +20,24 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import Any
+from contextlib import contextmanager
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
 from tests.vdsm.config import (
     BAKE_VERSION,
     DEFAULT_ADMIN_USER,
+    DEFAULT_FRESH_PASSWORD,
+    DEFAULT_FRESH_USER,
     DEFAULT_TEST_PASSWORD,
     DEFAULT_TEST_USER,
     DSM_API_POLL_INTERVAL,
     DSM_BOOT_TIMEOUT,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 logger = logging.getLogger(__name__)
 
@@ -275,7 +281,7 @@ def _create_shared_folders_via_ssh(
     host: str,
     ssh_port: int,
     admin_password: str,
-    test_user: str,
+    test_users: tuple[str, ...],
 ) -> None:
     """Create shared folders and test data via SSH into the DSM guest.
 
@@ -355,13 +361,14 @@ def _create_shared_folders_via_ssh(
     else:
         print(f"    Warning: synoindex -A -d /testshare/Media returned rc={rc}: {out}")
 
-    # Set ACL permissions for test user (requires sudo)
-    for name in ["testshare", "writable"]:
-        rc, out = ssh(f"{_SYNOSHARE} --setuser {name} RW + {test_user}")
-        if rc == 0:
-            print(f"    Permissions set on {name} for {test_user}")
-        else:
-            print(f"    Warning: setuser {name} rc={rc}: {out}")
+    # Set ACL permissions for the test users (requires sudo)
+    for test_user in test_users:
+        for name in ["testshare", "writable"]:
+            rc, out = ssh(f"{_SYNOSHARE} --setuser {name} RW + {test_user}")
+            if rc == 0:
+                print(f"    Permissions set on {name} for {test_user}")
+            else:
+                print(f"    Warning: setuser {name} rc={rc}: {out}")
 
 
 # ---------------------------------------------------------------------------
@@ -561,19 +568,18 @@ def _configure_download_station_via_api(
     base_url: str,
     admin_user: str,
     admin_password: str,
-    test_user: str,
-    test_password: str,
+    test_users: tuple[tuple[str, str], ...],
     default_destination: str = "writable",
 ) -> None:
     """Configure Download Station after install: default destination + permissions.
 
     Runs once at golden-image bake time. Uses DSM admin session to:
       1. Set DS default destination to an existing share
-      2. Grant the test_user the Download Station application privilege
+      2. Grant each test user the Download Station application privilege
          (``SYNO.Core.AppPriv.Rule.set``), then check that the existing
          ``administrators`` rule survived
 
-    Then verifies the grant from the test user's own session (``Task.list``).
+    Then verifies each grant from that user's own session (``Task.list``).
     Any failure fails the bake: an image without the grant would only show up
     later as a 105 on every non-admin DS test.
     """
@@ -630,27 +636,31 @@ def _configure_download_station_via_api(
             # with the existing rules (verified: a set carrying only this user's
             # rule leaves the administrators group rule in place), so a single
             # set is enough. Rule.list wants a JSON-quoted app_id.
-            print(f"    Granting {test_user} the Download Station app privilege...")
-            rule = {
-                "entity_type": "user",
-                "entity_name": test_user,
-                "app_id": _DS_APP_ID,
-                "allow_ip": ["0.0.0.0"],
-                "deny_ip": [],
-            }
+            names = [user for user, _ in test_users]
+            print(f"    Granting {', '.join(names)} the Download Station app privilege...")
+            rules = [
+                {
+                    "entity_type": "user",
+                    "entity_name": user,
+                    "app_id": _DS_APP_ID,
+                    "allow_ip": ["0.0.0.0"],
+                    "deny_ip": [],
+                }
+                for user in names
+            ]
             set_data = client.get(
                 "/webapi/entry.cgi",
                 params={
                     "api": "SYNO.Core.AppPriv.Rule",
                     "version": "1",
                     "method": "set",
-                    "rules": json.dumps([rule]),
+                    "rules": json.dumps(rules),
                     "_sid": sid,
                 },
             ).json()
             if not set_data.get("success"):
                 code = set_data.get("error", {}).get("code", "?")
-                msg = f"AppPriv.Rule.set for {test_user} failed: code {code}"
+                msg = f"AppPriv.Rule.set for {', '.join(names)} failed: code {code}"
                 raise RuntimeError(msg)
 
             list_data = client.get(
@@ -671,7 +681,7 @@ def _configure_download_station_via_api(
                 (r.get("entity_type"), r.get("entity_name"))
                 for r in list_data.get("data", {}).get("rules", [])
             }
-            for expected in (("group", "administrators"), ("user", test_user)):
+            for expected in (("group", "administrators"), *(("user", n) for n in names)):
                 if expected not in entities:
                     msg = (
                         f"Download Station app privilege rules lack {expected[0]} "
@@ -691,13 +701,16 @@ def _configure_download_station_via_api(
                 },
             )
 
-    _verify_ds_access_as_user(base_url, test_user, test_password)
+    for user, password in test_users:
+        _verify_ds_access_as_user(base_url, user, password)
     print("    Download Station configured.")
 
 
-def _verify_ds_access_as_user(base_url: str, username: str, password: str) -> None:
-    """Fail the bake unless ``username``'s own session can list DS tasks."""
-    print(f"    Verifying {username} can use Download Station...")
+@contextmanager
+def _user_session(
+    base_url: str, username: str, password: str
+) -> Iterator[tuple[httpx.Client, str]]:
+    """Log ``username`` in for one bake step; yield the HTTP client and sid."""
     with httpx.Client(base_url=base_url, timeout=30, verify=False) as client:  # noqa: S501
         login_data = client.get(
             "/webapi/auth.cgi",
@@ -716,15 +729,7 @@ def _verify_ds_access_as_user(base_url: str, username: str, password: str) -> No
             raise RuntimeError(msg)
         sid = login_data["data"]["sid"]
         try:
-            list_data = client.get(
-                "/webapi/DownloadStation/task.cgi",
-                params={
-                    "api": "SYNO.DownloadStation.Task",
-                    "version": "1",
-                    "method": "list",
-                    "_sid": sid,
-                },
-            ).json()
+            yield client, sid
         finally:
             client.get(
                 "/webapi/auth.cgi",
@@ -736,10 +741,72 @@ def _verify_ds_access_as_user(base_url: str, username: str, password: str) -> No
                     "_sid": sid,
                 },
             )
-        if not list_data.get("success"):
-            code = list_data.get("error", {}).get("code", "?")
-            msg = f"{username} cannot use Download Station after the grant: Task.list code {code}"
-            raise RuntimeError(msg)
+
+
+def _ds_info(client: httpx.Client, sid: str, method: str, **params: str) -> dict[str, Any]:
+    """Call ``SYNO.DownloadStation.Info`` v1 and raise unless it succeeds."""
+    data = client.get(
+        "/webapi/DownloadStation/info.cgi",
+        params={
+            "api": "SYNO.DownloadStation.Info",
+            "version": "1",
+            "method": method,
+            "_sid": sid,
+            **params,
+        },
+    ).json()
+    if not data.get("success"):
+        code = data.get("error", {}).get("code", "?")
+        msg = f"DS Info.{method} failed: code {code}"
+        raise RuntimeError(msg)
+    result: dict[str, Any] = data.get("data", {})
+    return result
+
+
+def _verify_ds_access_as_user(base_url: str, username: str, password: str) -> None:
+    """Fail the bake unless ``username``'s own session can list DS tasks."""
+    print(f"    Verifying {username} can use Download Station...")
+    with _user_session(base_url, username, password) as (client, sid):
+        list_data = client.get(
+            "/webapi/DownloadStation/task.cgi",
+            params={
+                "api": "SYNO.DownloadStation.Task",
+                "version": "1",
+                "method": "list",
+                "_sid": sid,
+            },
+        ).json()
+    if not list_data.get("success"):
+        code = list_data.get("error", {}).get("code", "?")
+        msg = f"{username} cannot use Download Station after the grant: Task.list code {code}"
+        raise RuntimeError(msg)
+
+
+def _set_own_ds_default_destination(
+    base_url: str, username: str, password: str, destination: str
+) -> None:
+    """Set ``username``'s own DS default destination, as a first DS visit would.
+
+    DS never starts a non-manager's tasks until that user has a default
+    destination (DS 3.9 and 4.1, #124); DSM applies it per user. Fails the
+    bake unless the user's own ``getconfig`` then reports it.
+    """
+    print(f"    Setting {username}'s own DS default destination = {destination}")
+    with _user_session(base_url, username, password) as (client, sid):
+        _ds_info(client, sid, "setserverconfig", default_destination=destination)
+        got = _ds_info(client, sid, "getconfig").get("default_destination")
+    if got != destination:
+        msg = f"{username}'s DS default destination is {got!r} after setting {destination!r}"
+        raise RuntimeError(msg)
+
+
+def _verify_no_ds_default_destination(base_url: str, username: str, password: str) -> None:
+    """Fail the bake unless ``username`` still has no DS default destination."""
+    with _user_session(base_url, username, password) as (client, sid):
+        got = _ds_info(client, sid, "getconfig").get("default_destination")
+    if got:
+        msg = f"{username} should have no DS default destination, has {got!r}"
+        raise RuntimeError(msg)
 
 
 # ---------------------------------------------------------------------------
@@ -781,10 +848,13 @@ def setup_dsm_for_testing(
     print("\n  [1/5] Enabling SSH...")
     _enable_ssh(base_url, admin_user, admin_password)
 
-    print("\n  [2/5] Creating test user via synouser (SSH)...")
-    _create_user_via_ssh(
-        ssh_host, ssh_port, admin_password, DEFAULT_TEST_USER, DEFAULT_TEST_PASSWORD
+    test_users = (
+        (DEFAULT_TEST_USER, DEFAULT_TEST_PASSWORD),
+        (DEFAULT_FRESH_USER, DEFAULT_FRESH_PASSWORD),
     )
+    print("\n  [2/5] Creating test users via synouser (SSH)...")
+    for user, password in test_users:
+        _create_user_via_ssh(ssh_host, ssh_port, admin_password, user, password)
 
     print("\n  [3/5] Installing Download Station via synopkg (SSH)...")
     _install_download_station_via_ssh(ssh_host, ssh_port, admin_password, base_url)
@@ -794,7 +864,7 @@ def setup_dsm_for_testing(
         ssh_host,
         ssh_port,
         admin_password,
-        DEFAULT_TEST_USER,
+        tuple(user for user, _ in test_users),
     )
 
     print("\n  [5/5] Configuring Download Station...")
@@ -802,10 +872,11 @@ def setup_dsm_for_testing(
         base_url=base_url,
         admin_user=admin_user,
         admin_password=admin_password,
-        test_user=DEFAULT_TEST_USER,
-        test_password=DEFAULT_TEST_PASSWORD,
+        test_users=test_users,
         default_destination="writable",
     )
+    _set_own_ds_default_destination(base_url, DEFAULT_TEST_USER, DEFAULT_TEST_PASSWORD, "writable")
+    _verify_no_ds_default_destination(base_url, DEFAULT_FRESH_USER, DEFAULT_FRESH_PASSWORD)
 
     # Verify — check both admin and test user can see shares
     print("\n  Verifying setup...")
@@ -823,7 +894,10 @@ def setup_dsm_for_testing(
         "test_password": DEFAULT_TEST_PASSWORD,
         "dsm_packages": ["DownloadStation"],
         "bake_version": BAKE_VERSION,
-        "grants": [f"ds:{DEFAULT_TEST_USER}"],
+        "fresh_user": DEFAULT_FRESH_USER,
+        "fresh_password": DEFAULT_FRESH_PASSWORD,
+        "grants": [f"ds:{DEFAULT_TEST_USER}", f"ds:{DEFAULT_FRESH_USER}"],
+        "ds_default_destination": {DEFAULT_TEST_USER: "writable"},
         "test_paths": {
             "existing_share": "/testshare",
             "search_folder": "/testshare/Documents",

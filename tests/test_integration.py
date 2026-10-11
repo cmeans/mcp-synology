@@ -39,6 +39,7 @@ from mcp_synology.modules.filestation.search import search_files
 from mcp_synology.modules.filestation.transfer import download_file, upload_file
 from mcp_synology.modules.system.info import get_system_info
 from mcp_synology.modules.system.utilization import get_resource_usage
+from tests.personas import Persona, ReauthSpy
 
 logger = logging.getLogger(__name__)
 
@@ -72,8 +73,21 @@ def _load_integration_config() -> tuple[AppConfig, dict[str, str]]:
     admin_config = raw.pop("admin_config", None)
     if admin_config:
         test_paths["admin_config"] = admin_config
+    # Whether nas_client's account is an admin (see nas_persona); not an AppConfig key.
+    is_admin = raw.pop("is_admin", None)
+    if isinstance(is_admin, bool):
+        test_paths["is_admin"] = str(is_admin).lower()
     config = AppConfig(**raw)
     return config, test_paths
+
+
+@pytest.fixture
+def nas_persona(integration_config: tuple[AppConfig, dict[str, str]]) -> Persona:
+    """The real-NAS persona, from ``is_admin`` in integration_config.yaml."""
+    config, test_paths = integration_config
+    flag = test_paths.get("is_admin")
+    username = config.auth.username if config.auth else None
+    return Persona(username=username, is_admin=None if flag is None else flag == "true")
 
 
 @pytest.fixture
@@ -1288,19 +1302,23 @@ class TestResourceUsage:
     Falls back gracefully when admin config is not available.
     """
 
-    async def test_resource_usage_non_admin(self, nas_client: Any) -> None:
-        """Non-admin user should get a clear permission error."""
+    async def test_resource_usage_non_admin(
+        self, nas_client: Any, nas_persona: Persona, reauth_spy: ReauthSpy
+    ) -> None:
+        """A non-admin gets a clear permission error, and 105 never triggers re-auth."""
+        if nas_persona.is_admin is None:
+            pytest.skip("nas_client's persona is unknown: set is_admin in integration_config.yaml")
+        if nas_persona.is_admin:
+            pytest.skip("nas_client is an admin on this NAS; see test_resource_usage_admin")
         client, _, _, _ = _unpack(nas_client)
-        # Should fail with permission error for non-admin users
-        # or succeed if the user IS admin.
-        try:
-            result = await get_resource_usage(client)
-            logger.info("get_resource_usage (non-admin succeeded — user is admin):\n%s", result)
-        except ToolError as e:
-            body = json.loads(str(e))
-            logger.info("get_resource_usage (non-admin) raised ToolError: %s", e)
-            msg = body["error"]["message"].lower()
-            assert "admin" in msg or "permission" in msg
+        with pytest.raises(ToolError) as exc:
+            await get_resource_usage(client)
+        body = json.loads(str(exc.value))
+        logger.info("get_resource_usage (non-admin) raised ToolError: %s", exc.value)
+        assert body["error"]["code"] == "permission_denied"
+        msg = body["error"]["message"].lower()
+        assert "admin" in msg or "permission" in msg
+        reauth_spy.assert_105_never_reauthed()
 
     async def test_resource_usage_admin(self, admin_client: Any) -> None:
         """Admin user should get real utilization data."""
