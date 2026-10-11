@@ -82,13 +82,27 @@ def make_api_cache() -> dict[str, ApiInfoEntry]:
         "SYNO.FileStation.Delete": ApiInfoEntry(path="entry.cgi", min_version=1, max_version=2),
         "SYNO.FileStation.Upload": ApiInfoEntry(path="entry.cgi", min_version=1, max_version=2),
         "SYNO.FileStation.Download": ApiInfoEntry(path="entry.cgi", min_version=1, max_version=2),
-        "SYNO.DownloadStation.Task": ApiInfoEntry(path="entry.cgi", min_version=1, max_version=3),
-        "SYNO.DownloadStation.Statistic": ApiInfoEntry(
-            path="entry.cgi", min_version=1, max_version=1
+        # Download Station entries mirror a real query.cgi capture (vdsm DSM
+        # 7.2.2 / DS 4.1-5012, see tests/modules/downloadstation/fixtures/).
+        # v1 APIs live at their own CGI paths; DS2 APIs live at entry.cgi with
+        # requestFormat=JSON. Keep these in sync with a re-capture, never by hand.
+        "SYNO.DownloadStation.Task": ApiInfoEntry(
+            path="DownloadStation/task.cgi", min_version=1, max_version=3
         ),
-        "SYNO.DownloadStation.Info": ApiInfoEntry(path="entry.cgi", min_version=1, max_version=1),
+        "SYNO.DownloadStation.Statistic": ApiInfoEntry(
+            path="DownloadStation/statistic.cgi", min_version=1, max_version=1
+        ),
+        "SYNO.DownloadStation.Info": ApiInfoEntry(
+            path="DownloadStation/info.cgi", min_version=1, max_version=2
+        ),
         "SYNO.DownloadStation.Schedule": ApiInfoEntry(
-            path="entry.cgi", min_version=1, max_version=1
+            path="DownloadStation/schedule.cgi", min_version=1, max_version=1
+        ),
+        "SYNO.DownloadStation2.Task": ApiInfoEntry(
+            path="entry.cgi", min_version=1, max_version=2, request_format="JSON"
+        ),
+        "SYNO.DownloadStation2.Settings.Scheduler": ApiInfoEntry(
+            path="entry.cgi", min_version=1, max_version=1, request_format="JSON"
         ),
     }
 

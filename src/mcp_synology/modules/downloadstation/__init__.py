@@ -44,6 +44,9 @@ MODULE_INFO = ModuleInfo(
         ApiRequirement(api_name="SYNO.DownloadStation.RSS.Feed", min_version=1, optional=True),
         ApiRequirement(api_name="SYNO.DownloadStation.BTSearch", min_version=1, optional=True),
         ApiRequirement(api_name="SYNO.DownloadStation2.Task", min_version=1, optional=True),
+        ApiRequirement(
+            api_name="SYNO.DownloadStation2.Settings.Scheduler", min_version=1, optional=True
+        ),
     ],
     tools=[
         ToolInfo(
@@ -51,7 +54,9 @@ MODULE_INFO = ModuleInfo(
             description=(
                 "List download tasks in the Download Station queue. Filter by status "
                 "(downloading/finished/paused/error/all). Returns a table with id, title, "
-                "type (bt/http/ftp/nzb), status, size, progress%, current speed, and ETA."
+                "type (bt/http/ftp/nzb), status, size, progress%, current speed, and ETA. "
+                "Accounts that are not Download Station managers see only their own tasks "
+                "(the output says so), so an empty list does not mean the NAS is idle."
             ),
             permission_tier=PermissionTier.READ,
         ),
@@ -77,18 +82,21 @@ MODULE_INFO = ModuleInfo(
         ToolInfo(
             name="get_download_config",
             description=(
-                "Get Download Station global configuration: BT max upload/download speeds, "
-                "default destination, scheduled-throttling plan summary, eMule enable state, "
-                "and other DSM-level DS settings."
+                "Get Download Station global configuration: default destination, BT/HTTP/"
+                "FTP/NZB/eMule max speeds, eMule and auto-unzip state. For accounts that are "
+                "not Download Station managers DSM returns a per-user view (labeled as "
+                "such), not the NAS-wide settings. Use get_schedule for the weekly plan."
             ),
             permission_tier=PermissionTier.READ,
         ),
         ToolInfo(
             name="get_schedule",
             description=(
-                "Get the Download Station weekly schedule as a 7-day × 24-hour grid. Each "
-                "cell shows whether downloads are off, on, or throttled at that hour. "
-                "Useful for verifying off-peak bandwidth policies."
+                "Get the Download Station schedule: whether it is enabled, the limited-speed "
+                "(alt) download/upload rates, and the weekly plan as a 7-day × 24-hour grid "
+                "where each hour is full speed, limited, or no download. The weekly plan "
+                "needs a Download Station manager/admin account; otherwise only the flags "
+                "are shown."
             ),
             permission_tier=PermissionTier.READ,
         ),
@@ -100,18 +108,20 @@ MODULE_INFO = ModuleInfo(
                 "URIs (HTTP, FTP, magnet, etc.) via `uri` OR pass a local path to "
                 "a .torrent / .nzb file via `torrent_file_path`. `destination` is a "
                 "share-relative path (omit to use DSM's default destination). "
-                "`username` / `password` may be supplied for protected URLs."
+                "`username` / `password` may be supplied for protected URLs (not for "
+                "torrent files). Returns the new task IDs when DSM provides them (not "
+                "for URLs with `username` / `password`); long magnet links and URI "
+                "lists are supported."
             ),
             permission_tier=PermissionTier.WRITE,
         ),
         ToolInfo(
             name="delete_download",
             description=(
-                "Delete one or more download tasks. `task_ids` is a list. "
-                "`delete_data` MUST be set explicitly to true or false — true also "
-                "removes the downloaded files from disk, false removes the task "
-                "record only. `force_complete` (default false) marks errored tasks "
-                "as complete before deletion."
+                "Remove one or more download tasks. `task_ids` is a list. Files from "
+                "finished tasks are always kept. For unfinished tasks the partial data "
+                "is discarded (irreversible), unless `force_complete` is true, which "
+                "moves the incomplete file into the task's destination instead."
             ),
             permission_tier=PermissionTier.WRITE,
         ),
@@ -136,9 +146,8 @@ MODULE_INFO = ModuleInfo(
             name="edit_download",
             description=(
                 "Edit task parameters. `task_ids` is a list. Currently supports "
-                "`destination` (move the task's output target). Other DSM "
-                "Task.edit fields may be supported depending on DSM version — "
-                "verify against the live API before relying on additional fields."
+                "`destination` (change the task's output share). Requires a newer "
+                "Download Station (Task API v2); older versions get a clear error."
             ),
             permission_tier=PermissionTier.WRITE,
         ),
@@ -148,18 +157,23 @@ MODULE_INFO = ModuleInfo(
                 "Set Download Station global configuration. All parameters are "
                 "optional — only fields you pass get updated. Rates are KB/s; 0 "
                 "means unlimited. Pass `default_destination` to change DS's "
-                "default destination share."
+                "default destination share. Requires a Download Station manager/admin "
+                "account: DSM silently ignores this change from other accounts, so the "
+                "tool refuses it."
             ),
             permission_tier=PermissionTier.WRITE,
         ),
         ToolInfo(
             name="set_schedule",
             description=(
-                "Set the Download Station weekly schedule. `schedule_plan` is a "
-                "168-character string (7 days × 24 hours, Sun=0 .. Sat=6); each "
-                "char is '0' off, '1' on, '2' throttled. `enabled` and "
-                "`emule_enabled` toggle whether the schedule applies. All "
-                "parameters optional — only what you pass gets updated."
+                "Set the Download Station schedule. All parameters optional — only what "
+                "you pass gets updated. `enabled` / `emule_enabled` toggle whether the "
+                "schedule applies (DSM lets any Download Station user toggle this NAS-wide "
+                "flag). `schedule_plan` is a 168-character string, 24 chars per day, Sun "
+                "first through Sat; each char is '0' no download, '1' full speed, '2' "
+                "limited. `download_rate` / `upload_rate` set the limited speed in KB/s "
+                "(0 = unlimited). The plan and rates need a Download Station manager/admin "
+                "account; if that write is refused, nothing is applied."
             ),
             permission_tier=PermissionTier.WRITE,
         ),
@@ -289,7 +303,6 @@ def register(ctx: RegisterContext) -> None:
         )
         async def tool_delete_download(
             task_ids: list[str],
-            delete_data: bool,
             force_complete: bool = False,
         ) -> str:
             from mcp_synology.modules.downloadstation.tasks import delete_download
@@ -298,7 +311,6 @@ def register(ctx: RegisterContext) -> None:
             return await delete_download(
                 client,
                 task_ids=task_ids,
-                delete_data=delete_data,
                 force_complete=force_complete,
             )
 
@@ -381,6 +393,8 @@ def register(ctx: RegisterContext) -> None:
             enabled: bool | None = None,
             emule_enabled: bool | None = None,
             schedule_plan: str | None = None,
+            download_rate: int | None = None,
+            upload_rate: int | None = None,
         ) -> str:
             from mcp_synology.modules.downloadstation.config import set_schedule
 
@@ -390,4 +404,6 @@ def register(ctx: RegisterContext) -> None:
                 enabled=enabled,
                 emule_enabled=emule_enabled,
                 schedule_plan=schedule_plan,
+                download_rate=download_rate,
+                upload_rate=upload_rate,
             )

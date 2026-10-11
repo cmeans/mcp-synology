@@ -197,10 +197,18 @@ class TestDownloadstationPhase2ToolInvocation:
         mock = self._capture_call(monkeypatch, target)
         register(ctx)
         result = await server._tool_manager._tools["delete_download"].fn(
-            task_ids=["dbid_001"], delete_data=True
+            task_ids=["dbid_001"], force_complete=True
         )
         assert result == f"<<{target}-result>>"
-        mock.assert_awaited_once()
+        assert mock.await_args.kwargs == {"task_ids": ["dbid_001"], "force_complete": True}
+
+    def test_delete_download_has_no_delete_data_param(self) -> None:
+        """#123 bug 7: DS never deletes completed files; delete_data was a false promise."""
+        server, _manager, ctx = _make_ctx()
+        register(ctx)
+        params = server._tool_manager._tools["delete_download"].parameters["properties"]
+        assert "delete_data" not in params
+        assert params["force_complete"]["default"] is False
 
     async def test_pause_download_invocation(self, monkeypatch) -> None:
         server, _manager, ctx = _make_ctx()
@@ -245,6 +253,52 @@ class TestDownloadstationPhase2ToolInvocation:
         target = "mcp_synology.modules.downloadstation.config.set_schedule"
         mock = self._capture_call(monkeypatch, target)
         register(ctx)
-        result = await server._tool_manager._tools["set_schedule"].fn(enabled=True)
+        result = await server._tool_manager._tools["set_schedule"].fn(
+            enabled=True, download_rate=512, upload_rate=0
+        )
         assert result == f"<<{target}-result>>"
-        mock.assert_awaited_once()
+        kwargs = mock.await_args.kwargs
+        assert kwargs["download_rate"] == 512
+        assert kwargs["upload_rate"] == 0
+
+
+class TestModuleInfoDescriptions:
+    """#123 item 12: every tool whose user-facing behavior changed says so."""
+
+    @staticmethod
+    def _desc(name: str) -> str:
+        return next(t.description for t in MODULE_INFO.tools if t.name == name)
+
+    def test_ds2_scheduler_is_an_optional_requirement(self) -> None:
+        reqs = {r.api_name: r for r in MODULE_INFO.required_apis}
+        assert reqs["SYNO.DownloadStation2.Settings.Scheduler"].optional
+
+    def test_list_downloads_mentions_own_tasks_for_non_managers(self) -> None:
+        assert "only their own tasks" in self._desc("list_downloads")
+
+    def test_get_download_config_no_longer_claims_plan_summary(self) -> None:
+        desc = self._desc("get_download_config")
+        assert "plan summary" not in desc
+        assert "per-user view" in desc
+
+    def test_set_download_config_mentions_manager_requirement(self) -> None:
+        assert "manager" in self._desc("set_download_config")
+
+    def test_schedule_tools_describe_verified_plan_format(self) -> None:
+        for name in ("get_schedule", "set_schedule"):
+            desc = self._desc(name)
+            assert "full speed" in desc and "limited" in desc, name
+        set_desc = self._desc("set_schedule")
+        assert "Sun" in set_desc and "download_rate" in set_desc
+
+    def test_create_download_mentions_returned_ids(self) -> None:
+        assert "task IDs" in self._desc("create_download")
+
+    def test_edit_download_mentions_version_requirement(self) -> None:
+        assert "newer Download Station" in self._desc("edit_download")
+
+    def test_delete_download_describes_real_file_semantics(self) -> None:
+        desc = self._desc("delete_download")
+        assert "finished tasks are always kept" in desc
+        assert "force_complete" in desc
+        assert "delete_data" not in desc
