@@ -482,6 +482,13 @@ class TestCreateDownloadDestination:
         assert "won't start" not in result
 
     @respx.mock
+    async def test_info_api_absent_is_unchanged(self, mock_client: DsmClient) -> None:
+        del mock_client.api_cache[INFO]
+        route = post_route(TASK2, "create", version=2).respond(json=captured("ds2_task_create_url"))
+        await create_download(mock_client, uri="magnet:?xt=a", destination="writable")
+        assert _form(route.calls.last.request)["destination"] == '"writable"'
+
+    @respx.mock
     async def test_unreadable_config_is_unchanged(self, mock_client: DsmClient) -> None:
         get_route(INFO, "getconfig", version=1).respond(json=err(105))
         route = post_route(TASK2, "create", version=2).respond(json=captured("ds2_task_create_url"))
