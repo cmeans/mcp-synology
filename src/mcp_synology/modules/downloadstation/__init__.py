@@ -122,7 +122,9 @@ MODULE_INFO = ModuleInfo(
                 "finished tasks are always kept. For unfinished tasks the partial data "
                 "is discarded (irreversible). `force_complete` asks DSM to keep the "
                 "incomplete file in the destination instead, but DSM has been seen to "
-                "discard it anyway, so don't rely on it to preserve partial data."
+                "discard it anyway, so don't rely on it to preserve partial data. DSM "
+                "refuses `force_complete` on finished tasks (error 405; the task stays "
+                "listed), so leave it false for those."
             ),
             permission_tier=PermissionTier.WRITE,
         ),
