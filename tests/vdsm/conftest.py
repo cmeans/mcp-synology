@@ -183,10 +183,13 @@ def vdsm_container(dsm_version: str) -> Any:
 # Download Station readiness. DSM starts the package at boot as the systemd
 # unit pkgctl-DownloadStation.service (ordered after nginx and
 # syno-login.target), so DS is ready when that unit is active and an
-# authenticated Task.list succeeds. On CI (#107) DS's CGIs once answered 502
-# for the whole run after a restored image booted; if the unit never becomes
-# active, the fixture logs its status and journal, then starts DS with the
-# package's own script (what the bake uses) as a recorded workaround.
+# authenticated Task.list succeeds. If not, the fixture collects diagnostics
+# and starts DS with the package's own script (what the bake uses). Locally a
+# DS that then answers is a logged workaround; on CI the session fails
+# (config.ds_start_fallback_allowed), since there it means a broken bake. The
+# case that prompted this (#107): DS's CGIs answered 502 because
+# pkg-synodl-apid.service was masked, the image having been saved from a
+# SIGKILLed VM. The bake now shuts DSM down cleanly (VirtualDsmContainer.shutdown).
 _DS_UNIT = "pkgctl-DownloadStation.service"
 _DS_PROBE_PATH = "/webapi/DownloadStation/task.cgi"
 _DS_READY_WAIT = 90

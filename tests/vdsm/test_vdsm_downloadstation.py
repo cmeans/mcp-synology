@@ -1,8 +1,9 @@
 """Integration tests for Download Station tools against virtual-dsm.
 
 Requires DS installed in the golden image (see tests/vdsm/setup_dsm.py
-_install_download_station_via_ssh). Tests skip cleanly if the package isn't
-available on the connected NAS (e.g., running against a real NAS without DS).
+_install_download_station_via_ssh). Tests skip only when the golden image's
+meta.json doesn't list DS; an image that lists it but whose DS APIs are
+missing (a stopped package) goes to ds_backend_ready and fails on CI.
 
 One test per tool, exercising the real call shapes verified in #123: string
 task statuses, the DS2 weekly-plan API, ``setserverconfig``, ``Task.edit``
@@ -23,6 +24,8 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import urlencode
 
 import pytest
+
+from tests.vdsm.golden_image import download_station_skip_reason, load_golden_meta
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -60,12 +63,13 @@ def _unpack(nas_client: Any) -> tuple[DsmClient, Any, Any, dict[str, str]]:
 
 
 @pytest.fixture
-async def _ds_available(nas_client: Any, request: pytest.FixtureRequest) -> bool:
-    """Skip if DS isn't installed; otherwise wait (once per session) for its back end."""
+async def _ds_available(nas_client: Any, dsm_version: str, request: pytest.FixtureRequest) -> bool:
+    """Skip if the image has no DS; otherwise wait (once per session) for its back end."""
     client, _, _, _ = _unpack(nas_client)
     info = await client.query_api_info()
-    if "SYNO.DownloadStation.Task" not in info:
-        pytest.skip("Download Station package not installed on this NAS")
+    reason = download_station_skip_reason(load_golden_meta(dsm_version), info)
+    if reason is not None:
+        pytest.skip(reason)
     request.getfixturevalue("ds_backend_ready")
     return True
 
