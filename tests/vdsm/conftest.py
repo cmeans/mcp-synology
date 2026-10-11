@@ -21,7 +21,14 @@ import pytest
 from mcp_synology.core.auth import AuthManager
 from mcp_synology.core.client import DsmClient
 from mcp_synology.core.config import AppConfig
-from tests.vdsm.config import DEFAULT_DSM_VERSION, DSM_VERSIONS, ds_start_fallback_allowed
+from tests.personas import Persona
+from tests.vdsm.config import (
+    DEFAULT_DSM_VERSION,
+    DEFAULT_FRESH_USER,
+    DEFAULT_TEST_USER,
+    DSM_VERSIONS,
+    ds_start_fallback_allowed,
+)
 from tests.vdsm.container import VirtualDsmContainer
 from tests.vdsm.golden_image import (
     has_golden_image,
@@ -376,8 +383,8 @@ def vdsm_config(
             "verify_ssl": False,
         },
         auth={
-            "username": meta.get("admin_user", "admin"),
-            "password": meta.get("admin_password", ""),
+            "username": meta.get("test_user", DEFAULT_TEST_USER),
+            "password": meta.get("test_password", ""),
         },
         modules={
             "filestation": {
@@ -452,39 +459,67 @@ async def refresh_search_index(
     return _refresh
 
 
+async def _user_session(
+    config: AppConfig, test_paths: dict[str, str], dsm_version: str, label: str
+) -> Any:
+    """Yield ``(client, auth, config, test_paths)`` logged in with ``config``'s account."""
+    conn = config.connection
+    assert conn is not None
+    client = DsmClient(base_url=f"http://{conn.host}:{conn.port}", verify_ssl=False, timeout=30)
+    async with client:
+        cache = await client.query_api_info()
+        logger.info("vDSM API cache: %d APIs discovered (DSM %s)", len(cache), dsm_version)
+        auth = AuthManager(config, client)
+        sid = await auth.login()
+        logger.info("vDSM %s authenticated, SID=%s... (DSM %s)", label, sid[:8], dsm_version)
+        yield client, auth, config, test_paths
+        await auth.logout()
+
+
 @pytest.fixture
 async def nas_client(
     vdsm_config: tuple[AppConfig, dict[str, str]],
     dsm_version: str,
 ) -> Any:
-    """Provide an authenticated DsmClient connected to virtual-dsm.
+    """Provide a DsmClient logged in as the golden image's **non-admin** test user.
 
     Function-scoped async generator — same shape as the real-NAS fixture
-    in test_integration.py: yields (client, auth, config, test_paths).
+    in test_integration.py: yields (client, auth, config, test_paths). Tests
+    that need admin use ``admin_client``; ``nas_persona`` says who this is.
     """
     config, test_paths = vdsm_config
-    conn = config.connection
-    assert conn is not None
+    async for session in _user_session(config, test_paths, dsm_version, "test user"):
+        yield session
 
-    base_url = f"http://{conn.host}:{conn.port}"
 
-    client = DsmClient(
-        base_url=base_url,
-        verify_ssl=False,
-        timeout=30,
+@pytest.fixture
+def nas_persona(dsm_version: str) -> Persona:
+    """vdsm's ``nas_client`` persona is known: the bake's non-admin test user."""
+    meta = load_golden_meta(dsm_version)
+    return Persona(username=str(meta.get("test_user", DEFAULT_TEST_USER)), is_admin=False)
+
+
+@pytest.fixture
+async def fresh_client(
+    vdsm_config: tuple[AppConfig, dict[str, str]],
+    dsm_version: str,
+) -> Any:
+    """A DS-granted non-admin that has never set a DS default destination (#124)."""
+    config, test_paths = vdsm_config
+    meta = load_golden_meta(dsm_version)
+    fresh = config.model_copy(
+        update={
+            "instance_id": f"{config.instance_id}-fresh",
+            "auth": config.auth.model_copy(
+                update={
+                    "username": meta.get("fresh_user", DEFAULT_FRESH_USER),
+                    "password": meta.get("fresh_password", ""),
+                }
+            ),
+        }
     )
-
-    async with client:
-        cache = await client.query_api_info()
-        logger.info("vDSM API cache: %d APIs discovered (DSM %s)", len(cache), dsm_version)
-
-        auth = AuthManager(config, client)
-        sid = await auth.login()
-        logger.info("vDSM authenticated, SID=%s... (DSM %s)", sid[:8], dsm_version)
-
-        yield client, auth, config, test_paths
-
-        await auth.logout()
+    async for session in _user_session(fresh, test_paths, dsm_version, "fresh user"):
+        yield session
 
 
 @pytest.fixture

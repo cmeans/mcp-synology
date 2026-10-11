@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import os
 import re
 import time
@@ -24,6 +25,7 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import urlencode
 
 import pytest
+from mcp.server.fastmcp.exceptions import ToolError
 
 from tests.vdsm.golden_image import download_station_skip_reason, load_golden_meta
 
@@ -31,6 +33,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from mcp_synology.core.client import DsmClient
+    from tests.personas import Persona, ReauthSpy
 
 pytestmark = pytest.mark.vdsm
 
@@ -171,14 +174,15 @@ async def _local_source(nas_client: Any, _clean_queue: None, tmp_path: Path) -> 
 
 
 @pytest.fixture
-async def _throttled(nas_client: Any, _ds_available: bool) -> Any:
+async def _throttled(admin_client: Any, _ds_available: bool) -> Any:
     """Cap HTTP download speed; restore the previous cap afterward.
 
     Uses the v1 ``http_max_download`` speed cap (KB/s). DS 3.9 on DSM 7.1
     ignores the DS2 weekly plan's limited speed for HTTP tasks, so the plan
-    can't hold a task partial there; this cap does on both versions.
+    can't hold a task partial there; this cap does on both versions. It is a
+    NAS-wide setting, so it is set as admin (DSM ignores it from the test user).
     """
-    client, _, _, _ = _unpack(nas_client)
+    client, _, _, _ = _unpack(admin_client)
     info = "SYNO.DownloadStation.Info"
     before = await client.request(info, "getconfig", version=1)
     await client.request(
@@ -243,25 +247,25 @@ class TestVdsmDownloadStationReads:
         assert "Upload (total)" in result
 
     async def test_get_download_config_returns_known_fields(
-        self, nas_client: Any, _ds_available: bool
+        self, admin_client: Any, _ds_available: bool
     ) -> None:
         from mcp_synology.modules.downloadstation.config import get_download_config
 
-        client, _, _, _ = _unpack(nas_client)
+        client, _, _, _ = _unpack(admin_client)
         result = await get_download_config(client)
         assert "Default destination" in result
         assert "BT max download" in result
-        # The bake configured default_destination=writable, and nas_client is
-        # admin, so this is the NAS-wide view rather than a per-user one.
+        # The bake configured default_destination=writable; as admin this is
+        # the NAS-wide view (the test user's view is pinned in TestVdsmDownloadStationNonAdmin).
         assert "writable" in result
         assert "your user view" not in result
 
     async def test_get_schedule_returns_flags_rates_and_grid(
-        self, nas_client: Any, _ds_available: bool
+        self, admin_client: Any, _ds_available: bool
     ) -> None:
         from mcp_synology.modules.downloadstation.config import get_schedule
 
-        client, _, _, _ = _unpack(nas_client)
+        client, _, _, _ = _unpack(admin_client)
         result = await get_schedule(client)
         assert "Enabled" in result
         assert "Limited download rate" in result
@@ -408,12 +412,12 @@ class TestVdsmDownloadStationTasks:
 
 class TestVdsmDownloadStationSettings:
     async def test_set_download_config_round_trip(
-        self, nas_client: Any, _ds_available: bool
+        self, admin_client: Any, _ds_available: bool
     ) -> None:
         """#123 bug 4: config writes go through setserverconfig."""
         from mcp_synology.modules.downloadstation.config import set_download_config
 
-        client, _, _, _ = _unpack(nas_client)
+        client, _, _, _ = _unpack(admin_client)
         before = await client.request("SYNO.DownloadStation.Info", "getconfig", version=1)
         try:
             await set_download_config(client, bt_max_download=123)
@@ -423,12 +427,12 @@ class TestVdsmDownloadStationSettings:
             await set_download_config(client, bt_max_download=int(before["bt_max_download"]))
 
     async def test_set_schedule_plan_and_rates_round_trip(
-        self, nas_client: Any, _ds_available: bool
+        self, admin_client: Any, _ds_available: bool
     ) -> None:
         """#123 bugs 2/3: the plan is read from and written to DS2."""
         from mcp_synology.modules.downloadstation.config import get_schedule, set_schedule
 
-        client, _, _, _ = _unpack(nas_client)
+        client, _, _, _ = _unpack(admin_client)
         scheduler = "SYNO.DownloadStation2.Settings.Scheduler"
         before = await client.request(scheduler, "get", version=1)
         plan = "2" * 24 + "0" * 24 + "1" * 120  # Sun limited, Mon off, rest full
@@ -447,4 +451,186 @@ class TestVdsmDownloadStationSettings:
                 schedule_plan=str(before["schedule"]),
                 download_rate=int(before["download_rate"]),
                 upload_rate=int(before["upload_rate"]),
+            )
+
+
+def _error(exc: ToolError) -> dict[str, Any]:
+    return json.loads(str(exc))["error"]  # type: ignore[no-any-return]
+
+
+class TestVdsmDownloadStationNonAdmin:
+    """What the bake's non-admin test user sees (#124), pinned on DS 3.9 and 4.1.
+
+    ``nas_client`` is that user; ``admin_client`` checks NAS-wide state; the
+    re-auth spy asserts DSM's 105s never trigger a session re-auth.
+    """
+
+    async def test_get_download_config_is_the_users_own_view(
+        self, nas_client: Any, nas_persona: Persona, _ds_available: bool
+    ) -> None:
+        from mcp_synology.modules.downloadstation.config import get_download_config
+
+        assert nas_persona.is_admin is False
+        client, _, _, _ = _unpack(nas_client)
+        result = await get_download_config(client)
+        assert "your user view" in result
+        assert "writable" in result  # the bake set the test user's own default
+
+    async def test_get_schedule_degrades_without_reauth(
+        self, nas_client: Any, reauth_spy: ReauthSpy, _ds_available: bool
+    ) -> None:
+        """DS2 Scheduler.get answers 105: flags still shown, plan marked unavailable."""
+        from mcp_synology.modules.downloadstation.config import get_schedule
+
+        client, _, _, _ = _unpack(nas_client)
+        result = await get_schedule(client)
+        assert "Enabled" in result
+        assert "weekly plan not available" in result
+        assert "Limited download rate" not in result
+        assert (reauth_spy.reauths, reauth_spy.logins) == (0, 0)
+
+    async def test_set_schedule_plan_is_refused_with_nothing_applied(
+        self, nas_client: Any, admin_client: Any, reauth_spy: ReauthSpy, _ds_available: bool
+    ) -> None:
+        from mcp_synology.modules.downloadstation.config import set_schedule
+
+        user, _, _, _ = _unpack(nas_client)
+        admin, _, _, _ = _unpack(admin_client)
+        scheduler = "SYNO.DownloadStation2.Settings.Scheduler"
+        before = await admin.request(scheduler, "get", version=1)
+        with pytest.raises(ToolError) as exc:
+            await set_schedule(user, schedule_plan="0" * 168, download_rate=1)
+        error = _error(exc.value)
+        assert error["code"] == "permission_denied"
+        assert "nothing was applied" in error["message"]
+        assert await admin.request(scheduler, "get", version=1) == before
+        assert (reauth_spy.reauths, reauth_spy.logins) == (0, 0)
+
+    async def test_schedule_enabled_flag_is_nas_wide(
+        self, nas_client: Any, admin_client: Any, _ds_available: bool
+    ) -> None:
+        """v1 Schedule.setconfig works for the test user and flips the NAS-wide flag."""
+        from mcp_synology.modules.downloadstation.config import set_schedule
+
+        user, _, _, _ = _unpack(nas_client)
+        admin, _, _, _ = _unpack(admin_client)
+        flags = "SYNO.DownloadStation.Schedule"
+        before = bool((await admin.request(flags, "getconfig", version=1))["enabled"])
+        try:
+            await set_schedule(user, enabled=not before)
+            after = await admin.request(flags, "getconfig", version=1)
+            assert bool(after["enabled"]) is (not before)
+        finally:
+            await set_schedule(admin, enabled=before)
+
+    async def test_set_download_config_rates_are_refused(
+        self, nas_client: Any, admin_client: Any, reauth_spy: ReauthSpy, _ds_available: bool
+    ) -> None:
+        """#123 bug 12: DSM ignores a non-manager's rate writes, so nothing is sent."""
+        from mcp_synology.modules.downloadstation.config import set_download_config
+
+        user, _, _, _ = _unpack(nas_client)
+        admin, _, _, _ = _unpack(admin_client)
+        info = "SYNO.DownloadStation.Info"
+        before = await admin.request(info, "getconfig", version=1)
+        with pytest.raises(ToolError) as exc:
+            await set_download_config(user, bt_max_download=321)
+        error = _error(exc.value)
+        assert error["code"] == "permission_denied"
+        assert "bt_max_download" in error["message"]
+        assert await admin.request(info, "getconfig", version=1) == before
+        assert (reauth_spy.reauths, reauth_spy.logins) == (0, 0)
+
+    async def test_set_download_config_destination_is_per_user(
+        self, nas_client: Any, admin_client: Any, _ds_available: bool
+    ) -> None:
+        """#124: DSM applies a non-manager's default_destination to that user only."""
+        from mcp_synology.modules.downloadstation.config import set_download_config
+
+        user, _, _, _ = _unpack(nas_client)
+        admin, _, _, _ = _unpack(admin_client)
+        info = "SYNO.DownloadStation.Info"
+        try:
+            result = await set_download_config(user, default_destination="testshare")
+            assert "your own default destination" in result
+            mine = await user.request(info, "getconfig", version=1)
+            assert mine["default_destination"] == "testshare"
+            nas_wide = await admin.request(info, "getconfig", version=1)
+            assert nas_wide["default_destination"] == "writable"
+        finally:
+            await set_download_config(user, default_destination="writable")
+
+    async def test_list_downloads_shows_only_own_tasks(
+        self, nas_client: Any, admin_client: Any, _clean_queue: None
+    ) -> None:
+        from mcp_synology.modules.downloadstation.tasks import create_download, list_downloads
+
+        user, _, _, _ = _unpack(nas_client)
+        admin, _, _, _ = _unpack(admin_client)
+        admin_task = _ids_in(await create_download(admin, uri=_FAKE_MAGNET))[0]
+        try:
+            assert admin_task not in await list_downloads(user)
+            assert admin_task in await list_downloads(admin)
+        finally:
+            await admin.request(
+                "SYNO.DownloadStation.Task",
+                "delete",
+                version=1,
+                params={"id": admin_task, "force_complete": "false"},
+            )
+
+    async def test_create_without_destination_uses_own_default(
+        self, nas_client: Any, _local_source: str
+    ) -> None:
+        """#124: DS2 create answers 120 to a non-manager with no destination;
+        create_download fills in the user's own default instead."""
+        from mcp_synology.modules.downloadstation.tasks import create_download
+
+        client, _, _, _ = _unpack(nas_client)
+        created = await create_download(client, uri=_local_source)
+        task_id = _ids_in(created)[0]
+        assert "won't start" not in created
+        await _wait_for(client, task_id, lambda t: t["status"] == "finished")
+        assert "ds-source.bin" in await _writable_names(client)
+
+
+class TestVdsmDownloadStationUnconfiguredUser:
+    """A DS-granted non-admin that never set a default destination (#124).
+
+    DS queues such a user's tasks but never starts them, and DS2 create
+    answers 120 when they omit ``destination``.
+    """
+
+    async def test_create_without_destination_is_refused_and_creates_nothing(
+        self, fresh_client: Any, _ds_available: bool
+    ) -> None:
+        from mcp_synology.modules.downloadstation.tasks import create_download
+
+        client, _, _, _ = _unpack(fresh_client)
+        with pytest.raises(ToolError) as exc:
+            await create_download(client, uri=_FAKE_MAGNET)
+        error = _error(exc.value)
+        assert error["code"] == "invalid_parameter"
+        assert "set_download_config" in error["suggestion"]
+        assert await _all_task_ids(client) == []
+
+    async def test_create_with_destination_says_it_wont_start(
+        self, fresh_client: Any, _ds_available: bool
+    ) -> None:
+        from mcp_synology.modules.downloadstation.tasks import create_download
+
+        client, _, _, _ = _unpack(fresh_client)
+        created = await create_download(client, uri=_FAKE_MAGNET, destination="writable")
+        task_ids = _ids_in(created)
+        try:
+            assert "won't start" in created
+            assert "set_download_config(default_destination=" in created
+            await asyncio.sleep(10)
+            assert (await _task(client, task_ids[0]))["status"] == "waiting"
+        finally:
+            await client.request(
+                "SYNO.DownloadStation.Task",
+                "delete",
+                version=1,
+                params={"id": ",".join(task_ids), "force_complete": "false"},
             )

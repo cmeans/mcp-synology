@@ -16,6 +16,12 @@ connection:
   # https: true
   # verify_ssl: false
 
+# Whether the account above is a DSM admin. Persona-dependent tests (e.g.
+# test_resource_usage_non_admin) assert the right behavior outright when this
+# is set, and skip when it is absent. Prefer a non-admin account: it is what a
+# least-privilege deployment uses.
+# is_admin: false
+
 # Optional: inline credentials (keyring or env vars preferred)
 # auth:
 #   username: your_user

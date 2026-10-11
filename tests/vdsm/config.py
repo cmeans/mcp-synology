@@ -71,7 +71,10 @@ DEFAULT_DSM_VERSION: str = "7.2.2"
 # test user's Download Station grant, added in v2).
 #   v3: the bake shuts DSM down cleanly before saving; v2 images were saved
 #       from a SIGKILLed VM (on CI, DS's pkg-synodl-apid unit came up masked).
-BAKE_VERSION: int = 3
+#   v4: the test user sets its own DS default destination (DS never starts a
+#       non-manager's tasks until it is set, #124), and a second, unconfigured
+#       DS user (DEFAULT_FRESH_USER) pins that case.
+BAKE_VERSION: int = 4
 
 # Project root / .vdsm directory for all virtual-dsm artifacts
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -97,6 +100,9 @@ def storage_path(version: str) -> Path:
 DEFAULT_ADMIN_USER: str = "mcpadmin"
 DEFAULT_TEST_USER: str = "mcptest"
 DEFAULT_TEST_PASSWORD: str = "Mcp#Test9!xK27zQ"
+# A DS-granted non-admin that has never set a DS default destination (#124).
+DEFAULT_FRESH_USER: str = "mcpfresh"
+DEFAULT_FRESH_PASSWORD: str = "Mcp#Fresh7!pQ31vW"
 
 # Container resource limits
 CONTAINER_DISK_SIZE: str = "16G"

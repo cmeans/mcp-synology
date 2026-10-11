@@ -12,6 +12,7 @@ import pytest
 from mcp_synology.core.client import DsmClient
 from mcp_synology.core.config import AppConfig
 from mcp_synology.core.state import ApiInfoEntry
+from tests.personas import ReauthSpy, attach_reauth_spy
 
 BASE_URL = "http://nas:5000"
 
@@ -120,3 +121,10 @@ async def mock_client() -> AsyncGenerator[DsmClient, None]:
     client._api_cache = make_api_cache()
     async with client:
         yield client
+
+
+@pytest.fixture
+def reauth_spy(nas_client: Any) -> ReauthSpy:
+    """Count re-auths and logins on ``nas_client``'s AuthManager (integration/vdsm)."""
+    _, auth, _, _ = nas_client
+    return attach_reauth_spy(auth)
