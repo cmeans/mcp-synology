@@ -527,50 +527,23 @@ async def admin_client(
     vdsm_config: tuple[AppConfig, dict[str, str]],
     dsm_version: str,
 ) -> Any:
-    """Provide an admin-authenticated DsmClient for virtual-dsm.
+    """Provide a DsmClient logged in as the golden image's admin.
 
-    Virtual-dsm typically runs with admin credentials, so this is the
-    same as nas_client but authenticates as admin.
+    Same shape as ``nas_client`` (which is the non-admin test user); tests
+    that need NAS-wide or admin-only behavior use this one.
     """
     config, test_paths = vdsm_config
-    conn = config.connection
-    assert conn is not None
-
-    base_url = f"http://{conn.host}:{conn.port}"
     meta = load_golden_meta(dsm_version)
-
-    # Build admin config
-    admin_config = AppConfig(
-        schema_version=1,
-        instance_id=f"vdsm-admin-{dsm_version.replace('.', '-')}",
-        connection={
-            "host": conn.host,
-            "port": conn.port,
-            "https": False,
-            "verify_ssl": False,
-        },
-        auth={
-            "username": meta.get("admin_user", "admin"),
-            "password": meta.get("admin_password", ""),
-        },
-        modules={
-            "filestation": {"enabled": True, "permission": "write"},
-            "system": {"enabled": True},
-        },
+    admin = config.model_copy(
+        update={
+            "instance_id": f"vdsm-admin-{dsm_version.replace('.', '-')}",
+            "auth": config.auth.model_copy(
+                update={
+                    "username": meta.get("admin_user", "admin"),
+                    "password": meta.get("admin_password", ""),
+                }
+            ),
+        }
     )
-
-    client = DsmClient(
-        base_url=base_url,
-        verify_ssl=False,
-        timeout=30,
-    )
-
-    async with client:
-        await client.query_api_info()
-        auth = AuthManager(admin_config, client)
-        sid = await auth.login()
-        logger.info("vDSM admin authenticated, SID=%s... (DSM %s)", sid[:8], dsm_version)
-
-        yield client, auth, admin_config, test_paths
-
-        await auth.logout()
+    async for session in _user_session(admin, test_paths, dsm_version, "admin"):
+        yield session

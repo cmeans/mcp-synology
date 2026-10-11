@@ -582,7 +582,7 @@ class TestVdsmDownloadStationNonAdmin:
     async def test_create_without_destination_uses_own_default(
         self, nas_client: Any, _local_source: str
     ) -> None:
-        """#124: DS2 create answers 120 to a non-manager with no destination;
+        """#133: DS2 create answers 120 to any user who omits destination;
         create_download fills in the user's own default instead."""
         from mcp_synology.modules.downloadstation.tasks import create_download
 
@@ -597,8 +597,8 @@ class TestVdsmDownloadStationNonAdmin:
 class TestVdsmDownloadStationUnconfiguredUser:
     """A DS-granted non-admin that never set a default destination (#124).
 
-    DS queues such a user's tasks but never starts them, and DS2 create
-    answers 120 when they omit ``destination``.
+    DS queues such a user's tasks but never starts them, and with no default
+    to fill in, create_download refuses a create that omits ``destination``.
     """
 
     async def test_create_without_destination_is_refused_and_creates_nothing(
@@ -615,12 +615,14 @@ class TestVdsmDownloadStationUnconfiguredUser:
         assert await _all_task_ids(client) == []
 
     async def test_create_with_destination_says_it_wont_start(
-        self, fresh_client: Any, _ds_available: bool
+        self, fresh_client: Any, _local_source: str
     ) -> None:
+        """The NAS-served source finishes in about 2 s for a configured user, so
+        still ``waiting`` after 10 s is unambiguous (a magnet could be slow anyway)."""
         from mcp_synology.modules.downloadstation.tasks import create_download
 
         client, _, _, _ = _unpack(fresh_client)
-        created = await create_download(client, uri=_FAKE_MAGNET, destination="writable")
+        created = await create_download(client, uri=_local_source, destination="writable")
         task_ids = _ids_in(created)
         try:
             assert "won't start" in created

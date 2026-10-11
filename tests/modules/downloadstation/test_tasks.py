@@ -218,7 +218,7 @@ class TestCreateDownloadUri:
 
     @respx.mock
     async def test_ds2_post_returns_task_ids(self, mock_client: DsmClient) -> None:
-        _no_default()
+        _has_default()
         route = post_route(TASK2, "create", version=2).respond(json=captured("ds2_task_create_url"))
         result = await create_download(
             mock_client, uri="magnet:?xt=urn:btih:abc", destination="writable"
@@ -232,7 +232,7 @@ class TestCreateDownloadUri:
 
     @respx.mock
     async def test_comma_list_becomes_json_array(self, mock_client: DsmClient) -> None:
-        _no_default()
+        _has_default()
         route = post_route(TASK2, "create", version=2).respond(
             json=ok({"list_id": [], "task_id": ["dbid_1", "dbid_2"]})
         )
@@ -241,13 +241,13 @@ class TestCreateDownloadUri:
         )
         form = _form(route.calls.last.request)
         assert json.loads(form["url"]) == ["http://a.example/1.iso", "http://b.example/2.iso"]
-        assert "destination" not in form
+        assert form["destination"] == '"writable"'  # filled in from the default
         assert "dbid_1" in result and "dbid_2" in result
 
     @respx.mock
     async def test_long_uri_list_is_sent_in_body_not_query(self, mock_client: DsmClient) -> None:
         """#123 bug 14: a GET URL past ~8 KB gets HTTP 414 from DSM."""
-        _no_default()
+        _has_default()
         long_magnet = "magnet:?xt=urn:btih:" + "a" * 40 + "&tr=" + "x" * 12_000
         route = post_route(TASK2, "create", version=2).respond(
             json=ok({"list_id": [], "task_id": ["dbid_9"]})
@@ -262,7 +262,7 @@ class TestCreateDownloadUri:
     async def test_falls_back_to_v1_post_on_not_available_codes(
         self, mock_client: DsmClient, code: int
     ) -> None:
-        _no_default()
+        _has_default()
         post_route(TASK2, "create", version=2).respond(json=err(code))
         v1 = post_route(TASK, "create", version=1).respond(json=captured("v1_task_create_url"))
         result = await create_download(mock_client, uri="magnet:?xt=a", destination="writable")
@@ -273,7 +273,7 @@ class TestCreateDownloadUri:
 
     @respx.mock
     async def test_falls_back_to_v1_when_ds2_absent(self, mock_client: DsmClient) -> None:
-        _no_default()
+        _has_default()
         del mock_client.api_cache[TASK2]
         v1 = post_route(TASK, "create", version=1).respond(json=captured("v1_task_create_url"))
         await create_download(mock_client, uri="magnet:?xt=a")
@@ -281,7 +281,7 @@ class TestCreateDownloadUri:
 
     @respx.mock
     async def test_falls_back_to_v1_when_ds2_task_is_v1_only(self, mock_client: DsmClient) -> None:
-        _no_default()
+        _has_default()
         mock_client.api_cache[TASK2] = mock_client.api_cache[TASK2].model_copy(
             update={"max_version": 1}
         )
@@ -292,7 +292,7 @@ class TestCreateDownloadUri:
     @respx.mock
     async def test_other_ds2_error_is_surfaced_not_retried(self, mock_client: DsmClient) -> None:
         """Retrying after a post-commit failure could create duplicate downloads."""
-        _no_default()
+        _has_default()
         post_route(TASK2, "create", version=2).respond(json=err(401))
         v1 = post_route(TASK, "create", version=1).respond(json=ok())
         with pytest.raises(ToolError, match="Max number of tasks"):
@@ -301,7 +301,7 @@ class TestCreateDownloadUri:
 
     @respx.mock
     async def test_ds2_http_5xx_is_surfaced_not_retried(self, mock_client: DsmClient) -> None:
-        _no_default()
+        _has_default()
         post_route(TASK2, "create", version=2).respond(status_code=502)
         v1 = post_route(TASK, "create", version=1).respond(json=ok())
         with pytest.raises(ToolError) as exc:
@@ -314,7 +314,7 @@ class TestCreateDownloadUri:
 
     @respx.mock
     async def test_ds2_timeout_is_surfaced_not_retried(self, mock_client: DsmClient) -> None:
-        _no_default()
+        _has_default()
         post_route(TASK2, "create", version=2).mock(side_effect=httpx.ReadTimeout("slow"))
         v1 = post_route(TASK, "create", version=1).respond(json=ok())
         with pytest.raises(ToolError) as exc:
@@ -326,7 +326,7 @@ class TestCreateDownloadUri:
 
     @respx.mock
     async def test_ds2_error_120_is_invalid_parameter(self, mock_client: DsmClient) -> None:
-        _no_default()
+        _has_default()
         post_route(TASK2, "create", version=2).respond(json=err(120))
         with pytest.raises(ToolError) as exc:
             await create_download(mock_client, uri="magnet:?xt=a")
@@ -338,7 +338,7 @@ class TestCreateDownloadUri:
     async def test_credentials_go_to_v1_in_post_body(self, mock_client: DsmClient) -> None:
         """HTTP-auth sources use v1 (DS2 url-create credential fields are
         unverified); credentials travel in the POST body, never the URL."""
-        _no_default()
+        _has_default()
         ds2 = post_route(TASK2, "create").respond(json=ok())
         v1 = post_route(TASK, "create", version=1).respond(json=ok())
         await create_download(
@@ -353,7 +353,7 @@ class TestCreateDownloadUri:
 
     @respx.mock
     async def test_session_error_triggers_one_reauth_retry(self, mock_client: DsmClient) -> None:
-        _no_default()
+        _has_default()
         reauths = 0
 
         async def fake_reauth() -> None:
@@ -373,7 +373,7 @@ class TestCreateDownloadUri:
 
     @respx.mock
     async def test_v1_fallback_error_is_surfaced(self, mock_client: DsmClient) -> None:
-        _no_default()
+        _has_default()
         del mock_client.api_cache[TASK2]
         post_route(TASK, "create", version=1).respond(json=err(403))
         with pytest.raises(ToolError, match="Destination doesn't exist"):
@@ -403,14 +403,13 @@ def _default_destination(dest: str | None, *, is_manager: bool = True) -> respx.
     return get_route(INFO, "getconfig", version=1).respond(json=body)
 
 
-def _no_default() -> None:
-    """A manager with no default destination: create_download sends what it was given."""
-    _default_destination(None)
-    _manager()
+def _has_default() -> None:
+    """A manager whose default destination is set (the normal case)."""
+    _default_destination("writable")
 
 
 class TestCreateDownloadDestination:
-    """#124: DS2 create answers 120 without a destination for a non-manager, and DS
+    """#133: DS2 create answers 120 to any user who omits destination, and DS
     never starts a non-manager's tasks until their default destination is set
     (DS 3.9 and 4.1). create_download resolves the default itself."""
 
@@ -455,12 +454,31 @@ class TestCreateDownloadDestination:
         assert "set_download_config(default_destination=" in result
 
     @respx.mock
-    async def test_manager_without_default_is_unchanged(self, mock_client: DsmClient) -> None:
+    async def test_manager_without_default_or_destination_is_refused(
+        self, mock_client: DsmClient
+    ) -> None:
+        """DS2 create answers 120 to any user who omits destination, even an admin
+        with a default (DS 3.9/4.1), so with no default to fill in, nothing is sent."""
         _default_destination(None)
         _manager()
         route = post_route(TASK2, "create", version=2).respond(json=captured("ds2_task_create_url"))
-        result = await create_download(mock_client, uri="magnet:?xt=a")
-        assert "destination" not in _form(route.calls.last.request)
+        with pytest.raises(ToolError) as exc:
+            await create_download(mock_client, uri="magnet:?xt=a")
+        envelope = _envelope(exc.value)
+        assert envelope["code"] == "invalid_parameter"
+        assert "destination" in envelope["suggestion"]
+        assert "set_download_config" not in envelope["suggestion"]
+        assert not route.called
+
+    @respx.mock
+    async def test_manager_without_default_with_destination_has_no_note(
+        self, mock_client: DsmClient
+    ) -> None:
+        _default_destination(None)
+        _manager()
+        route = post_route(TASK2, "create", version=2).respond(json=captured("ds2_task_create_url"))
+        result = await create_download(mock_client, uri="magnet:?xt=a", destination="writable")
+        assert _form(route.calls.last.request)["destination"] == '"writable"'
         assert "won't start" not in result
 
     @respx.mock
@@ -478,7 +496,7 @@ class TestCreateDownloadFile:
     async def test_torrent_upload_uses_ds2_multipart(
         self, mock_client: DsmClient, tmp_path: Path
     ) -> None:
-        _no_default()
+        _has_default()
         torrent = tmp_path / "ubuntu.torrent"
         torrent.write_bytes(b"d4:infod6:lengthi100eee")
         route = respx.post("http://nas:5000/webapi/entry.cgi").respond(
@@ -515,7 +533,7 @@ class TestCreateDownloadFile:
     ) -> None:
         """v1 multipart upload fails with 101 on DSM 7.2.2 in every variant
         (#123 bug 6), so there is deliberately no v1 fallback for files."""
-        _no_default()
+        _has_default()
         del mock_client.api_cache[TASK2]
         torrent = tmp_path / "x.torrent"
         torrent.write_bytes(b"x")

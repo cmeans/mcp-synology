@@ -297,11 +297,13 @@ async def _resolve_destination(
 ) -> tuple[str | None, str]:
     """Fill in the user's default destination; return it and a note for the result.
 
-    Verified on DS 3.9 and 4.1 (#124): DS2 ``Task.create`` answers 120 when a
-    non-manager omits ``destination``, and DS never starts a non-manager's
-    tasks (they stay ``waiting``) until that user's default destination is set.
-    Passing the default explicitly works for every user. When the config can't
-    be read, the request goes out unchanged.
+    Verified on DS 3.9 and 4.1 (#133): DS2 ``Task.create`` answers 120 to any
+    user who omits ``destination``, even an admin with a default set, so the
+    default is always passed explicitly. With no default and no destination
+    the task is refused before anything is sent. DS also never starts a
+    non-manager's tasks (they stay ``waiting``) until that user's default
+    destination is set; then the result says so. When the config can't be
+    read, the request goes out unchanged.
     """
     if "SYNO.DownloadStation.Info" not in client.api_cache:
         return destination, ""
@@ -313,9 +315,8 @@ async def _resolve_destination(
     default = config.get("default_destination") or None
     if default is not None:
         return (destination if destination is not None else str(default)), ""
-    if await ds_is_manager(client) is not False:
-        return destination, ""
 
+    non_manager = await ds_is_manager(client) is False
     setup = (
         "Set your default destination first, e.g. "
         'set_download_config(default_destination="<share>").'
@@ -323,13 +324,19 @@ async def _resolve_destination(
     if destination is None:
         error_response(
             ErrorCode.INVALID_PARAMETER,
-            "Create download failed: no `destination` given and you have no default "
-            "destination, so DSM would reject the task. Download Station also won't start "
-            "your tasks until a default destination is set.",
+            "Create download failed: no `destination` given and there is no default "
+            "destination to use, so DSM would reject the task."
+            + (
+                " Download Station also won't start your tasks until a default destination is set."
+                if non_manager
+                else ""
+            ),
             retryable=False,
             param="destination",
-            suggestion=setup,
+            suggestion=setup if non_manager else "Pass `destination` (a share name).",
         )
+    if not non_manager:
+        return destination, ""
     return destination, (
         " Note: Download Station won't start your tasks until your default destination "
         f"is set; they stay waiting. {setup}"
