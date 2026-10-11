@@ -18,7 +18,12 @@ from mcp_synology.core.client import DsmClient
 from mcp_synology.core.config import AppConfig
 from tests.vdsm.config import DEFAULT_DSM_VERSION, DSM_VERSIONS
 from tests.vdsm.container import VirtualDsmContainer
-from tests.vdsm.golden_image import has_golden_image, load_golden_meta, restore_golden_image
+from tests.vdsm.golden_image import (
+    has_golden_image,
+    load_golden_meta,
+    restore_golden_image,
+    stale_golden_image_reason,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +58,12 @@ def vdsm_container(dsm_version: str) -> Any:
             f"Golden image not found for DSM {dsm_version}. "
             f"Run: python scripts/vdsm_setup.py --version {dsm_version}"
         )
+
+    # Fail rather than skip: a stale image would boot fine and then fail tests
+    # with errors (e.g. a 105 from a missing grant) that hide the real cause.
+    stale = stale_golden_image_reason(load_golden_meta(dsm_version), dsm_version)
+    if stale:
+        pytest.fail(stale)
 
     storage_dir = restore_golden_image(dsm_version)
     logger.info("Restored golden image for DSM %s to %s", dsm_version, storage_dir)

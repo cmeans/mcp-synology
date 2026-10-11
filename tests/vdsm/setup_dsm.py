@@ -17,6 +17,7 @@ JavaScript dispatch or Playwright's force=True to bypass overlay interception.
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from pathlib import Path
@@ -25,6 +26,7 @@ from typing import Any
 import httpx
 
 from tests.vdsm.config import (
+    BAKE_VERSION,
     DEFAULT_ADMIN_USER,
     DEFAULT_TEST_PASSWORD,
     DEFAULT_TEST_USER,
@@ -33,6 +35,8 @@ from tests.vdsm.config import (
 )
 
 logger = logging.getLogger(__name__)
+
+_DS_APP_ID = "SYNO.SDS.DownloadStation.Application"
 
 # Directory for debug screenshots on failure
 _SCREENSHOT_DIR = Path(__file__).parent.parent.parent / ".vdsm" / "screenshots"
@@ -562,19 +566,20 @@ def _configure_download_station_via_api(
     admin_user: str,
     admin_password: str,
     test_user: str,
+    test_password: str,
     default_destination: str = "writable",
 ) -> None:
     """Configure Download Station after install: default destination + permissions.
 
     Runs once at golden-image bake time. Uses DSM admin session to:
       1. Set DS default destination to an existing share
-      2. Grant the test_user permission to use DS (via the DSM
-         Application Privileges system)
+      2. Grant the test_user the Download Station application privilege
+         (``SYNO.Core.AppPriv.Rule.set``), then check that the existing
+         ``administrators`` rule survived
 
-    All calls go through the DSM web API (login -> admin session -> operation).
-    The permission-grant API name may differ across DSM versions; a failure
-    on that call logs a warning rather than failing the bake — test failures
-    from a 105 on DS calls will surface the gap clearly in CI logs.
+    Then verifies the grant from the test user's own session (``Task.list``).
+    Any failure fails the bake: an image without the grant would only show up
+    later as a 105 on every non-admin DS test.
     """
     print("    Configuring Download Station (admin session)...")
 
@@ -625,35 +630,58 @@ def _configure_download_station_via_api(
                 msg = f"DS setserverconfig failed: code {err}"
                 raise RuntimeError(msg)
 
-            # 2. Grant test_user permission for DS
-            # DSM uses SYNO.Core.Package.Setting.User to manage per-user package
-            # access. The exact API call shape varies by DSM version — use the
-            # most widely supported form. If this returns 105/403 (no permission
-            # via API on vdsm — the SYNO.Core.* surface is restricted on
-            # virtual-dsm), don't fail the bake; log a warning. A test failure
-            # with code 105 on DS calls will surface the missing permission
-            # clearly enough that the operator can fall back to a UI grant.
-            print(f"    Granting {test_user} permission for DownloadStation...")
-            perm_resp = client.get(
+            # 2. Grant test_user the DS application privilege. Rule.set merges
+            # with the existing rules (verified: a set carrying only this user's
+            # rule leaves the administrators group rule in place), so a single
+            # set is enough. Rule.list wants a JSON-quoted app_id.
+            print(f"    Granting {test_user} the Download Station app privilege...")
+            rule = {
+                "entity_type": "user",
+                "entity_name": test_user,
+                "app_id": _DS_APP_ID,
+                "allow_ip": ["0.0.0.0"],
+                "deny_ip": [],
+            }
+            set_data = client.get(
                 "/webapi/entry.cgi",
                 params={
-                    "api": "SYNO.Core.Package.Setting.User",
+                    "api": "SYNO.Core.AppPriv.Rule",
                     "version": "1",
                     "method": "set",
-                    "package": "DownloadStation",
-                    "users": '[{"name":"' + test_user + '","allowed":true}]',
+                    "rules": json.dumps([rule]),
                     "_sid": sid,
                 },
-            )
-            perm_data = perm_resp.json()
-            if not perm_data.get("success"):
-                code = perm_data.get("error", {}).get("code", "?")
-                logger.warning(
-                    "DS permission grant for %s returned code %s — test_user may "
-                    "lack DS access. May need manual UI grant.",
-                    test_user,
-                    code,
-                )
+            ).json()
+            if not set_data.get("success"):
+                code = set_data.get("error", {}).get("code", "?")
+                msg = f"AppPriv.Rule.set for {test_user} failed: code {code}"
+                raise RuntimeError(msg)
+
+            list_data = client.get(
+                "/webapi/entry.cgi",
+                params={
+                    "api": "SYNO.Core.AppPriv.Rule",
+                    "version": "1",
+                    "method": "list",
+                    "app_id": json.dumps(_DS_APP_ID),
+                    "_sid": sid,
+                },
+            ).json()
+            if not list_data.get("success"):
+                code = list_data.get("error", {}).get("code", "?")
+                msg = f"AppPriv.Rule.list failed: code {code}"
+                raise RuntimeError(msg)
+            entities = {
+                (r.get("entity_type"), r.get("entity_name"))
+                for r in list_data.get("data", {}).get("rules", [])
+            }
+            for expected in (("group", "administrators"), ("user", test_user)):
+                if expected not in entities:
+                    msg = (
+                        f"Download Station app privilege rules lack {expected[0]} "
+                        f"{expected[1]!r} after Rule.set: {sorted(entities)}"
+                    )
+                    raise RuntimeError(msg)
         finally:
             # Logout regardless of success
             client.get(
@@ -667,7 +695,55 @@ def _configure_download_station_via_api(
                 },
             )
 
+    _verify_ds_access_as_user(base_url, test_user, test_password)
     print("    Download Station configured.")
+
+
+def _verify_ds_access_as_user(base_url: str, username: str, password: str) -> None:
+    """Fail the bake unless ``username``'s own session can list DS tasks."""
+    print(f"    Verifying {username} can use Download Station...")
+    with httpx.Client(base_url=base_url, timeout=30, verify=False) as client:  # noqa: S501
+        login_data = client.get(
+            "/webapi/auth.cgi",
+            params={
+                "api": "SYNO.API.Auth",
+                "version": "3",
+                "method": "login",
+                "account": username,
+                "passwd": password,
+                "session": "DownloadStation",
+                "format": "sid",
+            },
+        ).json()
+        if not login_data.get("success"):
+            msg = f"{username} login failed: {login_data.get('error')}"
+            raise RuntimeError(msg)
+        sid = login_data["data"]["sid"]
+        try:
+            list_data = client.get(
+                "/webapi/DownloadStation/task.cgi",
+                params={
+                    "api": "SYNO.DownloadStation.Task",
+                    "version": "1",
+                    "method": "list",
+                    "_sid": sid,
+                },
+            ).json()
+        finally:
+            client.get(
+                "/webapi/auth.cgi",
+                params={
+                    "api": "SYNO.API.Auth",
+                    "version": "1",
+                    "method": "logout",
+                    "session": "DownloadStation",
+                    "_sid": sid,
+                },
+            )
+        if not list_data.get("success"):
+            code = list_data.get("error", {}).get("code", "?")
+            msg = f"{username} cannot use Download Station after the grant: Task.list code {code}"
+            raise RuntimeError(msg)
 
 
 # ---------------------------------------------------------------------------
@@ -726,6 +802,7 @@ def setup_dsm_for_testing(
             admin_user=admin_user,
             admin_password=admin_password,
             test_user=DEFAULT_TEST_USER,
+            test_password=DEFAULT_TEST_PASSWORD,
             default_destination="writable",
         )
     else:
@@ -746,6 +823,8 @@ def setup_dsm_for_testing(
         "test_user": DEFAULT_TEST_USER,
         "test_password": DEFAULT_TEST_PASSWORD,
         "dsm_packages": ["DownloadStation"],
+        "bake_version": BAKE_VERSION,
+        "grants": [f"ds:{DEFAULT_TEST_USER}"],
         "test_paths": {
             "existing_share": "/testshare",
             "search_folder": "/testshare/Documents",

@@ -60,6 +60,13 @@ DSM_VERSIONS: dict[str, DsmVersionInfo] = {
 
 DEFAULT_DSM_VERSION: str = "7.2.2"
 
+# Bumped on every change to what the bake puts into a golden image. The bake
+# records it in meta.json, and the vdsm conftest refuses older images: CI's
+# cache key hashes the bake files, but a local .vdsm/golden/ image is reused
+# indefinitely and would otherwise silently lack newer setup (e.g. the
+# test user's Download Station grant, added in v2).
+BAKE_VERSION: int = 2
+
 # Project root / .vdsm directory for all virtual-dsm artifacts
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 VDSM_ROOT: Path = _PROJECT_ROOT / ".vdsm"

@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 from tests.vdsm.config import (
+    BAKE_VERSION,
     DEFAULT_ADMIN_USER,
     DEFAULT_TEST_PASSWORD,
     DEFAULT_TEST_USER,
@@ -61,6 +62,8 @@ def save_golden_image(
             "test_user": DEFAULT_TEST_USER,
             "test_password": DEFAULT_TEST_PASSWORD,
             "dsm_packages": ["DownloadStation"],
+            "bake_version": BAKE_VERSION,
+            "grants": [f"ds:{DEFAULT_TEST_USER}"],
             "test_paths": {
                 "existing_share": "/testshare",
                 "search_folder": "/testshare/Documents",
@@ -118,3 +121,16 @@ def load_golden_meta(version: str) -> dict[str, object]:
         raise FileNotFoundError(msg)
 
     return json.loads(meta_path.read_text())  # type: ignore[no-any-return]
+
+
+def stale_golden_image_reason(meta: dict[str, object], version: str) -> str | None:
+    """Return why a golden image is too old for this checkout, or None if current."""
+    baked = meta.get("bake_version")
+    if isinstance(baked, int) and not isinstance(baked, bool) and baked >= BAKE_VERSION:
+        return None
+    found = f"bake v{baked}" if isinstance(baked, int) else "an unversioned bake"
+    return (
+        f"Golden image for DSM {version} is from {found} and predates bake "
+        f"v{BAKE_VERSION}. Delete .vdsm/golden/dsm-{version}.tar.gz (and its "
+        f".meta.json) and rebuild: python scripts/vdsm_setup.py --version {version}"
+    )

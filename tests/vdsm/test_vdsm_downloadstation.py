@@ -16,9 +16,11 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import os
 import re
 import time
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlencode
 
 import httpx
 import pytest
@@ -39,11 +41,18 @@ _FAKE_MAGNET = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=
 
 _TASK_ID = re.compile(r"\bdbid_\d+\b")
 
-# A small file on an IPv4-only host. vdsm's QEMU user networking has no IPv6
-# route, and DS 3.9 (what Package Center serves DSM 7.1) does not fall back
-# from IPv6 the way curl does: a dual-stack URL such as http://example.com/
-# sits at 0 bytes forever on 7.1 while the same guest's curl fetches it (#123).
-_IPV4_ONLY_FILE = "http://ipv4.download.thinkbroadband.com/5MB.zip"
+# HTTP download tests fetch a file the NAS serves itself (File Station
+# Download on the guest's own 127.0.0.1:5000), so they never depend on an
+# external host. External hosts made these tests skip on a slow network, and
+# dual-stack ones never finish on DSM 7.1: vdsm's QEMU networking has no IPv6
+# route and DS 3.9 does not fall back to IPv4 (#123).
+_SOURCE_DIR = "/testshare"
+_SOURCE_NAME = "ds-source.bin"
+_SOURCE_SIZE = 4 * 1024 * 1024
+
+# HTTP speed cap (KB/s) for the unfinished-task tests: slow enough that the
+# 4 MB source stays partial for minutes, fast enough to show progress quickly.
+_THROTTLE_KBPS = 4
 
 # How long to wait for the DS back end to answer after the container reports
 # DSM ready. DSM's web server comes up before DS's CGIs, which answer
@@ -130,6 +139,102 @@ def _synthetic_torrent(tmp_path: Path) -> Path:
     path = tmp_path / "vdsm-probe.torrent"
     path.write_bytes(b({"announce": "http://127.0.0.1:1/announce", "info": info}))
     return path
+
+
+def _local_url(client: DsmClient) -> str:
+    """URL for the NAS-served source file, fetched by DS from inside the guest."""
+    query = urlencode(
+        {
+            "api": "SYNO.FileStation.Download",
+            "version": "2",
+            "method": "download",
+            "mode": "download",
+            "path": f"{_SOURCE_DIR}/{_SOURCE_NAME}",
+            "_sid": client.sid or "",
+        }
+    )
+    return f"http://127.0.0.1:5000/webapi/entry.cgi?{query}"
+
+
+async def _writable_names(client: DsmClient) -> list[str]:
+    listing = await client.request(
+        "SYNO.FileStation.List", "list", version=2, params={"folder_path": "/writable"}
+    )
+    return [f["name"] for f in listing.get("files", [])]
+
+
+async def _remove_from_writable(client: DsmClient, name: str) -> None:
+    from mcp_synology.modules.filestation.operations import delete_files
+
+    if name in await _writable_names(client):
+        await delete_files(client, paths=[f"/writable/{name}"])
+
+
+@pytest.fixture
+async def _local_source(nas_client: Any, _clean_queue: None, tmp_path: Path) -> Any:
+    """Put a random file on the NAS for DS to download; clean up its copies after."""
+    from mcp_synology.modules.filestation.transfer import upload_file
+
+    client, _, _, _ = _unpack(nas_client)
+    local = tmp_path / _SOURCE_NAME
+    local.write_bytes(os.urandom(_SOURCE_SIZE))
+    await upload_file(client, local_path=str(local), dest_folder=_SOURCE_DIR, overwrite=True)
+    await _remove_from_writable(client, _SOURCE_NAME)
+    yield _local_url(client)
+    await _remove_from_writable(client, _SOURCE_NAME)
+
+
+@pytest.fixture
+async def _throttled(nas_client: Any, _ds_available: bool) -> Any:
+    """Cap HTTP download speed; restore the previous cap afterward.
+
+    Uses the v1 ``http_max_download`` speed cap (KB/s). DS 3.9 on DSM 7.1
+    ignores the DS2 weekly plan's limited speed for HTTP tasks, so the plan
+    can't hold a task partial there; this cap does on both versions.
+    """
+    client, _, _, _ = _unpack(nas_client)
+    info = "SYNO.DownloadStation.Info"
+    before = await client.request(info, "getconfig", version=1)
+    await client.request(
+        info, "setserverconfig", version=1, params={"http_max_download": str(_THROTTLE_KBPS)}
+    )
+    try:
+        yield
+    finally:
+        await client.request(
+            info,
+            "setserverconfig",
+            version=1,
+            params={"http_max_download": str(before["http_max_download"])},
+        )
+
+
+async def _task(client: DsmClient, task_id: str) -> dict[str, Any]:
+    data = await client.request(
+        "SYNO.DownloadStation.Task",
+        "getinfo",
+        version=1,
+        params={"id": task_id, "additional": "transfer"},
+    )
+    return data["tasks"][0]  # type: ignore[no-any-return]
+
+
+async def _wait_for(
+    client: DsmClient, task_id: str, done: Any, *, timeout: float = 120
+) -> dict[str, Any]:
+    """Poll a task until ``done(task)`` is true; fail with its last state otherwise."""
+    deadline = time.monotonic() + timeout
+    task = await _task(client, task_id)
+    while not done(task):
+        if task["status"] == "error" or time.monotonic() > deadline:
+            pytest.fail(f"task {task_id} never reached the expected state: {task}")
+        await asyncio.sleep(2)
+        task = await _task(client, task_id)
+    return task
+
+
+def _downloaded(task: dict[str, Any]) -> int:
+    return int(task.get("additional", {}).get("transfer", {}).get("size_downloaded", 0))
 
 
 class TestVdsmDownloadStationReads:
@@ -252,32 +357,42 @@ class TestVdsmDownloadStationTasks:
         assert len(ids) == 1, created
         assert ids[0] in await _all_task_ids(client)
 
-    async def test_delete_keeps_finished_file(self, nas_client: Any, _clean_queue: None) -> None:
+    async def test_delete_keeps_finished_file(self, nas_client: Any, _local_source: str) -> None:
         """#123 bug 7: DSM never deletes a finished task's file."""
         from mcp_synology.modules.downloadstation.tasks import create_download, delete_download
 
         client, _, _, _ = _unpack(nas_client)
-        created = await create_download(client, uri=_IPV4_ONLY_FILE, destination="writable")
+        created = await create_download(client, uri=_local_source, destination="writable")
         task_id = _ids_in(created)[0]
-        status = ""
-        for _ in range(30):
-            await asyncio.sleep(2)
-            data = await client.request(
-                "SYNO.DownloadStation.Task", "getinfo", version=1, params={"id": task_id}
-            )
-            status = data["tasks"][0]["status"]
-            if status in ("finished", "seeding", "error"):
-                break
-        if status != "finished":
-            pytest.skip(f"vdsm guest could not complete an HTTP download (status={status!r})")
-        title = data["tasks"][0]["title"]
+        task = await _wait_for(client, task_id, lambda t: t["status"] == "finished")
 
         await delete_download(client, task_ids=[task_id])
-        listing = await client.request(
-            "SYNO.FileStation.List", "list", version=2, params={"folder_path": "/writable"}
-        )
-        names = [f["name"] for f in listing.get("files", [])]
-        assert title in names, f"finished file {title!r} should be kept; /writable has {names}"
+        names = await _writable_names(client)
+        assert task["title"] in names, f"finished file should be kept; /writable has {names}"
+
+    @pytest.mark.parametrize("force_complete", [False, True])
+    async def test_delete_unfinished_task_discards_partial_data(
+        self, nas_client: Any, _local_source: str, _throttled: None, force_complete: bool
+    ) -> None:
+        """An unfinished HTTP task's partial data is discarded on delete.
+
+        ``force_complete`` is documented as moving the incomplete file into the
+        destination, but DS 3.9 and 4.1 discard it either way, downloading or
+        paused (#128). Pinned so a DS version that does move it shows up here.
+        """
+        from mcp_synology.modules.downloadstation.tasks import create_download, delete_download
+
+        client, _, _, _ = _unpack(nas_client)
+        created = await create_download(client, uri=_local_source, destination="writable")
+        task_id = _ids_in(created)[0]
+        task = await _wait_for(client, task_id, lambda t: _downloaded(t) > 0)
+        assert task["status"] != "finished", f"throttle did not hold the task partial: {task}"
+
+        await delete_download(client, task_ids=[task_id], force_complete=force_complete)
+        assert task_id not in await _all_task_ids(client)
+        await asyncio.sleep(10)  # give DS time for any deferred move
+        names = await _writable_names(client)
+        assert task["title"] not in names, f"partial data should be discarded: {names}"
 
 
 class TestVdsmDownloadStationSettings:
