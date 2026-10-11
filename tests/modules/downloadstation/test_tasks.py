@@ -434,8 +434,9 @@ class TestCreateDownloadFile:
 
 
 class TestDeleteDownload:
-    """Delete semantics verified live (#123 bug 7): finished files are kept;
-    unfinished tasks' partial data is discarded unless force_complete moves it.
+    """Delete semantics verified live (#123 bug 7, #128): finished files are
+    kept; an unfinished HTTP task's partial data is discarded, and DS 3.9/4.1
+    do so even with force_complete (documented as moving it).
     """
 
     @respx.mock
@@ -465,7 +466,19 @@ class TestDeleteDownload:
         )
         result = await delete_download(mock_client, task_ids=["dbid_1"], force_complete=True)
         assert dict(route.calls.last.request.url.params)["force_complete"] == "true"
-        assert "moved into the destination" in result
+        # #128: DSM discarded partial HTTP data despite force_complete, so the
+        # result must not claim a move; it says to check the destination.
+        assert "moved into" not in result
+        assert "check the destination" in result
+
+    def test_tool_description_does_not_promise_a_move(self) -> None:
+        from mcp_synology.modules.downloadstation import MODULE_INFO
+
+        tool = next(t for t in MODULE_INFO.tools if t.name == "delete_download")
+        assert "moves" not in tool.description
+        assert "force_complete" in tool.description
+        # #130: DSM refuses force_complete on finished tasks (they stay listed).
+        assert "refuses `force_complete` on finished tasks" in tool.description
 
     @respx.mock
     async def test_per_task_error_rendered(self, mock_client: DsmClient) -> None:
@@ -474,6 +487,35 @@ class TestDeleteDownload:
         )
         result = await delete_download(mock_client, task_ids=["dbid_1", "dbid_2"])
         assert "error 405" in result
+
+    @respx.mock
+    async def test_title_counts_only_removed_tasks(self, mock_client: DsmClient) -> None:
+        get_route(TASK, "delete", version=1).respond(
+            json=ok([{"error": 0, "id": "dbid_1"}, {"error": 405, "id": "dbid_2"}])
+        )
+        result = await delete_download(mock_client, task_ids=["dbid_1", "dbid_2"])
+        assert "1 of 2 task(s) removed" in result
+
+    @respx.mock
+    async def test_force_complete_on_finished_task_405_says_retry_without(
+        self, mock_client: DsmClient
+    ) -> None:
+        # Live on DS 3.9 and 4.1: force_complete=true on a finished task gets a
+        # per-task 405 and the task stays listed; force_complete=false deletes it.
+        get_route(TASK, "delete", version=1).respond(json=ok([{"error": 405, "id": "dbid_1"}]))
+        result = await delete_download(mock_client, task_ids=["dbid_1"], force_complete=True)
+        assert "0 of 1 task(s) removed" in result
+        assert "error 405" in result
+        assert "retry them with force_complete=false" in result
+
+    @respx.mock
+    async def test_405_without_force_complete_has_no_retry_hint(
+        self, mock_client: DsmClient
+    ) -> None:
+        get_route(TASK, "delete", version=1).respond(json=ok([{"error": 405, "id": "dbid_1"}]))
+        result = await delete_download(mock_client, task_ids=["dbid_1"])
+        assert "0 of 1 task(s) removed" in result
+        assert "force_complete=false" not in result
 
     async def test_empty_task_ids_raises(self, mock_client: DsmClient) -> None:
         with pytest.raises(ToolError, match="task_ids"):

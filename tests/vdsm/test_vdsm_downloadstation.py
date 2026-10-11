@@ -356,6 +356,31 @@ class TestVdsmDownloadStationTasks:
         names = await _writable_names(client)
         assert task["title"] in names, f"finished file should be kept; /writable has {names}"
 
+    async def test_force_complete_on_finished_task_is_refused(
+        self, nas_client: Any, _local_source: str
+    ) -> None:
+        """#130: DSM refuses force_complete on a finished task (per-task 405).
+
+        The task stays listed, so the result must not count it as removed and
+        must say to retry without force_complete, which does delete it.
+        """
+        from mcp_synology.modules.downloadstation.tasks import create_download, delete_download
+
+        client, _, _, _ = _unpack(nas_client)
+        created = await create_download(client, uri=_local_source, destination="writable")
+        task_id = _ids_in(created)[0]
+        await _wait_for(client, task_id, lambda t: t["status"] == "finished")
+
+        refused = await delete_download(client, task_ids=[task_id], force_complete=True)
+        assert "0 of 1 task(s) removed" in refused, refused
+        assert "error 405" in refused, refused
+        assert "retry them with force_complete=false" in refused, refused
+        assert task_id in await _all_task_ids(client)
+
+        retried = await delete_download(client, task_ids=[task_id])
+        assert "1 of 1 task(s) removed" in retried, retried
+        assert task_id not in await _all_task_ids(client)
+
     @pytest.mark.parametrize("force_complete", [False, True])
     async def test_delete_unfinished_task_discards_partial_data(
         self, nas_client: Any, _local_source: str, _throttled: None, force_complete: bool

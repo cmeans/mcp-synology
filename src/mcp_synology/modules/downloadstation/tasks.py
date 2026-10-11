@@ -12,6 +12,7 @@ from mcp_synology.core.formatting import (
     error_response,
     format_key_value,
     format_size,
+    format_status,
     format_table,
     format_timestamp,
     synology_error_response,
@@ -413,11 +414,16 @@ async def delete_download(
 ) -> str:
     """Remove one or more download tasks.
 
-    Behavior verified live on DSM 7.2.2 (#123): files from **finished**
-    tasks are always kept. For **unfinished** tasks the partial data is
-    discarded, unless ``force_complete=True``, which moves the incomplete
-    file into the task's destination (its size on disk does not reflect how
-    much was downloaded).
+    Behavior verified live on DSM 7.2.2 (DS 4.1) and DSM 7.1 (DS 3.9): files
+    from **finished** tasks are always kept, and an **unfinished** HTTP task's
+    partial data is discarded. ``force_complete`` is passed through to DSM,
+    whose API guide says it moves the incomplete file into the destination,
+    but both DS versions discarded it anyway, whether the task was
+    downloading or paused (#128). The result therefore never claims a move.
+    On a **finished** task, ``force_complete=True`` is refused per task with
+    error 405 and the task stays listed (both DS versions; #130), so the title
+    counts only the tasks DSM actually removed and the result says to retry
+    those with ``force_complete=False``.
     """
     if not task_ids:
         error_response(
@@ -445,23 +451,39 @@ async def delete_download(
 
     results = data if isinstance(data, list) else data.get("results", [])
     rows: list[list[str]] = []
+    errors: list[int] = []
     for r in results:
         err = r.get("error", 0)
         status = "ok" if err == 0 else f"error {err}"
         rows.append([r.get("id", "—"), status])
+        if err != 0:
+            errors.append(err)
 
     unfinished = (
-        "incomplete files moved into the destination"
+        "force_complete requested, but DSM may still discard partial data; check the destination"
         if force_complete
         else "partial data of unfinished tasks discarded"
     )
-    return format_table(
+    removed = (
+        f"{len(results) - len(errors)} of {len(task_ids)} task(s) removed"
+        if results
+        else f"{len(task_ids)} task(s) removed"
+    )
+    table = format_table(
         headers=["Task ID", "Result"],
         rows=rows,
-        title=(
-            f"Delete download — {len(task_ids)} task(s) removed; completed files kept; {unfinished}"
-        ),
+        title=f"Delete download — {removed}; completed files kept; {unfinished}",
     )
+    if force_complete and 405 in errors:
+        # Live on DS 3.9 and 4.1 (#130): force_complete on a finished task is
+        # refused per task with 405 and the task stays listed.
+        hint = format_status(
+            "DSM refuses force_complete for finished tasks (error 405); those tasks "
+            "are still listed: retry them with force_complete=false.",
+            success=False,
+        )
+        return f"{table}\n\n{hint}"
+    return table
 
 
 async def _task_state_change(
