@@ -7,6 +7,7 @@ fixture that matches the shape of the real-NAS fixture in test_integration.py.
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import time
 import warnings
@@ -20,7 +21,7 @@ import pytest
 from mcp_synology.core.auth import AuthManager
 from mcp_synology.core.client import DsmClient
 from mcp_synology.core.config import AppConfig
-from tests.vdsm.config import DEFAULT_DSM_VERSION, DSM_VERSIONS
+from tests.vdsm.config import DEFAULT_DSM_VERSION, DSM_VERSIONS, ds_start_fallback_allowed
 from tests.vdsm.container import VirtualDsmContainer
 from tests.vdsm.golden_image import (
     has_golden_image,
@@ -290,7 +291,12 @@ def _ds_diagnostics(container: VirtualDsmContainer, password: str) -> str:
 
 @pytest.fixture(scope="session")
 def ds_backend_ready(vdsm_container: VirtualDsmContainer, dsm_version: str) -> None:
-    """Wait once per session for Download Station; start it if it never comes up.
+    """Wait once per session for Download Station; start it locally if it never comes up.
+
+    If DS is still down after the wait, the fixture collects diagnostics and
+    starts DS with its package script. Locally, a DS that then answers is a
+    logged workaround; on CI it fails the session (see
+    ``ds_start_fallback_allowed``), because there it means the bake is broken.
 
     Session-scoped so an unavailable DS costs one wait, not one per test:
     pytest caches a session fixture's failure and re-raises it at once for
@@ -321,6 +327,13 @@ def ds_backend_ready(vdsm_container: VirtualDsmContainer, dsm_version: str) -> N
         f"Diagnostics before starting it:\n{before}\n"
         f"$ {_DS_START} (rc={rc})\n{out.strip()[-1500:]}"
     )
+    if after_problem is None and not ds_start_fallback_allowed(os.environ):
+        pytest.fail(
+            f"{report}\nDS answered only after the conftest started it. On CI that means "
+            "the bake is broken (DS does not start on boot of the golden image); the "
+            "start-it-ourselves fallback runs only locally.",
+            pytrace=False,
+        )
     if after_problem is None:
         warnings.warn(
             f"{report}\nWORKAROUND: DS answered only after the conftest started it.",

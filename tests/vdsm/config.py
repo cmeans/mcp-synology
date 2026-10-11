@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import dataclasses
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 
 @dataclasses.dataclass(frozen=True)
@@ -102,3 +106,16 @@ CONTAINER_CPU_CORES: str = "2"
 # Timing
 DSM_BOOT_TIMEOUT: int = 600  # seconds
 DSM_API_POLL_INTERVAL: int = 10  # seconds
+
+
+def ds_start_fallback_allowed(env: Mapping[str, str]) -> bool:
+    """Whether the conftest may start Download Station itself when it never came up.
+
+    Never on CI, where every golden image is baked: a DS that only answers after
+    the conftest starts it means a broken bake, and that must turn the job red.
+    Locally it stays a logged workaround so an older image is still usable.
+    """
+    return not any(env.get(var, "").lower() not in ("", "false", "0") for var in _CI_VARS)
+
+
+_CI_VARS = ("CI", "GITHUB_ACTIONS")
