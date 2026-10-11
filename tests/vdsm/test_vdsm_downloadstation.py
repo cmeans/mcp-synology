@@ -22,7 +22,6 @@ import time
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlencode
 
-import httpx
 import pytest
 
 if TYPE_CHECKING:
@@ -54,11 +53,6 @@ _SOURCE_SIZE = 4 * 1024 * 1024
 # 4 MB source stays partial for minutes, fast enough to show progress quickly.
 _THROTTLE_KBPS = 4
 
-# How long to wait for the DS back end to answer after the container reports
-# DSM ready. DSM's web server comes up before DS's CGIs, which answer
-# 502 Bad Gateway until the package finishes starting (seen in CI on #107).
-_DS_READY_TIMEOUT = 180
-
 
 def _unpack(nas_client: Any) -> tuple[DsmClient, Any, Any, dict[str, str]]:
     """Unpack the nas_client tuple yielded by conftest."""
@@ -66,26 +60,14 @@ def _unpack(nas_client: Any) -> tuple[DsmClient, Any, Any, dict[str, str]]:
 
 
 @pytest.fixture
-async def _ds_available(nas_client: Any) -> bool:
-    """Skip if DS isn't installed; otherwise wait until its back end answers."""
+async def _ds_available(nas_client: Any, request: pytest.FixtureRequest) -> bool:
+    """Skip if DS isn't installed; otherwise wait (once per session) for its back end."""
     client, _, _, _ = _unpack(nas_client)
     info = await client.query_api_info()
     if "SYNO.DownloadStation.Task" not in info:
         pytest.skip("Download Station package not installed on this NAS")
-
-    deadline = time.monotonic() + _DS_READY_TIMEOUT
-    last: Exception | None = None
-    while time.monotonic() < deadline:
-        try:
-            await client.request("SYNO.DownloadStation.Info", "getinfo", version=1)
-            return True
-        except httpx.HTTPStatusError as e:  # 502 while the DS CGIs start
-            last = e
-            await asyncio.sleep(3)
-    pytest.fail(
-        f"Download Station back end did not answer within {_DS_READY_TIMEOUT}s "
-        f"after DSM was ready (last error: {last})"
-    )
+    request.getfixturevalue("ds_backend_ready")
+    return True
 
 
 async def _all_task_ids(client: DsmClient) -> list[str]:

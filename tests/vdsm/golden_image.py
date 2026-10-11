@@ -61,9 +61,8 @@ def save_golden_image(
             "admin_user": DEFAULT_ADMIN_USER,
             "test_user": DEFAULT_TEST_USER,
             "test_password": DEFAULT_TEST_PASSWORD,
-            "dsm_packages": ["DownloadStation"],
-            "bake_version": BAKE_VERSION,
-            "grants": [f"ds:{DEFAULT_TEST_USER}"],
+            # No bake_version or grants: nothing here proves the bake ran,
+            # so an image saved this way must count as stale.
             "test_paths": {
                 "existing_share": "/testshare",
                 "search_folder": "/testshare/Documents",

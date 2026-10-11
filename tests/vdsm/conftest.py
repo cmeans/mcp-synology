@@ -7,10 +7,13 @@ fixture that matches the shape of the real-NAS fixture in test_integration.py.
 from __future__ import annotations
 
 import logging
+import time
+import warnings
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+import httpx
 import pytest
 
 from mcp_synology.core.auth import AuthManager
@@ -24,6 +27,7 @@ from tests.vdsm.golden_image import (
     restore_golden_image,
     stale_golden_image_reason,
 )
+from tests.vdsm.ssh import ssh_exec
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +78,147 @@ def vdsm_container(dsm_version: str) -> Any:
         yield container
     finally:
         container.stop()
+
+
+# Download Station back-end readiness. DSM's web server answers before DS's
+# CGIs, which return 502 Bad Gateway until the package's services are up.
+# On CI (#107) DS sometimes never comes up after a restored golden image
+# boots, so after the first wait the fixture starts it with the same script
+# the bake uses, logging diagnostics either way.
+_DS_PROBE_PATH = "/webapi/DownloadStation/task.cgi"
+_DS_READY_WAIT = 90
+_DS_KICK_WAIT = 120
+_DS_START = "/var/packages/DownloadStation/scripts/start-stop-status start"
+_DS_DIAGNOSTICS = (
+    "/usr/syno/bin/synopkg status DownloadStation",
+    "ls -la /var/packages/DownloadStation/",
+    "tail -n 30 /var/log/synopkg.log",
+    "ps -ef",
+)
+
+
+class _DsProbe:
+    """Authenticated ``Task.list`` probe; logs in once and reuses the session.
+
+    ``Task.list`` is the readiness signal because it needs the DS daemon:
+    with the daemon stopped, unauthenticated calls still return JSON (105)
+    and ``Info.getinfo`` still succeeds, while ``Task.list`` answers error 100.
+    On CI the CGIs answered 502 instead. Either counts as not ready.
+    """
+
+    def __init__(self, base_url: str, user: str, password: str) -> None:
+        self.base_url = base_url
+        self.user = user
+        self.password = password
+        self.sid: str | None = None
+
+    def _login(self) -> str | None:
+        resp = httpx.get(
+            f"{self.base_url}/webapi/auth.cgi",
+            params={
+                "api": "SYNO.API.Auth",
+                "version": "3",
+                "method": "login",
+                "account": self.user,
+                "passwd": self.password,
+                "session": "DownloadStation",
+                "format": "sid",
+            },
+            timeout=15,
+        ).json()
+        if not resp.get("success"):
+            return f"login failed: {resp.get('error')}"
+        self.sid = resp["data"]["sid"]
+        return None
+
+    def problem(self) -> str | None:
+        """None if DS lists tasks, else why not."""
+        try:
+            if self.sid is None and (failed := self._login()):
+                return failed
+            resp = httpx.get(
+                f"{self.base_url}{_DS_PROBE_PATH}",
+                params={
+                    "api": "SYNO.DownloadStation.Task",
+                    "version": "1",
+                    "method": "list",
+                    "_sid": self.sid or "",
+                },
+                timeout=15,
+            )
+            if resp.status_code >= 400:
+                return f"HTTP {resp.status_code}"
+            body = resp.json()
+        except httpx.HTTPError as e:
+            return f"{type(e).__name__}: {e}"
+        except ValueError:
+            return "non-JSON response"
+        if body.get("success"):
+            return None
+        code = body.get("error", {}).get("code")
+        if code in (106, 107, 119):
+            self.sid = None  # session lost; log in again on the next poll
+        return f"DSM error {code}"
+
+    def wait(self, timeout: float) -> str | None:
+        """Poll until DS answers; return the last problem if it never does."""
+        deadline = time.monotonic() + timeout
+        problem = self.problem()
+        while problem and time.monotonic() < deadline:
+            time.sleep(3)
+            problem = self.problem()
+        return problem
+
+
+def _ds_diagnostics(container: VirtualDsmContainer, password: str) -> str:
+    out = []
+    for cmd in _DS_DIAGNOSTICS:
+        try:
+            rc, text = ssh_exec(container.host, container.ssh_port, password, cmd)
+        except Exception as e:  # noqa: BLE001 — diagnostics must not mask the real failure
+            rc, text = -1, f"{type(e).__name__}: {e}"
+        if cmd == "ps -ef":
+            procs = [" ".join(ln.split()[7:])[:160] for ln in text.splitlines() if "ownload" in ln]
+            text = "\n".join(sorted(set(procs))[:15])
+        out.append(f"$ {cmd} (rc={rc})\n{text.strip()[-1500:]}")
+    return "\n".join(out)
+
+
+@pytest.fixture(scope="session")
+def ds_backend_ready(vdsm_container: VirtualDsmContainer, dsm_version: str) -> None:
+    """Wait once per session for Download Station; start it if it never comes up.
+
+    Session-scoped so an unavailable DS costs one wait, not one per test:
+    pytest caches a session fixture's failure and re-raises it at once for
+    every later DS test.
+    """
+    base_url = vdsm_container.base_url
+    meta = load_golden_meta(dsm_version)
+    password = str(meta.get("admin_password", ""))
+    probe = _DsProbe(base_url, str(meta.get("admin_user", "admin")), password)
+    problem = probe.wait(_DS_READY_WAIT)
+    if problem is None:
+        return
+
+    before = _ds_diagnostics(vdsm_container, password)
+    rc, out = ssh_exec(
+        vdsm_container.host, vdsm_container.ssh_port, password, _DS_START, timeout=180
+    )
+    after_problem = probe.wait(_DS_KICK_WAIT)
+    report = (
+        f"Download Station did not answer at {base_url}{_DS_PROBE_PATH} within "
+        f"{_DS_READY_WAIT}s of DSM being ready (last: {problem}).\n"
+        f"Diagnostics before starting it:\n{before}\n"
+        f"$ {_DS_START} (rc={rc})\n{out.strip()[-1500:]}"
+    )
+    if after_problem is None:
+        warnings.warn(f"{report}\nDS answered after the conftest started it.", stacklevel=1)
+        return
+    pytest.fail(
+        f"{report}\nStill not answering {_DS_KICK_WAIT}s later (last: {after_problem}).\n"
+        f"Diagnostics after:\n{_ds_diagnostics(vdsm_container, password)}",
+        pytrace=False,
+    )
 
 
 @pytest.fixture(scope="session")

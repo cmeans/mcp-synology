@@ -25,7 +25,7 @@ jobs:
     # Non-blocking while the job stabilizes. Promote to required check
     # after the job is green on main for several consecutive runs.
     continue-on-error: true
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -91,24 +91,19 @@ jobs:
             --yes
 
       - name: Run vdsm integration tests
+        # Step budget below the job's, so a hung suite still leaves time to
+        # print pytest's summary path and upload logs (#107 was cancelled
+        # at the job timeout with neither).
+        timeout-minutes: 30
         run: uv run pytest -m vdsm -v --no-cov --log-cli-level=INFO
 
       - name: Upload logs on failure
-        if: failure()
+        if: failure() || cancelled()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: vdsm-failure-logs
           path: |
             .vdsm/storage/**/log/
             /tmp/vdsm-*.log
-          if-no-files-found: ignore
-          retention-days: 7
-
-      - name: Upload Playwright screenshots on failure
-        if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: vdsm-failure-screenshots
-          path: .vdsm/screenshots/
           if-no-files-found: ignore
           retention-days: 7

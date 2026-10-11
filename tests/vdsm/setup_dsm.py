@@ -20,7 +20,6 @@ from __future__ import annotations
 import json
 import logging
 import time
-from pathlib import Path
 from typing import Any
 
 import httpx
@@ -37,9 +36,6 @@ from tests.vdsm.config import (
 logger = logging.getLogger(__name__)
 
 _DS_APP_ID = "SYNO.SDS.DownloadStation.Application"
-
-# Directory for debug screenshots on failure
-_SCREENSHOT_DIR = Path(__file__).parent.parent.parent / ".vdsm" / "screenshots"
 
 
 # ---------------------------------------------------------------------------
@@ -776,37 +772,40 @@ def setup_dsm_for_testing(
     # Playwright (tooltip only, deterministic across retries), and the
     # Package Center UI proved unautomatable over Ext 3.4.1's component model
     # (see _install_download_station_via_ssh docstring).
-    if ssh_port:
-        print("\n  [1/5] Enabling SSH...")
-        _enable_ssh(base_url, admin_user, admin_password)
+    if not ssh_port:
+        # Every setup step runs over SSH; baking without it would save an
+        # image stamped bake_version/grants that has none of them.
+        msg = "No SSH port for the DSM guest; cannot bake a golden image."
+        raise RuntimeError(msg)
 
-        print("\n  [2/5] Creating test user via synouser (SSH)...")
-        _create_user_via_ssh(
-            ssh_host, ssh_port, admin_password, DEFAULT_TEST_USER, DEFAULT_TEST_PASSWORD
-        )
+    print("\n  [1/5] Enabling SSH...")
+    _enable_ssh(base_url, admin_user, admin_password)
 
-        print("\n  [3/5] Installing Download Station via synopkg (SSH)...")
-        _install_download_station_via_ssh(ssh_host, ssh_port, admin_password, base_url)
+    print("\n  [2/5] Creating test user via synouser (SSH)...")
+    _create_user_via_ssh(
+        ssh_host, ssh_port, admin_password, DEFAULT_TEST_USER, DEFAULT_TEST_PASSWORD
+    )
 
-        print("\n  [4/5] Creating shared folders and test data via SSH...")
-        _create_shared_folders_via_ssh(
-            ssh_host,
-            ssh_port,
-            admin_password,
-            DEFAULT_TEST_USER,
-        )
+    print("\n  [3/5] Installing Download Station via synopkg (SSH)...")
+    _install_download_station_via_ssh(ssh_host, ssh_port, admin_password, base_url)
 
-        print("\n  [5/5] Configuring Download Station...")
-        _configure_download_station_via_api(
-            base_url=base_url,
-            admin_user=admin_user,
-            admin_password=admin_password,
-            test_user=DEFAULT_TEST_USER,
-            test_password=DEFAULT_TEST_PASSWORD,
-            default_destination="writable",
-        )
-    else:
-        print("\n  No SSH port — skipping all setup steps (SSH, test user, DS, shares)")
+    print("\n  [4/5] Creating shared folders and test data via SSH...")
+    _create_shared_folders_via_ssh(
+        ssh_host,
+        ssh_port,
+        admin_password,
+        DEFAULT_TEST_USER,
+    )
+
+    print("\n  [5/5] Configuring Download Station...")
+    _configure_download_station_via_api(
+        base_url=base_url,
+        admin_user=admin_user,
+        admin_password=admin_password,
+        test_user=DEFAULT_TEST_USER,
+        test_password=DEFAULT_TEST_PASSWORD,
+        default_destination="writable",
+    )
 
     # Verify — check both admin and test user can see shares
     print("\n  Verifying setup...")
