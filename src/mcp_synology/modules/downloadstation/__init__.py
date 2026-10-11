@@ -109,8 +109,9 @@ MODULE_INFO = ModuleInfo(
                 "a .torrent / .nzb file via `torrent_file_path`. `destination` is a "
                 "share-relative path (omit to use DSM's default destination). "
                 "`username` / `password` may be supplied for protected URLs (not for "
-                "torrent files). Returns the new task IDs when DSM provides them; long "
-                "magnet links and URI lists are supported."
+                "torrent files). Returns the new task IDs when DSM provides them (not "
+                "for URLs with `username` / `password`); long magnet links and URI "
+                "lists are supported."
             ),
             permission_tier=PermissionTier.WRITE,
         ),

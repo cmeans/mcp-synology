@@ -296,8 +296,12 @@ class TestCreateDownloadUri:
     async def test_ds2_http_5xx_is_surfaced_not_retried(self, mock_client: DsmClient) -> None:
         post_route(TASK2, "create", version=2).respond(status_code=502)
         v1 = post_route(TASK, "create", version=1).respond(json=ok())
-        with pytest.raises(ToolError):
+        with pytest.raises(ToolError) as exc:
             await create_download(mock_client, uri="magnet:?xt=a")
+        envelope = _envelope(exc.value)
+        assert envelope["code"] == "unavailable"
+        # DSM may already have created the task: a client retry could duplicate it.
+        assert envelope["retryable"] is False
         assert not v1.called
 
     @respx.mock
@@ -306,8 +310,19 @@ class TestCreateDownloadUri:
         v1 = post_route(TASK, "create", version=1).respond(json=ok())
         with pytest.raises(ToolError) as exc:
             await create_download(mock_client, uri="magnet:?xt=a")
-        assert _envelope(exc.value)["code"] == "timeout"
+        envelope = _envelope(exc.value)
+        assert envelope["code"] == "timeout"
+        assert envelope["retryable"] is False
         assert not v1.called
+
+    @respx.mock
+    async def test_ds2_error_120_is_invalid_parameter(self, mock_client: DsmClient) -> None:
+        post_route(TASK2, "create", version=2).respond(json=err(120))
+        with pytest.raises(ToolError) as exc:
+            await create_download(mock_client, uri="magnet:?xt=a")
+        envelope = _envelope(exc.value)
+        assert envelope["code"] == "invalid_parameter"
+        assert envelope["help_url"].endswith("#invalid_parameter")
 
     @respx.mock
     async def test_credentials_go_to_v1_in_post_body(self, mock_client: DsmClient) -> None:

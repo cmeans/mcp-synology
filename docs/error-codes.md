@@ -266,6 +266,8 @@ Fix:
    `try/finally`, but tasks from earlier crashed runs may persist.
 5. `timeout` is marked `retryable=true`, but only retry after addressing the
    root cause. Blind retry on an overloaded NAS makes the situation worse.
+   The exception is a `create_download` timeout, which is marked
+   `retryable=false` because DSM may already have created the task.
 
 ## unavailable
 
@@ -275,7 +277,8 @@ where data was expected — or DSM answered with an HTTP error status.**
 The HTTP-status case (e.g. `502 Bad Gateway` from DSM's web server while a
 package such as Download Station is still starting) is reported with the
 status in the message. As with `timeout`, a `create_download` that fails this
-way may still have been applied; check `list_downloads` before retrying.
+way may still have been applied, so it is marked `retryable=false`; check
+`list_downloads` before retrying.
 
 Affects `get_system_info`, `get_resource_usage`, and similar metric tools.
 The API responded `success=true` but the data block was missing or empty.

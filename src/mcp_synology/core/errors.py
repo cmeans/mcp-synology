@@ -127,18 +127,30 @@ class RequestTooLongError(SynologyError):
     error_code = ErrorCode.INVALID_PARAMETER
 
 
+class InvalidParameterError(SynologyError):
+    """A JSON-format DSM API rejected a parameter's type (common code 120)."""
+
+    error_code = ErrorCode.INVALID_PARAMETER
+
+
 class DsmUnavailableError(SynologyError):
-    """DSM answered with a non-2xx HTTP status (e.g. a 502 from its web server)."""
+    """DSM answered with a non-2xx HTTP status (e.g. a 502 from its web server).
+
+    Raised only by ``DsmClient.request_form_post``, whose one caller is the
+    non-idempotent Download Station ``Task.create``. DSM may already have
+    applied the request, so a blind retry could duplicate it: not retryable.
+    """
 
     error_code = ErrorCode.UNAVAILABLE
-    retryable = True
 
 
 class DsmTimeoutError(SynologyError):
-    """The HTTP request to DSM timed out."""
+    """The HTTP request to DSM timed out.
+
+    Not retryable for the same reason as ``DsmUnavailableError``.
+    """
 
     error_code = ErrorCode.TIMEOUT
-    retryable = True
 
 
 class FileStationError(SynologyError):
@@ -339,6 +351,8 @@ def error_from_code(code: int, api_name: str = "") -> SynologyError:
             return SessionExpiredError(message, code=code, suggestion=suggestion)
         if code == 102:
             return ApiNotFoundError(message, code=code, suggestion=suggestion)
+        if code == 120:
+            return InvalidParameterError(message, code=code, suggestion=suggestion)
         return SynologyError(message, code=code, suggestion=suggestion)
 
     return SynologyError(f"Unknown error (code {code})", code=code)
