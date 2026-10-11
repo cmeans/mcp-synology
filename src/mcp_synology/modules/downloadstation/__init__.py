@@ -1,8 +1,8 @@
 """Download Station module: MODULE_INFO, register(), DownloadStationSettings.
 
-Phase 1 (READ tools): list_downloads, get_download_info, get_download_stats,
-get_download_config, get_schedule. Phase 2 adds task CRUD writes; Phase 3
-adds BT search + RSS. See docs/superpowers/specs/2026-05-13-downloadstation-module-design.md.
+READ tools: list_downloads, get_download_info, get_download_stats,
+get_download_config, get_schedule. WRITE tools: task create/delete/pause/
+resume/edit, set_download_config, set_schedule. BT search + RSS are planned.
 """
 
 from __future__ import annotations
