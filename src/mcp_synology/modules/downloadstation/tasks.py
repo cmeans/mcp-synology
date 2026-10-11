@@ -1,12 +1,13 @@
-"""Download Station task tools: list_downloads, get_download_info."""
+"""Download Station task tools: listing, info, create/delete/pause/resume/edit."""
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from mcp_synology.core.errors import ErrorCode, SynologyError
+from mcp_synology.core.errors import ApiNotFoundError, ErrorCode, SynologyError
 from mcp_synology.core.formatting import (
     error_response,
     format_key_value,
@@ -17,6 +18,7 @@ from mcp_synology.core.formatting import (
 )
 from mcp_synology.modules.downloadstation.helpers import (
     STATUS_GROUPS,
+    ds_is_manager,
     format_eta,
     format_speed,
     format_task_status,
@@ -80,6 +82,12 @@ async def list_downloads(
 
     tasks: list[dict[str, Any]] = data.get("tasks", [])
 
+    # Non-managers only ever see their own tasks (#123), so an empty or short
+    # list must not read as "nothing is downloading on the NAS".
+    own_tasks_only = await ds_is_manager(client) is False
+    scope = f"{status_filter}; your tasks only" if own_tasks_only else status_filter
+    title = f"Download Station queue ({scope})"
+
     if status_filter != "all":
         wanted = STATUS_GROUPS[status_filter]
         tasks = [t for t in tasks if t.get("status") in wanted]
@@ -88,7 +96,7 @@ async def list_downloads(
         return format_table(
             headers=["ID", "Title", "Type", "Status", "Size", "Progress", "Speed", "ETA"],
             rows=[],
-            title=f"Download Station queue ({status_filter})",
+            title=title,
         )
 
     rows: list[list[str]] = []
@@ -118,7 +126,6 @@ async def list_downloads(
         )
 
     total = data.get("total", len(rows))
-    title = f"Download Station queue ({status_filter})"
     result = format_table(
         headers=["ID", "Title", "Type", "Status", "Size", "Progress", "Speed", "ETA"],
         rows=rows,
@@ -269,6 +276,21 @@ async def get_download_info(
     return "\n\n".join(sections)
 
 
+# DS2 Task.create answers these when it can't serve the request at all; only
+# then is a v1 retry safe. Any other failure may have happened after DSM
+# committed the task, so retrying could create duplicate downloads (#123).
+_DS2_NOT_AVAILABLE_CODES = frozenset({102, 103, 104})
+
+
+def _created_message(task_ids: list[str], n_uris: int) -> str:
+    if task_ids:
+        return f"Created {len(task_ids)} download task(s): {', '.join(task_ids)}."
+    return (
+        f"Created download task(s) for {n_uris} URI(s); DSM did not return task IDs "
+        "— use list_downloads to find them."
+    )
+
+
 async def create_download(
     client: DsmClient,
     *,
@@ -283,6 +305,12 @@ async def create_download(
     Pass exactly one of:
     - ``uri``: comma-separated URIs (HTTP, FTP, magnet, etc.)
     - ``torrent_file_path``: local path to a .torrent or .nzb file (multipart upload)
+
+    URIs go to ``SYNO.DownloadStation2.Task.create`` as a form POST (a GET URL
+    past ~8 KB gets HTTP 414, #123), which returns the new task IDs. v1
+    ``Task.create`` (also POST) is the fallback when DS2 is unavailable, and
+    the path for ``username``/``password`` sources, whose DS2 fields are
+    unverified. Files go to DS2 only (v1 file upload is broken on DSM 7.2.2).
     """
     if uri is None and torrent_file_path is None:
         error_response(
@@ -299,6 +327,14 @@ async def create_download(
         )
 
     if torrent_file_path is not None:
+        if username is not None or password is not None:
+            error_response(
+                ErrorCode.INVALID_PARAMETER,
+                "Create download failed: `username`/`password` only apply to `uri` "
+                "sources (HTTP/FTP authentication), not to torrent files.",
+                retryable=False,
+                param="username" if username is not None else "password",
+            )
         path = Path(torrent_file_path).expanduser()
         if not path.is_file():
             error_response(
@@ -313,56 +349,75 @@ async def create_download(
                 file_path=path,
                 filename=path.name,
                 destination=destination,
-                username=username,
-                password=password,
             )
         except SynologyError as e:
             synology_error_response(f"Create download ({path.name})", e)
-        task_id = data.get("task_id", "—") if isinstance(data, dict) else "—"
-        return f"Created download task {task_id} from file {path.name}."
+        task_ids = [str(t) for t in data.get("task_id", [])]
+        return f"{_created_message(task_ids, 1)} Source: file {path.name}."
 
-    # URI path — standard GET
-    params: dict[str, str] = {"uri": uri or ""}
-    if destination is not None:
-        params["destination"] = destination
-    if username is not None:
-        params["username"] = username
-    if password is not None:
-        params["password"] = password
-
-    try:
-        data = await client.request(
-            "SYNO.DownloadStation.Task",
-            "create",
-            version=1,
-            params=params,
+    uris = [u for u in (uri or "").split(",") if u]
+    if not uris:
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            "Create download failed: `uri` is empty.",
+            retryable=False,
+            param="uri",
         )
+
+    if username is None and password is None:
+        try:
+            ds2_version = client.negotiate_version(
+                "SYNO.DownloadStation2.Task", min_version=2, max_version=2
+            )
+        except ApiNotFoundError as e:
+            logger.debug("DS2 Task.create unavailable (%s); using v1 Task.create", e)
+        else:
+            ds2_params = {
+                "type": json.dumps("url"),
+                "url": json.dumps(uris),
+                "create_list": "false",
+            }
+            if destination is not None:
+                ds2_params["destination"] = json.dumps(destination)
+            try:
+                data = await client.request_form_post(
+                    "SYNO.DownloadStation2.Task", "create", ds2_version, ds2_params
+                )
+            except SynologyError as e:
+                if e.code not in _DS2_NOT_AVAILABLE_CODES:
+                    synology_error_response("Create download", e)
+                logger.debug("DS2 Task.create answered %s; using v1 Task.create", e.code)
+            else:
+                task_ids = [str(t) for t in data.get("task_id", [])]
+                return _created_message(task_ids, len(uris))
+
+    v1_params: dict[str, str] = {"uri": ",".join(uris)}
+    if destination is not None:
+        v1_params["destination"] = destination
+    if username is not None:
+        v1_params["username"] = username
+    if password is not None:
+        v1_params["password"] = password
+    try:
+        await client.request_form_post("SYNO.DownloadStation.Task", "create", 1, v1_params)
     except SynologyError as e:
         synology_error_response("Create download", e)
-
-    task_id = data.get("task_id", "—") if isinstance(data, dict) else "—"
-    n_uris = len((uri or "").split(","))
-    return f"Created {n_uris} download task(s); first id: {task_id}."
+    return _created_message([], len(uris))
 
 
 async def delete_download(
     client: DsmClient,
     *,
     task_ids: list[str],
-    delete_data: bool,
     force_complete: bool = False,
 ) -> str:
-    """Delete one or more download tasks.
+    """Remove one or more download tasks.
 
-    ``delete_data`` must be explicitly set:
-    - ``True``: call DSM Task.delete, which removes task records AND their
-      downloaded files from disk. This is DSM v1's only supported deletion
-      mode.
-    - ``False``: REFUSED — DSM v1 Task.delete has no "remove task, keep files"
-      mode. The flag is required to be explicit so the caller never assumes a
-      "safe" delete that DSM doesn't actually support.
-
-    ``force_complete`` marks errored tasks as complete before deletion.
+    Behavior verified live on DSM 7.2.2 (#123): files from **finished**
+    tasks are always kept. For **unfinished** tasks the partial data is
+    discarded, unless ``force_complete=True``, which moves the incomplete
+    file into the task's destination (its size on disk does not reflect how
+    much was downloaded).
     """
     if not task_ids:
         error_response(
@@ -371,17 +426,6 @@ async def delete_download(
             retryable=False,
             param="task_ids",
             value=task_ids,
-        )
-
-    if not delete_data:
-        error_response(
-            ErrorCode.INVALID_PARAMETER,
-            "Delete download failed: delete_data=False is not supported. "
-            "DSM v1 Task.delete removes the task AND its files unconditionally. "
-            "Pass delete_data=True to acknowledge the destructive side effect.",
-            retryable=False,
-            param="delete_data",
-            value=False,
         )
 
     ids_joined = ",".join(task_ids)
@@ -406,10 +450,17 @@ async def delete_download(
         status = "ok" if err == 0 else f"error {err}"
         rows.append([r.get("id", "—"), status])
 
+    unfinished = (
+        "incomplete files moved into the destination"
+        if force_complete
+        else "partial data of unfinished tasks discarded"
+    )
     return format_table(
         headers=["Task ID", "Result"],
         rows=rows,
-        title=f"Delete download — {len(task_ids)} task(s), files removed",
+        title=(
+            f"Delete download — {len(task_ids)} task(s) removed; completed files kept; {unfinished}"
+        ),
     )
 
 
@@ -486,9 +537,8 @@ async def edit_download(
 ) -> str:
     """Edit task parameters. Currently supports ``destination`` only.
 
-    DSM ``Task.edit`` v1's full supported-field set varies by DSM version. The
-    tool only exposes ``destination`` for Phase 2; expansion is follow-up work
-    once additional fields are verified against a live NAS.
+    The guide documents only ``destination`` for ``Task.edit`` (v2+); other
+    fields are follow-up work once verified against a live NAS.
     """
     if not task_ids:
         error_response(
@@ -509,11 +559,27 @@ async def edit_download(
 
     ids_joined = ",".join(task_ids)
 
+    # Task.edit is "2 and later" (v1 answers 103, #123). Pinned to exactly v2
+    # like the other version pins; a NAS whose Task API tops out at v1 gets
+    # negotiate_version's clean 104 instead of a raw "method does not exist".
+    try:
+        version = client.negotiate_version(
+            "SYNO.DownloadStation.Task", min_version=2, max_version=2
+        )
+    except ApiNotFoundError as e:
+        error_response(
+            ErrorCode.API_NOT_FOUND,
+            f"Edit download failed: editing a task requires a newer Download Station "
+            f"(SYNO.DownloadStation.Task v2). {e}",
+            retryable=False,
+            suggestion="Update Download Station in Package Center.",
+        )
+
     try:
         data = await client.request(
             "SYNO.DownloadStation.Task",
             "edit",
-            version=1,
+            version=version,
             params={"id": ids_joined, "destination": destination},
         )
     except SynologyError as e:

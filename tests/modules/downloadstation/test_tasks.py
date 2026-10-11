@@ -1,668 +1,558 @@
-"""Tests for modules/downloadstation/tasks.py — list_downloads, get_download_info."""
+"""Tests for modules/downloadstation/tasks.py.
+
+Payloads are real DSM captures (``dsm.captured``) and every route matches on
+the DSM ``api`` / ``method`` (and ``version`` where pinned), so a wrong API
+name, method, or version fails with an unmatched request — see #123.
+"""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import json
+from typing import TYPE_CHECKING, Any
+from urllib.parse import parse_qs
 
 import httpx
+import pytest
 import respx
+from mcp.server.fastmcp.exceptions import ToolError
 
-from mcp_synology.modules.downloadstation.tasks import get_download_info, list_downloads
-from tests.conftest import BASE_URL
+from mcp_synology.modules.downloadstation.tasks import (
+    create_download,
+    delete_download,
+    edit_download,
+    get_download_info,
+    list_downloads,
+    pause_download,
+    resume_download,
+)
+from tests.modules.downloadstation.dsm import captured, err, get_route, ok, post_route
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     from mcp_synology.core.client import DsmClient
 
+TASK = "SYNO.DownloadStation.Task"
+TASK2 = "SYNO.DownloadStation2.Task"
+INFO = "SYNO.DownloadStation.Info"
+
+
+def _envelope(exc: ToolError) -> dict[str, Any]:
+    return json.loads(str(exc))["error"]  # type: ignore[no-any-return]
+
+
+def _form(request: httpx.Request) -> dict[str, str]:
+    return {k: v[0] for k, v in parse_qs(request.content.decode()).items()}
+
+
+def _task(task_id: str, status: str, *, title: str = "t", size: int = 100) -> dict[str, Any]:
+    """A task row shaped like the captured Task.list v1 rows (string status)."""
+    row = captured("task_list_v1")["data"]["tasks"][0]
+    row.update({"id": task_id, "status": status, "title": title, "size": size})
+    return row
+
+
+def _manager(is_manager: bool = True) -> None:
+    key = "info_getinfo_admin" if is_manager else "info_getinfo_user"
+    get_route(INFO, "getinfo", version=1).respond(json=captured(key))
+
 
 class TestListDownloads:
     @respx.mock
-    async def test_lists_all_tasks(self, mock_client: DsmClient) -> None:
-        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
-            json={
-                "success": True,
-                "data": {
-                    "offset": 0,
-                    "total": 2,
-                    "tasks": [
-                        {
-                            "id": "dbid_001",
-                            "type": "bt",
-                            "title": "ubuntu-24.04.iso",
-                            "size": 5368709120,
-                            "status": 2,
-                            "additional": {
-                                "detail": {"destination": "downloads"},
-                                "transfer": {
-                                    "size_downloaded": 2684354560,
-                                    "speed_download": 5242880,
-                                    "speed_upload": 0,
-                                },
-                            },
-                        },
-                        {
-                            "id": "dbid_002",
-                            "type": "http",
-                            "title": "movie.mkv",
-                            "size": 2147483648,
-                            "status": 5,
-                            "additional": {
-                                "detail": {"destination": "video"},
-                                "transfer": {
-                                    "size_downloaded": 2147483648,
-                                    "speed_download": 0,
-                                    "speed_upload": 0,
-                                },
-                            },
-                        },
-                    ],
-                },
-            }
-        )
-        result = await list_downloads(mock_client, status_filter="all")
-        assert "ubuntu-24.04.iso" in result
-        assert "movie.mkv" in result
-        assert "downloading" in result
-        assert "finished" in result
-        assert "(50%)" in result
+    async def test_captured_list_renders_string_status(self, mock_client: DsmClient) -> None:
+        """Regression for #123 bug 1: v1 status is a string, not an int."""
+        _manager()
+        get_route(TASK, "list", version=1).respond(json=captured("task_list_v1"))
+        result = await list_downloads(mock_client)
+        assert "capture-magnet" in result
+        assert "unknown(" not in result
+        assert "waiting" in result or "downloading" in result or "finished" in result
 
     @respx.mock
-    async def test_filter_downloading_excludes_finished(self, mock_client: DsmClient) -> None:
-        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
-            json={
-                "success": True,
-                "data": {
+    @pytest.mark.parametrize(
+        ("status_filter", "kept", "dropped"),
+        [
+            ("downloading", "waiting", "finished"),
+            ("downloading", "downloading", "paused"),
+            ("finished", "seeding", "downloading"),
+            ("paused", "paused", "waiting"),
+            ("error", "error", "finished"),
+        ],
+    )
+    async def test_status_filter_matches_string_statuses(
+        self, mock_client: DsmClient, status_filter: str, kept: str, dropped: str
+    ) -> None:
+        """Regression for #123 bug 1: every filter except 'all' used to return empty."""
+        _manager()
+        get_route(TASK, "list", version=1).respond(
+            json=ok(
+                {
                     "offset": 0,
                     "total": 2,
                     "tasks": [
-                        {
-                            "id": "dbid_001",
-                            "type": "bt",
-                            "title": "active.iso",
-                            "size": 100,
-                            "status": 2,
-                            "additional": {
-                                "detail": {},
-                                "transfer": {
-                                    "size_downloaded": 50,
-                                    "speed_download": 100,
-                                    "speed_upload": 0,
-                                },
-                            },
-                        },
-                        {
-                            "id": "dbid_002",
-                            "type": "http",
-                            "title": "done.mkv",
-                            "size": 100,
-                            "status": 5,
-                            "additional": {
-                                "detail": {},
-                                "transfer": {
-                                    "size_downloaded": 100,
-                                    "speed_download": 0,
-                                    "speed_upload": 0,
-                                },
-                            },
-                        },
+                        _task("dbid_1", kept, title="keep-me"),
+                        _task("dbid_2", dropped, title="drop-me"),
                     ],
-                },
-            }
+                }
+            )
         )
-        result = await list_downloads(mock_client, status_filter="downloading")
-        assert "active.iso" in result
-        assert "done.mkv" not in result
+        result = await list_downloads(mock_client, status_filter=status_filter)
+        assert "keep-me" in result
+        assert "drop-me" not in result
 
     @respx.mock
     async def test_empty_queue(self, mock_client: DsmClient) -> None:
-        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
-            json={"success": True, "data": {"offset": 0, "total": 0, "tasks": []}},
-        )
+        _manager()
+        get_route(TASK, "list", version=1).respond(json=ok({"offset": 0, "total": 0, "tasks": []}))
         result = await list_downloads(mock_client)
         assert "No items to display" in result
 
     @respx.mock
-    async def test_dsm_error_propagates_as_tool_error(self, mock_client: DsmClient) -> None:
-        from mcp.server.fastmcp.exceptions import ToolError
-
-        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
-            json={"success": False, "error": {"code": 105}},
-        )
-        try:
-            await list_downloads(mock_client)
-        except ToolError as e:
-            assert "105" in str(e) or "permission" in str(e).lower()
-        else:
-            raise AssertionError("expected ToolError")
+    async def test_non_manager_output_says_own_tasks_only(self, mock_client: DsmClient) -> None:
+        """#123 bug 13: non-managers only see their own tasks (captured: total 0)."""
+        _manager(is_manager=False)
+        get_route(TASK, "list", version=1).respond(json=captured("task_list_user"))
+        result = await list_downloads(mock_client)
+        assert "your tasks only" in result
 
     @respx.mock
-    async def test_unknown_status_filter_raises_tool_error(self, mock_client: DsmClient) -> None:
-        from mcp.server.fastmcp.exceptions import ToolError
+    async def test_manager_output_has_no_own_tasks_note(self, mock_client: DsmClient) -> None:
+        _manager()
+        get_route(TASK, "list", version=1).respond(json=captured("task_list_v1"))
+        result = await list_downloads(mock_client)
+        assert "your tasks only" not in result
 
-        try:
+    @respx.mock
+    async def test_info_api_absent_lists_without_note(self, mock_client: DsmClient) -> None:
+        del mock_client.api_cache[INFO]
+        get_route(TASK, "list", version=1).respond(json=captured("task_list_v1"))
+        result = await list_downloads(mock_client)
+        assert "capture-magnet" in result
+        assert "your tasks only" not in result
+
+    @respx.mock
+    async def test_manager_lookup_failure_does_not_fail_listing(
+        self, mock_client: DsmClient
+    ) -> None:
+        get_route(INFO, "getinfo", version=1).respond(json=err(105))
+        get_route(TASK, "list", version=1).respond(json=captured("task_list_v1"))
+        result = await list_downloads(mock_client)
+        assert "capture-magnet" in result
+        assert "your tasks only" not in result
+
+    @respx.mock
+    async def test_dsm_error_propagates_as_tool_error(self, mock_client: DsmClient) -> None:
+        _manager()
+        get_route(TASK, "list", version=1).respond(json=err(105))
+        with pytest.raises(ToolError) as exc:
+            await list_downloads(mock_client)
+        assert _envelope(exc.value)["code"] == "permission_denied"
+
+    async def test_unknown_status_filter_raises_tool_error(self, mock_client: DsmClient) -> None:
+        with pytest.raises(ToolError, match="status_filter"):
             await list_downloads(mock_client, status_filter="not_a_status")
-        except ToolError as e:
-            assert "status_filter" in str(e)
-        else:
-            raise AssertionError("expected ToolError for invalid status_filter")
 
 
 class TestGetDownloadInfo:
     @respx.mock
-    async def test_returns_detail_transfer_blocks(self, mock_client: DsmClient) -> None:
-        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
-            json={
-                "success": True,
-                "data": {
-                    "tasks": [
-                        {
-                            "id": "dbid_001",
-                            "type": "bt",
-                            "title": "ubuntu.iso",
-                            "size": 1000000000,
-                            "status": 2,
-                            "additional": {
-                                "detail": {
-                                    "destination": "downloads",
-                                    "uri": "magnet:?xt=...",
-                                    "create_time": 1700000000,
-                                    "started_time": 1700000010,
-                                    "priority": "auto",
-                                },
-                                "transfer": {
-                                    "size_downloaded": 500000000,
-                                    "size_uploaded": 100000000,
-                                    "speed_download": 1024 * 1024,
-                                    "speed_upload": 256 * 1024,
-                                },
-                                "file": [
-                                    {
-                                        "filename": "ubuntu.iso",
-                                        "size": 1000000000,
-                                        "size_downloaded": 500000000,
-                                        "priority": "normal",
-                                    },
-                                ],
-                                "tracker": [
-                                    {
-                                        "url": "http://tracker.example.org/announce",
-                                        "status": "Success",
-                                        "peers": 42,
-                                        "seeds": 10,
-                                    },
-                                ],
-                                "peer": [
-                                    {
-                                        "address": "1.2.3.4",
-                                        "agent": "Transmission",
-                                        "progress": 1.0,
-                                        "speed_download": 0,
-                                        "speed_upload": 1024,
-                                    },
-                                ],
-                            },
-                        }
-                    ]
-                },
-            }
-        )
-        result = await get_download_info(mock_client, task_id="dbid_001")
-        assert "ubuntu.iso" in result
-        assert "downloading" in result
-        assert "downloads" in result  # destination
-        assert "(50%)" in result  # transfer progress
-        # Section headers should all be present.
-        assert "Files" in result
-        assert "Trackers" in result
-        assert "Peers" in result
-        assert "tracker.example.org" in result
-        assert "1.2.3.4" in result
+    async def test_captured_getinfo_renders_sections(self, mock_client: DsmClient) -> None:
+        route = get_route(TASK, "getinfo", version=1).respond(json=captured("task_getinfo_v1"))
+        result = await get_download_info(mock_client, task_id="dbid_1")
+        assert "capture-magnet" in result
+        assert "unknown(" not in result
+        assert "writable" in result  # destination
+        sent = dict(route.calls.last.request.url.params)
+        assert sent["additional"] == "detail,transfer,file,tracker,peer"
 
     @respx.mock
-    async def test_task_not_found_error(self, mock_client: DsmClient) -> None:
-        from mcp.server.fastmcp.exceptions import ToolError
-
-        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
-            json={"success": False, "error": {"code": 404}},
-        )
-        try:
-            await get_download_info(mock_client, task_id="dbid_missing")
-        except ToolError as e:
-            assert "404" in str(e) or "task" in str(e).lower()
-        else:
-            raise AssertionError("expected ToolError for missing task")
+    async def test_captured_invalid_task_id_error(self, mock_client: DsmClient) -> None:
+        get_route(TASK, "getinfo", version=1).respond(json=captured("task_getinfo_bogus"))
+        with pytest.raises(ToolError, match="Invalid task id"):
+            await get_download_info(mock_client, task_id="dbid_99999")
 
     @respx.mock
     async def test_empty_tasks_array_treated_as_not_found(self, mock_client: DsmClient) -> None:
-        from mcp.server.fastmcp.exceptions import ToolError
-
-        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
-            json={"success": True, "data": {"tasks": []}},
-        )
-        try:
-            await get_download_info(mock_client, task_id="dbid_001")
-        except ToolError as e:
-            assert "not found" in str(e).lower() or "dbid_001" in str(e)
-        else:
-            raise AssertionError("expected ToolError when DSM returns empty tasks array")
+        get_route(TASK, "getinfo", version=1).respond(json=ok({"tasks": []}))
+        with pytest.raises(ToolError) as exc:
+            await get_download_info(mock_client, task_id="dbid_1")
+        assert _envelope(exc.value)["code"] == "not_found"
 
 
-class TestCreateDownload:
+class TestGetDownloadInfoBtSections:
     @respx.mock
-    async def test_uri_create_success(self, mock_client: DsmClient) -> None:
-        from mcp_synology.modules.downloadstation.tasks import create_download
+    async def test_file_tracker_peer_tables_render(self, mock_client: DsmClient) -> None:
+        # The vdsm capture's magnet task has empty file/tracker/peer arrays, so
+        # these rows follow the official DS Web API guide's Task_File /
+        # Task_Tracker / Task_Peer definitions (note sizes are strings there).
+        body = captured("task_getinfo_v1")
+        add = body["data"]["tasks"][0]["additional"]
+        add["file"] = [
+            {
+                "filename": "ubuntu.iso",
+                "size": "1000",
+                "size_downloaded": "500",
+                "priority": "normal",
+            }
+        ]
+        add["tracker"] = [
+            {"url": "http://tracker.example/announce", "status": "Success", "seeds": 3, "peers": 9}
+        ]
+        add["peer"] = [
+            {
+                "address": "192.0.2.7",
+                "agent": "Transmission",
+                "progress": 0.25,
+                "speed_download": 0,
+                "speed_upload": 2048,
+            }
+        ]
+        get_route(TASK, "getinfo", version=1).respond(json=body)
+        result = await get_download_info(mock_client, task_id="dbid_1")
+        assert "Files" in result and "ubuntu.iso" in result and "(50%)" in result
+        assert "Trackers" in result and "tracker.example" in result
+        assert "Peers" in result and "192.0.2.7" in result and "25%" in result
 
-        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
-            json={"success": True, "data": {"task_id": "dbid_new"}},
-        )
-        result = await create_download(mock_client, uri="magnet:?xt=urn:btih:abc")
-        assert "Created" in result or "dbid_new" in result
+
+class TestCreateDownloadUri:
+    """URI create goes to DS2 Task.create v2 as a form POST (#123 items 9/9a)."""
 
     @respx.mock
-    async def test_uri_comma_list_passes_through(self, mock_client: DsmClient) -> None:
-        from mcp_synology.modules.downloadstation.tasks import create_download
-
-        captured: dict = {}
-
-        def _capture(request):
-            captured["params"] = dict(request.url.params)
-            return httpx.Response(200, json={"success": True, "data": {}})
-
-        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_capture)
-        await create_download(
-            mock_client, uri="http://a.example/file.iso,http://b.example/file2.iso"
-        )
-        assert (
-            captured["params"].get("uri") == "http://a.example/file.iso,http://b.example/file2.iso"
-        )
-
-    async def test_neither_uri_nor_torrent_path_raises_tool_error(
-        self, mock_client: DsmClient
-    ) -> None:
-        from mcp.server.fastmcp.exceptions import ToolError
-
-        from mcp_synology.modules.downloadstation.tasks import create_download
-
-        try:
-            await create_download(mock_client)
-        except ToolError as e:
-            msg = str(e).lower()
-            assert "uri" in msg or "torrent" in msg
-        else:
-            raise AssertionError("expected ToolError when neither input supplied")
-
-    async def test_both_uri_and_torrent_path_raises_tool_error(
-        self, mock_client: DsmClient, tmp_path: Path
-    ) -> None:
-        from mcp.server.fastmcp.exceptions import ToolError
-
-        from mcp_synology.modules.downloadstation.tasks import create_download
-
-        torrent = tmp_path / "x.torrent"
-        torrent.write_bytes(b"x")
-        try:
-            await create_download(mock_client, uri="magnet:?...", torrent_file_path=str(torrent))
-        except ToolError as e:
-            msg = str(e).lower()
-            assert "both" in msg or "exactly one" in msg
-        else:
-            raise AssertionError("expected ToolError when both supplied")
-
-    async def test_torrent_file_create_uses_multipart_path(
-        self, mock_client: DsmClient, tmp_path: Path, monkeypatch
-    ) -> None:
-        from unittest.mock import AsyncMock
-
-        from mcp_synology.modules.downloadstation.tasks import create_download
-
-        torrent = tmp_path / "ubuntu.torrent"
-        torrent.write_bytes(b"d4:infod6:lengthi100eee")
-
-        mock = AsyncMock(return_value={"task_id": "dbid_mp_001"})
-        monkeypatch.setattr(mock_client, "create_download_task_with_file", mock)
-
+    async def test_ds2_post_returns_task_ids(self, mock_client: DsmClient) -> None:
+        route = post_route(TASK2, "create", version=2).respond(json=captured("ds2_task_create_url"))
         result = await create_download(
-            mock_client, torrent_file_path=str(torrent), destination="downloads"
+            mock_client, uri="magnet:?xt=urn:btih:abc", destination="writable"
         )
-        assert "dbid_mp_001" in result
-        mock.assert_awaited_once()
-        kwargs = mock.await_args.kwargs
-        assert kwargs.get("destination") == "downloads"
-        # Verify file_path is a Path pointing at the torrent
-        # (accept either keyword or positional file_path)
-        file_path_arg = kwargs.get("file_path")
-        if file_path_arg is None and mock.await_args.args:
-            file_path_arg = mock.await_args.args[0]
-        assert str(file_path_arg).endswith("ubuntu.torrent")
-
-    async def test_torrent_file_missing_raises_tool_error(self, mock_client: DsmClient) -> None:
-        from mcp.server.fastmcp.exceptions import ToolError
-
-        from mcp_synology.modules.downloadstation.tasks import create_download
-
-        try:
-            await create_download(mock_client, torrent_file_path="/nonexistent/file.torrent")
-        except ToolError as e:
-            msg = str(e).lower()
-            assert "not found" in msg or "no such" in msg
-        else:
-            raise AssertionError("expected ToolError on missing torrent file")
+        assert "dbid_1" in result
+        form = _form(route.calls.last.request)
+        assert form["type"] == '"url"'
+        assert json.loads(form["url"]) == ["magnet:?xt=urn:btih:abc"]
+        assert form["destination"] == '"writable"'
+        assert form["create_list"] == "false"
 
     @respx.mock
-    async def test_dsm_400_upload_failed_propagates(self, mock_client: DsmClient) -> None:
-        from mcp.server.fastmcp.exceptions import ToolError
-
-        from mcp_synology.modules.downloadstation.tasks import create_download
-
-        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
-            json={"success": False, "error": {"code": 400}},
+    async def test_comma_list_becomes_json_array(self, mock_client: DsmClient) -> None:
+        route = post_route(TASK2, "create", version=2).respond(
+            json=ok({"list_id": [], "task_id": ["dbid_1", "dbid_2"]})
         )
-        try:
-            await create_download(mock_client, uri="magnet:?...")
-        except ToolError as e:
-            # DS 400 = "File upload failed" — error envelope should surface it
-            assert "upload" in str(e).lower() or "400" in str(e)
-        else:
-            raise AssertionError("expected ToolError on DS 400")
+        result = await create_download(
+            mock_client, uri="http://a.example/1.iso,http://b.example/2.iso"
+        )
+        form = _form(route.calls.last.request)
+        assert json.loads(form["url"]) == ["http://a.example/1.iso", "http://b.example/2.iso"]
+        assert "destination" not in form
+        assert "dbid_1" in result and "dbid_2" in result
 
     @respx.mock
-    async def test_session_error_triggers_reauth_retry_on_uri_path(
-        self, mock_client: DsmClient
+    async def test_long_uri_list_is_sent_in_body_not_query(self, mock_client: DsmClient) -> None:
+        """#123 bug 14: a GET URL past ~8 KB gets HTTP 414 from DSM."""
+        long_magnet = "magnet:?xt=urn:btih:" + "a" * 40 + "&tr=" + "x" * 12_000
+        route = post_route(TASK2, "create", version=2).respond(
+            json=ok({"list_id": [], "task_id": ["dbid_9"]})
+        )
+        await create_download(mock_client, uri=long_magnet)
+        request = route.calls.last.request
+        assert long_magnet not in str(request.url)
+        assert json.loads(_form(request)["url"]) == [long_magnet]
+
+    @respx.mock
+    @pytest.mark.parametrize("code", [102, 103, 104])
+    async def test_falls_back_to_v1_post_on_not_available_codes(
+        self, mock_client: DsmClient, code: int
     ) -> None:
-        """#99-style coverage: create_download exercises the standard GET
-        path's re-auth retry (handled transparently by DsmClient.request)."""
-        from mcp_synology.modules.downloadstation.tasks import create_download
+        post_route(TASK2, "create", version=2).respond(json=err(code))
+        v1 = post_route(TASK, "create", version=1).respond(json=captured("v1_task_create_url"))
+        result = await create_download(mock_client, uri="magnet:?xt=a", destination="writable")
+        form = _form(v1.calls.last.request)
+        assert form["uri"] == "magnet:?xt=a"
+        assert form["destination"] == "writable"
+        assert "did not return task IDs" in result
 
-        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+    @respx.mock
+    async def test_falls_back_to_v1_when_ds2_absent(self, mock_client: DsmClient) -> None:
+        del mock_client.api_cache[TASK2]
+        v1 = post_route(TASK, "create", version=1).respond(json=captured("v1_task_create_url"))
+        await create_download(mock_client, uri="magnet:?xt=a")
+        assert v1.called
+
+    @respx.mock
+    async def test_falls_back_to_v1_when_ds2_task_is_v1_only(self, mock_client: DsmClient) -> None:
+        mock_client.api_cache[TASK2] = mock_client.api_cache[TASK2].model_copy(
+            update={"max_version": 1}
+        )
+        v1 = post_route(TASK, "create", version=1).respond(json=captured("v1_task_create_url"))
+        await create_download(mock_client, uri="magnet:?xt=a")
+        assert v1.called
+
+    @respx.mock
+    async def test_other_ds2_error_is_surfaced_not_retried(self, mock_client: DsmClient) -> None:
+        """Retrying after a post-commit failure could create duplicate downloads."""
+        post_route(TASK2, "create", version=2).respond(json=err(401))
+        v1 = post_route(TASK, "create", version=1).respond(json=ok())
+        with pytest.raises(ToolError, match="Max number of tasks"):
+            await create_download(mock_client, uri="magnet:?xt=a")
+        assert not v1.called
+
+    @respx.mock
+    async def test_ds2_http_5xx_is_surfaced_not_retried(self, mock_client: DsmClient) -> None:
+        post_route(TASK2, "create", version=2).respond(status_code=502)
+        v1 = post_route(TASK, "create", version=1).respond(json=ok())
+        with pytest.raises(ToolError) as exc:
+            await create_download(mock_client, uri="magnet:?xt=a")
+        envelope = _envelope(exc.value)
+        assert envelope["code"] == "unavailable"
+        # DSM may already have created the task: a client retry could duplicate it.
+        assert envelope["retryable"] is False
+        assert not v1.called
+
+    @respx.mock
+    async def test_ds2_timeout_is_surfaced_not_retried(self, mock_client: DsmClient) -> None:
+        post_route(TASK2, "create", version=2).mock(side_effect=httpx.ReadTimeout("slow"))
+        v1 = post_route(TASK, "create", version=1).respond(json=ok())
+        with pytest.raises(ToolError) as exc:
+            await create_download(mock_client, uri="magnet:?xt=a")
+        envelope = _envelope(exc.value)
+        assert envelope["code"] == "timeout"
+        assert envelope["retryable"] is False
+        assert not v1.called
+
+    @respx.mock
+    async def test_ds2_error_120_is_invalid_parameter(self, mock_client: DsmClient) -> None:
+        post_route(TASK2, "create", version=2).respond(json=err(120))
+        with pytest.raises(ToolError) as exc:
+            await create_download(mock_client, uri="magnet:?xt=a")
+        envelope = _envelope(exc.value)
+        assert envelope["code"] == "invalid_parameter"
+        assert envelope["help_url"].endswith("#invalid_parameter")
+
+    @respx.mock
+    async def test_credentials_go_to_v1_in_post_body(self, mock_client: DsmClient) -> None:
+        """HTTP-auth sources use v1 (DS2 url-create credential fields are
+        unverified); credentials travel in the POST body, never the URL."""
+        ds2 = post_route(TASK2, "create").respond(json=ok())
+        v1 = post_route(TASK, "create", version=1).respond(json=ok())
+        await create_download(
+            mock_client, uri="http://example.com/f.bin", username="u", password="s3cret"
+        )
+        assert not ds2.called
+        request = v1.calls.last.request
+        assert "s3cret" not in str(request.url)
+        form = _form(request)
+        assert form["username"] == "u"
+        assert form["password"] == "s3cret"
+
+    @respx.mock
+    async def test_session_error_triggers_one_reauth_retry(self, mock_client: DsmClient) -> None:
+        reauths = 0
+
+        async def fake_reauth() -> None:
+            nonlocal reauths
+            reauths += 1
+
+        mock_client.set_re_auth_callback(fake_reauth)
+        post_route(TASK2, "create", version=2).mock(
             side_effect=[
-                httpx.Response(200, json={"success": False, "error": {"code": 106}}),
-                httpx.Response(200, json={"success": True, "data": {"task_id": "ok"}}),
+                httpx.Response(200, json=err(106)),
+                httpx.Response(200, json=ok({"list_id": [], "task_id": ["dbid_3"]})),
             ]
         )
-        # If the mock_client fixture's underlying client doesn't set up a
-        # re-auth callback, this test verifies create_download surfaces the
-        # error rather than swallowing it. Check the fixture if needed.
-        try:
-            result = await create_download(mock_client, uri="magnet:?...")
-            assert "ok" in result
-        except Exception as e:
-            # If the fixture doesn't wire re-auth, the call should raise the
-            # session error rather than silently succeeding — that's also fine
-            # for this test's purpose (it documents the path).
-            assert "106" in str(e) or "session" in str(e).lower()
+        result = await create_download(mock_client, uri="magnet:?xt=a")
+        assert "dbid_3" in result
+        assert reauths == 1
+
+    @respx.mock
+    async def test_v1_fallback_error_is_surfaced(self, mock_client: DsmClient) -> None:
+        del mock_client.api_cache[TASK2]
+        post_route(TASK, "create", version=1).respond(json=err(403))
+        with pytest.raises(ToolError, match="Destination doesn't exist"):
+            await create_download(mock_client, uri="magnet:?xt=a", destination="nope")
+
+    async def test_only_commas_is_an_empty_uri(self, mock_client: DsmClient) -> None:
+        with pytest.raises(ToolError, match="empty"):
+            await create_download(mock_client, uri=",,")
+
+    async def test_neither_uri_nor_torrent_path_raises(self, mock_client: DsmClient) -> None:
+        with pytest.raises(ToolError, match="uri"):
+            await create_download(mock_client)
+
+    async def test_both_uri_and_torrent_path_raises(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        torrent = tmp_path / "x.torrent"
+        torrent.write_bytes(b"x")
+        with pytest.raises(ToolError, match="exactly one"):
+            await create_download(mock_client, uri="magnet:?xt=a", torrent_file_path=str(torrent))
+
+
+class TestCreateDownloadFile:
+    """File create goes to DS2 Task.create (multipart, part named 'torrent')."""
+
+    @respx.mock
+    async def test_torrent_upload_uses_ds2_multipart(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        torrent = tmp_path / "ubuntu.torrent"
+        torrent.write_bytes(b"d4:infod6:lengthi100eee")
+        route = respx.post("http://nas:5000/webapi/entry.cgi").respond(
+            json=captured("ds2_task_create_url")
+        )
+        result = await create_download(
+            mock_client, torrent_file_path=str(torrent), destination="writable"
+        )
+        assert "dbid_1" in result
+        body = route.calls.last.request.content
+        assert b'name="torrent"; filename="ubuntu.torrent"' in body
+        assert b'name="api"\r\n\r\nSYNO.DownloadStation2.Task' in body
+        assert b'name="type"\r\n\r\n"file"' in body
+        assert b'name="file"\r\n\r\n["torrent"]' in body
+        assert b'name="destination"\r\n\r\n"writable"' in body
+        assert b'name="create_list"\r\n\r\nfalse' in body
+
+    async def test_missing_file_raises_not_found(self, mock_client: DsmClient) -> None:
+        with pytest.raises(ToolError) as exc:
+            await create_download(mock_client, torrent_file_path="/nonexistent/file.torrent")
+        assert _envelope(exc.value)["code"] == "not_found"
+
+    async def test_credentials_with_torrent_file_are_refused(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        torrent = tmp_path / "x.torrent"
+        torrent.write_bytes(b"x")
+        with pytest.raises(ToolError, match="only apply to `uri`"):
+            await create_download(mock_client, torrent_file_path=str(torrent), username="u")
+
+    async def test_ds2_absent_gives_clear_error(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """v1 multipart upload fails with 101 on DSM 7.2.2 in every variant
+        (#123 bug 6), so there is deliberately no v1 fallback for files."""
+        del mock_client.api_cache[TASK2]
+        torrent = tmp_path / "x.torrent"
+        torrent.write_bytes(b"x")
+        with pytest.raises(ToolError) as exc:
+            await create_download(mock_client, torrent_file_path=str(torrent))
+        assert _envelope(exc.value)["code"] == "api_not_found"
 
 
 class TestDeleteDownload:
+    """Delete semantics verified live (#123 bug 7): finished files are kept;
+    unfinished tasks' partial data is discarded unless force_complete moves it.
+    """
+
     @respx.mock
-    async def test_delete_data_true_success(self, mock_client: DsmClient) -> None:
-        from mcp_synology.modules.downloadstation.tasks import delete_download
-
-        captured: dict = {}
-
-        def _capture(request):
-            captured["params"] = dict(request.url.params)
-            return httpx.Response(
-                200,
-                json={
-                    "success": True,
-                    "data": [
-                        {"id": "dbid_001", "error": 0},
-                        {"id": "dbid_002", "error": 0},
-                    ],
-                },
-            )
-
-        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_capture)
-        result = await delete_download(
-            mock_client, task_ids=["dbid_001", "dbid_002"], delete_data=True
-        )
-        assert "dbid_001" in result
-        assert "dbid_002" in result
-        # Comma-joined ids in the request
-        assert captured["params"].get("id") == "dbid_001,dbid_002"
-
-    async def test_delete_data_false_refuses_with_clear_message(
+    async def test_delete_sends_ids_and_force_complete_false_by_default(
         self, mock_client: DsmClient
     ) -> None:
-        """DSM Task.delete v1 has no documented "keep files" mode — the tool
-        refuses delete_data=False rather than silently deleting the files."""
-        from mcp.server.fastmcp.exceptions import ToolError
-
-        from mcp_synology.modules.downloadstation.tasks import delete_download
-
-        try:
-            await delete_download(mock_client, task_ids=["dbid_001"], delete_data=False)
-        except ToolError as e:
-            msg = str(e).lower()
-            assert "delete_data" in msg or "keep" in msg or "not supported" in msg
-        else:
-            raise AssertionError("expected ToolError on delete_data=False")
+        route = get_route(TASK, "delete", version=1).respond(json=captured("task_delete_v1"))
+        result = await delete_download(mock_client, task_ids=["dbid_1", "dbid_2"])
+        sent = dict(route.calls.last.request.url.params)
+        assert sent["id"] == "dbid_1,dbid_2"
+        assert sent["force_complete"] == "false"
+        assert "dbid_1" in result and "dbid_2" in result
 
     @respx.mock
-    async def test_per_task_error_rendered_in_result(self, mock_client: DsmClient) -> None:
-        from mcp_synology.modules.downloadstation.tasks import delete_download
+    async def test_result_never_claims_files_were_removed(self, mock_client: DsmClient) -> None:
+        get_route(TASK, "delete", version=1).respond(json=captured("task_delete_v1"))
+        result = await delete_download(mock_client, task_ids=["dbid_1", "dbid_2"])
+        assert "files removed" not in result
+        assert "completed files kept" in result
 
-        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
-            json={
-                "success": True,
-                "data": [
-                    {"id": "dbid_001", "error": 0},
-                    {"id": "dbid_002", "error": 405},
-                ],
-            },
+    @respx.mock
+    async def test_force_complete_true_is_passed_and_described(
+        self, mock_client: DsmClient
+    ) -> None:
+        route = get_route(TASK, "delete", version=1).respond(
+            json=ok([{"error": 0, "id": "dbid_1"}])
         )
-        result = await delete_download(
-            mock_client, task_ids=["dbid_001", "dbid_002"], delete_data=True
+        result = await delete_download(mock_client, task_ids=["dbid_1"], force_complete=True)
+        assert dict(route.calls.last.request.url.params)["force_complete"] == "true"
+        assert "moved into the destination" in result
+
+    @respx.mock
+    async def test_per_task_error_rendered(self, mock_client: DsmClient) -> None:
+        get_route(TASK, "delete", version=1).respond(
+            json=ok([{"error": 0, "id": "dbid_1"}, {"error": 405, "id": "dbid_2"}])
         )
-        assert "dbid_001" in result
-        assert "dbid_002" in result
-        assert "405" in result or "error" in result.lower()
+        result = await delete_download(mock_client, task_ids=["dbid_1", "dbid_2"])
+        assert "error 405" in result
 
     async def test_empty_task_ids_raises(self, mock_client: DsmClient) -> None:
-        from mcp.server.fastmcp.exceptions import ToolError
-
-        from mcp_synology.modules.downloadstation.tasks import delete_download
-
-        try:
-            await delete_download(mock_client, task_ids=[], delete_data=True)
-        except ToolError as e:
-            assert "task_ids" in str(e) or "empty" in str(e).lower()
-        else:
-            raise AssertionError("expected ToolError on empty task_ids")
+        with pytest.raises(ToolError, match="task_ids"):
+            await delete_download(mock_client, task_ids=[])
 
     @respx.mock
     async def test_dsm_error_propagates(self, mock_client: DsmClient) -> None:
-        from mcp.server.fastmcp.exceptions import ToolError
+        get_route(TASK, "delete", version=1).respond(json=err(105))
+        with pytest.raises(ToolError) as exc:
+            await delete_download(mock_client, task_ids=["dbid_1"])
+        assert _envelope(exc.value)["code"] == "permission_denied"
 
-        from mcp_synology.modules.downloadstation.tasks import delete_download
 
-        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
-            json={"success": False, "error": {"code": 105}},
-        )
-        try:
-            await delete_download(mock_client, task_ids=["dbid_001"], delete_data=True)
-        except ToolError as e:
-            assert "105" in str(e) or "permission" in str(e).lower()
-        else:
-            raise AssertionError("expected ToolError")
-
+class TestPauseResume:
     @respx.mock
-    async def test_force_complete_passed_to_dsm(self, mock_client: DsmClient) -> None:
-        from mcp_synology.modules.downloadstation.tasks import delete_download
-
-        captured: dict = {}
-
-        def _capture(request):
-            captured["params"] = dict(request.url.params)
-            return httpx.Response(
-                200,
-                json={"success": True, "data": [{"id": "dbid_001", "error": 0}]},
-            )
-
-        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_capture)
-        await delete_download(
-            mock_client,
-            task_ids=["dbid_001"],
-            delete_data=True,
-            force_complete=True,
-        )
-        assert captured["params"].get("force_complete") == "true"
-
-
-class TestPauseDownload:
-    @respx.mock
-    async def test_pause_success(self, mock_client: DsmClient) -> None:
-        from mcp_synology.modules.downloadstation.tasks import pause_download
-
-        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
-            json={"success": True, "data": [{"id": "dbid_001", "error": 0}]},
-        )
-        result = await pause_download(mock_client, task_ids=["dbid_001"])
-        assert "dbid_001" in result
-        assert "ok" in result.lower()
-
-    @respx.mock
-    async def test_pause_already_paused_renders_per_task_error(
+    async def test_pause_uses_pause_method_and_renders_captured_results(
         self, mock_client: DsmClient
     ) -> None:
-        from mcp_synology.modules.downloadstation.tasks import pause_download
-
-        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
-            json={
-                "success": True,
-                "data": [{"id": "dbid_001", "error": 405}],
-            },
-        )
-        result = await pause_download(mock_client, task_ids=["dbid_001"])
-        assert "405" in result or "error" in result.lower()
+        route = get_route(TASK, "pause", version=1).respond(json=captured("task_pause_v1"))
+        result = await pause_download(mock_client, task_ids=["dbid_1", "dbid_2"])
+        assert dict(route.calls.last.request.url.params)["id"] == "dbid_1,dbid_2"
+        assert "ok" in result
+        assert "error 405" in result  # captured: dbid_2 could not be paused
 
     @respx.mock
-    async def test_pause_calls_pause_method(self, mock_client: DsmClient) -> None:
-        """Regression guard — pause must call method=pause, not delete or resume."""
-        from mcp_synology.modules.downloadstation.tasks import pause_download
-
-        captured: dict = {}
-
-        def _capture(request):
-            captured["params"] = dict(request.url.params)
-            return httpx.Response(
-                200,
-                json={"success": True, "data": [{"id": "dbid_001", "error": 0}]},
-            )
-
-        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_capture)
-        await pause_download(mock_client, task_ids=["dbid_001"])
-        assert captured["params"].get("method") == "pause"
+    async def test_resume_uses_resume_method(self, mock_client: DsmClient) -> None:
+        route = get_route(TASK, "resume", version=1).respond(json=captured("task_resume_v1"))
+        await resume_download(mock_client, task_ids=["dbid_1", "dbid_2"])
+        assert route.called
 
     async def test_empty_task_ids_raises(self, mock_client: DsmClient) -> None:
-        from mcp.server.fastmcp.exceptions import ToolError
-
-        from mcp_synology.modules.downloadstation.tasks import pause_download
-
-        try:
+        with pytest.raises(ToolError, match="task_ids"):
             await pause_download(mock_client, task_ids=[])
-        except ToolError as e:
-            assert "task_ids" in str(e) or "empty" in str(e).lower()
-        else:
-            raise AssertionError("expected ToolError on empty task_ids")
-
-
-class TestResumeDownload:
-    @respx.mock
-    async def test_resume_success(self, mock_client: DsmClient) -> None:
-        from mcp_synology.modules.downloadstation.tasks import resume_download
-
-        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
-            json={"success": True, "data": [{"id": "dbid_001", "error": 0}]},
-        )
-        result = await resume_download(mock_client, task_ids=["dbid_001"])
-        assert "dbid_001" in result
-        assert "ok" in result.lower()
 
     @respx.mock
-    async def test_resume_calls_resume_method(self, mock_client: DsmClient) -> None:
-        """Regression guard against the shared helper accidentally swapping
-        methods between pause/resume."""
-        from mcp_synology.modules.downloadstation.tasks import resume_download
-
-        captured: dict = {}
-
-        def _capture(request):
-            captured["params"] = dict(request.url.params)
-            return httpx.Response(
-                200,
-                json={"success": True, "data": [{"id": "dbid_001", "error": 0}]},
-            )
-
-        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_capture)
-        await resume_download(mock_client, task_ids=["dbid_001"])
-        assert captured["params"].get("method") == "resume"
+    async def test_dsm_error_propagates(self, mock_client: DsmClient) -> None:
+        get_route(TASK, "resume", version=1).respond(json=err(105))
+        with pytest.raises(ToolError) as exc:
+            await resume_download(mock_client, task_ids=["dbid_1"])
+        assert _envelope(exc.value)["code"] == "permission_denied"
 
 
 class TestEditDownload:
     @respx.mock
-    async def test_edit_destination_success(self, mock_client: DsmClient) -> None:
-        from mcp_synology.modules.downloadstation.tasks import edit_download
+    async def test_edit_is_pinned_to_task_v2(self, mock_client: DsmClient) -> None:
+        """#123 bug 5: Task.edit is "2 and later"; v1 returns 103."""
+        route = get_route(TASK, "edit", version=2).respond(json=captured("task_edit_v2"))
+        result = await edit_download(mock_client, task_ids=["dbid_1"], destination="testshare")
+        assert dict(route.calls.last.request.url.params)["destination"] == "testshare"
+        assert "dbid_1" in result
 
-        captured: dict = {}
-
-        def _capture(request):
-            captured["params"] = dict(request.url.params)
-            return httpx.Response(
-                200,
-                json={"success": True, "data": [{"id": "dbid_001", "error": 0}]},
-            )
-
-        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_capture)
-        result = await edit_download(mock_client, task_ids=["dbid_001"], destination="new_share")
-        assert "dbid_001" in result
-        assert captured["params"].get("destination") == "new_share"
-        assert captured["params"].get("method") == "edit"
+    async def test_nas_with_task_v1_only_gets_clear_error(self, mock_client: DsmClient) -> None:
+        mock_client.api_cache[TASK] = mock_client.api_cache[TASK].model_copy(
+            update={"max_version": 1}
+        )
+        with pytest.raises(ToolError, match="requires a newer Download Station"):
+            await edit_download(mock_client, task_ids=["dbid_1"], destination="testshare")
 
     async def test_no_destination_raises(self, mock_client: DsmClient) -> None:
-        from mcp.server.fastmcp.exceptions import ToolError
-
-        from mcp_synology.modules.downloadstation.tasks import edit_download
-
-        try:
-            await edit_download(mock_client, task_ids=["dbid_001"])
-        except ToolError as e:
-            msg = str(e).lower()
-            assert "destination" in msg or "nothing" in msg or "no editable" in msg
-        else:
-            raise AssertionError("expected ToolError when no edit fields supplied")
+        with pytest.raises(ToolError, match="destination"):
+            await edit_download(mock_client, task_ids=["dbid_1"])
 
     async def test_empty_task_ids_raises(self, mock_client: DsmClient) -> None:
-        from mcp.server.fastmcp.exceptions import ToolError
-
-        from mcp_synology.modules.downloadstation.tasks import edit_download
-
-        try:
-            await edit_download(mock_client, task_ids=[], destination="downloads")
-        except ToolError as e:
-            assert "task_ids" in str(e) or "empty" in str(e).lower()
-        else:
-            raise AssertionError("expected ToolError on empty task_ids")
+        with pytest.raises(ToolError, match="task_ids"):
+            await edit_download(mock_client, task_ids=[], destination="writable")
 
     @respx.mock
     async def test_per_task_error_rendered(self, mock_client: DsmClient) -> None:
-        from mcp_synology.modules.downloadstation.tasks import edit_download
-
-        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
-            json={
-                "success": True,
-                "data": [
-                    {"id": "dbid_001", "error": 0},
-                    {"id": "dbid_002", "error": 407},  # set destination failed
-                ],
-            },
+        get_route(TASK, "edit", version=2).respond(
+            json=ok([{"error": 0, "id": "dbid_1"}, {"error": 407, "id": "dbid_2"}])
         )
         result = await edit_download(
-            mock_client,
-            task_ids=["dbid_001", "dbid_002"],
-            destination="downloads",
+            mock_client, task_ids=["dbid_1", "dbid_2"], destination="writable"
         )
-        assert "dbid_001" in result
-        assert "dbid_002" in result
-        assert "407" in result or "error" in result.lower()
+        assert "error 407" in result
+
+    @respx.mock
+    async def test_dsm_error_propagates(self, mock_client: DsmClient) -> None:
+        get_route(TASK, "edit", version=2).respond(json=err(105))
+        with pytest.raises(ToolError) as exc:
+            await edit_download(mock_client, task_ids=["dbid_1"], destination="writable")
+        assert _envelope(exc.value)["code"] == "permission_denied"

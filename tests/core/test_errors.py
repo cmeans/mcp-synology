@@ -4,6 +4,7 @@ from mcp_synology.core.errors import (
     ApiNotFoundError,
     AuthenticationError,
     DiskFullError,
+    ErrorCode,
     FileStationError,
     IllegalNameError,
     PathNotFoundError,
@@ -83,6 +84,11 @@ class TestErrorFromCode:
         """FileStation code 408 should still be PathNotFoundError, not Auth."""
         err = error_from_code(408, api_name="SYNO.FileStation.List")
         assert isinstance(err, PathNotFoundError)
+
+    def test_json_format_invalid_parameter(self) -> None:
+        err = error_from_code(120, api_name="SYNO.DownloadStation2.Task")
+        assert err.error_code == ErrorCode.INVALID_PARAMETER
+        assert err.code == 120
 
     def test_unknown_code(self) -> None:
         err = error_from_code(9999)

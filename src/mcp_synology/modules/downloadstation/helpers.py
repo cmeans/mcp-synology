@@ -2,44 +2,66 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+from mcp_synology.core.errors import SynologyError
 from mcp_synology.core.formatting import format_size
 
-# DSM Download Station task status numeric codes (public API guide).
-_STATUS_LABELS: dict[int, str] = {
-    1: "waiting",
-    2: "downloading",
-    3: "paused",
-    4: "finishing",
-    5: "finished",
-    6: "hash_checking",
-    7: "seeding",
-    8: "filehosting_waiting",
-    9: "extracting",
-    10: "error",
-}
+if TYPE_CHECKING:
+    from mcp_synology.core.client import DsmClient
+
+# DSM Download Station task statuses. The v1, v2 and v3 Task APIs all return
+# these as strings (official DS Web API guide, Appendix A; verified live on
+# DSM 7.2.2 / DS 4.1-5012 in #123). Only the separate SYNO.DownloadStation2.Task
+# API returns integers, and nothing in this module reads status from it.
+TASK_STATUSES: frozenset[str] = frozenset(
+    {
+        "waiting",
+        "downloading",
+        "paused",
+        "finishing",
+        "finished",
+        "hash_checking",
+        "seeding",
+        "filehosting_waiting",
+        "extracting",
+        "error",
+    }
+)
 
 # Operator-facing groupings used by list_downloads(status_filter=...).
 # "downloading" is interpreted as "in-flight or waiting for a slot, but not
-# paused / finished / error" — so transient pre-active states (1 waiting,
-# 8 filehosting_waiting) are bucketed there alongside actively-transferring
+# paused / finished / error" — so transient pre-active states (waiting,
+# filehosting_waiting) are bucketed there alongside actively-transferring
 # states.
-STATUS_GROUPS: dict[str, set[int]] = {
-    "downloading": {1, 2, 4, 6, 8, 9},
-    "finished": {5, 7},
-    "paused": {3},
-    "error": {10},
+STATUS_GROUPS: dict[str, set[str]] = {
+    "downloading": {
+        "waiting",
+        "downloading",
+        "finishing",
+        "hash_checking",
+        "filehosting_waiting",
+        "extracting",
+    },
+    "finished": {"finished", "seeding"},
+    "paused": {"paused"},
+    "error": {"error"},
 }
 
 
-def format_task_status(status_code: int | None) -> str:
-    """Translate a DSM numeric status to its label.
+def format_task_status(status: object) -> str:
+    """Render a DSM task status.
 
-    Unknown codes return ``unknown(<n>)`` so the original value is preserved
-    in diagnostic output; None returns plain ``unknown``.
+    Known status strings pass through. Anything else (an unrecognized string,
+    or an int from an API shape this module doesn't consume) renders as
+    ``unknown(<raw>)`` so the original value is preserved in diagnostic
+    output; None renders as plain ``unknown``.
     """
-    if status_code is None:
+    if status is None:
         return "unknown"
-    return _STATUS_LABELS.get(status_code, f"unknown({status_code})")
+    if isinstance(status, str) and status in TASK_STATUSES:
+        return status
+    return f"unknown({status})"
 
 
 def format_transfer_progress(downloaded: int, total: int) -> str:
@@ -91,39 +113,84 @@ def format_eta(downloaded: int, total: int, speed: int) -> str:
 
 _DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
 
-# Per DSM convention: 7 days × 24 hours. Each char encodes one hour.
+# Weekly plan format, verified from DSM's own SYNO.ux.ScheduleTable widget
+# (#123): day-major Sun..Sat, 24 chars per day, one char per hour.
 SCHEDULE_PLAN_LENGTH = 7 * 24
+_VALID_PLAN_CHARS = frozenset("012")
 
 _CELL_GLYPHS: dict[str, str] = {
-    "0": ".",  # off
-    "1": "#",  # on (full)
-    "2": "~",  # throttled
-    "3": "#",  # on + eMule (older DSM) — render same as on
+    "0": ".",  # no download
+    "1": "#",  # full speed
+    "2": "~",  # limited (alt speed)
 }
 
 
-def format_schedule_grid(plan: str) -> str:
-    """Render a DSM Download Station weekly schedule plan as a text grid.
+def schedule_plan_problem(plan: str) -> str | None:
+    """Describe why ``plan`` is not a valid weekly plan, or None if it is.
 
-    ``plan`` is a 168-character string (7 days × 24 hours, Sun..Sat). Each
-    character encodes one hour: '0'=off, '1'=on, '2'=throttled, '3'=on+eMule.
-
-    Output is one row per day with a 24-cell hour grid, plus a legend line.
+    DS2 ``Settings.Scheduler.set`` stores whatever it is given (no server-side
+    validation), so this client-side check is the only guard on writes.
     """
     if len(plan) != SCHEDULE_PLAN_LENGTH:
-        msg = (
+        return (
             f"schedule_plan must be {SCHEDULE_PLAN_LENGTH} chars "
             f"(7 days × 24 hours), got {len(plan)}"
         )
-        raise ValueError(msg)
+    bad = sorted(set(plan) - _VALID_PLAN_CHARS)
+    if bad:
+        shown = ", ".join(repr(ch) for ch in bad)
+        return (
+            f"schedule_plan may only contain '0' (no download), '1' (full speed) "
+            f"or '2' (limited); found {shown}"
+        )
+    return None
 
+
+def format_schedule_grid(plan: str) -> str:
+    """Render a Download Station weekly plan as a 7 × 24 text grid.
+
+    ``plan`` is day-major Sun..Sat, 24 chars per day: '0' = no download,
+    '1' = full speed, '2' = limited (alt speed). A malformed stored plan is
+    rendered rather than rejected — missing or unrecognized cells show as
+    '?' and a note names the problem — because other clients can store
+    anything and a read must never fail on it.
+    """
     hour_header = "     " + " ".join(f"{h:02d}" for h in range(24))
     lines = [hour_header]
     for day_idx, name in enumerate(_DAY_NAMES):
-        day_slice = plan[day_idx * 24 : (day_idx + 1) * 24]
+        day_slice = plan[day_idx * 24 : (day_idx + 1) * 24].ljust(24, "?")
         cells = " ".join(_CELL_GLYPHS.get(ch, "?") for ch in day_slice)
         lines.append(f"{name}  {cells}")
 
     lines.append("")
-    lines.append("Legend: # = on   ~ = throttled   . = off")
+    lines.append("Legend: # = full speed   ~ = limited (alt speed)   . = no download")
+    if len(plan) != SCHEDULE_PLAN_LENGTH:
+        lines.append(
+            f"Note: stored plan is malformed ({len(plan)} chars, expected "
+            f"{SCHEDULE_PLAN_LENGTH}); '?' marks unreadable hours."
+        )
+    elif set(plan) - _VALID_PLAN_CHARS:
+        lines.append(
+            "Note: stored plan is malformed (contains values other than 0/1/2); "
+            "'?' marks unreadable hours."
+        )
     return "\n".join(lines)
+
+
+async def ds_is_manager(client: DsmClient) -> bool | None:
+    """Whether the session's user is a Download Station manager.
+
+    From ``SYNO.DownloadStation.Info.getinfo``'s ``is_manager``. Non-managers
+    get a sanitized per-user view of the global config, only see their own
+    tasks, and have global config writes silently ignored (#123). Returns
+    None when it can't be determined (API absent, call failed), so callers
+    fall back to their pre-#123 behavior rather than failing.
+    """
+    if "SYNO.DownloadStation.Info" not in client.api_cache:
+        return None
+    try:
+        data = await client.request("SYNO.DownloadStation.Info", "getinfo", version=1)
+    except SynologyError:
+        return None
+    value = data.get("is_manager")
+    return value if isinstance(value, bool) else None

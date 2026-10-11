@@ -1,0 +1,550 @@
+{
+ "_provenance": "Captured live from vdsm DSM 7.2.2 / Download Station 4.1-5012 on 2026-10-10 (issue #123). Raw DSM JSON envelopes; *_user keys were captured as a non-admin user granted DS access. Do not hand-edit payload shapes: re-capture instead.",
+ "api_info_ds": {
+  "SYNO.DownloadStation.BTSearch": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "DownloadStation/btsearch.cgi"
+  },
+  "SYNO.DownloadStation.Info": {
+   "maxVersion": 2,
+   "minVersion": 1,
+   "path": "DownloadStation/info.cgi"
+  },
+  "SYNO.DownloadStation.RSS.Feed": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "DownloadStation/RSSfeed.cgi"
+  },
+  "SYNO.DownloadStation.RSS.Site": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "DownloadStation/RSSsite.cgi"
+  },
+  "SYNO.DownloadStation.Schedule": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "DownloadStation/schedule.cgi"
+  },
+  "SYNO.DownloadStation.Statistic": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "DownloadStation/statistic.cgi"
+  },
+  "SYNO.DownloadStation.Task": {
+   "maxVersion": 3,
+   "minVersion": 1,
+   "path": "DownloadStation/task.cgi"
+  },
+  "SYNO.DownloadStation2.BTSearch": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.DownloadStation2.Captcha": {
+   "maxVersion": 2,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.DownloadStation2.Package.Info": {
+   "maxVersion": 2,
+   "minVersion": 2,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.DownloadStation2.Package.Module": {
+   "maxVersion": 2,
+   "minVersion": 2,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.DownloadStation2.Package.Service": {
+   "maxVersion": 2,
+   "minVersion": 2,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.DownloadStation2.RSS.Feed": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.DownloadStation2.RSS.Filter": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.DownloadStation2.RSS.Item": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.DownloadStation2.Settings.AutoExtraction": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.DownloadStation2.Settings.BT": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.DownloadStation2.Settings.BTSearch": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.DownloadStation2.Settings.Emule": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.DownloadStation2.Settings.Emule.Location": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.DownloadStation2.Settings.FileHosting": {
+   "maxVersion": 2,
+   "minVersion": 2,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.DownloadStation2.Settings.FtpHttp": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.DownloadStation2.Settings.Global": {
+   "maxVersion": 2,
+   "minVersion": 2,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.DownloadStation2.Settings.Location": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.DownloadStation2.Settings.Nzb": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.DownloadStation2.Settings.Rss": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.DownloadStation2.Settings.Scheduler": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.DownloadStation2.Task": {
+   "maxVersion": 2,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.DownloadStation2.Task.BT": {
+   "maxVersion": 2,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.DownloadStation2.Task.BT.File": {
+   "maxVersion": 2,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.DownloadStation2.Task.BT.Peer": {
+   "maxVersion": 2,
+   "minVersion": 2,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.DownloadStation2.Task.BT.Tracker": {
+   "maxVersion": 2,
+   "minVersion": 2,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.DownloadStation2.Task.Complete": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.DownloadStation2.Task.List": {
+   "maxVersion": 2,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.DownloadStation2.Task.List.Polling": {
+   "maxVersion": 2,
+   "minVersion": 2,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.DownloadStation2.Task.NZB.File": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.DownloadStation2.Task.NZB.Log": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.DownloadStation2.Task.Source": {
+   "maxVersion": 2,
+   "minVersion": 2,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.DownloadStation2.Task.Statistic": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.DownloadStation2.Task.eMule": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.DownloadStation2.Thumbnail": {
+   "maxVersion": 2,
+   "minVersion": 2,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.DownloadStation2.eMule.Search": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.DownloadStation2.eMule.Server": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  }
+ },
+ "ds2_scheduler_get_admin": {
+  "data": {
+   "download_rate": 0,
+   "enable_schedule": false,
+   "max_tasks": 10,
+   "max_tasks_limit": 80,
+   "order": "request",
+   "schedule": "111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111",
+   "upload_rate": 0
+  },
+  "success": true
+ },
+ "ds2_scheduler_get_user": {
+  "error": {
+   "code": 105
+  },
+  "success": false
+ },
+ "ds2_scheduler_set_raw_err": {
+  "error": {
+   "code": 120,
+   "errors": {
+    "name": "schedule",
+    "reason": "type"
+   }
+  },
+  "success": false
+ },
+ "ds2_task_create_url": {
+  "data": {
+   "list_id": [],
+   "task_id": [
+    "dbid_1"
+   ]
+  },
+  "success": true
+ },
+ "info_getconfig_admin": {
+  "data": {
+   "bt_max_download": 0,
+   "bt_max_upload": 20,
+   "default_destination": "writable",
+   "emule_default_destination": null,
+   "emule_enabled": false,
+   "emule_max_download": 0,
+   "emule_max_upload": 20,
+   "ftp_max_download": 0,
+   "http_max_download": 0,
+   "nzb_max_download": 0,
+   "unzip_service_enabled": false
+  },
+  "success": true
+ },
+ "info_getconfig_user": {
+  "data": {
+   "bt_max_download": 0,
+   "bt_max_upload": 0,
+   "default_destination": null,
+   "emule_default_destination": null,
+   "emule_enabled": false,
+   "emule_max_download": 0,
+   "emule_max_upload": 0,
+   "ftp_max_download": 0,
+   "http_max_download": 0,
+   "nzb_max_download": 0,
+   "unzip_service_enabled": false
+  },
+  "success": true
+ },
+ "info_getinfo_admin": {
+  "data": {
+   "is_manager": true,
+   "version": 5012,
+   "version_string": "4.1-5012"
+  },
+  "success": true
+ },
+ "info_getinfo_user": {
+  "data": {
+   "is_manager": false,
+   "version": 5012,
+   "version_string": "4.1-5012"
+  },
+  "success": true
+ },
+ "info_setconfig_err": {
+  "error": {
+   "code": 103
+  },
+  "success": false
+ },
+ "info_setserverconfig_user": {
+  "success": true
+ },
+ "schedule_getconfig": {
+  "data": {
+   "emule_enabled": false,
+   "enabled": false
+  },
+  "success": true
+ },
+ "statistic_getinfo": {
+  "data": {
+   "speed_download": 0,
+   "speed_upload": 0
+  },
+  "success": true
+ },
+ "task_delete_v1": {
+  "data": [
+   {
+    "error": 0,
+    "id": "dbid_1"
+   },
+   {
+    "error": 0,
+    "id": "dbid_2"
+   }
+  ],
+  "success": true
+ },
+ "task_edit_v1_err": {
+  "error": {
+   "code": 103
+  },
+  "success": false
+ },
+ "task_edit_v2": {
+  "data": [
+   {
+    "error": 0,
+    "id": "dbid_1"
+   }
+  ],
+  "success": true
+ },
+ "task_getinfo_bogus": {
+  "error": {
+   "code": 404
+  },
+  "success": false
+ },
+ "task_getinfo_v1": {
+  "data": {
+   "tasks": [
+    {
+     "additional": {
+      "detail": {
+       "completed_time": 0,
+       "connected_leechers": 0,
+       "connected_peers": 0,
+       "connected_seeders": 0,
+       "create_time": 1791647736,
+       "destination": "writable",
+       "seedelapsed": 0,
+       "started_time": 1791647738,
+       "total_peers": 0,
+       "total_pieces": 0,
+       "unzip_password": "",
+       "uri": "magnet:?xt=urn:btih:dddddddddddddddddddddddddddddddddddddddd&dn=capture-magnet",
+       "waiting_seconds": 0
+      },
+      "file": [],
+      "peer": [],
+      "tracker": [],
+      "transfer": {
+       "downloaded_pieces": 0,
+       "size_downloaded": 0,
+       "size_uploaded": 0,
+       "speed_download": 0,
+       "speed_upload": 0
+      }
+     },
+     "id": "dbid_1",
+     "size": 0,
+     "status": "downloading",
+     "title": "capture-magnet",
+     "type": "bt",
+     "username": "mcpadmin"
+    }
+   ]
+  },
+  "success": true
+ },
+ "task_list_user": {
+  "data": {
+   "offset": 0,
+   "tasks": [],
+   "total": 0
+  },
+  "success": true
+ },
+ "task_list_v1": {
+  "data": {
+   "offset": 0,
+   "tasks": [
+    {
+     "additional": {
+      "detail": {
+       "completed_time": 0,
+       "connected_leechers": 0,
+       "connected_peers": 0,
+       "connected_seeders": 0,
+       "create_time": 1791647736,
+       "destination": "writable",
+       "seedelapsed": 0,
+       "started_time": 1791647738,
+       "total_peers": 0,
+       "total_pieces": 0,
+       "unzip_password": "",
+       "uri": "magnet:?xt=urn:btih:dddddddddddddddddddddddddddddddddddddddd&dn=capture-magnet",
+       "waiting_seconds": 0
+      },
+      "transfer": {
+       "downloaded_pieces": 0,
+       "size_downloaded": 0,
+       "size_uploaded": 0,
+       "speed_download": 0,
+       "speed_upload": 0
+      }
+     },
+     "id": "dbid_1",
+     "size": 0,
+     "status": "downloading",
+     "title": "capture-magnet",
+     "type": "bt",
+     "username": "mcpadmin"
+    },
+    {
+     "additional": {
+      "detail": {
+       "completed_time": 1791647740,
+       "connected_leechers": 0,
+       "connected_peers": 0,
+       "connected_seeders": 0,
+       "create_time": 1791647736,
+       "destination": "writable",
+       "seedelapsed": 0,
+       "started_time": 1791647739,
+       "total_peers": 0,
+       "total_pieces": 0,
+       "unzip_password": "",
+       "uri": "http://example.com/",
+       "waiting_seconds": 0
+      },
+      "transfer": {
+       "downloaded_pieces": 0,
+       "size_downloaded": 577,
+       "size_uploaded": 0,
+       "speed_download": 0,
+       "speed_upload": 0
+      }
+     },
+     "id": "dbid_2",
+     "size": 577,
+     "status": "finished",
+     "title": "Unknown",
+     "type": "http",
+     "username": "mcpadmin"
+    }
+   ],
+   "total": 2
+  },
+  "success": true
+ },
+ "task_pause_v1": {
+  "data": [
+   {
+    "error": 0,
+    "id": "dbid_1"
+   },
+   {
+    "error": 405,
+    "id": "dbid_2"
+   }
+  ],
+  "success": true
+ },
+ "task_resume_v1": {
+  "data": [
+   {
+    "error": 0,
+    "id": "dbid_1"
+   },
+   {
+    "error": 405,
+    "id": "dbid_2"
+   }
+  ],
+  "success": true
+ },
+ "v1_task_create_url": {
+  "success": true
+ }
+}
