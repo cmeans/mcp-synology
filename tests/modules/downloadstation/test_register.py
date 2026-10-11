@@ -284,6 +284,18 @@ class TestModuleInfoDescriptions:
     def test_set_download_config_mentions_manager_requirement(self) -> None:
         assert "manager" in self._desc("set_download_config")
 
+    def test_set_download_config_allows_per_user_destination(self) -> None:
+        """#124: non-managers can set their own default destination."""
+        desc = self._desc("set_download_config")
+        assert "per user" in desc
+        assert "won't start" in desc
+
+    def test_create_download_explains_unset_default_destination(self) -> None:
+        """#124: a non-manager with no default destination gets tasks DS never starts."""
+        desc = self._desc("create_download")
+        assert "your default destination" in desc
+        assert "set_download_config" in desc
+
     def test_schedule_tools_describe_verified_plan_format(self) -> None:
         for name in ("get_schedule", "set_schedule"):
             desc = self._desc(name)

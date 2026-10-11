@@ -308,7 +308,41 @@ class TestSetDownloadConfig:
         envelope = _envelope(exc.value)
         assert envelope["code"] == "permission_denied"
         assert "silently ignores" in envelope["message"]
+        assert "bt_max_download" in envelope["message"]
         assert not route.called
+
+    @respx.mock
+    async def test_non_manager_default_destination_is_sent(self, mock_client: DsmClient) -> None:
+        """#124: DSM applies a non-manager's default_destination per user (DS 3.9/4.1),
+        and DS won't start their tasks until it is set."""
+        _manager(is_manager=False)
+        route = get_route(INFO, "setserverconfig", version=1).respond(
+            json=captured("info_setserverconfig_user")
+        )
+        result = await set_download_config(mock_client, default_destination="writable")
+        assert _sent(route)["default_destination"] == "writable"
+        assert "your own default destination" in result
+
+    @respx.mock
+    async def test_non_manager_destination_with_rates_sends_nothing(
+        self, mock_client: DsmClient
+    ) -> None:
+        _manager(is_manager=False)
+        route = get_route(INFO, "setserverconfig", version=1).respond(json=ok())
+        with pytest.raises(ToolError) as exc:
+            await set_download_config(mock_client, default_destination="writable", bt_max_upload=5)
+        envelope = _envelope(exc.value)
+        assert envelope["code"] == "permission_denied"
+        assert "bt_max_upload" in envelope["message"]
+        assert "default_destination alone" in envelope["suggestion"]
+        assert not route.called
+
+    @respx.mock
+    async def test_manager_result_has_no_per_user_note(self, mock_client: DsmClient) -> None:
+        _manager()
+        get_route(INFO, "setserverconfig", version=1).respond(json=ok())
+        result = await set_download_config(mock_client, default_destination="writable")
+        assert "your own default destination" not in result
 
     async def test_no_fields_supplied_raises(self, mock_client: DsmClient) -> None:
         with pytest.raises(ToolError, match="no fields"):

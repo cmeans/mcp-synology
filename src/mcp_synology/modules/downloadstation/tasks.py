@@ -292,6 +292,50 @@ def _created_message(task_ids: list[str], n_uris: int) -> str:
     )
 
 
+async def _resolve_destination(
+    client: DsmClient, destination: str | None
+) -> tuple[str | None, str]:
+    """Fill in the user's default destination; return it and a note for the result.
+
+    Verified on DS 3.9 and 4.1 (#124): DS2 ``Task.create`` answers 120 when a
+    non-manager omits ``destination``, and DS never starts a non-manager's
+    tasks (they stay ``waiting``) until that user's default destination is set.
+    Passing the default explicitly works for every user. When the config can't
+    be read, the request goes out unchanged.
+    """
+    if "SYNO.DownloadStation.Info" not in client.api_cache:
+        return destination, ""
+    try:
+        config = await client.request("SYNO.DownloadStation.Info", "getconfig", version=1)
+    except SynologyError as e:
+        logger.debug("Info.getconfig failed (%s); creating without a resolved destination", e)
+        return destination, ""
+    default = config.get("default_destination") or None
+    if default is not None:
+        return (destination if destination is not None else str(default)), ""
+    if await ds_is_manager(client) is not False:
+        return destination, ""
+
+    setup = (
+        "Set your default destination first, e.g. "
+        'set_download_config(default_destination="<share>").'
+    )
+    if destination is None:
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            "Create download failed: no `destination` given and you have no default "
+            "destination, so DSM would reject the task. Download Station also won't start "
+            "your tasks until a default destination is set.",
+            retryable=False,
+            param="destination",
+            suggestion=setup,
+        )
+    return destination, (
+        " Note: Download Station won't start your tasks until your default destination "
+        f"is set; they stay waiting. {setup}"
+    )
+
+
 async def create_download(
     client: DsmClient,
     *,
@@ -345,6 +389,7 @@ async def create_download(
                 param="torrent_file_path",
                 value=torrent_file_path,
             )
+        destination, note = await _resolve_destination(client, destination)
         try:
             data = await client.create_download_task_with_file(
                 file_path=path,
@@ -354,7 +399,7 @@ async def create_download(
         except SynologyError as e:
             synology_error_response(f"Create download ({path.name})", e)
         task_ids = [str(t) for t in data.get("task_id", [])]
-        return f"{_created_message(task_ids, 1)} Source: file {path.name}."
+        return f"{_created_message(task_ids, 1)} Source: file {path.name}.{note}"
 
     uris = [u for u in (uri or "").split(",") if u]
     if not uris:
@@ -364,6 +409,8 @@ async def create_download(
             retryable=False,
             param="uri",
         )
+
+    destination, note = await _resolve_destination(client, destination)
 
     if username is None and password is None:
         try:
@@ -390,7 +437,7 @@ async def create_download(
                 logger.debug("DS2 Task.create answered %s; using v1 Task.create", e.code)
             else:
                 task_ids = [str(t) for t in data.get("task_id", [])]
-                return _created_message(task_ids, len(uris))
+                return _created_message(task_ids, len(uris)) + note
 
     v1_params: dict[str, str] = {"uri": ",".join(uris)}
     if destination is not None:
@@ -403,7 +450,7 @@ async def create_download(
         await client.request_form_post("SYNO.DownloadStation.Task", "create", 1, v1_params)
     except SynologyError as e:
         synology_error_response("Create download", e)
-    return _created_message([], len(uris))
+    return _created_message([], len(uris)) + note
 
 
 async def delete_download(

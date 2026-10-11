@@ -5,7 +5,8 @@ API surface verified live on DSM 7.2.2 / DS 4.1-5012 (#123):
 - Global config: ``SYNO.DownloadStation.Info`` v1 ``getconfig`` /
   ``setserverconfig`` (there is no ``setconfig``). Non-managers get a
   sanitized per-user view from ``getconfig``, and DSM answers success to
-  their ``setserverconfig`` while ignoring it.
+  their ``setserverconfig`` while ignoring it, except ``default_destination``,
+  which it applies per user (#124).
 - Schedule flags: ``SYNO.DownloadStation.Schedule`` v1 ``getconfig`` /
   ``setconfig`` carry only ``enabled`` / ``emule_enabled`` and work for any
   DS-enabled user.
@@ -150,8 +151,11 @@ async def set_download_config(
 ) -> str:
     """Set DS global configuration. Only supplied fields are updated.
 
-    Rates are KB/s; pass 0 to mean unlimited. Refused for non-managers:
-    DSM answers success to their ``setserverconfig`` but ignores it.
+    Rates are KB/s; pass 0 to mean unlimited. For non-managers, DSM answers
+    success to the rate fields but ignores them, so those are refused with
+    nothing sent. ``default_destination`` is the exception: DSM applies it per
+    user (DS 3.9 and 4.1, #124), and DS doesn't start a non-manager's tasks
+    until it is set.
     """
     fields: dict[str, str] = {}
     if bt_max_download is not None:
@@ -179,14 +183,19 @@ async def set_download_config(
             ],
         )
 
-    if await ds_is_manager(client) is False:
+    is_manager = await ds_is_manager(client)
+    nas_wide = [name for name in fields if name != "default_destination"]
+    if is_manager is False and nas_wide:
         error_response(
             ErrorCode.PERMISSION_DENIED,
-            "Set download config failed: requires a Download Station manager/admin "
-            "account. DSM accepts this change from non-managers but silently ignores it, "
-            "so nothing was sent.",
+            f"Set download config failed: {', '.join(nas_wide)} require a Download Station "
+            "manager/admin account. DSM accepts these changes from non-managers but "
+            "silently ignores them, so nothing was sent.",
             retryable=False,
-            suggestion="Use an account that is a Download Station manager (e.g. an admin).",
+            suggestion=(
+                "Use an account that is a Download Station manager (e.g. an admin). A "
+                "non-manager can set default_destination alone: DSM applies it per user."
+            ),
         )
 
     try:
@@ -200,7 +209,10 @@ async def set_download_config(
         synology_error_response("Set download config", e)
 
     pairs: list[tuple[str, str]] = list(fields.items())
-    return format_key_value(pairs, title=f"Set download config — {len(fields)} field(s) updated")
+    title = f"Set download config — {len(fields)} field(s) updated"
+    if is_manager is False:
+        title += " (your own default destination, not the NAS-wide one)"
+    return format_key_value(pairs, title=title)
 
 
 async def set_schedule(

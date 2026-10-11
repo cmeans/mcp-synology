@@ -107,7 +107,9 @@ MODULE_INFO = ModuleInfo(
                 "Create one or more download tasks. Pass a comma-separated list of "
                 "URIs (HTTP, FTP, magnet, etc.) via `uri` OR pass a local path to "
                 "a .torrent / .nzb file via `torrent_file_path`. `destination` is a "
-                "share-relative path (omit to use DSM's default destination). "
+                "share-relative path (omit to use your default destination; a "
+                "non-manager who has none must set it first with `set_download_config`, "
+                "because DS won't start their tasks until then). "
                 "`username` / `password` may be supplied for protected URLs (not for "
                 "torrent files). Returns the new task IDs when DSM provides them (not "
                 "for URLs with `username` / `password`); long magnet links and URI "
@@ -160,9 +162,11 @@ MODULE_INFO = ModuleInfo(
                 "Set Download Station global configuration. All parameters are "
                 "optional — only fields you pass get updated. Rates are KB/s; 0 "
                 "means unlimited. Pass `default_destination` to change DS's "
-                "default destination share. Requires a Download Station manager/admin "
-                "account: DSM silently ignores this change from other accounts, so the "
-                "tool refuses it."
+                "default destination share. The rate fields require a Download Station "
+                "manager/admin account: DSM silently ignores them from other accounts, so "
+                "the tool refuses them. Any user can set `default_destination`: DSM "
+                "applies it per user, and DS won't start a non-manager's tasks until it "
+                "is set."
             ),
             permission_tier=PermissionTier.WRITE,
         ),
