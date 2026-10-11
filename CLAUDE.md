@@ -124,6 +124,7 @@ uv run pytest --cov=mcp_synology           # Tests with coverage
   - Configure NAS connection + `test_paths` (existing_share, search_folder, search_keyword, writable_folder)
   - Run: `uv run pytest -m integration -v --log-cli-level=INFO`
   - Search tests can be flaky if the NAS search service is overloaded — allow recovery time between runs
+- **vdsm Download Station coverage**: the bake installs Download Station with `synopkg` over SSH (`tests/vdsm/setup_dsm.py:_install_download_station_via_ssh`), creates the test user with `synouser`, and grants that user the DS app privilege via `SYNO.Core.AppPriv.Rule.set`. It fails unless the test user's own session can `Task.list`. **Bump `tests/vdsm/config.py:BAKE_VERSION` on every bake change.** The bake records it in `meta.json`, and the vdsm conftest fails fast on an older local image (`.vdsm/golden/dsm-<version>.tar.gz`): delete the image and its `.meta.json`, then rebuild with `python scripts/vdsm_setup.py --version <version>`. CI's cache key hashes the bake files, so CI rebuilds on its own. Run `tests/vdsm/test_vdsm_downloadstation.py` on both `--dsm-version 7.2.2` and `--dsm-version 7.1`.
 
 ## Common Tasks
 

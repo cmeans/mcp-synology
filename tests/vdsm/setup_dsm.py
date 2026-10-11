@@ -17,14 +17,15 @@ JavaScript dispatch or Playwright's force=True to bypass overlay interception.
 
 from __future__ import annotations
 
+import json
 import logging
 import time
-from pathlib import Path
 from typing import Any
 
 import httpx
 
 from tests.vdsm.config import (
+    BAKE_VERSION,
     DEFAULT_ADMIN_USER,
     DEFAULT_TEST_PASSWORD,
     DEFAULT_TEST_USER,
@@ -34,21 +35,12 @@ from tests.vdsm.config import (
 
 logger = logging.getLogger(__name__)
 
-# Directory for debug screenshots on failure
-_SCREENSHOT_DIR = Path(__file__).parent.parent.parent / ".vdsm" / "screenshots"
+_DS_APP_ID = "SYNO.SDS.DownloadStation.Application"
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _screenshot(page: Any, name: str) -> None:
-    """Save a debug screenshot."""
-    _SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
-    path = _SCREENSHOT_DIR / f"{name}.png"
-    page.screenshot(path=str(path))
-    print(f"    Screenshot: {path.name}")
 
 
 def _click_text(page: Any, text: str, *, timeout: int = 3) -> bool:
@@ -175,186 +167,7 @@ def complete_wizard(base_url: str, admin_user: str, admin_password: str) -> None
 
 
 # ---------------------------------------------------------------------------
-# Post-wizard popups
-# ---------------------------------------------------------------------------
-
-
-def _dismiss_all_popups(page: Any) -> None:
-    """Dismiss all overlay popups: 2FA, MFA, tour, notifications.
-
-    DSM 7 shows persistent promotion dialogs after first login. Clicking
-    through the MFA confirmation flow is unreliable — the dialog can
-    reappear. Instead, we click the initial 2FA "No, thanks" then
-    force-remove all promotion windows and overlay masks from the DOM.
-    """
-    # Step 1: Dismiss initial popups via button clicks
-    for _round in range(3):
-        time.sleep(1)
-        if _click_text(page, "No, thanks", timeout=2):
-            print("    Dismissed: 2FA promotion")
-            continue
-        if _click_text(page, "No, Thanks", timeout=2):
-            print("    Dismissed: 2FA promotion (alt)")
-            continue
-        break
-
-    # Step 2: Force-remove ALL promotion/overlay windows from the DOM.
-    removed = page.evaluate("""() => {
-        let count = 0;
-        document.querySelectorAll(
-            '.syno-promotion-app, [syno-id="promotion-app-window"]'
-        ).forEach(el => { el.remove(); count++; });
-        document.querySelectorAll(
-            '.v-window-container-mask, .v-window-mask'
-        ).forEach(el => { el.remove(); count++; });
-        return count;
-    }""")
-    if removed:
-        print(f"    Force-removed {removed} promotion/overlay elements")
-    time.sleep(2)
-
-    # Step 3: Close notification toasts
-    page.evaluate("""() => {
-        document.querySelectorAll('.x-tool-close, .v-close-btn')
-            .forEach(btn => { if (btn.offsetParent !== null) btn.click(); });
-    }""")
-    time.sleep(1)
-
-
-# ---------------------------------------------------------------------------
-# Login
-# ---------------------------------------------------------------------------
-
-
-def _dsm_login(page: Any, base_url: str, username: str, password: str) -> None:
-    """Login to DSM desktop via the two-step login UI."""
-    page.goto(base_url, wait_until="networkidle", timeout=60000)
-    time.sleep(3)
-
-    # Step 1: Enter username and press Enter
-    user_field = page.wait_for_selector("input:visible", timeout=30000)
-    if user_field:
-        user_field.fill(username)
-    time.sleep(1)
-    page.keyboard.press("Enter")
-    time.sleep(3)
-
-    # Step 2: Enter password and press Enter
-    pass_field = page.wait_for_selector("input[type='password']:visible", timeout=10000)
-    if pass_field:
-        pass_field.fill(password)
-    time.sleep(1)
-    page.keyboard.press("Enter")
-
-    # Wait for desktop to load
-    time.sleep(10)
-    _dismiss_all_popups(page)
-    print("    Logged in to DSM desktop")
-    _screenshot(page, "02-desktop")
-
-
-# ---------------------------------------------------------------------------
-# Control Panel navigation
-# ---------------------------------------------------------------------------
-
-
-def _open_control_panel(page: Any) -> None:
-    """Open Control Panel from the DSM desktop."""
-    _dismiss_all_popups(page)
-
-    cp = page.query_selector("text='Control Panel'")
-    if cp and cp.is_visible():
-        cp.dblclick(force=True)
-        time.sleep(5)
-        _dismiss_all_popups(page)
-        print("    Opened Control Panel")
-        _screenshot(page, "03-control-panel")
-        return
-
-    print("    Warning: Could not find Control Panel shortcut")
-    _screenshot(page, "03-control-panel-missing")
-
-
-# ---------------------------------------------------------------------------
-# User creation via Playwright
-# ---------------------------------------------------------------------------
-
-
-def _create_user_via_ui(page: Any, username: str, password: str) -> None:
-    """Create a local user via Control Panel > User & Group wizard.
-
-    Uses Playwright's type() for form fields (not fill()) because DSM's
-    ExtJS framework requires keystroke events for internal validation.
-    The wizard buttons are <button class="x-btn-text"> elements.
-    """
-    print("    Creating user via web UI...")
-
-    _click_text(page, "User & Group", timeout=3)
-    _screenshot(page, "04-user-group")
-
-    # Click Create in the toolbar
-    page.locator("span:has-text('Create')").first.click(force=True)
-    time.sleep(3)
-    _screenshot(page, "05-user-wizard")
-
-    # Fill form fields using type() for proper ExtJS event dispatch
-    wizard = page.locator(".sds-wizard-window")
-
-    name_input = wizard.locator("input[aria-label='Name'], input[name='name']").first
-    name_input.click(force=True)
-    name_input.press("Control+a")
-    name_input.type(username, delay=50)
-    time.sleep(0.5)
-
-    pwd_field = wizard.locator("input[type='password']").first
-    pwd_field.click(force=True)
-    pwd_field.type(password, delay=30)
-    time.sleep(0.5)
-
-    confirm_field = wizard.locator("input[type='password']").nth(1)
-    confirm_field.click(force=True)
-    confirm_field.type(password, delay=30)
-    time.sleep(0.5)
-
-    _screenshot(page, "06-user-filled")
-
-    # Click through wizard steps
-    for step in range(10):
-        time.sleep(2)
-        _screenshot(page, f"06-user-step-{step}")
-
-        # Re-acquire wizard locator each step (class may change on final page)
-        wiz = page.locator(".sds-wizard-window, .x-window.active-win")
-
-        # Check for Apply/Done (final step buttons)
-        for final_text in ["Apply", "Done"]:
-            final_btn = wiz.locator(f"button:has-text('{final_text}')")
-            if final_btn.count() > 0 and final_btn.first.is_visible():
-                final_btn.first.click(force=True)
-                print(f"    User wizard: {final_text}")
-                time.sleep(5)
-                step = 99  # noqa: PLW2901
-                break
-        if step == 99:
-            break
-
-        # Click Next
-        nxt = wiz.locator("button:has-text('Next')")
-        if nxt.count() > 0 and nxt.first.is_visible():
-            nxt.first.click(force=True)
-            print(f"    User wizard: Next (step {step})")
-            continue
-
-        print(f"    User wizard: no buttons at step {step}")
-        break
-
-    time.sleep(3)
-    _screenshot(page, "07-user-created")
-    print(f"    User '{username}' creation completed")
-
-
-# ---------------------------------------------------------------------------
-# Shared folders and test data via SSH into DSM guest
+# Test user, shared folders and test data via SSH into DSM guest
 # ---------------------------------------------------------------------------
 
 _SYNOSHARE = "/usr/syno/sbin/synoshare"
@@ -424,6 +237,38 @@ def _ssh(
     callers in this module don't have to change.
     """
     return _ssh_exec(host, port, password, cmd, sudo=sudo)
+
+
+_SYNOUSER = "/usr/syno/sbin/synouser"
+
+
+def _create_user_via_ssh(
+    host: str,
+    ssh_port: int,
+    admin_password: str,
+    username: str,
+    password: str,
+) -> None:
+    """Create the local, non-admin test user with the synouser CLI.
+
+    Idempotent: an existing user is left in place (re-bakes on a reused
+    storage dir). Failure is fatal — every non-admin test depends on it.
+    """
+    rc, _ = _ssh(host, ssh_port, admin_password, f"{_SYNOUSER} --get {username}")
+    if rc == 0:
+        print(f"    Test user {username} already exists")
+        return
+    # synouser --add <user> <pwd> <full name> <expired 0|1> <mail> <app privilege>
+    rc, out = _ssh(
+        host,
+        ssh_port,
+        admin_password,
+        f"{_SYNOUSER} --add {username} '{password}' 'MCP test user' 0 '' 0",
+    )
+    if rc != 0:
+        msg = f"synouser --add {username} failed (rc={rc}): {out}"
+        raise RuntimeError(msg)
+    print(f"    Created test user: {username}")
 
 
 def _create_shared_folders_via_ssh(
@@ -577,6 +422,327 @@ def _verify_setup_via_api(base_url: str, username: str, password: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Download Station install via synopkg (SSH)
+# ---------------------------------------------------------------------------
+
+
+def _install_download_station_via_ssh(
+    host: str,
+    ssh_port: int,
+    admin_password: str,
+    base_url: str,
+    *,
+    install_timeout_sec: int = 300,
+) -> None:
+    """Install Download Station via synopkg over SSH.
+
+    Replaces the original Playwright/Package-Center UI flow, which proved
+    unautomatable against Synology's heavily customized DSM 7 Package
+    Center (Ext 3.4.1 + syno-ux checkbox = no synthetic-click path
+    dismisses the ToS modal). SSH bypasses the UI entirely and reuses
+    the `_ssh` helper proven for share creation.
+
+    Three-step start:
+      1. `synopkg install_from_server` to install (~3s)
+      2. `synopkg start` is a no-op on vDSM — systemd-unit lookup fails
+         with status_code 263 even though install succeeded
+      3. `/var/packages/DownloadStation/scripts/start-stop-status start`
+         runs the package's own SysV-style start script which actually
+         starts the DS services (synopkg/synosystemd is the misleading
+         layer; the package internals work fine)
+
+    Gate is the DSM API cache (SYNO.API.Info query for
+    SYNO.DownloadStation.Task), NOT `synopkg status` — the latter keeps
+    reporting stopped on vDSM regardless of actual service state.
+
+    Idempotent on cached golden images: returns early if the API is
+    already registered.
+    """
+
+    def ssh(cmd: str, *, sudo: bool = True) -> tuple[int, str]:
+        return _ssh(host, ssh_port, admin_password, cmd, sudo=sudo)
+
+    # All DS APIs the downstream bake steps + the vdsm tests touch.
+    # Different DS APIs register at different times after start —
+    # Task tends to appear first, Info (used by setconfig at [6/6]) lags.
+    # Gating on the full set avoids the "Task registered but Info isn't"
+    # race that bit CI on 43a2526.
+    required_apis = (
+        "SYNO.DownloadStation.Task",
+        "SYNO.DownloadStation.Info",
+        "SYNO.DownloadStation.Statistic",
+        "SYNO.DownloadStation.Schedule",
+    )
+
+    def missing_ds_apis() -> list[str]:
+        """Return the subset of required DS APIs NOT yet in the API cache."""
+        try:
+            resp = httpx.get(
+                f"{base_url}/webapi/query.cgi",
+                params={
+                    "api": "SYNO.API.Info",
+                    "version": "1",
+                    "method": "query",
+                    "query": ",".join(required_apis),
+                },
+                timeout=10,
+                verify=False,  # noqa: S501
+            )
+            data = resp.json().get("data", {})
+            return [api for api in required_apis if not data.get(api)]
+        except (httpx.HTTPError, ValueError):
+            return list(required_apis)
+
+    # Idempotency: a cached golden image rebuilt against an already-DS
+    # image will have all APIs registered already.
+    if not missing_ds_apis():
+        print("    Download Station already running (all DS APIs in cache)")
+        return
+    # Install (~3s on a warm Synology package server, 30-60s on cold cache).
+    print("    Running synopkg install_from_server DownloadStation...")
+    start = time.monotonic()
+    rc, out = ssh(
+        "/usr/syno/bin/synopkg install_from_server DownloadStation",
+        sudo=True,
+    )
+    elapsed = int(time.monotonic() - start)
+    if rc != 0:
+        msg = f"synopkg install_from_server failed after {elapsed}s (rc={rc}): {out.strip()}"
+        raise RuntimeError(msg)
+    print(f"    synopkg install completed in {elapsed}s")
+    # Verify install via the package list (cheap sanity check).
+    rc, out = ssh("/usr/syno/bin/synopkg list --name DownloadStation", sudo=False)
+    if "DownloadStation" not in out:
+        msg = f"DownloadStation not in package list after install: {out.strip()[:200]}"
+        raise RuntimeError(msg)
+    # Run synopkg start (typically a no-op on vDSM but harmless on real DSM)
+    # then the package's own start script which actually starts the DS
+    # services on vDSM. start-stop-status emits benign warnings about
+    # python2 (eMule plugin only) and a missing amule statistics file —
+    # both are unrelated to the core download/list/edit task surface.
+    ssh("/usr/syno/bin/synopkg start DownloadStation", sudo=True)
+    rc, out = ssh(
+        "/var/packages/DownloadStation/scripts/start-stop-status start 2>&1",
+        sudo=True,
+    )
+    print(f"    start-stop-status start: rc={rc}")
+    if "active" not in out.lower() and "started" not in out.lower():
+        # No "active" marker — likely failed to start. Surface the output
+        # so we can debug; don't silently swallow.
+        print(f"    start-stop-status output:\n{out.strip()[:600]}")
+    # Poll the API cache for ALL required DS APIs — gating on Task alone
+    # is insufficient because Info (used by setconfig at [6/6]) registers
+    # on a different timeline. synopkg status keeps reporting stopped on
+    # vDSM regardless of actual service state, so it's not a useful gate.
+    deadline = time.monotonic() + 120
+    missing: list[str] = list(required_apis)
+    while time.monotonic() < deadline:
+        missing = missing_ds_apis()
+        if not missing:
+            print(f"    All {len(required_apis)} DS APIs registered in DSM API cache.")
+            break
+        time.sleep(3)
+    else:
+        msg = (
+            f"DS APIs still missing from cache after 120s: {missing}. "
+            "Package services may not have started — check "
+            "/var/log/synopkg.log on the NAS."
+        )
+        raise RuntimeError(msg)
+    print("    Download Station installed, started, and API-verified.")
+
+
+# ---------------------------------------------------------------------------
+# Download Station configuration via API
+# ---------------------------------------------------------------------------
+
+
+def _configure_download_station_via_api(
+    base_url: str,
+    admin_user: str,
+    admin_password: str,
+    test_user: str,
+    test_password: str,
+    default_destination: str = "writable",
+) -> None:
+    """Configure Download Station after install: default destination + permissions.
+
+    Runs once at golden-image bake time. Uses DSM admin session to:
+      1. Set DS default destination to an existing share
+      2. Grant the test_user the Download Station application privilege
+         (``SYNO.Core.AppPriv.Rule.set``), then check that the existing
+         ``administrators`` rule survived
+
+    Then verifies the grant from the test user's own session (``Task.list``).
+    Any failure fails the bake: an image without the grant would only show up
+    later as a 105 on every non-admin DS test.
+    """
+    print("    Configuring Download Station (admin session)...")
+
+    with httpx.Client(base_url=base_url, timeout=30, verify=False) as client:  # noqa: S501
+        # Admin login
+        login_resp = client.get(
+            "/webapi/auth.cgi",
+            params={
+                "api": "SYNO.API.Auth",
+                "version": "3",
+                "method": "login",
+                "account": admin_user,
+                "passwd": admin_password,
+                "session": "DownloadStation",
+                "format": "cookie",
+            },
+        )
+        login_data = login_resp.json()
+        if not login_data.get("success"):
+            msg = f"Admin login failed: {login_data.get('error')}"
+            raise RuntimeError(msg)
+        sid = login_data["data"]["sid"]
+
+        try:
+            # 1. Set DS default destination
+            # DSM 7.2.2 DS Info API only dispatches via /webapi/DownloadStation/info.cgi,
+            # NOT the generic /webapi/entry.cgi (which returns error 102 for ALL
+            # DS API calls). The method name is `setserverconfig`, NOT the
+            # `setconfig` published in some older DSM API docs — `setconfig`
+            # returns error 103 (method does not exist). Discovered by probing
+            # local vdsm 7.2.2 with both endpoints x [setconfig/setserverconfig/
+            # set/config/update] x [v1/v2]; only setserverconfig at
+            # info.cgi succeeded.
+            print(f"    Setting DS default_destination = {default_destination}")
+            setconfig_resp = client.get(
+                "/webapi/DownloadStation/info.cgi",
+                params={
+                    "api": "SYNO.DownloadStation.Info",
+                    "version": "1",
+                    "method": "setserverconfig",
+                    "default_destination": default_destination,
+                    "_sid": sid,
+                },
+            )
+            setconfig_data = setconfig_resp.json()
+            if not setconfig_data.get("success"):
+                err = setconfig_data.get("error", {}).get("code", "?")
+                msg = f"DS setserverconfig failed: code {err}"
+                raise RuntimeError(msg)
+
+            # 2. Grant test_user the DS application privilege. Rule.set merges
+            # with the existing rules (verified: a set carrying only this user's
+            # rule leaves the administrators group rule in place), so a single
+            # set is enough. Rule.list wants a JSON-quoted app_id.
+            print(f"    Granting {test_user} the Download Station app privilege...")
+            rule = {
+                "entity_type": "user",
+                "entity_name": test_user,
+                "app_id": _DS_APP_ID,
+                "allow_ip": ["0.0.0.0"],
+                "deny_ip": [],
+            }
+            set_data = client.get(
+                "/webapi/entry.cgi",
+                params={
+                    "api": "SYNO.Core.AppPriv.Rule",
+                    "version": "1",
+                    "method": "set",
+                    "rules": json.dumps([rule]),
+                    "_sid": sid,
+                },
+            ).json()
+            if not set_data.get("success"):
+                code = set_data.get("error", {}).get("code", "?")
+                msg = f"AppPriv.Rule.set for {test_user} failed: code {code}"
+                raise RuntimeError(msg)
+
+            list_data = client.get(
+                "/webapi/entry.cgi",
+                params={
+                    "api": "SYNO.Core.AppPriv.Rule",
+                    "version": "1",
+                    "method": "list",
+                    "app_id": json.dumps(_DS_APP_ID),
+                    "_sid": sid,
+                },
+            ).json()
+            if not list_data.get("success"):
+                code = list_data.get("error", {}).get("code", "?")
+                msg = f"AppPriv.Rule.list failed: code {code}"
+                raise RuntimeError(msg)
+            entities = {
+                (r.get("entity_type"), r.get("entity_name"))
+                for r in list_data.get("data", {}).get("rules", [])
+            }
+            for expected in (("group", "administrators"), ("user", test_user)):
+                if expected not in entities:
+                    msg = (
+                        f"Download Station app privilege rules lack {expected[0]} "
+                        f"{expected[1]!r} after Rule.set: {sorted(entities)}"
+                    )
+                    raise RuntimeError(msg)
+        finally:
+            # Logout regardless of success
+            client.get(
+                "/webapi/auth.cgi",
+                params={
+                    "api": "SYNO.API.Auth",
+                    "version": "1",
+                    "method": "logout",
+                    "session": "DownloadStation",
+                    "_sid": sid,
+                },
+            )
+
+    _verify_ds_access_as_user(base_url, test_user, test_password)
+    print("    Download Station configured.")
+
+
+def _verify_ds_access_as_user(base_url: str, username: str, password: str) -> None:
+    """Fail the bake unless ``username``'s own session can list DS tasks."""
+    print(f"    Verifying {username} can use Download Station...")
+    with httpx.Client(base_url=base_url, timeout=30, verify=False) as client:  # noqa: S501
+        login_data = client.get(
+            "/webapi/auth.cgi",
+            params={
+                "api": "SYNO.API.Auth",
+                "version": "3",
+                "method": "login",
+                "account": username,
+                "passwd": password,
+                "session": "DownloadStation",
+                "format": "sid",
+            },
+        ).json()
+        if not login_data.get("success"):
+            msg = f"{username} login failed: {login_data.get('error')}"
+            raise RuntimeError(msg)
+        sid = login_data["data"]["sid"]
+        try:
+            list_data = client.get(
+                "/webapi/DownloadStation/task.cgi",
+                params={
+                    "api": "SYNO.DownloadStation.Task",
+                    "version": "1",
+                    "method": "list",
+                    "_sid": sid,
+                },
+            ).json()
+        finally:
+            client.get(
+                "/webapi/auth.cgi",
+                params={
+                    "api": "SYNO.API.Auth",
+                    "version": "1",
+                    "method": "logout",
+                    "session": "DownloadStation",
+                    "_sid": sid,
+                },
+            )
+        if not list_data.get("success"):
+            code = list_data.get("error", {}).get("code", "?")
+            msg = f"{username} cannot use Download Station after the grant: Task.list code {code}"
+            raise RuntimeError(msg)
+
+
+# ---------------------------------------------------------------------------
 # Main setup entry point
 # ---------------------------------------------------------------------------
 
@@ -591,53 +757,55 @@ def setup_dsm_for_testing(
 ) -> dict[str, Any]:
     """Run the full post-wizard setup.
 
-    Uses Playwright for user creation (requires web UI), then SSH into the
-    DSM guest VM (via QEMU) for shared folder creation with synoshare CLI,
-    test data, and permissions.
+    Enables SSH via the DSM API, then SSHes into the DSM guest VM (via QEMU)
+    to create the test user (synouser), install Download Station (synopkg),
+    and create shared folders, test data, and permissions (synoshare).
 
     Returns metadata dict for the golden image sidecar.
     """
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError as e:
-        msg = "Playwright is required: uv sync --extra vdsm"
-        raise ImportError(msg) from e
-
     print("\nConfiguring DSM for integration testing...")
 
-    # 1. Create test user via web UI (Control Panel wizard)
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page(viewport={"width": 1280, "height": 900})
+    # Enable SSH, create the test user, install Download Station, create
+    # shared folders, configure DS — all via the SSH/CLI/API surface. The
+    # test user used to be created through the Control Panel UI, but on
+    # DSM 7.1 the desktop's Control Panel icon never opens the window under
+    # Playwright (tooltip only, deterministic across retries), and the
+    # Package Center UI proved unautomatable over Ext 3.4.1's component model
+    # (see _install_download_station_via_ssh docstring).
+    if not ssh_port:
+        # Every setup step runs over SSH; baking without it would save an
+        # image stamped bake_version/grants that has none of them.
+        msg = "No SSH port for the DSM guest; cannot bake a golden image."
+        raise RuntimeError(msg)
 
-        try:
-            print("\n  [1/4] Logging in to DSM...")
-            _dsm_login(page, base_url, admin_user, admin_password)
+    print("\n  [1/5] Enabling SSH...")
+    _enable_ssh(base_url, admin_user, admin_password)
 
-            print("\n  [2/4] Creating test user...")
-            _open_control_panel(page)
-            _create_user_via_ui(page, DEFAULT_TEST_USER, DEFAULT_TEST_PASSWORD)
+    print("\n  [2/5] Creating test user via synouser (SSH)...")
+    _create_user_via_ssh(
+        ssh_host, ssh_port, admin_password, DEFAULT_TEST_USER, DEFAULT_TEST_PASSWORD
+    )
 
-        except Exception:
-            _screenshot(page, "error-state")
-            raise
-        finally:
-            browser.close()
+    print("\n  [3/5] Installing Download Station via synopkg (SSH)...")
+    _install_download_station_via_ssh(ssh_host, ssh_port, admin_password, base_url)
 
-    # 2. Enable SSH and create shared folders via synoshare in the DSM guest
-    if ssh_port:
-        print("\n  [3/4] Enabling SSH...")
-        _enable_ssh(base_url, admin_user, admin_password)
+    print("\n  [4/5] Creating shared folders and test data via SSH...")
+    _create_shared_folders_via_ssh(
+        ssh_host,
+        ssh_port,
+        admin_password,
+        DEFAULT_TEST_USER,
+    )
 
-        print("\n  [4/4] Creating shared folders and test data via SSH...")
-        _create_shared_folders_via_ssh(
-            ssh_host,
-            ssh_port,
-            admin_password,
-            DEFAULT_TEST_USER,
-        )
-    else:
-        print("\n  [3/4] No SSH port — skipping share creation")
+    print("\n  [5/5] Configuring Download Station...")
+    _configure_download_station_via_api(
+        base_url=base_url,
+        admin_user=admin_user,
+        admin_password=admin_password,
+        test_user=DEFAULT_TEST_USER,
+        test_password=DEFAULT_TEST_PASSWORD,
+        default_destination="writable",
+    )
 
     # Verify — check both admin and test user can see shares
     print("\n  Verifying setup...")
@@ -653,6 +821,9 @@ def setup_dsm_for_testing(
         "admin_password": admin_password,
         "test_user": DEFAULT_TEST_USER,
         "test_password": DEFAULT_TEST_PASSWORD,
+        "dsm_packages": ["DownloadStation"],
+        "bake_version": BAKE_VERSION,
+        "grants": [f"ds:{DEFAULT_TEST_USER}"],
         "test_paths": {
             "existing_share": "/testshare",
             "search_folder": "/testshare/Documents",

@@ -7,18 +7,32 @@ fixture that matches the shape of the real-NAS fixture in test_integration.py.
 from __future__ import annotations
 
 import logging
+import os
+import subprocess
+import time
+import warnings
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
+import httpx
 import pytest
 
 from mcp_synology.core.auth import AuthManager
 from mcp_synology.core.client import DsmClient
 from mcp_synology.core.config import AppConfig
-from tests.vdsm.config import DEFAULT_DSM_VERSION, DSM_VERSIONS
+from tests.vdsm.config import DEFAULT_DSM_VERSION, DSM_VERSIONS, ds_start_fallback_allowed
 from tests.vdsm.container import VirtualDsmContainer
-from tests.vdsm.golden_image import has_golden_image, load_golden_meta, restore_golden_image
+from tests.vdsm.golden_image import (
+    has_golden_image,
+    load_golden_meta,
+    restore_golden_image,
+    stale_golden_image_reason,
+)
+from tests.vdsm.ssh import ssh_exec
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +53,95 @@ def dsm_version(request: pytest.FixtureRequest) -> str:
     return request.config.getoption("--dsm-version")  # type: ignore[no-any-return]
 
 
+# DSM answers SYNO.API.Info before it has finished booting: on CI (#107) the
+# logins right after that got DSM error 499 for a couple of seconds and a
+# request was dropped mid-response. DSM's own boot state machine marks the
+# end of boot: syno-bootup-done.service runs ``synobootseq --set-boot-done``
+# and is ordered After=multi-user.target syno-login.target, so "boot done"
+# means the login service is up. The suite waits for that over SSH.
+_BOOT_DONE_TIMEOUT = 300
+_BOOT_POLL_INTERVAL = 2
+_SYNOBOOTSEQ = "/usr/syno/bin/synobootseq"
+
+
+def _ssh(
+    container: VirtualDsmContainer,
+    password: str,
+    cmd: str,
+    timeout: int = 30,
+    *,
+    sudo: bool = True,
+) -> tuple[int, str]:
+    """ssh_exec that reports a hung or unreachable sshd as a failed command.
+
+    Use ``sudo=False`` when the output is the answer: ``sudo -S`` prints its
+    prompt without a newline, so the first output line arrives as
+    ``Password:<output>`` and ssh_exec's prompt filter drops it.
+    """
+    try:
+        return ssh_exec(
+            container.host, container.ssh_port, password, cmd, sudo=sudo, timeout=timeout
+        )
+    except subprocess.TimeoutExpired:
+        return -1, f"ssh timed out after {timeout}s"
+
+
+def _login_problem(base_url: str, user: str, password: str) -> str | None:
+    """Log in and out once; None on success, else what went wrong."""
+    try:
+        resp = httpx.get(
+            f"{base_url}/webapi/auth.cgi",
+            params={
+                "api": "SYNO.API.Auth",
+                "version": "3",
+                "method": "login",
+                "account": user,
+                "passwd": password,
+                "session": "MCPReadiness",
+                "format": "sid",
+            },
+            timeout=15,
+        ).json()
+        if not resp.get("success"):
+            return f"DSM error {resp.get('error', {}).get('code')}"
+        httpx.get(
+            f"{base_url}/webapi/auth.cgi",
+            params={
+                "api": "SYNO.API.Auth",
+                "version": "1",
+                "method": "logout",
+                "session": "MCPReadiness",
+                "_sid": resp["data"]["sid"],
+            },
+            timeout=15,
+        )
+    except (httpx.HTTPError, ValueError) as e:
+        return f"{type(e).__name__}: {e}"
+    return None
+
+
+def _wait_for_boot_done(container: VirtualDsmContainer, user: str, password: str) -> None:
+    """Block until DSM reports boot done, then require one successful login."""
+    deadline = time.monotonic() + _BOOT_DONE_TIMEOUT
+    rc, out = _ssh(container, password, f"{_SYNOBOOTSEQ} --is-ready")
+    while rc != 0:
+        if time.monotonic() > deadline:
+            _, stage = _ssh(container, password, f"{_SYNOBOOTSEQ} --get", sudo=False)
+            pytest.fail(
+                f"DSM did not report boot done within {_BOOT_DONE_TIMEOUT}s "
+                f"(synobootseq --get: {stage.strip()!r}; last --is-ready rc={rc}: "
+                f"{out.strip()[-300:]!r})",
+                pytrace=False,
+            )
+        time.sleep(_BOOT_POLL_INTERVAL)
+        rc, out = _ssh(container, password, f"{_SYNOBOOTSEQ} --is-ready")
+    waited = _BOOT_DONE_TIMEOUT - (deadline - time.monotonic())
+    logger.info("DSM reports boot done %.0fs after its web API answered", waited)
+    problem = _login_problem(container.base_url, user, password)
+    if problem:
+        pytest.fail(f"DSM reports boot done, but login failed: {problem}", pytrace=False)
+
+
 @pytest.fixture(scope="session")
 def vdsm_container(dsm_version: str) -> Any:
     """Boot a virtual-dsm container from golden image for the test session.
@@ -54,15 +157,197 @@ def vdsm_container(dsm_version: str) -> Any:
             f"Run: python scripts/vdsm_setup.py --version {dsm_version}"
         )
 
+    # Fail rather than skip: a stale image would boot fine and then fail tests
+    # with errors (e.g. a 105 from a missing grant) that hide the real cause.
+    stale = stale_golden_image_reason(load_golden_meta(dsm_version), dsm_version)
+    if stale:
+        pytest.fail(stale)
+
     storage_dir = restore_golden_image(dsm_version)
     logger.info("Restored golden image for DSM %s to %s", dsm_version, storage_dir)
 
     container = VirtualDsmContainer(dsm_version, storage_dir)
     try:
         container.start()
+        meta = load_golden_meta(dsm_version)
+        _wait_for_boot_done(
+            container,
+            str(meta.get("admin_user", "admin")),
+            str(meta.get("admin_password", "")),
+        )
         yield container
     finally:
         container.stop()
+
+
+# Download Station readiness. DSM starts the package at boot as the systemd
+# unit pkgctl-DownloadStation.service (ordered after nginx and
+# syno-login.target), so DS is ready when that unit is active and an
+# authenticated Task.list succeeds. If not, the fixture collects diagnostics
+# and starts DS with the package's own script (what the bake uses). Locally a
+# DS that then answers is a logged workaround; on CI the session fails
+# (config.ds_start_fallback_allowed), since there it means a broken bake. The
+# case that prompted this (#107): DS's CGIs answered 502 because
+# pkg-synodl-apid.service was masked, the image having been saved from a
+# SIGKILLed VM. The bake now shuts DSM down cleanly (VirtualDsmContainer.shutdown).
+_DS_UNIT = "pkgctl-DownloadStation.service"
+_DS_PROBE_PATH = "/webapi/DownloadStation/task.cgi"
+_DS_READY_WAIT = 90
+_DS_KICK_WAIT = 120
+_DS_START = "/var/packages/DownloadStation/scripts/start-stop-status start"
+# (command, needs root). Root-less where possible: see _ssh on sudo -S.
+_DS_DIAGNOSTICS = (
+    ("systemctl is-enabled pkg-synodl-apid.service", False),  # "masked" on CI (#107)
+    ("systemctl is-active pkg-synodl-apid.service", False),
+    (f"systemctl status {_DS_UNIT} --no-pager", False),
+    (f"journalctl -u {_DS_UNIT} -n 40 --no-pager", True),
+    ("/usr/syno/bin/synopkg status DownloadStation", False),
+    ("tail -n 30 /var/log/synopkg.log", True),
+    ("ps -ef", False),
+)
+
+
+class _DsProbe:
+    """Authenticated ``Task.list`` probe; logs in once and reuses the session.
+
+    ``Task.list`` is the readiness signal because it needs the DS daemon:
+    with the daemon stopped, unauthenticated calls still return JSON (105)
+    and ``Info.getinfo`` still succeeds, while ``Task.list`` answers error 100.
+    On CI the CGIs answered 502 instead. Either counts as not ready.
+    """
+
+    def __init__(self, base_url: str, user: str, password: str) -> None:
+        self.base_url = base_url
+        self.user = user
+        self.password = password
+        self.sid: str | None = None
+
+    def _login(self) -> str | None:
+        resp = httpx.get(
+            f"{self.base_url}/webapi/auth.cgi",
+            params={
+                "api": "SYNO.API.Auth",
+                "version": "3",
+                "method": "login",
+                "account": self.user,
+                "passwd": self.password,
+                "session": "DownloadStation",
+                "format": "sid",
+            },
+            timeout=15,
+        ).json()
+        if not resp.get("success"):
+            return f"login failed: {resp.get('error')}"
+        self.sid = resp["data"]["sid"]
+        return None
+
+    def problem(self) -> str | None:
+        """None if DS lists tasks, else why not."""
+        try:
+            if self.sid is None and (failed := self._login()):
+                return failed
+            resp = httpx.get(
+                f"{self.base_url}{_DS_PROBE_PATH}",
+                params={
+                    "api": "SYNO.DownloadStation.Task",
+                    "version": "1",
+                    "method": "list",
+                    "_sid": self.sid or "",
+                },
+                timeout=15,
+            )
+            if resp.status_code >= 400:
+                return f"HTTP {resp.status_code}"
+            body = resp.json()
+        except httpx.HTTPError as e:
+            return f"{type(e).__name__}: {e}"
+        except ValueError:
+            return "non-JSON response"
+        if body.get("success"):
+            return None
+        code = body.get("error", {}).get("code")
+        if code in (106, 107, 119):
+            self.sid = None  # session lost; log in again on the next poll
+        return f"DSM error {code}"
+
+
+def _poll(check: Callable[[], str | None], timeout: float) -> str | None:
+    """Call ``check`` every 3 s until it returns None; return its last problem."""
+    deadline = time.monotonic() + timeout
+    problem = check()
+    while problem and time.monotonic() < deadline:
+        time.sleep(3)
+        problem = check()
+    return problem
+
+
+def _ds_diagnostics(container: VirtualDsmContainer, password: str) -> str:
+    out = []
+    for cmd, sudo in _DS_DIAGNOSTICS:
+        rc, text = _ssh(container, password, cmd, sudo=sudo)
+        if cmd == "ps -ef":
+            procs = [" ".join(ln.split()[7:])[:160] for ln in text.splitlines() if "ownload" in ln]
+            text = "\n".join(sorted(set(procs))[:15])
+        out.append(f"$ {cmd} (rc={rc})\n{text.strip()[-1500:]}")
+    return "\n".join(out)
+
+
+@pytest.fixture(scope="session")
+def ds_backend_ready(vdsm_container: VirtualDsmContainer, dsm_version: str) -> None:
+    """Wait once per session for Download Station; start it locally if it never comes up.
+
+    If DS is still down after the wait, the fixture collects diagnostics and
+    starts DS with its package script. Locally, a DS that then answers is a
+    logged workaround; on CI it fails the session (see
+    ``ds_start_fallback_allowed``), because there it means the bake is broken.
+
+    Session-scoped so an unavailable DS costs one wait, not one per test:
+    pytest caches a session fixture's failure and re-raises it at once for
+    every later DS test.
+    """
+    base_url = vdsm_container.base_url
+    meta = load_golden_meta(dsm_version)
+    password = str(meta.get("admin_password", ""))
+    probe = _DsProbe(base_url, str(meta.get("admin_user", "admin")), password)
+
+    def unit_then_api() -> str | None:
+        _, state = _ssh(vdsm_container, password, f"systemctl is-active {_DS_UNIT}", sudo=False)
+        if state.strip() != "active":
+            return f"{_DS_UNIT} is {state.strip() or 'unknown'}"
+        return probe.problem()
+
+    problem = _poll(unit_then_api, _DS_READY_WAIT)
+    if problem is None:
+        return
+
+    before = _ds_diagnostics(vdsm_container, password)
+    rc, out = _ssh(vdsm_container, password, _DS_START, timeout=180)
+    # Started outside systemd, the unit may stay inactive; the API is the test.
+    after_problem = _poll(probe.problem, _DS_KICK_WAIT)
+    report = (
+        f"Download Station did not answer at {base_url}{_DS_PROBE_PATH} within "
+        f"{_DS_READY_WAIT}s of DSM boot done (last: {problem}).\n"
+        f"Diagnostics before starting it:\n{before}\n"
+        f"$ {_DS_START} (rc={rc})\n{out.strip()[-1500:]}"
+    )
+    if after_problem is None and not ds_start_fallback_allowed(os.environ):
+        pytest.fail(
+            f"{report}\nDS answered only after the conftest started it. On CI that means "
+            "the bake is broken (DS does not start on boot of the golden image); the "
+            "start-it-ourselves fallback runs only locally.",
+            pytrace=False,
+        )
+    if after_problem is None:
+        warnings.warn(
+            f"{report}\nWORKAROUND: DS answered only after the conftest started it.",
+            stacklevel=1,
+        )
+        return
+    pytest.fail(
+        f"{report}\nStill not answering {_DS_KICK_WAIT}s later (last: {after_problem}).\n"
+        f"Diagnostics after:\n{_ds_diagnostics(vdsm_container, password)}",
+        pytrace=False,
+    )
 
 
 @pytest.fixture(scope="session")
