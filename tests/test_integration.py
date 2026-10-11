@@ -1318,7 +1318,7 @@ class TestResourceUsage:
         assert body["error"]["code"] == "permission_denied"
         msg = body["error"]["message"].lower()
         assert "admin" in msg or "permission" in msg
-        assert (reauth_spy.reauths, reauth_spy.logins) == (0, 0)
+        reauth_spy.assert_105_never_reauthed()
 
     async def test_resource_usage_admin(self, admin_client: Any) -> None:
         """Admin user should get real utilization data."""

@@ -7,7 +7,7 @@
 - **vdsm tests run as a non-admin user; Download Station fixes found that way** (#133) — closes #124.
   - **Tests now run as non-admin.** The vdsm `nas_client` is now the golden image's non-admin test user (`mcptest`); `admin_client` stays admin.
     - A new `nas_persona` fixture says who `nas_client` is, so persona-dependent tests assert outright. vdsm knows the persona; a real NAS reads it from a new `is_admin` key in `integration_config.yaml`, and tests skip when it's absent.
-    - A `reauth_spy` fixture (`tests/personas.py`) counts session re-auths and `login()` calls, so "error 105 never triggers re-auth" is actually tested.
+    - A `reauth_spy` fixture (`tests/personas.py`) records each session re-auth with the DSM code that triggered it, plus `login()` calls, so "error 105 never triggers re-auth" is actually tested. A re-auth on a session code is still allowed: on CI, DSM once answered a non-admin's admin-only `Utilization` call with 119 before the 105.
     - `test_resource_usage_non_admin` could not fail before, since it accepted success. It now asserts `permission_denied` and zero re-auths.
   - **The audit.** The full suite run as non-admin on DSM 7.2.2 and 7.1 left 8 failures. Four were legitimately admin-only: the DS config and schedule reads and writes. They moved to `admin_client`, each with a strict non-admin twin that pins the observed DSM behavior:
     - the user-scoped config view;

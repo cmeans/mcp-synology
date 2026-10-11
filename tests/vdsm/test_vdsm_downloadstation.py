@@ -487,7 +487,7 @@ class TestVdsmDownloadStationNonAdmin:
         assert "Enabled" in result
         assert "weekly plan not available" in result
         assert "Limited download rate" not in result
-        assert (reauth_spy.reauths, reauth_spy.logins) == (0, 0)
+        reauth_spy.assert_105_never_reauthed()
 
     async def test_set_schedule_plan_is_refused_with_nothing_applied(
         self, nas_client: Any, admin_client: Any, reauth_spy: ReauthSpy, _ds_available: bool
@@ -504,7 +504,7 @@ class TestVdsmDownloadStationNonAdmin:
         assert error["code"] == "permission_denied"
         assert "nothing was applied" in error["message"]
         assert await admin.request(scheduler, "get", version=1) == before
-        assert (reauth_spy.reauths, reauth_spy.logins) == (0, 0)
+        reauth_spy.assert_105_never_reauthed()
 
     async def test_schedule_enabled_flag_is_nas_wide(
         self, nas_client: Any, admin_client: Any, _ds_available: bool
@@ -539,7 +539,7 @@ class TestVdsmDownloadStationNonAdmin:
         assert error["code"] == "permission_denied"
         assert "bt_max_download" in error["message"]
         assert await admin.request(info, "getconfig", version=1) == before
-        assert (reauth_spy.reauths, reauth_spy.logins) == (0, 0)
+        reauth_spy.assert_105_never_reauthed()
 
     async def test_set_download_config_destination_is_per_user(
         self, nas_client: Any, admin_client: Any, _ds_available: bool
