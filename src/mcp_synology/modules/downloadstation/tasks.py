@@ -413,11 +413,12 @@ async def delete_download(
 ) -> str:
     """Remove one or more download tasks.
 
-    Behavior verified live on DSM 7.2.2 (#123): files from **finished**
-    tasks are always kept. For **unfinished** tasks the partial data is
-    discarded, unless ``force_complete=True``, which moves the incomplete
-    file into the task's destination (its size on disk does not reflect how
-    much was downloaded).
+    Behavior verified live on DSM 7.2.2 (DS 4.1) and DSM 7.1 (DS 3.9): files
+    from **finished** tasks are always kept, and an **unfinished** HTTP task's
+    partial data is discarded. ``force_complete`` is passed through to DSM,
+    whose API guide says it moves the incomplete file into the destination,
+    but both DS versions discarded it anyway, whether the task was
+    downloading or paused (#128). The result therefore never claims a move.
     """
     if not task_ids:
         error_response(
@@ -451,7 +452,7 @@ async def delete_download(
         rows.append([r.get("id", "—"), status])
 
     unfinished = (
-        "incomplete files moved into the destination"
+        "force_complete requested, but DSM may still discard partial data; check the destination"
         if force_complete
         else "partial data of unfinished tasks discarded"
     )

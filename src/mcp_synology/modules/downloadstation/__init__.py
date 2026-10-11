@@ -120,8 +120,9 @@ MODULE_INFO = ModuleInfo(
             description=(
                 "Remove one or more download tasks. `task_ids` is a list. Files from "
                 "finished tasks are always kept. For unfinished tasks the partial data "
-                "is discarded (irreversible), unless `force_complete` is true, which "
-                "moves the incomplete file into the task's destination instead."
+                "is discarded (irreversible). `force_complete` asks DSM to keep the "
+                "incomplete file in the destination instead, but DSM has been seen to "
+                "discard it anyway, so don't rely on it to preserve partial data."
             ),
             permission_tier=PermissionTier.WRITE,
         ),

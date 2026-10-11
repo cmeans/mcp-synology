@@ -434,8 +434,9 @@ class TestCreateDownloadFile:
 
 
 class TestDeleteDownload:
-    """Delete semantics verified live (#123 bug 7): finished files are kept;
-    unfinished tasks' partial data is discarded unless force_complete moves it.
+    """Delete semantics verified live (#123 bug 7, #128): finished files are
+    kept; an unfinished HTTP task's partial data is discarded, and DS 3.9/4.1
+    do so even with force_complete (documented as moving it).
     """
 
     @respx.mock
@@ -465,7 +466,17 @@ class TestDeleteDownload:
         )
         result = await delete_download(mock_client, task_ids=["dbid_1"], force_complete=True)
         assert dict(route.calls.last.request.url.params)["force_complete"] == "true"
-        assert "moved into the destination" in result
+        # #128: DSM discarded partial HTTP data despite force_complete, so the
+        # result must not claim a move; it says to check the destination.
+        assert "moved into" not in result
+        assert "check the destination" in result
+
+    def test_tool_description_does_not_promise_a_move(self) -> None:
+        from mcp_synology.modules.downloadstation import MODULE_INFO
+
+        tool = next(t for t in MODULE_INFO.tools if t.name == "delete_download")
+        assert "moves" not in tool.description
+        assert "force_complete" in tool.description
 
     @respx.mock
     async def test_per_task_error_rendered(self, mock_client: DsmClient) -> None:
