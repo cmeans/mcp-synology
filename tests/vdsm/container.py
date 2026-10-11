@@ -216,8 +216,37 @@ class VirtualDsmContainer:
         port = self._container.get_exposed_port(5000)
         return f"http://{self.host}:{port}"
 
+    def shutdown(self, timeout: int = 120) -> float:
+        """Shut DSM down cleanly and remove the container; raise if it was killed.
+
+        ``stop()`` force-removes the container, which SIGKILLs QEMU with DSM
+        mid-flight: fine for a test container that is discarded, but a
+        golden image saved that way is only crash-consistent (unflushed
+        package state included). virtual-dsm turns SIGTERM into a guest-API
+        shutdown request and waits for QEMU to exit, and its docs give the
+        container 120 s for it (``--stop-timeout 120``).
+        """
+        if self._container is None:
+            return 0.0
+        wrapped = self._container.get_wrapped_container()
+        logger.info("Shutting down DSM %s (SIGTERM, %ds grace)", self.version, timeout)
+        start = time.monotonic()
+        wrapped.stop(timeout=timeout)
+        elapsed = time.monotonic() - start
+        wrapped.reload()
+        exit_code = wrapped.attrs.get("State", {}).get("ExitCode")
+        self.stop()
+        if exit_code == 137 or elapsed >= timeout:
+            msg = (
+                f"DSM {self.version} did not shut down within {timeout}s "
+                f"(exit code {exit_code}); the storage is not safe to save"
+            )
+            raise RuntimeError(msg)
+        logger.info("DSM %s shut down cleanly in %.0fs", self.version, elapsed)
+        return elapsed
+
     def stop(self) -> None:
-        """Stop the container if it is running."""
+        """Stop the container if it is running (force-remove; DSM is not shut down)."""
         if self._container is not None:
             logger.info("Stopping virtual-dsm container (DSM %s)", self.version)
             try:

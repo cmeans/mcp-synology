@@ -65,7 +65,9 @@ DEFAULT_DSM_VERSION: str = "7.2.2"
 # cache key hashes the bake files, but a local .vdsm/golden/ image is reused
 # indefinitely and would otherwise silently lack newer setup (e.g. the
 # test user's Download Station grant, added in v2).
-BAKE_VERSION: int = 2
+#   v3: the bake shuts DSM down cleanly before saving; v2 images were saved
+#       from a SIGKILLed VM (on CI, DS's pkg-synodl-apid unit came up masked).
+BAKE_VERSION: int = 3
 
 # Project root / .vdsm directory for all virtual-dsm artifacts
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent

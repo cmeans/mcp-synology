@@ -145,9 +145,11 @@ def setup(dsm_version: str, admin_user: str, admin_password: str, assume_yes: bo
             ssh_port=container.ssh_port,
         )
 
-        # 9. Stop container gracefully
-        click.echo("\nStopping container...")
-        container.stop()
+        # 9. Shut DSM down cleanly. A force-remove would save a
+        # crash-consistent image (see VirtualDsmContainer.shutdown).
+        click.echo("\nShutting down DSM...")
+        elapsed = container.shutdown()
+        click.echo(f"  DSM shut down cleanly in {elapsed:.0f}s")
         container = None  # type: ignore[assignment]
 
         # 10. Save golden image

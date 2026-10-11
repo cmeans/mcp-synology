@@ -191,12 +191,15 @@ _DS_PROBE_PATH = "/webapi/DownloadStation/task.cgi"
 _DS_READY_WAIT = 90
 _DS_KICK_WAIT = 120
 _DS_START = "/var/packages/DownloadStation/scripts/start-stop-status start"
+# (command, needs root). Root-less where possible: see _ssh on sudo -S.
 _DS_DIAGNOSTICS = (
-    f"systemctl status {_DS_UNIT} --no-pager",
-    f"journalctl -u {_DS_UNIT} -n 40 --no-pager",
-    "/usr/syno/bin/synopkg status DownloadStation",
-    "tail -n 30 /var/log/synopkg.log",
-    "ps -ef",
+    ("systemctl is-enabled pkg-synodl-apid.service", False),  # "masked" on CI (#107)
+    ("systemctl is-active pkg-synodl-apid.service", False),
+    (f"systemctl status {_DS_UNIT} --no-pager", False),
+    (f"journalctl -u {_DS_UNIT} -n 40 --no-pager", True),
+    ("/usr/syno/bin/synopkg status DownloadStation", False),
+    ("tail -n 30 /var/log/synopkg.log", True),
+    ("ps -ef", False),
 )
 
 
@@ -276,8 +279,8 @@ def _poll(check: Callable[[], str | None], timeout: float) -> str | None:
 
 def _ds_diagnostics(container: VirtualDsmContainer, password: str) -> str:
     out = []
-    for cmd in _DS_DIAGNOSTICS:
-        rc, text = _ssh(container, password, cmd)
+    for cmd, sudo in _DS_DIAGNOSTICS:
+        rc, text = _ssh(container, password, cmd, sudo=sudo)
         if cmd == "ps -ef":
             procs = [" ".join(ln.split()[7:])[:160] for ln in text.splitlines() if "ownload" in ln]
             text = "\n".join(sorted(set(procs))[:15])
