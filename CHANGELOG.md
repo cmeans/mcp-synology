@@ -4,7 +4,7 @@
 
 ### Added
 
-- **vdsm tests run as a non-admin user; Download Station fixes found that way** (#PR) — closes #124.
+- **vdsm tests run as a non-admin user; Download Station fixes found that way** (#133) — closes #124.
   - **Tests now run as non-admin.** The vdsm `nas_client` is now the golden image's non-admin test user (`mcptest`); `admin_client` stays admin.
     - A new `nas_persona` fixture says who `nas_client` is, so persona-dependent tests assert outright. vdsm knows the persona; a real NAS reads it from a new `is_admin` key in `integration_config.yaml`, and tests skip when it's absent.
     - A `reauth_spy` fixture (`tests/personas.py`) counts session re-auths and `login()` calls, so "error 105 never triggers re-auth" is actually tested.
