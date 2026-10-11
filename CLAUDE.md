@@ -6,14 +6,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 mcp-synology is an MCP server for Synology NAS devices. It exposes Synology DSM API functionality as MCP tools that Claude can use. Modular, secure (2FA-ready), permission-tiered. Python 3.11+, async throughout, Apache 2.0 licensed.
 
-**Current status:** v0.4.x — File Station (14 tools) + System monitoring (2 tools), CLI, integration tests.
+**Current status:** v0.5.x — File Station (14 tools) + System monitoring (2 tools) + Download Station (12 tools, ships in v0.6.0), CLI, integration and vdsm tests.
 
 ## Architecture
 
 Layered design: core → modules → server/CLI.
 
 - **Core** (`src/mcp_synology/core/`): DSM API client (async httpx), auth manager (session lifecycle, 2FA, keyring), YAML+Pydantic config loader, shared response formatters, typed exception hierarchy
-- **Modules** (`src/mcp_synology/modules/`): Feature-specific tool handlers. Each module declares `MODULE_INFO` with API requirements and tool metadata. File Station (14 tools: 7 READ + 7 WRITE), System (2 tools: get_system_info, get_resource_usage)
+- **Modules** (`src/mcp_synology/modules/`): Feature-specific tool handlers. Each module declares `MODULE_INFO` with API requirements and tool metadata. File Station (14 tools: 7 READ + 7 WRITE), System (2 tools: get_system_info, get_resource_usage), Download Station (12 tools: 5 READ + 7 WRITE; opt-in)
 - **Server** (`src/mcp_synology/server.py`): FastMCP initialization, module loading, startup
 - **CLI** (`src/mcp_synology/cli/`): click-based package with `serve`, `setup`, `check` subcommands
 

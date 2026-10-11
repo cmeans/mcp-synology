@@ -4,6 +4,8 @@
 
 ### Added
 
+- **README documents the Download Station module** (#PR) — closes #127. A "Download Station" entry under Supported Modules lists the 12 tools by tier and gives step-by-step activation: install the package, add `downloadstation` inside the existing `modules:` section of the config file (a second `modules:` key would silently drop File Station), run `check`, and restart the MCP client. `setup` writes only File Station. It says the tools register even without the package installed and then fail with `api_not_found`. It also covers what a non-admin account needs and can do, as verified in #133: the app privilege; a default destination before DS starts any of their tasks (and the warning or refusal `create_download` gives without one); own tasks only; a user-scoped config view; NAS-wide speed limits refused; the weekly plan admin-only, with the on/off switch NAS-wide. The known limits are listed, along with the tested DSM and DS versions. `examples/config-power-user.yaml` enables the module, and the CLAUDE.md status lines count it.
+
 - **vdsm tests run as a non-admin user; Download Station fixes found that way** (#133) — closes #124.
   - **Tests now run as non-admin.** The vdsm `nas_client` is now the golden image's non-admin test user (`mcptest`); `admin_client` stays admin.
     - A new `nas_persona` fixture says who `nas_client` is, so persona-dependent tests assert outright. vdsm knows the persona; a real NAS reads it from a new `is_admin` key in `integration_config.yaml`, and tests skip when it's absent.

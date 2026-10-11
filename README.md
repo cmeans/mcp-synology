@@ -65,6 +65,50 @@ Monitor NAS health and resource utilization. 2 read-only tools:
 - **get_system_info** — model, firmware version, RAM, temperature, uptime (works for all users)
 - **get_resource_usage** — live CPU load, memory usage, disk I/O, network throughput (requires admin account)
 
+### Download Station
+
+Manage the Download Station queue and settings. 12 tools across two permission tiers:
+
+- **READ** — list_downloads, get_download_info, get_download_stats, get_download_config, get_schedule
+- **WRITE** — create_download, delete_download, pause_download, resume_download, edit_download, set_download_config, set_schedule
+
+Download Station is opt-in: `mcp-synology setup` only configures File Station. To turn it on:
+
+1. **Install Download Station on the NAS** from Package Center, if it isn't installed already. Without the package the tools still appear, but every call fails with [`api_not_found`](docs/error-codes.md#api_not_found).
+2. **Edit your config file.** That's `~/.config/mcp-synology/config.yaml`, or the per-NAS file such as `home-nas.yaml` if you use [Multi-NAS](#multi-nas). Add `downloadstation` **inside the existing `modules:` section**; don't add a second `modules:` key. Use `permission: read` for the read tools only, or `permission: write` for all 12:
+
+   ```yaml
+   modules:
+     filestation:          # already there
+       enabled: true
+       permission: write
+     downloadstation:      # add this
+       enabled: true
+       permission: write   # or read
+   ```
+
+3. **Check the config:** `mcp-synology check --config <your config file>` reports YAML or validation mistakes and confirms the login still works.
+4. **Restart your MCP client** (for example, Claude Desktop). The server reads its config only at startup. The Download Station tools (`list_downloads` and the rest) then appear alongside the File Station ones. Ask the assistant to "list my downloads" to try it.
+
+If the account isn't an admin, read **Accounts** below first: a non-admin needs a one-time setup step before Download Station will run its tasks.
+
+**Accounts.** An admin (Download Station manager) can use every tool. A non-admin account needs the Download Station application privilege (**Control Panel → User & Group → [account] → Edit → Applications**). It also has these limits, all enforced or reported by the tools:
+
+- **First-time setup.** Download Station doesn't start a non-admin's tasks until that user has a default destination; until then they wait forever. A user who has never opened Download Station has none. Set it once with `set_download_config(default_destination="<share>")`, which DSM applies to that user only. Until then, `create_download` with an explicit `destination` still creates the task but warns that it won't start. Without a `destination`, it refuses and says what to set. That refusal applies to any account, admin included, whenever there's no default destination to fall back on.
+- **Own tasks only.** `list_downloads` and the other task tools see only the user's own tasks.
+- **Settings.** `get_download_config` shows the user's own view, not the NAS-wide settings. `set_download_config` can change only the user's own `default_destination`; the speed limits are NAS-wide and are refused, because DSM accepts and then silently ignores them from a non-admin.
+- **Schedule.** The weekly plan and limited-speed rates in `get_schedule` / `set_schedule` need an admin. A non-admin can still turn the schedule on or off, and that switch is NAS-wide.
+
+**Known limits:**
+
+- `create_download` returns no task IDs for URLs that use `username` / `password`.
+- `edit_download` changes only the destination.
+- There is no way to pick individual files inside a torrent.
+- BT search and RSS feeds are not supported yet.
+- `delete_download(force_complete=true)` doesn't reliably keep partial data: DSM discarded unfinished HTTP downloads anyway. DSM also refuses it for finished tasks, and the tool reports those as not removed.
+
+Tested against DSM 7.1 (Download Station 3.9-4627) and DSM 7.2.2 (Download Station 4.1-5012).
+
 ## Features
 
 - **Interactive setup** — guided configuration that creates your config, stores credentials, handles 2FA, and emits a Claude Desktop snippet

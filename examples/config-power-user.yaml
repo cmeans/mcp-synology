@@ -36,6 +36,9 @@ modules:
       default_upload_dir: /home/uploads
   system:
     enabled: true  # CPU, memory, temperature, uptime (resource usage requires admin)
+  downloadstation:
+    enabled: true  # needs the Download Station package on the NAS
+    permission: write
 
 logging:
   level: debug
