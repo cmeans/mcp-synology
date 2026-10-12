@@ -577,7 +577,8 @@ class TestWriteOperations:
     async def test_01b_json_like_names(self, nas_client: Any) -> None:
         """#121: DSM parses values as JSON first, so names like 2024 or true got
         error 400 and a list pattern of 2024 crashed the request (HTTP 502)."""
-        client, _, _, paths = _unpack(nas_client)
+        client, _, config, paths = _unpack(nas_client)
+        _skip_unless_write(config)
         base = f"{paths['writable_folder']}/{self._TEST_DIR}-json"
         try:
             created = await create_folder(client, paths=[f"{base}/2024", f"{base}/true"])
