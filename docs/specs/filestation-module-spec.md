@@ -206,8 +206,7 @@ Get detailed metadata for one or more specific files or folders.
 **DSM API:** `SYNO.FileStation.List` / `getinfo`
 
 **Tool description (LLM-facing):**
-> Get detailed metadata for specific files or folders: size, owner, timestamps, permissions, and real
-> path.
+> Get detailed metadata for specific files or folders: size, owner, timestamps, permissions, and real path. `additional` optionally picks the DSM fields to fetch: real_path, size, owner, time, perm, type (the file's extension type) and mount_point_type (shown only for a mount point). Default: real_path, size, owner, time, perm. Unknown values are rejected.
 
 **Parameters:**
 
@@ -236,7 +235,8 @@ File Info: /video/Movies/Dune Part Two (2024)/Dune.Part.Two.2024.mkv
 **Response shape (multiple files):** Uses `format_table` with one row per file.
 
 **Design notes:**
-- Sizes are human-readable with 1 decimal place.
+- Sizes are human-readable with 1 decimal place. A file's Size is shown only when DSM returned `size`: with an `additional` that leaves it out, there's no Size line (or `—` in the multi-path table), never a false "0 B" (#146). `list_files` and `search_files` do the same.
+- `type` renders as "File type" (DSM's extension type, e.g. `ISO`; empty for a folder) and `mount_point_type` as "Mount point", each only when non-empty (#146).
 - Timestamps are UTC and labeled as such (`2025-02-18 13:42:05 UTC`), consistent with `search_files` treating naive input dates as UTC (#137).
 - For multiple paths, report individual failures inline alongside successes.
 

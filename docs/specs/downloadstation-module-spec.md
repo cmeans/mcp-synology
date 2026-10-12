@@ -65,7 +65,7 @@ A failed task's status carries DSM's reason from `status_extra.error_detail`: `e
 
 ### Destinations
 
-Download Station takes share-relative paths (`video/Torrents`), while File Station shows `/share/...`. DSM rejects the slash form: 403 "Destination doesn't exist" on create, and 100 "Unknown error" on edit (DSM 7.2.2). So `create_download`, `edit_download` and `set_download_config(default_destination=...)` drop leading and trailing slashes before sending. A destination with no share left (`/`, empty) gets `invalid_parameter` (#147). Destinations are displayed as DSM stores them, share-relative.
+Download Station takes share-relative paths (`video/Torrents`), while File Station shows `/share/...`. DSM rejects the slash form: 403 "Destination doesn't exist" on create, and 100 "Unknown error" on edit (DSM 7.2.2). So `create_download`, `edit_download` and `set_download_config(default_destination=...)` drop leading and trailing slashes before sending. A destination with no share left (`/`, empty) gets `invalid_parameter`, naming the caller's argument (`destination`, or `default_destination` for `set_download_config`) (#147). A folder that doesn't exist still fails at DSM: create's 403 and edit's whole-call 100 both suggest a share-relative path (`video/Torrents`, not the `/volume1/video/Torrents` real path that `get_file_info` prints) and checking the folder with `list_files`. Edit keeps 100's `dsm_error` code, since 100 isn't specific, but says the destination is the likely cause (#147). Destinations are displayed as DSM stores them, share-relative.
 
 ### Managers and non-managers
 
@@ -86,10 +86,10 @@ Probed on both versions (#136): a non-manager targeting another user's task gets
 |---|---|
 | `resume`, `edit`, `delete` | per-task error **544** |
 | `pause` in a mixed list | per-task **404** |
-| `pause` when **no** ID matches | whole-call **101** |
+| `pause` when **no** ID can be paused | whole-call **101**, also for the caller's **own** finished or already-paused task |
 | `getinfo` | whole-call **404** (even if one of the IDs is the caller's) |
 
-The tools render per-task 544 and 404 as `not found (no such task, or not yours)`, add a hint pointing to `list_downloads`, and turn pause's all-unknown 101 into a `not_found` error. A 101 from any other method keeps its normal meaning.
+The tools render per-task 544 and 404 as `not found (no such task, or not yours)`, add a hint pointing to `list_downloads`, and turn pause's whole-call 101 into an `invalid_parameter` error that names all three causes it covers: no such task, another user's task, or a task that can't be paused (finished, or already paused). Its suggestion is to check each task's status with `list_downloads` (#146). A 101 from any other method keeps its normal meaning.
 
 ### Secrets in URLs
 
@@ -430,7 +430,7 @@ Remove tasks.
 
 **Response shape:** a per-task table under `Pause download — N task(s)`, plus the not-found hint when needed.
 
-**Design notes:** pause is the one method that fails the **whole call** with 101 when no ID matches. That becomes a `not_found` error naming the IDs. A finished task gets per-task 405.
+**Design notes:** pause is the one method that fails the **whole call** with 101 when no ID can be paused. That covers a missing ID, another user's task, and the caller's own finished or already-paused task (probed on DSM 7.1 and 7.2.2), so it becomes `invalid_parameter` naming the IDs and all three causes, not `not_found`.
 
 ---
 
@@ -475,7 +475,7 @@ Remove tasks.
 
 **Response shape:** a per-task table under `Edit download — N task(s), destination=<dest>`.
 
-**Design notes:** `edit` doesn't exist at v1. A NAS whose `Task` API stops at v1 gets a clear `api_not_found` ("requires a newer Download Station"), not a raw "method does not exist". `destination` is optional in the signature so that omitting it gets a clear validation error.
+**Design notes:** `edit` doesn't exist at v1. A NAS whose `Task` API stops at v1 gets a clear `api_not_found` ("requires a newer Download Station"), not a raw "method does not exist". `destination` is optional in the signature so that omitting it gets a clear validation error. A whole-call DSM 100 is edit's answer to a folder that doesn't exist (see Destinations).
 
 ---
 
