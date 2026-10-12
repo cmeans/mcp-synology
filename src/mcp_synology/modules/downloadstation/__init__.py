@@ -125,7 +125,9 @@ MODULE_INFO = ModuleInfo(
         ToolInfo(
             name="delete_download",
             description=(
-                "Remove one or more download tasks. `task_ids` is a list. Files from "
+                "Remove one or more download tasks. `task_ids` is a list. A deleted "
+                "task can't be restored (its source URL is gone with it), so name the "
+                "tasks and confirm with the user before deleting. Files from "
                 "finished tasks are always kept. For unfinished tasks the partial data "
                 "is discarded (irreversible). `force_complete` asks DSM to keep the "
                 "incomplete file in the destination instead, but DSM has been seen to "
