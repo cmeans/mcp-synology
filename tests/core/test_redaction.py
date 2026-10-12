@@ -78,6 +78,49 @@ class TestRedactUrl:
     def test_non_urls_are_unchanged(self, text: str) -> None:
         assert redact_url(text) == text
 
+    def test_unencoded_tracker_query_in_magnet_is_masked(self) -> None:
+        # #144 QA: split on "&", "passkey=" became a top-level magnet key and leaked.
+        magnet = (
+            f"magnet:?xt=urn:btih:{'0' * 40}&dn=Show"
+            f"&tr=https://t.example/announce.php?uid=12&passkey={PASSKEY}"
+        )
+        result = redact_url(magnet)
+        assert PASSKEY not in result
+        assert "passkey=***" in result
+        assert f"xt=urn:btih:{'0' * 40}" in result and "dn=Show" in result
+
+    def test_magnet_keeps_only_known_safe_keys(self) -> None:
+        magnet = f"magnet:?xt=urn:btih:{'0' * 40}&xl=1024&kt=show&x.pe=198.51.100.7:6881&so=0"
+        assert redact_url(magnet) == (
+            f"magnet:?xt=urn:btih:{'0' * 40}&xl=1024&kt=show&x.pe=***&so=***"
+        )
+
+    def test_token_inside_a_path_segment_is_masked(self) -> None:
+        url = f"https://t.example/rss/{PASSKEY}.torrent"
+        assert redact_url(url) == "https://t.example/rss/***.torrent"
+
+    def test_path_parameter_values_are_masked(self) -> None:
+        url = f"https://h.example/dl/file.iso;jsessionid={PASSKEY}"
+        assert redact_url(url) == "https://h.example/dl/file.iso;jsessionid=***"
+
+    def test_separated_token_is_masked(self) -> None:
+        # base64url tokens carry - and _, but keep long alphanumeric runs.
+        assert redact_url("https://h.example/dl/Ab3dE5fG7hI9jK1lM_x") == "https://h.example/dl/***"
+
+    def test_uuid_segment_is_masked(self) -> None:
+        url = "https://h.example/dl/550e8400-e29b-41d4-a716-446655440000/file.iso"
+        assert redact_url(url) == "https://h.example/dl/***/file.iso"
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://h.example/ubuntu-24-04-desktop-amd64",
+            "https://h.example/v/Cleddau_Series_1_2026_1080p_WEB.mkv",
+        ],
+    )
+    def test_names_made_of_short_words_are_kept(self, url: str) -> None:
+        assert redact_url(url) == url
+
 
 class TestRedactUrls:
     def test_comma_separated_v1_uri_list(self) -> None:
@@ -103,6 +146,9 @@ class TestRedactTitle:
 
     def test_question_mark_query_is_masked(self) -> None:
         assert redact_title(f"file.iso?token={PASSKEY}&x=1") == "file.iso?token=***&x=***"
+
+    def test_path_parameter_in_title_is_masked(self) -> None:
+        assert redact_title(f"file.bin;jsessionid={PASSKEY}") == "file.bin;jsessionid=***"
 
     def test_full_url_title_is_redacted(self) -> None:
         title = f"https://t.example/dl/{PASSKEY}/file.iso"
