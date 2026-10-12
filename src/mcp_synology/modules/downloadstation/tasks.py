@@ -17,6 +17,7 @@ from mcp_synology.core.formatting import (
     format_timestamp,
     synology_error_response,
 )
+from mcp_synology.core.redaction import redact_title, redact_url, redact_urls
 from mcp_synology.modules.downloadstation.helpers import (
     STATUS_GROUPS,
     ds_is_manager,
@@ -175,7 +176,7 @@ async def list_downloads(
         rows.append(
             [
                 t.get("id", "—"),
-                t.get("title", "—"),
+                _title(t),
                 t.get("type", "—"),
                 format_task_status(t.get("status")),
                 format_size(size_total),
@@ -198,6 +199,12 @@ async def list_downloads(
 def _detail(task: dict[str, Any]) -> dict[str, Any]:
     detail: dict[str, Any] = (task.get("additional") or {}).get("detail") or {}
     return detail
+
+
+def _title(task: dict[str, Any]) -> str:
+    # Only a BT title is the torrent's name; every other type (http, ftp, nzb, emule)
+    # is titled with the URL's last segment, which can be a tracker passkey (#144).
+    return redact_title(str(task.get("title", "—")), url_derived=task.get("type") != "bt")
 
 
 async def _list_tasks(
@@ -290,7 +297,7 @@ async def get_download_info(
     # Header block
     header_pairs = [
         ("ID", task.get("id", "—")),
-        ("Title", task.get("title", "—")),
+        ("Title", _title(task)),
         ("Type", task.get("type", "—")),
         ("Status", format_task_status(task.get("status"))),
         ("Size", format_size(int(task.get("size", 0)))),
@@ -304,7 +311,7 @@ async def get_download_info(
     if detail:
         detail_pairs = [
             ("Destination", detail.get("destination", "—")),
-            ("URI", detail.get("uri", "—")),
+            ("URI", redact_urls(str(detail.get("uri", "—")))),
             ("Priority", detail.get("priority", "—")),
             ("Created", _format_epoch(detail.get("create_time"))),
             ("Started", _format_epoch(detail.get("started_time"))),
@@ -351,7 +358,7 @@ async def get_download_info(
     if trackers:
         tracker_rows = [
             [
-                tr.get("url", "—"),
+                redact_url(str(tr.get("url", "—"))),
                 tr.get("status", "—"),
                 str(tr.get("peers", 0)),
                 str(tr.get("seeds", 0)),
