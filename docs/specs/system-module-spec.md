@@ -119,7 +119,7 @@ Live utilization, for deciding whether the NAS is busy before an expensive opera
 ```
 Resource Usage
 ===================================
-  CPU load avg:     1m=81  5m=106  15m=121
+  CPU load avg:     1m=0.81  5m=1.06  15m=1.21
   CPU usage:        17% (system=7%, user=10%)
   Memory usage:     74%
   Memory detail:    4096 MB total, 171 MB available, 824 MB cached
@@ -130,7 +130,7 @@ Resource Usage
 ```
 
 **Design notes:**
-- `CPU load avg` appears only when DSM reports the 1/5/15-minute loads. Otherwise, `CPU usage` comes from `system_load + user_load`, falling back to `other_load`.
+- `CPU load avg` appears only when DSM reports the 1/5/15-minute loads. DSM reports them ×100 (`1min_load: 81` is a load of 0.81), so they're divided by 100 and shown to two decimals (#147). Otherwise, `CPU usage` comes from `system_load + user_load`, falling back to `other_load`.
 - One `Network (<device>)` line per interface DSM reports, including its `total` pseudo-device. One `Disk (<device>)` line per disk, with the read and write rates when DSM includes them.
 - DSM returns `disk` either as a list or as `{"disk": [...]}`; both are accepted.
 

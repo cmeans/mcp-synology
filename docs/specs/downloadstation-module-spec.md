@@ -61,6 +61,12 @@ The module is **opt-in**: add `downloadstation` under the top-level `modules:` k
 | `error` | `error` |
 | `all` | everything |
 
+A failed task's status carries DSM's reason from `status_extra.error_detail`: `error (broken_link)` for a source that answered 404 (seen on DSM 7.2.2). It's shown in both `list_downloads` rows and `get_download_info`'s Status line (#147).
+
+### Destinations
+
+Download Station takes share-relative paths (`video/Torrents`), while File Station shows `/share/...`. DSM rejects the slash form: 403 "Destination doesn't exist" on create, and 100 "Unknown error" on edit (DSM 7.2.2). So `create_download`, `edit_download` and `set_download_config(default_destination=...)` drop leading and trailing slashes before sending. A destination with no share left (`/`, empty) gets `invalid_parameter` (#147). Destinations are displayed as DSM stores them, share-relative.
+
 ### Managers and non-managers
 
 `ds_is_manager()` reads `is_manager` from `SYNO.DownloadStation.Info` / `getinfo`. It returns `None` when that can't be determined, and callers then keep their default behavior instead of failing. A non-manager is an account with the Download Station app privilege that isn't a DS manager (typically a non-admin).
@@ -96,6 +102,8 @@ DSM returns tracker announce URLs and task source URIs verbatim. A private track
 - inside a magnet, the URL-valued parameters (`tr`, `ws`, `as`, `xs`) are redacted recursively
 
 That covers `get_download_info`'s Trackers table and URI line, and every `DsmClient` DEBUG request log. DSM still receives the real values.
+
+Task titles get a narrower pass (`redact_title`): DSM titles an HTTP task with its URL's tail, query string included (`file.bin&_sid=...`, seen on vdsm). So `?key=` and `&key=` values in a title, and any whole URL in it, are masked in `list_downloads` and `get_download_info`. Token-shaped words are kept, because in a title they're names (`Show_Series_1_2026_1080p`).
 
 ### Formatting
 
