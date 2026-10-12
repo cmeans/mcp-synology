@@ -79,8 +79,8 @@ MODULE_INFO = ModuleInfo(
             name="get_download_stats",
             description=(
                 "Get current Download Station throughput statistics: total download and "
-                "upload speed across all tasks, plus per-service (BT, HTTP/FTP, eMule) "
-                "breakdowns when those services are enabled."
+                "upload speed across all tasks, plus eMule download/upload speed when the "
+                "eMule service is enabled. For per-task speeds use list_downloads."
             ),
             permission_tier=PermissionTier.READ,
         ),

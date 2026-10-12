@@ -329,6 +329,13 @@ class TestModuleInfoDescriptions:
         assert "covers the whole queue" in desc
         assert "sort_by=completed" in desc
 
+    def test_get_download_stats_claims_only_what_it_returns(self) -> None:
+        """#137: it said "per-service (BT, HTTP/FTP, eMule) breakdowns"; only
+        totals and eMule (when enabled) come back."""
+        desc = self._desc("get_download_stats")
+        assert "BT, HTTP/FTP" not in desc
+        assert "eMule" in desc
+
     def test_delete_download_describes_real_file_semantics(self) -> None:
         desc = self._desc("delete_download")
         assert "finished tasks are always kept" in desc

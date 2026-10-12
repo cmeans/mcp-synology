@@ -1,7 +1,9 @@
 # File Station Module — Tool Specifications
 
-> **Version:** 0.4 | **Updated:** 2026-03-18 — Added upload_file (WRITE) and download_file (READ) tools for local↔NAS file transfer. Tool counts: 7 READ + 7 WRITE = 14.
-> **Parent doc:** `mcp-synology-architecture.md` v0.3
+> **Version:** 0.6 | **Updated:** 2026-10-11. Every LLM-facing description refreshed to the shipped text (all 14 had drifted since 0.4); `get_file_info`'s `additional` is exposed (#146); timestamps are labeled UTC (#137). Earlier: 0.4 (2026-03-18) added upload_file (WRITE) and download_file (READ). Tool counts: 7 READ + 7 WRITE = 14.
+> **Parent doc:** `docs/specs/architecture.md`
+>
+> Kept in sync with the code by `tests/test_module_specs.py`: tool headings, permission tiers, parameter names and the exact LLM-facing descriptions must match what ships.
 
 ## Module Metadata
 
@@ -108,7 +110,7 @@ List all shared folders (top-level mount points) on the NAS.
 **DSM API:** `SYNO.FileStation.List` / `list_share`
 
 **Tool description (LLM-facing):**
-> List all shared folders on the NAS. This is the starting point for file navigation — call this first to discover available paths. Returns folder names, paths, each share's volume and that volume's free space, and owners. Use these paths as the root for all other file operations (e.g., the path "/video" from results becomes the prefix for list_files, move_files, etc.).
+> List all shared folders on the NAS. This is the starting point for file navigation — call this first to discover available paths. Shows each share's volume and that volume's free space (shared by every share on it); for how much space a share uses, call get_dir_size.
 
 **Parameters:**
 
@@ -155,7 +157,8 @@ List files and folders within a given directory path.
 **DSM API:** `SYNO.FileStation.List` / `list`
 
 **Tool description (LLM-facing):**
-> List files and folders in a directory. Supports glob pattern filtering (e.g., "*.mkv"), file type filtering, sorting, and pagination. Returns file names, types, sizes, and modification dates by default. Use the 'additional' parameter to request more metadata fields.
+> List files and folders in a directory. Supports glob pattern filtering, file type filtering,
+> sorting, and pagination.
 
 **Parameters:**
 
@@ -203,7 +206,8 @@ Get detailed metadata for one or more specific files or folders.
 **DSM API:** `SYNO.FileStation.List` / `getinfo`
 
 **Tool description (LLM-facing):**
-> Get detailed metadata for specific files or folders: size, owner, timestamps, permissions, and real path. Accepts one or more paths.
+> Get detailed metadata for specific files or folders: size, owner, timestamps, permissions, and real
+> path.
 
 **Parameters:**
 
@@ -223,9 +227,9 @@ File Info: /video/Movies/Dune Part Two (2024)/Dune.Part.Two.2024.mkv
   Type:           File
   Size:           18.4 GB
   Owner:          admin (users)
-  Modified:       2025-02-18 13:42:05
-  Created:        2025-02-18 13:40:12
-  Accessed:       2025-03-15 20:30:00
+  Modified:       2025-02-18 13:42:05 UTC
+  Created:        2025-02-18 13:40:12 UTC
+  Accessed:       2025-03-15 20:30:00 UTC
   Permissions:    rwxr-xr-x (755)
 ```
 
@@ -233,7 +237,7 @@ File Info: /video/Movies/Dune Part Two (2024)/Dune.Part.Two.2024.mkv
 
 **Design notes:**
 - Sizes are human-readable with 1 decimal place.
-- Timestamps in local NAS time.
+- Timestamps are UTC and labeled as such (`2025-02-18 13:42:05 UTC`), consistent with `search_files` treating naive input dates as UTC (#137).
 - For multiple paths, report individual failures inline alongside successes.
 
 ---
@@ -247,7 +251,12 @@ Search for files by name, type, size, or modification date within a given scope.
 **DSM API:** `SYNO.FileStation.Search` (start → list → stop → clean)
 
 **Tool description (LLM-facing):**
-> Search for files by name pattern, extension, size range, or modification date. Searches recursively by default. Supports glob patterns (e.g., "*Severance*") and extension filtering (e.g., "mkv"). Size parameters accept human-readable values like "500MB" or "2GB". Use exclude_pattern to filter out unwanted matches (e.g., "*.torrent").
+> Search recursively for files by keyword, extension, size, or modification date. The pattern
+> parameter is a keyword/substring match on filenames (not glob). Use extension for file type
+> filtering (e.g., extension="mkv"). Accepts human-readable sizes like "500MB". mtime_from / mtime_to
+> accept ISO 8601 ("2026-04-01T12:00:00+00:00"), a calendar date ("YYYY-MM-DD"), or Unix epoch
+> seconds; naive dates are treated as UTC. For directory contents or sizes, use list_files or
+> get_dir_size instead.
 
 **Parameters:**
 
@@ -296,7 +305,9 @@ Calculate the total size of a directory (recursive).
 **DSM API:** `SYNO.FileStation.DirSize` (start → status → stop)
 
 **Tool description (LLM-facing):**
-> Calculate the total size of a directory, including all files and subdirectories. Returns total size, file count, and directory count.
+> Calculate the total size of a directory, including all files and subdirectories. Returns total size,
+> file count, and directory count. This is the best tool for answering 'how much space does X use'
+> questions.
 
 **Parameters:**
 
@@ -325,7 +336,8 @@ List contents of a shared folder's recycle bin.
 **DSM API:** `SYNO.FileStation.List` / `list` (targeting `/<share>/#recycle/`)
 
 **Tool description (LLM-facing):**
-> List the contents of a shared folder's recycle bin. Shows recently deleted files that can be restored with restore_from_recycle_bin. Only works on shares with the recycle bin enabled. Sorted by most recently deleted first by default.
+> List the contents of a shared folder's recycle bin. Shows recently deleted files that can be
+> restored.
 
 **Parameters:**
 
@@ -368,7 +380,8 @@ Download a NAS file to a local directory on this machine.
 **DSM API:** `SYNO.FileStation.Download` / `download` (GET, binary response)
 
 **Tool description (LLM-facing):**
-> Download a NAS file to a local directory on this machine. Provide the NAS file path and a local destination directory. Does not overwrite existing local files by default.
+> Download a NAS file to a local directory on this machine. Provide the NAS file path. dest_folder is
+> optional if default_download_dir is configured. Does not overwrite existing local files by default.
 
 **Parameters:**
 
@@ -405,7 +418,8 @@ Upload a local file from this machine to a NAS folder.
 **DSM API:** `SYNO.FileStation.Upload` / `upload` (POST multipart — the ONE exception to the GET-only rule)
 
 **Tool description (LLM-facing):**
-> Upload a local file from this machine to a NAS folder. Provide the local file path and NAS destination folder. Does not overwrite existing NAS files by default.
+> Upload a local file from this machine to a NAS folder. Provide the local file path. dest_folder is
+> optional if default_upload_dir is configured. Does not overwrite existing NAS files by default.
 
 **Parameters:**
 
@@ -441,7 +455,8 @@ Restore files from a shared folder's recycle bin.
 **DSM API:** `SYNO.FileStation.CopyMove` / `start` (moving from `#recycle` back out)
 
 **Tool description (LLM-facing):**
-> Restore deleted files from a shared folder's recycle bin to their original location or a specified destination. Use list_recycle_bin first to see what's available. If no dest_folder is specified, files are restored to their original location within the share.
+> Restore deleted files from a shared folder's recycle bin to their original location or a specified
+> destination.
 
 **Parameters:**
 
@@ -477,7 +492,8 @@ Create one or more new folders.
 **DSM API:** `SYNO.FileStation.CreateFolder` / `create`
 
 **Tool description (LLM-facing):**
-> Create one or more new folders. Creates parent directories automatically by default (like mkdir -p). Idempotent — creating a folder that already exists succeeds without error.
+> Create one or more new folders. Creates parent directories automatically by default. Idempotent —
+> creating an existing folder succeeds.
 
 **Parameters:**
 
@@ -504,7 +520,8 @@ Rename a file or folder.
 **DSM API:** `SYNO.FileStation.Rename` / `rename`
 
 **Tool description (LLM-facing):**
-> Rename a file or folder. Provide the full current path and the new name (just the name, not a full path). Does not move the item — use move_files to relocate.
+> Rename a file or folder. Provide the full current path and the new name (just the name, not a full
+> path).
 
 **Parameters:**
 
@@ -531,7 +548,8 @@ Copy files or folders to a destination.
 **DSM API:** `SYNO.FileStation.CopyMove` / `start` (with `remove_src=false`)
 
 **Tool description (LLM-facing):**
-> Copy files or folders to a destination folder. Source files remain in place. For large files, progress is reported during the operation. Set overwrite=true to replace existing files at the destination.
+> Copy files or folders to a destination folder. Source files remain in place. Set overwrite=true to
+> replace existing files.
 
 **Parameters:**
 
@@ -560,7 +578,8 @@ Move files or folders to a new location. **Source files are removed after succes
 **DSM API:** `SYNO.FileStation.CopyMove` / `start` (with `remove_src=true`)
 
 **Tool description (LLM-facing):**
-> Move files or folders to a new location. Source files are REMOVED after successful transfer — this is destructive and cannot be undone via this tool. Set overwrite=true to replace existing files at the destination. Same-volume moves are instant; cross-volume moves show progress.
+> Move files or folders to a new location. Source files are REMOVED after transfer. Set overwrite=true
+> to replace existing files.
 
 **Parameters:**
 
@@ -591,7 +610,8 @@ Delete files or folders.
 **DSM API:** `SYNO.FileStation.Delete` / `start` (async) or `delete` (sync)
 
 **Tool description (LLM-facing):**
-> Delete files or folders. If the target share has a recycle bin enabled, deleted files can be recovered using list_recycle_bin and restore_from_recycle_bin. If no recycle bin, deletion is permanent. Deletes non-empty folders recursively by default.
+> Delete files or folders. If the share has a recycle bin, files can be recovered. Otherwise deletion
+> is permanent.
 
 **Parameters:**
 
