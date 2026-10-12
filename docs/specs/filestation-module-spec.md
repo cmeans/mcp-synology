@@ -115,7 +115,7 @@ List all shared folders (top-level mount points) on the NAS.
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
 | `additional` | `list[str]` | No | `["real_path", "owner", "perm", "volume_status"]` | Metadata fields to include. Options: `real_path`, `size`, `owner`, `time`, `perm`, `mount_point_type`, `volume_status`. DSM's `list_share` returns no `size` for a share (seen on DSM 7.1 and 7.2), so the default doesn't ask for it (#151). |
-| `sort_by` | `str` | No | `"name"` | Sort field. Options: `name`, `size`, `user`, `mtime`, `crtime`. |
+| `sort_by` | `str` | No | `"name"` | Sort field. Options: `name`, `user`, `mtime`, `crtime`. (DSM also accepts `size`, but with no share size it has no useful effect: on vdsm, `size` with `desc` just reverses name order.) |
 | `sort_direction` | `str` | No | `"asc"` | Sort direction: `asc` or `desc`. |
 
 **Response shape:**

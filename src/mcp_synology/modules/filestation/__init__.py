@@ -278,8 +278,9 @@ def register(ctx: RegisterContext) -> None:
         ) -> str:
             """`additional`: optional list of DSM metadata fields. Valid values:
             real_path, size, owner, time, perm, mount_point_type, volume_status.
-            Defaults to ["real_path", "size", "owner", "perm"]. Unknown values
-            are rejected before reaching DSM.
+            Defaults to ["real_path", "owner", "perm", "volume_status"]; DSM sends
+            no size for a share (#151). Unknown values are rejected before
+            reaching DSM.
             """
             client = await manager.get_client()
             return manager.with_update_notice(
