@@ -95,6 +95,13 @@ class TestRedactUrl:
             f"magnet:?xt=urn:btih:{'0' * 40}&xl=1024&kt=show&x.pe=***&so=***"
         )
 
+    def test_bare_magnet_item_is_masked(self) -> None:
+        # A tracker URL pasted unencoded can leave a bare "&<passkey>" item with no "=".
+        magnet = f"magnet:?xt=urn:btih:{'0' * 40}&dn=Show&{PASSKEY}"
+        result = redact_url(magnet)
+        assert PASSKEY not in result
+        assert result == f"magnet:?xt=urn:btih:{'0' * 40}&dn=Show&***"
+
     def test_token_inside_a_path_segment_is_masked(self) -> None:
         url = f"https://t.example/rss/{PASSKEY}.torrent"
         assert redact_url(url) == "https://t.example/rss/***.torrent"
