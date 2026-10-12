@@ -28,7 +28,9 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from types import ModuleType
 
-    from mcp_synology.core.config import AppConfig
+    from mcp_synology.core.config import AppConfig, ModuleConfig
+
+    _ModulePlan = list[tuple[str, ModuleType, ModuleConfig, set[str]]]
 
 logger = logging.getLogger(__name__)
 
@@ -280,6 +282,44 @@ class SharedClientManager:
             logger.debug("Update check failed", exc_info=True)
 
 
+def _withheld_tools_notice(config: AppConfig, plan: _ModulePlan) -> str:
+    """Say which tools this connection doesn't register, and how to enable them.
+
+    A read-only connection hides its WRITE tools, so a model (or a directory's
+    scorer) couldn't tell they exist and might say the server can't move or
+    delete files. Registration itself is unchanged.
+    """
+    lines: list[str] = []
+    for mod_name, module, mod_config, allowed in plan:
+        withheld = [t.name for t in module.MODULE_INFO.tools if t.name not in allowed]
+        if withheld:
+            lines.append(
+                f"- {mod_name} is {mod_config.permission}-only here. Withheld: "
+                f"{', '.join(withheld)}. To enable them, the user sets "
+                f"`permission: write` for {mod_name} in the mcp-synology config."
+            )
+    enabled = {name for name, _, _, _ in plan}
+    for mod_name in sorted(set(_MODULE_REGISTRY) - enabled):
+        count = len(_MODULE_REGISTRY[mod_name].MODULE_INFO.tools)
+        if mod_name in config.modules:
+            # Listed but `enabled: false`: adding it again wouldn't help.
+            fix = f"set `enabled: true` for `{mod_name}`"
+        else:
+            fix = f"add `{mod_name}` under `modules:`"
+        lines.append(
+            f"- The {mod_name} module ({count} tools) is not enabled. The user can "
+            f"{fix} in the mcp-synology config."
+        )
+    if not lines:
+        return ""
+    return (
+        "\n\nPERMISSIONS:\n"
+        "Some mcp-synology tools aren't available on this connection. If the user "
+        "asks for one, say it exists but isn't enabled, and how to enable it; don't "
+        "say the server can't do it.\n" + "\n".join(lines)
+    )
+
+
 def create_server(config: AppConfig) -> FastMCP:
     """Create and configure the MCP server.
 
@@ -316,6 +356,31 @@ def create_server(config: AppConfig) -> FastMCP:
 
     instructions = instructions.format_map(template_vars)
 
+    # Resolve each enabled module's tools first, so the instructions can say
+    # which ones this connection withholds.
+    plan: _ModulePlan = []
+    for mod_name, mod_config in config.modules.items():
+        if not mod_config.enabled:
+            logger.debug("Module '%s' is disabled, skipping", mod_name)
+            continue
+        module = _MODULE_REGISTRY.get(mod_name)
+        if module is None:
+            logger.warning("Unknown module '%s' — skipping.", mod_name)
+            continue
+        tier = PermissionTier(mod_config.permission)
+        plan.append(
+            (
+                mod_name,
+                module,
+                mod_config,
+                filter_tools_by_permission(module.MODULE_INFO.tools, tier),
+            )
+        )
+
+    if not config.instructions_file:
+        # A full replacement file is the user's own; everything else gets the notice.
+        instructions += _withheld_tools_notice(config, plan)
+
     server = FastMCP(
         server_name,
         instructions=instructions,
@@ -327,24 +392,12 @@ def create_server(config: AppConfig) -> FastMCP:
     manager = SharedClientManager(config)
     manager.install_cleanup_handlers()
 
-    # Determine which modules and tools to register
-    for mod_name, mod_config in config.modules.items():
-        if not mod_config.enabled:
-            logger.debug("Module '%s' is disabled, skipping", mod_name)
-            continue
-
-        module = _MODULE_REGISTRY.get(mod_name)
-        if module is None:
-            logger.warning("Unknown module '%s' — skipping.", mod_name)
-            continue
-
+    for mod_name, module, mod_config, allowed_tools in plan:
         module_info = module.MODULE_INFO
-        tier = PermissionTier(mod_config.permission)
-        allowed_tools = filter_tools_by_permission(module_info.tools, tier)
         logger.debug(
             "Module '%s': permission=%s, registering %d/%d tools: %s",
             mod_name,
-            tier.value,
+            mod_config.permission,
             len(allowed_tools),
             len(module_info.tools),
             sorted(allowed_tools),

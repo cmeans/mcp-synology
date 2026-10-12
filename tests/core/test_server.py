@@ -653,3 +653,77 @@ class TestSharedClientManagerUnreachableNas:
             await manager.get_client()
         fake_client.__aexit__.assert_awaited_once()
         assert manager._client is None
+
+
+class TestWithheldToolsNotice:
+    """A read-only connection hides its WRITE tools, so neither the model nor a
+    directory scorer (Glama, 2026-04) could tell they exist. The instructions say
+    which tools are withheld and how to enable them."""
+
+    def _instructions(self, **overrides: Any) -> str:
+        server = create_server(make_test_config(**overrides))
+        return server.instructions or ""
+
+    def test_read_only_module_lists_withheld_write_tools(self) -> None:
+        text = self._instructions(modules={"filestation": {"enabled": True, "permission": "read"}})
+        assert "PERMISSIONS" in text
+        assert "read-only" in text
+        for tool in (
+            "upload_file",
+            "delete_files",
+            "move_files",
+            "rename",
+            "restore_from_recycle_bin",
+            "create_folder",
+            "copy_files",
+        ):
+            assert tool in text.split("PERMISSIONS", 1)[1]
+        assert "permission: write" in text
+
+    def test_nothing_withheld_means_no_section(self) -> None:
+        """Every module enabled at ``write``: no PERMISSIONS section at all."""
+        text = self._instructions(
+            modules={
+                "filestation": {"enabled": True, "permission": "write"},
+                "system": {"enabled": True, "permission": "write"},
+                "downloadstation": {"enabled": True, "permission": "write"},
+            }
+        )
+        assert "PERMISSIONS" not in text
+
+    def test_module_not_enabled_is_named(self) -> None:
+        text = self._instructions(modules={"filestation": {"enabled": True, "permission": "write"}})
+        assert "downloadstation" in text
+        assert "not enabled" in text
+
+    def test_disabled_module_is_told_to_enable_not_add(self) -> None:
+        """QA on #156: a module listed with ``enabled: false`` is already under
+        ``modules:``; the fix the user needs is ``enabled: true``."""
+        text = self._instructions(
+            modules={
+                "filestation": {"enabled": True, "permission": "write"},
+                "downloadstation": {"enabled": False, "permission": "write"},
+            }
+        )
+        section = text.split("PERMISSIONS", 1)[1]
+        assert "downloadstation" in section
+        assert "`enabled: true`" in section
+        assert "add `downloadstation` under `modules:`" not in section
+
+    def test_full_instructions_file_is_left_alone(self, tmp_path: Path) -> None:
+        custom = tmp_path / "custom.md"
+        custom.write_text("ONLY THESE INSTRUCTIONS")
+        text = self._instructions(
+            instructions_file=str(custom),
+            modules={"filestation": {"enabled": True, "permission": "read"}},
+        )
+        assert text == "ONLY THESE INSTRUCTIONS"
+
+    def test_withheld_tools_are_not_registered(self) -> None:
+        """The notice changes nothing about registration: still read-only."""
+        server = create_server(
+            make_test_config(modules={"filestation": {"enabled": True, "permission": "read"}})
+        )
+        names = set(server._tool_manager._tools)
+        assert "delete_files" not in names
+        assert "list_files" in names
