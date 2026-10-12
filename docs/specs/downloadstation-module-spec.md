@@ -47,7 +47,7 @@ The module is **opt-in**: add `downloadstation` under the top-level `modules:` k
 - **Everything is GET,** per the project rule, with **one scoped exception:** URI `Task.create` (DS2 v2, and the v1 fallback) is sent as a form POST through `DsmClient.request_form_post()`. A GET URL past about 8 KB gets HTTP 414 from DSM (a magnet with many trackers, or a URI list), and a GET would put source-URL credentials in access logs. Nothing else may use `request_form_post()`.
 - **Torrent and NZB upload** is a DS2 multipart POST (`create_download_task_with_file()`, file part named `torrent`).
 - **Version pins:** `Task.edit` is pinned to exactly v2 (it doesn't exist at v1). DS2 `Task.create` and DS2 `Task.list` are pinned to v2.
-- **Never retried blindly:** timeouts and non-2xx responses on the create POST map to `timeout` / `unavailable` with `retryable: false`, because DSM may already have created the task.
+- **Never retried blindly:** for **URI** create (`request_form_post()`), timeouts and non-2xx responses map to `timeout` / `unavailable` with `retryable: false`, because DSM may already have created the task. The torrent/NZB multipart path (`create_download_task_with_file()`) doesn't do this yet: a timeout or HTTP error there escapes as a raw httpx error (#154).
 
 ### Statuses
 
@@ -65,7 +65,7 @@ A failed task's status carries DSM's reason from `status_extra.error_detail`: `e
 
 ### Destinations
 
-Download Station takes share-relative paths (`video/Torrents`), while File Station shows `/share/...`. DSM rejects the slash form: 403 "Destination doesn't exist" on create, and 100 "Unknown error" on edit (DSM 7.2.2). So `create_download`, `edit_download` and `set_download_config(default_destination=...)` drop leading and trailing slashes before sending. A destination with no share left (`/`, empty) gets `invalid_parameter`, naming the caller's argument (`destination`, or `default_destination` for `set_download_config`) (#147). A folder that doesn't exist still fails at DSM: create's 403 and edit's whole-call 100 both suggest a share-relative path (`video/Torrents`, not the `/volume1/video/Torrents` real path that `get_file_info` prints) and checking the folder with `list_files`. Edit keeps 100's `dsm_error` code, since 100 isn't specific, but says the destination is the likely cause (#147). Destinations are displayed as DSM stores them, share-relative.
+Download Station takes share-relative paths (`video/Torrents`), while File Station shows `/share/...`. DSM rejects the slash form: 403 "Destination doesn't exist" on create, and 100 "Unknown error" on edit (DSM 7.2.2). So `create_download`, `edit_download` and `set_download_config(default_destination=...)` trim surrounding whitespace and drop leading and trailing slashes before sending (`" /writable "` → `writable`). A destination with no share left (`/`, empty) gets `invalid_parameter`, naming the caller's argument (`destination`, or `default_destination` for `set_download_config`) (#147). A folder that doesn't exist still fails at DSM: create's 403 and edit's whole-call 100 both suggest a share-relative path (`video/Torrents`, not the `/volume1/video/Torrents` real path that `get_file_info` prints) and checking the folder with `list_files`. Edit keeps 100's `dsm_error` code, since 100 isn't specific, but says the destination is the likely cause (#147). Destinations are displayed as DSM stores them, share-relative.
 
 ### Managers and non-managers
 
@@ -103,7 +103,9 @@ DSM returns tracker announce URLs and task source URIs verbatim. A private track
 
 That covers `get_download_info`'s Trackers table and URI line, and every `DsmClient` DEBUG request log. DSM still receives the real values.
 
-Task titles get a narrower pass (`redact_title`): DSM titles an HTTP task with its URL's tail, query string included (`file.bin&_sid=...`, seen on vdsm). So `?key=`, `&key=` and `;key=` values in a title, and any whole URL in it, are masked in `list_downloads` and `get_download_info`. Token-shaped words are kept, because in a title they're names (`Show_Series_1_2026_1080p`).
+Task titles get a narrower pass (`redact_title`): DSM titles an HTTP task with its URL's tail, query string included (`file.bin&_sid=...`, seen on vdsm). So `?key=`, `&key=` and `;key=` values in a title, and any whole URL in it, are masked in `list_downloads` and `get_download_info`. Whether token-shaped words are masked depends on the task type (`tasks._title`):
+- **BT:** kept, because a BT title is the torrent's name (`Show_Series_1_2026_1080p`).
+- **Every other type** (`http`, `ftp`, `nzb`, `emule`, or no type): masked as in a URL path, because the title is the URL's last segment. A private tracker's `…/<passkey>.torrent` link is titled `<passkey>.torrent` and shows as `***.torrent` (#144).
 
 ### Formatting
 
@@ -120,14 +122,14 @@ DS-specific codes (`core/downloadstation_errors.py`) are dispatched when the API
 | 402 | Destination denied | Check write permission on the destination share |
 | 403 | Destination doesn't exist | Verify the share and folder with `list_files` |
 | 404 | Invalid task id | No such task, or another user's; run `list_downloads` |
-| 405 | Invalid task action | Not valid for the task's state; `force_complete` on a finished task |
+| 405 | Invalid task action | Not valid for the task's current state, e.g. resuming a task that is already running |
 | 406 | No default destination | Set one with `set_download_config` |
 | 407 | Set destination failed | Path invalid or no write permission |
 | 408 | File doesn't exist | A referenced .torrent/.nzb on the NAS is missing |
 | 120 (common) | JSON-format API parameter error | Mapped to `invalid_parameter` with a specific message |
 | 544 (per task) | Not found, or not yours | Rendered as above; not in the code map because it only appears per task |
 
-Tool input is validated locally first and fails with `invalid_parameter`, naming the parameter and listing the valid values.
+Tool input is validated locally first and fails before any DSM call. A bad value gets `invalid_parameter` naming the parameter, plus `valid` values where there's a fixed set (status filters, sort keys, the `uri`/`torrent_file_path` choice). A missing local `torrent_file_path` gets `not_found`.
 
 ---
 
@@ -157,23 +159,23 @@ List the queue, paged, with the true total.
 |------|------|----------|---------|-------------|
 | `status_filter` | `str` | No | `"all"` | `all`, `downloading`, `finished`, `paused` or `error` (see Statuses). |
 | `sort_by` | `str` | No | `"queue"` | `queue` (DSM order: creation order, oldest first), `created` or `completed` (newest first; tasks that never completed sort last). |
-| `offset` | `int` | No | `0` | First task to show (0-based) within the filtered and sorted list. |
-| `limit` | `int` | No | `25` | Page size. |
+| `offset` | `int` | No | `0` | First task to show (0-based) within the filtered and sorted list. Must be 0 or more; a negative offset is rejected locally with `invalid_parameter` (#141). |
+| `limit` | `int` | No | `25` | Page size. Must be 1 or more, checked locally (#141). |
 
 **Response shape:**
 
 ```
 Download Station queue (all)
-==========================================================================================
-  ID         Title                          Type  Status   Size    Progress                Down  Up          ETA  Completed
-  ─────────  ─────────────────────────────  ────  ───────  ──────  ──────────────────────  ────  ──────────  ───  ───────────────────
-  dbid_2554  Mrs Biggs  (2012) 720p         bt    seeding  4.2 GB  4.2 GB / 4.2 GB (100%)  —     —           —    2025-09-27 13:23:43 UTC
-  dbid_4010  Cleddau Series 2 (2026)        bt    seeding  6.5 GB  6.5 GB / 6.5 GB (100%)  —     100.9 KB/s  —    2026-10-11 20:01:33 UTC
+=================================================================================================================================
+  ID         Title                    Type  Status   Size    Progress                Down  Up          ETA  Completed
+  ─────────  ───────────────────────  ────  ───────  ──────  ──────────────────────  ────  ──────────  ───  ───────────────────────
+  dbid_2554  Mrs Biggs  (2012) 720p   bt    seeding  4.2 GB  4.2 GB / 4.2 GB (100%)  —     —           —    2025-09-27 13:23:43 UTC
+  dbid_4010  Cleddau Series 2 (2026)  bt    seeding  6.5 GB  6.5 GB / 6.5 GB (100%)  —     100.9 KB/s  —    2025-10-11 20:01:33 UTC
 
-1214 task(s) total; showing 1–25. Pass offset=25 for the next page.
+1214 task(s) total; showing 1–2. Pass offset=2 for the next page.
 ```
 
-The heading adds `; newest completed first` (or `created`) for a sort, and `; your tasks only` for a non-manager. An offset past the end shows an empty table and `N task(s) total; offset X is past the end.`
+The heading adds `; newest completed first` (or `created`) for a sort, and `; your tasks only` for a non-manager. An offset past the end shows the heading, `No items to display.` (no column headers) and `N task(s) total; offset X is past the end.`
 
 **Design notes:**
 - **DSM's v1 `total` is the page size, not the queue size** (`limit=5` gives `total=5`; `limit=-1` returns everything). #140 found the tool reporting "100 task(s) total" for 1,214. So:
@@ -401,7 +403,7 @@ Remove tasks.
 | `task_ids` | `list[str]` | **Yes** | — | Task IDs to remove. |
 | `force_complete` | `bool` | No | `false` | Passed through to DSM; see below. |
 
-**Response shape:** a per-task table (`ok`, `not found (no such task, or not yours)`, or `error N`) under a title such as `Delete download — 1 of 2 task(s) removed; completed files kept; partial data of unfinished tasks discarded`. When nothing was removed, the title says `0 of N task(s) removed; nothing was deleted`.
+**Response shape:** a per-task table (`ok`, `not found (no such task, or not yours)`, or `error N`) under a title such as `Delete download — 1 of 2 task(s) removed; completed files kept; partial data of unfinished tasks discarded`. When nothing was removed, the title says `0 of N task(s) removed; nothing was deleted`. With `force_complete=true`, the unfinished part reads `force_complete requested, but DSM may still discard partial data; check the destination`.
 
 **Design notes:**
 - **Verified on both versions** (#128/#130):

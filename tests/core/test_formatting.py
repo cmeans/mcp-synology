@@ -162,7 +162,7 @@ class TestFormatTimestamp:
         assert result == "1970-01-01 00:00:00 UTC"
 
     def test_says_it_is_utc(self) -> None:
-        """An unlabeled UTC time read as local time put a completion six hours
+        """An unlabeled UTC time read as local time put a completion five hours
         off during release testing (#137)."""
         assert format_timestamp(1_791_749_055) == "2026-10-11 20:04:15 UTC"
 

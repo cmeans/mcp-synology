@@ -50,7 +50,7 @@ DOWNLOADSTATION_ERROR_CODES: dict[int, tuple[str, str]] = {
     405: (
         "Invalid task action",
         "Action is not valid for this task's current state (e.g., resuming a "
-        "task that is already running, or pausing a finished task).",
+        "task that is already running).",
     ),
     406: (
         "No default destination",

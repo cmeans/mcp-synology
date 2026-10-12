@@ -41,6 +41,13 @@ class TestDownloadstationErrorCodes:
         assert expected_in_message.lower() in combined
         assert suggestion.strip(), f"code {code} has empty suggestion"
 
+    def test_405_example_is_one_dsm_really_answers_with_405(self) -> None:
+        """Pausing a finished task is a whole-call 101, not 405 (probed in #146), so
+        the suggestion mustn't use it as the example (QA on #153)."""
+        _, suggestion = DOWNLOADSTATION_ERROR_CODES[405]
+        assert "pausing a finished task" not in suggestion
+        assert "already running" in suggestion
+
     def test_all_codes_400_through_408_present(self) -> None:
         for code in range(400, 409):
             assert code in DOWNLOADSTATION_ERROR_CODES, f"missing code {code}"

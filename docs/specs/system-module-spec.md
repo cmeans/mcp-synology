@@ -34,7 +34,7 @@ The module has no settings.
 | `SYNO.Core.System` / `info` (v1) | Admins | CPU series, cores and clock; NTP server. Also a fallback for model, firmware, RAM, temperature and uptime |
 | `SYNO.Core.System.Utilization` / `get` | Admins | Live CPU, memory, network and disk I/O |
 
-`get_system_info` merges the first two. A failure of either source (including a non-admin's refusal from `SYNO.Core.System`) is logged at DEBUG and that source is treated as empty, so a non-admin still gets the `DSM.Info` fields. Only when **both** are empty does the tool fail.
+`get_system_info` merges the first two. A failure of either source (including a non-admin's refusal from `SYNO.Core.System`) is logged at DEBUG and that source is treated as empty, so a non-admin still gets the `DSM.Info` fields. The tool fails with `unavailable` when both are empty, or when the sources returned data but none of it produced a field.
 
 `get_resource_usage` needs `SYNO.Core.System.Utilization`. A non-admin's 105 becomes a structured `permission_denied` error, and per the project rule it **never triggers a re-auth** (verified on vdsm with the non-admin persona and the re-auth spy, #124/#133).
 
@@ -94,7 +94,7 @@ System Info
 ```
 
 **Design notes:**
-- Field precedence: `DSM.Info` first, then `Core.System`. Missing values are told apart from zero by explicit `None` checks.
+- Field precedence: `DSM.Info` first, then `Core.System`. Temperature tells a missing value from 0°C with explicit `None` checks. RAM and uptime are shown only when nonzero.
 - `NTP` appears only when NTP is enabled and a server is set.
 
 ---
@@ -131,7 +131,7 @@ Resource Usage
 
 **Design notes:**
 - `CPU load avg` appears only when DSM reports the 1/5/15-minute loads. DSM reports them ×100 (`1min_load: 81` is a load of 0.81), so they're divided by 100 and shown to two decimals (#147). Otherwise, `CPU usage` comes from `system_load + user_load`, falling back to `other_load`.
-- One `Network (<device>)` line per interface DSM reports, including its `total` pseudo-device. One `Disk (<device>)` line per disk, with the read and write rates when DSM includes them.
+- One `Network (<device>)` line per interface DSM reports with traffic, including its `total` pseudo-device; an idle interface (rx = tx = 0) is skipped. One `Disk (<device>)` line per disk with activity (busy %, or a read or write rate), with the rates when DSM includes them; an idle disk is skipped.
 - DSM returns `disk` either as a list or as `{"disk": [...]}`; both are accepted.
 
 ---

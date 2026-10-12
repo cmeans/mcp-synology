@@ -176,23 +176,24 @@ List files and folders within a given directory path.
 **Response shape:**
 
 ```
-Contents of /video/TV Shows (12 items)
-═══════════════════════════════════════════════════
-  Type  Name                         Size        Modified
-  ────  ───────────────────────      ─────────   ──────────────
-  📁    Breaking Bad/                —           2024-08-15 10:30
-  📁    The Bear/                    —           2025-01-22 14:15
-  📁    Severance/                   —           2025-03-10 09:45
-  🎬    sample_clip.mp4              284 MB      2025-03-14 22:10
+Contents of /video/TV Shows (5 items)
+====================================================
+  Type  Name           Size    Modified
+  ────  ─────────────  ──────  ───────────────────────
+  📁     Breaking Bad/  —       2024-08-15 10:30:00 UTC
+  📁     Severance/     —       2024-08-15 10:30:00 UTC
+  📁     The Bear/      —       2024-08-15 10:30:00 UTC
+  📄     show.nfo       2 KB    2024-04-03 11:25:00 UTC
+  🎬     clip.mp4       284 MB  2024-08-15 10:30:00 UTC
 
-Showing 1–12 of 12 items.
+5 of 5 items.
 ```
 
 **Design notes:**
 - `📁` for directories, `📄` for generic files, `🎬` for video files. Configurable fallback to text markers (`[DIR]`/`[FILE]`).
 - Directories show `—` for size (use `get_dir_size` for directory sizes).
 - Trailing `/` on directory names for visual distinction.
-- Pagination footer when truncated: `"Showing 1–200 of 1,432 items. Use offset=200 to see more."`
+- Footer: `N of N items.` when everything fits, or `"Showing 200 of 1,432 items. Use offset=200 to see more."` when truncated.
 - `#recycle` folders are **hidden by default**. They appear only via `list_recycle_bin` or direct path access.
 
 ---
@@ -352,19 +353,19 @@ List contents of a shared folder's recycle bin.
 **Response shape:**
 
 ```
-Recycle Bin for /video (3 items)
-═══════════════════════════════════════════════════
-  Type  Name                         Size        Deleted
-  ────  ───────────────────────      ─────────   ──────────────
-  🎬    old_episode.mkv              1.2 GB      2025-03-15 18:20
-  📄    old_episode.srt              38 KB       2025-03-15 18:20
-  📁    temp_folder/                 —           2025-03-14 09:00
+Contents of /video/#recycle (3 items)
+====================================================
+  Type  Name           Size    Modified
+  ────  ─────────────  ──────  ───────────────────────
+  🎬     old-movie.mkv  4.5 GB  2024-03-14 12:30:00 UTC
+  📁     Season 3/      —       2024-03-08 09:00:00 UTC
+  📄     notes.txt      1 KB    2024-03-01 11:00:00 UTC
 
-To restore items, use restore_from_recycle_bin with the file paths shown above.
+3 of 3 items.
 ```
 
 **Design notes:**
-- Convenience wrapper around `list_files` targeting `/<share>/#recycle/`.
+- Convenience wrapper around `list_files` targeting `/<share>/#recycle/`; it returns `list_files`' output as is (title `Contents of /<share>/#recycle`, a `Modified` column).
 - Default sort is most recently deleted first.
 - If recycle bin is not enabled: `"Recycle bin is not enabled on /video. Deleted files cannot be recovered."`
 - The `#recycle` folder preserves original directory structure. Top-level listing shown; deeper browsing possible via `list_files` on `#recycle` subpaths.
