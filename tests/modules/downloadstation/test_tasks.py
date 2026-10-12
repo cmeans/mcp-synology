@@ -336,6 +336,22 @@ class TestListDownloadsColumnsAndSort:
         assert _ids(result) == ["dbid_3", "dbid_2", "dbid_1"]
 
     @respx.mock
+    @pytest.mark.parametrize(
+        ("sort_by", "field"), [("created", "created"), ("completed", "completed")]
+    )
+    async def test_tied_times_put_the_later_queued_task_first(
+        self, mock_client: DsmClient, sort_by: str, field: str
+    ) -> None:
+        # DSM records times to the second, so a batch ties (seen on vdsm: ten tasks
+        # with one create_time). Newest first must then mean last queued first.
+        _manager()
+        tasks = [_timed("dbid_1", created=5, completed=5)]
+        tasks += [_timed(f"dbid_{i}", created=9, completed=9) for i in range(2, 6)]
+        _v1_list(limit="-1").respond(json=ok({"offset": 0, "total": 5, "tasks": tasks}))
+        result = await list_downloads(mock_client, sort_by=sort_by, limit=3)
+        assert _ids(result) == ["dbid_5", "dbid_4", "dbid_3"]
+
+    @respx.mock
     async def test_sort_and_filter_combine(self, mock_client: DsmClient) -> None:
         _manager()
         tasks = [

@@ -125,8 +125,13 @@ async def list_downloads(
                 matching = [t for t in matching if t.get("status") in wanted]
             if sort_by in _SORT_KEYS:
                 key = _SORT_KEYS[sort_by]
-                # Stable sort, newest first; a 0/absent time (never completed) sorts last.
-                matching.sort(key=lambda t: int(_detail(t).get(key) or 0), reverse=True)
+                # Newest first; a 0/absent time (never completed) sorts last. DSM
+                # records times to the second, so a batch ties: break ties by queue
+                # position, newest first too (matching is in queue order).
+                order = {id(t): i for i, t in enumerate(matching)}
+                matching.sort(
+                    key=lambda t: (int(_detail(t).get(key) or 0), order[id(t)]), reverse=True
+                )
             total = len(matching)
             tasks = matching[offset : offset + limit]
     except SynologyError as e:
