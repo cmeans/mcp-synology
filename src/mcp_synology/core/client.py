@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import shutil
-from collections.abc import Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine
 from typing import TYPE_CHECKING, Any, BinaryIO, Self
 
 if TYPE_CHECKING:
@@ -49,6 +49,44 @@ def _log_safe(
 # Type alias for transfer progress callbacks.
 # Called with (bytes_transferred, total_bytes_or_None).
 ProgressCallback = Callable[[int, int | None], Coroutine[Any, Any, None]]
+
+
+_MAY_HAVE_APPLIED = "DSM may still have applied the request; check before retrying."
+
+
+async def _guarded_post(
+    label: str, send: Callable[[], Awaitable[httpx.Response]]
+) -> httpx.Response:
+    """Send a non-idempotent POST, mapping transport and HTTP failures to typed errors.
+
+    Shared by URI create (form POST) and torrent/NZB create (multipart, #154).
+    DSM may already have created the task, so every failure is non-retryable,
+    and the message is never empty (httpx's ``ConnectTimeout('')`` is).
+    """
+    try:
+        resp = await send()
+    except httpx.TimeoutException as e:
+        raise DsmTimeoutError(
+            f"{label}: request to DSM timed out ({type(e).__name__}).",
+            suggestion=_MAY_HAVE_APPLIED,
+        ) from e
+    except httpx.TransportError as e:
+        detail = f": {e}" if str(e) else ""
+        raise DsmUnavailableError(
+            f"{label}: couldn't reach DSM ({type(e).__name__}{detail}).",
+            suggestion=_MAY_HAVE_APPLIED,
+        ) from e
+    if resp.status_code == 414:
+        raise RequestTooLongError(
+            f"{label}: DSM rejected the request with HTTP 414 (Request-URI Too Large).",
+            suggestion="Reduce the size of the request (e.g. fewer URIs per call).",
+        )
+    if resp.status_code >= 400:
+        raise DsmUnavailableError(
+            f"{label}: DSM answered HTTP {resp.status_code}.",
+            suggestion=_MAY_HAVE_APPLIED,
+        )
+    return resp
 
 
 class DsmClient:
@@ -389,23 +427,9 @@ class DsmClient:
         retry_tag = " (retry)" if _is_retry else ""
         logger.debug("DSM POST%s: %s/%s v%d — %s", retry_tag, api, method, version, log_data)
 
-        try:
-            resp = await http.post(url, params=query_params, data=form_data)
-        except httpx.TimeoutException as e:
-            raise DsmTimeoutError(
-                f"{api}/{method}: request to DSM timed out.",
-                suggestion="DSM may still have applied the request; check before retrying.",
-            ) from e
-        if resp.status_code == 414:
-            raise RequestTooLongError(
-                f"{api}/{method}: DSM rejected the request with HTTP 414 (Request-URI Too Large).",
-                suggestion="Reduce the size of the request (e.g. fewer URIs per call).",
-            )
-        if resp.status_code >= 400:
-            raise DsmUnavailableError(
-                f"{api}/{method}: DSM answered HTTP {resp.status_code}.",
-                suggestion="DSM may still have applied the request; check before retrying.",
-            )
+        resp = await _guarded_post(
+            f"{api}/{method}", lambda: http.post(url, params=query_params, data=form_data)
+        )
         body = resp.json()
 
         if body.get("success"):
@@ -598,17 +622,19 @@ class DsmClient:
 
         fh = _open_file()
         try:
-            resp = await http.post(
-                url,
-                params=query_params,
-                data=form_data,
-                files={"torrent": (filename, fh, "application/x-bittorrent")},
-                timeout=httpx.Timeout(timeout),
+            resp = await _guarded_post(
+                f"{api}/create",
+                lambda: http.post(
+                    url,
+                    params=query_params,
+                    data=form_data,
+                    files={"torrent": (filename, fh, "application/x-bittorrent")},
+                    timeout=httpx.Timeout(timeout),
+                ),
             )
         finally:
             fh.close()
 
-        resp.raise_for_status()
         body = resp.json()
 
         if body.get("success"):

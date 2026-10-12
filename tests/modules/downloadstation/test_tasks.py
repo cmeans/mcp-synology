@@ -898,6 +898,25 @@ class TestCreateDownloadFile:
         assert b'name="destination"\r\n\r\n"writable"' in body
         assert b'name="create_list"\r\n\r\nfalse' in body
 
+    @respx.mock
+    async def test_torrent_upload_timeout_is_a_non_retryable_timeout(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """#154: the tool reports a structured timeout and says to check before
+        retrying, since DSM may already have created the task."""
+        _has_default()
+        torrent = tmp_path / "x.torrent"
+        torrent.write_bytes(b"x")
+        respx.post("http://nas:5000/webapi/entry.cgi").mock(side_effect=httpx.ReadTimeout(""))
+        with pytest.raises(ToolError) as exc:
+            await create_download(mock_client, torrent_file_path=str(torrent))
+        envelope = _envelope(exc.value)
+        assert envelope["code"] == "timeout"
+        assert envelope["retryable"] is False
+        assert "list_downloads" in envelope.get("suggestion", "") or "check" in envelope.get(
+            "suggestion", ""
+        )
+
     async def test_missing_file_raises_not_found(self, mock_client: DsmClient) -> None:
         with pytest.raises(ToolError) as exc:
             await create_download(mock_client, torrent_file_path="/nonexistent/file.torrent")

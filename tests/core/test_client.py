@@ -340,6 +340,18 @@ class TestRequestFormPost:
         assert reauths == 0
 
     @respx.mock
+    async def test_connect_error_raises_structured_error(self) -> None:
+        """#154: a transport failure other than a timeout was also a raw httpx error."""
+        client = make_client(make_api_cache())
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=httpx.ConnectError(""))
+        async with client:
+            with pytest.raises(SynologyError) as exc:
+                await client.request_form_post("SYNO.DownloadStation2.Task", "create", version=2)
+        assert exc.value.error_code.value == "unavailable"
+        assert exc.value.retryable is False
+        assert str(exc.value)
+
+    @respx.mock
     async def test_http_5xx_raises_structured_error(self) -> None:
         from mcp_synology.core.errors import ErrorCode
 
@@ -397,6 +409,45 @@ class TestRequestFormPost:
 class TestCreateDownloadTaskWithFile:
     """Multipart torrent upload via SYNO.DownloadStation2.Task.create (#123 bug 6:
     the v1 multipart path returns 101 on DSM 7.2.2 in every variant)."""
+
+    @pytest.mark.parametrize(
+        ("failure", "code"),
+        [
+            (httpx.ReadTimeout("slow"), "timeout"),
+            (httpx.ConnectTimeout(""), "timeout"),
+            (httpx.ConnectError(""), "unavailable"),
+        ],
+    )
+    @respx.mock
+    async def test_transport_failure_raises_structured_non_retryable_error(
+        self, tmp_path: Path, failure: Exception, code: str
+    ) -> None:
+        """#154: like URI create, a torrent upload that fails in transport must
+        not escape as a raw (possibly empty) httpx error or invite a retry."""
+        client = make_client(make_api_cache())
+        torrent = tmp_path / "x.torrent"
+        torrent.write_bytes(b"x")
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=failure)
+        async with client:
+            with pytest.raises(SynologyError) as exc:
+                await client.create_download_task_with_file(file_path=torrent, filename="x.torrent")
+        assert exc.value.error_code.value == code
+        assert exc.value.retryable is False
+        assert str(exc.value)  # never empty, unlike ConnectTimeout('')
+        assert "check" in (exc.value.suggestion or "")
+
+    @respx.mock
+    async def test_http_5xx_raises_structured_non_retryable_error(self, tmp_path: Path) -> None:
+        client = make_client(make_api_cache())
+        torrent = tmp_path / "x.torrent"
+        torrent.write_bytes(b"x")
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(status_code=502)
+        async with client:
+            with pytest.raises(SynologyError) as exc:
+                await client.create_download_task_with_file(file_path=torrent, filename="x.torrent")
+        assert exc.value.error_code.value == "unavailable"
+        assert exc.value.retryable is False
+        assert "502" in str(exc.value)
 
     @respx.mock
     async def test_ds2_multipart_shape(self, tmp_path: Path) -> None:
