@@ -1066,7 +1066,8 @@ class TestTaskNotFoundOrNotYours:
     """#136, probed on DS 3.9 and 4.1: another user's task and a task that
     doesn't exist look the same. resume/edit/delete answer per-task 544; pause
     answers per-task 404 in a mixed list and fails the whole call with 101 when
-    no ID matches; getinfo fails with 404."""
+    no ID can be paused (missing, not yours, or the caller's own finished or
+    already-paused task); getinfo fails with 404."""
 
     NOT_FOUND = "not found (no such task, or not yours)"
 
@@ -1090,14 +1091,20 @@ class TestTaskNotFoundOrNotYours:
         assert self.NOT_FOUND in result
 
     @respx.mock
-    async def test_pause_101_when_no_id_matches_is_not_found(self, mock_client: DsmClient) -> None:
+    async def test_pause_101_names_every_cause(self, mock_client: DsmClient) -> None:
+        """QA on #146: pause's whole-call 101 also covers the caller's own task when it
+        is finished or already paused, so the message can't say "not found"."""
         get_route(TASK, "pause", version=1).respond(json=err(101))
         with pytest.raises(ToolError) as exc:
             await pause_download(mock_client, task_ids=["dbid_9"])
         envelope = _envelope(exc.value)
-        assert envelope["code"] == "not_found"
+        assert envelope["code"] == "invalid_parameter"
+        assert "could be paused" in envelope["message"]
         assert "another user" in envelope["message"]
+        assert "finished, or already paused" in envelope["message"]
+        assert "were found" not in envelope["message"]
         assert "list_downloads" in envelope["suggestion"]
+        assert "status" in envelope["suggestion"]
 
     @respx.mock
     async def test_resume_101_is_not_reinterpreted(self, mock_client: DsmClient) -> None:

@@ -228,12 +228,12 @@ class AuthManager:
         except SynologyError as e:
             if e.code == _ERROR_2FA_REQUIRED:
                 if device_id:
-                    # DSM no longer trusts the stored token: it expired, or the
-                    # trusted device was removed in DSM's security settings.
+                    # DSM no longer trusts the stored token, e.g. the trusted
+                    # device was removed in DSM's security settings.
                     logger.debug("Login failed: DSM rejected the stored 2FA device token")
                     message = (
                         "2FA is required and DSM rejected the stored device token "
-                        "(it may have expired or been removed on the NAS). "
+                        "(it may have been removed or invalidated on the NAS). "
                         "Run 'mcp-synology setup' to sign in with a new 2FA code."
                     )
                 else:

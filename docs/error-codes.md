@@ -26,6 +26,9 @@ Common causes:
 
 - Wrong username or password in the credential store.
 - 2FA is enforced on the account but has not been bootstrapped via `mcp-synology setup`.
+- 2FA is set up, but DSM rejected the stored device token (the message says so),
+  for example because the trusted device was removed in **Personal → Security →
+  Sign-in Activity**.
 - The account is disabled in DSM.
 - The IP has been auto-blocked after too many failed attempts.
 
@@ -33,9 +36,9 @@ Fix:
 
 1. Run `mcp-synology check -v`. The verbose output exercises the full auth chain
    and reports which step fails (lookup → request → response).
-2. If 2FA is required, run `mcp-synology setup` and complete the OTP exchange.
-   This stores the device token in the keyring so subsequent runs do not need
-   the OTP code.
+2. If 2FA is required, or DSM rejected the stored device token, run
+   `mcp-synology setup` and complete the OTP exchange. This stores a new device
+   token in the keyring so subsequent runs do not need the OTP code.
 3. If the IP is auto-blocked, sign in to DSM directly and clear the entry at
    **Control Panel → Security → Account → Auto Block → Allow / Block List**.
 4. Verify the account has access to FileStation: **Control Panel → User & Group
@@ -109,8 +112,8 @@ _Paths and files_
 
 ## not_found
 
-**The path could not be resolved on the NAS, or a local file in upload/download
-does not exist.**
+**The path could not be resolved on the NAS, a local file in upload/download
+does not exist, or a Download Station task ID matched no task.**
 
 Common causes:
 
@@ -122,6 +125,9 @@ Common causes:
 - For local-side errors: the local file (upload) or destination folder
   (download) does not exist or is given as a relative path that resolves
   somewhere unexpected.
+- For Download Station tasks: the task ID doesn't exist, or the task belongs to
+  another user. DSM answers both the same way, and an account that isn't a
+  Download Station manager sees only its own tasks.
 
 Fix:
 
@@ -136,6 +142,8 @@ Fix:
    paths resolve against the mcp-synology process working directory, which is
    not the same as your shell's working directory when launched by Claude
    Desktop or another MCP client.
+6. For Download Station task IDs: call `list_downloads` to see the IDs this
+   account can act on.
 
 ## already_exists
 
@@ -174,6 +182,10 @@ Common causes:
   and `2`. DSM stores whatever it is given, so mcp-synology validates it first.
 - DSM error 120: a JSON-format DSM API (e.g. `SYNO.DownloadStation2.*`) rejected
   a parameter's type.
+- `pause_download` with DSM error 101: none of the tasks could be paused. DSM
+  gives the same answer for a missing ID, another user's task, and the
+  caller's own task that is finished or already paused. Check each task's
+  status with `list_downloads`.
 
 Fix:
 
@@ -235,7 +247,7 @@ Fix:
 ## timeout
 
 **A long-running DSM background task did not complete within the timeout window,
-or an HTTP request to DSM timed out.**
+an HTTP request to DSM timed out, or the NAS couldn't be reached in time.**
 
 Affects search, copy, move, delete, and `get_dir_size` — these all run as
 asynchronous DSM tasks that mcp-synology polls. `create_download` can also time
@@ -252,8 +264,20 @@ Common causes:
 - The NAS is starved for CPU or I/O by another workload (Plex transcoding,
   SMR drive write amplification, RAID resync, snapshot replication).
 - Orphaned background tasks from prior aborted runs are competing for resources.
+- The NAS can't be reached at all: it's off or asleep, the network or VPN is
+  down, or the configured host or port is wrong. The message starts "Can't
+  reach the NAS at …" and names the URL and the timeout.
 
 Fix:
+
+**Can't reach the NAS?** If the message starts "Can't reach the NAS at …",
+mcp-synology never got an answer from DSM, so the NAS-side checks below
+can't help. Check that the NAS is powered on and reachable from this
+machine (LAN or VPN), and that `connection` `host`, `port` and `https` in
+the config are right, then run `mcp-synology check -v --config <file>`,
+which tests the connection and login step by step.
+
+Otherwise:
 
 1. Check NAS health first: call `get_resource_usage` to confirm CPU and RAM
    are not pinned. If they are, fix that before retrying.
@@ -271,8 +295,13 @@ Fix:
 
 ## unavailable
 
-**mcp-synology called DSM successfully, but DSM returned an empty payload
-where data was expected — or DSM answered with an HTTP error status.**
+**mcp-synology couldn't connect to the NAS, or it called DSM successfully but
+DSM returned an empty payload where data was expected, or DSM answered with an
+HTTP error status.**
+
+The connection case (the message starts "Can't reach the NAS at …") means no
+DSM answer arrived at all: the connection was refused or the host couldn't be
+resolved or routed to. See **Can't reach the NAS?** under Fix.
 
 The HTTP-status case (e.g. `502 Bad Gateway` from DSM's web server while a
 package such as Download Station is still starting) is reported with the
@@ -280,8 +309,8 @@ status in the message. As with `timeout`, a `create_download` that fails this
 way may still have been applied, so it is marked `retryable=false`; check
 `list_downloads` before retrying.
 
-Affects `get_system_info`, `get_resource_usage`, and similar metric tools.
-The API responded `success=true` but the data block was missing or empty.
+The empty-payload case affects `get_system_info`, `get_resource_usage`, and
+similar metric tools. The API responded `success=true` but the data block was missing or empty.
 
 Common causes:
 
@@ -292,6 +321,15 @@ Common causes:
 - The DSM package providing the metric is stopped.
 
 Fix:
+
+**Can't reach the NAS?** If the message starts "Can't reach the NAS at …",
+mcp-synology never got an answer from DSM, so the NAS-side checks below
+can't help. Check that the NAS is powered on and reachable from this
+machine (LAN or VPN), and that `connection` `host`, `port` and `https` in
+the config are right, then run `mcp-synology check -v --config <file>`,
+which tests the connection and login step by step.
+
+Otherwise:
 
 1. Wait one to two minutes after a NAS reboot before calling system tools.
 2. Verify the DSM user is in the `administrators` group for system-level tools.

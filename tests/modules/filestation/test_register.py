@@ -164,6 +164,17 @@ class TestFilestationToolInvocation:
         await server._tool_manager._tools["get_file_info"].fn(paths=["/a"], additional=["size"])
         assert mock.await_args.kwargs["additional"] == ["size"]
 
+    async def test_get_file_info_description_names_additional(self) -> None:
+        """QA on #146: the client sees only the tool description, not the handler's
+        docstring, so the description itself has to name `additional` and its values."""
+        server, _manager, ctx = _make_ctx()
+        register(ctx)
+        tools = {t.name: t for t in await server.list_tools()}
+        description = tools["get_file_info"].description or ""
+        assert "additional" in description
+        for field in ("real_path", "size", "owner", "time", "perm", "type", "mount_point_type"):
+            assert field in description
+
     async def test_list_recycle_bin_invocation(self, monkeypatch: pytest.MonkeyPatch) -> None:
         server, _manager, ctx = _make_ctx()
         mock = self._capture_call(

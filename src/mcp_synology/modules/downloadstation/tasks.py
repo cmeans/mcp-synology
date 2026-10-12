@@ -49,8 +49,9 @@ def _format_epoch(epoch: int | None) -> str:
 
 # Per-task codes for "no such task, or not yours". Probed on DS 3.9 and 4.1
 # (#136): another user's task and a missing ID look the same. resume, edit and
-# delete answer 544; pause answers 404 (and 101 for the whole call when no ID
-# matches).
+# delete answer 544; pause answers 404 in a mixed list, and 101 for the whole
+# call when no ID can be paused, which also covers the caller's own finished or
+# already-paused task.
 _TASK_NOT_FOUND_CODES = frozenset({404, 544})
 _NOT_FOUND_RESULT = "not found (no such task, or not yours)"
 _NOT_FOUND_SUGGESTION = (
@@ -724,13 +725,22 @@ async def _task_state_change(
         )
     except SynologyError as e:
         if method == "pause" and e.code == 101:
-            # Pause fails the whole call with 101 when no ID matches (#136).
+            # Pause fails the whole call with 101 when no ID can be paused (#136):
+            # a missing ID, another user's task, or an own task that is finished or
+            # already paused all look the same.
             error_response(
-                ErrorCode.NOT_FOUND,
-                f"{operation_label} failed: none of the task IDs ({ids_joined}) were found: "
-                "no such task, or they belong to another user (DSM error 101).",
+                ErrorCode.INVALID_PARAMETER,
+                f"{operation_label} failed: none of the tasks ({ids_joined}) could be paused: "
+                "no such task, it belongs to another user, or it can't be paused "
+                "(finished, or already paused) (DSM error 101).",
                 retryable=False,
-                suggestion=_NOT_FOUND_SUGGESTION,
+                param="task_ids",
+                value=task_ids,
+                suggestion=(
+                    "Check each task's status with list_downloads; only an active task "
+                    "can be paused. An account that isn't a Download Station manager "
+                    "sees only its own tasks."
+                ),
             )
         synology_error_response(operation_label, e)
 

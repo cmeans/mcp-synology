@@ -210,7 +210,7 @@ async def search_files(
         parent = "/".join(fpath.split("/")[:-1]) + "/" if "/" in fpath else ""
 
         add_info = f.get("additional", {})
-        size = "—" if is_dir else format_size(add_info.get("size", 0))
+        size = "—" if is_dir or "size" not in add_info else format_size(add_info["size"])
         mtime = add_info.get("time", {}).get("mtime", 0)
         modified = format_timestamp(mtime) if mtime else "—"
 

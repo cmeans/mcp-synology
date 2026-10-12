@@ -239,7 +239,7 @@ The auth manager auto-detects the appropriate authentication path rather than re
 1. **If device_id is available** → attempt login with account + passwd + device_name + device_id (Path B: 2FA with remembered device). This is the steady-state for 2FA users.
 2. **If no device_id and login succeeds** → account has no 2FA (Path A: simple login). Done.
 3. **If no device_id and DSM returns error 403** → 2FA is required but no device token exists. Server cannot proceed; the user must run the setup CLI to bootstrap. See [Setup / Bootstrap Flow](#setup--bootstrap-flow).
-4. **If a device_id was sent and DSM still returns error 403** → DSM rejected the stored device token (it expired, or the trusted device was removed in DSM). The error says so, rather than reporting that no token exists, and the user re-runs the setup CLI to sign in with a new 2FA code.
+4. **If a device_id was sent and DSM still returns error 403** → DSM rejected the stored device token (for example, the trusted device was removed in DSM). The error says so, rather than reporting that no token exists, and the user re-runs the setup CLI to sign in with a new 2FA code.
 
 ### Rejected Auth Approaches
 

@@ -120,7 +120,7 @@ async def get_file_info(
         name = f.get("name", "")
         path = f.get("path", "")
         ftype = "Directory" if f.get("isdir") else "File"
-        size = format_size(add_info.get("size", 0)) if not f.get("isdir") else "—"
+        size = "—" if f.get("isdir") or "size" not in add_info else format_size(add_info["size"])
         mtime = add_info.get("time", {}).get("mtime", 0)
         modified = format_timestamp(mtime) if mtime else "—"
         rows.append([name, path, ftype, size, modified])
@@ -145,9 +145,16 @@ def _format_single_info(file_data: dict[str, Any]) -> str:
         pairs.append(("Real path", real_path))
 
     pairs.append(("Type", "Directory" if is_dir else "File"))
+    # DSM's "type" is the extension type ("ISO"; "" for a folder) and
+    # "mount_point_type" is "" unless the path is a mount point.
+    if add_info.get("type"):
+        pairs.append(("File type", str(add_info["type"])))
+    if add_info.get("mount_point_type"):
+        pairs.append(("Mount point", str(add_info["mount_point_type"])))
 
-    if not is_dir:
-        pairs.append(("Size", format_size(add_info.get("size", 0))))
+    # Only when DSM returned it: an `additional` without "size" isn't a 0-byte file.
+    if not is_dir and "size" in add_info:
+        pairs.append(("Size", format_size(add_info["size"])))
 
     owner_info = add_info.get("owner", {})
     user = owner_info.get("user", "")
