@@ -96,14 +96,14 @@ The tools render per-task 544 and 404 as `not found (no such task, or not yours)
 DSM returns tracker announce URLs and task source URIs verbatim. A private tracker's announce URL embeds the user's **passkey** (`/announce/<passkey>`), and a source URI can carry `user:pass@` or tokens. Everything that shows a URL goes through `core/redaction.py` (#143):
 
 - userinfo becomes `***@`
-- every query value becomes `***`
-- a token-like path segment (16+ of `[A-Za-z0-9_-]`, containing both a letter and a digit) becomes `***`
+- every query value and path-parameter value (`;sid=`) becomes `***`
+- a token inside a path segment becomes `***`: a run of `[A-Za-z0-9_-]` holding an alphanumeric stretch of 16+ characters with both a letter and a digit, or a UUID. So `<passkey>.torrent` becomes `***.torrent`, while names of short words (`ubuntu-24-04-desktop-amd64`) are kept
 - the fragment is dropped
-- inside a magnet, the URL-valued parameters (`tr`, `ws`, `as`, `xs`) are redacted recursively
+- a magnet keeps only `xt`, `dn`, `xl` and `kt` as they are, redacts its URL-valued parameters (`tr`, `ws`, `as`, `xs`) recursively, and masks every other value. A tracker URL pasted unencoded splits on `&`, so its `passkey=` lands at the top level, where it's masked
 
 That covers `get_download_info`'s Trackers table and URI line, and every `DsmClient` DEBUG request log. DSM still receives the real values.
 
-Task titles get a narrower pass (`redact_title`): DSM titles an HTTP task with its URL's tail, query string included (`file.bin&_sid=...`, seen on vdsm). So `?key=` and `&key=` values in a title, and any whole URL in it, are masked in `list_downloads` and `get_download_info`. Token-shaped words are kept, because in a title they're names (`Show_Series_1_2026_1080p`).
+Task titles get a narrower pass (`redact_title`): DSM titles an HTTP task with its URL's tail, query string included (`file.bin&_sid=...`, seen on vdsm). So `?key=`, `&key=` and `;key=` values in a title, and any whole URL in it, are masked in `list_downloads` and `get_download_info`. Token-shaped words are kept, because in a title they're names (`Show_Series_1_2026_1080p`).
 
 ### Formatting
 
