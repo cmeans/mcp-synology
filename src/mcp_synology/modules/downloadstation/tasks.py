@@ -33,6 +33,11 @@ if TYPE_CHECKING:
 
 _VALID_STATUS_FILTERS: set[str] = {"all", *STATUS_GROUPS.keys()}
 
+# sort_by -> the detail timestamp to sort on, newest first (#145). "queue" keeps
+# DSM's own order (creation order, oldest first).
+_SORT_KEYS: dict[str, str] = {"created": "create_time", "completed": "completed_time"}
+_VALID_SORTS: set[str] = {"queue", *_SORT_KEYS}
+
 
 def _format_epoch(epoch: int | None) -> str:
     """Render an epoch timestamp using the shared formatter; '—' for None/0."""
@@ -45,8 +50,9 @@ async def list_downloads(
     client: DsmClient,
     *,
     status_filter: str = "all",
+    sort_by: str = "queue",
     offset: int = 0,
-    limit: int = 100,
+    limit: int = 25,
 ) -> str:
     """List download tasks in the Download Station queue.
 
@@ -56,8 +62,9 @@ async def list_downloads(
     - Unfiltered, one v1 page is fetched. A short page gives the total
       directly; a full page takes it from DS2 ``Task.list`` (``limit=1``),
       falling back to a v1 count without ``additional`` groups.
-    - Filtered, every task is fetched (``limit=-1``) and filtered here, then
-      the requested page of the filtered list is shown.
+    - Filtered or sorted (``sort_by`` ``created`` / ``completed``, newest
+      first, never-completed last; #145), every task is fetched
+      (``limit=-1``), filtered and sorted here, then the requested page is shown.
 
     Only the ``detail`` and ``transfer`` groups are requested, to keep rows
     cheap; ``get_download_info`` fetches the full set for a single task.
@@ -71,9 +78,18 @@ async def list_downloads(
             value=status_filter,
             valid=sorted(_VALID_STATUS_FILTERS),
         )
+    if sort_by not in _VALID_SORTS:
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            f"List downloads failed: unknown sort_by {sort_by!r}.",
+            retryable=False,
+            param="sort_by",
+            value=sort_by,
+            valid=sorted(_VALID_SORTS),
+        )
 
     try:
-        if status_filter == "all":
+        if status_filter == "all" and sort_by == "queue":
             tasks = await _list_tasks(client, offset=offset, limit=limit)
             # A short page ends the queue, so it gives the total, unless it's
             # empty past offset 0 (offset beyond the end: count instead).
@@ -82,8 +98,14 @@ async def list_downloads(
             else:
                 total = await _count_tasks(client)
         else:
-            wanted = STATUS_GROUPS[status_filter]
-            matching = [t for t in await _list_tasks(client) if t.get("status") in wanted]
+            matching = await _list_tasks(client)
+            if status_filter != "all":
+                wanted = STATUS_GROUPS[status_filter]
+                matching = [t for t in matching if t.get("status") in wanted]
+            if sort_by in _SORT_KEYS:
+                key = _SORT_KEYS[sort_by]
+                # Stable sort, newest first; a 0/absent time (never completed) sorts last.
+                matching.sort(key=lambda t: int(_detail(t).get(key) or 0), reverse=True)
             total = len(matching)
             tasks = matching[offset : offset + limit]
     except SynologyError as e:
@@ -92,9 +114,24 @@ async def list_downloads(
     # Non-managers only ever see their own tasks (#123), so an empty or short
     # list must not read as "nothing is downloading on the NAS".
     own_tasks_only = await ds_is_manager(client) is False
-    scope = f"{status_filter}; your tasks only" if own_tasks_only else status_filter
+    scope = status_filter
+    if sort_by != "queue":
+        scope += f"; newest {sort_by} first"
+    if own_tasks_only:
+        scope += "; your tasks only"
     heading = f"Download Station queue ({scope})"
-    headers = ["ID", "Title", "Type", "Status", "Size", "Progress", "Speed", "ETA"]
+    headers = [
+        "ID",
+        "Title",
+        "Type",
+        "Status",
+        "Size",
+        "Progress",
+        "Down",
+        "Up",
+        "ETA",
+        "Completed",
+    ]
 
     if not tasks:
         result = format_table(headers=headers, rows=[], title=heading)
@@ -108,6 +145,7 @@ async def list_downloads(
         transfer = t.get("additional", {}).get("transfer", {})
         size_down = int(transfer.get("size_downloaded", 0))
         speed_down = int(transfer.get("speed_download", 0))
+        speed_up = int(transfer.get("speed_upload", 0))
         rows.append(
             [
                 t.get("id", "—"),
@@ -117,7 +155,9 @@ async def list_downloads(
                 format_size(size_total),
                 format_transfer_progress(size_down, size_total),
                 format_speed(speed_down),
+                format_speed(speed_up),
                 format_eta(size_down, size_total, speed_down),
+                _format_epoch(_detail(t).get("completed_time")),
             ]
         )
 
@@ -127,6 +167,11 @@ async def list_downloads(
     if last < total:
         result += f" Pass offset={last} for the next page."
     return result
+
+
+def _detail(task: dict[str, Any]) -> dict[str, Any]:
+    detail: dict[str, Any] = (task.get("additional") or {}).get("detail") or {}
+    return detail
 
 
 async def _list_tasks(

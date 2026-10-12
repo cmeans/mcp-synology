@@ -131,6 +131,19 @@ class TestDownloadstationToolInvocation:
         manager.get_client.assert_awaited()
         mock.assert_awaited_once()
 
+    async def test_list_downloads_passes_sort_by_and_defaults(self, monkeypatch) -> None:
+        """#145: sort_by reaches the handler; the default page is 25."""
+        import inspect
+
+        server, _manager, ctx = _make_ctx()
+        target = "mcp_synology.modules.downloadstation.tasks.list_downloads"
+        mock = self._capture_call(monkeypatch, target)
+        register(ctx)
+        fn = server._tool_manager._tools["list_downloads"].fn
+        assert inspect.signature(fn).parameters["limit"].default == 25
+        await fn(sort_by="completed")
+        assert mock.await_args.kwargs["sort_by"] == "completed"
+
     async def test_get_download_info_invocation(self, monkeypatch) -> None:
         server, _manager, ctx = _make_ctx()
         target = "mcp_synology.modules.downloadstation.tasks.get_download_info"
@@ -313,7 +326,8 @@ class TestModuleInfoDescriptions:
         """#140: the assistant must know the footer carries the true total."""
         desc = self._desc("list_downloads")
         assert "true total and the next offset" in desc
-        assert "searches the whole queue" in desc
+        assert "covers the whole queue" in desc
+        assert "sort_by=completed" in desc
 
     def test_delete_download_describes_real_file_semantics(self) -> None:
         desc = self._desc("delete_download")

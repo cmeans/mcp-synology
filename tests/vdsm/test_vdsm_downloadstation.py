@@ -395,6 +395,28 @@ class TestVdsmDownloadStationTasks:
         assert len(ids) == 1, created
         assert ids[0] in await _all_task_ids(client)
 
+    async def test_sort_by_completed_and_completed_column(
+        self, nas_client: Any, _local_source: str
+    ) -> None:
+        """#145: the finished task sorts ahead of a newer unfinished one, and the
+        list shows its completion time."""
+        from mcp_synology.modules.downloadstation.tasks import create_download, list_downloads
+
+        client, _, _, _ = _unpack(nas_client)
+        finished = _ids_in(
+            await create_download(client, uri=_local_source, destination="writable")
+        )[0]
+        await _wait_for(client, finished, lambda t: t["status"] == "finished")
+        pending = _ids_in(await create_download(client, uri=_magnet(7), destination="writable"))[0]
+
+        assert _ids_in(await list_downloads(client)) == [finished, pending]  # queue order
+        latest = await list_downloads(client, sort_by="completed", limit=1)
+        assert _ids_in(latest) == [finished], latest
+        assert "newest completed first" in latest
+        row = next(line for line in latest.splitlines() if finished in line)
+        assert re.search(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}", row), row  # Completed column
+        assert "2 task(s) total; showing 1–1." in latest
+
     async def test_delete_keeps_finished_file(self, nas_client: Any, _local_source: str) -> None:
         """#123 bug 7: DSM never deletes a finished task's file."""
         from mcp_synology.modules.downloadstation.tasks import create_download, delete_download

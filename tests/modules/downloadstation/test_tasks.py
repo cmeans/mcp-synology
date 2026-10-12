@@ -17,6 +17,7 @@ import pytest
 import respx
 from mcp.server.fastmcp.exceptions import ToolError
 
+from mcp_synology.core.formatting import format_timestamp
 from mcp_synology.modules.downloadstation.tasks import (
     create_download,
     delete_download,
@@ -195,7 +196,7 @@ class TestListDownloadsPaging:
     @respx.mock
     async def test_short_page_needs_no_count(self, mock_client: DsmClient) -> None:
         _manager()
-        _v1_list(limit="100").respond(json=_page(3))
+        _v1_list(limit="25").respond(json=_page(3))
         ds2 = _ds2_total(999)
         result = await list_downloads(mock_client)
         assert not ds2.called
@@ -234,7 +235,7 @@ class TestListDownloadsPaging:
     @respx.mock
     async def test_offset_past_the_end(self, mock_client: DsmClient) -> None:
         _manager()
-        _v1_list(limit="100").respond(json=ok({"offset": 500, "total": 0, "tasks": []}))
+        _v1_list(limit="25").respond(json=ok({"offset": 500, "total": 0, "tasks": []}))
         _ds2_total(12)
         result = await list_downloads(mock_client, offset=500)
         assert "No items to display" in result
@@ -264,6 +265,98 @@ class TestListDownloadsPaging:
         assert _ids(result) == ["dbid_3", "dbid_4"]
         assert "5 task(s) total; showing 3–4." in result
         assert "offset=4" in result
+
+
+def _timed(
+    task_id: str, *, created: int, completed: int = 0, down: int = 0, up: int = 0
+) -> dict[str, Any]:
+    """A task row with creation/completion times and transfer speeds set."""
+    row = _task(task_id, "seeding" if completed else "downloading", title="timed")
+    row["additional"]["detail"].update({"create_time": created, "completed_time": completed})
+    row["additional"]["transfer"].update({"speed_download": down, "speed_upload": up})
+    return row
+
+
+class TestListDownloadsColumnsAndSort:
+    """#145: upload speed, completion time, sort_by, and a smaller default page."""
+
+    @respx.mock
+    async def test_down_and_up_speed_columns(self, mock_client: DsmClient) -> None:
+        _manager()
+        _v1_list().respond(
+            json=ok({"offset": 0, "total": 1, "tasks": [_timed("dbid_1", created=1, up=25088)]})
+        )
+        result = await list_downloads(mock_client)
+        header = result.splitlines()[2]
+        assert "Down" in header and "Up" in header and "Speed" not in header
+        assert "24.5 KB/s" in result
+
+    @respx.mock
+    async def test_completed_column(self, mock_client: DsmClient) -> None:
+        _manager()
+        tasks = [
+            _timed("dbid_1", created=1_791_700_000, completed=1_791_771_855),
+            _timed("dbid_2", created=1_791_700_100),
+        ]
+        _v1_list().respond(json=ok({"offset": 0, "total": 2, "tasks": tasks}))
+        result = await list_downloads(mock_client)
+        assert "Completed" in result.splitlines()[2]
+        assert format_timestamp(1_791_771_855) in result
+        row_2 = next(line for line in result.splitlines() if "dbid_2" in line)
+        assert row_2.rstrip().endswith("—") or " — " in row_2
+
+    @respx.mock
+    async def test_sort_by_completed_finds_the_latest_across_the_queue(
+        self, mock_client: DsmClient
+    ) -> None:
+        """Creation order isn't completion order: the newest task finished first."""
+        _manager()
+        tasks = [_timed(f"dbid_{i}", created=i, completed=1000 + i) for i in range(1, 60)]
+        tasks.append(_timed("dbid_60", created=60, completed=1001))  # newest, finished early
+        tasks.append(_timed("dbid_61", created=61))  # still downloading
+        _v1_list(limit="-1").respond(json=ok({"offset": 0, "total": 61, "tasks": tasks}))
+        result = await list_downloads(mock_client, sort_by="completed", limit=1)
+        assert _ids(result) == ["dbid_59"]
+        assert "61 task(s) total; showing 1–1." in result
+
+    @respx.mock
+    async def test_sort_by_completed_puts_unfinished_last(self, mock_client: DsmClient) -> None:
+        _manager()
+        tasks = [_timed("dbid_1", created=1), _timed("dbid_2", created=2, completed=5)]
+        _v1_list(limit="-1").respond(json=ok({"offset": 0, "total": 2, "tasks": tasks}))
+        result = await list_downloads(mock_client, sort_by="completed")
+        assert _ids(result) == ["dbid_2", "dbid_1"]
+
+    @respx.mock
+    async def test_sort_by_created_is_newest_first(self, mock_client: DsmClient) -> None:
+        _manager()
+        tasks = [_timed(f"dbid_{i}", created=i) for i in range(1, 4)]
+        _v1_list(limit="-1").respond(json=ok({"offset": 0, "total": 3, "tasks": tasks}))
+        result = await list_downloads(mock_client, sort_by="created")
+        assert _ids(result) == ["dbid_3", "dbid_2", "dbid_1"]
+
+    @respx.mock
+    async def test_sort_and_filter_combine(self, mock_client: DsmClient) -> None:
+        _manager()
+        tasks = [
+            _timed("dbid_1", created=1, completed=9),
+            _timed("dbid_2", created=2),
+            _timed("dbid_3", created=3, completed=7),
+        ]
+        _v1_list(limit="-1").respond(json=ok({"offset": 0, "total": 3, "tasks": tasks}))
+        result = await list_downloads(mock_client, status_filter="finished", sort_by="completed")
+        assert _ids(result) == ["dbid_1", "dbid_3"]
+
+    async def test_unknown_sort_by_raises_tool_error(self, mock_client: DsmClient) -> None:
+        with pytest.raises(ToolError, match="sort_by"):
+            await list_downloads(mock_client, sort_by="size")
+
+    @respx.mock
+    async def test_default_page_is_25(self, mock_client: DsmClient) -> None:
+        _manager()
+        route = _v1_list(limit="25").respond(json=_page(3))
+        await list_downloads(mock_client)
+        assert route.called
 
 
 def _ids(text: str) -> list[str]:
