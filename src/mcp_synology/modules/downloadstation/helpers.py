@@ -73,20 +73,20 @@ def task_error_detail(task: dict[str, Any]) -> object:
     return extra.get("error_detail") if isinstance(extra, dict) else None
 
 
-def normalize_destination(destination: str, *, operation: str) -> str:
+def normalize_destination(destination: str, *, operation: str, param: str = "destination") -> str:
     """Make a destination share-relative, as Download Station requires.
 
     File Station shows paths as ``/share/...``; DS rejects that form (DSM 403
     "Destination doesn't exist" on create, error 100 on edit), so a leading or
-    trailing ``/`` is dropped.
+    trailing ``/`` is dropped. ``param`` names the caller's argument in errors.
     """
     relative = destination.strip().strip("/")
     if not relative:
         error_response(
             ErrorCode.INVALID_PARAMETER,
-            f"{operation} failed: destination {destination!r} names no shared folder.",
+            f"{operation} failed: {param} {destination!r} names no shared folder.",
             retryable=False,
-            param="destination",
+            param=param,
             value=destination,
             suggestion="Pass a share-relative path such as 'video/Torrents'.",
         )

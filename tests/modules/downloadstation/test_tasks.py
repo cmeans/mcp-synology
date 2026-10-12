@@ -1069,6 +1069,29 @@ class TestEditDownload:
         await edit_download(mock_client, task_ids=["dbid_1"], destination="/testshare/")
         assert dict(route.calls.last.request.url.params)["destination"] == "testshare"
 
+    @respx.mock
+    async def test_edit_100_hints_at_the_destination(self, mock_client: DsmClient) -> None:
+        """QA on #147: a missing folder (e.g. "/volume1/testshare") makes Task.edit
+        fail with a bare 100 on vdsm 7.1 and 7.2.2; point the model at the cause."""
+        get_route(TASK, "edit", version=2).respond(json=err(100))
+        with pytest.raises(ToolError) as exc:
+            await edit_download(mock_client, task_ids=["dbid_1"], destination="/volume1/testshare")
+        envelope = _envelope(exc.value)
+        assert "DSM error 100" in envelope["message"]
+        assert "share-relative" in envelope["suggestion"]
+        assert "/volume1" in envelope["suggestion"]
+        assert "list_files" in envelope["suggestion"]
+
+    @respx.mock
+    async def test_create_403_mentions_the_volume_form(self, mock_client: DsmClient) -> None:
+        _has_default()
+        post_route(TASK2, "create", version=2).respond(json=err(403))
+        with pytest.raises(ToolError) as exc:
+            await create_download(
+                mock_client, uri="magnet:?xt=urn:btih:abc", destination="/volume1/video"
+            )
+        assert "/volume1" in _envelope(exc.value)["suggestion"]
+
     async def test_nas_with_task_v1_only_gets_clear_error(self, mock_client: DsmClient) -> None:
         mock_client.api_cache[TASK] = mock_client.api_cache[TASK].model_copy(
             update={"max_version": 1}

@@ -168,7 +168,7 @@ async def set_download_config(
         fields["emule_max_upload"] = str(emule_max_upload)
     if default_destination is not None:
         fields["default_destination"] = normalize_destination(
-            default_destination, operation="Set download config"
+            default_destination, operation="Set download config", param="default_destination"
         )
 
     if not fields:

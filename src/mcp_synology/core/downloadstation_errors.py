@@ -37,8 +37,9 @@ DOWNLOADSTATION_ERROR_CODES: dict[int, tuple[str, str]] = {
     ),
     403: (
         "Destination doesn't exist",
-        "Destination path doesn't exist on the NAS. Verify the share and "
-        "folder with list_files before retrying.",
+        "Destination path doesn't exist on the NAS. Pass a share-relative path "
+        "('video/Torrents', not '/volume1/video/Torrents') and verify the share "
+        "and folder with list_files before retrying.",
     ),
     404: (
         "Invalid task id",

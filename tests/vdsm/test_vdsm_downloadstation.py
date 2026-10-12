@@ -387,6 +387,13 @@ class TestVdsmDownloadStationTasks:
         assert "writable" in await get_download_info(client, task_id=task_id)
         assert "ok" in await edit_download(client, task_ids=[task_id], destination="/testshare/")
         assert "testshare" in await get_download_info(client, task_id=task_id)
+        # A folder that doesn't exist (a /volume1 real path, as get_file_info shows):
+        # edit fails with a bare DSM 100, so the error must point at the destination.
+        with pytest.raises(ToolError) as exc:
+            await edit_download(client, task_ids=[task_id], destination="/volume1/testshare")
+        error = _error(exc.value)
+        assert "DSM error 100" in error["message"], error
+        assert "share-relative" in error["suggestion"]
 
     async def test_error_task_shows_dsm_reason(self, nas_client: Any, _clean_queue: None) -> None:
         """DSM sets ``status_extra.error_detail`` on a failed task (``broken_link`` for a 404)."""
