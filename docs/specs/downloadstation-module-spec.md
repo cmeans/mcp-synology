@@ -47,7 +47,7 @@ The module is **opt-in**: add `downloadstation` under the top-level `modules:` k
 - **Everything is GET,** per the project rule, with **one scoped exception:** URI `Task.create` (DS2 v2, and the v1 fallback) is sent as a form POST through `DsmClient.request_form_post()`. A GET URL past about 8 KB gets HTTP 414 from DSM (a magnet with many trackers, or a URI list), and a GET would put source-URL credentials in access logs. Nothing else may use `request_form_post()`.
 - **Torrent and NZB upload** is a DS2 multipart POST (`create_download_task_with_file()`, file part named `torrent`).
 - **Version pins:** `Task.edit` is pinned to exactly v2 (it doesn't exist at v1). DS2 `Task.create` and DS2 `Task.list` are pinned to v2.
-- **Never retried blindly:** for **URI** create (`request_form_post()`), timeouts and non-2xx responses map to `timeout` / `unavailable` with `retryable: false`, because DSM may already have created the task. The torrent/NZB multipart path (`create_download_task_with_file()`) doesn't do this yet: a timeout or HTTP error there escapes as a raw httpx error (#154).
+- **Never retried blindly:** both create paths, URI create (`request_form_post()`) and torrent/NZB upload (`create_download_task_with_file()`), send through `_guarded_post()`. A timeout maps to `timeout`, a connection failure or a non-2xx response to `unavailable`, and an HTTP 414 to `invalid_parameter`, all with `retryable: false` and a "check before retrying" suggestion, because DSM may already have created the task. A message is never empty (#155).
 
 ### Statuses
 

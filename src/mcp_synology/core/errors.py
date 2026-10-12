@@ -136,9 +136,10 @@ class InvalidParameterError(SynologyError):
 class DsmUnavailableError(SynologyError):
     """DSM answered with a non-2xx HTTP status (e.g. a 502 from its web server).
 
-    Raised only by ``DsmClient.request_form_post``, whose one caller is the
-    non-idempotent Download Station ``Task.create``. DSM may already have
-    applied the request, so a blind retry could duplicate it: not retryable.
+    Raised only for the non-idempotent Download Station ``Task.create`` POSTs
+    (``request_form_post`` and ``create_download_task_with_file``), also when
+    DSM can't be reached. DSM may already have applied the request, so a
+    blind retry could duplicate it: not retryable.
     """
 
     error_code = ErrorCode.UNAVAILABLE
