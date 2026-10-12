@@ -61,7 +61,7 @@
 
 ### Changed
 
-- **Glama listing restored** (#PR). The Glama score badge is back in `README.md`, and `glama.json` (the maintainer claim) is back at the repo root. #88 removed both while Glama's scoring had problems; those are now fixed on Glama's side.
+- **Glama listing restored** (#150) — reverts #88. The Glama score badge is back in `README.md`, and `glama.json` (the maintainer claim) is back at the repo root. #88 removed both because Glama's Maintenance score read planned roadmap issues as unanswered support requests; Glama has fixed that metric, and the badge now reports an A.
 
 - **Bump uv group: mcp 1.26.0→1.28.1, anyio 4.12.1→4.14.2, cryptography 46.0.7→50.0.0, pydantic-settings 2.13.1→2.14.2, pyjwt 2.12.1→2.15.0, python-multipart 0.0.27→0.0.31, starlette 0.52.1→1.3.1, clearing all 34 open Dependabot alerts (2 critical, 12 high)** (#122) — Dependabot security update. `mcp` is the only direct dependency; the rest are transitive, and no `pyproject.toml` constraint changed. Every open alert's vulnerable range excludes the new version (checked against `uv.lock`). mcp-synology serves MCP over **stdio only** (`cli/main.py`: `server.run(transport="stdio")`), so the HTTP/WebSocket-transport advisories below aren't reachable today. They would be as soon as a network transport is added. The critical and high advisories, with their exposure:
   - **anyio** (2 alerts): **critical** [GHSA-82r6-8w77-94w6](https://github.com/advisories/GHSA-82r6-8w77-94w6), `TLSStream` encodes host names with IDNA 2003, which enables potential TLS certificate spoofing. **Reachable:** every HTTPS request to the NAS goes through httpcore's anyio backend and `TLSStream.wrap(hostname=…)`. In practice only non-ASCII NAS host names are affected.
