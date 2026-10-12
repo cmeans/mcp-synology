@@ -54,7 +54,12 @@ MODULE_INFO = ModuleInfo(
             description=(
                 "List download tasks in the Download Station queue. Filter by status "
                 "(downloading/finished/paused/error/all). Returns a table with id, title, "
-                "type (bt/http/ftp/nzb), status, size, progress%, current speed, and ETA. "
+                "type (bt/http/ftp/nzb), status, size, progress%, download and upload "
+                "speed, ETA, and completion time. Paged with offset/limit (default 25); the "
+                "footer gives the true total and the next offset. sort_by: queue (default, "
+                "oldest first), created or completed (newest first; e.g. sort_by=completed, "
+                "limit=1 gives the most recently finished task). A status filter or sort "
+                "covers the whole queue, not just one page. "
                 "Accounts that are not Download Station managers see only their own tasks "
                 "(the output says so), so an empty list does not mean the NAS is idle."
             ),
@@ -220,13 +225,15 @@ def register(ctx: RegisterContext) -> None:
         )
         async def tool_list_downloads(
             status_filter: str = "all",
+            sort_by: str = "queue",
             offset: int = 0,
-            limit: int = 100,
+            limit: int = 25,
         ) -> str:
             client = await manager.get_client()
             return await list_downloads(
                 client,
                 status_filter=status_filter,
+                sort_by=sort_by,
                 offset=offset,
                 limit=limit,
             )
