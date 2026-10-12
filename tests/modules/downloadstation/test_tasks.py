@@ -469,6 +469,43 @@ class TestGetDownloadInfoBtSections:
         assert "Peers" in result and "192.0.2.7" in result and "25%" in result
 
 
+class TestGetDownloadInfoRedaction:
+    """#143: tracker passkeys and source-URL credentials never reach tool output."""
+
+    PASSKEY = "a1B2c3D4e5F6g7H8i9J0"
+
+    @respx.mock
+    async def test_tracker_passkey_is_masked(self, mock_client: DsmClient) -> None:
+        body = captured("task_getinfo_v1")
+        add = body["data"]["tasks"][0]["additional"]
+        add["tracker"] = [
+            {
+                "url": f"https://tracker.example/announce/{self.PASSKEY}",
+                "status": "Success",
+                "seeds": 51,
+                "peers": 3,
+            }
+        ]
+        get_route(TASK, "getinfo", version=1).respond(json=body)
+        result = await get_download_info(mock_client, task_id="dbid_1")
+        assert self.PASSKEY not in result
+        assert "https://tracker.example/announce/***" in result
+        assert "51" in result
+
+    @respx.mock
+    async def test_source_uri_secrets_are_masked(self, mock_client: DsmClient) -> None:
+        body = captured("task_getinfo_v1")
+        detail = body["data"]["tasks"][0]["additional"]["detail"]
+        detail["uri"] = (
+            f"magnet:?xt=urn:btih:{'d' * 40}&dn=show"
+            f"&tr=https%3A%2F%2Ftracker.example%2Fannounce%2F{self.PASSKEY}"
+        )
+        get_route(TASK, "getinfo", version=1).respond(json=body)
+        result = await get_download_info(mock_client, task_id="dbid_1")
+        assert self.PASSKEY not in result
+        assert "dn=show" in result
+
+
 class TestCreateDownloadUri:
     """URI create goes to DS2 Task.create v2 as a form POST (#123 items 9/9a)."""
 

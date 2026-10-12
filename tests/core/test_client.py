@@ -256,6 +256,36 @@ class TestRequestFormPost:
         assert "the-sid" not in caplog.text
 
     @respx.mock
+    async def test_source_url_secrets_redacted_in_debug_log_but_sent_intact(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """#143: a source URI's credentials or tracker passkey must not reach the log."""
+        import json
+        import logging
+
+        passkey = "a1B2c3D4e5F6g7H8i9J0"
+        v1_uri = f"https://alice:s3cret@files.example/x.iso,https://t.example/announce/{passkey}"
+        ds2_url = json.dumps([f"https://t.example/dl?passkey={passkey}"])
+        client = make_client(make_api_cache())
+        v1 = respx.post(f"{BASE_URL}/webapi/DownloadStation/task.cgi").respond(
+            json={"success": True}
+        )
+        ds2 = respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(json={"success": True})
+        caplog.set_level(logging.DEBUG, logger="mcp_synology.core.client")
+        async with client:
+            await client.request_form_post(
+                "SYNO.DownloadStation.Task", "create", version=1, params={"uri": v1_uri}
+            )
+            await client.request_form_post(
+                "SYNO.DownloadStation2.Task", "create", version=2, params={"url": ds2_url}
+            )
+        assert passkey not in caplog.text
+        assert "s3cret" not in caplog.text
+        assert "files.example" in caplog.text  # still useful for debugging
+        assert passkey in v1.calls.last.request.content.decode()  # DSM gets the real URI
+        assert passkey in ds2.calls.last.request.content.decode()
+
+    @respx.mock
     async def test_dsm_error_raises_typed_exception(self) -> None:
         client = make_client(make_api_cache())
         respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(

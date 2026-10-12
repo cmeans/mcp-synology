@@ -24,6 +24,7 @@ from mcp_synology.core.errors import (
     SynologyError,
     error_from_code,
 )
+from mcp_synology.core.redaction import redact_urls
 from mcp_synology.core.state import ApiInfoEntry
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,17 @@ _SESSION_ERROR_CODES = frozenset({106, 107, 119})
 
 # Request params masked as *** in debug logs.
 _SENSITIVE_PARAMS = frozenset({"passwd", "password", "_sid", "device_id", "otp_code"})
+
+
+def _log_safe(
+    params: dict[str, Any], sensitive: frozenset[str] = _SENSITIVE_PARAMS
+) -> dict[str, Any]:
+    """Params as they may be logged: sensitive names masked, URL secrets redacted (#143)."""
+    return {
+        k: "***" if k in sensitive else redact_urls(v) if isinstance(v, str) else v
+        for k, v in params.items()
+    }
+
 
 # Type alias for transfer progress callbacks.
 # Called with (bytes_transferred, total_bytes_or_None).
@@ -280,7 +292,7 @@ class DsmClient:
             req_params["_sid"] = self._sid
 
         # Log request (mask password)
-        log_params = {k: ("***" if k in _SENSITIVE_PARAMS else v) for k, v in req_params.items()}
+        log_params = _log_safe(req_params)
         retry_tag = " (retry)" if _is_retry else ""
 
         # Always use GET with query params. DSM v2 APIs work with GET, and we
@@ -373,7 +385,7 @@ class DsmClient:
         if self._sid:
             query_params["_sid"] = self._sid
 
-        log_data = {k: ("***" if k in _SENSITIVE_PARAMS else v) for k, v in form_data.items()}
+        log_data = _log_safe(form_data)
         retry_tag = " (retry)" if _is_retry else ""
         logger.debug("DSM POST%s: %s/%s v%d — %s", retry_tag, api, method, version, log_data)
 
@@ -468,7 +480,7 @@ class DsmClient:
             query_params["_sid"] = self._sid
 
         _sensitive = frozenset({"_sid"})
-        log_data = {k: ("***" if k in _sensitive else v) for k, v in form_data.items()}
+        log_data = _log_safe(form_data, _sensitive)
         retry_tag = " (retry)" if _is_retry else ""
         logger.debug(
             "DSM POST%s: %s/upload v%d — %s, file=%s",
@@ -570,7 +582,7 @@ class DsmClient:
         if self._sid:
             query_params["_sid"] = self._sid
 
-        log_data = {k: ("***" if k in _SENSITIVE_PARAMS else v) for k, v in form_data.items()}
+        log_data = _log_safe(form_data)
         retry_tag = " (retry)" if _is_retry else ""
         logger.debug(
             "DSM POST%s: %s/create v%d — %s, file=%s",
@@ -669,7 +681,7 @@ class DsmClient:
             params["_sid"] = self._sid
 
         _sensitive = frozenset({"_sid"})
-        log_params = {k: ("***" if k in _sensitive else v) for k, v in params.items()}
+        log_params = _log_safe(params, _sensitive)
         retry_tag = " (retry)" if _is_retry else ""
         logger.debug(
             "DSM GET%s: %s/download v%d — %s",

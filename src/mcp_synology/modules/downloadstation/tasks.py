@@ -17,6 +17,7 @@ from mcp_synology.core.formatting import (
     format_timestamp,
     synology_error_response,
 )
+from mcp_synology.core.redaction import redact_url, redact_urls
 from mcp_synology.modules.downloadstation.helpers import (
     STATUS_GROUPS,
     ds_is_manager,
@@ -304,7 +305,7 @@ async def get_download_info(
     if detail:
         detail_pairs = [
             ("Destination", detail.get("destination", "—")),
-            ("URI", detail.get("uri", "—")),
+            ("URI", redact_urls(str(detail.get("uri", "—")))),
             ("Priority", detail.get("priority", "—")),
             ("Created", _format_epoch(detail.get("create_time"))),
             ("Started", _format_epoch(detail.get("started_time"))),
@@ -351,7 +352,7 @@ async def get_download_info(
     if trackers:
         tracker_rows = [
             [
-                tr.get("url", "—"),
+                redact_url(str(tr.get("url", "—"))),
                 tr.get("status", "—"),
                 str(tr.get("peers", 0)),
                 str(tr.get("seeds", 0)),
