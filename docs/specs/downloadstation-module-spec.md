@@ -122,7 +122,7 @@ DS-specific codes (`core/downloadstation_errors.py`) are dispatched when the API
 | 402 | Destination denied | Check write permission on the destination share |
 | 403 | Destination doesn't exist | Verify the share and folder with `list_files` |
 | 404 | Invalid task id | No such task, or another user's; run `list_downloads` |
-| 405 | Invalid task action | Not valid for the task's current state, e.g. resuming a task that is already running |
+| 405 | Invalid task action | Not valid for the task's current state: resuming an active or finished task, or pausing a paused or finished task (per task, in a list that has other valid IDs) |
 | 406 | No default destination | Set one with `set_download_config` |
 | 407 | Set destination failed | Path invalid or no write permission |
 | 408 | File doesn't exist | A referenced .torrent/.nzb on the NAS is missing |
@@ -421,8 +421,9 @@ Remove tasks.
 **DSM API:** `SYNO.DownloadStation.Task` / `pause` v1
 
 **Tool description (LLM-facing):**
-> Pause one or more download tasks. `task_ids` is a list. Pausing an already-paused task is a no-op
-> for that id; pausing a finished task returns invalid task action.
+> Pause one or more download tasks. `task_ids` is a list. An already-paused or finished task is
+> refused for that id (error 405), while the others are paused. If none of the ids can be paused, the
+> whole call fails with invalid_parameter.
 
 **Parameters:**
 
@@ -432,7 +433,7 @@ Remove tasks.
 
 **Response shape:** a per-task table under `Pause download — N task(s)`, plus the not-found hint when needed.
 
-**Design notes:** pause is the one method that fails the **whole call** with 101 when no ID can be paused. That covers a missing ID, another user's task, and the caller's own finished or already-paused task (probed on DSM 7.1 and 7.2.2), so it becomes `invalid_parameter` naming the IDs and all three causes, not `not_found`.
+**Design notes:** pause is the one method that fails the **whole call** with 101 when no ID can be paused. That covers a missing ID, another user's task, and the caller's own finished or already-paused task (probed on DSM 7.1 and 7.2.2), so it becomes `invalid_parameter` naming the IDs and all three causes, not `not_found`. Within a mixed list, an already-paused or finished task is refused **per task** with 405 while the others are paused; the whole-call 101 happens only when nothing in the call is pausable (QA on #153, DSM 7.1 and 7.2.2).
 
 ---
 
@@ -443,8 +444,8 @@ Remove tasks.
 **DSM API:** `SYNO.DownloadStation.Task` / `resume` v1
 
 **Tool description (LLM-facing):**
-> Resume one or more paused download tasks. `task_ids` is a list. Resuming an already-active task is a
-> no-op for that id.
+> Resume one or more paused download tasks. `task_ids` is a list. An active or finished task is
+> refused for that id (error 405), while the others are resumed.
 
 **Parameters:**
 
@@ -454,7 +455,7 @@ Remove tasks.
 
 **Response shape:** a per-task table under `Resume download — N task(s)`, plus the not-found hint when needed.
 
-**Design notes:** pause and resume share `_task_state_change`. Per-task 544 means not found or not yours.
+**Design notes:** pause and resume share `_task_state_change`. Per-task 544 means not found or not yours. Resuming an active (including `waiting`) or finished task is refused per task with 405; it isn't a no-op (DSM 7.1 and 7.2.2).
 
 ---
 

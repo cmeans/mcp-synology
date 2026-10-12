@@ -348,3 +348,20 @@ class TestModuleInfoDescriptions:
         desc = self._desc("delete_download")
         assert "confirm" in desc
         assert "can't be restored" in desc
+
+    def test_pause_download_describes_real_405_and_101_semantics(self) -> None:
+        """QA on #153, probed on DSM 7.1 and 7.2.2: an already-paused or finished
+        task is refused per task (405); only when nothing is pausable does the
+        whole call fail (101 -> invalid_parameter). Neither is a no-op."""
+        desc = self._desc("pause_download")
+        assert "no-op" not in desc
+        assert "already-paused" in desc and "finished" in desc
+        assert "405" in desc
+        assert "invalid_parameter" in desc
+
+    def test_resume_download_describes_real_405_semantics(self) -> None:
+        """QA on #153: resuming an active or finished task is a per-task 405."""
+        desc = self._desc("resume_download")
+        assert "no-op" not in desc
+        assert "active" in desc and "finished" in desc
+        assert "405" in desc

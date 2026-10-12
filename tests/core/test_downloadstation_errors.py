@@ -41,12 +41,14 @@ class TestDownloadstationErrorCodes:
         assert expected_in_message.lower() in combined
         assert suggestion.strip(), f"code {code} has empty suggestion"
 
-    def test_405_example_is_one_dsm_really_answers_with_405(self) -> None:
-        """Pausing a finished task is a whole-call 101, not 405 (probed in #146), so
-        the suggestion mustn't use it as the example (QA on #153)."""
+    def test_405_suggestion_covers_both_directions(self) -> None:
+        """Probed on DSM 7.1 and 7.2.2 (QA on #153): DSM answers per-task 405 to
+        resuming an active or finished task and to pausing a paused or finished
+        one. (Pausing when nothing in the call is pausable is a whole-call 101
+        instead, #146, but within a mixed list it's 405.)"""
         _, suggestion = DOWNLOADSTATION_ERROR_CODES[405]
-        assert "pausing a finished task" not in suggestion
-        assert "already running" in suggestion
+        assert "resuming an active or finished task" in suggestion
+        assert "pausing a paused or finished task" in suggestion
 
     def test_all_codes_400_through_408_present(self) -> None:
         for code in range(400, 409):
