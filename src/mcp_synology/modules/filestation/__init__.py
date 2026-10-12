@@ -108,7 +108,11 @@ MODULE_INFO = ModuleInfo(
             name="get_file_info",
             description=(
                 "Get detailed metadata for specific files or folders: size, owner, "
-                "timestamps, permissions, and real path."
+                "timestamps, permissions, and real path. `additional` optionally picks "
+                "the DSM fields to fetch: real_path, size, owner, time, perm, type (the "
+                "file's extension type) and mount_point_type (shown only for a mount "
+                "point). Default: real_path, size, owner, time, perm. Unknown values "
+                "are rejected."
             ),
             permission_tier=PermissionTier.READ,
         ),
@@ -408,9 +412,11 @@ def register(ctx: RegisterContext) -> None:
             description=_desc("get_file_info"),
             annotations=_tool_annos["get_file_info"],
         )
-        async def tool_get_file_info(paths: list[str]) -> str:
+        async def tool_get_file_info(paths: list[str], additional: list[str] | None = None) -> str:
             client = await manager.get_client()
-            return manager.with_update_notice(await get_file_info(client, paths=paths))
+            return manager.with_update_notice(
+                await get_file_info(client, paths=paths, additional=additional)
+            )
 
     if "get_dir_size" in ctx.allowed_tools:
 

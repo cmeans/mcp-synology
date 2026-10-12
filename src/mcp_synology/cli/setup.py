@@ -21,7 +21,7 @@ _CONFIG_DIR = Path.home() / ".config" / "mcp-synology"
 @click.command()
 @click.option("-c", "--config", type=click.Path(), help="Path to config file")
 @click.option("-l", "--list", "list_configs", is_flag=True, help="List existing configurations")
-@click.option("--verbose", is_flag=True, help="Enable debug logging")
+@click.option("-v", "--verbose", is_flag=True, help="Enable debug logging")
 def setup(config: str | None, list_configs: bool, verbose: bool) -> None:
     """Interactive credential setup and 2FA bootstrap."""
     _init_early_logging(verbose=verbose)

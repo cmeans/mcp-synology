@@ -47,6 +47,48 @@ def _format_epoch(epoch: int | None) -> str:
     return format_timestamp(float(epoch))
 
 
+# Per-task codes for "no such task, or not yours". Probed on DS 3.9 and 4.1
+# (#136): another user's task and a missing ID look the same. resume, edit and
+# delete answer 544; pause answers 404 in a mixed list, and 101 for the whole
+# call when no ID can be paused, which also covers the caller's own finished or
+# already-paused task.
+_TASK_NOT_FOUND_CODES = frozenset({404, 544})
+_NOT_FOUND_RESULT = "not found (no such task, or not yours)"
+_NOT_FOUND_SUGGESTION = (
+    "Use list_downloads to find task IDs. An account that isn't a Download Station "
+    "manager sees only its own tasks."
+)
+
+
+def _per_task_rows(results: list[dict[str, Any]]) -> tuple[list[list[str]], list[int]]:
+    """Rows of (task ID, result) and the nonzero per-task error codes."""
+    rows: list[list[str]] = []
+    errors: list[int] = []
+    for r in results:
+        err = int(r.get("error", 0))
+        if err == 0:
+            status = "ok"
+        elif err in _TASK_NOT_FOUND_CODES:
+            status = _NOT_FOUND_RESULT
+        else:
+            status = f"error {err}"
+        rows.append([r.get("id", "—"), status])
+        if err:
+            errors.append(err)
+    return rows, errors
+
+
+def _not_found_hint(errors: list[int]) -> str:
+    missing = sum(1 for e in errors if e in _TASK_NOT_FOUND_CODES)
+    if not missing:
+        return ""
+    return "\n\n" + format_status(
+        f"{missing} task(s) not found: no such task, or it belongs to another user. "
+        + _NOT_FOUND_SUGGESTION,
+        success=False,
+    )
+
+
 async def list_downloads(
     client: DsmClient,
     *,
@@ -624,29 +666,24 @@ async def delete_download(
         synology_error_response("Delete download", e)
 
     results = data if isinstance(data, list) else data.get("results", [])
-    rows: list[list[str]] = []
-    errors: list[int] = []
-    for r in results:
-        err = r.get("error", 0)
-        status = "ok" if err == 0 else f"error {err}"
-        rows.append([r.get("id", "—"), status])
-        if err != 0:
-            errors.append(err)
+    rows, errors = _per_task_rows(results)
 
     unfinished = (
         "force_complete requested, but DSM may still discard partial data; check the destination"
         if force_complete
         else "partial data of unfinished tasks discarded"
     )
-    removed = (
-        f"{len(results) - len(errors)} of {len(task_ids)} task(s) removed"
-        if results
-        else f"{len(task_ids)} task(s) removed"
-    )
-    table = format_table(
-        headers=["Task ID", "Result"],
-        rows=rows,
-        title=f"Delete download — {removed}; completed files kept; {unfinished}",
+    if results and len(errors) == len(results):
+        title = f"Delete download — 0 of {len(task_ids)} task(s) removed; nothing was deleted"
+    else:
+        removed = (
+            f"{len(results) - len(errors)} of {len(task_ids)} task(s) removed"
+            if results
+            else f"{len(task_ids)} task(s) removed"
+        )
+        title = f"Delete download — {removed}; completed files kept; {unfinished}"
+    table = format_table(headers=["Task ID", "Result"], rows=rows, title=title) + _not_found_hint(
+        errors
     )
     if force_complete and 405 in errors:
         # Live on DS 3.9 and 4.1 (#130): force_complete on a finished task is
@@ -687,20 +724,33 @@ async def _task_state_change(
             params={"id": ids_joined},
         )
     except SynologyError as e:
+        if method == "pause" and e.code == 101:
+            # Pause fails the whole call with 101 when no ID can be paused (#136):
+            # a missing ID, another user's task, or an own task that is finished or
+            # already paused all look the same.
+            error_response(
+                ErrorCode.INVALID_PARAMETER,
+                f"{operation_label} failed: none of the tasks ({ids_joined}) could be paused: "
+                "no such task, it belongs to another user, or it can't be paused "
+                "(finished, or already paused) (DSM error 101).",
+                retryable=False,
+                param="task_ids",
+                value=task_ids,
+                suggestion=(
+                    "Check each task's status with list_downloads; only an active task "
+                    "can be paused. An account that isn't a Download Station manager "
+                    "sees only its own tasks."
+                ),
+            )
         synology_error_response(operation_label, e)
 
     results = data if isinstance(data, list) else data.get("results", [])
-    rows: list[list[str]] = []
-    for r in results:
-        err = r.get("error", 0)
-        status = "ok" if err == 0 else f"error {err}"
-        rows.append([r.get("id", "—"), status])
-
+    rows, errors = _per_task_rows(results)
     return format_table(
         headers=["Task ID", "Result"],
         rows=rows,
         title=f"{operation_label} — {len(task_ids)} task(s)",
-    )
+    ) + _not_found_hint(errors)
 
 
 async def pause_download(
@@ -782,14 +832,9 @@ async def edit_download(
         synology_error_response("Edit download", e)
 
     results = data if isinstance(data, list) else data.get("results", [])
-    rows: list[list[str]] = []
-    for r in results:
-        err = r.get("error", 0)
-        status = "ok" if err == 0 else f"error {err}"
-        rows.append([r.get("id", "—"), status])
-
+    rows, errors = _per_task_rows(results)
     return format_table(
         headers=["Task ID", "Result"],
         rows=rows,
         title=f"Edit download — {len(task_ids)} task(s), destination={destination}",
-    )
+    ) + _not_found_hint(errors)

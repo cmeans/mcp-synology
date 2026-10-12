@@ -221,6 +221,24 @@ class TestListFiles:
         assert "clip.mp4" in result
 
     @respx.mock
+    async def test_list_files_size_dash_when_not_requested(self, mock_client: DsmClient) -> None:
+        """QA on #146: additional without "size" must not show a file as "0 B"."""
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={
+                "success": True,
+                "data": {
+                    "files": [
+                        {"name": "clip.mp4", "isdir": False, "additional": {"owner": {}}},
+                    ],
+                    "total": 1,
+                },
+            }
+        )
+        result = await list_files(mock_client, path="/video", additional=["owner"])
+        assert "clip.mp4" in result
+        assert "0 B" not in result
+
+    @respx.mock
     async def test_list_files_hides_recycle(self, mock_client: DsmClient) -> None:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
             json={

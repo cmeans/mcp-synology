@@ -1060,3 +1060,79 @@ class TestEditDownload:
         with pytest.raises(ToolError) as exc:
             await edit_download(mock_client, task_ids=["dbid_1"], destination="writable")
         assert _envelope(exc.value)["code"] == "permission_denied"
+
+
+class TestTaskNotFoundOrNotYours:
+    """#136, probed on DS 3.9 and 4.1: another user's task and a task that
+    doesn't exist look the same. resume/edit/delete answer per-task 544; pause
+    answers per-task 404 in a mixed list and fails the whole call with 101 when
+    no ID can be paused (missing, not yours, or the caller's own finished or
+    already-paused task); getinfo fails with 404."""
+
+    NOT_FOUND = "not found (no such task, or not yours)"
+
+    @respx.mock
+    async def test_resume_544_is_not_found_with_hint(self, mock_client: DsmClient) -> None:
+        get_route(TASK, "resume", version=1).respond(
+            json=ok([{"error": 544, "id": "dbid_9"}, {"error": 0, "id": "dbid_1"}])
+        )
+        result = await resume_download(mock_client, task_ids=["dbid_9", "dbid_1"])
+        assert self.NOT_FOUND in result
+        assert "error 544" not in result
+        assert "1 task(s) not found" in result
+        assert "list_downloads" in result
+
+    @respx.mock
+    async def test_pause_404_in_mixed_list_is_not_found(self, mock_client: DsmClient) -> None:
+        get_route(TASK, "pause", version=1).respond(
+            json=ok([{"error": 0, "id": "dbid_1"}, {"error": 404, "id": "dbid_9"}])
+        )
+        result = await pause_download(mock_client, task_ids=["dbid_1", "dbid_9"])
+        assert self.NOT_FOUND in result
+
+    @respx.mock
+    async def test_pause_101_names_every_cause(self, mock_client: DsmClient) -> None:
+        """QA on #146: pause's whole-call 101 also covers the caller's own task when it
+        is finished or already paused, so the message can't say "not found"."""
+        get_route(TASK, "pause", version=1).respond(json=err(101))
+        with pytest.raises(ToolError) as exc:
+            await pause_download(mock_client, task_ids=["dbid_9"])
+        envelope = _envelope(exc.value)
+        assert envelope["code"] == "invalid_parameter"
+        assert "could be paused" in envelope["message"]
+        assert "another user" in envelope["message"]
+        assert "finished, or already paused" in envelope["message"]
+        assert "were found" not in envelope["message"]
+        assert "list_downloads" in envelope["suggestion"]
+        assert "status" in envelope["suggestion"]
+
+    @respx.mock
+    async def test_resume_101_is_not_reinterpreted(self, mock_client: DsmClient) -> None:
+        """Only pause answers 101 for unknown IDs; elsewhere 101 stays a 101."""
+        get_route(TASK, "resume", version=1).respond(json=err(101))
+        with pytest.raises(ToolError) as exc:
+            await resume_download(mock_client, task_ids=["dbid_9"])
+        assert _envelope(exc.value)["code"] != "not_found"
+
+    @respx.mock
+    async def test_edit_544_is_not_found(self, mock_client: DsmClient) -> None:
+        get_route(TASK, "edit", version=2).respond(json=ok([{"error": 544, "id": "dbid_9"}]))
+        result = await edit_download(mock_client, task_ids=["dbid_9"], destination="writable")
+        assert self.NOT_FOUND in result
+
+    @respx.mock
+    async def test_delete_nothing_removed_says_so(self, mock_client: DsmClient) -> None:
+        get_route(TASK, "delete", version=1).respond(json=ok([{"error": 544, "id": "dbid_9"}]))
+        result = await delete_download(mock_client, task_ids=["dbid_9"])
+        title = result.splitlines()[0]
+        assert "0 of 1 task(s) removed" in title
+        assert "nothing was deleted" in title
+        assert "discarded" not in title
+        assert self.NOT_FOUND in result
+
+    @respx.mock
+    async def test_getinfo_404_mentions_other_users(self, mock_client: DsmClient) -> None:
+        get_route(TASK, "getinfo", version=1).respond(json=captured("task_getinfo_bogus"))
+        with pytest.raises(ToolError) as exc:
+            await get_download_info(mock_client, task_id="dbid_9")
+        assert "another user" in _envelope(exc.value)["suggestion"]

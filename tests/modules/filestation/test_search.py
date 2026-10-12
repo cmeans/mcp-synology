@@ -235,6 +235,28 @@ class TestSearchFiles:
         assert captured.get("mtime_to") == "1775044800"  # 2026-04-01 12:00 UTC
 
     @respx.mock
+    async def test_search_size_dash_when_not_requested(self, mock_client: DsmClient) -> None:
+        """QA on #146: additional without "size" must not show a file as "0 B"."""
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            method = dict(request.url.params).get("method")
+            if method == "start":
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "s-sz"}})
+            if method == "list":
+                found = {"name": "a.iso", "path": "/video/a.iso", "isdir": False}
+                found["additional"] = {"owner": {"user": "admin"}}
+                data = {"files": [found], "finished": True, "total": 1}
+                return httpx.Response(200, json={"success": True, "data": data})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        result = await search_files(
+            mock_client, folder_path="/video", pattern="a", additional=["owner"]
+        )
+        assert "a.iso" in result
+        assert "0 B" not in result
+
+    @respx.mock
     async def test_search_additional_round_trips(self, mock_client: DsmClient) -> None:
         """Closes #41: caller-supplied `additional` reaches DSM verbatim.
 

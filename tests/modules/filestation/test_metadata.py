@@ -313,3 +313,105 @@ class TestGetDirSize:
         assert body["error"]["retryable"] is True
         assert body["error"]["param"] == "timeout"
         assert body["error"]["value"] == 1.0
+
+
+class TestGetFileInfoAdditionalValidation:
+    async def test_unknown_additional_is_rejected_before_dsm(self, mock_client: DsmClient) -> None:
+        """Same up-front check as list_files/search_files: DSM ignores unknown fields."""
+        with pytest.raises(ToolError, match="unknown 'additional'"):
+            await get_file_info(mock_client, paths=["/video/a.mkv"], additional=["sizee"])
+
+    @respx.mock
+    async def test_size_line_omitted_when_size_not_requested(self, mock_client: DsmClient) -> None:
+        """QA on #146: additional=["owner"] gives no size, so don't print "Size: 0 B"."""
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={
+                "success": True,
+                "data": {
+                    "files": [
+                        {
+                            "name": "a.iso",
+                            "path": "/video/a.iso",
+                            "isdir": False,
+                            "additional": {"owner": {"user": "admin", "group": "users"}},
+                        }
+                    ]
+                },
+            }
+        )
+        result = await get_file_info(mock_client, paths=["/video/a.iso"], additional=["owner"])
+        assert "Size" not in result
+        assert "0 B" not in result
+        assert "admin (users)" in result
+
+    @respx.mock
+    async def test_table_shows_dash_when_size_not_requested(self, mock_client: DsmClient) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={
+                "success": True,
+                "data": {
+                    "files": [
+                        {
+                            "name": "a.iso",
+                            "path": "/video/a.iso",
+                            "isdir": False,
+                            "additional": {"owner": {"user": "admin"}},
+                        }
+                    ]
+                },
+            }
+        )
+        result = await get_file_info(
+            mock_client, paths=["/video/a.iso", "/video/b.iso"], additional=["owner"]
+        )
+        assert "0 B" not in result
+
+    @respx.mock
+    async def test_type_and_mount_point_type_are_rendered(self, mock_client: DsmClient) -> None:
+        """Shapes from vdsm DSM 7.2.2: ``type`` is the extension type ("ISO", "" for a
+        folder); ``mount_point_type`` is "" unless the path is a mount point."""
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={
+                "success": True,
+                "data": {
+                    "files": [
+                        {
+                            "name": "a.iso",
+                            "path": "/video/a.iso",
+                            "isdir": False,
+                            "additional": {"type": "ISO", "mount_point_type": "remote"},
+                        }
+                    ]
+                },
+            }
+        )
+        result = await get_file_info(
+            mock_client, paths=["/video/a.iso"], additional=["type", "mount_point_type"]
+        )
+        assert "File type" in result and "ISO" in result
+        assert "Mount point" in result and "remote" in result
+
+    @respx.mock
+    async def test_empty_type_and_mount_point_type_are_omitted(
+        self, mock_client: DsmClient
+    ) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={
+                "success": True,
+                "data": {
+                    "files": [
+                        {
+                            "name": "dir",
+                            "path": "/video/dir",
+                            "isdir": True,
+                            "additional": {"type": "", "mount_point_type": ""},
+                        }
+                    ]
+                },
+            }
+        )
+        result = await get_file_info(
+            mock_client, paths=["/video/dir"], additional=["type", "mount_point_type"]
+        )
+        assert "File type" not in result
+        assert "Mount point" not in result

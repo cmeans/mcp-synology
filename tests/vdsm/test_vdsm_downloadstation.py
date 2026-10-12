@@ -706,6 +706,69 @@ class TestVdsmDownloadStationNonAdmin:
                 params={"id": ",".join(admin_tasks), "force_complete": "false"},
             )
 
+    async def test_another_users_task_reads_as_not_found(
+        self, nas_client: Any, admin_client: Any, _clean_queue: None
+    ) -> None:
+        """#136: DSM answers 544 (resume/edit/delete) and 101 (pause, no match)
+        for another user's task, exactly as for a missing ID; the tools say
+        "not found (no such task, or not yours)" instead of a bare code, and
+        pause's 101 names every cause it covers."""
+        from mcp_synology.modules.downloadstation.tasks import (
+            create_download,
+            delete_download,
+            edit_download,
+            pause_download,
+            resume_download,
+        )
+
+        user, _, _, _ = _unpack(nas_client)
+        admin, _, _, _ = _unpack(admin_client)
+        magnet = "magnet:?xt=urn:btih:" + "e" * 40 + "&dn=admins-task"
+        theirs = _ids_in(await create_download(admin, uri=magnet, destination="writable"))[0]
+        try:
+            for result in (
+                await resume_download(user, task_ids=[theirs]),
+                await edit_download(user, task_ids=[theirs], destination="writable"),
+                await delete_download(user, task_ids=[theirs]),
+            ):
+                assert "not found (no such task, or not yours)" in result, result
+            assert "nothing was deleted" in await delete_download(user, task_ids=[theirs])
+            with pytest.raises(ToolError) as exc:
+                await pause_download(user, task_ids=[theirs])
+            error = _error(exc.value)
+            assert error["code"] == "invalid_parameter"  # 101 also covers own tasks
+            assert "belongs to another user" in error["message"]
+            assert theirs in await _all_task_ids(admin)  # untouched
+        finally:
+            await admin.request(
+                "SYNO.DownloadStation.Task",
+                "delete",
+                version=1,
+                params={"id": theirs, "force_complete": "false"},
+            )
+
+    async def test_pause_own_finished_or_paused_task_names_every_cause(
+        self, nas_client: Any, _local_source: str
+    ) -> None:
+        """QA on #146: pause's whole-call 101 also covers the caller's own finished or
+        already-paused task, so the error can't claim the task is missing."""
+        from mcp_synology.modules.downloadstation.tasks import create_download, pause_download
+
+        client, _, _, _ = _unpack(nas_client)
+        finished = _ids_in(await create_download(client, uri=_local_source, destination="writable"))
+        await _wait_for(client, finished[0], lambda t: t["status"] == "finished")
+        paused = _ids_in(await create_download(client, uri=_magnet(8), destination="writable"))
+        await pause_download(client, task_ids=paused)
+        await _wait_for(client, paused[0], lambda t: t["status"] == "paused", timeout=30)
+
+        for ids in (finished, paused):
+            with pytest.raises(ToolError) as exc:
+                await pause_download(client, task_ids=ids)
+            error = _error(exc.value)
+            assert error["code"] == "invalid_parameter", error
+            assert "finished, or already paused" in error["message"]
+            assert "were found" not in error["message"]
+
     async def test_create_without_destination_uses_own_default(
         self, nas_client: Any, _local_source: str
     ) -> None:

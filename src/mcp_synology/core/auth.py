@@ -227,10 +227,23 @@ class AuthManager:
             data = await self._client.request("SYNO.API.Auth", "login", version=6, params=params)
         except SynologyError as e:
             if e.code == _ERROR_2FA_REQUIRED:
-                logger.debug("Login failed: 2FA required but no device token available")
+                if device_id:
+                    # DSM no longer trusts the stored token, e.g. the trusted
+                    # device was removed in DSM's security settings.
+                    logger.debug("Login failed: DSM rejected the stored 2FA device token")
+                    message = (
+                        "2FA is required and DSM rejected the stored device token "
+                        "(it may have been removed or invalidated on the NAS). "
+                        "Run 'mcp-synology setup' to sign in with a new 2FA code."
+                    )
+                else:
+                    logger.debug("Login failed: 2FA required but no device token available")
+                    message = (
+                        "2FA is required but no device token is available. "
+                        "Run 'mcp-synology setup' to complete 2FA bootstrap."
+                    )
                 raise AuthenticationError(
-                    "2FA is required but no device token is available. "
-                    "Run 'mcp-synology setup' to complete 2FA bootstrap.",
+                    message,
                     code=_ERROR_2FA_REQUIRED,
                     suggestion="Run: mcp-synology setup --config <your-config>",
                 ) from e

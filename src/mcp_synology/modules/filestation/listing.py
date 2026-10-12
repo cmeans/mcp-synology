@@ -179,7 +179,7 @@ async def list_files(
         icon = file_type_icon(is_dir, name, style=file_type_indicator)
 
         add_info = f.get("additional", {})
-        size = "—" if is_dir else format_size(add_info.get("size", 0))
+        size = "—" if is_dir or "size" not in add_info else format_size(add_info["size"])
 
         time_info = add_info.get("time", {})
         mtime = time_info.get("mtime", 0)

@@ -6,10 +6,12 @@ import asyncio
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+import respx
 
 from mcp_synology.server import _BASE_INSTRUCTIONS, SharedClientManager, create_server
-from tests.conftest import make_test_config
+from tests.conftest import BASE_URL, make_test_config
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -573,3 +575,81 @@ class TestSharedClientManagerSubscribeOnReauth:
         # Attached directly — no queueing.
         fake_auth.add_on_reauth_callback.assert_called_once_with(cb)
         assert manager._pending_reauth_callbacks == []
+
+
+class TestSharedClientManagerUnreachableNas:
+    """#138: an unreachable NAS used to give every tool an empty error message
+    ("Error executing tool list_shares: "), because httpx.ConnectTimeout('')
+    stringifies to ''."""
+
+    @staticmethod
+    def _envelope(exc: Exception) -> dict[str, Any]:
+        import json
+
+        return json.loads(str(exc))["error"]  # type: ignore[no-any-return]
+
+    @pytest.mark.parametrize(
+        ("raised", "code"),
+        [
+            (httpx.ConnectTimeout, "timeout"),
+            (httpx.ReadTimeout, "timeout"),
+            (httpx.ConnectError, "unavailable"),
+        ],
+    )
+    @respx.mock
+    async def test_transport_failure_is_a_structured_error(
+        self, raised: type[Exception], code: str
+    ) -> None:
+        from mcp.server.fastmcp.exceptions import ToolError
+
+        manager = SharedClientManager(make_test_config())
+        respx.get(f"{BASE_URL}/webapi/query.cgi").mock(side_effect=raised)
+        with pytest.raises(ToolError) as exc:
+            await manager.get_client()
+        err = self._envelope(exc.value)
+        assert err["code"] == code
+        assert "nas:5000" in err["message"]
+        assert err["retryable"] is True
+        assert "mcp-synology check" in err["suggestion"]
+
+    @respx.mock
+    async def test_half_open_client_is_closed_and_next_call_retries(self) -> None:
+        from mcp.server.fastmcp.exceptions import ToolError
+
+        from mcp_synology.core.client import DsmClient
+
+        manager = SharedClientManager(make_test_config())
+        route = respx.get(f"{BASE_URL}/webapi/query.cgi").mock(side_effect=httpx.ConnectError)
+        closed: list[DsmClient] = []
+        original_exit = DsmClient.__aexit__
+
+        async def spy_exit(self: DsmClient, *args: object) -> None:
+            closed.append(self)
+            await original_exit(self, *args)
+
+        with patch.object(DsmClient, "__aexit__", spy_exit), pytest.raises(ToolError):
+            await manager.get_client()
+        assert len(closed) == 1
+        assert manager._client is None
+        with pytest.raises(ToolError):
+            await manager.get_client()
+        assert route.call_count == 2  # not cached as broken
+
+    async def test_login_failure_also_closes_the_client(self) -> None:
+        from mcp_synology.core.errors import AuthenticationError
+
+        manager = SharedClientManager(make_test_config())
+        fake_client = MagicMock()
+        fake_client.__aenter__ = AsyncMock(return_value=fake_client)
+        fake_client.__aexit__ = AsyncMock(return_value=None)
+        fake_client.query_api_info = AsyncMock(return_value={})
+        fake_auth = MagicMock()
+        fake_auth.login = AsyncMock(side_effect=AuthenticationError("bad password"))
+        with (
+            patch("mcp_synology.server.DsmClient", return_value=fake_client),
+            patch("mcp_synology.server.AuthManager", return_value=fake_auth),
+            pytest.raises(AuthenticationError),
+        ):
+            await manager.get_client()
+        fake_client.__aexit__.assert_awaited_once()
+        assert manager._client is None
