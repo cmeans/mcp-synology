@@ -21,11 +21,13 @@ Modules are domain-split: `listing.py`, `search.py`, `metadata.py`, `operations.
 
 ## Design Specs
 
-**Read the relevant spec before implementing.** These are the source of truth for design decisions. If the code and a spec disagree, flag it — don't silently deviate.
+**Read the relevant spec before implementing.** These are the source of truth for design decisions. If the code and a spec disagree, flag it — don't silently deviate. `tests/test_module_specs.py` fails when a module spec's tools, permission tiers, parameter names or LLM-facing descriptions don't match the code: update the spec in the same PR.
 
 - `docs/specs/architecture.md` — layered architecture, module system, auth strategy chain, session lifecycle, credential storage
 - `docs/specs/project-scaffolding-spec.md` — repo structure, pyproject.toml, CI, testing strategy
 - `docs/specs/filestation-module-spec.md` — all 14 File Station tools with parameters, response shapes, error codes
+- `docs/specs/system-module-spec.md` — the 2 System tools
+- `docs/specs/downloadstation-module-spec.md` — all 12 Download Station tools, the verified DSM behavior behind them (v1 vs DS2, non-manager semantics, paging and totals, secrets in URLs)
 - `docs/specs/config-schema-spec.md` — YAML config structure, validation rules, env var overrides, state file
 
 ## Build & Development Commands

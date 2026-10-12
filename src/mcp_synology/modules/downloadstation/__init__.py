@@ -79,8 +79,8 @@ MODULE_INFO = ModuleInfo(
             name="get_download_stats",
             description=(
                 "Get current Download Station throughput statistics: total download and "
-                "upload speed across all tasks, plus per-service (BT, HTTP/FTP, eMule) "
-                "breakdowns when those services are enabled."
+                "upload speed across all tasks, plus eMule download/upload speed when the "
+                "eMule service is enabled. For per-task speeds use list_downloads."
             ),
             permission_tier=PermissionTier.READ,
         ),
@@ -140,17 +140,19 @@ MODULE_INFO = ModuleInfo(
         ToolInfo(
             name="pause_download",
             description=(
-                "Pause one or more download tasks. `task_ids` is a list. Pausing "
-                "an already-paused task is a no-op for that id; pausing a finished "
-                "task returns invalid task action."
+                "Pause one or more download tasks. `task_ids` is a list. An "
+                "already-paused or finished task is refused for that id (error 405), "
+                "while the others are paused. If none of the ids can be paused, the "
+                "whole call fails with invalid_parameter."
             ),
             permission_tier=PermissionTier.WRITE,
         ),
         ToolInfo(
             name="resume_download",
             description=(
-                "Resume one or more paused download tasks. `task_ids` is a list. "
-                "Resuming an already-active task is a no-op for that id."
+                "Resume one or more paused download tasks. `task_ids` is a list. An "
+                "active or finished task is refused for that id (error 405), while "
+                "the others are resumed."
             ),
             permission_tier=PermissionTier.WRITE,
         ),

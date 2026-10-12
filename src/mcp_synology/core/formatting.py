@@ -266,9 +266,12 @@ def format_size(size_bytes: int) -> str:
 
 
 def format_timestamp(epoch: float) -> str:
-    """Format a Unix epoch timestamp as a human-readable datetime string.
+    """Format a Unix epoch timestamp as a human-readable UTC datetime string.
 
-    Returns format: YYYY-MM-DD HH:MM:SS
+    Returns format: YYYY-MM-DD HH:MM:SS UTC. The zone is spelled out because an
+    unlabeled UTC time reads as local time (#137). UTC rather than local keeps
+    the output independent of the machine the server runs on, and matches
+    search_files, which treats naive input dates as UTC.
     """
     dt = datetime.datetime.fromtimestamp(epoch, tz=datetime.UTC)
-    return dt.strftime("%Y-%m-%d %H:%M:%S")
+    return dt.strftime("%Y-%m-%d %H:%M:%S UTC")
