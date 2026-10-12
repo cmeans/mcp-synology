@@ -69,7 +69,9 @@ MODULE_INFO = ModuleInfo(
             name="list_shares",
             description=(
                 "List all shared folders on the NAS. This is the starting point for "
-                "file navigation — call this first to discover available paths."
+                "file navigation — call this first to discover available paths. Shows "
+                "each share's volume and that volume's free space (shared by every share "
+                "on it); for how much space a share uses, call get_dir_size."
             ),
             permission_tier=PermissionTier.READ,
         ),
