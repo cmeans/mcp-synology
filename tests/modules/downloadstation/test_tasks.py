@@ -121,6 +121,27 @@ class TestListDownloads:
         assert "drop-me" not in result
 
     @respx.mock
+    async def test_error_task_shows_dsm_error_detail(self, mock_client: DsmClient) -> None:
+        _manager()
+        row = _task("dbid_12", "error", title="missing-one.iso")
+        row["status_extra"] = {"error_detail": "broken_link"}
+        get_route(TASK, "list", version=1).respond(
+            json=ok({"offset": 0, "total": 1, "tasks": [row]})
+        )
+        result = await list_downloads(mock_client)
+        assert "error (broken_link)" in result
+
+    @respx.mock
+    async def test_info_shows_dsm_error_detail(self, mock_client: DsmClient) -> None:
+        body = captured("task_getinfo_v1")
+        task = body["data"]["tasks"][0]
+        task["status"] = "error"
+        task["status_extra"] = {"error_detail": "broken_link"}
+        get_route(TASK, "getinfo", version=1).respond(json=body)
+        result = await get_download_info(mock_client, task_id="dbid_1")
+        assert "error (broken_link)" in result
+
+    @respx.mock
     async def test_empty_queue(self, mock_client: DsmClient) -> None:
         _manager()
         get_route(TASK, "list", version=1).respond(json=ok({"offset": 0, "total": 0, "tasks": []}))
@@ -774,6 +795,16 @@ class TestCreateDownloadDestination:
         assert _form(route.calls.last.request)["destination"] == '"writable"'
 
     @respx.mock
+    async def test_file_station_style_destination_is_made_share_relative(
+        self, mock_client: DsmClient
+    ) -> None:
+        # DSM answers 403 "Destination doesn't exist" to "/writable" (vdsm 7.2.2).
+        _has_default()
+        route = post_route(TASK2, "create", version=2).respond(json=captured("ds2_task_create_url"))
+        await create_download(mock_client, uri="magnet:?xt=a", destination="/writable")
+        assert _form(route.calls.last.request)["destination"] == '"writable"'
+
+    @respx.mock
     async def test_non_manager_without_default_and_destination_is_refused(
         self, mock_client: DsmClient
     ) -> None:
@@ -1028,6 +1059,15 @@ class TestEditDownload:
         result = await edit_download(mock_client, task_ids=["dbid_1"], destination="testshare")
         assert dict(route.calls.last.request.url.params)["destination"] == "testshare"
         assert "dbid_1" in result
+
+    @respx.mock
+    async def test_file_station_style_destination_is_made_share_relative(
+        self, mock_client: DsmClient
+    ) -> None:
+        # DSM answers error 100 to "/testshare" (vdsm 7.2.2).
+        route = get_route(TASK, "edit", version=2).respond(json=captured("task_edit_v2"))
+        await edit_download(mock_client, task_ids=["dbid_1"], destination="/testshare/")
+        assert dict(route.calls.last.request.url.params)["destination"] == "testshare"
 
     async def test_nas_with_task_v1_only_gets_clear_error(self, mock_client: DsmClient) -> None:
         mock_client.api_cache[TASK] = mock_client.api_cache[TASK].model_copy(

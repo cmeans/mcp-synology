@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from mcp_synology.core.errors import SynologyError
-from mcp_synology.core.formatting import format_size
+from mcp_synology.core.errors import ErrorCode, SynologyError
+from mcp_synology.core.formatting import error_response, format_size
 
 if TYPE_CHECKING:
     from mcp_synology.core.client import DsmClient
@@ -49,19 +49,48 @@ STATUS_GROUPS: dict[str, set[str]] = {
 }
 
 
-def format_task_status(status: object) -> str:
+def format_task_status(status: object, error_detail: object = None) -> str:
     """Render a DSM task status.
 
     Known status strings pass through. Anything else (an unrecognized string,
     or an int from an API shape this module doesn't consume) renders as
     ``unknown(<raw>)`` so the original value is preserved in diagnostic
-    output; None renders as plain ``unknown``.
+    output; None renders as plain ``unknown``. ``error_detail`` is DSM's
+    ``status_extra.error_detail`` (e.g. ``broken_link``), appended when set.
     """
     if status is None:
-        return "unknown"
-    if isinstance(status, str) and status in TASK_STATUSES:
-        return status
-    return f"unknown({status})"
+        text = "unknown"
+    elif isinstance(status, str) and status in TASK_STATUSES:
+        text = status
+    else:
+        text = f"unknown({status})"
+    return f"{text} ({error_detail})" if error_detail else text
+
+
+def task_error_detail(task: dict[str, Any]) -> object:
+    """DSM's reason for an ``error`` task (``status_extra.error_detail``), or None."""
+    extra = task.get("status_extra")
+    return extra.get("error_detail") if isinstance(extra, dict) else None
+
+
+def normalize_destination(destination: str, *, operation: str) -> str:
+    """Make a destination share-relative, as Download Station requires.
+
+    File Station shows paths as ``/share/...``; DS rejects that form (DSM 403
+    "Destination doesn't exist" on create, error 100 on edit), so a leading or
+    trailing ``/`` is dropped.
+    """
+    relative = destination.strip().strip("/")
+    if not relative:
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            f"{operation} failed: destination {destination!r} names no shared folder.",
+            retryable=False,
+            param="destination",
+            value=destination,
+            suggestion="Pass a share-relative path such as 'video/Torrents'.",
+        )
+    return relative
 
 
 def format_transfer_progress(downloaded: int, total: int) -> str:

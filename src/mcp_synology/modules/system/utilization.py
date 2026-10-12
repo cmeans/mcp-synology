@@ -34,9 +34,9 @@ def _format_cpu(cpu: dict[str, Any]) -> list[tuple[str, str]]:
         pairs.append(
             (
                 "CPU load avg",
-                f"1m={cpu.get('1min_load', 0)}  "
-                f"5m={cpu.get('5min_load', 0)}  "
-                f"15m={cpu.get('15min_load', 0)}",
+                f"1m={_load_avg(cpu, '1min_load')}  "
+                f"5m={_load_avg(cpu, '5min_load')}  "
+                f"15m={_load_avg(cpu, '15min_load')}",
             )
         )
     if total > 0:
@@ -103,6 +103,11 @@ def _format_disk(disks: list[dict[str, Any]]) -> list[tuple[str, str]]:
                 detail += f"  R={_format_rate(read_rate)}  W={_format_rate(write_rate)}"
             pairs.append((f"Disk ({device})", detail))
     return pairs
+
+
+def _load_avg(cpu: dict[str, Any], key: str) -> str:
+    """DSM reports load averages x100 (an idle 2-core VM gives ``1min_load=124``)."""
+    return f"{float(cpu.get(key, 0)) / 100:.2f}"
 
 
 async def get_resource_usage(client: DsmClient) -> str:
