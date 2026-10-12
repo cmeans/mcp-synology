@@ -282,8 +282,9 @@ Otherwise:
 1. Check NAS health first: call `get_resource_usage` to confirm CPU and RAM
    are not pinned. If they are, fix that before retrying.
 2. For search: narrow the path to a single share rather than the root, use a
-   more specific keyword, and avoid rapid-fire repeats. The search service can
-   exhaust itself and refuse new tasks.
+   more specific keyword. (Before 0.6.0, mcp-synology sent search task IDs
+   unquoted, so DSM lost most tasks and never cleaned them up, which looked
+   like an exhausted search service; see #121.)
 3. For copy, move, and delete: split the operation into smaller batches.
 4. To clear suspected orphaned tasks: stop and start the File Station package
    from **Package Center**. mcp-synology cleans up its own tasks via

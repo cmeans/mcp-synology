@@ -17,6 +17,7 @@ from mcp_synology.core.formatting import (
 )
 from mcp_synology.modules.filestation.helpers import (
     normalize_path,
+    task_request,
     validate_additional,
 )
 
@@ -29,12 +30,12 @@ logger = logging.getLogger(__name__)
 async def _stop_dirsize_task(client: DsmClient, taskid: str) -> None:
     """Stop a DirSize background task. Logs warnings on failure."""
     try:
-        await client.request(
-            "SYNO.FileStation.DirSize",
-            "stop",
-            params={"taskid": taskid},
-        )
+        await task_request(client, "SYNO.FileStation.DirSize", "stop", taskid)
     except SynologyError as e:
+        if e.code == 599:
+            # DSM drops a DirSize task once its finished status has been read.
+            logger.debug("DirSize task %s already gone at stop", taskid)
+            return
         logger.warning("DirSize task cleanup failed for %s: %s", taskid, e)
     except Exception:
         logger.warning("DirSize task cleanup failed for %s", taskid, exc_info=True)
@@ -208,28 +209,10 @@ async def get_dir_size(
     try:
         while elapsed < timeout:
             try:
-                status = await client.request(
-                    "SYNO.FileStation.DirSize",
-                    "status",
-                    params={"taskid": taskid},
-                )
+                # 599 here used to be read as "finished too fast to measure";
+                # it was the unquoted task ID matching no task (#121).
+                status = await task_request(client, "SYNO.FileStation.DirSize", "status", taskid)
             except SynologyError as e:
-                if e.code == 599:
-                    # Task completed and was cleaned up before we could read
-                    # status. Common on Virtual DSM where tiny directories
-                    # finish instantly. Return a best-effort result.
-                    logger.debug(
-                        "DirSize task %s completed before status check (error 599)", taskid
-                    )
-                    result = format_key_value(
-                        [
-                            ("Total size", "completed (too fast to measure)"),
-                            ("Files", "unknown"),
-                            ("Directories", "unknown"),
-                        ],
-                        title=f"Directory Size: {normalized}",
-                    )
-                    break
                 poll_error = e
                 break
 

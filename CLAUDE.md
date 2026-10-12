@@ -93,7 +93,9 @@ uv run pytest --cov=mcp_synology           # Tests with coverage
 
 ### DSM API Client
 - Thin wrapper — knows DSM request/response conventions, nothing about specific APIs
-- **Always use GET** — never POST. DSM reports `requestFormat=JSON` on all FileStation APIs (even v2), but this is metadata not a mandate. POST causes silent failures on DSM 7.1
+- **Always use GET** — never POST. DSM reports `requestFormat=JSON` on all FileStation APIs (even v2). That doesn't mean POST (POST causes silent failures on DSM 7.1), but it does mean DSM **parses each parameter value as JSON first** (#121)
+  - **JSON-quote free-text values** with `filestation.helpers.dsm_str()`: task IDs (Search, DirSize, via `task_request()`), `name` (CreateFolder, Rename), `pattern` (List, Search) and `extension` (Search). Unquoted, a value that is valid JSON is read as that type: a Search/DirSize task ID like `17918443788CE649B9` matches no task (Search `list` answers a bare `{"finished": true}`, DirSize `status` 599, `stop`/`clean` clean nothing), a folder named `2024` or `true` gets error 400, and a `list` pattern of `2024` crashes the request (HTTP 502). Synology's API guide quotes every such value
+  - Paths don't need it (they start with `/`, so never valid JSON); booleans and numbers are meant as JSON scalars
   - **One scoped exception (#123):** Download Station URI `Task.create` (DS2 `SYNO.DownloadStation2.Task` v2, with v1 `SYNO.DownloadStation.Task` as fallback) is sent as a form POST via `DsmClient.request_form_post()`. A GET URL past ~8 KB (a magnet with many trackers, or a URI list) gets HTTP 414 from DSM, and GET would put source-URL credentials in access logs. Its #123 merge gate is the full Download Station vdsm suite passing on DSM 7.1 (where the POST failures were seen) and 7.2.2. Do not route anything else through `request_form_post()`. Multipart uploads (`upload()`, `create_download_task_with_file()`) were already POST
 - **Download Station v1 vs DS2:** the v1 `SYNO.DownloadStation.*` APIs return task `status` as a string; the weekly schedule plan lives only in DS2 `SYNO.DownloadStation2.Settings.Scheduler` (JSON-format: string values are JSON-encoded; no server-side validation); global config writes use `Info.setserverconfig` (there is no `setconfig`). Build test fixtures from a real capture (`tests/modules/downloadstation/fixtures/`) and route mocks by `api`/`method`/`version` (`tests/modules/downloadstation/dsm.py`) — the invented shapes behind #123 passed a catch-all mock
 - Calls `SYNO.API.Info` with `query=ALL` at startup; caches API name → path/version map
@@ -115,7 +117,7 @@ uv run pytest --cov=mcp_synology           # Tests with coverage
 - Always pass `filetype=all` — DSM defaults to `"file"` if omitted, excluding directories from results
 - Auto-wrap bare keywords with wildcards: `"Bambu"` → `"*Bambu*"` so substring matching works
 - Pure extension patterns like `"*.mkv"` use DSM's native `extension` filter
-- DSM search service on non-indexed shares (`has_not_index_share: True`) can be unreliable under load — orphaned tasks or rapid-fire requests can exhaust it
+- A Search `list` reply without `total`/`files` (bare `{"finished": true}`) is DSM's answer for an unknown task, so it's reported as a lost task, never as 0 results. The "search is unreliable under load / needs recovery delays" lore was this unquoted-task-ID bug (#121): with the ID quoted, back-to-back searches all succeed
 
 ## Testing
 
