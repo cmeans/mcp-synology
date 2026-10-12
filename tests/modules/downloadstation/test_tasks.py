@@ -351,6 +351,36 @@ class TestListDownloadsColumnsAndSort:
         with pytest.raises(ToolError, match="sort_by"):
             await list_downloads(mock_client, sort_by="size")
 
+    @pytest.mark.parametrize(
+        ("kwargs", "param"),
+        [
+            ({"offset": -1}, "offset"),
+            ({"offset": -2, "limit": 1}, "offset"),
+            ({"limit": 0}, "limit"),
+            ({"limit": -1}, "limit"),
+        ],
+    )
+    @pytest.mark.parametrize(
+        "path",
+        [{}, {"status_filter": "finished"}, {"sort_by": "completed"}],
+        ids=["queue", "filtered", "sorted"],
+    )
+    @respx.mock
+    async def test_bad_offset_or_limit_is_rejected_before_any_dsm_call(
+        self, mock_client: DsmClient, path: dict[str, str], kwargs: dict[str, int], param: str
+    ) -> None:
+        # The filtered/sorted path pages with a Python slice, where -1 drops a row
+        # and a negative offset counts from the end; DSM clamps a negative offset
+        # to 0. Reject both up front so every path agrees (#141 QA).
+        list_route = _v1_list(limit=str(kwargs.get("limit", 25)))
+        with pytest.raises(ToolError) as exc:
+            await list_downloads(mock_client, **path, **kwargs)  # type: ignore[arg-type]
+        error = _envelope(exc.value)
+        assert error["code"] == "invalid_parameter"
+        assert error["param"] == param
+        assert error["value"] == kwargs[param]
+        assert not list_route.called
+
     @respx.mock
     async def test_default_page_is_25(self, mock_client: DsmClient) -> None:
         _manager()

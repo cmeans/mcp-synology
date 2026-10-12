@@ -87,6 +87,27 @@ async def list_downloads(
             value=sort_by,
             valid=sorted(_VALID_SORTS),
         )
+    # Checked here because the filtered/sorted path pages with a Python slice
+    # (where -1 drops a row and a negative offset counts from the end) while
+    # DSM clamps a negative offset to 0. Rejecting both keeps every path alike.
+    if offset < 0:
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            f"List downloads failed: offset must be 0 or more, got {offset}.",
+            retryable=False,
+            param="offset",
+            value=offset,
+            suggestion="For the newest tasks, use sort_by='created' with offset=0.",
+        )
+    if limit < 1:
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            f"List downloads failed: limit must be 1 or more, got {limit}.",
+            retryable=False,
+            param="limit",
+            value=limit,
+            suggestion="Page through the queue with offset; the footer gives the next offset.",
+        )
 
     try:
         if status_filter == "all" and sort_by == "queue":
