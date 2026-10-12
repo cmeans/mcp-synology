@@ -505,6 +505,31 @@ class TestGetDownloadInfoRedaction:
         assert self.PASSKEY not in result
         assert "dn=show" in result
 
+    @respx.mock
+    async def test_title_query_secrets_are_masked(self, mock_client: DsmClient) -> None:
+        body = captured("task_getinfo_v1")
+        body["data"]["tasks"][0]["title"] = f"file.iso&_sid={self.PASSKEY}"
+        get_route(TASK, "getinfo", version=1).respond(json=body)
+        result = await get_download_info(mock_client, task_id="dbid_1")
+        assert self.PASSKEY not in result
+        assert "file.iso&_sid=***" in result
+
+    @respx.mock
+    async def test_list_title_query_secrets_are_masked(self, mock_client: DsmClient) -> None:
+        _manager()
+        get_route(TASK, "list", version=1).respond(
+            json=ok(
+                {
+                    "offset": 0,
+                    "total": 1,
+                    "tasks": [_task("dbid_1", "finished", title=f"f.bin&_sid={self.PASSKEY}")],
+                }
+            )
+        )
+        result = await list_downloads(mock_client)
+        assert self.PASSKEY not in result
+        assert "f.bin&_sid=***" in result
+
 
 class TestCreateDownloadUri:
     """URI create goes to DS2 Task.create v2 as a form POST (#123 items 9/9a)."""

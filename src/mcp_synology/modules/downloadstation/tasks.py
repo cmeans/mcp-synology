@@ -17,7 +17,7 @@ from mcp_synology.core.formatting import (
     format_timestamp,
     synology_error_response,
 )
-from mcp_synology.core.redaction import redact_url, redact_urls
+from mcp_synology.core.redaction import redact_title, redact_url, redact_urls
 from mcp_synology.modules.downloadstation.helpers import (
     STATUS_GROUPS,
     ds_is_manager,
@@ -176,7 +176,7 @@ async def list_downloads(
         rows.append(
             [
                 t.get("id", "—"),
-                t.get("title", "—"),
+                redact_title(str(t.get("title", "—"))),
                 t.get("type", "—"),
                 format_task_status(t.get("status")),
                 format_size(size_total),
@@ -291,7 +291,7 @@ async def get_download_info(
     # Header block
     header_pairs = [
         ("ID", task.get("id", "—")),
-        ("Title", task.get("title", "—")),
+        ("Title", redact_title(str(task.get("title", "—")))),
         ("Type", task.get("type", "—")),
         ("Status", format_task_status(task.get("status"))),
         ("Size", format_size(int(task.get("size", 0)))),

@@ -9,7 +9,7 @@ import json
 
 import pytest
 
-from mcp_synology.core.redaction import redact_url, redact_urls
+from mcp_synology.core.redaction import redact_title, redact_url, redact_urls
 
 PASSKEY = "a1B2c3D4e5F6g7H8i9J0"
 
@@ -92,3 +92,31 @@ class TestRedactUrls:
 
     def test_text_without_urls_is_unchanged(self) -> None:
         assert redact_urls("Created 2 task(s).") == "Created 2 task(s)."
+
+
+class TestRedactTitle:
+    """DSM titles an HTTP task with the URL's tail, query string included (#144)."""
+
+    def test_query_tail_from_a_url_title_is_masked(self) -> None:
+        # Seen live on vdsm: a FileStation download link titled with its session id.
+        assert redact_title(f"ds-source.bin&_sid={PASSKEY}") == "ds-source.bin&_sid=***"
+
+    def test_question_mark_query_is_masked(self) -> None:
+        assert redact_title(f"file.iso?token={PASSKEY}&x=1") == "file.iso?token=***&x=***"
+
+    def test_full_url_title_is_redacted(self) -> None:
+        title = f"https://t.example/dl/{PASSKEY}/file.iso"
+        assert redact_title(title) == "https://t.example/dl/***/file.iso"
+
+    @pytest.mark.parametrize(
+        "title",
+        [
+            "Cleddau Series 1 (2026) 1080p",
+            "Tom & Jerry (1940)",
+            "Mrs Biggs  (2012) 720p",
+            "Cleddau_Series_1_2026_1080p_WEB",  # token-shaped, but a name: kept
+            "a=b c",
+        ],
+    )
+    def test_ordinary_titles_are_unchanged(self, title: str) -> None:
+        assert redact_title(title) == title

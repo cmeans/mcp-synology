@@ -15,6 +15,9 @@ Rules, chosen so the host stays visible and nothing secret-shaped survives:
   ``ubuntu-24.04.iso`` are kept
 - the fragment is dropped
 - a magnet keeps ``xt`` / ``dn``; its URL-valued parameters are redacted in turn
+
+Task titles get their own, narrower pass (``redact_title``): DSM titles an HTTP
+task with the tail of its URL, query string included (``file.bin&_sid=...``).
 """
 
 from __future__ import annotations
@@ -34,6 +37,11 @@ _MAGNET_URL_KEYS = frozenset({"tr", "ws", "as", "xs"})
 # A URL or magnet inside free text. Commas end a match because v1 Task.create
 # takes a comma-separated URI list; quotes end it for DS2's JSON-encoded list.
 _URL_IN_TEXT = re.compile(r"""magnet:\?[^\s,"'<>]+|[A-Za-z][A-Za-z0-9+.-]*://[^\s,"'<>]+""")
+
+
+# A query item glued to a title: ``?key=value`` or ``&key=value`` with no spaces.
+# "Tom & Jerry" doesn't match, because the ``&`` must be followed by ``key=``.
+_QUERY_ITEM = re.compile(r"([?&])([^\s=&?#]+)=[^\s&#]*")
 
 
 def _is_token(segment: str) -> bool:
@@ -91,3 +99,12 @@ def redact_url(url: str) -> str:
 def redact_urls(text: str) -> str:
     """Redact every URL or magnet found in ``text`` (lists, JSON, prose)."""
     return _URL_IN_TEXT.sub(lambda m: redact_url(m.group(0)), text)
+
+
+def redact_title(title: str) -> str:
+    """Mask query values (and any whole URL) in a task title; other text is kept.
+
+    Unlike ``redact_url``, token-shaped words are left alone: a title like
+    ``Show_Series_1_2026_1080p`` is a name, not a secret.
+    """
+    return _QUERY_ITEM.sub(lambda m: f"{m.group(1)}{m.group(2)}={MASK}", redact_urls(title))
