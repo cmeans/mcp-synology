@@ -55,6 +55,9 @@ MODULE_INFO = ModuleInfo(
                 "List download tasks in the Download Station queue. Filter by status "
                 "(downloading/finished/paused/error/all). Returns a table with id, title, "
                 "type (bt/http/ftp/nzb), status, size, progress%, current speed, and ETA. "
+                "Paged with offset/limit (default 100, oldest first); the footer gives the "
+                "true total and the next offset. A status filter searches the whole queue, "
+                "not just one page. "
                 "Accounts that are not Download Station managers see only their own tasks "
                 "(the output says so), so an empty list does not mean the NAS is idle."
             ),

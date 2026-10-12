@@ -46,6 +46,12 @@ _FAKE_MAGNET = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=
 
 _TASK_ID = re.compile(r"\bdbid_\d+\b")
 
+
+def _magnet(n: int) -> str:
+    """A distinct fake magnet per ``n`` (DS rejects a second task with the same hash)."""
+    return f"magnet:?xt=urn:btih:{n:040x}&dn=test-file-{n}"
+
+
 # HTTP download tests fetch a file the NAS serves itself (File Station
 # Download on the guest's own 127.0.0.1:5000), so they never depend on an
 # external host. External hosts made these tests skip on a slow network, and
@@ -318,6 +324,48 @@ class TestVdsmDownloadStationTasks:
         assert "ok" in deleted
         assert task_id not in await _all_task_ids(client)
 
+    async def test_list_downloads_reports_true_total_and_pages(
+        self, nas_client: Any, _clean_queue: None
+    ) -> None:
+        """#140: v1 Task.list's ``total`` is the page size, not the queue size."""
+        from mcp_synology.modules.downloadstation.tasks import create_download, list_downloads
+
+        client, _, _, _ = _unpack(nas_client)
+        ids = [
+            _ids_in(await create_download(client, uri=_magnet(i), destination="writable"))[0]
+            for i in range(3)
+        ]
+
+        first = await list_downloads(client, limit=2)
+        assert "Download Station queue (all" in first  # not a task's title (#140)
+        assert "3 task(s) total; showing 1–2." in first, first
+        assert "offset=2" in first
+        rest = await list_downloads(client, offset=2, limit=2)
+        assert "3 task(s) total; showing 3–3." in rest, rest
+        assert sorted(_ids_in(first) + _ids_in(rest)) == sorted(ids)
+
+    async def test_status_filter_looks_past_the_first_page(
+        self, nas_client: Any, _clean_queue: None
+    ) -> None:
+        """#140: the filter used to run over one page only, so a paused task
+        past ``limit`` was missed."""
+        from mcp_synology.modules.downloadstation.tasks import (
+            create_download,
+            list_downloads,
+            pause_download,
+        )
+
+        client, _, _, _ = _unpack(nas_client)
+        ids = [
+            _ids_in(await create_download(client, uri=_magnet(i), destination="writable"))[0]
+            for i in range(3)
+        ]
+        await pause_download(client, task_ids=[ids[-1]])
+
+        paused = await list_downloads(client, status_filter="paused", limit=1)
+        assert _ids_in(paused) == [ids[-1]], paused
+        assert "1 task(s) total; showing 1–1." in paused
+
     async def test_create_from_magnet_longer_than_get_url_limit(
         self, nas_client: Any, _clean_queue: None
     ) -> None:
@@ -577,6 +625,41 @@ class TestVdsmDownloadStationNonAdmin:
                 "delete",
                 version=1,
                 params={"id": admin_task, "force_complete": "false"},
+            )
+
+    async def test_list_downloads_total_counts_only_own_tasks(
+        self, nas_client: Any, admin_client: Any, _clean_queue: None
+    ) -> None:
+        """#140: the total (from DS2 when present) must be scoped like v1's
+        list: a non-manager's own tasks, not the whole queue."""
+        from mcp_synology.modules.downloadstation.tasks import create_download, list_downloads
+
+        user, _, _, _ = _unpack(nas_client)
+        admin, _, _, _ = _unpack(admin_client)
+        admin_tasks = [
+            _ids_in(await create_download(admin, uri=_magnet(i), destination="writable"))[0]
+            for i in range(2)
+        ]
+        try:
+            mine = _ids_in(await create_download(user, uri=_magnet(9), destination="writable"))
+            # DSM itself: DS2's total is scoped to the caller, like v1's list.
+            ds2 = "SYNO.DownloadStation2.Task"
+            page = {"offset": "0", "limit": "1"}
+            assert (await user.request(ds2, "list", version=2, params=page))["total"] == 1
+            everyone = len(await _all_task_ids(admin))
+            assert everyone >= 3
+            assert (await admin.request(ds2, "list", version=2, params=page))["total"] == everyone
+            # limit=1 makes each page full, so the total comes from DS2.
+            listed = await list_downloads(user, limit=1)
+            assert _ids_in(listed) == mine
+            assert "1 task(s) total; showing 1–1." in listed, listed
+            assert f"{everyone} task(s) total; showing 1–1." in await list_downloads(admin, limit=1)
+        finally:
+            await admin.request(
+                "SYNO.DownloadStation.Task",
+                "delete",
+                version=1,
+                params={"id": ",".join(admin_tasks), "force_complete": "false"},
             )
 
     async def test_create_without_destination_uses_own_default(

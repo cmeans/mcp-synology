@@ -45,12 +45,17 @@ def _url(api: str) -> str:
     return f"{BASE_URL}/webapi/{make_api_cache()[api].path}"
 
 
-def get_route(api: str, method: str, *, version: int | None = None) -> respx.Route:
-    """Route a GET for ``api``/``method`` (and ``version`` if given) at its real CGI path."""
-    params = {"api": api, "method": method}
+def get_route(
+    api: str, method: str, *, version: int | None = None, params: dict[str, str] | None = None
+) -> respx.Route:
+    """Route a GET for ``api``/``method`` (and ``version`` if given) at its real CGI path.
+
+    ``params`` narrows the match to requests that also carry those query values.
+    """
+    match = {"api": api, "method": method, **(params or {})}
     if version is not None:
-        params["version"] = str(version)
-    return respx.get(_url(api), params__contains=params)
+        match["version"] = str(version)
+    return respx.get(_url(api), params__contains=match)
 
 
 def post_route(api: str, method: str, *, version: int | None = None) -> respx.Route:

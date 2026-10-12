@@ -50,10 +50,17 @@ async def list_downloads(
 ) -> str:
     """List download tasks in the Download Station queue.
 
-    The DSM v1 ``SYNO.DownloadStation.Task.list`` endpoint does not support
-    server-side status filtering, so we fetch and filter client-side. To keep
-    each row cheap, only ``detail`` and ``transfer`` additional groups are
-    requested — ``get_download_info`` fetches the full set for a single task.
+    DSM v1 ``Task.list`` reports ``total`` as the number of tasks it returned,
+    not the queue size (#140), and it can't filter by status. So:
+
+    - Unfiltered, one v1 page is fetched. A short page gives the total
+      directly; a full page takes it from DS2 ``Task.list`` (``limit=1``),
+      falling back to a v1 count without ``additional`` groups.
+    - Filtered, every task is fetched (``limit=-1``) and filtered here, then
+      the requested page of the filtered list is shown.
+
+    Only the ``detail`` and ``transfer`` groups are requested, to keep rows
+    cheap; ``get_download_info`` fetches the full set for a single task.
     """
     if status_filter not in _VALID_STATUS_FILTERS:
         error_response(
@@ -66,74 +73,109 @@ async def list_downloads(
         )
 
     try:
-        data = await client.request(
-            "SYNO.DownloadStation.Task",
-            "list",
-            version=1,
-            params={
-                "offset": str(offset),
-                "limit": str(limit),
-                # DS Task API uses comma-separated additional groups, not the
-                # JSON-array format FileStation v2 uses.
-                "additional": "detail,transfer",
-            },
-        )
+        if status_filter == "all":
+            tasks = await _list_tasks(client, offset=offset, limit=limit)
+            # A short page ends the queue, so it gives the total, unless it's
+            # empty past offset 0 (offset beyond the end: count instead).
+            if len(tasks) < limit and (tasks or offset == 0):
+                total = offset + len(tasks)
+            else:
+                total = await _count_tasks(client)
+        else:
+            wanted = STATUS_GROUPS[status_filter]
+            matching = [t for t in await _list_tasks(client) if t.get("status") in wanted]
+            total = len(matching)
+            tasks = matching[offset : offset + limit]
     except SynologyError as e:
         synology_error_response("List downloads", e)
-
-    tasks: list[dict[str, Any]] = data.get("tasks", [])
 
     # Non-managers only ever see their own tasks (#123), so an empty or short
     # list must not read as "nothing is downloading on the NAS".
     own_tasks_only = await ds_is_manager(client) is False
     scope = f"{status_filter}; your tasks only" if own_tasks_only else status_filter
-    title = f"Download Station queue ({scope})"
-
-    if status_filter != "all":
-        wanted = STATUS_GROUPS[status_filter]
-        tasks = [t for t in tasks if t.get("status") in wanted]
+    heading = f"Download Station queue ({scope})"
+    headers = ["ID", "Title", "Type", "Status", "Size", "Progress", "Speed", "ETA"]
 
     if not tasks:
-        return format_table(
-            headers=["ID", "Title", "Type", "Status", "Size", "Progress", "Speed", "ETA"],
-            rows=[],
-            title=title,
-        )
+        result = format_table(headers=headers, rows=[], title=heading)
+        if offset > 0 and total > 0:
+            result += f"\n\n{total} task(s) total; offset {offset} is past the end."
+        return result
 
     rows: list[list[str]] = []
     for t in tasks:
-        task_id = t.get("id", "—")
-        title = t.get("title", "—")
-        ttype = t.get("type", "—")
-        status = format_task_status(t.get("status"))
         size_total = int(t.get("size", 0))
         transfer = t.get("additional", {}).get("transfer", {})
         size_down = int(transfer.get("size_downloaded", 0))
         speed_down = int(transfer.get("speed_download", 0))
-        progress = format_transfer_progress(size_down, size_total)
-        speed = format_speed(speed_down)
-        eta = format_eta(size_down, size_total, speed_down)
         rows.append(
             [
-                task_id,
-                title,
-                ttype,
-                status,
+                t.get("id", "—"),
+                t.get("title", "—"),
+                t.get("type", "—"),
+                format_task_status(t.get("status")),
                 format_size(size_total),
-                progress,
-                speed,
-                eta,
+                format_transfer_progress(size_down, size_total),
+                format_speed(speed_down),
+                format_eta(size_down, size_total, speed_down),
             ]
         )
 
-    total = data.get("total", len(rows))
-    result = format_table(
-        headers=["ID", "Title", "Type", "Status", "Size", "Progress", "Speed", "ETA"],
-        rows=rows,
-        title=title,
-    )
-    result += f"\n\n{total} task(s) total; showing {len(rows)}."
+    last = offset + len(rows)
+    result = format_table(headers=headers, rows=rows, title=heading)
+    result += f"\n\n{total} task(s) total; showing {offset + 1}–{last}."
+    if last < total:
+        result += f" Pass offset={last} for the next page."
     return result
+
+
+async def _list_tasks(
+    client: DsmClient, *, offset: int = 0, limit: int = -1
+) -> list[dict[str, Any]]:
+    """One v1 ``Task.list`` call with ``detail,transfer``; ``limit=-1`` means every task."""
+    data = await client.request(
+        "SYNO.DownloadStation.Task",
+        "list",
+        version=1,
+        params={
+            "offset": str(offset),
+            "limit": str(limit),
+            # DS Task API uses comma-separated additional groups, not the
+            # JSON-array format FileStation v2 uses.
+            "additional": "detail,transfer",
+        },
+    )
+    tasks: list[dict[str, Any]] = data.get("tasks", [])
+    return tasks
+
+
+async def _count_tasks(client: DsmClient) -> int:
+    """The number of tasks this account can see.
+
+    DS2 ``Task.list`` reports the true total even at ``limit=1``. Without DS2,
+    or if it refuses, count a v1 listing without ``additional`` groups (about
+    190 KB for 1,214 tasks, measured in #140).
+    """
+    try:
+        version = client.negotiate_version(
+            "SYNO.DownloadStation2.Task", min_version=2, max_version=2
+        )
+        data = await client.request(
+            "SYNO.DownloadStation2.Task",
+            "list",
+            version=version,
+            params={"offset": "0", "limit": "1"},
+        )
+        return int(data["total"])
+    except (SynologyError, KeyError, TypeError, ValueError) as e:
+        logger.debug("DS2 Task.list total unavailable (%s); counting with v1", e)
+    data = await client.request(
+        "SYNO.DownloadStation.Task",
+        "list",
+        version=1,
+        params={"offset": "0", "limit": "-1"},
+    )
+    return len(data.get("tasks", []))
 
 
 async def get_download_info(

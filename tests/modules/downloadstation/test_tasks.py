@@ -8,6 +8,7 @@ name, method, or version fails with an unmatched request — see #123.
 from __future__ import annotations
 
 import json
+import re
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs
 
@@ -55,6 +56,24 @@ def _task(task_id: str, status: str, *, title: str = "t", size: int = 100) -> di
 def _manager(is_manager: bool = True) -> None:
     key = "info_getinfo_admin" if is_manager else "info_getinfo_user"
     get_route(INFO, "getinfo", version=1).respond(json=captured(key))
+
+
+def _v1_list(*, limit: str | None = None) -> respx.Route:
+    """Route v1 ``Task.list``; with ``limit``, only requests carrying that limit."""
+    return get_route(TASK, "list", version=1, params={"limit": limit} if limit else None)
+
+
+def _page(n: int, *, total: int | None = None, status: str = "downloading") -> dict[str, Any]:
+    """A v1 Task.list page of ``n`` tasks. DSM sets ``total`` to the page size (#140)."""
+    tasks = [_task(f"dbid_{i}", status, title=f"task-{i}") for i in range(1, n + 1)]
+    return ok({"offset": 0, "total": n if total is None else total, "tasks": tasks})
+
+
+def _ds2_total(total: int) -> respx.Route:
+    """Route DS2 ``Task.list`` v2, which reports the true queue size (#140)."""
+    return get_route(TASK2, "list", version=2).respond(
+        json=ok({"offset": 0, "total": total, "task": []})
+    )
 
 
 class TestListDownloads:
@@ -151,6 +170,104 @@ class TestListDownloads:
     async def test_unknown_status_filter_raises_tool_error(self, mock_client: DsmClient) -> None:
         with pytest.raises(ToolError, match="status_filter"):
             await list_downloads(mock_client, status_filter="not_a_status")
+
+
+class TestListDownloadsPaging:
+    """#140, found on a real NAS with 1,214 tasks: v1 ``total`` is the page size."""
+
+    @respx.mock
+    async def test_heading_is_the_queue_not_the_last_task(self, mock_client: DsmClient) -> None:
+        _manager()
+        _v1_list().respond(json=_page(2))
+        result = await list_downloads(mock_client)
+        assert result.splitlines()[0] == "Download Station queue (all)"
+
+    @respx.mock
+    async def test_full_page_takes_total_from_ds2(self, mock_client: DsmClient) -> None:
+        _manager()
+        _v1_list(limit="2").respond(json=_page(2))
+        ds2 = _ds2_total(1214)
+        result = await list_downloads(mock_client, limit=2)
+        assert ds2.called
+        assert "1214 task(s) total; showing 1–2." in result
+        assert "offset=2" in result
+
+    @respx.mock
+    async def test_short_page_needs_no_count(self, mock_client: DsmClient) -> None:
+        _manager()
+        _v1_list(limit="100").respond(json=_page(3))
+        ds2 = _ds2_total(999)
+        result = await list_downloads(mock_client)
+        assert not ds2.called
+        assert "3 task(s) total; showing 1–3." in result
+        assert "offset=" not in result
+
+    @respx.mock
+    async def test_short_later_page_counts_from_offset(self, mock_client: DsmClient) -> None:
+        _manager()
+        _v1_list(limit="2").respond(json=_page(1))
+        ds2 = _ds2_total(999)
+        result = await list_downloads(mock_client, offset=4, limit=2)
+        assert not ds2.called
+        assert "5 task(s) total; showing 5–5." in result
+
+    @respx.mock
+    async def test_ds2_absent_counts_with_v1(self, mock_client: DsmClient) -> None:
+        del mock_client.api_cache[TASK2]
+        _manager()
+        _v1_list(limit="2").respond(json=_page(2))
+        count = _v1_list(limit="-1").respond(json=_page(7))
+        result = await list_downloads(mock_client, limit=2)
+        assert count.called
+        assert "additional" not in count.calls.last.request.url.params
+        assert "7 task(s) total; showing 1–2." in result
+
+    @respx.mock
+    async def test_ds2_refusal_counts_with_v1(self, mock_client: DsmClient) -> None:
+        _manager()
+        _v1_list(limit="2").respond(json=_page(2))
+        get_route(TASK2, "list", version=2).respond(json=err(105))
+        _v1_list(limit="-1").respond(json=_page(7))
+        result = await list_downloads(mock_client, limit=2)
+        assert "7 task(s) total; showing 1–2." in result
+
+    @respx.mock
+    async def test_offset_past_the_end(self, mock_client: DsmClient) -> None:
+        _manager()
+        _v1_list(limit="100").respond(json=ok({"offset": 500, "total": 0, "tasks": []}))
+        _ds2_total(12)
+        result = await list_downloads(mock_client, offset=500)
+        assert "No items to display" in result
+        assert "12 task(s) total; offset 500 is past the end." in result
+
+    @respx.mock
+    async def test_status_filter_fetches_every_task_then_pages(
+        self, mock_client: DsmClient
+    ) -> None:
+        _manager()
+        tasks = [_task(f"dbid_{i}", "finished", title=f"done-{i}") for i in range(1, 151)]
+        tasks.append(_task("dbid_151", "paused", title="the-paused-one"))
+        everything = _v1_list(limit="-1").respond(
+            json=ok({"offset": 0, "total": 151, "tasks": tasks})
+        )
+        result = await list_downloads(mock_client, status_filter="paused", limit=100)
+        assert "additional" in everything.calls.last.request.url.params
+        assert "the-paused-one" in result
+        assert "1 task(s) total; showing 1–1." in result
+
+    @respx.mock
+    async def test_status_filter_pages_the_filtered_list(self, mock_client: DsmClient) -> None:
+        _manager()
+        tasks = [_task(f"dbid_{i}", "finished", title=f"done-{i}") for i in range(1, 6)]
+        _v1_list(limit="-1").respond(json=ok({"offset": 0, "total": 5, "tasks": tasks}))
+        result = await list_downloads(mock_client, status_filter="finished", offset=2, limit=2)
+        assert _ids(result) == ["dbid_3", "dbid_4"]
+        assert "5 task(s) total; showing 3–4." in result
+        assert "offset=4" in result
+
+
+def _ids(text: str) -> list[str]:
+    return re.findall(r"\bdbid_\d+\b", text)
 
 
 class TestGetDownloadInfo:

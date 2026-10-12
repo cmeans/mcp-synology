@@ -309,6 +309,12 @@ class TestModuleInfoDescriptions:
     def test_edit_download_mentions_version_requirement(self) -> None:
         assert "newer Download Station" in self._desc("edit_download")
 
+    def test_list_downloads_describes_paging_and_whole_queue_filter(self) -> None:
+        """#140: the assistant must know the footer carries the true total."""
+        desc = self._desc("list_downloads")
+        assert "true total and the next offset" in desc
+        assert "searches the whole queue" in desc
+
     def test_delete_download_describes_real_file_semantics(self) -> None:
         desc = self._desc("delete_download")
         assert "finished tasks are always kept" in desc
