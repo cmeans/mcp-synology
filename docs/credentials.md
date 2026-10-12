@@ -35,7 +35,7 @@ For accounts with two-factor authentication enabled:
 1. Run `mcp-synology setup` — it detects 2FA (DSM error 403) and prompts for your OTP code
 2. On successful OTP, DSM returns a device token which is stored as `device_id` in the keyring
 3. Subsequent logins include the device token, so DSM treats the server as a remembered device — no OTP required
-4. If the device token expires or is revoked in DSM, run `mcp-synology setup` again to re-bootstrap
+4. Device tokens have no fixed lifetime. If DSM stops accepting the stored token (for example, the trusted device was removed in **Personal → Security → Sign-in Activity**), the error says DSM rejected it; run `mcp-synology setup` again to sign in with a new 2FA code
 
 The device token is specific to the `instance_id`. Multiple NAS configs with different 2FA accounts each get their own token.
 
