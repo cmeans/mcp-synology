@@ -324,6 +324,28 @@ class TestSetDownloadConfig:
         assert "your own default destination" in result
 
     @respx.mock
+    async def test_file_station_style_default_destination_is_made_share_relative(
+        self, mock_client: DsmClient
+    ) -> None:
+        _manager(is_manager=False)
+        route = get_route(INFO, "setserverconfig", version=1).respond(
+            json=captured("info_setserverconfig_user")
+        )
+        await set_download_config(mock_client, default_destination="/writable")
+        assert _sent(route)["default_destination"] == "writable"
+
+    async def test_empty_default_destination_names_the_right_param(
+        self, mock_client: DsmClient
+    ) -> None:
+        """QA on #147: the error must name the argument the model sent."""
+        with pytest.raises(ToolError) as exc:
+            await set_download_config(mock_client, default_destination="/")
+        envelope = _envelope(exc.value)
+        assert envelope["code"] == "invalid_parameter"
+        assert envelope["param"] == "default_destination"
+        assert "default_destination" in envelope["message"]
+
+    @respx.mock
     async def test_non_manager_destination_with_rates_sends_nothing(
         self, mock_client: DsmClient
     ) -> None:

@@ -28,7 +28,7 @@ from mcp_synology.core.formatting import (
     format_key_value,
     synology_error_response,
 )
-from mcp_synology.modules.downloadstation.helpers import ds_is_manager
+from mcp_synology.modules.downloadstation.helpers import ds_is_manager, normalize_destination
 
 logger = logging.getLogger(__name__)
 
@@ -167,7 +167,9 @@ async def set_download_config(
     if emule_max_upload is not None:
         fields["emule_max_upload"] = str(emule_max_upload)
     if default_destination is not None:
-        fields["default_destination"] = default_destination
+        fields["default_destination"] = normalize_destination(
+            default_destination, operation="Set download config", param="default_destination"
+        )
 
     if not fields:
         error_response(

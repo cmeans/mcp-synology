@@ -334,3 +334,10 @@ class TestModuleInfoDescriptions:
         assert "finished tasks are always kept" in desc
         assert "force_complete" in desc
         assert "delete_data" not in desc
+
+    def test_delete_download_asks_for_confirmation(self) -> None:
+        # A blind chat run on vdsm (Sonnet, tools auto-approved) deleted two tasks
+        # straight away when asked to; nothing in the description said to confirm.
+        desc = self._desc("delete_download")
+        assert "confirm" in desc
+        assert "can't be restored" in desc

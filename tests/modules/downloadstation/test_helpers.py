@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import pytest
+from mcp.server.fastmcp.exceptions import ToolError
 
 from mcp_synology.modules.downloadstation.helpers import (
     format_eta,
     format_speed,
     format_task_status,
     format_transfer_progress,
+    normalize_destination,
 )
 
 
@@ -123,6 +125,35 @@ class TestFormatTaskStatus:
 
     def test_none_status_returns_unknown(self) -> None:
         assert format_task_status(None) == "unknown"
+
+    def test_error_shows_dsm_error_detail(self) -> None:
+        # Live on vdsm DSM 7.2.2: a 404 source gives status_extra.error_detail.
+        assert format_task_status("error", "broken_link") == "error (broken_link)"
+
+    def test_error_detail_ignored_when_empty(self) -> None:
+        assert format_task_status("error", None) == "error"
+        assert format_task_status("error", "") == "error"
+
+
+class TestNormalizeDestination:
+    """DS wants share-relative paths; File Station shows /share (DSM 403 on '/writable')."""
+
+    @pytest.mark.parametrize(
+        ("given", "sent"),
+        [
+            ("writable", "writable"),
+            ("/writable", "writable"),
+            ("/video/Torrents/", "video/Torrents"),
+            ("video/Torrents", "video/Torrents"),
+        ],
+    )
+    def test_leading_and_trailing_slashes_are_dropped(self, given: str, sent: str) -> None:
+        assert normalize_destination(given, operation="Edit download") == sent
+
+    @pytest.mark.parametrize("given", ["/", "", "  "])
+    def test_no_share_left_is_invalid(self, given: str) -> None:
+        with pytest.raises(ToolError, match="destination"):
+            normalize_destination(given, operation="Edit download")
 
 
 class TestStatusGroups:

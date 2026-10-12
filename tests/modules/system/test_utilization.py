@@ -69,6 +69,8 @@ class TestGetResourceUsage:
         assert "Resource Usage" in result
         assert "eth0" in result
         assert "sda" in result
+        # DSM reports load averages x100 (an idle 2-core vdsm VM gives 1min_load=124).
+        assert "1m=1.50  5m=1.20  15m=1.00" in result
 
     @respx.mock
     async def test_cpu_other_load_fallback_format(self, mock_client: DsmClient) -> None:

@@ -366,6 +366,45 @@ class TestVdsmDownloadStationTasks:
         assert _ids_in(paused) == [ids[-1]], paused
         assert "1 task(s) total; showing 1–1." in paused
 
+    async def test_file_station_style_destinations_work(
+        self, nas_client: Any, _clean_queue: None
+    ) -> None:
+        """File Station shows ``/writable``; DS rejects that form unless we strip the slash.
+
+        Raw DSM 7.2.2: create with "/writable" gives 403 "Destination doesn't
+        exist", and edit with "/testshare" gives error 100.
+        """
+        from mcp_synology.modules.downloadstation.tasks import (
+            create_download,
+            edit_download,
+            get_download_info,
+        )
+
+        client, _, _, _ = _unpack(nas_client)
+        task_id = _ids_in(await create_download(client, uri=_FAKE_MAGNET, destination="/writable"))[
+            0
+        ]
+        assert "writable" in await get_download_info(client, task_id=task_id)
+        assert "ok" in await edit_download(client, task_ids=[task_id], destination="/testshare/")
+        assert "testshare" in await get_download_info(client, task_id=task_id)
+        # A folder that doesn't exist (a /volume1 real path, as get_file_info shows):
+        # edit fails with a bare DSM 100, so the error must point at the destination.
+        with pytest.raises(ToolError) as exc:
+            await edit_download(client, task_ids=[task_id], destination="/volume1/testshare")
+        error = _error(exc.value)
+        assert "DSM error 100" in error["message"], error
+        assert "share-relative" in error["suggestion"]
+
+    async def test_error_task_shows_dsm_reason(self, nas_client: Any, _clean_queue: None) -> None:
+        """DSM sets ``status_extra.error_detail`` on a failed task (``broken_link`` for a 404)."""
+        from mcp_synology.modules.downloadstation.tasks import create_download, list_downloads
+
+        client, _, _, _ = _unpack(nas_client)
+        missing = "http://127.0.0.1:5000/mcp-synology-missing.iso"
+        task_id = _ids_in(await create_download(client, uri=missing, destination="writable"))[0]
+        await _wait_for(client, task_id, lambda t: t["status"] == "error", timeout=60)
+        assert "error (broken_link)" in await list_downloads(client, status_filter="error")
+
     async def test_create_from_magnet_longer_than_get_url_limit(
         self, nas_client: Any, _clean_queue: None
     ) -> None:

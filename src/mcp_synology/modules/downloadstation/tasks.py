@@ -25,6 +25,8 @@ from mcp_synology.modules.downloadstation.helpers import (
     format_speed,
     format_task_status,
     format_transfer_progress,
+    normalize_destination,
+    task_error_detail,
 )
 
 logger = logging.getLogger(__name__)
@@ -220,7 +222,7 @@ async def list_downloads(
                 t.get("id", "—"),
                 _title(t),
                 t.get("type", "—"),
-                format_task_status(t.get("status")),
+                format_task_status(t.get("status"), task_error_detail(t)),
                 format_size(size_total),
                 format_transfer_progress(size_down, size_total),
                 format_speed(speed_down),
@@ -341,7 +343,7 @@ async def get_download_info(
         ("ID", task.get("id", "—")),
         ("Title", _title(task)),
         ("Type", task.get("type", "—")),
-        ("Status", format_task_status(task.get("status"))),
+        ("Status", format_task_status(task.get("status"), task_error_detail(task))),
         ("Size", format_size(int(task.get("size", 0)))),
     ]
     sections.append(format_key_value(header_pairs, title="Task"))
@@ -539,6 +541,8 @@ async def create_download(
             "Create download failed: supply exactly one of `uri` or `torrent_file_path`, not both.",
             retryable=False,
         )
+    if destination is not None:
+        destination = normalize_destination(destination, operation="Create download")
 
     if torrent_file_path is not None:
         if username is not None or password is not None:
@@ -802,6 +806,7 @@ async def edit_download(
             retryable=False,
             valid=["destination"],
         )
+    destination = normalize_destination(destination, operation="Edit download")
 
     ids_joined = ",".join(task_ids)
 
@@ -829,6 +834,20 @@ async def edit_download(
             params={"id": ids_joined, "destination": destination},
         )
     except SynologyError as e:
+        if e.code == 100:
+            # Task.edit's answer to a destination that doesn't exist (vdsm 7.1 and
+            # 7.2.2), where create says 403. 100 isn't specific, so keep its code.
+            error_response(
+                e.error_code,
+                f"Edit download failed (DSM error 100): {e}. This is usually a "
+                f"destination folder that doesn't exist ({destination!r}).",
+                retryable=False,
+                suggestion=(
+                    "Pass a share-relative path such as 'video/Torrents' (not "
+                    "'/volume1/video/Torrents') and check the folder exists with list_files."
+                ),
+                help_url=e.help_url,
+            )
         synology_error_response("Edit download", e)
 
     results = data if isinstance(data, list) else data.get("results", [])
