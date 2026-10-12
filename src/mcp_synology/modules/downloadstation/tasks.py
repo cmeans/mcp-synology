@@ -176,7 +176,7 @@ async def list_downloads(
         rows.append(
             [
                 t.get("id", "—"),
-                redact_title(str(t.get("title", "—"))),
+                _title(t),
                 t.get("type", "—"),
                 format_task_status(t.get("status")),
                 format_size(size_total),
@@ -199,6 +199,12 @@ async def list_downloads(
 def _detail(task: dict[str, Any]) -> dict[str, Any]:
     detail: dict[str, Any] = (task.get("additional") or {}).get("detail") or {}
     return detail
+
+
+def _title(task: dict[str, Any]) -> str:
+    # Only a BT title is the torrent's name; every other type (http, ftp, nzb, emule)
+    # is titled with the URL's last segment, which can be a tracker passkey (#144).
+    return redact_title(str(task.get("title", "—")), url_derived=task.get("type") != "bt")
 
 
 async def _list_tasks(
@@ -291,7 +297,7 @@ async def get_download_info(
     # Header block
     header_pairs = [
         ("ID", task.get("id", "—")),
-        ("Title", redact_title(str(task.get("title", "—")))),
+        ("Title", _title(task)),
         ("Type", task.get("type", "—")),
         ("Status", format_task_status(task.get("status"))),
         ("Size", format_size(int(task.get("size", 0)))),

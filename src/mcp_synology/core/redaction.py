@@ -124,10 +124,16 @@ def redact_urls(text: str) -> str:
     return _URL_IN_TEXT.sub(lambda m: redact_url(m.group(0)), text)
 
 
-def redact_title(title: str) -> str:
+def redact_title(title: str, *, url_derived: bool = False) -> str:
     """Mask query values (and any whole URL) in a task title; other text is kept.
 
-    Unlike ``redact_url``, token-shaped words are left alone: a title like
-    ``Show_Series_1_2026_1080p`` is a name, not a secret.
+    Token-shaped words are left alone by default: a BT title like
+    ``Show_Series_1_2026_1080p`` is a name, not a secret. With ``url_derived``
+    (an HTTP/FTP/NZB task, whose title is the URL's last segment), tokens are
+    masked as ``redact_url`` masks them in a path, so ``<passkey>.torrent``
+    becomes ``***.torrent``.
     """
-    return _QUERY_ITEM.sub(lambda m: f"{m.group(1)}{m.group(2)}={MASK}", redact_urls(title))
+    title = _QUERY_ITEM.sub(lambda m: f"{m.group(1)}{m.group(2)}={MASK}", redact_urls(title))
+    if url_derived:
+        title = _TOKEN_RUN.sub(lambda m: MASK if _is_token(m.group(0)) else m.group(0), title)
+    return title

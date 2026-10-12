@@ -173,3 +173,20 @@ class TestRedactTitle:
     )
     def test_ordinary_titles_are_unchanged(self, title: str) -> None:
         assert redact_title(title) == title
+
+    @pytest.mark.parametrize(
+        ("title", "expected"),
+        [
+            (f"{PASSKEY}.torrent", "***.torrent"),  # private tracker's .torrent link (QA, #144)
+            (f"{PASSKEY}.iso", "***.iso"),
+            (f"file-{PASSKEY}.bin&_sid={PASSKEY}", "***.bin&_sid=***"),  # whole run, as in a path
+            ("ubuntu-24.04-desktop-amd64.iso", "ubuntu-24.04-desktop-amd64.iso"),
+        ],
+    )
+    def test_url_derived_title_masks_tokens(self, title: str, expected: str) -> None:
+        # An HTTP/FTP/NZB task's title is the URL's last segment, so a token in it is
+        # the same secret redact_url masks in the URI.
+        assert redact_title(title, url_derived=True) == expected
+
+    def test_bt_title_keeps_token_shaped_names(self) -> None:
+        assert redact_title(f"{PASSKEY}.torrent") == f"{PASSKEY}.torrent"

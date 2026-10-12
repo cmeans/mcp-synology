@@ -395,6 +395,28 @@ class TestVdsmDownloadStationTasks:
         assert len(ids) == 1, created
         assert ids[0] in await _all_task_ids(client)
 
+    async def test_http_title_passkey_is_masked(self, nas_client: Any, _clean_queue: None) -> None:
+        # QA on #144: DSM titles an HTTP task with the URL's last segment, so a private
+        # tracker's .../<passkey>.torrent link put the passkey in the title.
+        from mcp_synology.modules.downloadstation.tasks import (
+            create_download,
+            get_download_info,
+            list_downloads,
+        )
+
+        client, _, _, _ = _unpack(nas_client)
+        passkey = "Zq7Lm2Xc9Vb4Nn8Kk1Jj6Hh3Gg5Ff0Dd"  # synthetic
+        url = f"http://127.0.0.1:5000/download/123/{passkey}.torrent"
+        task_id = _ids_in(await create_download(client, uri=url, destination="writable"))[0]
+
+        raw = await _task(client, task_id)
+        assert passkey in raw["title"], f"DSM no longer titles HTTP tasks from the URL: {raw}"
+        info = await get_download_info(client, task_id=task_id)
+        listed = await list_downloads(client)
+        assert passkey not in info
+        assert passkey not in listed
+        assert "***.torrent" in info and "***.torrent" in listed
+
     async def test_sort_by_completed_and_completed_column(
         self, nas_client: Any, _local_source: str
     ) -> None:

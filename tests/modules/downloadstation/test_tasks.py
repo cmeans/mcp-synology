@@ -530,6 +530,34 @@ class TestGetDownloadInfoRedaction:
         assert self.PASSKEY not in result
         assert "f.bin&_sid=***" in result
 
+    @pytest.mark.parametrize("task_type", ["http", "ftp", "nzb", "emule", None])
+    @respx.mock
+    async def test_url_derived_title_token_is_masked(
+        self, mock_client: DsmClient, task_type: str | None
+    ) -> None:
+        # QA on vdsm: DSM titles an HTTP task for .../<passkey>.torrent "<passkey>.torrent".
+        body = captured("task_getinfo_v1")
+        body["data"]["tasks"][0].update({"type": task_type, "title": f"{self.PASSKEY}.torrent"})
+        get_route(TASK, "getinfo", version=1).respond(json=body)
+        result = await get_download_info(mock_client, task_id="dbid_1")
+        assert self.PASSKEY not in result
+        assert "***.torrent" in result
+
+    @respx.mock
+    async def test_list_url_derived_title_token_is_masked(self, mock_client: DsmClient) -> None:
+        _manager()
+        http = _task("dbid_1", "error", title=f"{self.PASSKEY}.iso")
+        http["type"] = "http"
+        bt = _task("dbid_2", "finished", title="Show_Series_1_2026_1080p_WEB")
+        bt["type"] = "bt"
+        get_route(TASK, "list", version=1).respond(
+            json=ok({"offset": 0, "total": 2, "tasks": [http, bt]})
+        )
+        result = await list_downloads(mock_client)
+        assert self.PASSKEY not in result
+        assert "***.iso" in result
+        assert "Show_Series_1_2026_1080p_WEB" in result
+
 
 class TestCreateDownloadUri:
     """URI create goes to DS2 Task.create v2 as a form POST (#123 items 9/9a)."""
