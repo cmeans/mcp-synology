@@ -176,11 +176,13 @@ logging:
 | `alias` | `str` | No | — | Human-friendly name for this NAS (e.g., "HomeNAS"). Used as `display_name` in tool output and server identity. |
 | `check_for_updates` | `bool` | No | `true` | Check PyPI for newer versions on first tool call. |
 | `custom_instructions` | `str` | No | — | Additional instructions prepended to the built-in server prompt (higher priority). Supports template variables: `{display_name}`, `{instance_id}`, `{host}`, `{port}`. Useful for guiding Claude on when to use this connection vs others. |
-| `instructions_file` | `str` | No | — | Path to a custom `.md` file that **replaces** the built-in server instructions entirely. Copy the built-in `server.md` as a starting point. Same template variables are supported. Takes precedence over `custom_instructions`. |
+| `instructions_file` | `str` | No | — | Path to a custom `.md` file that **replaces** the built-in server instructions entirely. Copy the built-in `server.md` as a starting point. Same template variables are supported. Takes precedence over `custom_instructions`. Unlike the built-in or prepended instructions, a replacement file doesn't get the generated PERMISSIONS section (below). |
 | `connection` | `object` | No | — | NAS connection details. Required unless `SYNOLOGY_HOST` env var is set. |
 | `auth` | `object` | No | `{}` | Last-resort plaintext credentials. |
 | `modules` | `object` | **Yes** | — | Module enable/disable and configuration. |
 | `logging` | `object` | No | See defaults | Logging configuration. |
+
+**Generated PERMISSIONS section.** Unless `instructions_file` replaces them, the server instructions end with a PERMISSIONS section when the connection withholds tools. It lists each enabled module's tools above its `permission` tier (e.g. File Station's 7 WRITE tools at `permission: read`) and each registered module that isn't enabled, with the config change that enables them, and tells the model to say such a tool exists but isn't enabled. Registration is unaffected.
 
 ### `connection` Object
 
