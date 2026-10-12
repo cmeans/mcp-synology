@@ -69,7 +69,9 @@ MODULE_INFO = ModuleInfo(
             name="list_shares",
             description=(
                 "List all shared folders on the NAS. This is the starting point for "
-                "file navigation — call this first to discover available paths."
+                "file navigation — call this first to discover available paths. Shows "
+                "each share's volume and that volume's free space (shared by every share "
+                "on it); for how much space a share uses, call get_dir_size."
             ),
             permission_tier=PermissionTier.READ,
         ),
@@ -276,8 +278,9 @@ def register(ctx: RegisterContext) -> None:
         ) -> str:
             """`additional`: optional list of DSM metadata fields. Valid values:
             real_path, size, owner, time, perm, mount_point_type, volume_status.
-            Defaults to ["real_path", "size", "owner", "perm"]. Unknown values
-            are rejected before reaching DSM.
+            Defaults to ["real_path", "owner", "perm", "volume_status"]; DSM sends
+            no size for a share (#151). Unknown values are rejected before
+            reaching DSM.
             """
             client = await manager.get_client()
             return manager.with_update_notice(

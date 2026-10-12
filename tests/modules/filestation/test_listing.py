@@ -34,7 +34,7 @@ class TestListShares:
                             "path": "/video",
                             "isdir": True,
                             "additional": {
-                                "size": {"total_size": 5153960755200},
+                                "real_path": "/volume1/x",
                                 "owner": {"user": "admin"},
                             },
                         },
@@ -43,7 +43,7 @@ class TestListShares:
                             "path": "/music",
                             "isdir": True,
                             "additional": {
-                                "size": {"total_size": 919828684800},
+                                "real_path": "/volume1/x",
                                 "owner": {"user": "admin"},
                             },
                         },
@@ -69,7 +69,7 @@ class TestListShares:
                             "name": "video",
                             "path": "/video",
                             "isdir": True,
-                            "additional": {"size": {"total_size": 0}, "owner": {"user": "admin"}},
+                            "additional": {"owner": {"user": "admin"}},
                         },
                     ],
                     "total": 1,
@@ -102,19 +102,19 @@ class TestListShares:
                             "name": "video",
                             "path": "/video",
                             "isdir": True,
-                            "additional": {"size": {"total_size": 0}, "owner": {"user": "admin"}},
+                            "additional": {"owner": {"user": "admin"}},
                         },
                         {
                             "name": "music",
                             "path": "/music",
                             "isdir": True,
-                            "additional": {"size": {"total_size": 0}, "owner": {"user": "admin"}},
+                            "additional": {"owner": {"user": "admin"}},
                         },
                         {
                             "name": "scratch",
                             "path": "/scratch",
                             "isdir": True,
-                            "additional": {"size": {"total_size": 0}, "owner": {"user": "admin"}},
+                            "additional": {"owner": {"user": "admin"}},
                         },
                     ],
                     "total": 3,
@@ -186,6 +186,74 @@ class TestListShares:
         assert body["status"] == "error"
         assert body["error"]["code"] == "invalid_parameter"
         assert "sze" in body["error"]["message"]
+
+
+def _share(name: str, real_path: str | None, volume: dict[str, object] | None) -> dict[str, object]:
+    """A list_share row shaped like a real DSM 7.2 response (seska, #151): DSM sends
+    no ``size`` for a share; ``volume_status`` describes the share's volume."""
+    additional: dict[str, object] = {"owner": {"user": "root"}}
+    if real_path is not None:
+        additional["real_path"] = real_path
+    if volume is not None:
+        additional["volume_status"] = volume
+    return {"name": name, "path": f"/{name}", "isdir": True, "additional": additional}
+
+
+_VOLUME1 = {"freespace": 1633576271872, "readonly": False, "totalspace": 40289542017024}
+
+
+class TestListSharesVolumeSpace:
+    """#151: DSM's list_share has no per-share size, so the old Size column was
+    always 0 B. Show the share's volume and that volume's free space instead."""
+
+    @respx.mock
+    async def test_default_request_asks_for_volume_status(self, mock_client: DsmClient) -> None:
+        route = respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": True, "data": {"shares": [], "total": 0}}
+        )
+        await list_shares(mock_client)
+        sent = json.loads(dict(route.calls.last.request.url.params)["additional"])
+        assert "volume_status" in sent
+        assert "real_path" in sent
+        assert "size" not in sent
+
+    @respx.mock
+    async def test_volume_and_free_space_replace_size(self, mock_client: DsmClient) -> None:
+        shares = [
+            _share("Backups", "/volume1/Backups", _VOLUME1),
+            _share("home", "/volume1/homes/synAdmin", _VOLUME1),
+        ]
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": True, "data": {"shares": shares, "total": 2}}
+        )
+        result = await list_shares(mock_client, hostname="seska")
+        assert "0 B" not in result
+        assert "Size" not in result
+        assert "Volume" in result and "volume1" in result
+        assert "1.5 TB of 36.6 TB" in result
+        assert "get_dir_size" in result  # a share's own usage lives there
+        assert "per volume" in result
+
+    @respx.mock
+    async def test_read_only_volume_is_marked(self, mock_client: DsmClient) -> None:
+        ro = {**_VOLUME1, "readonly": True}
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": True, "data": {"shares": [_share("usb", "/volumeUSB1/usbshare", ro)]}}
+        )
+        result = await list_shares(mock_client)
+        assert "volumeUSB1" in result
+        assert "read-only" in result
+
+    @respx.mock
+    async def test_missing_fields_show_a_dash(self, mock_client: DsmClient) -> None:
+        """A caller's own `additional` may leave out real_path or volume_status."""
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": True, "data": {"shares": [_share("video", None, None)]}}
+        )
+        result = await list_shares(mock_client, additional=["owner"])
+        assert "0 B" not in result
+        assert "—" in result
+        assert "per volume" not in result  # no free space shown, so no note
 
 
 class TestListFiles:

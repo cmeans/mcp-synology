@@ -294,6 +294,18 @@ class TestListing:
         assert "Name" in result  # table header
         logger.info("list_shares output:\n%s", result)
 
+    async def test_list_shares_shows_volume_free_space_not_zero_size(self, nas_client: Any) -> None:
+        """#151: DSM sends no per-share size, so every share read "0 B". Each row
+        now shows its volume and that volume's free space."""
+        import re
+
+        client, _, _, _ = _unpack(nas_client)
+        result = await list_shares(client)
+        assert "0 B" not in result, result
+        assert re.search(r"volume\w*\d", result), result
+        assert re.search(r"\d+(\.\d)? [KMGT]?B of \d+(\.\d)? [KMGT]?B", result), result
+        assert "get_dir_size" in result
+
     async def test_list_files_existing_share(self, nas_client: Any) -> None:
         """Should list files in a known share."""
         client, _, _, paths = _unpack(nas_client)

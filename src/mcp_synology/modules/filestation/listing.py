@@ -43,6 +43,23 @@ def _resolve_sort_by(sort_by: str) -> str:
     return _SORT_ALIASES.get(sort_by, sort_by)
 
 
+def _volume_name(real_path: object) -> str:
+    """``/volume1/homes/admin`` -> ``volume1``; ``—`` when DSM didn't send it."""
+    if not isinstance(real_path, str) or not real_path.startswith("/"):
+        return "—"
+    return real_path.split("/")[1] or "—"
+
+
+def _volume_free(volume_status: object) -> str:
+    """Free space of the share's volume, e.g. ``1.5 TB of 36.6 TB``."""
+    if not isinstance(volume_status, dict) or "freespace" not in volume_status:
+        return "—"
+    free = format_size(int(volume_status["freespace"]))
+    total = volume_status.get("totalspace")
+    text = f"{free} of {format_size(int(total))}" if total else free
+    return f"{text}, read-only" if volume_status.get("readonly") else text
+
+
 async def list_shares(
     client: DsmClient,
     *,
@@ -56,7 +73,8 @@ async def list_shares(
     """List all shared folders on the NAS."""
     validate_additional(additional, tool_name="List shares")
     if additional is None:
-        additional = ["real_path", "size", "owner", "perm"]
+        # No "size": DSM's list_share never returns one for a share (#151).
+        additional = ["real_path", "owner", "perm", "volume_status"]
 
     sort_by = _resolve_sort_by(sort_by)
 
@@ -81,18 +99,20 @@ async def list_shares(
             title=f"Shared Folders on {hostname}",
         )
 
-    headers = ["Name", "Path", "Size", "Owner"]
+    headers = ["Name", "Path", "Volume", "Free", "Owner"]
     if recycle_bin_status:
         headers.append("Recycle Bin")
 
     rows: list[list[str]] = []
+    shows_free = False
     for share in shares:
         name = share.get("name", "")
         path = share.get("path", f"/{name}")
-        add_info = share.get("additional", {})
-        size = format_size(add_info.get("size", {}).get("total_size", 0))
+        add_info = share.get("additional") or {}
+        free = _volume_free(add_info.get("volume_status"))
+        shows_free = shows_free or free != "—"
         owner = add_info.get("owner", {}).get("user", "—")
-        row = [name, path, size, owner]
+        row = [name, path, _volume_name(add_info.get("real_path")), free, owner]
         if recycle_bin_status:
             # Distinguish unprobed-yet from observed-disabled. Pre-#37 the
             # cache was always empty so this column never appeared at all;
@@ -109,6 +129,11 @@ async def list_shares(
     total = data.get("total", len(shares))
     result = format_table(headers=headers, rows=rows, title=f"Shared Folders on {hostname}")
     result += f"\n\n{total} shared folders found."
+    if shows_free:
+        result += (
+            "\n\nFree space is per volume: shares on one volume share it. "
+            "For how much space a share uses, call get_dir_size on its path."
+        )
     result += (
         "\n\nPaths shown above are the root for all file operations."
         '\nExample: to list files in the video share, use list_files(path="/video")'

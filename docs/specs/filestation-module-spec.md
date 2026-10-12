@@ -108,14 +108,14 @@ List all shared folders (top-level mount points) on the NAS.
 **DSM API:** `SYNO.FileStation.List` / `list_share`
 
 **Tool description (LLM-facing):**
-> List all shared folders on the NAS. This is the starting point for file navigation — call this first to discover available paths. Returns folder names, paths, sizes, and permissions. Use these paths as the root for all other file operations (e.g., the path "/video" from results becomes the prefix for list_files, move_files, etc.).
+> List all shared folders on the NAS. This is the starting point for file navigation — call this first to discover available paths. Returns folder names, paths, each share's volume and that volume's free space, and owners. Use these paths as the root for all other file operations (e.g., the path "/video" from results becomes the prefix for list_files, move_files, etc.).
 
 **Parameters:**
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `additional` | `list[str]` | No | `["real_path", "size", "owner", "perm"]` | Metadata fields to include. Options: `real_path`, `size`, `owner`, `time`, `perm`, `mount_point_type`, `volume_status`. |
-| `sort_by` | `str` | No | `"name"` | Sort field. Options: `name`, `size`, `user`, `mtime`, `crtime`. |
+| `additional` | `list[str]` | No | `["real_path", "owner", "perm", "volume_status"]` | Metadata fields to include. Options: `real_path`, `size`, `owner`, `time`, `perm`, `mount_point_type`, `volume_status`. DSM's `list_share` returns no `size` for a share (seen on DSM 7.1 and 7.2), so the default doesn't ask for it (#151). |
+| `sort_by` | `str` | No | `"name"` | Sort field. Options: `name`, `user`, `mtime`, `crtime`. (DSM also accepts `size`, but with no share size it has no useful effect: on vdsm, `size` with `desc` just reverses name order.) |
 | `sort_direction` | `str` | No | `"asc"` | Sort direction: `asc` or `desc`. |
 
 **Response shape:**
@@ -123,14 +123,16 @@ List all shared folders (top-level mount points) on the NAS.
 ```
 Shared Folders on [NAS hostname]
 ═══════════════════════════════════════════════════
-  Name          Path        Size      Owner     Recycle Bin
-  ─────────     ────────    ──────    ──────    ───────────
-  docker        /docker     1.2 TB    admin     enabled
-  music         /music      856 GB    admin     enabled
-  photo         /photo      2.1 TB    admin     enabled
-  video         /video      4.8 TB    admin     enabled
+  Name     Path      Volume   Free               Owner  Recycle Bin
+  ───────  ────────  ───────  ─────────────────  ─────  ───────────
+  docker   /docker   volume1  1.5 TB of 36.6 TB  admin  enabled
+  music    /music    volume1  1.5 TB of 36.6 TB  admin  enabled
+  photo    /photo    volume1  1.5 TB of 36.6 TB  admin  enabled
+  video    /video    volume2  812 GB of 7.3 TB   admin  enabled
 
 4 shared folders found.
+
+Free space is per volume: shares on one volume share it. For how much space a share uses, call get_dir_size on its path.
 
 Paths shown above are the root for all file operations.
 Example: to list files in the video share, use list_files(path="/video")
@@ -138,6 +140,7 @@ Example: to list files in the video share, use list_files(path="/video")
 
 **Design notes:**
 - The footer text teaches the LLM how to use the paths in subsequent tool calls.
+- Volume comes from the first component of `real_path`; Free comes from `volume_status` (`freespace` of `totalspace`, marked `read-only` when `readonly`). A missing field shows `—`, and the per-volume note appears only when some Free value is shown. There is deliberately no per-share size: DSM doesn't send one, and the old Size column read as "0 B" for every share (#151).
 - The "Recycle Bin" column shows enabled/disabled status per share (from the cached startup check).
 - When `additional` includes `perm`, include a column indicating read-only vs read-write access for the service account.
 
