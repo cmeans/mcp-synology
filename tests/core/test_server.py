@@ -680,14 +680,35 @@ class TestWithheldToolsNotice:
             assert tool in text.split("PERMISSIONS", 1)[1]
         assert "permission: write" in text
 
-    def test_write_module_has_no_notice(self) -> None:
-        text = self._instructions(modules={"filestation": {"enabled": True, "permission": "write"}})
-        assert "withheld" not in text
+    def test_nothing_withheld_means_no_section(self) -> None:
+        """Every module enabled at ``write``: no PERMISSIONS section at all."""
+        text = self._instructions(
+            modules={
+                "filestation": {"enabled": True, "permission": "write"},
+                "system": {"enabled": True, "permission": "write"},
+                "downloadstation": {"enabled": True, "permission": "write"},
+            }
+        )
+        assert "PERMISSIONS" not in text
 
     def test_module_not_enabled_is_named(self) -> None:
         text = self._instructions(modules={"filestation": {"enabled": True, "permission": "write"}})
         assert "downloadstation" in text
         assert "not enabled" in text
+
+    def test_disabled_module_is_told_to_enable_not_add(self) -> None:
+        """QA on #156: a module listed with ``enabled: false`` is already under
+        ``modules:``; the fix the user needs is ``enabled: true``."""
+        text = self._instructions(
+            modules={
+                "filestation": {"enabled": True, "permission": "write"},
+                "downloadstation": {"enabled": False, "permission": "write"},
+            }
+        )
+        section = text.split("PERMISSIONS", 1)[1]
+        assert "downloadstation" in section
+        assert "`enabled: true`" in section
+        assert "add `downloadstation` under `modules:`" not in section
 
     def test_full_instructions_file_is_left_alone(self, tmp_path: Path) -> None:
         custom = tmp_path / "custom.md"

@@ -182,7 +182,7 @@ logging:
 | `modules` | `object` | **Yes** | — | Module enable/disable and configuration. |
 | `logging` | `object` | No | See defaults | Logging configuration. |
 
-**Generated PERMISSIONS section.** Unless `instructions_file` replaces them, the server instructions end with a PERMISSIONS section when the connection withholds tools. It lists each enabled module's tools above its `permission` tier (e.g. File Station's 7 WRITE tools at `permission: read`) and each registered module that isn't enabled, with the config change that enables them, and tells the model to say such a tool exists but isn't enabled. Registration is unaffected.
+**Generated PERMISSIONS section.** Unless `instructions_file` replaces them, the server instructions end with a PERMISSIONS section when the connection withholds tools. It lists each enabled module's tools above its `permission` tier (e.g. File Station's 7 WRITE tools at `permission: read`) and each registered module that isn't enabled (absent from `modules:`, or listed with `enabled: false`), with the config change that enables it (`permission: write`, adding the module, or `enabled: true`), and tells the model to say such a tool exists but isn't enabled. Registration is unaffected.
 
 ### `connection` Object
 

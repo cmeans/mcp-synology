@@ -113,7 +113,7 @@ Tested against DSM 7.1 (Download Station 3.9-4627) and DSM 7.2.2 (Download Stati
 ## Features
 
 - **Interactive setup** — guided configuration that creates your config, stores credentials, handles 2FA, and emits a Claude Desktop snippet
-- **Permission tiers** — READ or WRITE per module, enforced at tool registration
+- **Permission tiers** — READ or WRITE per module, enforced at tool registration. A read-only connection tells the model which tools it withholds and how to enable them, so the model doesn't claim the server can't do it
 - **2FA support** — auto-detected; device token bootstrap with automatic silent re-auth
 - **Secure credentials** — OS keyring integration that works transparently on macOS, Windows, and Linux (including from Claude Desktop). See [docs/credentials.md](docs/credentials.md).
 - **Multi-NAS** — manage multiple NAS devices with separate configs, credentials, and state
@@ -278,7 +278,7 @@ custom_instructions: |
   Never delete files from /Backups without explicit confirmation.
 ```
 
-**Full control** — `instructions_file` replaces the built-in prompt entirely. Copy the [built-in server.md](src/mcp_synology/instructions/server.md) as a starting point:
+**Full control** — `instructions_file` replaces the built-in prompt entirely. Copy the [built-in server.md](src/mcp_synology/instructions/server.md) as a starting point. A replacement file is used exactly as written, so it doesn't get the generated PERMISSIONS section, which tells the model which tools this connection withholds and how to enable them (`custom_instructions` keeps it):
 
 ```yaml
 # ~/.config/mcp-synology/config.yaml
