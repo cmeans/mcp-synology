@@ -17,6 +17,7 @@ from mcp_synology.core.formatting import (
 )
 from mcp_synology.modules.filestation.helpers import (
     normalize_path,
+    validate_additional,
 )
 
 if TYPE_CHECKING:
@@ -60,6 +61,7 @@ async def get_file_info(
     path, table for multiple). Trade-off is N round-trips for N paths,
     which is fine for the typical small-N usage and trivially correct.
     """
+    validate_additional(additional, tool_name="Get file info")
     if additional is None:
         additional = ["real_path", "size", "owner", "time", "perm"]
 

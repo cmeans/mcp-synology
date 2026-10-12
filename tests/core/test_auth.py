@@ -294,6 +294,30 @@ class TestLogin:
         assert request_params["device_id"] == "dev123"
 
     @respx.mock
+    async def test_rejected_device_token_says_so(self) -> None:
+        """A stored device token DSM no longer trusts also gets 403. The error
+        used to say "no device token is available", which sent users looking
+        for a token that was there."""
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 403}}
+        )
+        config = _make_config(
+            auth={"username": "admin", "password": "secret", "device_id": "dev123"}
+        )
+        async with _make_client() as client:
+            auth = AuthManager(config, client)
+            with (
+                patch.dict(os.environ, _clean_env(), clear=True),
+                patch("mcp_synology.core.auth.kr", _no_keyring()),
+                pytest.raises(AuthenticationError) as exc,
+            ):
+                await auth.login()
+        message = str(exc.value)
+        assert "rejected" in message
+        assert "no device token" not in message
+        assert "mcp-synology setup" in message
+
+    @respx.mock
     async def test_2fa_required_without_device_id(self) -> None:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
             json={"success": False, "error": {"code": 403}}

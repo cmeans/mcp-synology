@@ -8,13 +8,16 @@ import logging
 import platform
 import signal
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NoReturn
 
+import httpx
 from mcp.server.fastmcp import FastMCP
 from mcp.types import Icon
 
 from mcp_synology.core.auth import AuthManager
 from mcp_synology.core.client import DsmClient
+from mcp_synology.core.errors import ErrorCode
+from mcp_synology.core.formatting import error_response
 from mcp_synology.core.state import ServerState
 from mcp_synology.modules import PermissionTier, RegisterContext, filter_tools_by_permission
 from mcp_synology.modules import downloadstation as _downloadstation_mod
@@ -72,6 +75,27 @@ _MODULE_REGISTRY: dict[str, ModuleType] = {
 }
 
 
+def _unreachable_error(base_url: str, timeout: float, exc: httpx.TransportError) -> NoReturn:
+    """Raise a structured error for a NAS that can't be reached (#138).
+
+    httpx's connect errors often stringify to ``''``, which used to reach the
+    model as "Error executing tool list_shares: " with nothing to act on.
+    """
+    timed_out = isinstance(exc, httpx.TimeoutException)
+    what = f"timed out after {timeout:g} s" if timed_out else "could not connect"
+    detail = f" ({type(exc).__name__}: {exc})" if str(exc) else f" ({type(exc).__name__})"
+    error_response(
+        ErrorCode.TIMEOUT if timed_out else ErrorCode.UNAVAILABLE,
+        f"Can't reach the NAS at {base_url}: {what}{detail}.",
+        retryable=True,
+        suggestion=(
+            "Check that the NAS is powered on and reachable from this machine (LAN or VPN), "
+            "and that connection host, port and https in the config are right. "
+            "`mcp-synology check --config <file>` tests the connection and login."
+        ),
+    )
+
+
 class SharedClientManager:
     """Manages the shared DSM client lifecycle across all modules.
 
@@ -106,10 +130,16 @@ class SharedClientManager:
                 timeout=conn.timeout,
             )
             await client.__aenter__()
-            await client.query_api_info()
-
-            auth = AuthManager(self._config, client)
-            await auth.login()
+            try:
+                await client.query_api_info()
+                auth = AuthManager(self._config, client)
+                await auth.login()
+            except BaseException as e:
+                # Don't leak the half-open client; the next call starts fresh.
+                await client.__aexit__(None, None, None)
+                if isinstance(e, httpx.TransportError):
+                    _unreachable_error(base_url, conn.timeout, e)
+                raise
 
             # Flush any reauth callbacks that modules queued during sync
             # `register()` (before the AuthManager existed).

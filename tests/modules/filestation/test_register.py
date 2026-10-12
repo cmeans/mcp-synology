@@ -154,6 +154,16 @@ class TestFilestationToolInvocation:
         assert "list_files-result" in result
         mock.assert_awaited_once()
 
+    async def test_get_file_info_passes_additional(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The spec documents `additional` on get_file_info, and the handler takes
+        it; #87 exposed it on three tools but missed this one."""
+        server, _manager, ctx = _make_ctx()
+        target = "mcp_synology.modules.filestation.metadata.get_file_info"
+        mock = self._capture_call(monkeypatch, target)
+        register(ctx)
+        await server._tool_manager._tools["get_file_info"].fn(paths=["/a"], additional=["size"])
+        assert mock.await_args.kwargs["additional"] == ["size"]
+
     async def test_list_recycle_bin_invocation(self, monkeypatch: pytest.MonkeyPatch) -> None:
         server, _manager, ctx = _make_ctx()
         mock = self._capture_call(

@@ -42,7 +42,9 @@ DOWNLOADSTATION_ERROR_CODES: dict[int, tuple[str, str]] = {
     ),
     404: (
         "Invalid task id",
-        "Task id not found. Run list_downloads to get the current set of ids.",
+        "Task id not found: no such task, or it belongs to another user (an account "
+        "that isn't a Download Station manager sees only its own tasks). Run "
+        "list_downloads to get the current set of ids.",
     ),
     405: (
         "Invalid task action",

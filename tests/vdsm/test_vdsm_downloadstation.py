@@ -706,6 +706,44 @@ class TestVdsmDownloadStationNonAdmin:
                 params={"id": ",".join(admin_tasks), "force_complete": "false"},
             )
 
+    async def test_another_users_task_reads_as_not_found(
+        self, nas_client: Any, admin_client: Any, _clean_queue: None
+    ) -> None:
+        """#136: DSM answers 544 (resume/edit/delete) and 101 (pause, no match)
+        for another user's task, exactly as for a missing ID; the tools say
+        "not found (no such task, or not yours)" instead of a bare code."""
+        from mcp_synology.modules.downloadstation.tasks import (
+            create_download,
+            delete_download,
+            edit_download,
+            pause_download,
+            resume_download,
+        )
+
+        user, _, _, _ = _unpack(nas_client)
+        admin, _, _, _ = _unpack(admin_client)
+        magnet = "magnet:?xt=urn:btih:" + "e" * 40 + "&dn=admins-task"
+        theirs = _ids_in(await create_download(admin, uri=magnet, destination="writable"))[0]
+        try:
+            for result in (
+                await resume_download(user, task_ids=[theirs]),
+                await edit_download(user, task_ids=[theirs], destination="writable"),
+                await delete_download(user, task_ids=[theirs]),
+            ):
+                assert "not found (no such task, or not yours)" in result, result
+            assert "nothing was deleted" in await delete_download(user, task_ids=[theirs])
+            with pytest.raises(ToolError) as exc:
+                await pause_download(user, task_ids=[theirs])
+            assert _error(exc.value)["code"] == "not_found"
+            assert theirs in await _all_task_ids(admin)  # untouched
+        finally:
+            await admin.request(
+                "SYNO.DownloadStation.Task",
+                "delete",
+                version=1,
+                params={"id": theirs, "force_complete": "false"},
+            )
+
     async def test_create_without_destination_uses_own_default(
         self, nas_client: Any, _local_source: str
     ) -> None:

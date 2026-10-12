@@ -408,9 +408,16 @@ def register(ctx: RegisterContext) -> None:
             description=_desc("get_file_info"),
             annotations=_tool_annos["get_file_info"],
         )
-        async def tool_get_file_info(paths: list[str]) -> str:
+        async def tool_get_file_info(paths: list[str], additional: list[str] | None = None) -> str:
+            """`additional`: optional list of DSM metadata fields. Valid values:
+            real_path, size, owner, time, perm, type, mount_point_type. Defaults
+            to ["real_path", "size", "owner", "time", "perm"]. Unknown values are
+            rejected before reaching DSM.
+            """
             client = await manager.get_client()
-            return manager.with_update_notice(await get_file_info(client, paths=paths))
+            return manager.with_update_notice(
+                await get_file_info(client, paths=paths, additional=additional)
+            )
 
     if "get_dir_size" in ctx.allowed_tools:
 

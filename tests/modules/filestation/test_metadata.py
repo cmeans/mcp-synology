@@ -313,3 +313,10 @@ class TestGetDirSize:
         assert body["error"]["retryable"] is True
         assert body["error"]["param"] == "timeout"
         assert body["error"]["value"] == 1.0
+
+
+class TestGetFileInfoAdditionalValidation:
+    async def test_unknown_additional_is_rejected_before_dsm(self, mock_client: DsmClient) -> None:
+        """Same up-front check as list_files/search_files: DSM ignores unknown fields."""
+        with pytest.raises(ToolError, match="unknown 'additional'"):
+            await get_file_info(mock_client, paths=["/video/a.mkv"], additional=["sizee"])

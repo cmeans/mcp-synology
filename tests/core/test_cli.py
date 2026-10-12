@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from click.testing import CliRunner
 
 from mcp_synology import __version__
@@ -1223,3 +1224,26 @@ class TestCliLogging:
             assert len(after) == len(before)
         finally:
             self._restore_root_logger(snapshot)
+
+
+class TestVerboseShortFlag:
+    """`-v` is `--verbose` on check/setup, as docs/error-codes.md tells users to
+    run `mcp-synology check -v`; top-level `-v` stays `--version`."""
+
+    @pytest.mark.parametrize("command", ["check", "setup"])
+    def test_subcommand_accepts_dash_v(self, command: str) -> None:
+        from click.testing import CliRunner
+
+        from mcp_synology.cli.main import main
+
+        result = CliRunner().invoke(main, [command, "--help"])
+        assert "-v, --verbose" in result.output
+
+    def test_top_level_dash_v_is_still_version(self) -> None:
+        from click.testing import CliRunner
+
+        from mcp_synology.cli.main import main
+
+        result = CliRunner().invoke(main, ["-v"])
+        assert result.exit_code == 0
+        assert "version" in result.output

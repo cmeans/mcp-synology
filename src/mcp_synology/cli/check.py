@@ -13,7 +13,7 @@ from mcp_synology.cli.logging_ import _configure_logging, _init_early_logging
 
 @click.command()
 @click.option("-c", "--config", type=click.Path(), help="Path to config file")
-@click.option("--verbose", is_flag=True, help="Enable debug logging")
+@click.option("-v", "--verbose", is_flag=True, help="Enable debug logging")
 def check(config: str | None, verbose: bool) -> None:
     """Validate stored credentials can authenticate."""
     _init_early_logging(verbose=verbose)
