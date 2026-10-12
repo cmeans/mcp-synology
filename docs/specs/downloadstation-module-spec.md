@@ -387,11 +387,12 @@ Remove tasks.
 **DSM API:** `SYNO.DownloadStation.Task` / `delete` v1
 
 **Tool description (LLM-facing):**
-> Remove one or more download tasks. `task_ids` is a list. Files from finished tasks are always kept.
-> For unfinished tasks the partial data is discarded (irreversible). `force_complete` asks DSM to keep
-> the incomplete file in the destination instead, but DSM has been seen to discard it anyway, so don't
-> rely on it to preserve partial data. DSM refuses `force_complete` on finished tasks (error 405; the
-> task stays listed), so leave it false for those.
+> Remove one or more download tasks. `task_ids` is a list. A deleted task can't be restored (its
+> source URL is gone with it), so name the tasks and confirm with the user before deleting. Files from
+> finished tasks are always kept. For unfinished tasks the partial data is discarded (irreversible).
+> `force_complete` asks DSM to keep the incomplete file in the destination instead, but DSM has been
+> seen to discard it anyway, so don't rely on it to preserve partial data. DSM refuses
+> `force_complete` on finished tasks (error 405; the task stays listed), so leave it false for those.
 
 **Parameters:**
 
