@@ -232,10 +232,11 @@ async def _copy_move_one_path(
     copymove_version: int,
     timeout: float,
     done: list[str] | None = None,
-) -> int:
+) -> tuple[int, bool]:
     """Copy or move a single path via DSM async-task pattern.
 
-    Returns the `processed_size` byte count from the completed task so the
+    Returns the `processed_size` byte count from the completed task (and whether DSM
+    skipped items that already existed at the destination, #171) so the
     caller can sum sizes across all per-path tasks. Raises ToolError on
     failure (via error_response/synology_error_response). Always stops the
     background task on exit so orphaned tasks can't accumulate on the NAS.
@@ -347,7 +348,13 @@ async def _copy_move_one_path(
         )
 
     size = status.get("processed_size", 0)
-    return int(size) if isinstance(size, int | float) else 0
+    # With overwrite=false DSM skips items that already exist at the destination and
+    # says so only here: {"status": "none"} = nothing skipped, {"status": "all"} = at
+    # least one item skipped (a whole file, or some of a folder's children); null with
+    # overwrite=true. Same on DSM 7.1 and 7.2.2 (#171).
+    skip = status.get("skipstatus")
+    skipped = isinstance(skip, dict) and skip.get("status") not in (None, "none")
+    return (int(size) if isinstance(size, int | float) else 0), skipped
 
 
 async def _copy_move(
@@ -399,8 +406,9 @@ async def _copy_move(
 
     total_processed = 0
     done = list(already_done or [])
+    skipped_paths: list[str] = []
     for p in normalized:
-        total_processed += await _copy_move_one_path(
+        size, skipped = await _copy_move_one_path(
             client,
             p,
             dest=dest,
@@ -411,17 +419,41 @@ async def _copy_move(
             timeout=timeout,
             done=done,
         )
+        total_processed += size
+        if skipped:
+            skipped_paths.append(p)
         done.append(p)
 
     verb = "Copied" if not remove_src else "Moved"
-    lines = [format_status(f"{verb} {len(normalized)} item(s) to {dest}/:")]
+    if skipped_paths:
+        lines = [
+            format_status(
+                f"{verb} {len(normalized)} item(s) to {dest}/, but some items already existed "
+                "there and were skipped:",
+                success=False,
+            )
+        ]
+    else:
+        lines = [format_status(f"{verb} {len(normalized)} item(s) to {dest}/:")]
     lines.extend(f"  {p.split('/')[-1]}" for p in normalized)
 
     if total_processed > 0:
         lines.append(f"\nTotal size: {format_size(total_processed)}")
 
+    if skipped_paths:
+        # DSM doesn't say which items it skipped, only that it skipped some (#171).
+        lines.append("\nItems already at the destination were skipped (overwrite=false) for:")
+        for p in skipped_paths:
+            src_dir = "/".join(p.split("/")[:-1]) or "/"
+            lines.append(
+                f"  {p}" + (f" (skipped items are still in {src_dir}/)" if remove_src else "")
+            )
+        lines.append("Pass overwrite=true to replace them.")
+
     if remove_src:
-        src_dirs = sorted({"/".join(p.split("/")[:-1]) for p in normalized})
+        src_dirs = sorted(
+            {"/".join(p.split("/")[:-1]) for p in normalized if p not in skipped_paths}
+        )
         lines.extend(f"\nSource files have been removed from {d}/." for d in src_dirs)
 
     return "\n".join(lines)
@@ -752,4 +784,6 @@ async def restore_from_recycle_bin(
     )
 
     # Rephrase from "Moved" to "Restored"
-    return result.replace("[+] Moved", f"[+] Restored from /{share_name} recycle bin:")
+    return result.replace("[+] Moved", f"[+] Restored from /{share_name} recycle bin:").replace(
+        "[!] Moved", f"[!] Restored from /{share_name} recycle bin:"
+    )

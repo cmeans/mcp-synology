@@ -1223,3 +1223,97 @@ class TestOverlappingPaths:
         message = json.loads(str(exc_info.value))["error"]["message"]
         assert "/a/y" in message
         assert "Already deleted before this failure: /a/x" in message
+
+
+class TestCopyMoveSkippedItems:
+    """#171: with overwrite=false DSM skips items that already exist at the destination and
+    reports it only in `skipstatus`. Captured on vdsm DSM 7.1 and 7.2.2 (2026-10-13):
+    {"status": "none"} when nothing was skipped, {"status": "all"} when anything was (a
+    whole file, or some children of a folder), null with overwrite=true. A skipped move
+    leaves its source in place."""
+
+    @staticmethod
+    def _dsm(skipstatus_by_path: dict[str, object]) -> object:
+        started: list[str] = []
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            method = params.get("method", "")
+            if method == "getinfo":
+                path = params["path"]
+                entry = {"isdir": False, "name": path.rsplit("/", 1)[-1], "path": path}
+                return httpx.Response(200, json={"success": True, "data": {"files": [entry]}})
+            if method == "start":
+                started.append(params.get("path", ""))
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "t"}})
+            if method == "status":
+                data: dict[str, object] = {
+                    "finished": True,
+                    "path": "",
+                    "processed_size": 0,
+                    "status": "PROCESSING",
+                }
+                skip = skipstatus_by_path.get(started[-1])
+                if skip is not None:
+                    data["skipstatus"] = skip
+                return httpx.Response(200, json={"success": True, "data": data})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        return side_effect
+
+    NONE = {"status": "none"}
+    ALL = {"status": "all"}
+
+    @respx.mock
+    async def test_copy_without_skips_is_plain_success(self, mock_client: DsmClient) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm({"/w/a": self.NONE}))
+        result = await copy_files(mock_client, paths=["/w/a"], dest_folder="/w/dst")
+        assert result.startswith("[+] Copied 1 item(s)")
+        assert "skipped" not in result
+
+    @respx.mock
+    async def test_copy_with_skips_says_so(self, mock_client: DsmClient) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm({"/w/a": self.ALL}))
+        result = await copy_files(mock_client, paths=["/w/a"], dest_folder="/w/dst")
+        assert result.startswith("[!]"), result
+        assert "/w/a" in result and "already existed" in result and "skipped" in result
+        assert "overwrite=true" in result
+
+    @respx.mock
+    async def test_move_with_skips_does_not_claim_source_removed(
+        self, mock_client: DsmClient
+    ) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm({"/w/a": self.ALL}))
+        result = await move_files(mock_client, paths=["/w/a"], dest_folder="/w/dst")
+        assert result.startswith("[!]"), result
+        assert "have been removed" not in result
+        assert "still in /w" in result
+
+    @respx.mock
+    async def test_mixed_names_only_the_skipped_path(self, mock_client: DsmClient) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._dsm({"/w/a": self.NONE, "/v/b": self.ALL})
+        )
+        result = await move_files(mock_client, paths=["/w/a", "/v/b"], dest_folder="/w/dst")
+        assert result.startswith("[!]"), result
+        skipped_section = result[result.index("skipped") :]
+        assert "/v/b" in skipped_section and "/w/a" not in skipped_section
+        assert "Source files have been removed from /w/." in result
+        assert "removed from /v/" not in result
+
+    @respx.mock
+    async def test_restore_with_skips_says_items_stay_in_recycle_bin(
+        self, mock_client: DsmClient
+    ) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._dsm({"/video/#recycle/a.mkv": self.ALL})
+        )
+        result = await restore_from_recycle_bin(mock_client, share="video", paths=["a.mkv"])
+        assert result.startswith("[!]"), result
+        assert "recycle bin" in result and "skipped" in result
+
+    @respx.mock
+    async def test_overwrite_true_has_no_skipstatus(self, mock_client: DsmClient) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm({}))
+        result = await copy_files(mock_client, paths=["/w/a"], dest_folder="/w/dst", overwrite=True)
+        assert result.startswith("[+] Copied 1 item(s)")

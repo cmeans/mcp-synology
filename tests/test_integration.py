@@ -1325,6 +1325,36 @@ class TestErrorHandling:
         assert body["error"]["code"] == "not_found"
         assert "mcp_no_such" in body["error"]["message"]
 
+    async def test_skipped_copy_and_move_are_reported(
+        self, nas_client: Any, tmp_path: Path
+    ) -> None:
+        """#171: with overwrite=false DSM skips an existing destination item; the tools say
+        so, keep the old file, and a skipped move leaves its source in place."""
+        client, _, config, paths = _unpack(nas_client)
+        _skip_unless_write(config)
+        base = f"{paths['writable_folder'].rstrip('/')}/mcp_skip"
+        new_file = tmp_path / "f.txt"
+        new_file.write_bytes(b"NEW-CONTENT-12345")
+        old_file = tmp_path / "old" / "f.txt"
+        old_file.parent.mkdir()
+        old_file.write_bytes(b"old")
+        try:
+            await upload_file(client, local_path=str(new_file), dest_folder=f"{base}/src")
+            await upload_file(client, local_path=str(old_file), dest_folder=f"{base}/dst")
+            copied = await copy_files(
+                client, paths=[f"{base}/src/f.txt"], dest_folder=f"{base}/dst"
+            )
+            assert copied.startswith("[!]"), copied
+            assert "skipped" in copied and "overwrite=true" in copied
+            info = await get_file_info(client, paths=[f"{base}/dst/f.txt"])
+            assert "3 B" in info  # the old file is untouched
+            moved = await move_files(client, paths=[f"{base}/src/f.txt"], dest_folder=f"{base}/dst")
+            assert moved.startswith("[!]"), moved
+            assert "have been removed" not in moved
+            assert "f.txt" in await get_file_info(client, paths=[f"{base}/src/f.txt"])
+        finally:
+            await delete_files(client, paths=[base])
+
     async def test_move_with_one_missing_source_moves_nothing(self, nas_client: Any) -> None:
         """One missing source refuses the whole move; the existing source stays put."""
         client, _, config, paths = _unpack(nas_client)
