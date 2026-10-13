@@ -35,7 +35,7 @@ MODULE_INFO = ModuleInfo(
 
 - **Input:** Accept paths with or without leading `/`. Normalize internally by prepending `/` if missing.
 - **Output:** Always return fully-qualified paths starting with `/shared_folder/...`.
-- **Validation:** Check that the first path component corresponds to a known shared folder (from `SYNO.FileStation.List` / `list_share` cache). Return a clear error with `list_shares` guidance if not.
+- **Validation:** Check that the first path component corresponds to a known shared folder (from `SYNO.FileStation.List` / `list_share` cache). Return a clear error with `list_shares` guidance if not. Every path-taking tool does this in its wrapper before any DSM call (#160): the cache is per session, filled on first use, reloaded once when a path names a share it doesn't hold (so a new share is found), and cleared on re-auth. An unknown share is a non-retryable `not_found` naming the shares that exist (for an account that isn't an admin, the shares it can see). If DSM won't list shares, the check is skipped and DSM's own error stands. Without it, DSM answers an unknown share with misleading codes: 900 "Unexpected server error" (Delete) and 1100 "Insufficient filesystem permissions" (CreateFolder), on DSM 7.1 and 7.2.2.
 - **Escaping:** The DSM API uses commas as separators in multi-path parameters. Commas in paths must be escaped to `\,` and backslashes to `\\`. The core client handles this transparently.
 
 ### Response Formatting
@@ -49,6 +49,7 @@ Several File Station APIs are non-blocking (start → poll status → stop/clean
 - **Default timeout:** 120 seconds (configurable per-tool via module config if needed).
 - **On timeout:** Stop the background task, return an error with the last known progress.
 - **Progress reporting:** Via `ctx.report_progress(current, total)` using the MCP progress notification protocol. Whether the client renders this visually depends on the client implementation.
+- **Failures without an `error` key:** a finished task can still have failed. CopyMove lists a missing source under `errors` (`[{"code": 408, "path": ...}]`), and a Delete of a missing path finishes with `total: -1` (DSM 7.1 and 7.2.2). Both are reported as structured errors naming the path, never as success (#162).
 
 ### Human-Readable Size Parsing
 
@@ -240,6 +241,7 @@ File Info: /video/Movies/Dune Part Two (2024)/Dune.Part.Two.2024.mkv
 - `type` renders as "File type" (DSM's extension type, e.g. `ISO`; empty for a folder) and `mount_point_type` as "Mount point", each only when non-empty (#146).
 - Timestamps are UTC and labeled as such (`2025-02-18 13:42:05 UTC`), consistent with `search_files` treating naive input dates as UTC (#137).
 - For multiple paths, report individual failures inline alongside successes.
+- DSM's `getinfo` answers a missing path with a per-file `{"code": 408, "path": ...}` entry, not a failed request (DSM 7.1 and 7.2.2). That entry is the path's error, never a file row (#161). One path, or every path, missing is a structured `not_found` naming each path. A mixed request shows the found entries plus a `Not found: <path>` line for each missing one.
 
 ---
 
@@ -646,6 +648,8 @@ Recycle bin is enabled on /video — files can be recovered with list_recycle_bi
 - Response adapts based on cached recycle bin status of the target share.
 - User treats delete as done either way — the recycle bin note is a safety net, not a required step.
 - If paths span shares with different recycle bin statuses, group the response accordingly.
+- **Missing paths (#162):** every path is checked with `getinfo` before anything is deleted. Any missing path refuses the whole call with `not_found` naming the missing paths and saying nothing was deleted. When a missing path contains `*` or `?`, the suggestion explains that paths aren't wildcard patterns and points to `search_files`. DSM itself finishes a Delete task for a missing path without an error (`total: -1`, empty `path`), so that status is also treated as not found, which covers a path that disappears between the check and the delete.
+- **Task cleanup:** DSM releases a finished Delete task itself and answers `stop` with error 401 (DSM 7.1 and 7.2.2), so `stop` runs only for a task that didn't finish (timeout, polling error, cancellation).
 
 ---
 
