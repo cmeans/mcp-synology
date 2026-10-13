@@ -1345,6 +1345,47 @@ class TestErrorHandling:
         finally:
             await delete_files(client, paths=[f"{base}/mcp_mv_src", f"{base}/mcp_mv_dst"])
 
+    async def test_share_names_are_case_insensitive(self, nas_client: Any) -> None:
+        """QA R1 (#173): DSM accepts a differently cased share name, so the tools must too."""
+        from mcp_synology.server import create_server
+
+        _, _, config, paths = _unpack(nas_client)
+        share = paths["writable_folder"].strip("/").split("/")[0]
+        tools = create_server(config)._tool_manager._tools
+        result = await tools["list_files"].fn(path=f"/{share.upper()}")
+        assert "Unknown shared folder" not in result
+
+    async def test_non_recursive_delete_of_non_empty_folder_is_an_error(
+        self, nas_client: Any
+    ) -> None:
+        """QA R1 (#173): DSM leaves the folder and lists 900 under `errors`; not "Deleted"."""
+        client, _, config, paths = _unpack(nas_client)
+        _skip_unless_write(config)
+        base = paths["writable_folder"].rstrip("/")
+        await create_folder(client, paths=[f"{base}/mcp_nonempty/sub"])
+        try:
+            with pytest.raises(ToolError) as exc_info:
+                await delete_files(client, paths=[f"{base}/mcp_nonempty"], recursive=False)
+            error = json.loads(str(exc_info.value))["error"]
+            assert "recursive=true" in (error.get("suggestion") or "")
+            assert "mcp_nonempty" in await get_file_info(client, paths=[f"{base}/mcp_nonempty"])
+        finally:
+            await delete_files(client, paths=[f"{base}/mcp_nonempty"])
+
+    async def test_delete_parent_and_child_together(self, nas_client: Any) -> None:
+        """QA R1 (#173): a child listed with its parent no longer fails after the delete."""
+        client, _, config, paths = _unpack(nas_client)
+        _skip_unless_write(config)
+        base = paths["writable_folder"].rstrip("/")
+        await create_folder(client, paths=[f"{base}/mcp_overlap/child"])
+        result = await delete_files(
+            client,
+            paths=[f"{base}/mcp_overlap", f"{base}/mcp_overlap/child", f"{base}/mcp_overlap/"],
+        )
+        assert "1 item(s)" in result
+        with pytest.raises(ToolError):
+            await get_file_info(client, paths=[f"{base}/mcp_overlap"])
+
     async def test_unknown_share_rejected_by_the_tools(self, nas_client: Any) -> None:
         """Through the real server: an unknown share gets not_found naming real shares (#160).
 

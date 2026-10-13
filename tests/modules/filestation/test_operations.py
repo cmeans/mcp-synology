@@ -1139,3 +1139,70 @@ class TestCopyMoveRestorePreCheck:
         message = json.loads(str(exc_info.value))["error"]["message"]
         assert "/w/b" in message
         assert "Already moved before this failure: /w/a" in message
+
+
+class TestOverlappingPaths:
+    """QA R1 (#173): a path listed twice, or a path inside another listed path, ran a second
+    task after the first had already removed it; its total -1 then read as "not found" after
+    a successful delete. Overlaps are collapsed before anything runs."""
+
+    @staticmethod
+    def _dsm(missing_at_status: set[str] | None = None) -> tuple[object, list[str]]:
+        started: list[str] = []
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            method = params.get("method", "")
+            if method == "getinfo":
+                path = params["path"]
+                entry = {"isdir": True, "name": path.rsplit("/", 1)[-1], "path": path}
+                return httpx.Response(200, json={"success": True, "data": {"files": [entry]}})
+            if method == "start":
+                started.append(params.get("path", ""))
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "t"}})
+            if method == "status":
+                cur = started[-1]
+                if missing_at_status and cur in missing_at_status:
+                    data: dict[str, object] = {"finished": True, "path": "", "total": -1}
+                else:
+                    data = {"finished": True, "path": cur, "total": 1, "processed_size": 0}
+                return httpx.Response(200, json={"success": True, "data": data})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        return side_effect, started
+
+    @respx.mock
+    async def test_delete_drops_child_of_listed_parent(self, mock_client: DsmClient) -> None:
+        side_effect, started = self._dsm()
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        result = await delete_files(
+            mock_client, paths=["/a/n", "/a/n/child"], recycle_bin_status={"a": True}
+        )
+        assert started == ["/a/n"]
+        assert "Deleted 1 item(s)" in result
+
+    @respx.mock
+    async def test_delete_drops_duplicate_after_normalization(self, mock_client: DsmClient) -> None:
+        side_effect, started = self._dsm()
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        await delete_files(mock_client, paths=["/a/dup/", "a/dup"], recycle_bin_status={"a": True})
+        assert started == ["/a/dup"]
+
+    @respx.mock
+    async def test_move_drops_child_of_listed_parent(self, mock_client: DsmClient) -> None:
+        side_effect, started = self._dsm()
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        await move_files(mock_client, paths=["/a/n/child", "/a/n"], dest_folder="/b")
+        assert started == ["/a/n"]
+
+    @respx.mock
+    async def test_later_delete_failure_names_paths_already_deleted(
+        self, mock_client: DsmClient
+    ) -> None:
+        side_effect, _ = self._dsm(missing_at_status={"/a/y"})
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        with pytest.raises(ToolError) as exc_info:
+            await delete_files(mock_client, paths=["/a/x", "/a/y"], recycle_bin_status={"a": True})
+        message = json.loads(str(exc_info.value))["error"]["message"]
+        assert "/a/y" in message
+        assert "Already deleted before this failure: /a/x" in message

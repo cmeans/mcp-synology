@@ -173,6 +173,20 @@ async def move_files(
 _PAST_TENSE = {"Copy": "copied", "Move": "moved", "Restore": "restored", "Delete": "deleted"}
 
 
+def _collapse_overlaps(paths: list[str]) -> list[str]:
+    """Drop repeated paths and paths inside another listed path, keeping order (QA R1 on
+    #173). Each path runs as its own DSM task, so a child of an earlier path, or the same
+    path twice, would run after the first task had already removed it."""
+    out: list[str] = []
+    for p in paths:
+        if p in out:
+            continue
+        if any(p != q and p.startswith(q.rstrip("/") + "/") for q in paths):
+            continue
+        out.append(p)
+    return out
+
+
 def _already_done(operation: str, done: list[str] | None) -> str:
     """Name the items a multi-path operation finished before a later one failed."""
     if not done:
@@ -369,7 +383,7 @@ async def _copy_move(
             suggestion="Pass at least one path.",
         )
 
-    normalized = [normalize_path(p) for p in paths]
+    normalized = _collapse_overlaps([normalize_path(p) for p in paths])
     dest = normalize_path(dest_folder)
 
     # Pin to version 2 — v3 uses JSON request format with different
@@ -540,7 +554,7 @@ async def _delete_one_path(
         error_response(
             ErrorCode.NOT_FOUND,
             f"Delete files failed: {path} was not found when the delete ran, so nothing "
-            "was deleted for it.",
+            "was deleted for it" + (_already_done("Delete", done) or "."),
             retryable=False,
             param="paths",
             value=path,
@@ -581,7 +595,7 @@ async def delete_files(
             suggestion="Pass at least one path.",
         )
 
-    normalized = [normalize_path(p) for p in paths]
+    normalized = _collapse_overlaps([normalize_path(p) for p in paths])
 
     # Refuse the whole call if any path is missing (#162): DSM "deletes" a missing path
     # without an error, and a partial delete of a mistyped list is worse than none.
@@ -604,6 +618,7 @@ async def delete_files(
     # Pin to v2 — v3 uses JSON request format with different parameter encoding.
     delete_version = min(2, client.negotiate_version("SYNO.FileStation.Delete", max_version=2))
 
+    deleted: list[str] = []
     for p in normalized:
         await _delete_one_path(
             client,
@@ -611,7 +626,9 @@ async def delete_files(
             recursive=recursive,
             delete_version=delete_version,
             timeout=timeout,
+            done=deleted,
         )
+        deleted.append(p)
 
     # Determine recycle bin status per share. Probes lazily on first observation
     # via `ensure_recycle_status` so the dict stays empty until we actually need
