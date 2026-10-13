@@ -111,7 +111,8 @@ def claude_tokens(config_path: Path) -> dict[str, Any]:
                 {"x-api-key": key, "anthropic-version": "2023-06-01"},
             )["input_tokens"]
         except Exception as e:  # report and keep measuring
-            counts[model] = f"unavailable: {type(e).__name__}"
+            # Keep the message: a 404 (retired model ID) and a 401 (bad key) must differ.
+            counts[model] = f"unavailable: {type(e).__name__}: {e}"
     return counts
 
 
@@ -296,7 +297,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=Path)
     parser.add_argument("--compare", type=Path)
     parser.add_argument("--tdqs-score", action="store_true")
-    parser.add_argument("--no-external", action="store_true", help="skip mcpscore and tdqs")
+    parser.add_argument(
+        "--no-external",
+        action="store_true",
+        help="skip mcpscore and tdqs (lint and score, even with --tdqs-score)",
+    )
     parser.add_argument("--ollama")
     parser.add_argument("--ollama-model")
     args = parser.parse_args(argv)
@@ -318,8 +323,11 @@ def main(argv: list[str] | None = None) -> int:
                 {"status": "skipped"} if args.no_external else tdqs("lint", config, args.repo)
             ),
             "tdqs_score": tdqs("score", config, args.repo)
-            if args.tdqs_score
-            else {"status": "skipped", "reason": "no --tdqs-score"},
+            if args.tdqs_score and not args.no_external
+            else {
+                "status": "skipped",
+                "reason": "--no-external" if args.no_external else "no --tdqs-score",
+            },
         }
 
     out = args.out or args.repo / ".cache" / "measure" / (

@@ -77,3 +77,32 @@ def test_compare_reports_deltas(mt: ModuleType) -> None:
     assert "20809 -> 15730 (-5079, -24%)" in text
     assert "9127 -> 6879" in text
     assert "mcpscore: 77/92 -> 77/92" in text
+
+
+def test_claude_token_errors_keep_the_message(
+    mt: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """QA round 1 (#164): a 404 for a retired model ID and a 401 for a bad key must be
+    distinguishable, not both `unavailable: HTTPError`."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+
+    def fail(*_: object, **__: object) -> dict[str, Any]:
+        raise RuntimeError("HTTP Error 404: Not Found")
+
+    monkeypatch.setattr(mt, "_post_json", fail)
+    counts = mt.claude_tokens(mt.write_offline_config(tmp_path))
+    assert all("404: Not Found" in str(v) for v in counts.values()), counts
+
+
+def test_no_external_also_skips_tdqs_score(mt: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+    """QA round 1 (#164): --no-external wins over --tdqs-score; nothing is launched."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")  # else score skips before launching
+    launched: list[list[str]] = []
+    monkeypatch.setattr(mt, "run_external", lambda argv, env=None: launched.append(argv) or {})
+    monkeypatch.setattr(mt, "claude_tokens", lambda config: {"status": "skipped"})
+    out = Path(mt.REPO) / ".cache" / "measure" / "test-no-external.json"
+    try:
+        assert mt.main(["--no-external", "--tdqs-score", "--out", str(out)]) == 0
+        assert launched == []
+    finally:
+        out.unlink(missing_ok=True)
