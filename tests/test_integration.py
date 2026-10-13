@@ -1396,7 +1396,9 @@ class TestErrorHandling:
         try:
             result = await copy_files(client, paths=[src, f"{src}/b"], dest_folder=dest)
             assert "Copied 2 item(s)" in result
-            await get_file_info(client, paths=[f"{dest}/a/b", f"{dest}/b"])
+            # One path per call: a mixed request reports a missing path inline, not raised.
+            for copied in (f"{dest}/a/b", f"{dest}/b"):
+                await get_file_info(client, paths=[copied])
         finally:
             await delete_files(client, paths=[f"{base}/mcp_cp_overlap", dest])
 
