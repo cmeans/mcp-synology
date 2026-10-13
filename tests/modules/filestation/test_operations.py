@@ -842,3 +842,114 @@ class TestRestoreFromRecycleBin:
         body = json.loads(str(exc_info.value))
         assert body["status"] == "error"
         assert body["error"]["code"] == "not_found"
+
+
+class TestDeleteMissingPaths:
+    """#162: a missing path must never be reported as deleted.
+
+    Shapes captured on vdsm DSM 7.1 and 7.2.2 (2026-10-13):
+    - getinfo on a missing path: {"files": [{"code": 408, "path": ...}]}
+    - Delete status for a missing path: {"finished": true, "path": "", "processed_num": 0,
+      "processing_path": "", "progress": 1, "total": -1}
+    - Delete stop on any finished task: error 401
+    """
+
+    MISSING_STATUS = {
+        "finished": True,
+        "path": "",
+        "processed_num": 0,
+        "processing_path": "",
+        "progress": 1,
+        "total": -1,
+    }
+
+    @staticmethod
+    def _dsm(
+        missing: set[str], status: dict[str, object] | None = None
+    ) -> tuple[object, list[str]]:
+        calls: list[str] = []
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            api, method = params.get("api", ""), params.get("method", "")
+            calls.append(f"{api}.{method}")
+            if method == "getinfo":
+                path = params["path"]
+                entry = (
+                    {"code": 408, "path": path}
+                    if path in missing
+                    else {"isdir": False, "name": path.rsplit("/", 1)[-1], "path": path}
+                )
+                return httpx.Response(200, json={"success": True, "data": {"files": [entry]}})
+            if method == "start":
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "t1"}})
+            if method == "status":
+                return httpx.Response(
+                    200,
+                    json={
+                        "success": True,
+                        "data": status or {"finished": True, "total": 1, "path": "/a/x"},
+                    },
+                )
+            if method == "stop":
+                return httpx.Response(200, json={"success": False, "error": {"code": 401}})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        return side_effect, calls
+
+    @respx.mock
+    async def test_missing_path_refused_and_nothing_started(self, mock_client: DsmClient) -> None:
+        side_effect, calls = self._dsm(missing={"/a/gone"})
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        with pytest.raises(ToolError) as exc_info:
+            await delete_files(mock_client, paths=["/a/gone"], recycle_bin_status={"a": True})
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "not_found"
+        assert body["error"]["retryable"] is False
+        assert "/a/gone" in body["error"]["message"]
+        assert "Nothing was deleted" in body["error"]["message"]
+        assert not any(c.endswith(".start") for c in calls), calls
+
+    @respx.mock
+    async def test_one_missing_path_refuses_whole_call(self, mock_client: DsmClient) -> None:
+        side_effect, calls = self._dsm(missing={"/a/gone"})
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        with pytest.raises(ToolError) as exc_info:
+            await delete_files(
+                mock_client, paths=["/a/real.txt", "/a/gone"], recycle_bin_status={"a": True}
+            )
+        message = json.loads(str(exc_info.value))["error"]["message"]
+        assert "/a/gone" in message and "/a/real.txt" not in message
+        assert not any(c.endswith(".start") for c in calls), calls
+
+    @respx.mock
+    async def test_glob_path_gets_a_hint(self, mock_client: DsmClient) -> None:
+        side_effect, _ = self._dsm(missing={"/a/downloads/*"})
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        with pytest.raises(ToolError) as exc_info:
+            await delete_files(mock_client, paths=["/a/downloads/*"], recycle_bin_status={})
+        error = json.loads(str(exc_info.value))["error"]
+        assert "search_files" in (error.get("suggestion") or "")
+        assert "wildcard" in (error.get("suggestion") or "")
+
+    @respx.mock
+    async def test_status_total_minus_one_is_not_found(self, mock_client: DsmClient) -> None:
+        # getinfo saw the path, but it was gone by the time the task ran.
+        side_effect, _ = self._dsm(missing=set(), status=self.MISSING_STATUS)
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        with pytest.raises(ToolError) as exc_info:
+            await delete_files(mock_client, paths=["/a/x"], recycle_bin_status={"a": True})
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "not_found"
+        assert "/a/x" in body["error"]["message"]
+
+    @respx.mock
+    async def test_finished_task_is_not_stopped(
+        self, mock_client: DsmClient, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        side_effect, calls = self._dsm(missing=set())
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        result = await delete_files(mock_client, paths=["/a/x"], recycle_bin_status={"a": True})
+        assert "Deleted" in result
+        assert "SYNO.FileStation.Delete.stop" not in calls, calls
+        assert "cleanup failed" not in caplog.text

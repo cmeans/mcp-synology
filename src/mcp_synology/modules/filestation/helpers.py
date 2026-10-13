@@ -368,3 +368,39 @@ def correct_recycle_status_from_observation(
         observed_enabled,
     )
     recycle_status[share_name] = observed_enabled
+
+
+_WILDCARD_CHARS = ("*", "?")
+
+
+async def find_missing_paths(client: DsmClient, paths: list[str]) -> list[tuple[str, int]]:
+    """Return ``(path, dsm_code)`` for each path that ``getinfo`` reports as missing.
+
+    DSM answers a missing path with a per-file ``{"code": 408, "path": ...}`` entry rather
+    than a failed request (DSM 7.1 and 7.2.2; #161, #162). An answer with no entry for a
+    path proves nothing either way, so that path isn't reported. A failed request raises
+    ``SynologyError`` for the caller to map.
+    """
+    version = min(2, client.negotiate_version("SYNO.FileStation.List", max_version=2))
+    missing: list[tuple[str, int]] = []
+    for path in paths:
+        data = await client.request(
+            "SYNO.FileStation.List", "getinfo", version=version, params={"path": path}
+        )
+        for entry in data.get("files", []):
+            if "code" in entry:
+                missing.append((str(entry.get("path") or path), int(entry["code"])))
+    return missing
+
+
+def missing_paths_suggestion(missing: list[tuple[str, int]]) -> str:
+    """Suggestion for a call refused because paths don't exist (adds a wildcard hint)."""
+    suggestion = (
+        "Check the paths with list_files or search_files, then retry with paths that exist."
+    )
+    if any(ch in path for path, _ in missing for ch in _WILDCARD_CHARS):
+        suggestion += (
+            " Paths are literal, not wildcard patterns: use search_files (or list_files with a "
+            "pattern) to find the files, then pass their full paths."
+        )
+    return suggestion

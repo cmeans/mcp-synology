@@ -16,6 +16,8 @@ from mcp_synology.core.formatting import (
 from mcp_synology.modules.filestation.helpers import (
     dsm_str,
     ensure_recycle_status,
+    find_missing_paths,
+    missing_paths_suggestion,
     normalize_path,
 )
 
@@ -397,13 +399,17 @@ async def _delete_one_path(
         else:
             timed_out = True
     finally:
-        await _stop_background_task(
-            client,
-            "SYNO.FileStation.Delete",
-            taskid,
-            delete_version,
-            logger,
-        )
+        # DSM releases a finished Delete task itself: `stop` then always answers 401
+        # (DSM 7.1 and 7.2.2), which logged a cleanup warning on every delete. Stop
+        # only a task that didn't finish (timeout, polling error, cancellation).
+        if not status.get("finished", False):
+            await _stop_background_task(
+                client,
+                "SYNO.FileStation.Delete",
+                taskid,
+                delete_version,
+                logger,
+            )
 
     if poll_error:
         synology_error_response("Delete files", poll_error)
@@ -430,6 +436,19 @@ async def _delete_one_path(
                 mapped.suggestion
                 or "Check that paths exist and you have permission to delete them."
             ),
+        )
+
+    if status.get("total") == -1:
+        # DSM's "nothing found" signature: finished, total -1, empty path (#162). The
+        # pre-check saw the path, so it disappeared before the task ran.
+        error_response(
+            ErrorCode.NOT_FOUND,
+            f"Delete files failed: {path} was not found when the delete ran, so nothing "
+            "was deleted for it.",
+            retryable=False,
+            param="paths",
+            value=path,
+            suggestion=missing_paths_suggestion([(path, 408)]),
         )
 
 
@@ -467,6 +486,24 @@ async def delete_files(
         )
 
     normalized = [normalize_path(p) for p in paths]
+
+    # Refuse the whole call if any path is missing (#162): DSM "deletes" a missing path
+    # without an error, and a partial delete of a mistyped list is worse than none.
+    try:
+        missing = await find_missing_paths(client, normalized)
+    except SynologyError as e:
+        synology_error_response("Delete files", e)
+    if missing:
+        error_response(
+            ErrorCode.NOT_FOUND,
+            "Delete files refused: not found: "
+            + "; ".join(f"{p} (DSM error {code})" for p, code in missing)
+            + ". Nothing was deleted.",
+            retryable=False,
+            param="paths",
+            value=paths,
+            suggestion=missing_paths_suggestion(missing),
+        )
 
     # Pin to v2 — v3 uses JSON request format with different parameter encoding.
     delete_version = min(2, client.negotiate_version("SYNO.FileStation.Delete", max_version=2))

@@ -83,7 +83,7 @@ uv run pytest --cov=mcp_synology           # Tests with coverage
 - Common error codes (100-series) handled in the core client; module-specific codes (400-series for File Station) handled in modules
 - Always include actionable suggestions in error messages
 - Session errors (106/107/119) trigger transparent re-auth with exactly one retry; error 105 (permission denied) is NOT a session issue — never re-auth on 105
-- **Background task cleanup:** All async background tasks (Search, DirSize, CopyMove, Delete) must use `try/finally` to ensure stop/clean is called. Orphaned tasks consume CPU indefinitely on the NAS. Log warnings on cleanup failure — never silently suppress
+- **Background task cleanup:** All async background tasks (Search, DirSize, CopyMove, Delete) must use `try/finally` to ensure stop/clean is called. Orphaned tasks consume CPU indefinitely on the NAS. Log warnings on cleanup failure — never silently suppress. One exception (#162): a Delete task that reports `finished` is already released by DSM — `stop` then always answers 401 on DSM 7.1 and 7.2.2 — so it's stopped only when it didn't finish (timeout, polling error, cancellation)
 
 ### Auth
 - Strategy chain auto-detects 2FA vs non-2FA on login attempt
