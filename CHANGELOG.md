@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.6.0 (2026-10-12)
+
 ### Added
 
 - **Read-only connections say which tools they withhold** (#156). A module at `permission: read` registers only its READ tools, so a model couldn't tell the WRITE tools exist and might say the server can't move, delete or upload files; a module that isn't enabled (Download Station is opt-in) was invisible the same way. The server instructions now end with a PERMISSIONS section that lists each module's withheld tools and the config change that enables them (`permission: write`, adding the module under `modules:`, or `enabled: true` for a module listed as disabled), and tells the model to say the tool exists but isn't enabled. Registration is unchanged, and a full `instructions_file` replacement is left as written. Prompted by Glama's listing, whose inspector ran the read-only default and reported upload, delete, restore, move and rename as missing.

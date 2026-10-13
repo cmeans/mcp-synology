@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 mcp-synology is an MCP server for Synology NAS devices. It exposes Synology DSM API functionality as MCP tools that Claude can use. Modular, secure (2FA-ready), permission-tiered. Python 3.11+, async throughout, Apache 2.0 licensed.
 
-**Current status:** v0.5.x — File Station (14 tools) + System monitoring (2 tools) + Download Station (12 tools, ships in v0.6.0), CLI, integration and vdsm tests.
+**Current status:** v0.6.x — File Station (14 tools) + System monitoring (2 tools) + Download Station (12 tools, opt-in), CLI, integration and vdsm tests.
 
 ## Architecture
 
@@ -171,7 +171,8 @@ This convention was retired-and-restored on 2026-04-11 after PRs #13, #15, and #
 2. Run `python scripts/sync-server-json.py` to propagate the version into `server.json` (top-level + `packages[0].version`)
 3. Run `uv lock` to refresh `uv.lock`
 4. Rename `## Unreleased` in `CHANGELOG.md` to `## <version> (<date>)`, then add a fresh empty `## Unreleased` section above it for the next cycle
-5. Commit all four files together
+5. **Minor or major bump only:** update the supported-versions line and table in `SECURITY.md` (e.g. "the 0.6.x line", `0.6.x ✅` / `< 0.6 ❌`) and the **Current status** line at the top of this file
+6. Commit these files together
 
 CI runs `python scripts/sync-server-json.py --check` (no project install needed — stdlib only) and fails any PR where `server.json` has drifted from `pyproject.toml`. Never edit `server.json`'s version fields by hand.
 
