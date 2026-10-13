@@ -73,7 +73,11 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
+      # Measure the PR's own head, not the merge commit actions/checkout picks for a
+      # pull_request, so the report's git_sha is a branch commit (#164 QA R1).
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           python-version: "3.12"
