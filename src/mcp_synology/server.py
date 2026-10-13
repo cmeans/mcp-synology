@@ -6,6 +6,7 @@ import asyncio
 import atexit
 import logging
 import platform
+import re
 import signal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NoReturn
@@ -139,6 +140,19 @@ def _compact_tool_schemas(server: FastMCP) -> None:
     """
     for tool in server._tool_manager.list_tools():
         tool.parameters = _compact_schema(tool.parameters)
+
+
+_HTML_COMMENT = re.compile(r"<!--.*?-->\n?", re.DOTALL)
+
+
+def _strip_html_comments(text: str) -> str:
+    """Remove ``<!-- ... -->`` blocks (and the newline after each) from instruction text.
+
+    Comments are notes for whoever edits the file. Stripping happens before
+    ``format_map``, so a comment's ``{placeholders}`` are never filled in and sent to the
+    model, and can't raise ``KeyError``. An unclosed ``<!--`` is left as written (#163).
+    """
+    return _HTML_COMMENT.sub("", text)
 
 
 class SharedClientManager:
@@ -387,15 +401,23 @@ def create_server(config: AppConfig) -> FastMCP:
         # They can copy the built-in server.md as a starting point.
         instructions_path = Path(config.instructions_file).expanduser()
         try:
-            instructions = instructions_path.read_text(encoding="utf-8").strip()
+            instructions = _strip_html_comments(
+                instructions_path.read_text(encoding="utf-8")
+            ).strip()
         except OSError as e:
             logger.error("Failed to load instructions_file '%s': %s", instructions_path, e)
-            instructions = _BASE_INSTRUCTIONS
+            instructions = _strip_html_comments(_BASE_INSTRUCTIONS)
     elif config.custom_instructions:
         # Prepend custom instructions before base — gives them priority.
-        instructions = config.custom_instructions.strip() + "\n\n" + _BASE_INSTRUCTIONS
+        # Strip each source on its own: an unclosed `<!--` in the custom text must not
+        # pair with a `-->` in the base file and swallow the text between them.
+        instructions = (
+            _strip_html_comments(config.custom_instructions).strip()
+            + "\n\n"
+            + _strip_html_comments(_BASE_INSTRUCTIONS)
+        )
     else:
-        instructions = _BASE_INSTRUCTIONS
+        instructions = _strip_html_comments(_BASE_INSTRUCTIONS)
 
     instructions = instructions.format_map(template_vars)
 

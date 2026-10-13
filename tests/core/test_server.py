@@ -16,6 +16,7 @@ from mcp_synology.server import (
     _BASE_INSTRUCTIONS,
     SharedClientManager,
     _compact_schema,
+    _strip_html_comments,
     create_server,
 )
 from tests.conftest import BASE_URL, make_test_config
@@ -897,3 +898,39 @@ class TestServedSchemas:
         assert explicit.pattern is None
         assert omitted.pattern is None
         assert json.dumps(tool.parameters).count('"null"') == 0
+
+
+class TestInstructionComments:
+    """HTML comments are notes for whoever edits the file; models never get them (#163)."""
+
+    def test_builtin_template_comment_not_served(self) -> None:
+        instructions = create_server(make_test_config()).instructions or ""
+        assert "<!--" not in instructions
+        assert "Template variables available" not in instructions
+        assert "SERVER IDENTITY" in instructions  # text around the comment survives
+
+    def test_custom_instructions_comment_with_unknown_placeholder(self) -> None:
+        config = make_test_config(custom_instructions="RULES <!-- uses {not_a_var} -->\nMORE")
+        instructions = create_server(config).instructions or ""
+        assert "<!--" not in instructions
+        assert "RULES MORE" in instructions
+
+    def test_instructions_file_comment_removed(self, tmp_path: Path) -> None:
+        path = tmp_path / "custom.md"
+        path.write_text("TOP for {display_name}\n<!-- editor note {host} -->\nBOTTOM\n")
+        instructions = create_server(make_test_config(instructions_file=str(path))).instructions
+        assert instructions == "TOP for test\nBOTTOM"
+
+    def test_strip_keeps_line_structure(self) -> None:
+        assert _strip_html_comments("A\n<!-- c -->\nB") == "A\nB"
+        assert _strip_html_comments("A<!-- c -->B") == "AB"
+        assert _strip_html_comments("A <!--\nmulti\nline\n-->\nB") == "A B"
+
+    def test_unclosed_comment_left_alone(self) -> None:
+        assert _strip_html_comments("keep <!-- never closed\nB") == "keep <!-- never closed\nB"
+        config = make_test_config(custom_instructions="NOTE <!-- open")
+        assert "NOTE <!-- open" in (create_server(config).instructions or "")
+
+    def test_text_without_comments_is_unchanged(self) -> None:
+        text = "PATH FORMAT:\nAll paths start with a share.\n"
+        assert _strip_html_comments(text) == text
