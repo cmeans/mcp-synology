@@ -934,3 +934,22 @@ class TestInstructionComments:
     def test_text_without_comments_is_unchanged(self) -> None:
         text = "PATH FORMAT:\nAll paths start with a share.\n"
         assert _strip_html_comments(text) == text
+
+
+# Characters a model receives before any conversation (schemas + descriptions + instructions)
+# for ALL_MODULES. Raise this deliberately, in the same PR, when adding text a model needs
+# (e.g. #129's parameter descriptions); the review then sees the growth. Set by #163 to the
+# compacted size + 2%.
+PAYLOAD_BUDGET_CHARS = 16_019
+
+
+class TestPayloadBudget:
+    async def test_payload_within_budget(self) -> None:
+        tools, instructions = await _served(create_server(make_test_config(modules=ALL_MODULES)))
+        size = sum(len(json.dumps(t.inputSchema)) + len(t.description or "") for t in tools)
+        size += len(instructions)
+        assert size <= PAYLOAD_BUDGET_CHARS, (
+            f"served payload is {size} chars, budget {PAYLOAD_BUDGET_CHARS} "
+            f"(+{size - PAYLOAD_BUDGET_CHARS}). If the growth is intended, raise "
+            "PAYLOAD_BUDGET_CHARS in this PR."
+        )
