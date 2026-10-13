@@ -952,6 +952,23 @@ class TestDeleteMissingPaths:
         assert "/a/x" in body["error"]["message"]
 
     @respx.mock
+    async def test_delete_errors_list_is_an_error_not_success(self, mock_client: DsmClient) -> None:
+        """QA R1 (#173): a non-recursive delete of a non-empty folder finishes with
+        {"errors": [{"code": 900, "path": ...}], "finished": true} and the folder stays."""
+        side_effect, _ = self._dsm(
+            missing=set(),
+            status={"errors": [{"code": 900, "path": "/a/dir"}], "finished": True},
+        )
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        with pytest.raises(ToolError) as exc_info:
+            await delete_files(
+                mock_client, paths=["/a/dir"], recursive=False, recycle_bin_status={"a": True}
+            )
+        error = json.loads(str(exc_info.value))["error"]
+        assert "/a/dir" in error["message"] and "900" in error["message"]
+        assert "recursive=true" in (error.get("suggestion") or "")
+
+    @respx.mock
     async def test_finished_task_is_not_stopped(
         self, mock_client: DsmClient, caplog: pytest.LogCaptureFixture
     ) -> None:

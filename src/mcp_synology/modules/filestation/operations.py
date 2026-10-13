@@ -170,7 +170,7 @@ async def move_files(
     )
 
 
-_PAST_TENSE = {"Copy": "copied", "Move": "moved", "Restore": "restored"}
+_PAST_TENSE = {"Copy": "copied", "Move": "moved", "Restore": "restored", "Delete": "deleted"}
 
 
 def _already_done(operation: str, done: list[str] | None) -> str:
@@ -416,6 +416,7 @@ async def _delete_one_path(
     recursive: bool,
     delete_version: int,
     timeout: float,
+    done: list[str] | None = None,
 ) -> None:
     """Delete a single path via DSM async-task pattern.
 
@@ -503,6 +504,34 @@ async def _delete_one_path(
                 mapped.suggestion
                 or "Check that paths exist and you have permission to delete them."
             ),
+        )
+
+    errors = status.get("errors")
+    if isinstance(errors, list) and errors:
+        # Like CopyMove, a Delete task can finish without an `error` key and list per-item
+        # failures under `errors` instead, e.g. 900 for a non-recursive delete of a
+        # non-empty folder, which stays in place (QA R1 on #173).
+        failed = [
+            (str(e.get("path") or path), int(e.get("code", 0)))
+            for e in errors
+            if isinstance(e, dict)
+        ]
+        mapped = error_from_code(failed[0][1] if failed else 0, "SYNO.FileStation.Delete")
+        suggestion = mapped.suggestion or "Check that paths exist and you have permission."
+        if not recursive:
+            suggestion = (
+                "A folder that isn't empty can't be deleted with recursive=false; "
+                "pass recursive=true to delete it with its contents. " + suggestion
+            )
+        error_response(
+            mapped.error_code,
+            "Delete files failed: "
+            + "; ".join(f"{p} (DSM error {code})" for p, code in failed)
+            + _already_done("Delete", done),
+            retryable=mapped.retryable,
+            param="paths",
+            value=path,
+            suggestion=suggestion,
         )
 
     if status.get("total") == -1:
