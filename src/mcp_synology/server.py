@@ -142,11 +142,16 @@ def _compact_tool_schemas(server: FastMCP) -> None:
         tool.parameters = _compact_schema(tool.parameters)
 
 
-_HTML_COMMENT = re.compile(r"<!--.*?-->\n?", re.DOTALL)
+# A comment that fills its whole line (allowing indentation) goes with its line break;
+# anywhere else only the comment goes, so the text around it keeps its line breaks.
+_HTML_COMMENT = re.compile(r"^[ \t]*<!--.*?-->[ \t]*\n|<!--.*?-->", re.DOTALL | re.MULTILINE)
 
 
 def _strip_html_comments(text: str) -> str:
-    """Remove ``<!-- ... -->`` blocks (and the newline after each) from instruction text.
+    """Remove ``<!-- ... -->`` blocks from instruction text.
+
+    A comment on a line of its own is removed with that line; elsewhere only the comment
+    is removed, so it never joins the lines around it.
 
     Comments are notes for whoever edits the file. Stripping happens before
     ``format_map``, so a comment's ``{placeholders}`` are never filled in and sent to the

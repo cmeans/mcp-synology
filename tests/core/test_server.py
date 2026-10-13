@@ -913,7 +913,7 @@ class TestInstructionComments:
         config = make_test_config(custom_instructions="RULES <!-- uses {not_a_var} -->\nMORE")
         instructions = create_server(config).instructions or ""
         assert "<!--" not in instructions
-        assert "RULES MORE" in instructions
+        assert "RULES \nMORE" in instructions
 
     def test_instructions_file_comment_removed(self, tmp_path: Path) -> None:
         path = tmp_path / "custom.md"
@@ -924,12 +924,20 @@ class TestInstructionComments:
     def test_strip_keeps_line_structure(self) -> None:
         assert _strip_html_comments("A\n<!-- c -->\nB") == "A\nB"
         assert _strip_html_comments("A<!-- c -->B") == "AB"
-        assert _strip_html_comments("A <!--\nmulti\nline\n-->\nB") == "A B"
+        assert _strip_html_comments("A <!--\nmulti\nline\n-->\nB") == "A \nB"
 
     def test_unclosed_comment_left_alone(self) -> None:
         assert _strip_html_comments("keep <!-- never closed\nB") == "keep <!-- never closed\nB"
         config = make_test_config(custom_instructions="NOTE <!-- open")
         assert "NOTE <!-- open" in (create_server(config).instructions or "")
+
+    def test_trailing_comment_keeps_line_break(self) -> None:
+        # Review finding: a comment that ends a line must not join it to the next.
+        text = "- Use for media <!-- per Bob -->\n- Never delete"
+        assert _strip_html_comments(text) == "- Use for media \n- Never delete"
+
+    def test_indented_own_line_comment_removes_whole_line(self) -> None:
+        assert _strip_html_comments("x\n  <!-- c -->\nz") == "x\nz"
 
     def test_text_without_comments_is_unchanged(self) -> None:
         text = "PATH FORMAT:\nAll paths start with a share.\n"
