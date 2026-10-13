@@ -1264,8 +1264,7 @@ class TestFileTransfers:
         self, nas_client: Any, tmp_path: Path
     ) -> None:
         """filename="../x" is refused before the NAS is contacted; nothing outside changes."""
-        client, _, config, paths = _unpack(nas_client)
-        _skip_unless_write(config)
+        client, _, _, paths = _unpack(nas_client)
         dest = tmp_path / "downloads"
         dest.mkdir()
         outside = tmp_path / "outside.txt"

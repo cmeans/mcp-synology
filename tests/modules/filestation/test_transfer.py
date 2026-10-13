@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import contextlib
+import asyncio
 import errno
 import json
 import os
@@ -436,22 +436,80 @@ class TestDownloadFile:
         assert body["error"]["param"] == "path"
         assert not route.called
 
+    @staticmethod
+    def _stream(body: object) -> list[httpx.Response]:
+        """The pre-flight size lookup, then the streamed download."""
+        return [
+            httpx.Response(200, json={"success": True, "data": {"files": []}}),
+            httpx.Response(200, headers={"content-type": "application/octet-stream"}, content=body),
+        ]
+
     @respx.mock
-    async def test_download_partial_cleanup(self, mock_client: DsmClient, tmp_path: Path) -> None:
-        """Verify partial file is deleted on network failure."""
-        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
-            side_effect=httpx.ReadError("connection reset")
+    async def test_download_no_overwrite_never_replaces_a_file_created_meanwhile(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """overwrite=False must hold to the end: a file that appears while the download
+        streams (another call, another process) is not replaced (download review)."""
+        dest = tmp_path / "report.pdf"
+
+        async def body() -> AsyncIterator[bytes]:
+            yield b"first half "
+            dest.write_bytes(b"CREATED MEANWHILE")  # appears mid-download
+            yield b"second half"
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._stream(body()))
+        with pytest.raises(ToolError) as exc_info:
+            await download_file(mock_client, path="/docs/report.pdf", dest_folder=str(tmp_path))
+        assert json.loads(str(exc_info.value))["error"]["code"] == "already_exists"
+        assert dest.read_bytes() == b"CREATED MEANWHILE"
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["report.pdf"]  # no temp left
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
+    @respx.mock
+    async def test_download_overwrite_keeps_the_files_permissions(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        existing = tmp_path / "secret.txt"
+        existing.write_bytes(b"old")
+        existing.chmod(0o600)
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            content=b"new", headers={"content-type": "application/octet-stream"}
         )
+        await download_file(
+            mock_client, path="/docs/secret.txt", dest_folder=str(tmp_path), overwrite=True
+        )
+        assert existing.read_bytes() == b"new"
+        assert existing.stat().st_mode & 0o777 == 0o600
 
-        with contextlib.suppress(httpx.ReadError):
+    @respx.mock
+    async def test_download_cancelled_midstream_removes_temp(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        existing = tmp_path / "movie.mkv"
+        existing.write_bytes(b"original")
+
+        async def body() -> AsyncIterator[bytes]:
+            yield b"partial "
+            raise asyncio.CancelledError
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._stream(body()))
+        with pytest.raises(asyncio.CancelledError):
             await download_file(
-                mock_client,
-                path="/video/big_file.mkv",
-                dest_folder=str(tmp_path),
+                mock_client, path="/video/movie.mkv", dest_folder=str(tmp_path), overwrite=True
             )
+        assert existing.read_bytes() == b"original"
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["movie.mkv"]
 
-        # Partial file should be cleaned up
-        assert not (tmp_path / "big_file.mkv").exists()
+    @respx.mock
+    async def test_download_is_flushed_to_disk_before_publishing(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            content=b"data", headers={"content-type": "application/octet-stream"}
+        )
+        with patch("mcp_synology.core.client.os.fsync") as fsync:
+            await download_file(mock_client, path="/docs/a.txt", dest_folder=str(tmp_path))
+        fsync.assert_called_once()
 
     @_needs_non_root
     @respx.mock

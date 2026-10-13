@@ -6,6 +6,8 @@ about specific APIs (File Station, Download Station, etc.).
 
 from __future__ import annotations
 
+import contextlib
+import errno
 import json
 import logging
 import os
@@ -89,6 +91,32 @@ async def _guarded_post(
             suggestion=_MAY_HAVE_APPLIED,
         )
     return resp
+
+
+def _publish_download(tmp_file: Path, dest_file: Path, *, overwrite: bool) -> None:
+    """Move a finished download from ``tmp_file`` onto ``dest_file``.
+
+    With ``overwrite`` the destination is replaced, keeping its permission bits.
+    Without it, a ``dest_file`` that appeared while the download streamed is never
+    replaced: a hard link fails if the name exists (POSIX and NTFS alike), and where
+    links aren't supported (FAT, some network mounts) a final existence check
+    stands in. Either way an existing file raises ``FileExistsError``.
+    """
+    if overwrite:
+        with contextlib.suppress(OSError):
+            shutil.copymode(dest_file, tmp_file)  # best effort; dest may not exist
+        os.replace(tmp_file, dest_file)
+        return
+    try:
+        os.link(tmp_file, dest_file)
+    except FileExistsError:
+        raise
+    except OSError:
+        if dest_file.exists():
+            raise FileExistsError(errno.EEXIST, "File exists", str(dest_file)) from None
+        os.replace(tmp_file, dest_file)
+        return
+    tmp_file.unlink()
 
 
 class DsmClient:
@@ -673,15 +701,18 @@ class DsmClient:
         timeout: float = 300.0,
         chunk_size: int = 65536,
         progress_callback: ProgressCallback | None = None,
+        overwrite: bool = True,
         _is_retry: bool = False,
     ) -> int:
         """Download a file from the NAS via SYNO.FileStation.Download (GET, binary).
 
-        Streams the response to a hidden temp file next to ``dest_file`` and
+        Streams the response to a temp file (``.mcp-synology-*.part``) next to ``dest_file`` and
         renames it onto ``dest_file`` only after the whole body is written, so
         a failed or interrupted download never truncates or removes an
         existing file at ``dest_file``. The temp file is removed on any
-        failure. Returns total bytes written.
+        failure. With ``overwrite=False`` the finished file is published so that it
+        never replaces a ``dest_file`` that appeared during the download: that
+        raises ``FileExistsError``. Returns total bytes written.
 
         Checks Content-Length against local disk free space before writing.
         If the NAS returns a JSON error envelope (Content-Type: application/json)
@@ -764,6 +795,7 @@ class DsmClient:
                         timeout=timeout,
                         chunk_size=chunk_size,
                         progress_callback=progress_callback,
+                        overwrite=overwrite,
                         _is_retry=True,
                     )
 
@@ -788,14 +820,20 @@ class DsmClient:
             # name can't push it past the filesystem's name-length limit.
             tmp_file = dest_file.with_name(f".mcp-synology-{secrets.token_hex(8)}.part")
             bytes_written = 0
+            # Opened before the try: if the name somehow exists already, that isn't ours
+            # to delete.
+            fh = open(tmp_file, "xb")  # noqa: SIM115 - closed below, before publishing
             try:
-                with open(tmp_file, "xb") as fh:
+                with fh:
                     async for chunk in resp.aiter_bytes(chunk_size=chunk_size):
                         fh.write(chunk)
                         bytes_written += len(chunk)
                         if progress_callback:
                             await progress_callback(bytes_written, total_size)
-                os.replace(tmp_file, dest_file)
+                    # On disk before the rename, so a power loss can't leave an empty file.
+                    fh.flush()
+                    os.fsync(fh.fileno())
+                _publish_download(tmp_file, dest_file, overwrite=overwrite)
             except BaseException:
                 try:
                     tmp_file.unlink()

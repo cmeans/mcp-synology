@@ -224,6 +224,18 @@ async def download_file(
             dest_file,
             timeout=timeout,
             progress_callback=progress_callback,
+            overwrite=overwrite,
+        )
+    except FileExistsError:
+        # The local file appeared while the download streamed; overwrite=False holds.
+        error_response(
+            ErrorCode.ALREADY_EXISTS,
+            f"Download failed: Local file already exists: {dest_file} (it was created "
+            "while the download was in progress)",
+            retryable=False,
+            param="dest_folder",
+            value=str(dest_file),
+            suggestion="Use overwrite=true to replace the existing file.",
         )
     except SynologyError as e:
         # client.download() streams to a temp file and removes it on failure,
