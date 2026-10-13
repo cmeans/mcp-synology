@@ -6,11 +6,12 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
-from mcp_synology.core.errors import ErrorCode, SynologyError
+from mcp_synology.core.errors import ErrorCode, SynologyError, error_from_code
 from mcp_synology.core.formatting import (
     error_response,
     format_key_value,
     format_size,
+    format_status,
     format_table,
     format_timestamp,
     synology_error_response,
@@ -84,6 +85,7 @@ async def get_file_info(
     additional_param = '["' + '","'.join(additional) + '"]'
 
     files: list[dict[str, Any]] = []
+    missing: list[tuple[str, int]] = []
     for p in normalized:
         try:
             data = await client.request(
@@ -97,12 +99,34 @@ async def get_file_info(
             )
         except SynologyError as e:
             synology_error_response("Get file info", e)
-        per_path_files = data.get("files", [])
-        if per_path_files:
-            files.extend(per_path_files)
+        for entry in data.get("files", []):
+            # A missing path comes back as a per-file error, not a failed request:
+            # {"code": 408, "path": ...} on DSM 7.1 and 7.2.2 (#161).
+            if "code" in entry:
+                missing.append((str(entry.get("path") or p), int(entry["code"])))
+            else:
+                files.append(entry)
+
+    if missing and not files:
+        codes = {code for _, code in missing}
+        mapped = error_from_code(codes.pop() if len(codes) == 1 else 408, "SYNO.FileStation.List")
+        error_response(
+            mapped.error_code,
+            "Get file info failed: "
+            + "; ".join(f"{path} (DSM error {code})" for path, code in missing),
+            retryable=False,
+            param="paths",
+            value=paths,
+            suggestion=mapped.suggestion or "Check the paths with list_files or search_files.",
+        )
+
+    notes = "".join(
+        "\n" + format_status(f"Not found: {path} (DSM error {code})", success=False)
+        for path, code in missing
+    )
 
     if len(files) == 1:
-        return _format_single_info(files[0])
+        return _format_single_info(files[0]) + notes
 
     if not files:
         error_response(
@@ -126,7 +150,7 @@ async def get_file_info(
         modified = format_timestamp(mtime) if mtime else "—"
         rows.append([name, path, ftype, size, modified])
 
-    return format_table(headers=headers, rows=rows, title=f"File Info ({len(files)} items)")
+    return format_table(headers=headers, rows=rows, title=f"File Info ({len(files)} items)") + notes
 
 
 def _format_single_info(file_data: dict[str, Any]) -> str:
