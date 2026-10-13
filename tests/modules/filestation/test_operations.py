@@ -953,3 +953,57 @@ class TestDeleteMissingPaths:
         assert "Deleted" in result
         assert "SYNO.FileStation.Delete.stop" not in calls, calls
         assert "cleanup failed" not in caplog.text
+
+
+class TestCopyMoveMissingSource:
+    """Same bug class as #162: CopyMove reports a missing source in an `errors` list.
+
+    Status captured on vdsm DSM 7.1 and 7.2.2 (2026-10-13) for copying a missing file:
+    {"dest_folder_path": "/writable", "errors": [{"code": 408, "path": ...}],
+     "finished": true, "found_dir_num": 0, "found_file_num": 0, "path": "", ...}
+    """
+
+    @staticmethod
+    def _dsm(missing_src: str) -> object:
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            method = dict(request.url.params).get("method", "")
+            if method == "start":
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "c1"}})
+            if method == "status":
+                return httpx.Response(
+                    200,
+                    json={
+                        "success": True,
+                        "data": {
+                            "dest_folder_path": "/writable",
+                            "errors": [{"code": 408, "path": missing_src}],
+                            "finished": True,
+                            "found_dir_num": 0,
+                            "found_file_num": 0,
+                            "found_file_size": 0,
+                            "path": "",
+                            "processed_size": 0,
+                        },
+                    },
+                )
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        return side_effect
+
+    @respx.mock
+    async def test_copy_missing_source_is_not_found(self, mock_client: DsmClient) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm("/writable/gone"))
+        with pytest.raises(ToolError) as exc_info:
+            await copy_files(mock_client, paths=["/writable/gone"], dest_folder="/writable/dst")
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "not_found"
+        assert "/writable/gone" in body["error"]["message"]
+
+    @respx.mock
+    async def test_move_missing_source_is_not_found(self, mock_client: DsmClient) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm("/writable/gone"))
+        with pytest.raises(ToolError) as exc_info:
+            await move_files(mock_client, paths=["/writable/gone"], dest_folder="/writable/dst")
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "not_found"
+        assert "/writable/gone" in body["error"]["message"]

@@ -269,6 +269,29 @@ async def _copy_move_one_path(
             ),
         )
 
+    errors = status.get("errors")
+    if isinstance(errors, list) and errors:
+        # A missing source finishes without an `error` key: DSM lists it under `errors`
+        # instead ({"code": 408, "path": ...}; DSM 7.1 and 7.2.2). Same class as #162.
+        failed = [
+            (str(e.get("path") or path), int(e.get("code", 0)))
+            for e in errors
+            if isinstance(e, dict)
+        ]
+        mapped = error_from_code(failed[0][1] if failed else 0, "SYNO.FileStation.CopyMove")
+        error_response(
+            mapped.error_code,
+            f"{operation} files failed: "
+            + "; ".join(f"{p} (DSM error {code})" for p, code in failed),
+            retryable=mapped.retryable,
+            param="paths",
+            value=path,
+            suggestion=(
+                mapped.suggestion
+                or "Check that source paths exist and you have permission to access them."
+            ),
+        )
+
     size = status.get("processed_size", 0)
     return int(size) if isinstance(size, int | float) else 0
 
