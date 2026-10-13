@@ -423,7 +423,7 @@ async def refresh_search_index(
     It was added when fresh directories seemed to take minutes to become
     searchable; that was the unquoted task ID (#121). With the ID quoted,
     a folder created a moment earlier is found on the first search
-    without synoindex (vdsm DSM 7.2.2), so this is belt-and-braces now.
+    without synoindex (vdsm DSM 7.1 and 7.2.2), so this is only a safeguard now.
 
     Best-effort: a non-zero return from synoindex is logged but not
     raised.
