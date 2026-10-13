@@ -6,6 +6,7 @@ import asyncio
 import errno
 import json
 import os
+from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import patch
 
@@ -30,7 +31,6 @@ _needs_non_root = pytest.mark.skipif(
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
-    from pathlib import Path
 
     from mcp_synology.core.client import DsmClient
 
@@ -499,6 +499,88 @@ class TestDownloadFile:
             )
         assert existing.read_bytes() == b"original"
         assert sorted(p.name for p in tmp_path.iterdir()) == ["movie.mkv"]
+
+    @respx.mock
+    async def test_download_without_hard_links_still_publishes(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """Where links aren't supported (FAT, some network mounts), overwrite=False falls
+        back to a final existence check and publishes a new file normally."""
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            content=b"data", headers={"content-type": "application/octet-stream"}
+        )
+        with patch("mcp_synology.core.client.os.link", side_effect=PermissionError("no links")):
+            await download_file(mock_client, path="/docs/a.txt", dest_folder=str(tmp_path))
+        assert (tmp_path / "a.txt").read_bytes() == b"data"
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["a.txt"]
+
+    @respx.mock
+    async def test_download_without_hard_links_never_replaces_a_new_file(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        dest = tmp_path / "a.txt"
+
+        async def body() -> AsyncIterator[bytes]:
+            yield b"data"
+            dest.write_bytes(b"CREATED MEANWHILE")
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._stream(body()))
+        with (
+            patch("mcp_synology.core.client.os.link", side_effect=OSError(errno.EPERM, "no links")),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await download_file(mock_client, path="/docs/a.txt", dest_folder=str(tmp_path))
+        assert json.loads(str(exc_info.value))["error"]["code"] == "already_exists"
+        assert dest.read_bytes() == b"CREATED MEANWHILE"
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["a.txt"]
+
+    @respx.mock
+    async def test_download_cleanup_tolerates_a_missing_temp(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """If the temp file is already gone when a failure is cleaned up, the original
+        error still surfaces."""
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            content=b"data", headers={"content-type": "application/octet-stream"}
+        )
+
+        def publish(tmp_file: Path, dest_file: Path, *, overwrite: bool) -> None:
+            tmp_file.unlink()
+            raise OSError(errno.EIO, "publish failed")
+
+        with (
+            patch("mcp_synology.core.client._publish_download", side_effect=publish),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await download_file(mock_client, path="/docs/a.txt", dest_folder=str(tmp_path))
+        assert "publish failed" in json.loads(str(exc_info.value))["error"]["message"]
+        assert list(tmp_path.iterdir()) == []
+
+    @respx.mock
+    async def test_download_cleanup_failure_is_logged_and_original_error_kept(
+        self, mock_client: DsmClient, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            content=b"data", headers={"content-type": "application/octet-stream"}
+        )
+        real_unlink = Path.unlink
+
+        def unlink(self: Path, missing_ok: bool = False) -> None:
+            if self.name.endswith(".part"):
+                raise PermissionError(errno.EACCES, "locked")
+            real_unlink(self, missing_ok=missing_ok)
+
+        with (
+            patch(
+                "mcp_synology.core.client._publish_download",
+                side_effect=OSError(errno.EIO, "publish failed"),
+            ),
+            patch.object(Path, "unlink", unlink),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await download_file(mock_client, path="/docs/a.txt", dest_folder=str(tmp_path))
+        assert "publish failed" in json.loads(str(exc_info.value))["error"]["message"]
+        assert "Failed to clean up partial download" in caplog.text
 
     @respx.mock
     async def test_download_is_flushed_to_disk_before_publishing(
