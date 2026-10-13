@@ -1233,7 +1233,9 @@ class TestCopyMoveSkippedItems:
     leaves its source in place."""
 
     @staticmethod
-    def _dsm(skipstatus_by_path: dict[str, object]) -> object:
+    def _dsm(
+        skipstatus_by_path: dict[str, object], overwrite_sent: list[str] | None = None
+    ) -> object:
         started: list[str] = []
 
         def side_effect(request: httpx.Request) -> httpx.Response:
@@ -1245,6 +1247,8 @@ class TestCopyMoveSkippedItems:
                 return httpx.Response(200, json={"success": True, "data": {"files": [entry]}})
             if method == "start":
                 started.append(params.get("path", ""))
+                if overwrite_sent is not None:
+                    overwrite_sent.append(params.get("overwrite", ""))
                 return httpx.Response(200, json={"success": True, "data": {"taskid": "t"}})
             if method == "status":
                 data: dict[str, object] = {
@@ -1275,8 +1279,9 @@ class TestCopyMoveSkippedItems:
     async def test_copy_with_skips_says_so(self, mock_client: DsmClient) -> None:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm({"/w/a": self.ALL}))
         result = await copy_files(mock_client, paths=["/w/a"], dest_folder="/w/dst")
-        assert result.startswith("[!]"), result
-        assert "/w/a" in result and "already existed" in result and "skipped" in result
+        assert result.startswith("[!] Copied 0 of 1 item(s) to /w/dst/"), result
+        assert "Skipped in whole or in part:\n  /w/a" in result
+        assert "Copied:" not in result  # nothing to list as fully copied
         assert "overwrite=true" in result
 
     @respx.mock
@@ -1295,10 +1300,12 @@ class TestCopyMoveSkippedItems:
             side_effect=self._dsm({"/w/a": self.NONE, "/v/b": self.ALL})
         )
         result = await move_files(mock_client, paths=["/w/a", "/v/b"], dest_folder="/w/dst")
-        assert result.startswith("[!]"), result
-        skipped_section = result[result.index("skipped") :]
-        assert "/v/b" in skipped_section and "/w/a" not in skipped_section
-        assert "Source files have been removed from /w/." in result
+        assert result.startswith("[!] Moved 1 of 2 item(s) to /w/dst/"), result
+        moved = result[result.index("Moved:\n") : result.index("Skipped in whole or in part:")]
+        skipped = result[result.index("Skipped in whole or in part:") :]
+        assert "  a" in moved and "b" not in moved
+        assert "/v/b" in skipped and "/w/a" not in skipped
+        assert "Moved sources removed from /w/: a" in result
         assert "removed from /v/" not in result
 
     @respx.mock
@@ -1314,6 +1321,29 @@ class TestCopyMoveSkippedItems:
 
     @respx.mock
     async def test_overwrite_true_has_no_skipstatus(self, mock_client: DsmClient) -> None:
-        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm({}))
+        sent: list[str] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm({}, sent))
         result = await copy_files(mock_client, paths=["/w/a"], dest_folder="/w/dst", overwrite=True)
+        assert sent == ["true"]
         assert result.startswith("[+] Copied 1 item(s)")
+
+    @respx.mock
+    async def test_string_skipstatus_counts_as_skipped(self, mock_client: DsmClient) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm({"/w/a": "all"}))
+        result = await copy_files(mock_client, paths=["/w/a"], dest_folder="/w/dst")
+        assert result.startswith("[!]"), result
+
+    @respx.mock
+    async def test_multi_destination_restore_with_a_skip_leads_with_warning(
+        self, mock_client: DsmClient
+    ) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._dsm(
+                {"/video/#recycle/S1/a.mkv": self.NONE, "/video/#recycle/S2/b.mkv": self.ALL}
+            )
+        )
+        result = await restore_from_recycle_bin(
+            mock_client, share="video", paths=["S1/a.mkv", "S2/b.mkv"]
+        )
+        assert result.startswith("[!] Restored 1 of 2 item(s)"), result
+        assert "[+] Moved" not in result and "[!] Moved" not in result

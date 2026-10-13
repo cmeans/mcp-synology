@@ -1352,8 +1352,12 @@ class TestErrorHandling:
             assert moved.startswith("[!]"), moved
             assert "have been removed" not in moved
             assert "f.txt" in await get_file_info(client, paths=[f"{base}/src/f.txt"])
+            assert "3 B" in await get_file_info(client, paths=[f"{base}/dst/f.txt"])  # unchanged
         finally:
-            await delete_files(client, paths=[base])
+            try:
+                await delete_files(client, paths=[base])
+            except ToolError:
+                logger.warning("cleanup of %s failed; it may not have been created", base)
 
     async def test_move_with_one_missing_source_moves_nothing(self, nas_client: Any) -> None:
         """One missing source refuses the whole move; the existing source stays put."""
