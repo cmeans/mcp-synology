@@ -174,7 +174,9 @@ def validate_share_path(path: str, known_shares: set[str]) -> str | None:
     if share == "#recycle":
         return f"Invalid path '{path}': must start with a shared folder name, not #recycle."
 
-    if share not in known_shares:
+    # DSM share names aren't case-sensitive: /TESTSHARE/... works for share "testshare"
+    # (DSM 7.1 and 7.2.2; QA R1 on #173).
+    if share.casefold() not in {s.casefold() for s in known_shares}:
         available = ", ".join(sorted(known_shares)) if known_shares else "(none)"
         return (
             f"Unknown shared folder '{share}'. "
@@ -432,9 +434,12 @@ async def ensure_known_shares(client: DsmClient, paths: list[str], known_shares:
         return
 
     def _shares() -> set[str]:
-        return {normalize_path(p).split("/")[1] for p in paths if len(normalize_path(p)) > 1}
+        return {
+            normalize_path(p).split("/")[1].casefold() for p in paths if len(normalize_path(p)) > 1
+        }
 
-    if (not known_shares or not _shares() <= known_shares) and not await _refresh_known_shares(
+    known = {s.casefold() for s in known_shares}
+    if (not known_shares or not _shares() <= known) and not await _refresh_known_shares(
         client, known_shares
     ):
         return

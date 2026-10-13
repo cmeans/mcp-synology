@@ -445,6 +445,16 @@ class TestEnsureKnownShares:
         assert calls == [] and cache == set()
 
     @respx.mock
+    async def test_share_names_match_case_insensitively(self, mock_client: DsmClient) -> None:
+        """QA R1 (#173): DSM accepts /TESTSHARE/... for share "testshare" (DSM 7.2.2), so the
+        check must too, without reloading the share list for a case difference."""
+        calls: list[str] = []
+        self._route([["testshare", "writable"]], calls)
+        cache = {"testshare", "writable"}
+        await ensure_known_shares(mock_client, ["/TESTSHARE/Documents", "/Writable/x"], cache)
+        assert calls == []
+
+    @respx.mock
     async def test_recycle_as_share_is_rejected(self, mock_client: DsmClient) -> None:
         calls: list[str] = []
         self._route([["writable"]], calls)
