@@ -6,9 +6,8 @@ Requires: tests/integration_config.yaml (see integration_config.yaml.example)
 These tests hit the real DSM API over HTTP. They verify that our client,
 auth, and module code works against an actual NAS — not mocked responses.
 
-NOTE: DSM's background task APIs (Search, DirSize) can be overwhelmed by
-rapid-fire requests. Tests include delays where needed. If tests fail
-intermittently, wait for NAS CPU to settle and retry.
+Search and DirSize need no recovery delays between calls. Their old
+intermittent failures were the unquoted task ID (#121), not load.
 """
 
 from __future__ import annotations
@@ -437,14 +436,12 @@ class TestSearch:
     async def test_search_by_extension(self, nas_client: Any) -> None:
         """Search by extension pattern (*.stl) should not error."""
         client, _, _, paths = _unpack(nas_client)
-        await asyncio.sleep(2)
         result = await search_files(client, folder_path=paths["existing_share"], pattern="*.stl")
         logger.info("Extension search (*.stl):\n%s", result)
 
     async def test_search_no_results(self, nas_client: Any) -> None:
         """Search for a nonsense pattern should return 0 results, not an error."""
         client, _, _, paths = _unpack(nas_client)
-        await asyncio.sleep(2)
         result = await search_files(
             client, folder_path=paths["existing_share"], pattern="zzz_nonexistent_xyzzy_999"
         )
@@ -453,7 +450,6 @@ class TestSearch:
     async def test_search_from_root_error_handling(self, nas_client: Any) -> None:
         """Searching from '/' may fail — verify we handle it gracefully."""
         client, _, _, _ = _unpack(nas_client)
-        await asyncio.sleep(2)
         # Whether it returns results or raises ToolError, it should not crash hard.
         try:
             result = await search_files(client, folder_path="/", pattern="test")

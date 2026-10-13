@@ -59,8 +59,8 @@ Integration tests are excluded from CI by default (`addopts` in `pyproject.toml`
 
 ### Known quirks
 
-- **Search service throttling** — DSM's search service on non-indexed shares can be overwhelmed by rapid-fire requests, returning 0 results or 502 errors. Allow recovery time between search-heavy test runs.
-- **Background task cleanup** — orphaned Search/DirSize tasks consume CPU indefinitely. The code uses `try/finally` to prevent this, but if tests are interrupted (Ctrl+C), tasks may linger. Check DSM Resource Monitor > Processes for `synoscgi_SYNO.FileStation.Search` entries.
+- **JSON-parsed parameter values** — DSM's JSON-format File Station APIs parse each value as JSON first, so free-text values (task IDs, names, patterns) are sent JSON-quoted (`filestation.helpers.dsm_str()`). Before #121's fix, unquoted task IDs made most searches look like "0 results" and the search service look overloaded; back-to-back searches need no delay.
+- **Background task cleanup** — orphaned Search/DirSize tasks consume CPU indefinitely. The code uses `try/finally` to prevent this (with the task ID quoted; unquoted, `stop`/`clean` silently did nothing until #121), but if tests are interrupted (Ctrl+C), tasks may linger. Check DSM Resource Monitor > Processes for `synoscgi_SYNO.FileStation.Search` entries.
 
 ## Virtual-DSM Tests
 

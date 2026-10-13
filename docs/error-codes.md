@@ -259,8 +259,6 @@ Common causes:
 
 - The operation is genuinely large (deleting a directory tree with millions of
   files; searching a non-indexed share).
-- The DSM search service is overloaded. Search on shares with
-  `has_not_index_share=true` is unreliable under load.
 - The NAS is starved for CPU or I/O by another workload (Plex transcoding,
   SMR drive write amplification, RAID resync, snapshot replication).
 - Orphaned background tasks from prior aborted runs are competing for resources.
