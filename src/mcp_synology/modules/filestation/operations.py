@@ -173,15 +173,19 @@ async def move_files(
 _PAST_TENSE = {"Copy": "copied", "Move": "moved", "Restore": "restored", "Delete": "deleted"}
 
 
-def _collapse_overlaps(paths: list[str]) -> list[str]:
+def _collapse_overlaps(paths: list[str], *, drop_nested: bool = True) -> list[str]:
     """Drop repeated paths and paths inside another listed path, keeping order (QA R1 on
     #173). Each path runs as its own DSM task, so a child of an earlier path, or the same
-    path twice, would run after the first task had already removed it."""
+    path twice, would run after the first task had already removed it.
+
+    Copy passes ``drop_nested=False`` (QA R2 on #173): copying ``/a`` and ``/a/b`` is two
+    copies, ``dest/a`` and ``dest/b``, and the child still exists after the parent's copy.
+    """
     out: list[str] = []
     for p in paths:
         if p in out:
             continue
-        if any(p != q and p.startswith(q.rstrip("/") + "/") for q in paths):
+        if drop_nested and any(p != q and p.startswith(q.rstrip("/") + "/") for q in paths):
             continue
         out.append(p)
     return out
@@ -383,7 +387,7 @@ async def _copy_move(
             suggestion="Pass at least one path.",
         )
 
-    normalized = _collapse_overlaps([normalize_path(p) for p in paths])
+    normalized = _collapse_overlaps([normalize_path(p) for p in paths], drop_nested=remove_src)
     dest = normalize_path(dest_folder)
 
     # Pin to version 2 — v3 uses JSON request format with different

@@ -1196,6 +1196,23 @@ class TestOverlappingPaths:
         assert started == ["/a/n"]
 
     @respx.mock
+    async def test_copy_keeps_child_of_listed_parent(self, mock_client: DsmClient) -> None:
+        """QA R2 (#173): copying /a and /a/b is two copies (dest/a and dest/b); the child is
+        still there after the parent's copy, so it must not be dropped."""
+        side_effect, started = self._dsm()
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        result = await copy_files(mock_client, paths=["/a/n", "/a/n/child"], dest_folder="/b")
+        assert started == ["/a/n", "/a/n/child"]
+        assert "Copied 2 item(s)" in result
+
+    @respx.mock
+    async def test_copy_drops_duplicate_after_normalization(self, mock_client: DsmClient) -> None:
+        side_effect, started = self._dsm()
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        await copy_files(mock_client, paths=["/a/dup/", "a/dup"], dest_folder="/b")
+        assert started == ["/a/dup"]
+
+    @respx.mock
     async def test_later_delete_failure_names_paths_already_deleted(
         self, mock_client: DsmClient
     ) -> None:

@@ -1386,6 +1386,20 @@ class TestErrorHandling:
         with pytest.raises(ToolError):
             await get_file_info(client, paths=[f"{base}/mcp_overlap"])
 
+    async def test_copy_parent_and_child_copies_both(self, nas_client: Any) -> None:
+        """QA R2 (#173): copying a folder and a path inside it makes both copies."""
+        client, _, config, paths = _unpack(nas_client)
+        _skip_unless_write(config)
+        base = paths["writable_folder"].rstrip("/")
+        src, dest = f"{base}/mcp_cp_overlap/a", f"{base}/mcp_cp_overlap_dest"
+        await create_folder(client, paths=[f"{src}/b", dest])
+        try:
+            result = await copy_files(client, paths=[src, f"{src}/b"], dest_folder=dest)
+            assert "Copied 2 item(s)" in result
+            await get_file_info(client, paths=[f"{dest}/a/b", f"{dest}/b"])
+        finally:
+            await delete_files(client, paths=[f"{base}/mcp_cp_overlap", dest])
+
     async def test_unknown_share_rejected_by_the_tools(self, nas_client: Any) -> None:
         """Through the real server: an unknown share gets not_found naming real shares (#160).
 
