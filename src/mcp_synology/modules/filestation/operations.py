@@ -14,6 +14,7 @@ from mcp_synology.core.formatting import (
     synology_error_response,
 )
 from mcp_synology.modules.filestation.helpers import (
+    dsm_str,
     ensure_recycle_status,
     normalize_path,
 )
@@ -69,7 +70,7 @@ async def create_folder(
                 "create",
                 params={
                     "folder_path": parent,
-                    "name": name,
+                    "name": dsm_str(name),
                     "force_parent": str(force_parent).lower(),
                 },
             )
@@ -111,7 +112,7 @@ async def rename(
             "rename",
             params={
                 "path": normalized,
-                "name": new_name,
+                "name": dsm_str(new_name),
             },
         )
     except SynologyError as e:

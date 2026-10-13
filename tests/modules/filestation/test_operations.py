@@ -97,7 +97,7 @@ class TestCreateFolder:
             ):
                 creates.append(params)
                 folder_path = params["folder_path"]
-                name = params["name"]
+                name = json.loads(params["name"])  # JSON-quoted (#121)
                 return httpx.Response(
                     200,
                     json={
@@ -128,7 +128,7 @@ class TestCreateFolder:
                 f"each request must carry a single folder_path parent, "
                 f"got folder_path={params['folder_path']!r}"
             )
-        sent_names = sorted(p["name"] for p in creates)
+        sent_names = sorted(json.loads(p["name"]) for p in creates)
         assert sent_names == ["Season 1", "Season 2"]
         sent_parents = sorted(p["folder_path"] for p in creates)
         assert sent_parents == ["/video/Show", "/video/Show"]

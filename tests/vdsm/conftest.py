@@ -419,14 +419,14 @@ async def refresh_search_index(
     """Override the no-op fixture from test_integration.py.
 
     Invokes `synoindex -A -d <path>` via SSH on the vdsm container so
-    runtime-created directories are immediately discoverable by DSM's
-    search service. Without this, DSM Universal Search on non-indexed
-    shares takes several minutes (sometimes longer than any reasonable
-    test retry budget) to crawl freshly-created subdirectories.
+    runtime-created directories are registered with DSM's search index.
+    It was added when fresh directories seemed to take minutes to become
+    searchable; that was the unquoted task ID (#121). With the ID quoted,
+    a folder created a moment earlier is found on the first search
+    without synoindex (vdsm DSM 7.1 and 7.2.2), so this is only a safeguard now.
 
     Best-effort: a non-zero return from synoindex is logged but not
-    raised — the test's existing retry loop is the safety net for
-    indexer hiccups.
+    raised.
     """
     import asyncio
 

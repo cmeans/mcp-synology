@@ -6,9 +6,8 @@ Requires: tests/integration_config.yaml (see integration_config.yaml.example)
 These tests hit the real DSM API over HTTP. They verify that our client,
 auth, and module code works against an actual NAS — not mocked responses.
 
-NOTE: DSM's background task APIs (Search, DirSize) can be overwhelmed by
-rapid-fire requests. Tests include delays where needed. If tests fail
-intermittently, wait for NAS CPU to settle and retry.
+Search and DirSize need no recovery delays between calls. Their old
+intermittent failures were the unquoted task ID (#121), not load.
 """
 
 from __future__ import annotations
@@ -362,10 +361,10 @@ class TestSearch:
     - filetype=all includes directories in results
     - Searching from a share path (not root)
 
-    NOTE: DSM's search service can be overwhelmed by rapid-fire requests,
-    returning 0 results or 502 errors. Tests include delays between searches
-    to avoid exhausting the service. If tests fail intermittently, increase
-    the delay or run fewer search tests at once.
+    The intermittent "0 results" these tests used to retry around (#121) was
+    the unquoted task ID: DSM misread ~62% of them and answered every poll
+    with its unknown-task reply. With the ID JSON-quoted, a search finds its
+    target on the first try, back to back, with no recovery delays.
     """
 
     async def test_search_keyword_finds_directory(
@@ -412,49 +411,37 @@ class TestSearch:
         # narrow scopes. Extract the share root from search_folder.
         share_root = "/" + folder.strip("/").split("/")[0]
 
-        # Allow the search service to recover from prior test activity
-        # (DirSize tasks, delete operations, etc.). On Virtual DSM, the
-        # search service can be easily exhausted by rapid-fire requests.
-        # Worst-case retry budget: 3s + 10 + 10 + 15 + 15 + 15 = ~68s.
-        await asyncio.sleep(3)
-
-        max_attempts = 6
-        result = ""
-        for attempt in range(1, max_attempts + 1):
-            result = await search_files(client, folder_path=share_root, pattern=keyword)
-            logger.info(
-                "search_files(%s, pattern=%s) attempt %d/%d:\n%s",
-                share_root,
-                keyword,
-                attempt,
-                max_attempts,
-                result,
-            )
-            if "0 results found" not in result:
-                break
-            if attempt < max_attempts:
-                delay = 10 if attempt <= 2 else 15
-                logger.info("Search returned 0 results, waiting %ds for indexer...", delay)
-                await asyncio.sleep(delay)
-
+        # One attempt: before #121's fix this needed a 6-try, ~68 s retry loop
+        # and still failed about 5% of the time (0.62^6).
+        result = await search_files(client, folder_path=share_root, pattern=keyword)
+        logger.info("search_files(%s, pattern=%s):\n%s", share_root, keyword, result)
         assert "0 results found" not in result, (
-            f"Search for '{keyword}' in {share_root} returned 0 results after {max_attempts} "
-            "attempts. Verify the search_keyword and search_folder in "
-            "integration_config.yaml. Also check that DSM's search service is not "
-            "overloaded from prior test runs."
+            f"Search for '{keyword}' in {share_root} returned 0 results. Verify the "
+            "search_keyword and search_folder in integration_config.yaml."
         )
+
+    async def test_search_back_to_back_all_find(self, nas_client: Any) -> None:
+        """#121: 10 searches in a row with no delay each find the target. With the
+        unquoted task ID, about 6 in 10 came back as "0 results"."""
+        client, _, _, paths = _unpack(nas_client)
+        folder, keyword = paths["search_folder"], paths["search_keyword"]
+        share_root = "/" + folder.strip("/").split("/")[0]
+        misses = []
+        for attempt in range(10):
+            result = await search_files(client, folder_path=share_root, pattern=keyword)
+            if "0 results found" in result:
+                misses.append(attempt)
+        assert not misses, f"searches {misses} of 10 found nothing for {keyword!r}"
 
     async def test_search_by_extension(self, nas_client: Any) -> None:
         """Search by extension pattern (*.stl) should not error."""
         client, _, _, paths = _unpack(nas_client)
-        await asyncio.sleep(2)
         result = await search_files(client, folder_path=paths["existing_share"], pattern="*.stl")
         logger.info("Extension search (*.stl):\n%s", result)
 
     async def test_search_no_results(self, nas_client: Any) -> None:
         """Search for a nonsense pattern should return 0 results, not an error."""
         client, _, _, paths = _unpack(nas_client)
-        await asyncio.sleep(2)
         result = await search_files(
             client, folder_path=paths["existing_share"], pattern="zzz_nonexistent_xyzzy_999"
         )
@@ -463,7 +450,6 @@ class TestSearch:
     async def test_search_from_root_error_handling(self, nas_client: Any) -> None:
         """Searching from '/' may fail — verify we handle it gracefully."""
         client, _, _, _ = _unpack(nas_client)
-        await asyncio.sleep(2)
         # Whether it returns results or raises ToolError, it should not crash hard.
         try:
             result = await search_files(client, folder_path="/", pattern="test")
@@ -540,8 +526,11 @@ class TestMetadata:
         # Use the writable folder (likely small) rather than the existing_share
         # which may be very large and cause the background task to time out.
         result = await get_dir_size(client, path=paths["writable_folder"])
-        assert "Total size" in result
         logger.info("get_dir_size(%s):\n%s", paths["writable_folder"], result)
+        assert "Total size" in result
+        # #121: the unquoted task ID made most status polls fail with 599, which
+        # was reported as "completed (too fast to measure)" with unknown counts.
+        assert "too fast" not in result and "unknown" not in result, result
 
 
 # ---------------------------------------------------------------------------
@@ -580,6 +569,22 @@ class TestWriteOperations:
         except ToolError as e:
             body = json.loads(str(e))
             assert body["error"]["code"] == "already_exists", f"Unexpected error: {e}"
+
+    async def test_01b_json_like_names(self, nas_client: Any) -> None:
+        """#121: DSM parses values as JSON first, so names like 2024 or true got
+        error 400 and a list pattern of 2024 crashed the request (HTTP 502)."""
+        client, _, config, paths = _unpack(nas_client)
+        _skip_unless_write(config)
+        base = f"{paths['writable_folder']}/{self._TEST_DIR}-json"
+        try:
+            created = await create_folder(client, paths=[f"{base}/2024", f"{base}/true"])
+            assert "Created 2 folder(s)" in created, created
+            renamed = await rename(client, path=f"{base}/2024", new_name="007")
+            assert "007" in renamed, renamed
+            listing = await list_files(client, path=base, pattern="true")
+            assert "true/" in listing, listing
+        finally:
+            await delete_files(client, paths=[base])
 
     async def test_02_create_folder_idempotent(self, nas_client: Any) -> None:
         """Creating the same folder again should not error (idempotent)."""

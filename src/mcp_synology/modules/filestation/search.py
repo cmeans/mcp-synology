@@ -7,19 +7,22 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any
 
-from mcp_synology.core.errors import SynologyError
+from mcp_synology.core.errors import ErrorCode, SynologyError
 from mcp_synology.core.formatting import (
+    error_response,
     format_size,
     format_table,
     format_timestamp,
     synology_error_response,
 )
 from mcp_synology.modules.filestation.helpers import (
+    dsm_str,
     file_type_icon,
     matches_pattern,
     normalize_path,
     parse_human_size,
     parse_mtime,
+    task_request,
     validate_additional,
 )
 
@@ -33,12 +36,7 @@ async def _cleanup_search_task(
     """Stop and clean a search task. Logs warnings on failure instead of silently suppressing."""
     for method in ("stop", "clean"):
         try:
-            await client.request(
-                "SYNO.FileStation.Search",
-                method,
-                version=version,
-                params={"taskid": taskid},
-            )
+            await task_request(client, "SYNO.FileStation.Search", method, taskid, version=version)
         except SynologyError as e:
             logger.warning("Search task cleanup (%s) failed for %s: %s", method, taskid, e)
         except Exception:
@@ -94,9 +92,9 @@ async def search_files(
             search_pattern = pattern
             if "*" not in pattern and "?" not in pattern:
                 search_pattern = f"*{pattern}*"
-            start_params["pattern"] = search_pattern
+            start_params["pattern"] = dsm_str(search_pattern)
     if extension:
-        start_params["extension"] = extension
+        start_params["extension"] = dsm_str(extension)
     # Always pass filetype — DSM defaults to "file" if omitted, which
     # excludes directories from results.
     start_params["filetype"] = filetype
@@ -121,26 +119,26 @@ async def search_files(
 
     taskid = start_data.get("taskid", "")
 
-    # Poll for results. DSM search is async — start kicks it off, list checks
-    # progress. We must poll promptly: if we wait too long, the search may
-    # finish and discard results before we read them. We also don't trust
-    # finished=True on the very first poll with 0 results, as it can be a
-    # false positive on non-indexed shares.
+    # Poll for results. DSM search is async: start kicks it off, list checks
+    # progress. A real list reply carries `total` and `files`; a bare
+    # {"finished": true} is DSM's reply for a task it doesn't know (#121), so
+    # it's a lost task, never "0 results".
     start_time = time.monotonic()
     all_files: list[dict[str, Any]] = []
     finished = False
-    poll_count = 0
+    lost_task = False
     poll_error: SynologyError | None = None
 
     try:
         while (time.monotonic() - start_time) < timeout:
             try:
-                list_data = await client.request(
+                list_data = await task_request(
+                    client,
                     "SYNO.FileStation.Search",
                     "list",
+                    taskid,
                     version=search_version,
                     params={
-                        "taskid": taskid,
                         "additional": '["' + '","'.join(additional) + '"]',
                         "limit": str(limit),
                         "offset": "0",
@@ -150,13 +148,12 @@ async def search_files(
                 poll_error = e
                 break
 
-            poll_count += 1
+            if "total" not in list_data and "files" not in list_data:
+                lost_task = True
+                break
             all_files = list_data.get("files", [])
             finished = list_data.get("finished", False)
-
-            if finished and (all_files or poll_count >= 3):
-                # Trust finished=True if we have results, or after enough polls
-                # to confirm the search genuinely found nothing.
+            if finished:
                 break
 
             await asyncio.sleep(poll_interval)
@@ -167,6 +164,14 @@ async def search_files(
 
     if poll_error:
         synology_error_response("Search files", poll_error)
+    if lost_task:
+        error_response(
+            ErrorCode.UNAVAILABLE,
+            f"Search files failed: DSM lost the search task for {normalized} "
+            "and returned no results, so this is not a 0-result answer.",
+            retryable=True,
+            suggestion="Retry the search, or browse the likely folder with list_files.",
+        )
 
     # Apply client-side exclude_pattern
     excluded_count = 0

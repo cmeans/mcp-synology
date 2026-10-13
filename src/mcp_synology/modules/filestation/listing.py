@@ -17,6 +17,7 @@ from mcp_synology.core.formatting import (
 )
 from mcp_synology.modules.filestation.helpers import (
     correct_recycle_status_from_observation,
+    dsm_str,
     ensure_recycle_status,
     file_type_icon,
     normalize_path,
@@ -174,7 +175,7 @@ async def list_files(
         "limit": str(limit),
     }
     if pattern:
-        params["pattern"] = pattern
+        params["pattern"] = dsm_str(pattern)
 
     try:
         data = await client.request("SYNO.FileStation.List", "list", params=params)

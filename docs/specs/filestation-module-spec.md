@@ -290,7 +290,7 @@ Search results in /video (pattern: *Severance*, excluding: *.torrent)
 ```
 
 **Design notes:**
-- Async search fully abstracted internally.
+- Async search fully abstracted internally. The task ID, `pattern` and `extension` are sent JSON-quoted, because DSM parses File Station values as JSON first (#121). A `list` reply without `total`/`files` (a bare `{"finished": true}`) is DSM's answer for a task it doesn't know, so it's reported as a lost, retryable task, never as 0 results. A full, finished reply is trusted on the first poll.
 - `exclude_pattern` is applied **client-side** because the Synology Search API doesn't support exclusion natively. The response notes how many items were filtered out for transparency.
 - If 0 results, suggest broadening the pattern or checking the folder path.
 - Timeout: 60 seconds. If hit, return partial results with a note.

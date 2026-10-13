@@ -3,15 +3,71 @@
 from __future__ import annotations
 
 import fnmatch
+import json
 import logging
 import re
 from datetime import UTC, datetime
+from typing import Any
 
 from mcp_synology.core.client import DsmClient
 from mcp_synology.core.errors import ErrorCode, SynologyError
 from mcp_synology.core.formatting import error_response
 
 logger = logging.getLogger(__name__)
+
+
+def dsm_str(value: str) -> str:
+    """JSON-quote a free-text parameter value for a JSON-format File Station API.
+
+    DSM parses these values as JSON first (#121), so an unquoted value that is
+    valid JSON is read as that type: a folder named ``2024`` or ``true`` gets
+    error 400, a ``list`` pattern of ``2024`` crashes the request (HTTP 502),
+    and a Search/DirSize task ID like ``17918443788CE649B9`` matches no task.
+    Synology's API guide quotes every such value. Paths need no quoting: they
+    start with ``/`` and so are never valid JSON.
+    """
+    return json.dumps(value, ensure_ascii=False)
+
+
+# A quoted task ID that DSM rejects outright. Reported once on DSM 7.2.2
+# (esausilva/synology-api-sdk#1), never seen on vdsm 7.1/7.2.2 or a real
+# DS1618+, so it's a fallback, not the default.
+_QUOTED_TASKID_REJECTED = frozenset({599, 600})
+
+
+async def task_request(
+    client: DsmClient,
+    api: str,
+    method: str,
+    taskid: str,
+    *,
+    version: int | None = None,
+    params: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Call a Search/DirSize task method with ``taskid`` JSON-quoted (#121).
+
+    An unquoted ID whose first character after the 10-digit timestamp is a
+    digit is misread, so ``list`` answers DSM's unknown-task reply, ``status``
+    fails with 599, and ``stop``/``clean`` silently clean nothing. If DSM
+    rejects the quoted form (599/600), retry once unquoted.
+    """
+    base = dict(params or {})
+    try:
+        return await client.request(
+            api, method, version=version, params={**base, "taskid": dsm_str(taskid)}
+        )
+    except SynologyError as e:
+        if e.code not in _QUOTED_TASKID_REJECTED:
+            raise
+        logger.warning(
+            "%s/%s rejected quoted taskid %s (DSM %s); retrying unquoted",
+            api,
+            method,
+            taskid,
+            e.code,
+        )
+        return await client.request(api, method, version=version, params={**base, "taskid": taskid})
+
 
 # Union of `additional` field values DSM 7.x accepts across SYNO.FileStation.List
 # and SYNO.FileStation.Search. Tighter per-API whitelisting isn't worth the

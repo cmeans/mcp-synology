@@ -259,8 +259,6 @@ Common causes:
 
 - The operation is genuinely large (deleting a directory tree with millions of
   files; searching a non-indexed share).
-- The DSM search service is overloaded. Search on shares with
-  `has_not_index_share=true` is unreliable under load.
 - The NAS is starved for CPU or I/O by another workload (Plex transcoding,
   SMR drive write amplification, RAID resync, snapshot replication).
 - Orphaned background tasks from prior aborted runs are competing for resources.
@@ -282,8 +280,9 @@ Otherwise:
 1. Check NAS health first: call `get_resource_usage` to confirm CPU and RAM
    are not pinned. If they are, fix that before retrying.
 2. For search: narrow the path to a single share rather than the root, use a
-   more specific keyword, and avoid rapid-fire repeats. The search service can
-   exhaust itself and refuse new tasks.
+   more specific keyword. (Before 0.6.0, mcp-synology sent search task IDs
+   unquoted, so DSM lost most tasks and never cleaned them up, which looked
+   like an exhausted search service; see #121.)
 3. For copy, move, and delete: split the operation into smaller batches.
 4. To clear suspected orphaned tasks: stop and start the File Station package
    from **Package Center**. mcp-synology cleans up its own tasks via
