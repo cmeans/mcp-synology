@@ -131,6 +131,16 @@ def _compact_schema(node: Any) -> Any:
     return out
 
 
+def _compact_tool_schemas(server: FastMCP) -> None:
+    """Compact every registered tool's advertised input schema in place (#163).
+
+    Uses mcp 1.x's ``FastMCP._tool_manager``; the mcp 2.x migration (#114) must keep
+    this behavior (``TestServedSchemas`` checks what a real client session receives).
+    """
+    for tool in server._tool_manager.list_tools():
+        tool.parameters = _compact_schema(tool.parameters)
+
+
 class SharedClientManager:
     """Manages the shared DSM client lifecycle across all modules.
 
@@ -445,4 +455,5 @@ def create_server(config: AppConfig) -> FastMCP:
         )
         module.register(ctx)
 
+    _compact_tool_schemas(server)
     return server

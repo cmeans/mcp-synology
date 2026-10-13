@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 import respx
+from mcp.shared.memory import create_connected_server_and_client_session
 
 from mcp_synology.server import (
     _BASE_INSTRUCTIONS,
@@ -19,7 +21,10 @@ from mcp_synology.server import (
 from tests.conftest import BASE_URL, make_test_config
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
     from pathlib import Path
+
+    from mcp.server.fastmcp import FastMCP
 
 
 class TestCreateServer:
@@ -827,3 +832,68 @@ class TestCompactSchema:
         before = {"anyOf": [{"type": "string"}, {"type": "null"}], "default": None, "title": "P"}
         _compact_schema(node)
         assert node == before
+
+
+ALL_MODULES: dict[str, Any] = {
+    "filestation": {"enabled": True, "permission": "write"},
+    "system": {"enabled": True},
+    "downloadstation": {"enabled": True, "permission": "write"},
+}
+
+
+def _walk(node: Any) -> Iterator[Any]:
+    yield node
+    if isinstance(node, dict):
+        for value in node.values():
+            yield from _walk(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _walk(value)
+
+
+async def _served(server: FastMCP) -> tuple[list[Any], str]:
+    """Tools and instructions exactly as an MCP client receives them."""
+    async with create_connected_server_and_client_session(server._mcp_server) as session:
+        init = await session.initialize()
+        tools = (await session.list_tools()).tools
+    return list(tools), init.instructions or ""
+
+
+class TestServedSchemas:
+    """Every tool's advertised schema is compacted, and nothing a model needs is lost (#163)."""
+
+    async def test_client_sees_no_titles_or_null_unions(self) -> None:
+        tools, _ = await _served(create_server(make_test_config(modules=ALL_MODULES)))
+        assert len(tools) == 28
+        for tool in tools:
+            for node in _walk(tool.inputSchema):
+                if isinstance(node, dict):
+                    assert "title" not in node, tool.name
+                    assert {"type": "null"} not in node.get("anyOf", []), tool.name
+
+    def test_nothing_else_lost(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        config = make_test_config(modules=ALL_MODULES)
+        compacted = {t.name: t.parameters for t in create_server(config)._tool_manager.list_tools()}
+        monkeypatch.setattr("mcp_synology.server._compact_tool_schemas", lambda server: None)
+        raw = {t.name: t.parameters for t in create_server(config)._tool_manager.list_tools()}
+        assert compacted.keys() == raw.keys()
+        for name, schema in raw.items():
+            new = compacted[name]
+            assert new.get("required", []) == schema.get("required", []), name
+            assert new["properties"].keys() == schema["properties"].keys(), name
+            for prop, old in schema["properties"].items():
+                branches = [b for b in old.get("anyOf", [old]) if b != {"type": "null"}]
+                assert new["properties"][prop].get("type") == branches[0].get("type"), (name, prop)
+                if old.get("default") is not None:
+                    assert new["properties"][prop]["default"] == old["default"], (name, prop)
+
+    def test_validation_still_accepts_explicit_null_and_omission(self) -> None:
+        server = create_server(make_test_config(modules=ALL_MODULES))
+        tool = server._tool_manager.get_tool("search_files")
+        assert tool is not None
+        arg_model = tool.fn_metadata.arg_model
+        explicit = arg_model.model_validate({"folder_path": "/x", "pattern": None})
+        omitted = arg_model.model_validate({"folder_path": "/x"})
+        assert explicit.pattern is None
+        assert omitted.pattern is None
+        assert json.dumps(tool.parameters).count('"null"') == 0
