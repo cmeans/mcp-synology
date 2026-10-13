@@ -144,7 +144,12 @@ def _compact_tool_schemas(server: FastMCP) -> None:
 
 # A comment that fills its whole line (allowing indentation) goes with its line break;
 # anywhere else only the comment goes, so the text around it keeps its line breaks.
-_HTML_COMMENT = re.compile(r"^[ \t]*<!--.*?-->[ \t]*\n|<!--.*?-->", re.DOTALL | re.MULTILINE)
+# The whole-line alternative must not cross a "-->": with DOTALL a lazy ".*?" would
+# otherwise run on past a comment that has text after it, to a later "-->", and
+# delete the instruction text between them (QA round 1, #164).
+_HTML_COMMENT = re.compile(
+    r"^[ \t]*<!--(?:(?!-->).)*-->[ \t]*\n|<!--.*?-->", re.DOTALL | re.MULTILINE
+)
 
 
 def _strip_html_comments(text: str) -> str:

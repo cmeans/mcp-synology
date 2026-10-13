@@ -954,6 +954,16 @@ class TestInstructionComments:
     def test_indented_own_line_comment_removes_whole_line(self) -> None:
         assert _strip_html_comments("x\n  <!-- c -->\nz") == "x\nz"
 
+    def test_comment_with_trailing_text_does_not_swallow_later_lines(self) -> None:
+        # QA round 1 (#164): a line-leading comment followed by text must not let the
+        # whole-line alternative run on to a later "-->" and delete everything between.
+        text = "<!-- note --> keep this\nmore text\n<!-- other -->\nend\n"
+        assert _strip_html_comments(text) == " keep this\nmore text\nend\n"
+
+    def test_guardrail_between_comments_survives(self) -> None:
+        text = "A\n  <!-- a --> B\nC\n<!-- b -->\nD\n"
+        assert _strip_html_comments(text) == "A\n   B\nC\nD\n"
+
     def test_text_without_comments_is_unchanged(self) -> None:
         text = "PATH FORMAT:\nAll paths start with a share.\n"
         assert _strip_html_comments(text) == text
