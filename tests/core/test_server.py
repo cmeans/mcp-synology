@@ -872,6 +872,28 @@ class TestServedSchemas:
                     assert "title" not in node, tool.name
                     assert {"type": "null"} not in node.get("anyOf", []), tool.name
 
+    @staticmethod
+    def _expected(node: Any) -> Any:
+        """Independent statement of the compaction rule (QA round 1, #164): drop `title`
+        keys; turn {"anyOf": [T, {"type": "null"}], "default": null, ...rest} into
+        {...T, ...rest}; leave everything else exactly as it was."""
+        if isinstance(node, list):
+            return [TestServedSchemas._expected(v) for v in node]
+        if not isinstance(node, dict):
+            return node
+        kept = {k: TestServedSchemas._expected(v) for k, v in node.items() if k != "title"}
+        branches = kept.get("anyOf")
+        if (
+            isinstance(branches, list)
+            and len(branches) == 2
+            and {"type": "null"} in branches
+            and kept.get("default", "unset") is None
+        ):
+            (real,) = [b for b in branches if b != {"type": "null"}]
+            rest = {k: v for k, v in kept.items() if k not in ("anyOf", "default")}
+            return {**real, **rest}
+        return kept
+
     def test_nothing_else_lost(self, monkeypatch: pytest.MonkeyPatch) -> None:
         config = make_test_config(modules=ALL_MODULES)
         compacted = {t.name: t.parameters for t in create_server(config)._tool_manager.list_tools()}
@@ -879,14 +901,9 @@ class TestServedSchemas:
         raw = {t.name: t.parameters for t in create_server(config)._tool_manager.list_tools()}
         assert compacted.keys() == raw.keys()
         for name, schema in raw.items():
-            new = compacted[name]
-            assert new.get("required", []) == schema.get("required", []), name
-            assert new["properties"].keys() == schema["properties"].keys(), name
-            for prop, old in schema["properties"].items():
-                branches = [b for b in old.get("anyOf", [old]) if b != {"type": "null"}]
-                assert new["properties"][prop].get("type") == branches[0].get("type"), (name, prop)
-                if old.get("default") is not None:
-                    assert new["properties"][prop]["default"] == old["default"], (name, prop)
+            # Exhaustive: every key the rule doesn't remove (items, enum, description,
+            # examples, required, ...) must survive unchanged.
+            assert compacted[name] == self._expected(schema), name
 
     @respx.mock
     async def test_explicit_null_survives_a_real_tool_call(self) -> None:
