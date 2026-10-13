@@ -10,7 +10,12 @@ import httpx
 import pytest
 import respx
 
-from mcp_synology.server import _BASE_INSTRUCTIONS, SharedClientManager, create_server
+from mcp_synology.server import (
+    _BASE_INSTRUCTIONS,
+    SharedClientManager,
+    _compact_schema,
+    create_server,
+)
 from tests.conftest import BASE_URL, make_test_config
 
 if TYPE_CHECKING:
@@ -727,3 +732,98 @@ class TestWithheldToolsNotice:
         names = set(server._tool_manager._tools)
         assert "delete_files" not in names
         assert "list_files" in names
+
+
+class TestCompactSchema:
+    """`_compact_schema` drops `title`s and collapses `anyOf: [T, null]` + null default (#163)."""
+
+    def test_drops_titles_at_every_level(self) -> None:
+        schema = {
+            "title": "tool_listArguments",
+            "type": "object",
+            "properties": {"path": {"title": "Path", "type": "string"}},
+            "required": ["path"],
+        }
+        assert _compact_schema(schema) == {
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+        }
+
+    def test_collapses_optional_scalar(self) -> None:
+        node = {"anyOf": [{"type": "string"}, {"type": "null"}], "default": None, "title": "P"}
+        assert _compact_schema(node) == {"type": "string"}
+
+    def test_collapses_when_null_branch_comes_first(self) -> None:
+        node = {"anyOf": [{"type": "null"}, {"type": "integer"}], "default": None}
+        assert _compact_schema(node) == {"type": "integer"}
+
+    def test_collapses_optional_list_and_keeps_items(self) -> None:
+        node = {
+            "anyOf": [{"items": {"type": "string"}, "type": "array"}, {"type": "null"}],
+            "default": None,
+            "title": "Additional",
+        }
+        assert _compact_schema(node) == {"items": {"type": "string"}, "type": "array"}
+
+    def test_keeps_description_enum_examples(self) -> None:
+        node = {
+            "anyOf": [{"type": "string"}, {"type": "null"}],
+            "default": None,
+            "description": "Sort order.",
+            "enum": ["queue", "created", "completed"],
+            "examples": ["completed"],
+        }
+        assert _compact_schema(node) == {
+            "type": "string",
+            "description": "Sort order.",
+            "enum": ["queue", "created", "completed"],
+            "examples": ["completed"],
+        }
+
+    def test_non_null_default_is_left_as_union(self) -> None:
+        node = {"anyOf": [{"type": "integer"}, {"type": "null"}], "default": 5, "title": "X"}
+        assert _compact_schema(node) == {
+            "anyOf": [{"type": "integer"}, {"type": "null"}],
+            "default": 5,
+        }
+
+    def test_union_of_two_real_types_is_untouched(self) -> None:
+        node = {
+            "anyOf": [{"type": "string"}, {"type": "integer"}, {"type": "null"}],
+            "default": None,
+        }
+        assert _compact_schema(node) == node
+
+    def test_keeps_non_null_defaults_and_nested_objects(self) -> None:
+        schema = {
+            "type": "object",
+            "properties": {
+                "limit": {"default": 25, "title": "Limit", "type": "integer"},
+                "opts": {
+                    "type": "object",
+                    "title": "Opts",
+                    "properties": {"x": {"title": "X", "type": "boolean", "default": False}},
+                },
+            },
+        }
+        assert _compact_schema(schema) == {
+            "type": "object",
+            "properties": {
+                "limit": {"default": 25, "type": "integer"},
+                "opts": {
+                    "type": "object",
+                    "properties": {"x": {"type": "boolean", "default": False}},
+                },
+            },
+        }
+
+    def test_all_null_union_is_untouched(self) -> None:
+        node = {"anyOf": [{"type": "null"}, {"type": "null"}], "default": None}
+        assert _compact_schema(node) == node
+
+    def test_does_not_mutate_input(self) -> None:
+        node = {"anyOf": [{"type": "string"}, {"type": "null"}], "default": None, "title": "P"}
+        before = {"anyOf": [{"type": "string"}, {"type": "null"}], "default": None, "title": "P"}
+        _compact_schema(node)
+        assert node == before

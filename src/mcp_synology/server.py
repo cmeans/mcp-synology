@@ -8,7 +8,7 @@ import logging
 import platform
 import signal
 from pathlib import Path
-from typing import TYPE_CHECKING, NoReturn
+from typing import TYPE_CHECKING, Any, NoReturn
 
 import httpx
 from mcp.server.fastmcp import FastMCP
@@ -96,6 +96,39 @@ def _unreachable_error(base_url: str, timeout: float, exc: httpx.TransportError)
             "`mcp-synology check --config <file>` tests the connection and login."
         ),
     )
+
+
+_NULL_SCHEMA = {"type": "null"}
+
+
+def _compact_schema(node: Any) -> Any:
+    """Return a copy of a JSON schema without what a model can't use (#163).
+
+    Drops every ``title`` (pydantic's restatement of the parameter name) and
+    collapses ``{"anyOf": [T, {"type": "null"}], "default": null}`` into ``T``:
+    the parameter stays out of ``required``, so leaving it out still means "not
+    set". Everything else is kept, including ``description``/``enum``/``examples``.
+    FastMCP validates arguments against each function's pydantic model, not this
+    advertised schema, so what the server accepts doesn't change.
+    """
+    if isinstance(node, list):
+        return [_compact_schema(item) for item in node]
+    if not isinstance(node, dict):
+        return node
+    out = {key: _compact_schema(value) for key, value in node.items() if key != "title"}
+    any_of = out.get("anyOf")
+    if (
+        isinstance(any_of, list)
+        and len(any_of) == 2
+        and _NULL_SCHEMA in any_of
+        and "default" in out
+        and out["default"] is None
+    ):
+        branches = [branch for branch in any_of if branch != _NULL_SCHEMA]
+        if len(branches) == 1 and isinstance(branches[0], dict):
+            rest = {k: v for k, v in out.items() if k not in ("anyOf", "default")}
+            return {**branches[0], **rest}
+    return out
 
 
 class SharedClientManager:
