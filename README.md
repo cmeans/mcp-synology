@@ -278,7 +278,7 @@ custom_instructions: |
   Never delete files from /Backups without explicit confirmation.
 ```
 
-**Full control** — `instructions_file` replaces the built-in prompt entirely. Copy the [built-in server.md](src/mcp_synology/instructions/server.md) as a starting point. A replacement file is used exactly as written, so it doesn't get the generated PERMISSIONS section, which tells the model which tools this connection withholds and how to enable them (`custom_instructions` keeps it):
+**Full control** — `instructions_file` replaces the built-in prompt entirely. Copy the [built-in server.md](src/mcp_synology/instructions/server.md) as a starting point. A replacement file is used as written, apart from HTML comments, so it doesn't get the generated PERMISSIONS section, which tells the model which tools this connection withholds and how to enable them (`custom_instructions` keeps it):
 
 ```yaml
 # ~/.config/mcp-synology/config.yaml
@@ -286,6 +286,8 @@ instructions_file: ~/.config/mcp-synology/my-instructions.md
 ```
 
 Both support template variables: `{display_name}`, `{instance_id}`, `{host}`, `{port}`.
+
+HTML comments (`<!-- ... -->`) are removed from both before the text is sent, so they can hold notes for whoever edits the file. A comment on a line of its own is removed with that line.
 
 ## Debugging
 

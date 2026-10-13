@@ -3,18 +3,29 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 import respx
+from mcp.shared.memory import create_connected_server_and_client_session
 
-from mcp_synology.server import _BASE_INSTRUCTIONS, SharedClientManager, create_server
+from mcp_synology.server import (
+    _BASE_INSTRUCTIONS,
+    SharedClientManager,
+    _compact_schema,
+    _strip_html_comments,
+    create_server,
+)
 from tests.conftest import BASE_URL, make_test_config
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
     from pathlib import Path
+
+    from mcp.server.fastmcp import FastMCP
 
 
 class TestCreateServer:
@@ -727,3 +738,268 @@ class TestWithheldToolsNotice:
         names = set(server._tool_manager._tools)
         assert "delete_files" not in names
         assert "list_files" in names
+
+
+class TestCompactSchema:
+    """`_compact_schema` drops `title`s and collapses `anyOf: [T, null]` + null default (#163)."""
+
+    def test_drops_titles_at_every_level(self) -> None:
+        schema = {
+            "title": "tool_listArguments",
+            "type": "object",
+            "properties": {"path": {"title": "Path", "type": "string"}},
+            "required": ["path"],
+        }
+        assert _compact_schema(schema) == {
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+        }
+
+    def test_collapses_optional_scalar(self) -> None:
+        node = {"anyOf": [{"type": "string"}, {"type": "null"}], "default": None, "title": "P"}
+        assert _compact_schema(node) == {"type": "string"}
+
+    def test_collapses_when_null_branch_comes_first(self) -> None:
+        node = {"anyOf": [{"type": "null"}, {"type": "integer"}], "default": None}
+        assert _compact_schema(node) == {"type": "integer"}
+
+    def test_collapses_optional_list_and_keeps_items(self) -> None:
+        node = {
+            "anyOf": [{"items": {"type": "string"}, "type": "array"}, {"type": "null"}],
+            "default": None,
+            "title": "Additional",
+        }
+        assert _compact_schema(node) == {"items": {"type": "string"}, "type": "array"}
+
+    def test_keeps_description_enum_examples(self) -> None:
+        node = {
+            "anyOf": [{"type": "string"}, {"type": "null"}],
+            "default": None,
+            "description": "Sort order.",
+            "enum": ["queue", "created", "completed"],
+            "examples": ["completed"],
+        }
+        assert _compact_schema(node) == {
+            "type": "string",
+            "description": "Sort order.",
+            "enum": ["queue", "created", "completed"],
+            "examples": ["completed"],
+        }
+
+    def test_non_null_default_is_left_as_union(self) -> None:
+        node = {"anyOf": [{"type": "integer"}, {"type": "null"}], "default": 5, "title": "X"}
+        assert _compact_schema(node) == {
+            "anyOf": [{"type": "integer"}, {"type": "null"}],
+            "default": 5,
+        }
+
+    def test_union_of_two_real_types_is_untouched(self) -> None:
+        node = {
+            "anyOf": [{"type": "string"}, {"type": "integer"}, {"type": "null"}],
+            "default": None,
+        }
+        assert _compact_schema(node) == node
+
+    def test_keeps_non_null_defaults_and_nested_objects(self) -> None:
+        schema = {
+            "type": "object",
+            "properties": {
+                "limit": {"default": 25, "title": "Limit", "type": "integer"},
+                "opts": {
+                    "type": "object",
+                    "title": "Opts",
+                    "properties": {"x": {"title": "X", "type": "boolean", "default": False}},
+                },
+            },
+        }
+        assert _compact_schema(schema) == {
+            "type": "object",
+            "properties": {
+                "limit": {"default": 25, "type": "integer"},
+                "opts": {
+                    "type": "object",
+                    "properties": {"x": {"type": "boolean", "default": False}},
+                },
+            },
+        }
+
+    def test_all_null_union_is_untouched(self) -> None:
+        node = {"anyOf": [{"type": "null"}, {"type": "null"}], "default": None}
+        assert _compact_schema(node) == node
+
+    def test_does_not_mutate_input(self) -> None:
+        node = {"anyOf": [{"type": "string"}, {"type": "null"}], "default": None, "title": "P"}
+        before = {"anyOf": [{"type": "string"}, {"type": "null"}], "default": None, "title": "P"}
+        _compact_schema(node)
+        assert node == before
+
+
+ALL_MODULES: dict[str, Any] = {
+    "filestation": {"enabled": True, "permission": "write"},
+    "system": {"enabled": True},
+    "downloadstation": {"enabled": True, "permission": "write"},
+}
+
+
+def _walk(node: Any) -> Iterator[Any]:
+    yield node
+    if isinstance(node, dict):
+        for value in node.values():
+            yield from _walk(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _walk(value)
+
+
+async def _served(server: FastMCP) -> tuple[list[Any], str]:
+    """Tools and instructions exactly as an MCP client receives them."""
+    async with create_connected_server_and_client_session(server._mcp_server) as session:
+        init = await session.initialize()
+        tools = (await session.list_tools()).tools
+    return list(tools), init.instructions or ""
+
+
+class TestServedSchemas:
+    """Every tool's advertised schema is compacted, and nothing a model needs is lost (#163)."""
+
+    async def test_client_sees_no_titles_or_null_unions(self) -> None:
+        tools, _ = await _served(create_server(make_test_config(modules=ALL_MODULES)))
+        assert len(tools) == 28
+        for tool in tools:
+            for node in _walk(tool.inputSchema):
+                if isinstance(node, dict):
+                    assert "title" not in node, tool.name
+                    assert {"type": "null"} not in node.get("anyOf", []), tool.name
+
+    @staticmethod
+    def _expected(node: Any) -> Any:
+        """Independent statement of the compaction rule (QA round 1, #164): drop `title`
+        keys; turn {"anyOf": [T, {"type": "null"}], "default": null, ...rest} into
+        {...T, ...rest}; leave everything else exactly as it was."""
+        if isinstance(node, list):
+            return [TestServedSchemas._expected(v) for v in node]
+        if not isinstance(node, dict):
+            return node
+        kept = {k: TestServedSchemas._expected(v) for k, v in node.items() if k != "title"}
+        branches = kept.get("anyOf")
+        if (
+            isinstance(branches, list)
+            and len(branches) == 2
+            and {"type": "null"} in branches
+            and kept.get("default", "unset") is None
+        ):
+            (real,) = [b for b in branches if b != {"type": "null"}]
+            rest = {k: v for k, v in kept.items() if k not in ("anyOf", "default")}
+            return {**real, **rest}
+        return kept
+
+    def test_nothing_else_lost(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        config = make_test_config(modules=ALL_MODULES)
+        compacted = {t.name: t.parameters for t in create_server(config)._tool_manager.list_tools()}
+        monkeypatch.setattr("mcp_synology.server._compact_tool_schemas", lambda server: None)
+        raw = {t.name: t.parameters for t in create_server(config)._tool_manager.list_tools()}
+        assert compacted.keys() == raw.keys()
+        for name, schema in raw.items():
+            # Exhaustive: every key the rule doesn't remove (items, enum, description,
+            # examples, required, ...) must survive unchanged.
+            assert compacted[name] == self._expected(schema), name
+
+    @respx.mock
+    async def test_explicit_null_survives_a_real_tool_call(self) -> None:
+        """Review finding: the null claim must hold through MCP's call path, not just
+        the pydantic model, so an SDK that starts validating the advertised schema
+        (#114) fails here instead of silently rejecting clients that send nulls."""
+        respx.get(f"{BASE_URL}/webapi/query.cgi").mock(side_effect=httpx.ConnectError("down"))
+        server = create_server(make_test_config(modules=ALL_MODULES))
+        async with create_connected_server_and_client_session(server._mcp_server) as session:
+            await session.initialize()
+            result = await session.call_tool("search_files", {"folder_path": "/x", "pattern": None})
+        text = " ".join(getattr(c, "text", "") for c in result.content)
+        assert result.isError
+        assert "validation error" not in text.lower(), text
+        assert "unavailable" in text, text  # got past validation and reached the NAS call
+
+    def test_validation_still_accepts_explicit_null_and_omission(self) -> None:
+        server = create_server(make_test_config(modules=ALL_MODULES))
+        tool = server._tool_manager.get_tool("search_files")
+        assert tool is not None
+        arg_model = tool.fn_metadata.arg_model
+        explicit = arg_model.model_validate({"folder_path": "/x", "pattern": None})
+        omitted = arg_model.model_validate({"folder_path": "/x"})
+        assert explicit.pattern is None
+        assert omitted.pattern is None
+        assert json.dumps(tool.parameters).count('"null"') == 0
+
+
+class TestInstructionComments:
+    """HTML comments are notes for whoever edits the file; models never get them (#163)."""
+
+    def test_builtin_template_comment_not_served(self) -> None:
+        instructions = create_server(make_test_config()).instructions or ""
+        assert "<!--" not in instructions
+        assert "Template variables available" not in instructions
+        assert "SERVER IDENTITY" in instructions  # text around the comment survives
+
+    def test_custom_instructions_comment_with_unknown_placeholder(self) -> None:
+        config = make_test_config(custom_instructions="RULES <!-- uses {not_a_var} -->\nMORE")
+        instructions = create_server(config).instructions or ""
+        assert "<!--" not in instructions
+        assert "RULES \nMORE" in instructions
+
+    def test_instructions_file_comment_removed(self, tmp_path: Path) -> None:
+        path = tmp_path / "custom.md"
+        path.write_text("TOP for {display_name}\n<!-- editor note {host} -->\nBOTTOM\n")
+        instructions = create_server(make_test_config(instructions_file=str(path))).instructions
+        assert instructions == "TOP for test\nBOTTOM"
+
+    def test_strip_keeps_line_structure(self) -> None:
+        assert _strip_html_comments("A\n<!-- c -->\nB") == "A\nB"
+        assert _strip_html_comments("A<!-- c -->B") == "AB"
+        assert _strip_html_comments("A <!--\nmulti\nline\n-->\nB") == "A \nB"
+
+    def test_unclosed_comment_left_alone(self) -> None:
+        assert _strip_html_comments("keep <!-- never closed\nB") == "keep <!-- never closed\nB"
+        config = make_test_config(custom_instructions="NOTE <!-- open")
+        assert "NOTE <!-- open" in (create_server(config).instructions or "")
+
+    def test_trailing_comment_keeps_line_break(self) -> None:
+        # Review finding: a comment that ends a line must not join it to the next.
+        text = "- Use for media <!-- per Bob -->\n- Never delete"
+        assert _strip_html_comments(text) == "- Use for media \n- Never delete"
+
+    def test_indented_own_line_comment_removes_whole_line(self) -> None:
+        assert _strip_html_comments("x\n  <!-- c -->\nz") == "x\nz"
+
+    def test_comment_with_trailing_text_does_not_swallow_later_lines(self) -> None:
+        # QA round 1 (#164): a line-leading comment followed by text must not let the
+        # whole-line alternative run on to a later "-->" and delete everything between.
+        text = "<!-- note --> keep this\nmore text\n<!-- other -->\nend\n"
+        assert _strip_html_comments(text) == " keep this\nmore text\nend\n"
+
+    def test_guardrail_between_comments_survives(self) -> None:
+        text = "A\n  <!-- a --> B\nC\n<!-- b -->\nD\n"
+        assert _strip_html_comments(text) == "A\n   B\nC\nD\n"
+
+    def test_text_without_comments_is_unchanged(self) -> None:
+        text = "PATH FORMAT:\nAll paths start with a share.\n"
+        assert _strip_html_comments(text) == text
+
+
+# Characters a model receives before any conversation (schemas + descriptions + instructions)
+# for ALL_MODULES. Raise this deliberately, in the same PR, when adding text a model needs
+# (e.g. #129's parameter descriptions); the review then sees the growth. Set by #163 to the
+# compacted size + 2%.
+PAYLOAD_BUDGET_CHARS = 16_019
+
+
+class TestPayloadBudget:
+    async def test_payload_within_budget(self) -> None:
+        tools, instructions = await _served(create_server(make_test_config(modules=ALL_MODULES)))
+        size = sum(len(json.dumps(t.inputSchema)) + len(t.description or "") for t in tools)
+        size += len(instructions)
+        assert size <= PAYLOAD_BUDGET_CHARS, (
+            f"served payload is {size} chars, budget {PAYLOAD_BUDGET_CHARS} "
+            f"(+{size - PAYLOAD_BUDGET_CHARS}). If the growth is intended, raise "
+            "PAYLOAD_BUDGET_CHARS in this PR."
+        )

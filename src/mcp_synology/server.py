@@ -6,9 +6,10 @@ import asyncio
 import atexit
 import logging
 import platform
+import re
 import signal
 from pathlib import Path
-from typing import TYPE_CHECKING, NoReturn
+from typing import TYPE_CHECKING, Any, NoReturn
 
 import httpx
 from mcp.server.fastmcp import FastMCP
@@ -96,6 +97,72 @@ def _unreachable_error(base_url: str, timeout: float, exc: httpx.TransportError)
             "`mcp-synology check --config <file>` tests the connection and login."
         ),
     )
+
+
+_NULL_SCHEMA = {"type": "null"}
+
+
+def _compact_schema(node: Any) -> Any:
+    """Return a copy of a JSON schema without what a model can't use (#163).
+
+    Drops every ``title`` (pydantic's restatement of the parameter name) and
+    collapses ``{"anyOf": [T, {"type": "null"}], "default": null}`` into ``T``:
+    the parameter stays out of ``required``, so leaving it out still means "not
+    set". Everything else is kept, including ``description``/``enum``/``examples``.
+    FastMCP validates arguments against each function's pydantic model, not this
+    advertised schema, so what the server accepts doesn't change.
+    """
+    if isinstance(node, list):
+        return [_compact_schema(item) for item in node]
+    if not isinstance(node, dict):
+        return node
+    out = {key: _compact_schema(value) for key, value in node.items() if key != "title"}
+    any_of = out.get("anyOf")
+    if (
+        isinstance(any_of, list)
+        and len(any_of) == 2
+        and _NULL_SCHEMA in any_of
+        and "default" in out
+        and out["default"] is None
+    ):
+        branches = [branch for branch in any_of if branch != _NULL_SCHEMA]
+        if len(branches) == 1 and isinstance(branches[0], dict):
+            rest = {k: v for k, v in out.items() if k not in ("anyOf", "default")}
+            return {**branches[0], **rest}
+    return out
+
+
+def _compact_tool_schemas(server: FastMCP) -> None:
+    """Compact every registered tool's advertised input schema in place (#163).
+
+    Uses mcp 1.x's ``FastMCP._tool_manager``; the mcp 2.x migration (#114) must keep
+    this behavior (``TestServedSchemas`` checks what a real client session receives).
+    """
+    for tool in server._tool_manager.list_tools():
+        tool.parameters = _compact_schema(tool.parameters)
+
+
+# A comment that fills its whole line (allowing indentation) goes with its line break;
+# anywhere else only the comment goes, so the text around it keeps its line breaks.
+# The whole-line alternative must not cross a "-->": with DOTALL a lazy ".*?" would
+# otherwise run on past a comment that has text after it, to a later "-->", and
+# delete the instruction text between them (QA round 1, #164).
+_HTML_COMMENT = re.compile(
+    r"^[ \t]*<!--(?:(?!-->).)*-->[ \t]*\n|<!--.*?-->", re.DOTALL | re.MULTILINE
+)
+
+
+def _strip_html_comments(text: str) -> str:
+    """Remove ``<!-- ... -->`` blocks from instruction text.
+
+    A comment on a line of its own is removed with that line; elsewhere only the comment
+    is removed, so it never joins the lines around it.
+
+    Comments are notes for whoever edits the file. Stripping happens before
+    ``format_map``, so a comment's ``{placeholders}`` are never filled in and sent to the
+    model, and can't raise ``KeyError``. An unclosed ``<!--`` is left as written (#163).
+    """
+    return _HTML_COMMENT.sub("", text)
 
 
 class SharedClientManager:
@@ -344,15 +411,23 @@ def create_server(config: AppConfig) -> FastMCP:
         # They can copy the built-in server.md as a starting point.
         instructions_path = Path(config.instructions_file).expanduser()
         try:
-            instructions = instructions_path.read_text(encoding="utf-8").strip()
+            instructions = _strip_html_comments(
+                instructions_path.read_text(encoding="utf-8")
+            ).strip()
         except OSError as e:
             logger.error("Failed to load instructions_file '%s': %s", instructions_path, e)
-            instructions = _BASE_INSTRUCTIONS
+            instructions = _strip_html_comments(_BASE_INSTRUCTIONS)
     elif config.custom_instructions:
         # Prepend custom instructions before base — gives them priority.
-        instructions = config.custom_instructions.strip() + "\n\n" + _BASE_INSTRUCTIONS
+        # Strip each source on its own: an unclosed `<!--` in the custom text must not
+        # pair with a `-->` in the base file and swallow the text between them.
+        instructions = (
+            _strip_html_comments(config.custom_instructions).strip()
+            + "\n\n"
+            + _strip_html_comments(_BASE_INSTRUCTIONS)
+        )
     else:
-        instructions = _BASE_INSTRUCTIONS
+        instructions = _strip_html_comments(_BASE_INSTRUCTIONS)
 
     instructions = instructions.format_map(template_vars)
 
@@ -412,4 +487,5 @@ def create_server(config: AppConfig) -> FastMCP:
         )
         module.register(ctx)
 
+    _compact_tool_schemas(server)
     return server

@@ -66,3 +66,26 @@ jobs:
         if: matrix.python-version == '3.12'
         with:
           files: coverage.xml
+
+  tool-quality:
+    # Report only (#163): payload size, mcpscore and tdqs lint for an offline
+    # all-modules config. Promote to a gate separately once its output is stable.
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      # Measure the PR's own head, not the merge commit actions/checkout picks for a
+      # pull_request, so the report's git_sha is a branch commit (#164 QA R1).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          python-version: "3.12"
+      - run: uv sync --extra dev
+      - name: Measure tool payload
+        run: uv run python scripts/measure_tools.py --out tool-quality.json >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tool-quality
+          path: tool-quality.json

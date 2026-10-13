@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Added
+
+- **`scripts/measure_tools.py` and a `tool-quality` CI report** (#164) — for an offline all-modules config it reports the payload a model receives before any conversation: size in characters, exact Claude token counts (`count_tokens`, with `ANTHROPIC_API_KEY`), optional Ollama prompt tokens, mcpscore 1.22.1 and `tdqs lint` 0.1.0 (pinned; mcpscore never calls a tool), and optionally `tdqs score` graded by Claude. `--compare` prints the change against an earlier report. CI runs it on every PR as a non-blocking job and attaches the report — closes #163
+
+### Changed
+
+- **About 25% fewer tokens before every conversation** (#164) — tool input schemas no longer carry pydantic's auto-generated `title` fields or `anyOf: [T, null]` unions on optional parameters, and HTML comments (`<!-- ... -->`) are removed from server instructions before sending, in the built-in file, `custom_instructions` and `instructions_file` alike. With all three modules enabled, the payload falls from 20,805 to 15,728 characters, or from 9,115 to 6,873 tokens on the Claude 5.5 tokenizer. Tool names, descriptions, parameters and argument validation are unchanged: an explicit `null` for an optional parameter is still accepted. A test now guards the payload size — closes #163
+
 ## 0.6.0 (2026-10-12)
 
 ### Added
