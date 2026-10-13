@@ -16,6 +16,8 @@ from mcp_synology.core.formatting import (
 from mcp_synology.modules.filestation.helpers import (
     dsm_str,
     ensure_recycle_status,
+    find_missing_paths,
+    missing_paths_suggestion,
     normalize_path,
 )
 
@@ -168,6 +170,57 @@ async def move_files(
     )
 
 
+_PAST_TENSE = {"Copy": "copied", "Move": "moved", "Restore": "restored", "Delete": "deleted"}
+
+
+def _collapse_overlaps(paths: list[str], *, drop_nested: bool = True) -> list[str]:
+    """Drop repeated paths and paths inside another listed path, keeping order (QA R1 on
+    #173). Each path runs as its own DSM task, so a child of an earlier path, or the same
+    path twice, would run after the first task had already removed it.
+
+    Copy passes ``drop_nested=False`` (QA R2 on #173): copying ``/a`` and ``/a/b`` is two
+    copies, ``dest/a`` and ``dest/b``, and the child still exists after the parent's copy.
+    """
+    out: list[str] = []
+    for p in paths:
+        if p in out:
+            continue
+        if drop_nested and any(p != q and p.startswith(q.rstrip("/") + "/") for q in paths):
+            continue
+        out.append(p)
+    return out
+
+
+def _already_done(operation: str, done: list[str] | None) -> str:
+    """Name the items a multi-path operation finished before a later one failed."""
+    if not done:
+        return ""
+    return f". Already {_PAST_TENSE.get(operation, 'processed')} before this failure: " + ", ".join(
+        done
+    )
+
+
+async def _refuse_missing_sources(
+    client: DsmClient, operation: str, checked: list[str], original: list[str]
+) -> None:
+    """Refuse the whole call before anything moves if any source is missing (#162 policy)."""
+    try:
+        missing = await find_missing_paths(client, checked)
+    except SynologyError as e:
+        synology_error_response(f"{operation} files", e)
+    if missing:
+        error_response(
+            ErrorCode.NOT_FOUND,
+            f"{operation} files refused: not found: "
+            + "; ".join(f"{p} (DSM error {code})" for p, code in missing)
+            + f". Nothing was {_PAST_TENSE.get(operation, 'processed')}.",
+            retryable=False,
+            param="paths",
+            value=original,
+            suggestion=missing_paths_suggestion(missing),
+        )
+
+
 async def _copy_move_one_path(
     client: DsmClient,
     path: str,
@@ -178,6 +231,7 @@ async def _copy_move_one_path(
     operation: str,
     copymove_version: int,
     timeout: float,
+    done: list[str] | None = None,
 ) -> int:
     """Copy or move a single path via DSM async-task pattern.
 
@@ -259,8 +313,33 @@ async def _copy_move_one_path(
         mapped = error_from_code(err_code, "SYNO.FileStation.CopyMove")
         error_response(
             mapped.error_code,
-            f"{operation} files failed: DSM error code {err_code} on path: {err_path}",
+            f"{operation} files failed: DSM error code {err_code} on path: {err_path}"
+            + _already_done(operation, done),
             retryable=mapped.retryable,
+            suggestion=(
+                mapped.suggestion
+                or "Check that source paths exist and you have permission to access them."
+            ),
+        )
+
+    errors = status.get("errors")
+    if isinstance(errors, list) and errors:
+        # A missing source finishes without an `error` key: DSM lists it under `errors`
+        # instead ({"code": 408, "path": ...}; DSM 7.1 and 7.2.2). Same class as #162.
+        failed = [
+            (str(e.get("path") or path), int(e.get("code", 0)))
+            for e in errors
+            if isinstance(e, dict)
+        ]
+        mapped = error_from_code(failed[0][1] if failed else 0, "SYNO.FileStation.CopyMove")
+        error_response(
+            mapped.error_code,
+            f"{operation} files failed: "
+            + "; ".join(f"{p} (DSM error {code})" for p, code in failed)
+            + _already_done(operation, done),
+            retryable=mapped.retryable,
+            param="paths",
+            value=path,
             suggestion=(
                 mapped.suggestion
                 or "Check that source paths exist and you have permission to access them."
@@ -280,6 +359,8 @@ async def _copy_move(
     remove_src: bool,
     operation: str,
     timeout: float = 120.0,
+    check_sources: bool = True,
+    already_done: list[str] | None = None,
 ) -> str:
     """Shared implementation for copy and move operations.
 
@@ -306,14 +387,18 @@ async def _copy_move(
             suggestion="Pass at least one path.",
         )
 
-    normalized = [normalize_path(p) for p in paths]
+    normalized = _collapse_overlaps([normalize_path(p) for p in paths], drop_nested=remove_src)
     dest = normalize_path(dest_folder)
 
     # Pin to version 2 — v3 uses JSON request format with different
     # parameter encoding that our path-as-form-param shape doesn't support.
     copymove_version = min(2, client.negotiate_version("SYNO.FileStation.CopyMove", max_version=2))
 
+    if check_sources:
+        await _refuse_missing_sources(client, operation, normalized, paths)
+
     total_processed = 0
+    done = list(already_done or [])
     for p in normalized:
         total_processed += await _copy_move_one_path(
             client,
@@ -324,7 +409,9 @@ async def _copy_move(
             operation=operation,
             copymove_version=copymove_version,
             timeout=timeout,
+            done=done,
         )
+        done.append(p)
 
     verb = "Copied" if not remove_src else "Moved"
     lines = [format_status(f"{verb} {len(normalized)} item(s) to {dest}/:")]
@@ -347,6 +434,7 @@ async def _delete_one_path(
     recursive: bool,
     delete_version: int,
     timeout: float,
+    done: list[str] | None = None,
 ) -> None:
     """Delete a single path via DSM async-task pattern.
 
@@ -397,13 +485,17 @@ async def _delete_one_path(
         else:
             timed_out = True
     finally:
-        await _stop_background_task(
-            client,
-            "SYNO.FileStation.Delete",
-            taskid,
-            delete_version,
-            logger,
-        )
+        # DSM releases a finished Delete task itself: `stop` then always answers 401
+        # (DSM 7.1 and 7.2.2), which logged a cleanup warning on every delete. Stop
+        # only a task that didn't finish (timeout, polling error, cancellation).
+        if not status.get("finished", False):
+            await _stop_background_task(
+                client,
+                "SYNO.FileStation.Delete",
+                taskid,
+                delete_version,
+                logger,
+            )
 
     if poll_error:
         synology_error_response("Delete files", poll_error)
@@ -430,6 +522,47 @@ async def _delete_one_path(
                 mapped.suggestion
                 or "Check that paths exist and you have permission to delete them."
             ),
+        )
+
+    errors = status.get("errors")
+    if isinstance(errors, list) and errors:
+        # Like CopyMove, a Delete task can finish without an `error` key and list per-item
+        # failures under `errors` instead, e.g. 900 for a non-recursive delete of a
+        # non-empty folder, which stays in place (QA R1 on #173).
+        failed = [
+            (str(e.get("path") or path), int(e.get("code", 0)))
+            for e in errors
+            if isinstance(e, dict)
+        ]
+        mapped = error_from_code(failed[0][1] if failed else 0, "SYNO.FileStation.Delete")
+        suggestion = mapped.suggestion or "Check that paths exist and you have permission."
+        if not recursive:
+            suggestion = (
+                "A folder that isn't empty can't be deleted with recursive=false; "
+                "pass recursive=true to delete it with its contents. " + suggestion
+            )
+        error_response(
+            mapped.error_code,
+            "Delete files failed: "
+            + "; ".join(f"{p} (DSM error {code})" for p, code in failed)
+            + _already_done("Delete", done),
+            retryable=mapped.retryable,
+            param="paths",
+            value=path,
+            suggestion=suggestion,
+        )
+
+    if status.get("total") == -1:
+        # DSM's "nothing found" signature: finished, total -1, empty path (#162). The
+        # pre-check saw the path, so it disappeared before the task ran.
+        error_response(
+            ErrorCode.NOT_FOUND,
+            f"Delete files failed: {path} was not found when the delete ran, so nothing "
+            "was deleted for it" + (_already_done("Delete", done) or "."),
+            retryable=False,
+            param="paths",
+            value=path,
+            suggestion=missing_paths_suggestion([(path, 408)]),
         )
 
 
@@ -466,11 +599,30 @@ async def delete_files(
             suggestion="Pass at least one path.",
         )
 
-    normalized = [normalize_path(p) for p in paths]
+    normalized = _collapse_overlaps([normalize_path(p) for p in paths])
+
+    # Refuse the whole call if any path is missing (#162): DSM "deletes" a missing path
+    # without an error, and a partial delete of a mistyped list is worse than none.
+    try:
+        missing = await find_missing_paths(client, normalized)
+    except SynologyError as e:
+        synology_error_response("Delete files", e)
+    if missing:
+        error_response(
+            ErrorCode.NOT_FOUND,
+            "Delete files refused: not found: "
+            + "; ".join(f"{p} (DSM error {code})" for p, code in missing)
+            + ". Nothing was deleted.",
+            retryable=False,
+            param="paths",
+            value=paths,
+            suggestion=missing_paths_suggestion(missing),
+        )
 
     # Pin to v2 — v3 uses JSON request format with different parameter encoding.
     delete_version = min(2, client.negotiate_version("SYNO.FileStation.Delete", max_version=2))
 
+    deleted: list[str] = []
     for p in normalized:
         await _delete_one_path(
             client,
@@ -478,7 +630,9 @@ async def delete_files(
             recursive=recursive,
             delete_version=delete_version,
             timeout=timeout,
+            done=deleted,
         )
+        deleted.append(p)
 
     # Determine recycle bin status per share. Probes lazily on first observation
     # via `ensure_recycle_status` so the dict stays empty until we actually need
@@ -562,11 +716,14 @@ async def restore_from_recycle_bin(
             original = full_paths[-1].replace(f"/{share_name}/#recycle", f"/{share_name}")
             restore_destinations.append("/".join(original.split("/")[:-1]) or f"/{share_name}")
 
+    await _refuse_missing_sources(client, "Restore", full_paths, paths)
+
     # Use the first destination (or provided dest_folder)
     actual_dest = dest_folder or restore_destinations[0]
     if dest_folder is None and len(set(restore_destinations)) > 1:
         # Multiple different destinations — move each one separately
         results: list[str] = []
+        restored: list[str] = []
         for fp, dest in zip(full_paths, restore_destinations, strict=False):
             r = await _copy_move(
                 client,
@@ -576,8 +733,11 @@ async def restore_from_recycle_bin(
                 remove_src=True,
                 operation="Restore",
                 timeout=timeout,
+                check_sources=False,
+                already_done=restored,
             )
             results.append(r)
+            restored.append(fp)
         return "\n".join(results)
 
     result = await _copy_move(
@@ -588,6 +748,7 @@ async def restore_from_recycle_bin(
         remove_src=True,
         operation="Restore",
         timeout=timeout,
+        check_sources=False,
     )
 
     # Rephrase from "Moved" to "Restored"

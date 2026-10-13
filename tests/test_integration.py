@@ -1260,17 +1260,170 @@ class TestErrorHandling:
         logger.info("copy invalid source raised ToolError: %s", exc_info.value)
 
     async def test_delete_invalid_path(self, nas_client: Any) -> None:
-        """Delete a non-existent path should raise ToolError or succeed silently."""
-        client, _, config, paths = _unpack(nas_client)
+        """Deleting a path that doesn't exist is refused, never reported as deleted (#162).
+
+        This test used to accept a silent success: DSM finishes the Delete task for a
+        missing path without an error (total -1), and the tool reported "Deleted".
+        """
+        client, _, config, _ = _unpack(nas_client)
         _skip_unless_write(config)
 
-        # May succeed silently (DSM doesn't always error on missing paths)
-        # or raise ToolError. Either way, should not crash.
+        with pytest.raises(ToolError) as exc_info:
+            await delete_files(client, paths=["/zzz_nonexistent_999/fake.txt"])
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "not_found"
+        assert "Nothing was deleted" in body["error"]["message"]
+
+    async def test_delete_missing_file_in_real_share_refuses_whole_call(
+        self, nas_client: Any
+    ) -> None:
+        """One missing path refuses the whole call: the existing path isn't deleted (#162)."""
+        client, _, config, paths = _unpack(nas_client)
+        _skip_unless_write(config)
+        base = paths["writable_folder"].rstrip("/")
+        await create_folder(client, paths=[f"{base}/mcp_keep_me"])
         try:
-            result = await delete_files(client, paths=["/zzz_nonexistent_999/fake.txt"])
-            logger.info("delete invalid path:\n%s", result)
-        except ToolError as e:
-            logger.info("delete invalid path raised ToolError: %s", e)
+            with pytest.raises(ToolError) as exc_info:
+                await delete_files(client, paths=[f"{base}/mcp_keep_me", f"{base}/mcp_no_such"])
+            assert json.loads(str(exc_info.value))["error"]["code"] == "not_found"
+            info = await get_file_info(client, paths=[f"{base}/mcp_keep_me"])
+            assert "mcp_keep_me" in info  # still there
+        finally:
+            await delete_files(client, paths=[f"{base}/mcp_keep_me"])
+
+    async def test_delete_real_folder_still_deleted(self, nas_client: Any) -> None:
+        """A real delete still works (and no longer logs a cleanup warning) after #162."""
+        client, _, config, paths = _unpack(nas_client)
+        _skip_unless_write(config)
+        target = f"{paths['writable_folder'].rstrip('/')}/mcp_delete_me"
+        await create_folder(client, paths=[target])
+        result = await delete_files(client, paths=[target])
+        assert "Deleted" in result or "deleted" in result
+        with pytest.raises(ToolError) as exc_info:
+            await get_file_info(client, paths=[target])
+        assert json.loads(str(exc_info.value))["error"]["code"] == "not_found"
+
+    async def test_get_file_info_missing_path_is_not_found(self, nas_client: Any) -> None:
+        """A missing path is a not_found error, not a blank File entry (#161)."""
+        client, _, _, paths = _unpack(nas_client)
+        with pytest.raises(ToolError) as exc_info:
+            await get_file_info(
+                client, paths=[f"{paths['writable_folder'].rstrip('/')}/mcp_no_such"]
+            )
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "not_found"
+        assert "mcp_no_such" in body["error"]["message"]
+
+    async def test_copy_missing_source_in_real_share_is_not_found(self, nas_client: Any) -> None:
+        """Copying a missing source fails instead of reporting success (#162 class)."""
+        client, _, config, paths = _unpack(nas_client)
+        _skip_unless_write(config)
+        base = paths["writable_folder"].rstrip("/")
+        with pytest.raises(ToolError) as exc_info:
+            await copy_files(client, paths=[f"{base}/mcp_no_such"], dest_folder=base)
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "not_found"
+        assert "mcp_no_such" in body["error"]["message"]
+
+    async def test_move_with_one_missing_source_moves_nothing(self, nas_client: Any) -> None:
+        """One missing source refuses the whole move; the existing source stays put."""
+        client, _, config, paths = _unpack(nas_client)
+        _skip_unless_write(config)
+        base = paths["writable_folder"].rstrip("/")
+        await create_folder(client, paths=[f"{base}/mcp_mv_src", f"{base}/mcp_mv_dst"])
+        try:
+            with pytest.raises(ToolError) as exc_info:
+                await move_files(
+                    client,
+                    paths=[f"{base}/mcp_mv_src", f"{base}/mcp_no_such"],
+                    dest_folder=f"{base}/mcp_mv_dst",
+                )
+            error = json.loads(str(exc_info.value))["error"]
+            assert error["code"] == "not_found"
+            assert "Nothing was moved" in error["message"]
+            assert "mcp_mv_src" in await get_file_info(client, paths=[f"{base}/mcp_mv_src"])
+        finally:
+            await delete_files(client, paths=[f"{base}/mcp_mv_src", f"{base}/mcp_mv_dst"])
+
+    async def test_share_names_are_case_insensitive(self, nas_client: Any) -> None:
+        """QA R1 (#173): DSM accepts a differently cased share name, so the tools must too."""
+        from mcp_synology.server import create_server
+
+        _, _, config, paths = _unpack(nas_client)
+        share = paths["writable_folder"].strip("/").split("/")[0]
+        tools = create_server(config)._tool_manager._tools
+        result = await tools["list_files"].fn(path=f"/{share.upper()}")
+        assert "Unknown shared folder" not in result
+
+    async def test_non_recursive_delete_of_non_empty_folder_is_an_error(
+        self, nas_client: Any
+    ) -> None:
+        """QA R1 (#173): DSM leaves the folder and lists 900 under `errors`; not "Deleted"."""
+        client, _, config, paths = _unpack(nas_client)
+        _skip_unless_write(config)
+        base = paths["writable_folder"].rstrip("/")
+        await create_folder(client, paths=[f"{base}/mcp_nonempty/sub"])
+        try:
+            with pytest.raises(ToolError) as exc_info:
+                await delete_files(client, paths=[f"{base}/mcp_nonempty"], recursive=False)
+            error = json.loads(str(exc_info.value))["error"]
+            assert "recursive=true" in (error.get("suggestion") or "")
+            assert "mcp_nonempty" in await get_file_info(client, paths=[f"{base}/mcp_nonempty"])
+        finally:
+            await delete_files(client, paths=[f"{base}/mcp_nonempty"])
+
+    async def test_delete_parent_and_child_together(self, nas_client: Any) -> None:
+        """QA R1 (#173): a child listed with its parent no longer fails after the delete."""
+        client, _, config, paths = _unpack(nas_client)
+        _skip_unless_write(config)
+        base = paths["writable_folder"].rstrip("/")
+        await create_folder(client, paths=[f"{base}/mcp_overlap/child"])
+        result = await delete_files(
+            client,
+            paths=[f"{base}/mcp_overlap", f"{base}/mcp_overlap/child", f"{base}/mcp_overlap/"],
+        )
+        assert "1 item(s)" in result
+        with pytest.raises(ToolError):
+            await get_file_info(client, paths=[f"{base}/mcp_overlap"])
+
+    async def test_copy_parent_and_child_copies_both(self, nas_client: Any) -> None:
+        """QA R2 (#173): copying a folder and a path inside it makes both copies."""
+        client, _, config, paths = _unpack(nas_client)
+        _skip_unless_write(config)
+        base = paths["writable_folder"].rstrip("/")
+        src, dest = f"{base}/mcp_cp_overlap/a", f"{base}/mcp_cp_overlap_dest"
+        await create_folder(client, paths=[f"{src}/b", dest])
+        try:
+            result = await copy_files(client, paths=[src, f"{src}/b"], dest_folder=dest)
+            assert "Copied 2 item(s)" in result
+            # One path per call: a mixed request reports a missing path inline, not raised.
+            for copied in (f"{dest}/a/b", f"{dest}/b"):
+                await get_file_info(client, paths=[copied])
+        finally:
+            await delete_files(client, paths=[f"{base}/mcp_cp_overlap", dest])
+
+    async def test_unknown_share_rejected_by_the_tools(self, nas_client: Any) -> None:
+        """Through the real server: an unknown share gets not_found naming real shares (#160).
+
+        Before #160, create_folder answered DSM 1100 "Insufficient filesystem permissions"
+        and delete_files DSM 900 "Unexpected server error".
+        """
+        from mcp_synology.server import create_server
+
+        _, _, config, _ = _unpack(nas_client)
+        _skip_unless_write(config)
+        tools = create_server(config)._tool_manager._tools
+        for name, kwargs in (
+            ("create_folder", {"paths": ["/zzz_nonexistent_999/new"]}),
+            ("delete_files", {"paths": ["/zzz_nonexistent_999/x"]}),
+            ("list_files", {"path": "/zzz_nonexistent_999"}),
+        ):
+            with pytest.raises(ToolError) as exc_info:
+                await tools[name].fn(**kwargs)
+            body = json.loads(str(exc_info.value))
+            assert body["error"]["code"] == "not_found", (name, body)
+            assert "zzz_nonexistent_999" in body["error"]["message"], name
+            assert "list_shares" in body["error"]["message"], name
 
     async def test_rename_invalid_path(self, nas_client: Any) -> None:
         """Rename a non-existent path should raise ToolError."""

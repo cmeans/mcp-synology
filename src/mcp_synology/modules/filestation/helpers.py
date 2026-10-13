@@ -174,7 +174,9 @@ def validate_share_path(path: str, known_shares: set[str]) -> str | None:
     if share == "#recycle":
         return f"Invalid path '{path}': must start with a shared folder name, not #recycle."
 
-    if share not in known_shares:
+    # DSM share names aren't case-sensitive: /TESTSHARE/... works for share "testshare"
+    # (DSM 7.1 and 7.2.2; QA R1 on #173).
+    if share.casefold() not in {s.casefold() for s in known_shares}:
         available = ", ".join(sorted(known_shares)) if known_shares else "(none)"
         return (
             f"Unknown shared folder '{share}'. "
@@ -368,3 +370,87 @@ def correct_recycle_status_from_observation(
         observed_enabled,
     )
     recycle_status[share_name] = observed_enabled
+
+
+_WILDCARD_CHARS = ("*", "?")
+
+
+async def find_missing_paths(client: DsmClient, paths: list[str]) -> list[tuple[str, int]]:
+    """Return ``(path, dsm_code)`` for each path that ``getinfo`` reports as missing.
+
+    DSM answers a missing path with a per-file ``{"code": 408, "path": ...}`` entry rather
+    than a failed request (DSM 7.1 and 7.2.2; #161, #162). An answer with no entry for a
+    path proves nothing either way, so that path isn't reported. A failed request raises
+    ``SynologyError`` for the caller to map.
+    """
+    version = min(2, client.negotiate_version("SYNO.FileStation.List", max_version=2))
+    missing: list[tuple[str, int]] = []
+    for path in paths:
+        data = await client.request(
+            "SYNO.FileStation.List", "getinfo", version=version, params={"path": path}
+        )
+        for entry in data.get("files", []):
+            if "code" in entry:
+                missing.append((str(entry.get("path") or path), int(entry["code"])))
+    return missing
+
+
+def missing_paths_suggestion(missing: list[tuple[str, int]]) -> str:
+    """Suggestion for a call refused because paths don't exist (adds a wildcard hint)."""
+    suggestion = (
+        "Check the paths with list_files or search_files, then retry with paths that exist."
+    )
+    if any(ch in path for path, _ in missing for ch in _WILDCARD_CHARS):
+        suggestion += (
+            " Paths are literal, not wildcard patterns: use search_files (or list_files with a "
+            "pattern) to find the files, then pass their full paths."
+        )
+    return suggestion
+
+
+async def _refresh_known_shares(client: DsmClient, known_shares: set[str]) -> bool:
+    """Reload ``known_shares`` from ``list_share``; return False if DSM won't say."""
+    try:
+        data = await client.request("SYNO.FileStation.List", "list_share", params={})
+    except SynologyError as e:
+        logger.warning("Couldn't list shared folders to validate paths (DSM %s): %s", e.code, e)
+        return False
+    known_shares.clear()
+    known_shares.update(str(s["name"]) for s in data.get("shares", []) if s.get("name"))
+    logger.debug("Known shares: %s", sorted(known_shares))
+    return True
+
+
+async def ensure_known_shares(client: DsmClient, paths: list[str], known_shares: set[str]) -> None:
+    """Raise ``not_found`` for a path whose first component isn't a shared folder (#160).
+
+    ``known_shares`` is a cache owned by the caller (cleared on re-auth). It's filled on
+    first use and reloaded once when a path names a share it doesn't hold, so a share
+    created since is still found. For an account that isn't an admin, the list is the
+    shares it can see, which is what it should be told about. If DSM won't list shares,
+    the check is skipped and DSM's own error stands.
+    """
+    if not paths:
+        return
+
+    def _shares() -> set[str]:
+        return {
+            normalize_path(p).split("/")[1].casefold() for p in paths if len(normalize_path(p)) > 1
+        }
+
+    known = {s.casefold() for s in known_shares}
+    if (not known_shares or not _shares() <= known) and not await _refresh_known_shares(
+        client, known_shares
+    ):
+        return
+    for path in paths:
+        problem = validate_share_path(path, known_shares)
+        if problem:
+            error_response(
+                ErrorCode.NOT_FOUND,
+                problem,
+                retryable=False,
+                param="path",
+                value=path,
+                suggestion="Call list_shares to see the shared folders on this NAS.",
+            )

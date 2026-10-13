@@ -685,12 +685,14 @@ class TestBackgroundTaskErrors:
         def side_effect(request: httpx.Request) -> httpx.Response:
             params = dict(request.url.params)
             method = params.get("method", "")
+            methods.append(method)
             if method == "start":
                 return httpx.Response(200, json={"success": True, "data": {"taskid": "del-1"}})
             if method == "status":
                 return httpx.Response(200, json={"success": True, "data": {"finished": False}})
             return httpx.Response(200, json={"success": True, "data": {}})
 
+        methods: list[str] = []
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
 
         with pytest.raises(ToolError) as exc_info:
@@ -699,6 +701,8 @@ class TestBackgroundTaskErrors:
                 paths=["/video/huge_dir"],
                 timeout=1.0,
             )
+        # An unfinished task must still be stopped (#162 skips stop only when finished).
+        assert "stop" in methods
         body = json.loads(str(exc_info.value))
         assert body["error"]["code"] == "timeout"
         assert body["error"]["retryable"] is True
@@ -718,18 +722,22 @@ class TestBackgroundTaskErrors:
         def side_effect(request: httpx.Request) -> httpx.Response:
             params = dict(request.url.params)
             method = params.get("method", "")
+            methods.append(method)
             if method == "start":
                 return httpx.Response(200, json={"success": True, "data": {"taskid": "del-err"}})
             if method == "status":
                 return httpx.Response(200, json={"success": False, "error": {"code": 402}})
             return httpx.Response(200, json={"success": True, "data": {}})
 
+        methods: list[str] = []
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
 
         with pytest.raises(ToolError) as exc_info:
             await delete_files(mock_client, paths=["/video/file.mkv"])
         body = json.loads(str(exc_info.value))
         assert body["error"]["code"] == "filestation_error"
+        # The poll failed, so the task never reported finished: it must still be stopped.
+        assert "stop" in methods
 
     @respx.mock
     async def test_delete_task_completes_with_error(self, mock_client: DsmClient) -> None:
@@ -842,3 +850,376 @@ class TestRestoreFromRecycleBin:
         body = json.loads(str(exc_info.value))
         assert body["status"] == "error"
         assert body["error"]["code"] == "not_found"
+
+
+class TestDeleteMissingPaths:
+    """#162: a missing path must never be reported as deleted.
+
+    Shapes captured on vdsm DSM 7.1 and 7.2.2 (2026-10-13):
+    - getinfo on a missing path: {"files": [{"code": 408, "path": ...}]}
+    - Delete status for a missing path: {"finished": true, "path": "", "processed_num": 0,
+      "processing_path": "", "progress": 1, "total": -1}
+    - Delete stop on any finished task: error 401
+    """
+
+    MISSING_STATUS = {
+        "finished": True,
+        "path": "",
+        "processed_num": 0,
+        "processing_path": "",
+        "progress": 1,
+        "total": -1,
+    }
+
+    @staticmethod
+    def _dsm(
+        missing: set[str], status: dict[str, object] | None = None
+    ) -> tuple[object, list[str]]:
+        calls: list[str] = []
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            api, method = params.get("api", ""), params.get("method", "")
+            calls.append(f"{api}.{method}")
+            if method == "getinfo":
+                path = params["path"]
+                entry = (
+                    {"code": 408, "path": path}
+                    if path in missing
+                    else {"isdir": False, "name": path.rsplit("/", 1)[-1], "path": path}
+                )
+                return httpx.Response(200, json={"success": True, "data": {"files": [entry]}})
+            if method == "start":
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "t1"}})
+            if method == "status":
+                return httpx.Response(
+                    200,
+                    json={
+                        "success": True,
+                        "data": status or {"finished": True, "total": 1, "path": "/a/x"},
+                    },
+                )
+            if method == "stop":
+                return httpx.Response(200, json={"success": False, "error": {"code": 401}})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        return side_effect, calls
+
+    @respx.mock
+    async def test_missing_path_refused_and_nothing_started(self, mock_client: DsmClient) -> None:
+        side_effect, calls = self._dsm(missing={"/a/gone"})
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        with pytest.raises(ToolError) as exc_info:
+            await delete_files(mock_client, paths=["/a/gone"], recycle_bin_status={"a": True})
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "not_found"
+        assert body["error"]["retryable"] is False
+        assert "/a/gone" in body["error"]["message"]
+        assert "Nothing was deleted" in body["error"]["message"]
+        assert not any(c.endswith(".start") for c in calls), calls
+
+    @respx.mock
+    async def test_one_missing_path_refuses_whole_call(self, mock_client: DsmClient) -> None:
+        side_effect, calls = self._dsm(missing={"/a/gone"})
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        with pytest.raises(ToolError) as exc_info:
+            await delete_files(
+                mock_client, paths=["/a/real.txt", "/a/gone"], recycle_bin_status={"a": True}
+            )
+        message = json.loads(str(exc_info.value))["error"]["message"]
+        assert "/a/gone" in message and "/a/real.txt" not in message
+        assert not any(c.endswith(".start") for c in calls), calls
+
+    @respx.mock
+    async def test_glob_path_gets_a_hint(self, mock_client: DsmClient) -> None:
+        side_effect, _ = self._dsm(missing={"/a/downloads/*"})
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        with pytest.raises(ToolError) as exc_info:
+            await delete_files(mock_client, paths=["/a/downloads/*"], recycle_bin_status={})
+        error = json.loads(str(exc_info.value))["error"]
+        assert "search_files" in (error.get("suggestion") or "")
+        assert "wildcard" in (error.get("suggestion") or "")
+
+    @respx.mock
+    async def test_status_total_minus_one_is_not_found(self, mock_client: DsmClient) -> None:
+        # getinfo saw the path, but it was gone by the time the task ran.
+        side_effect, _ = self._dsm(missing=set(), status=self.MISSING_STATUS)
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        with pytest.raises(ToolError) as exc_info:
+            await delete_files(mock_client, paths=["/a/x"], recycle_bin_status={"a": True})
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "not_found"
+        assert "/a/x" in body["error"]["message"]
+
+    @respx.mock
+    async def test_delete_errors_list_is_an_error_not_success(self, mock_client: DsmClient) -> None:
+        """QA R1 (#173): a non-recursive delete of a non-empty folder finishes with
+        {"errors": [{"code": 900, "path": ...}], "finished": true} and the folder stays."""
+        side_effect, _ = self._dsm(
+            missing=set(),
+            status={"errors": [{"code": 900, "path": "/a/dir"}], "finished": True},
+        )
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        with pytest.raises(ToolError) as exc_info:
+            await delete_files(
+                mock_client, paths=["/a/dir"], recursive=False, recycle_bin_status={"a": True}
+            )
+        error = json.loads(str(exc_info.value))["error"]
+        assert "/a/dir" in error["message"] and "900" in error["message"]
+        assert "recursive=true" in (error.get("suggestion") or "")
+
+    @respx.mock
+    async def test_finished_task_is_not_stopped(
+        self, mock_client: DsmClient, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        side_effect, calls = self._dsm(missing=set())
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        result = await delete_files(mock_client, paths=["/a/x"], recycle_bin_status={"a": True})
+        assert "Deleted" in result
+        assert "SYNO.FileStation.Delete.stop" not in calls, calls
+        assert "cleanup failed" not in caplog.text
+
+
+class TestCopyMoveMissingSource:
+    """Same bug class as #162: CopyMove reports a missing source in an `errors` list.
+
+    Status captured on vdsm DSM 7.1 and 7.2.2 (2026-10-13) for copying a missing file:
+    {"dest_folder_path": "/writable", "errors": [{"code": 408, "path": ...}],
+     "finished": true, "found_dir_num": 0, "found_file_num": 0, "path": "", ...}
+    """
+
+    @staticmethod
+    def _dsm(missing_src: str) -> object:
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            method = dict(request.url.params).get("method", "")
+            if method == "start":
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "c1"}})
+            if method == "status":
+                return httpx.Response(
+                    200,
+                    json={
+                        "success": True,
+                        "data": {
+                            "dest_folder_path": "/writable",
+                            "errors": [{"code": 408, "path": missing_src}],
+                            "finished": True,
+                            "found_dir_num": 0,
+                            "found_file_num": 0,
+                            "found_file_size": 0,
+                            "path": "",
+                            "processed_size": 0,
+                        },
+                    },
+                )
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        return side_effect
+
+    @respx.mock
+    async def test_copy_missing_source_is_not_found(self, mock_client: DsmClient) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm("/writable/gone"))
+        with pytest.raises(ToolError) as exc_info:
+            await copy_files(mock_client, paths=["/writable/gone"], dest_folder="/writable/dst")
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "not_found"
+        assert "/writable/gone" in body["error"]["message"]
+
+    @respx.mock
+    async def test_move_missing_source_is_not_found(self, mock_client: DsmClient) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm("/writable/gone"))
+        with pytest.raises(ToolError) as exc_info:
+            await move_files(mock_client, paths=["/writable/gone"], dest_folder="/writable/dst")
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "not_found"
+        assert "/writable/gone" in body["error"]["message"]
+
+
+class TestCopyMoveRestorePreCheck:
+    """Tier 1 review: refuse the whole copy/move/restore if any source is missing, before
+    anything moves (same policy as delete, #162), and name completed items on a later failure."""
+
+    @staticmethod
+    def _dsm(missing: set[str], fail_status_for: str | None = None) -> tuple[object, list[str]]:
+        calls: list[str] = []
+        started: list[str] = []
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            method = params.get("method", "")
+            calls.append(method)
+            if method == "getinfo":
+                path = params["path"]
+                entry = (
+                    {"code": 408, "path": path}
+                    if path in missing
+                    else {"isdir": False, "name": path.rsplit("/", 1)[-1], "path": path}
+                )
+                return httpx.Response(200, json={"success": True, "data": {"files": [entry]}})
+            if method == "start":
+                started.append(params.get("path", ""))
+                return httpx.Response(
+                    200, json={"success": True, "data": {"taskid": f"t{len(started)}"}}
+                )
+            if method == "status":
+                current = started[-1]
+                if fail_status_for and current == fail_status_for:
+                    data = {
+                        "finished": True,
+                        "errors": [{"code": 408, "path": current}],
+                        "path": "",
+                    }
+                else:
+                    data = {"finished": True, "processed_size": 10, "path": current}
+                return httpx.Response(200, json={"success": True, "data": data})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        return side_effect, calls
+
+    @respx.mock
+    async def test_copy_refused_when_any_source_missing(self, mock_client: DsmClient) -> None:
+        side_effect, calls = self._dsm(missing={"/w/gone"})
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        with pytest.raises(ToolError) as exc_info:
+            await copy_files(mock_client, paths=["/w/a", "/w/gone"], dest_folder="/w/dst")
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "not_found"
+        assert "/w/gone" in error["message"] and "Nothing was copied" in error["message"]
+        assert "start" not in calls, calls
+
+    @respx.mock
+    async def test_move_refused_when_any_source_missing(self, mock_client: DsmClient) -> None:
+        side_effect, calls = self._dsm(missing={"/w/gone"})
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        with pytest.raises(ToolError) as exc_info:
+            await move_files(mock_client, paths=["/w/a", "/w/gone"], dest_folder="/w/dst")
+        error = json.loads(str(exc_info.value))["error"]
+        assert "Nothing was moved" in error["message"]
+        assert "start" not in calls, calls
+
+    @respx.mock
+    async def test_restore_refused_when_any_item_missing(self, mock_client: DsmClient) -> None:
+        side_effect, calls = self._dsm(missing={"/video/#recycle/gone.mkv"})
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        with pytest.raises(ToolError) as exc_info:
+            await restore_from_recycle_bin(
+                mock_client, share="video", paths=["Shows/a.mkv", "gone.mkv"]
+            )
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "not_found"
+        assert "/video/#recycle/gone.mkv" in error["message"]
+        assert "Nothing was restored" in error["message"]
+        assert "start" not in calls, calls
+
+    @respx.mock
+    async def test_multi_destination_restore_names_items_already_restored(
+        self, mock_client: DsmClient
+    ) -> None:
+        # Items from different folders restore one at a time to their own folders; a later
+        # failure must name what was already restored.
+        side_effect, calls = self._dsm(
+            missing=set(), fail_status_for="/video/#recycle/Movies/b.mkv"
+        )
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        with pytest.raises(ToolError) as exc_info:
+            await restore_from_recycle_bin(
+                mock_client, share="video", paths=["Shows/a.mkv", "Movies/b.mkv"]
+            )
+        message = json.loads(str(exc_info.value))["error"]["message"]
+        assert "/video/#recycle/Movies/b.mkv" in message
+        assert "Already restored before this failure: /video/#recycle/Shows/a.mkv" in message
+        assert calls.count("start") == 2
+
+    @respx.mock
+    async def test_later_failure_names_items_already_moved(self, mock_client: DsmClient) -> None:
+        # Both sources exist at the check; the second fails while moving (e.g. removed meanwhile).
+        side_effect, _ = self._dsm(missing=set(), fail_status_for="/w/b")
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        with pytest.raises(ToolError) as exc_info:
+            await move_files(mock_client, paths=["/w/a", "/w/b"], dest_folder="/w/dst")
+        message = json.loads(str(exc_info.value))["error"]["message"]
+        assert "/w/b" in message
+        assert "Already moved before this failure: /w/a" in message
+
+
+class TestOverlappingPaths:
+    """QA R1 (#173): a path listed twice, or a path inside another listed path, ran a second
+    task after the first had already removed it; its total -1 then read as "not found" after
+    a successful delete. Overlaps are collapsed before anything runs."""
+
+    @staticmethod
+    def _dsm(missing_at_status: set[str] | None = None) -> tuple[object, list[str]]:
+        started: list[str] = []
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            method = params.get("method", "")
+            if method == "getinfo":
+                path = params["path"]
+                entry = {"isdir": True, "name": path.rsplit("/", 1)[-1], "path": path}
+                return httpx.Response(200, json={"success": True, "data": {"files": [entry]}})
+            if method == "start":
+                started.append(params.get("path", ""))
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "t"}})
+            if method == "status":
+                cur = started[-1]
+                if missing_at_status and cur in missing_at_status:
+                    data: dict[str, object] = {"finished": True, "path": "", "total": -1}
+                else:
+                    data = {"finished": True, "path": cur, "total": 1, "processed_size": 0}
+                return httpx.Response(200, json={"success": True, "data": data})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        return side_effect, started
+
+    @respx.mock
+    async def test_delete_drops_child_of_listed_parent(self, mock_client: DsmClient) -> None:
+        side_effect, started = self._dsm()
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        result = await delete_files(
+            mock_client, paths=["/a/n", "/a/n/child"], recycle_bin_status={"a": True}
+        )
+        assert started == ["/a/n"]
+        assert "Deleted 1 item(s)" in result
+
+    @respx.mock
+    async def test_delete_drops_duplicate_after_normalization(self, mock_client: DsmClient) -> None:
+        side_effect, started = self._dsm()
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        await delete_files(mock_client, paths=["/a/dup/", "a/dup"], recycle_bin_status={"a": True})
+        assert started == ["/a/dup"]
+
+    @respx.mock
+    async def test_move_drops_child_of_listed_parent(self, mock_client: DsmClient) -> None:
+        side_effect, started = self._dsm()
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        await move_files(mock_client, paths=["/a/n/child", "/a/n"], dest_folder="/b")
+        assert started == ["/a/n"]
+
+    @respx.mock
+    async def test_copy_keeps_child_of_listed_parent(self, mock_client: DsmClient) -> None:
+        """QA R2 (#173): copying /a and /a/b is two copies (dest/a and dest/b); the child is
+        still there after the parent's copy, so it must not be dropped."""
+        side_effect, started = self._dsm()
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        result = await copy_files(mock_client, paths=["/a/n", "/a/n/child"], dest_folder="/b")
+        assert started == ["/a/n", "/a/n/child"]
+        assert "Copied 2 item(s)" in result
+
+    @respx.mock
+    async def test_copy_drops_duplicate_after_normalization(self, mock_client: DsmClient) -> None:
+        side_effect, started = self._dsm()
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        await copy_files(mock_client, paths=["/a/dup/", "a/dup"], dest_folder="/b")
+        assert started == ["/a/dup"]
+
+    @respx.mock
+    async def test_later_delete_failure_names_paths_already_deleted(
+        self, mock_client: DsmClient
+    ) -> None:
+        side_effect, _ = self._dsm(missing_at_status={"/a/y"})
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        with pytest.raises(ToolError) as exc_info:
+            await delete_files(mock_client, paths=["/a/x", "/a/y"], recycle_bin_status={"a": True})
+        message = json.loads(str(exc_info.value))["error"]["message"]
+        assert "/a/y" in message
+        assert "Already deleted before this failure: /a/x" in message

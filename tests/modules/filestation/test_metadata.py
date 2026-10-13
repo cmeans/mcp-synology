@@ -192,6 +192,69 @@ class TestGetFileInfo:
         assert body["error"]["value"] == ["/video/missing1", "/video/missing2"]
 
 
+class TestGetFileInfoMissingPaths:
+    """#161: getinfo reports a missing path as a per-file `code`, not a request error.
+
+    Shape captured on vdsm DSM 7.1 and 7.2.2 (2026-10-13), for a missing file in a real
+    share and for an unknown share alike.
+    """
+
+    @staticmethod
+    def _found(path: str) -> dict[str, object]:
+        return {"isdir": False, "name": path.rsplit("/", 1)[-1], "path": path}
+
+    @staticmethod
+    def _missing(path: str) -> dict[str, object]:
+        return {"code": 408, "path": path}
+
+    def _route(self, by_path: dict[str, dict[str, object]]) -> None:
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            path = request.url.params["path"]
+            return httpx.Response(200, json={"success": True, "data": {"files": [by_path[path]]}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+
+    @respx.mock
+    async def test_single_missing_path_is_not_found(self, mock_client: DsmClient) -> None:
+        self._route({"/writable/nope": self._missing("/writable/nope")})
+        with pytest.raises(ToolError) as exc_info:
+            await get_file_info(mock_client, paths=["/writable/nope"])
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "not_found"
+        assert body["error"]["retryable"] is False
+        assert "/writable/nope" in body["error"]["message"]
+        assert body["error"]["param"] == "paths"
+
+    @respx.mock
+    async def test_all_missing_paths_named_in_error(self, mock_client: DsmClient) -> None:
+        self._route({"/a/x": self._missing("/a/x"), "/a/y": self._missing("/a/y")})
+        with pytest.raises(ToolError) as exc_info:
+            await get_file_info(mock_client, paths=["/a/x", "/a/y"])
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "not_found"
+        assert "/a/x" in body["error"]["message"]
+        assert "/a/y" in body["error"]["message"]
+
+    @respx.mock
+    async def test_mixed_shows_found_and_lists_missing(self, mock_client: DsmClient) -> None:
+        self._route(
+            {"/a/real.txt": self._found("/a/real.txt"), "/a/gone": self._missing("/a/gone")}
+        )
+        result = await get_file_info(mock_client, paths=["/a/real.txt", "/a/gone"])
+        assert "real.txt" in result
+        assert "Not found: /a/gone" in result
+        assert "Name:  \n" not in result  # no blank card for the missing path
+
+    @respx.mock
+    async def test_missing_path_never_rendered_as_a_file(self, mock_client: DsmClient) -> None:
+        self._route(
+            {"/a/real.txt": self._found("/a/real.txt"), "/a/gone": self._missing("/a/gone")}
+        )
+        result = await get_file_info(mock_client, paths=["/a/real.txt", "/a/gone"])
+        rows = [line for line in result.splitlines() if "/a/gone" in line]
+        assert all("File" not in line and "Directory" not in line for line in rows), rows
+
+
 class TestGetDirSize:
     @respx.mock
     async def test_dir_size_success(self, mock_client: DsmClient) -> None:
