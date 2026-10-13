@@ -404,3 +404,48 @@ def missing_paths_suggestion(missing: list[tuple[str, int]]) -> str:
             "pattern) to find the files, then pass their full paths."
         )
     return suggestion
+
+
+async def _refresh_known_shares(client: DsmClient, known_shares: set[str]) -> bool:
+    """Reload ``known_shares`` from ``list_share``; return False if DSM won't say."""
+    try:
+        data = await client.request("SYNO.FileStation.List", "list_share", params={})
+    except SynologyError as e:
+        logger.warning("Couldn't list shared folders to validate paths (DSM %s): %s", e.code, e)
+        return False
+    known_shares.clear()
+    known_shares.update(str(s["name"]) for s in data.get("shares", []) if s.get("name"))
+    logger.debug("Known shares: %s", sorted(known_shares))
+    return True
+
+
+async def ensure_known_shares(client: DsmClient, paths: list[str], known_shares: set[str]) -> None:
+    """Raise ``not_found`` for a path whose first component isn't a shared folder (#160).
+
+    ``known_shares`` is a cache owned by the caller (cleared on re-auth). It's filled on
+    first use and reloaded once when a path names a share it doesn't hold, so a share
+    created since is still found. For an account that isn't an admin, the list is the
+    shares it can see, which is what it should be told about. If DSM won't list shares,
+    the check is skipped and DSM's own error stands.
+    """
+    if not paths:
+        return
+
+    def _shares() -> set[str]:
+        return {normalize_path(p).split("/")[1] for p in paths if len(normalize_path(p)) > 1}
+
+    if (not known_shares or not _shares() <= known_shares) and not await _refresh_known_shares(
+        client, known_shares
+    ):
+        return
+    for path in paths:
+        problem = validate_share_path(path, known_shares)
+        if problem:
+            error_response(
+                ErrorCode.NOT_FOUND,
+                problem,
+                retryable=False,
+                param="path",
+                value=path,
+                suggestion="Call list_shares to see the shared folders on this NAS.",
+            )

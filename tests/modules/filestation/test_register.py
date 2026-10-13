@@ -19,16 +19,15 @@ captures `report_progress` calls.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import json
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.exceptions import ToolError
 
 from mcp_synology.modules import RegisterContext
 from mcp_synology.modules.filestation import MODULE_INFO, register
-
-if TYPE_CHECKING:
-    import pytest
 
 
 def _make_ctx(
@@ -128,6 +127,13 @@ class TestFilestationToolInvocation:
     These tests mock the underlying domain function and invoke the tool
     via `server._tool_manager._tools[name].fn(...)`.
     """
+
+    @pytest.fixture(autouse=True)
+    def _shares_known(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # These tests cover the closures' plumbing; share validation (#160) has its own.
+        monkeypatch.setattr(
+            "mcp_synology.modules.filestation.helpers.ensure_known_shares", AsyncMock()
+        )
 
     @staticmethod
     def _capture_call(monkeypatch: pytest.MonkeyPatch, target: str) -> AsyncMock:
@@ -385,3 +391,85 @@ class TestFilestationToolInvocation:
         )
         assert "restore_from_recycle_bin-result" in result
         mock.assert_awaited_once()
+
+
+UNKNOWN = "/nosuchshare/x"
+# (tool, domain function it must not reach, kwargs naming the unknown share)
+SHARE_CASES = [
+    ("list_files", "listing.list_files", {"path": UNKNOWN}),
+    ("list_recycle_bin", "listing.list_recycle_bin", {"share": "nosuchshare"}),
+    ("search_files", "search.search_files", {"folder_path": UNKNOWN}),
+    ("get_file_info", "metadata.get_file_info", {"paths": ["/writable/ok", UNKNOWN]}),
+    ("get_dir_size", "metadata.get_dir_size", {"path": UNKNOWN}),
+    ("download_file", "transfer.download_file", {"path": UNKNOWN, "dest_folder": "/tmp"}),
+    ("create_folder", "operations.create_folder", {"paths": [UNKNOWN]}),
+    ("rename", "operations.rename", {"path": UNKNOWN, "new_name": "n"}),
+    ("copy_files", "operations.copy_files", {"paths": ["/writable/a"], "dest_folder": UNKNOWN}),
+    ("move_files", "operations.move_files", {"paths": [UNKNOWN], "dest_folder": "/writable"}),
+    ("delete_files", "operations.delete_files", {"paths": [UNKNOWN]}),
+    (
+        "upload_file",
+        "transfer.upload_file",
+        {"local_path": "/etc/hostname", "dest_folder": UNKNOWN},
+    ),
+    (
+        "restore_from_recycle_bin",
+        "operations.restore_from_recycle_bin",
+        {"share": "nosuchshare", "paths": ["x"]},
+    ),
+]
+NEEDS_CTX = {"download_file", "upload_file"}
+
+
+class TestFilestationShareValidation:
+    """#160: every path-taking tool checks the share name before its own DSM call."""
+
+    @staticmethod
+    def _ctx_with_shares(*names: str) -> tuple[FastMCP, MagicMock, RegisterContext]:
+        server, manager, ctx = _make_ctx()
+        client = MagicMock()
+
+        async def request(api: str, method: str, **_: object) -> dict[str, object]:
+            if method == "list_share":
+                return {"shares": [{"name": n, "path": f"/{n}"} for n in names]}
+            return {}
+
+        client.request = AsyncMock(side_effect=request)
+        manager.get_client = AsyncMock(return_value=client)
+        return server, manager, ctx
+
+    @pytest.mark.parametrize(
+        ("tool", "target", "kwargs"), SHARE_CASES, ids=[c[0] for c in SHARE_CASES]
+    )
+    async def test_unknown_share_refused_before_tool_runs(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tool: str,
+        target: str,
+        kwargs: dict[str, object],
+    ) -> None:
+        domain = AsyncMock(return_value="ran")
+        monkeypatch.setattr(f"mcp_synology.modules.filestation.{target}", domain)
+        server, _, ctx = self._ctx_with_shares("writable")
+        register(ctx)
+        fn = server._tool_manager._tools[tool].fn
+        extra: dict[str, object] = {}
+        if tool in NEEDS_CTX:
+            fake_mcp_ctx = MagicMock()
+            fake_mcp_ctx.report_progress = AsyncMock()
+            extra["ctx"] = fake_mcp_ctx
+        with pytest.raises(ToolError) as exc_info:
+            await fn(**extra, **kwargs)
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "not_found"
+        assert "nosuchshare" in body["error"]["message"]
+        assert "writable" in body["error"]["message"]
+        domain.assert_not_awaited()
+
+    async def test_known_share_reaches_the_tool(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        domain = AsyncMock(return_value="ran")
+        monkeypatch.setattr("mcp_synology.modules.filestation.operations.delete_files", domain)
+        server, _, ctx = self._ctx_with_shares("writable")
+        register(ctx)
+        assert await server._tool_manager._tools["delete_files"].fn(paths=["/writable/a"]) == "ran"
+        domain.assert_awaited_once()

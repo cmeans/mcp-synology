@@ -206,6 +206,7 @@ MODULE_INFO = ModuleInfo(
 
 def register(ctx: RegisterContext) -> None:
     """Register File Station tools with the MCP server."""
+    from mcp_synology.modules.filestation.helpers import ensure_known_shares
     from mcp_synology.modules.filestation.listing import (
         list_files,
         list_recycle_bin,
@@ -255,6 +256,11 @@ def register(ctx: RegisterContext) -> None:
     # SharedClientManager queues the callback and flushes on first
     # `get_client`.
     manager.subscribe_on_reauth(recycle_status.clear)
+
+    # Shared-folder names for path validation (#160): filled on first use, reloaded once
+    # when a path names a share it doesn't hold, and cleared on re-auth.
+    known_shares: set[str] = set()
+    manager.subscribe_on_reauth(known_shares.clear)
 
     # Build a lookup for tool annotations
     _tool_annos: dict[str, ToolAnnotations] = {}
@@ -317,6 +323,7 @@ def register(ctx: RegisterContext) -> None:
             to ["size", "time"]. Unknown values are rejected before reaching DSM.
             """
             client = await manager.get_client()
+            await ensure_known_shares(client, [path], known_shares)
             return manager.with_update_notice(
                 await list_files(
                     client,
@@ -348,6 +355,7 @@ def register(ctx: RegisterContext) -> None:
             limit: int = 100,
         ) -> str:
             client = await manager.get_client()
+            await ensure_known_shares(client, [share], known_shares)
             return manager.with_update_notice(
                 await list_recycle_bin(
                     client,
@@ -387,6 +395,7 @@ def register(ctx: RegisterContext) -> None:
             Unknown values are rejected before reaching DSM.
             """
             client = await manager.get_client()
+            await ensure_known_shares(client, [folder_path], known_shares)
             return manager.with_update_notice(
                 await search_files(
                     client,
@@ -417,6 +426,7 @@ def register(ctx: RegisterContext) -> None:
         )
         async def tool_get_file_info(paths: list[str], additional: list[str] | None = None) -> str:
             client = await manager.get_client()
+            await ensure_known_shares(client, paths, known_shares)
             return manager.with_update_notice(
                 await get_file_info(client, paths=paths, additional=additional)
             )
@@ -430,6 +440,7 @@ def register(ctx: RegisterContext) -> None:
         )
         async def tool_get_dir_size(path: str) -> str:
             client = await manager.get_client()
+            await ensure_known_shares(client, [path], known_shares)
             result = await get_dir_size(client, path=path, timeout=dir_size_timeout)
             return manager.with_update_notice(result)
 
@@ -456,6 +467,7 @@ def register(ctx: RegisterContext) -> None:
                 )
 
             client = await manager.get_client()
+            await ensure_known_shares(client, [path], known_shares)
 
             async def _progress(current: int, total: int | None) -> None:
                 await ctx.report_progress(float(current), float(total) if total else None)
@@ -485,6 +497,7 @@ def register(ctx: RegisterContext) -> None:
             force_parent: bool = True,
         ) -> str:
             client = await manager.get_client()
+            await ensure_known_shares(client, paths, known_shares)
             result = await create_folder(client, paths=paths, force_parent=force_parent)
             return manager.with_update_notice(result)
 
@@ -497,6 +510,7 @@ def register(ctx: RegisterContext) -> None:
         )
         async def tool_rename(path: str, new_name: str) -> str:
             client = await manager.get_client()
+            await ensure_known_shares(client, [path], known_shares)
             return manager.with_update_notice(await rename(client, path=path, new_name=new_name))
 
     if "copy_files" in ctx.allowed_tools:
@@ -512,6 +526,7 @@ def register(ctx: RegisterContext) -> None:
             overwrite: bool = False,
         ) -> str:
             client = await manager.get_client()
+            await ensure_known_shares(client, [*paths, dest_folder], known_shares)
             return manager.with_update_notice(
                 await copy_files(
                     client,
@@ -535,6 +550,7 @@ def register(ctx: RegisterContext) -> None:
             overwrite: bool = False,
         ) -> str:
             client = await manager.get_client()
+            await ensure_known_shares(client, [*paths, dest_folder], known_shares)
             return manager.with_update_notice(
                 await move_files(
                     client,
@@ -557,6 +573,7 @@ def register(ctx: RegisterContext) -> None:
             recursive: bool = True,
         ) -> str:
             client = await manager.get_client()
+            await ensure_known_shares(client, paths, known_shares)
             return manager.with_update_notice(
                 await delete_files(
                     client,
@@ -591,6 +608,9 @@ def register(ctx: RegisterContext) -> None:
                 )
 
             client = await manager.get_client()
+            await ensure_known_shares(
+                client, [d] if (d := dest_folder or default_upload_dir) else [], known_shares
+            )
 
             async def _progress(current: int, total: int | None) -> None:
                 await ctx.report_progress(float(current), float(total) if total else None)
@@ -622,6 +642,9 @@ def register(ctx: RegisterContext) -> None:
             overwrite: bool = False,
         ) -> str:
             client = await manager.get_client()
+            await ensure_known_shares(
+                client, [share, *([dest_folder] if dest_folder else [])], known_shares
+            )
             return manager.with_update_notice(
                 await restore_from_recycle_bin(
                     client,

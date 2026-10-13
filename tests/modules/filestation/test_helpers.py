@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
+import json
 import logging
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
+import respx
 from mcp.server.fastmcp.exceptions import ToolError
 
 from mcp_synology.core.errors import SynologyError
 from mcp_synology.modules.filestation.helpers import (
     correct_recycle_status_from_observation,
+    ensure_known_shares,
     ensure_recycle_status,
     escape_multi_path,
     file_type_icon,
@@ -21,6 +26,10 @@ from mcp_synology.modules.filestation.helpers import (
     validate_additional,
     validate_share_path,
 )
+from tests.conftest import BASE_URL
+
+if TYPE_CHECKING:
+    from mcp_synology.core.client import DsmClient
 
 
 class TestNormalizePath:
@@ -363,3 +372,72 @@ class TestCorrectRecycleStatusFromObservation:
             "scratch", observed_enabled=False, recycle_status=recycle_status
         )
         assert recycle_status == {"scratch": False}
+
+
+class TestEnsureKnownShares:
+    """#160: validate the share name against the NAS's share list before any DSM call."""
+
+    @staticmethod
+    def _route(share_lists: list[list[str]], calls: list[str]) -> None:
+        answers = iter(share_lists)
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            method = dict(request.url.params).get("method", "")
+            calls.append(method)
+            if method == "list_share":
+                names = next(answers)
+                shares = [{"name": n, "path": f"/{n}"} for n in names]
+                return httpx.Response(200, json={"success": True, "data": {"shares": shares}})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+
+    @respx.mock
+    async def test_unknown_share_is_not_found_with_available_shares(
+        self, mock_client: DsmClient
+    ) -> None:
+        calls: list[str] = []
+        self._route([["testshare", "writable"], ["testshare", "writable"]], calls)
+        with pytest.raises(ToolError) as exc_info:
+            await ensure_known_shares(mock_client, ["/video/downloads/*"], set())
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "not_found"
+        assert body["error"]["retryable"] is False
+        assert "video" in body["error"]["message"]
+        assert "testshare, writable" in body["error"]["message"]
+        assert "list_shares" in body["error"]["message"]
+
+    @respx.mock
+    async def test_known_share_passes_and_cache_is_reused(self, mock_client: DsmClient) -> None:
+        calls: list[str] = []
+        self._route([["testshare", "writable"]], calls)
+        cache: set[str] = set()
+        await ensure_known_shares(mock_client, ["/writable/a", "writable/b"], cache)
+        await ensure_known_shares(mock_client, ["/testshare/c"], cache)
+        assert cache == {"testshare", "writable"}
+        assert calls.count("list_share") == 1
+
+    @respx.mock
+    async def test_new_share_found_after_one_refresh(self, mock_client: DsmClient) -> None:
+        calls: list[str] = []
+        self._route([["writable", "media"]], calls)
+        cache = {"writable"}  # filled before "media" existed
+        await ensure_known_shares(mock_client, ["/media/x"], cache)
+        assert "media" in cache
+        assert calls.count("list_share") == 1
+
+    @respx.mock
+    async def test_share_list_failure_does_not_block(self, mock_client: DsmClient) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 105}}
+        )
+        cache: set[str] = set()
+        await ensure_known_shares(mock_client, ["/whatever/x"], cache)  # DSM decides instead
+        assert cache == set()
+
+    @respx.mock
+    async def test_recycle_as_share_is_rejected(self, mock_client: DsmClient) -> None:
+        calls: list[str] = []
+        self._route([["writable"]], calls)
+        with pytest.raises(ToolError):
+            await ensure_known_shares(mock_client, ["/#recycle/x"], {"writable"})
