@@ -386,6 +386,8 @@ Remove tasks.
 
 **Permission tier:** WRITE
 
+**Annotations:** `destructiveHint=true`: a deleted task can't be restored, and an unfinished task's partial data is discarded.
+
 **DSM API:** `SYNO.DownloadStation.Task` / `delete` v1
 
 **Tool description (LLM-facing):**
@@ -486,6 +488,8 @@ Remove tasks.
 
 **Permission tier:** WRITE
 
+**Annotations:** `destructiveHint=true`, `idempotentHint=true`: it replaces global values (the previous ones are lost), and repeating a call changes nothing more.
+
 **DSM API:** `SYNO.DownloadStation.Info` / `setserverconfig` v1
 
 **Tool description (LLM-facing):**
@@ -516,6 +520,8 @@ Remove tasks.
 ### 12. `set_schedule`
 
 **Permission tier:** WRITE
+
+**Annotations:** `destructiveHint=true`, `idempotentHint=true`: it replaces the NAS-wide schedule, and repeating a call changes nothing more.
 
 **DSM API:** `SYNO.DownloadStation2.Settings.Scheduler` / `set` v1 (plan and rates); `SYNO.DownloadStation.Schedule` / `setconfig` v1 (flags)
 
