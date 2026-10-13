@@ -681,7 +681,11 @@ class TestDownloadFile:
         """
 
         async def _raise_enospc(*args: object, **kwargs: object) -> int:
-            raise OSError(errno.ENOSPC, "No space left on device")
+            raise OSError(
+                errno.ENOSPC,
+                "No space left on device",
+                str(tmp_path / ".mcp-synology-0123456789abcdef.part"),
+            )
 
         monkeypatch.setattr(mock_client, "download", _raise_enospc)
 
@@ -696,6 +700,7 @@ class TestDownloadFile:
         assert body["error"]["code"] == "disk_full"
         assert body["error"]["retryable"] is True
         assert "No space left" in body["error"]["message"]
+        assert ".part" not in body["error"]["message"]  # QA R1 (#178): no temp path
 
     async def test_download_non_enospc_oserror_reports_filesystem_error(
         self, mock_client: DsmClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -722,6 +727,69 @@ class TestDownloadFile:
         body = json.loads(str(exc_info.value))
         assert body["error"]["code"] == "filesystem_error"
         assert body["error"]["retryable"] is False
+
+    @respx.mock
+    async def test_download_dangling_symlink_is_refused_up_front(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """QA R1 (#178): exists() follows links, so a dangling link passed the check, the
+        whole file streamed, and the error blamed a file "created while the download was
+        in progress"."""
+        (tmp_path / "report.txt").symlink_to(tmp_path / "missing-target")
+        route = respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(content=b"x")
+
+        with pytest.raises(ToolError) as exc_info:
+            await download_file(mock_client, path="/docs/report.txt", dest_folder=str(tmp_path))
+
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "already_exists"
+        assert "while the download" not in body["error"]["message"]
+        assert not route.called
+
+    @pytest.mark.parametrize("overwrite", [False, True])
+    @respx.mock
+    async def test_download_directory_at_destination_is_refused_up_front(
+        self, mock_client: DsmClient, tmp_path: Path, overwrite: bool
+    ) -> None:
+        """QA R1 (#178): a folder where the file would go can't be replaced; say so
+        before downloading, naming the destination, not the internal temp file."""
+        (tmp_path / "report.txt").mkdir()
+        route = respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(content=b"x")
+
+        with pytest.raises(ToolError) as exc_info:
+            await download_file(
+                mock_client,
+                path="/docs/report.txt",
+                dest_folder=str(tmp_path),
+                overwrite=overwrite,
+            )
+
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "invalid_parameter"
+        assert "is a folder" in error["message"]
+        assert str(tmp_path / "report.txt") in error["message"]
+        assert "filename" in error["suggestion"]
+        assert not route.called
+        assert (tmp_path / "report.txt").is_dir()
+
+    async def test_download_write_error_names_the_destination_not_the_temp_file(
+        self, mock_client: DsmClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """QA R1 (#178): an OSError from publishing carries the temp path; the message
+        names the file the caller asked for."""
+        tmp_name = str(tmp_path / ".mcp-synology-0123456789abcdef.part")
+
+        async def _raise(*args: object, **kwargs: object) -> int:
+            raise OSError(errno.EACCES, "Permission denied", tmp_name, str(tmp_path / "f.mkv"))
+
+        monkeypatch.setattr(mock_client, "download", _raise)
+        with pytest.raises(ToolError) as exc_info:
+            await download_file(mock_client, path="/video/f.mkv", dest_folder=str(tmp_path))
+
+        message = json.loads(str(exc_info.value))["error"]["message"]
+        assert ".part" not in message
+        assert str(tmp_path / "f.mkv") in message
+        assert "Permission denied" in message
 
     @respx.mock
     async def test_download_progress_callback(self, mock_client: DsmClient, tmp_path: Path) -> None:

@@ -180,7 +180,19 @@ async def download_file(
             suggestion="Pass a plain file name (no folders) as filename.",
         )
 
-    if dest_file.exists() and not overwrite:
+    if dest_file.is_dir() and not dest_file.is_symlink():
+        # Neither mode can replace a folder; refuse before downloading (QA R1 on #178).
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            f"Download failed: {dest_file} is a folder, so the file can't be saved there.",
+            retryable=False,
+            param="filename" if filename else "path",
+            value=filename if filename else path,
+            suggestion="Pass a different filename, or choose another dest_folder.",
+        )
+
+    # lexists, not exists: a dangling symlink is still a name in the way (QA R1 on #178).
+    if os.path.lexists(dest_file) and not overwrite:
         error_response(
             ErrorCode.ALREADY_EXISTS,
             f"Download failed: Local file already exists: {dest_file}",
@@ -255,13 +267,15 @@ async def download_file(
         if e.errno == errno.ENOSPC:
             error_response(
                 ErrorCode.DISK_FULL,
-                f"Download failed: No space left on local disk: {e}",
+                f"Download failed: No space left on local disk writing {dest_file}: "
+                f"{e.strerror or e}",
                 retryable=True,
                 suggestion="Free space on the local disk or choose a different destination.",
             )
+        # Name the file the caller asked for: str(e) can carry the internal temp path.
         error_response(
             ErrorCode.FILESYSTEM_ERROR,
-            f"Download failed: Failed to write local file: {e}",
+            f"Download failed: Failed to write local file {dest_file}: {e.strerror or e}",
             retryable=False,
             param="dest_folder",
             value=dest_folder,
