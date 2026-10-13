@@ -8,6 +8,7 @@
 
 ### Changed
 
+- **Bump github-actions group: astral-sh/setup-uv 10.2.0→10.3.0, actions/upload-artifact 7.0.1→7.0.2, actions/download-artifact 8.0.1→8.0.2, jlumbroso/free-disk-space 1.3.1→2.0.0** (#180)
 - **About 25% fewer tokens before every conversation** (#164) — tool input schemas no longer carry pydantic's auto-generated `title` fields or `anyOf: [T, null]` unions on optional parameters, and HTML comments (`<!-- ... -->`) are removed from server instructions before sending, in the built-in file, `custom_instructions` and `instructions_file` alike. With all three modules enabled, the payload falls from 20,805 to 15,728 characters, or from 9,115 to 6,873 tokens on the Claude 5.5 tokenizer. Tool names, descriptions, parameters and argument validation are unchanged: an explicit `null` for an optional parameter is still accepted. A test now guards the payload size — closes #163
 
 ## 0.6.0 (2026-10-12)
