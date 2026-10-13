@@ -888,6 +888,21 @@ class TestServedSchemas:
                 if old.get("default") is not None:
                     assert new["properties"][prop]["default"] == old["default"], (name, prop)
 
+    @respx.mock
+    async def test_explicit_null_survives_a_real_tool_call(self) -> None:
+        """Review finding: the null claim must hold through MCP's call path, not just
+        the pydantic model, so an SDK that starts validating the advertised schema
+        (#114) fails here instead of silently rejecting clients that send nulls."""
+        respx.get(f"{BASE_URL}/webapi/query.cgi").mock(side_effect=httpx.ConnectError("down"))
+        server = create_server(make_test_config(modules=ALL_MODULES))
+        async with create_connected_server_and_client_session(server._mcp_server) as session:
+            await session.initialize()
+            result = await session.call_tool("search_files", {"folder_path": "/x", "pattern": None})
+        text = " ".join(getattr(c, "text", "") for c in result.content)
+        assert result.isError
+        assert "validation error" not in text.lower(), text
+        assert "unavailable" in text, text  # got past validation and reached the NAS call
+
     def test_validation_still_accepts_explicit_null_and_omission(self) -> None:
         server = create_server(make_test_config(modules=ALL_MODULES))
         tool = server._tool_manager.get_tool("search_files")
