@@ -1325,6 +1325,26 @@ class TestErrorHandling:
         assert body["error"]["code"] == "not_found"
         assert "mcp_no_such" in body["error"]["message"]
 
+    async def test_move_with_one_missing_source_moves_nothing(self, nas_client: Any) -> None:
+        """One missing source refuses the whole move; the existing source stays put."""
+        client, _, config, paths = _unpack(nas_client)
+        _skip_unless_write(config)
+        base = paths["writable_folder"].rstrip("/")
+        await create_folder(client, paths=[f"{base}/mcp_mv_src", f"{base}/mcp_mv_dst"])
+        try:
+            with pytest.raises(ToolError) as exc_info:
+                await move_files(
+                    client,
+                    paths=[f"{base}/mcp_mv_src", f"{base}/mcp_no_such"],
+                    dest_folder=f"{base}/mcp_mv_dst",
+                )
+            error = json.loads(str(exc_info.value))["error"]
+            assert error["code"] == "not_found"
+            assert "Nothing was moved" in error["message"]
+            assert "mcp_mv_src" in await get_file_info(client, paths=[f"{base}/mcp_mv_src"])
+        finally:
+            await delete_files(client, paths=[f"{base}/mcp_mv_src", f"{base}/mcp_mv_dst"])
+
     async def test_unknown_share_rejected_by_the_tools(self, nas_client: Any) -> None:
         """Through the real server: an unknown share gets not_found naming real shares (#160).
 

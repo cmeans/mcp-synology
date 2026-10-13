@@ -170,6 +170,39 @@ async def move_files(
     )
 
 
+_PAST_TENSE = {"Copy": "copied", "Move": "moved", "Restore": "restored"}
+
+
+def _already_done(operation: str, done: list[str] | None) -> str:
+    """Name the items a multi-path operation finished before a later one failed."""
+    if not done:
+        return ""
+    return f". Already {_PAST_TENSE.get(operation, 'processed')} before this failure: " + ", ".join(
+        done
+    )
+
+
+async def _refuse_missing_sources(
+    client: DsmClient, operation: str, checked: list[str], original: list[str]
+) -> None:
+    """Refuse the whole call before anything moves if any source is missing (#162 policy)."""
+    try:
+        missing = await find_missing_paths(client, checked)
+    except SynologyError as e:
+        synology_error_response(f"{operation} files", e)
+    if missing:
+        error_response(
+            ErrorCode.NOT_FOUND,
+            f"{operation} files refused: not found: "
+            + "; ".join(f"{p} (DSM error {code})" for p, code in missing)
+            + f". Nothing was {_PAST_TENSE.get(operation, 'processed')}.",
+            retryable=False,
+            param="paths",
+            value=original,
+            suggestion=missing_paths_suggestion(missing),
+        )
+
+
 async def _copy_move_one_path(
     client: DsmClient,
     path: str,
@@ -180,6 +213,7 @@ async def _copy_move_one_path(
     operation: str,
     copymove_version: int,
     timeout: float,
+    done: list[str] | None = None,
 ) -> int:
     """Copy or move a single path via DSM async-task pattern.
 
@@ -261,7 +295,8 @@ async def _copy_move_one_path(
         mapped = error_from_code(err_code, "SYNO.FileStation.CopyMove")
         error_response(
             mapped.error_code,
-            f"{operation} files failed: DSM error code {err_code} on path: {err_path}",
+            f"{operation} files failed: DSM error code {err_code} on path: {err_path}"
+            + _already_done(operation, done),
             retryable=mapped.retryable,
             suggestion=(
                 mapped.suggestion
@@ -282,7 +317,8 @@ async def _copy_move_one_path(
         error_response(
             mapped.error_code,
             f"{operation} files failed: "
-            + "; ".join(f"{p} (DSM error {code})" for p, code in failed),
+            + "; ".join(f"{p} (DSM error {code})" for p, code in failed)
+            + _already_done(operation, done),
             retryable=mapped.retryable,
             param="paths",
             value=path,
@@ -305,6 +341,8 @@ async def _copy_move(
     remove_src: bool,
     operation: str,
     timeout: float = 120.0,
+    check_sources: bool = True,
+    already_done: list[str] | None = None,
 ) -> str:
     """Shared implementation for copy and move operations.
 
@@ -338,7 +376,11 @@ async def _copy_move(
     # parameter encoding that our path-as-form-param shape doesn't support.
     copymove_version = min(2, client.negotiate_version("SYNO.FileStation.CopyMove", max_version=2))
 
+    if check_sources:
+        await _refuse_missing_sources(client, operation, normalized, paths)
+
     total_processed = 0
+    done = list(already_done or [])
     for p in normalized:
         total_processed += await _copy_move_one_path(
             client,
@@ -349,7 +391,9 @@ async def _copy_move(
             operation=operation,
             copymove_version=copymove_version,
             timeout=timeout,
+            done=done,
         )
+        done.append(p)
 
     verb = "Copied" if not remove_src else "Moved"
     lines = [format_status(f"{verb} {len(normalized)} item(s) to {dest}/:")]
@@ -622,11 +666,14 @@ async def restore_from_recycle_bin(
             original = full_paths[-1].replace(f"/{share_name}/#recycle", f"/{share_name}")
             restore_destinations.append("/".join(original.split("/")[:-1]) or f"/{share_name}")
 
+    await _refuse_missing_sources(client, "Restore", full_paths, paths)
+
     # Use the first destination (or provided dest_folder)
     actual_dest = dest_folder or restore_destinations[0]
     if dest_folder is None and len(set(restore_destinations)) > 1:
         # Multiple different destinations — move each one separately
         results: list[str] = []
+        restored: list[str] = []
         for fp, dest in zip(full_paths, restore_destinations, strict=False):
             r = await _copy_move(
                 client,
@@ -636,8 +683,11 @@ async def restore_from_recycle_bin(
                 remove_src=True,
                 operation="Restore",
                 timeout=timeout,
+                check_sources=False,
+                already_done=restored,
             )
             results.append(r)
+            restored.append(fp)
         return "\n".join(results)
 
     result = await _copy_move(
@@ -648,6 +698,7 @@ async def restore_from_recycle_bin(
         remove_src=True,
         operation="Restore",
         timeout=timeout,
+        check_sources=False,
     )
 
     # Rephrase from "Moved" to "Restored"
