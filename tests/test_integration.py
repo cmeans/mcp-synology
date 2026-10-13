@@ -1359,6 +1359,42 @@ class TestErrorHandling:
             except ToolError:
                 logger.warning("cleanup of %s failed; it may not have been created", base)
 
+    async def test_partial_folder_merge_move_is_reported_as_partial(
+        self, nas_client: Any, tmp_path: Path
+    ) -> None:
+        """QA R1 (#175): moving folder d onto a destination that already has d/x.txt moves
+        d/y.txt and skips x.txt. DSM says only "all", so the count is of items moved in
+        full (0 of 1), and the result says a skipped folder's other parts still moved."""
+        client, _, config, paths = _unpack(nas_client)
+        _skip_unless_write(config)
+        base = f"{paths['writable_folder'].rstrip('/')}/mcp_skip_merge"
+        for name, body in (("x.txt", b"new-x"), ("y.txt", b"new-y")):
+            (tmp_path / name).write_bytes(body)
+        (tmp_path / "old").mkdir()
+        (tmp_path / "old" / "x.txt").write_bytes(b"old")
+        try:
+            for name in ("x.txt", "y.txt"):
+                await upload_file(
+                    client, local_path=str(tmp_path / name), dest_folder=f"{base}/src/d"
+                )
+            await upload_file(
+                client, local_path=str(tmp_path / "old" / "x.txt"), dest_folder=f"{base}/dst/d"
+            )
+            moved = await move_files(client, paths=[f"{base}/src/d"], dest_folder=f"{base}/dst")
+            assert moved.startswith("[!] Moved 0 of 1 item(s) in full"), moved
+            assert "were still moved" in moved
+            # The conflicting child stays in the source; the other one moved.
+            await get_file_info(client, paths=[f"{base}/src/d/x.txt"])
+            with pytest.raises(ToolError):
+                await get_file_info(client, paths=[f"{base}/src/d/y.txt"])
+            await get_file_info(client, paths=[f"{base}/dst/d/y.txt"])
+            assert "3 B" in await get_file_info(client, paths=[f"{base}/dst/d/x.txt"])
+        finally:
+            try:
+                await delete_files(client, paths=[base])
+            except ToolError:
+                logger.warning("cleanup of %s failed; it may not have been created", base)
+
     async def test_move_with_one_missing_source_moves_nothing(self, nas_client: Any) -> None:
         """One missing source refuses the whole move; the existing source stays put."""
         client, _, config, paths = _unpack(nas_client)

@@ -1279,8 +1279,14 @@ class TestCopyMoveSkippedItems:
     async def test_copy_with_skips_says_so(self, mock_client: DsmClient) -> None:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm({"/w/a": self.ALL}))
         result = await copy_files(mock_client, paths=["/w/a"], dest_folder="/w/dst")
-        assert result.startswith("[!] Copied 0 of 1 item(s) to /w/dst/"), result
+        # QA R1 (#175): "0 of 1" alone would claim nothing was copied, but DSM still copies
+        # a skipped folder's children that weren't at the destination.
+        assert result.startswith("[!] Copied 0 of 1 item(s) in full to /w/dst/"), result
         assert "Skipped in whole or in part:\n  /w/a" in result
+        assert (
+            "For a skipped folder, the parts not already at the destination were still copied"
+            in result
+        )
         assert "Copied:" not in result  # nothing to list as fully copied
         assert "overwrite=true" in result
 
@@ -1293,6 +1299,7 @@ class TestCopyMoveSkippedItems:
         assert result.startswith("[!]"), result
         assert "have been removed" not in result
         assert "still in /w" in result
+        assert "were still moved" in result
 
     @respx.mock
     async def test_mixed_names_only_the_skipped_path(self, mock_client: DsmClient) -> None:
@@ -1300,7 +1307,7 @@ class TestCopyMoveSkippedItems:
             side_effect=self._dsm({"/w/a": self.NONE, "/v/b": self.ALL})
         )
         result = await move_files(mock_client, paths=["/w/a", "/v/b"], dest_folder="/w/dst")
-        assert result.startswith("[!] Moved 1 of 2 item(s) to /w/dst/"), result
+        assert result.startswith("[!] Moved 1 of 2 item(s) in full to /w/dst/"), result
         moved = result[result.index("Moved:\n") : result.index("Skipped in whole or in part:")]
         skipped = result[result.index("Skipped in whole or in part:") :]
         assert "  a" in moved and "b" not in moved
@@ -1316,8 +1323,11 @@ class TestCopyMoveSkippedItems:
             side_effect=self._dsm({"/video/#recycle/a.mkv": self.ALL})
         )
         result = await restore_from_recycle_bin(mock_client, share="video", paths=["a.mkv"])
-        assert result.startswith("[!]"), result
+        assert result.startswith("[!] Restored from /video recycle bin: 0 of 1 item(s) in full"), (
+            result
+        )
         assert "recycle bin" in result and "skipped" in result
+        assert "were still restored" in result and "moved" not in result.lower()
 
     @respx.mock
     async def test_overwrite_true_has_no_skipstatus(self, mock_client: DsmClient) -> None:
@@ -1345,5 +1355,5 @@ class TestCopyMoveSkippedItems:
         result = await restore_from_recycle_bin(
             mock_client, share="video", paths=["S1/a.mkv", "S2/b.mkv"]
         )
-        assert result.startswith("[!] Restored 1 of 2 item(s)"), result
+        assert result.startswith("[!] Restored 1 of 2 item(s) in full"), result
         assert "[+] Moved" not in result and "[!] Moved" not in result

@@ -440,9 +440,11 @@ async def _copy_move(
     else:
         # DSM only says that it skipped something for a source (a whole file, or some of
         # a folder's children), not what, so each such source is listed separately (#171).
+        # The count is of sources done in full: a skipped folder's other children still
+        # went through, so "0 of 1" alone would be false (QA R1 on #175).
         lines = [
             format_status(
-                f"{verb} {len(ok)} of {len(normalized)} item(s) to {dest}/; "
+                f"{verb} {len(ok)} of {len(normalized)} item(s) in full to {dest}/; "
                 f"{len(skipped_paths)} skipped in whole or in part (already at the "
                 "destination, overwrite=false):",
                 success=False,
@@ -457,6 +459,10 @@ async def _copy_move(
             lines.append(
                 f"  {p}" + (f" (skipped items are still in {src_dir}/)" if remove_src else "")
             )
+        lines.append(
+            "For a skipped folder, the parts not already at the destination were still "
+            f"{verb.lower()}."
+        )
         lines.append("Pass overwrite=true to replace them.")
 
     if total_processed > 0:
@@ -740,6 +746,7 @@ def _as_restore(text: str, share_name: str) -> str:
         .replace("[!] Moved", f"[!] {prefix}")
         .replace("\nMoved:\n", "\nRestored:\n")
         .replace("\nMoved sources removed from", "\nRestored items removed from")
+        .replace("were still moved.", "were still restored.")
     )
 
 
@@ -804,7 +811,8 @@ async def restore_from_recycle_bin(
             results.insert(
                 0,
                 format_status(
-                    f"Restored {len(results) - len(partial)} of {len(results)} item(s) from "
+                    f"Restored {len(results) - len(partial)} of {len(results)} item(s) in full "
+                    "from "
                     f"/{share_name} recycle bin; {len(partial)} skipped in whole or in part "
                     "(already at the destination, overwrite=false):",
                     success=False,
