@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-import contextlib
+import asyncio
 import errno
 import json
+import os
+from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import patch
 
@@ -19,8 +21,16 @@ from mcp_synology.modules.filestation.transfer import (
 )
 from tests.conftest import BASE_URL
 
+# Root ignores file permission bits, so chmod can't provoke these errors there
+# (common in containers). Without the skip, the upload test reads the file,
+# then makes an unmocked HTTP call.
+_needs_non_root = pytest.mark.skipif(
+    hasattr(os, "geteuid") and os.geteuid() == 0,
+    reason="root ignores file permission bits",
+)
+
 if TYPE_CHECKING:
-    from pathlib import Path
+    from collections.abc import AsyncIterator
 
     from mcp_synology.core.client import DsmClient
 
@@ -126,6 +136,7 @@ class TestUploadFile:
         assert body["status"] == "error"
         assert "Upload" in body["error"]["message"]
 
+    @_needs_non_root
     async def test_upload_local_file_permission_error(
         self, mock_client: DsmClient, tmp_path: Path
     ) -> None:
@@ -258,22 +269,331 @@ class TestDownloadFile:
         assert not (tmp_path / "nonexistent.mkv").exists()
 
     @respx.mock
-    async def test_download_partial_cleanup(self, mock_client: DsmClient, tmp_path: Path) -> None:
-        """Verify partial file is deleted on network failure."""
-        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
-            side_effect=httpx.ReadError("connection reset")
+    async def test_download_dsm_error_keeps_existing_file_on_overwrite(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """A DSM error must not delete the local file overwrite=True would replace.
+
+        Before the fix, the SynologyError cleanup unlinked dest_file even
+        though nothing had been written: a missing NAS path destroyed the
+        user's existing local copy.
+        """
+        existing = tmp_path / "report.pdf"
+        existing.write_bytes(b"local data")
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 408}},
+            headers={"content-type": "application/json"},
         )
 
-        with contextlib.suppress(httpx.ReadError):
+        with pytest.raises(ToolError):
             await download_file(
                 mock_client,
-                path="/video/big_file.mkv",
+                path="/docs/report.pdf",
                 dest_folder=str(tmp_path),
+                overwrite=True,
             )
 
-        # Partial file should be cleaned up
-        assert not (tmp_path / "big_file.mkv").exists()
+        assert existing.read_bytes() == b"local data"
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["report.pdf"]
 
+    @respx.mock
+    async def test_download_interrupted_keeps_existing_file_on_overwrite(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """A dropped connection mid-stream must leave the original file intact.
+
+        Before the fix, the download opened dest_file with "wb" (truncating it)
+        and the failure path then deleted it.
+        """
+        existing = tmp_path / "movie.mkv"
+        existing.write_bytes(b"original")
+
+        async def _broken_body() -> AsyncIterator[bytes]:
+            yield b"partial "
+            raise httpx.ReadError("connection reset")
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=[
+                httpx.Response(200, json={"success": True, "data": {"files": []}}),
+                httpx.Response(
+                    200,
+                    headers={"content-type": "application/octet-stream"},
+                    content=_broken_body(),
+                ),
+            ]
+        )
+
+        with pytest.raises(httpx.ReadError):
+            await download_file(
+                mock_client,
+                path="/video/movie.mkv",
+                dest_folder=str(tmp_path),
+                overwrite=True,
+            )
+
+        assert existing.read_bytes() == b"original"
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["movie.mkv"]
+
+    @respx.mock
+    async def test_download_overwrite_leaves_no_temp_files(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        existing = tmp_path / "movie.mkv"
+        existing.write_bytes(b"old")
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            content=b"new content",
+            headers={"content-type": "application/octet-stream"},
+        )
+
+        await download_file(
+            mock_client,
+            path="/video/movie.mkv",
+            dest_folder=str(tmp_path),
+            overwrite=True,
+        )
+
+        assert existing.read_bytes() == b"new content"
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["movie.mkv"]
+
+    @pytest.mark.parametrize(
+        "bad_name",
+        [
+            "../outside.txt",
+            "sub/file.txt",
+            "sub\\file.txt",
+            "..",
+            ".",
+            "/abs/file.txt",
+            "a\x00b",
+            # On Windows a drive-qualified name replaces the folder: C:\dl / "D:x" is "D:x".
+            "D:evil.txt",
+            "C:",
+        ],
+    )
+    @respx.mock
+    async def test_download_rejects_filename_outside_dest_folder(
+        self, mock_client: DsmClient, tmp_path: Path, bad_name: str
+    ) -> None:
+        """filename must be a plain name; anything else could escape dest_folder."""
+        dest = tmp_path / "downloads"
+        dest.mkdir()
+        outside = tmp_path / "outside.txt"
+        outside.write_bytes(b"keep me")
+        route = respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            content=b"payload",
+            headers={"content-type": "application/octet-stream"},
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await download_file(
+                mock_client,
+                path="/share/file.txt",
+                dest_folder=str(dest),
+                filename=bad_name,
+                overwrite=True,
+            )
+
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "invalid_parameter"
+        assert body["error"]["param"] == "filename"
+        assert not route.called
+        assert outside.read_bytes() == b"keep me"
+        assert list(dest.iterdir()) == []
+
+    @respx.mock
+    async def test_download_refuses_any_name_that_leaves_dest_folder(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """Backstop: whatever the name rules miss, the joined file must sit in dest_folder."""
+        dest = tmp_path / "downloads"
+        dest.mkdir()
+        route = respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(content=b"payload")
+        with (
+            patch(
+                "mcp_synology.modules.filestation.transfer._local_name_problem", return_value=None
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await download_file(
+                mock_client, path="/share/f.txt", dest_folder=str(dest), filename="../x.txt"
+            )
+        assert json.loads(str(exc_info.value))["error"]["code"] == "invalid_parameter"
+        assert not route.called
+        assert not (tmp_path / "x.txt").exists()
+
+    @respx.mock
+    async def test_download_rejects_nas_path_ending_in_dotdot(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """Without filename, the local name comes from the NAS path and is checked too."""
+        route = respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(content=b"x")
+
+        with pytest.raises(ToolError) as exc_info:
+            await download_file(mock_client, path="/share/sub/..", dest_folder=str(tmp_path))
+
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "invalid_parameter"
+        assert body["error"]["param"] == "path"
+        assert not route.called
+
+    @staticmethod
+    def _stream(body: object) -> list[httpx.Response]:
+        """The pre-flight size lookup, then the streamed download."""
+        return [
+            httpx.Response(200, json={"success": True, "data": {"files": []}}),
+            httpx.Response(200, headers={"content-type": "application/octet-stream"}, content=body),
+        ]
+
+    @respx.mock
+    async def test_download_no_overwrite_never_replaces_a_file_created_meanwhile(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """overwrite=False must hold to the end: a file that appears while the download
+        streams (another call, another process) is not replaced (download review)."""
+        dest = tmp_path / "report.pdf"
+
+        async def body() -> AsyncIterator[bytes]:
+            yield b"first half "
+            dest.write_bytes(b"CREATED MEANWHILE")  # appears mid-download
+            yield b"second half"
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._stream(body()))
+        with pytest.raises(ToolError) as exc_info:
+            await download_file(mock_client, path="/docs/report.pdf", dest_folder=str(tmp_path))
+        assert json.loads(str(exc_info.value))["error"]["code"] == "already_exists"
+        assert dest.read_bytes() == b"CREATED MEANWHILE"
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["report.pdf"]  # no temp left
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
+    @respx.mock
+    async def test_download_overwrite_keeps_the_files_permissions(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        existing = tmp_path / "secret.txt"
+        existing.write_bytes(b"old")
+        existing.chmod(0o600)
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            content=b"new", headers={"content-type": "application/octet-stream"}
+        )
+        await download_file(
+            mock_client, path="/docs/secret.txt", dest_folder=str(tmp_path), overwrite=True
+        )
+        assert existing.read_bytes() == b"new"
+        assert existing.stat().st_mode & 0o777 == 0o600
+
+    @respx.mock
+    async def test_download_cancelled_midstream_removes_temp(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        existing = tmp_path / "movie.mkv"
+        existing.write_bytes(b"original")
+
+        async def body() -> AsyncIterator[bytes]:
+            yield b"partial "
+            raise asyncio.CancelledError
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._stream(body()))
+        with pytest.raises(asyncio.CancelledError):
+            await download_file(
+                mock_client, path="/video/movie.mkv", dest_folder=str(tmp_path), overwrite=True
+            )
+        assert existing.read_bytes() == b"original"
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["movie.mkv"]
+
+    @respx.mock
+    async def test_download_without_hard_links_still_publishes(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """Where links aren't supported (FAT, some network mounts), overwrite=False falls
+        back to a final existence check and publishes a new file normally."""
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            content=b"data", headers={"content-type": "application/octet-stream"}
+        )
+        with patch("mcp_synology.core.client.os.link", side_effect=PermissionError("no links")):
+            await download_file(mock_client, path="/docs/a.txt", dest_folder=str(tmp_path))
+        assert (tmp_path / "a.txt").read_bytes() == b"data"
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["a.txt"]
+
+    @respx.mock
+    async def test_download_without_hard_links_never_replaces_a_new_file(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        dest = tmp_path / "a.txt"
+
+        async def body() -> AsyncIterator[bytes]:
+            yield b"data"
+            dest.write_bytes(b"CREATED MEANWHILE")
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._stream(body()))
+        with (
+            patch("mcp_synology.core.client.os.link", side_effect=OSError(errno.EPERM, "no links")),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await download_file(mock_client, path="/docs/a.txt", dest_folder=str(tmp_path))
+        assert json.loads(str(exc_info.value))["error"]["code"] == "already_exists"
+        assert dest.read_bytes() == b"CREATED MEANWHILE"
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["a.txt"]
+
+    @respx.mock
+    async def test_download_cleanup_tolerates_a_missing_temp(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """If the temp file is already gone when a failure is cleaned up, the original
+        error still surfaces."""
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            content=b"data", headers={"content-type": "application/octet-stream"}
+        )
+
+        def publish(tmp_file: Path, dest_file: Path, *, overwrite: bool) -> None:
+            tmp_file.unlink()
+            raise OSError(errno.EIO, "publish failed")
+
+        with (
+            patch("mcp_synology.core.client._publish_download", side_effect=publish),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await download_file(mock_client, path="/docs/a.txt", dest_folder=str(tmp_path))
+        assert "publish failed" in json.loads(str(exc_info.value))["error"]["message"]
+        assert list(tmp_path.iterdir()) == []
+
+    @respx.mock
+    async def test_download_cleanup_failure_is_logged_and_original_error_kept(
+        self, mock_client: DsmClient, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            content=b"data", headers={"content-type": "application/octet-stream"}
+        )
+        real_unlink = Path.unlink
+
+        def unlink(self: Path, missing_ok: bool = False) -> None:
+            if self.name.endswith(".part"):
+                raise PermissionError(errno.EACCES, "locked")
+            real_unlink(self, missing_ok=missing_ok)
+
+        with (
+            patch(
+                "mcp_synology.core.client._publish_download",
+                side_effect=OSError(errno.EIO, "publish failed"),
+            ),
+            patch.object(Path, "unlink", unlink),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await download_file(mock_client, path="/docs/a.txt", dest_folder=str(tmp_path))
+        assert "publish failed" in json.loads(str(exc_info.value))["error"]["message"]
+        assert "Failed to clean up partial download" in caplog.text
+
+    @respx.mock
+    async def test_download_is_flushed_to_disk_before_publishing(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            content=b"data", headers={"content-type": "application/octet-stream"}
+        )
+        with patch("mcp_synology.core.client.os.fsync") as fsync:
+            await download_file(mock_client, path="/docs/a.txt", dest_folder=str(tmp_path))
+        fsync.assert_called_once()
+
+    @_needs_non_root
     @respx.mock
     async def test_download_write_permission_error(
         self, mock_client: DsmClient, tmp_path: Path
@@ -361,7 +681,11 @@ class TestDownloadFile:
         """
 
         async def _raise_enospc(*args: object, **kwargs: object) -> int:
-            raise OSError(errno.ENOSPC, "No space left on device")
+            raise OSError(
+                errno.ENOSPC,
+                "No space left on device",
+                str(tmp_path / ".mcp-synology-0123456789abcdef.part"),
+            )
 
         monkeypatch.setattr(mock_client, "download", _raise_enospc)
 
@@ -376,6 +700,7 @@ class TestDownloadFile:
         assert body["error"]["code"] == "disk_full"
         assert body["error"]["retryable"] is True
         assert "No space left" in body["error"]["message"]
+        assert ".part" not in body["error"]["message"]  # QA R1 (#178): no temp path
 
     async def test_download_non_enospc_oserror_reports_filesystem_error(
         self, mock_client: DsmClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -402,6 +727,69 @@ class TestDownloadFile:
         body = json.loads(str(exc_info.value))
         assert body["error"]["code"] == "filesystem_error"
         assert body["error"]["retryable"] is False
+
+    @respx.mock
+    async def test_download_dangling_symlink_is_refused_up_front(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """QA R1 (#178): exists() follows links, so a dangling link passed the check, the
+        whole file streamed, and the error blamed a file "created while the download was
+        in progress"."""
+        (tmp_path / "report.txt").symlink_to(tmp_path / "missing-target")
+        route = respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(content=b"x")
+
+        with pytest.raises(ToolError) as exc_info:
+            await download_file(mock_client, path="/docs/report.txt", dest_folder=str(tmp_path))
+
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "already_exists"
+        assert "while the download" not in body["error"]["message"]
+        assert not route.called
+
+    @pytest.mark.parametrize("overwrite", [False, True])
+    @respx.mock
+    async def test_download_directory_at_destination_is_refused_up_front(
+        self, mock_client: DsmClient, tmp_path: Path, overwrite: bool
+    ) -> None:
+        """QA R1 (#178): a folder where the file would go can't be replaced; say so
+        before downloading, naming the destination, not the internal temp file."""
+        (tmp_path / "report.txt").mkdir()
+        route = respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(content=b"x")
+
+        with pytest.raises(ToolError) as exc_info:
+            await download_file(
+                mock_client,
+                path="/docs/report.txt",
+                dest_folder=str(tmp_path),
+                overwrite=overwrite,
+            )
+
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "invalid_parameter"
+        assert "is a folder" in error["message"]
+        assert str(tmp_path / "report.txt") in error["message"]
+        assert "filename" in error["suggestion"]
+        assert not route.called
+        assert (tmp_path / "report.txt").is_dir()
+
+    async def test_download_write_error_names_the_destination_not_the_temp_file(
+        self, mock_client: DsmClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """QA R1 (#178): an OSError from publishing carries the temp path; the message
+        names the file the caller asked for."""
+        tmp_name = str(tmp_path / ".mcp-synology-0123456789abcdef.part")
+
+        async def _raise(*args: object, **kwargs: object) -> int:
+            raise OSError(errno.EACCES, "Permission denied", tmp_name, str(tmp_path / "f.mkv"))
+
+        monkeypatch.setattr(mock_client, "download", _raise)
+        with pytest.raises(ToolError) as exc_info:
+            await download_file(mock_client, path="/video/f.mkv", dest_folder=str(tmp_path))
+
+        message = json.loads(str(exc_info.value))["error"]["message"]
+        assert ".part" not in message
+        assert str(tmp_path / "f.mkv") in message
+        assert "Permission denied" in message
 
     @respx.mock
     async def test_download_progress_callback(self, mock_client: DsmClient, tmp_path: Path) -> None:

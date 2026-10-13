@@ -29,6 +29,10 @@ _ANNO_IDEMPOTENT = ToolAnnotations(
     idempotentHint=True,
 )
 _ANNO_DESTRUCTIVE = ToolAnnotations(readOnlyHint=False, destructiveHint=True)
+# download_file is READ on the NAS but writes to this machine, and with
+# overwrite=True it replaces a local file. MCP's readOnlyHint means "does not
+# modify its environment", and clients may auto-approve tools that claim it.
+_ANNO_LOCAL_WRITE = ToolAnnotations(readOnlyHint=False, destructiveHint=True)
 
 
 class FileStationSettings(BaseModel):
@@ -136,6 +140,7 @@ MODULE_INFO = ModuleInfo(
                 "Does not overwrite existing local files by default."
             ),
             permission_tier=PermissionTier.READ,
+            annotations=_ANNO_LOCAL_WRITE,
         ),
         # WRITE tools (7)
         ToolInfo(

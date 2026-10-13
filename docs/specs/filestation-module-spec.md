@@ -393,7 +393,7 @@ Download a NAS file to a local directory on this machine.
 |------|------|----------|---------|-------------|
 | `path` | `str` | **Yes** | — | NAS file path to download. |
 | `dest_folder` | `str` | **Yes** | — | Local directory to save the file to. |
-| `filename` | `str` | No | `None` | Rename on download (defaults to the NAS filename). |
+| `filename` | `str` | No | `None` | Rename on download (defaults to the NAS filename). Must be a plain file name: no `/` or `\`, not `.` or `..`, no NUL, no drive (`D:x`); otherwise `invalid_parameter` before the NAS is contacted. The same rule applies to a name taken from the NAS path. |
 | `overwrite` | `bool` | No | `false` | Replace existing local file. |
 
 **Response shape:**
@@ -406,7 +406,11 @@ Download a NAS file to a local directory on this machine.
 - Single-file download only in v1. Multi-file download (returns zip) deferred.
 - Binary data streamed to disk in 64 KB chunks — never buffered entirely in memory.
 - If the NAS returns `Content-Type: application/json` instead of binary, it's an error envelope — parsed and raised.
-- Partial files are cleaned up on failure (network error, DSM error).
+- **Never destroys or escapes local files.** The body streams to a temp file `.mcp-synology-<hex>.part` in `dest_folder`, flushed to disk (`fsync`) and then moved onto the destination only when complete. On any failure (DSM error, dropped connection, cancellation) only the temp file is removed; an existing destination is never truncated or deleted. A hard crash (power loss, SIGKILL) can leave a `.part` file behind.
+- **`overwrite=false` holds to the end:** the finished file is published with a hard link, which fails if the destination exists (falling back to a final existence check where links aren't supported), so a file created during the download is never replaced; that is `already_exists`. With `overwrite=true` the destination is replaced and keeps its permission bits. Replacing needs free space for both copies until the rename.
+- **Containment:** the resulting file must sit directly in `dest_folder`; anything else is `invalid_parameter`.
+- **Checked before downloading:** a folder at the destination is `invalid_parameter` in both modes (it can't be replaced). With `overwrite=false`, any name already there, including a dangling symlink, is `already_exists`. With `overwrite=true`, a symlink at the destination is replaced by the downloaded file; its target is untouched. Local write errors name the destination file, never the internal temp file.
+- **Annotations:** READ tier (it only reads the NAS), but `readOnlyHint=false`, `destructiveHint=true`, because it writes and can replace a file on this machine. Tiers guard the NAS only (see `architecture.md`).
 - The MCP server runs locally, so `dest_folder` refers to a path on the machine running the server.
 
 ---

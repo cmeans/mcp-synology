@@ -76,6 +76,19 @@ class TestFilestationModuleRegister:
         register(ctx)
         assert set(server._tool_manager._tools.keys()) == read_names
 
+    def test_download_file_is_not_annotated_read_only(self) -> None:
+        """download_file writes (and with overwrite=True replaces) local files.
+
+        It stays in the READ tier, since it only reads the NAS, but it must not
+        claim readOnlyHint: clients may auto-approve tools that do.
+        """
+        server, _manager, ctx = _make_ctx(allowed={"download_file"})
+        register(ctx)
+        annos = server._tool_manager._tools["download_file"].annotations
+        assert annos is not None
+        assert annos.readOnlyHint is False
+        assert annos.destructiveHint is True
+
     def test_register_write_only_tools(self) -> None:
         write_names = {
             "create_folder",

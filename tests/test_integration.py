@@ -1224,6 +1224,63 @@ class TestFileTransfers:
         assert body["status"] == "error"
         logger.info("download nonexistent raised ToolError: %s", exc_info.value)
 
+    async def test_09b_failed_overwrite_keeps_local_file(
+        self, nas_client: Any, tmp_path: Path
+    ) -> None:
+        """A failed download with overwrite=true must not delete the local file (real DSM)."""
+        client, _, _, paths = _unpack(nas_client)
+        existing = tmp_path / "report.pdf"
+        existing.write_bytes(b"LOCAL-ORIGINAL")
+        with pytest.raises(ToolError):
+            await download_file(
+                client,
+                path=f"{paths['writable_folder']}/{self._UPLOAD_DIR}/no_such_report.pdf",
+                dest_folder=str(tmp_path),
+                filename="report.pdf",
+                overwrite=True,
+            )
+        assert existing.read_bytes() == b"LOCAL-ORIGINAL"
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["report.pdf"]  # no temp left
+
+    async def test_09c_overwrite_replaces_and_leaves_no_temp(
+        self, nas_client: Any, tmp_path: Path
+    ) -> None:
+        """A successful overwrite replaces the content in place and leaves no temp file."""
+        client, _, config, paths = _unpack(nas_client)
+        _skip_unless_write(config)
+        existing = tmp_path / "upload_test.txt"
+        existing.write_bytes(b"old local content")
+        result = await download_file(
+            client,
+            path=f"{paths['writable_folder']}/{self._UPLOAD_DIR}/upload_test.txt",
+            dest_folder=str(tmp_path),
+            overwrite=True,
+        )
+        assert "[+]" in result
+        assert existing.read_bytes() == self._TEST_CONTENT
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["upload_test.txt"]
+
+    async def test_09d_filename_cannot_escape_dest_folder(
+        self, nas_client: Any, tmp_path: Path
+    ) -> None:
+        """filename="../x" is refused before the NAS is contacted; nothing outside changes."""
+        client, _, _, paths = _unpack(nas_client)
+        dest = tmp_path / "downloads"
+        dest.mkdir()
+        outside = tmp_path / "outside.txt"
+        outside.write_bytes(b"KEEP-ME")
+        with pytest.raises(ToolError) as exc_info:
+            await download_file(
+                client,
+                path=f"{paths['writable_folder']}/{self._UPLOAD_DIR}/upload_test.txt",
+                dest_folder=str(dest),
+                filename="../outside.txt",
+                overwrite=True,
+            )
+        assert json.loads(str(exc_info.value))["error"]["code"] == "invalid_parameter"
+        assert outside.read_bytes() == b"KEEP-ME"
+        assert list(dest.iterdir()) == []
+
     async def test_10_cleanup(self, nas_client: Any) -> None:
         """Delete the test upload directory from the NAS."""
         client, _, config, paths = _unpack(nas_client)

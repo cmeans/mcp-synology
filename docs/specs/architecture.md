@@ -201,6 +201,7 @@ class PermissionTier(Enum):
 - Write and admin require explicit opt-in in config
 - Tier is configured per-module
 - Enforcement: tools above the configured tier are never registered with the MCP server; the LLM cannot see or invoke them
+- **Scope: tiers guard the NAS only.** A tool's tier reflects what it does on the NAS. `download_file` is READ because it only reads the NAS, even though it writes a file on the machine running the server. Effects on that machine are described by MCP tool annotations instead (`download_file`: `readOnlyHint=false`, `destructiveHint=true`), so the client can confirm them, and by the tool's own safeguards (`download_file` writes only inside `dest_folder`).
 
 ---
 
