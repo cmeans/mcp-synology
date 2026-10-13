@@ -33,6 +33,9 @@ modules:
       upload_timeout: 600
       download_timeout: 600
       default_download_dir: ~/Downloads
+      allowed_local_paths:  # local folders upload/download may use (default: Downloads)
+        - ~/Downloads
+        - ~/Media
       default_upload_dir: /home/uploads
   system:
     enabled: true  # CPU, memory, temperature, uptime (resource usage requires admin)

@@ -412,6 +412,7 @@ Download a NAS file to a local directory on this machine.
 - **Checked before downloading:** a folder at the destination is `invalid_parameter` in both modes (it can't be replaced). With `overwrite=false`, any name already there, including a dangling symlink, is `already_exists`. With `overwrite=true`, a symlink at the destination is replaced by the downloaded file; its target is untouched. Local write errors name the destination file, never the internal temp file.
 - **Annotations:** READ tier (it only reads the NAS), but `readOnlyHint=false`, `destructiveHint=true`, because it writes and can replace a file on this machine. Tiers guard the NAS only (see `architecture.md`).
 - The MCP server runs locally, so `dest_folder` refers to a path on the machine running the server.
+- **Local path confinement:** `dest_folder` must resolve (after `~`, `..` and symlinks) to a path inside one of the `allowed_local_paths` folders (default: the user's Downloads folder; `default_download_dir` is always allowed). Otherwise it's `permission_denied`, listing the allowed folders, before any NAS request and before the folder's existence is checked, so a refusal doesn't reveal what exists outside. The server instructions list the allowed folders under LOCAL PATHS. See `local_paths.py` and `config-schema-spec.md`.
 
 ---
 
@@ -453,6 +454,7 @@ Upload a local file from this machine to a NAS folder.
 - On session error (106/107/119), re-auth and retry with a fresh file handle.
 - `SynologyFileExistsError` (414) caught with suggestion to use `overwrite=true`.
 - The MCP server runs locally, so `local_path` refers to a path on the machine running the server.
+- **Local path confinement:** `local_path` must resolve (after `~`, `..` and symlinks) to a path inside one of the `allowed_local_paths` folders (default: the user's Downloads folder; `default_download_dir` is always allowed). Otherwise it's `permission_denied`, listing the allowed folders, before any NAS request; a symlink inside an allowed folder that points outside is refused. The server instructions list the allowed folders under LOCAL PATHS. See `local_paths.py` and `config-schema-spec.md`.
 
 ---
 

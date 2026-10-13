@@ -52,6 +52,9 @@ class FileStationSettings(BaseModel):
     download_timeout: int | None = Field(default=None, ge=10, le=3600)
     default_download_dir: str | None = None
     default_upload_dir: str | None = None
+    # Local folders upload_file/download_file may use (see local_paths.py). None means
+    # the user's Downloads folder; default_download_dir is always allowed too.
+    allowed_local_paths: list[str] | None = Field(default=None, min_length=1)
     search_poll_interval: float = Field(default=1.0, ge=0.5, le=10.0)
 
 
@@ -217,6 +220,7 @@ MODULE_INFO = ModuleInfo(
 
 def register(ctx: RegisterContext) -> None:
     """Register File Station tools with the MCP server."""
+    from mcp_synology.modules.filestation import local_paths
     from mcp_synology.modules.filestation.helpers import ensure_known_shares
     from mcp_synology.modules.filestation.listing import (
         list_files,
@@ -250,6 +254,9 @@ def register(ctx: RegisterContext) -> None:
         else None
     )
     default_upload_dir = settings.default_upload_dir  # NAS path, no expansion
+    allowed_roots = local_paths.allowed_local_roots(
+        settings.allowed_local_paths, default_download_dir
+    )
     search_poll_interval = settings.search_poll_interval
     hide_recycle = settings.hide_recycle_in_listings
 
@@ -492,6 +499,7 @@ def register(ctx: RegisterContext) -> None:
                     overwrite=overwrite,
                     timeout=download_timeout,
                     progress_callback=_progress,
+                    allowed_roots=allowed_roots,
                 )
             )
 
@@ -636,6 +644,7 @@ def register(ctx: RegisterContext) -> None:
                     create_parents=create_parents,
                     timeout=upload_timeout,
                     progress_callback=_progress,
+                    allowed_roots=allowed_roots,
                 )
             )
 

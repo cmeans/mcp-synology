@@ -17,6 +17,7 @@ from mcp_synology.core.formatting import (
     synology_error_response,
 )
 from mcp_synology.modules.filestation.helpers import normalize_path
+from mcp_synology.modules.filestation.local_paths import outside_allowed_roots
 
 if TYPE_CHECKING:
     from mcp_synology.core.client import DsmClient, ProgressCallback
@@ -52,6 +53,33 @@ def _local_name_problem(name: str) -> str | None:
     return None
 
 
+def _refuse_outside_roots(
+    operation: str, param: str, value: str, path: Path, roots: list[Path] | None
+) -> None:
+    """Refuse a local path outside the allowed folders (``allowed_local_paths``).
+
+    ``roots`` of ``None`` means unconfined (direct callers); the tools always pass them.
+    """
+    if roots is None:
+        return
+    refused = outside_allowed_roots(path, roots)
+    if refused is None:
+        return
+    shown = value if str(refused) == value else f"{value} (resolves to {refused})"
+    error_response(
+        ErrorCode.PERMISSION_DENIED,
+        f"{operation} refused: {shown} is outside the folders this server may use on "
+        f"this machine: {', '.join(str(r) for r in roots)}.",
+        retryable=False,
+        param=param,
+        value=value,
+        suggestion=(
+            "Use a path inside one of those folders, or ask the user to add the folder "
+            "to allowed_local_paths in the filestation module settings."
+        ),
+    )
+
+
 async def upload_file(
     client: DsmClient,
     *,
@@ -62,9 +90,11 @@ async def upload_file(
     create_parents: bool = True,
     timeout: float = 300.0,
     progress_callback: ProgressCallback | None = None,
+    allowed_roots: list[Path] | None = None,
 ) -> str:
     """Upload a local file to a NAS folder."""
-    local = Path(local_path)
+    local = Path(local_path).expanduser()
+    _refuse_outside_roots("Upload", "local_path", local_path, local, allowed_roots)
     if not local.is_file():
         error_response(
             ErrorCode.NOT_FOUND,
@@ -138,9 +168,12 @@ async def download_file(
     overwrite: bool = False,
     timeout: float = 300.0,
     progress_callback: ProgressCallback | None = None,
+    allowed_roots: list[Path] | None = None,
 ) -> str:
     """Download a NAS file to a local directory."""
-    local_dir = Path(dest_folder)
+    local_dir = Path(dest_folder).expanduser()
+    # Before the existence check, so a refusal doesn't reveal what exists outside.
+    _refuse_outside_roots("Download", "dest_folder", dest_folder, local_dir, allowed_roots)
     if not local_dir.is_dir():
         error_response(
             ErrorCode.NOT_FOUND,
