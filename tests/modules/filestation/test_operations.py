@@ -1094,6 +1094,25 @@ class TestCopyMoveRestorePreCheck:
         assert "start" not in calls, calls
 
     @respx.mock
+    async def test_multi_destination_restore_names_items_already_restored(
+        self, mock_client: DsmClient
+    ) -> None:
+        # Items from different folders restore one at a time to their own folders; a later
+        # failure must name what was already restored.
+        side_effect, calls = self._dsm(
+            missing=set(), fail_status_for="/video/#recycle/Movies/b.mkv"
+        )
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        with pytest.raises(ToolError) as exc_info:
+            await restore_from_recycle_bin(
+                mock_client, share="video", paths=["Shows/a.mkv", "Movies/b.mkv"]
+            )
+        message = json.loads(str(exc_info.value))["error"]["message"]
+        assert "/video/#recycle/Movies/b.mkv" in message
+        assert "Already restored before this failure: /video/#recycle/Shows/a.mkv" in message
+        assert calls.count("start") == 2
+
+    @respx.mock
     async def test_later_failure_names_items_already_moved(self, mock_client: DsmClient) -> None:
         # Both sources exist at the check; the second fails while moving (e.g. removed meanwhile).
         side_effect, _ = self._dsm(missing=set(), fail_status_for="/w/b")

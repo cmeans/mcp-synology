@@ -436,6 +436,15 @@ class TestEnsureKnownShares:
         assert cache == set()
 
     @respx.mock
+    async def test_no_paths_makes_no_request(self, mock_client: DsmClient) -> None:
+        # e.g. upload_file with no dest_folder and no default_upload_dir configured
+        calls: list[str] = []
+        self._route([["writable"]], calls)
+        cache: set[str] = set()
+        await ensure_known_shares(mock_client, [], cache)
+        assert calls == [] and cache == set()
+
+    @respx.mock
     async def test_recycle_as_share_is_rejected(self, mock_client: DsmClient) -> None:
         calls: list[str] = []
         self._route([["writable"]], calls)
