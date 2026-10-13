@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import secrets
 import shutil
 from collections.abc import Awaitable, Callable, Coroutine
 from typing import TYPE_CHECKING, Any, BinaryIO, Self
@@ -675,7 +677,11 @@ class DsmClient:
     ) -> int:
         """Download a file from the NAS via SYNO.FileStation.Download (GET, binary).
 
-        Streams the response to disk. Returns total bytes written.
+        Streams the response to a hidden temp file next to ``dest_file`` and
+        renames it onto ``dest_file`` only after the whole body is written, so
+        a failed or interrupted download never truncates or removes an
+        existing file at ``dest_file``. The temp file is removed on any
+        failure. Returns total bytes written.
 
         Checks Content-Length against local disk free space before writing.
         If the NAS returns a JSON error envelope (Content-Type: application/json)
@@ -777,14 +783,29 @@ class DsmClient:
                     )
                     raise OSError(msg)
 
-            # Binary response — stream to disk with progress
+            # Binary response — stream to a temp file, then rename onto dest.
+            # The temp name doesn't embed the target name, so a long target
+            # name can't push it past the filesystem's name-length limit.
+            tmp_file = dest_file.with_name(f".mcp-synology-{secrets.token_hex(8)}.part")
             bytes_written = 0
-            with open(dest_file, "wb") as fh:
-                async for chunk in resp.aiter_bytes(chunk_size=chunk_size):
-                    fh.write(chunk)
-                    bytes_written += len(chunk)
-                    if progress_callback:
-                        await progress_callback(bytes_written, total_size)
+            try:
+                with open(tmp_file, "xb") as fh:
+                    async for chunk in resp.aiter_bytes(chunk_size=chunk_size):
+                        fh.write(chunk)
+                        bytes_written += len(chunk)
+                        if progress_callback:
+                            await progress_callback(bytes_written, total_size)
+                os.replace(tmp_file, dest_file)
+            except BaseException:
+                try:
+                    tmp_file.unlink()
+                except FileNotFoundError:
+                    pass
+                except OSError as cleanup_err:
+                    logger.warning(
+                        "Failed to clean up partial download %s: %s", tmp_file, cleanup_err
+                    )
+                raise
 
             logger.debug(
                 "DSM response: %s/download — success (%d bytes written)", api, bytes_written

@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import contextlib
 import errno
 import logging
+import os
 import shutil
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import TYPE_CHECKING
 
 from mcp_synology.core.errors import ErrorCode, SynologyError, SynologyFileExistsError
@@ -25,6 +25,31 @@ logger = logging.getLogger(__name__)
 
 # Files larger than this get a timeout warning in the output.
 _LARGE_FILE_THRESHOLD = 1024 * 1024 * 1024  # 1 GB
+
+# Separators rejected in a local file name on every OS, not just the host's:
+# a name with a backslash is a path on Windows even when this runs on POSIX.
+_NAME_SEPARATORS = frozenset({"/", "\\"} | {s for s in (os.sep, os.altsep) if s})
+
+
+def _local_name_problem(name: str) -> str | None:
+    """Return why ``name`` can't be used as a file name inside a local folder.
+
+    ``download_file`` joins the name onto ``dest_folder``. A name with a path
+    separator or a ``..`` component would write outside that folder, and an
+    absolute name would replace the folder entirely (``Path("/a") / "/b"`` is
+    ``/b``). Returns ``None`` for a plain file name.
+    """
+    if not name or name in (".", ".."):
+        return "it is empty or a relative directory reference"
+    if any(sep in name for sep in _NAME_SEPARATORS):
+        return "it contains a path separator"
+    if "\x00" in name:
+        return "it contains a NUL character"
+    # On Windows a drive-qualified name replaces the folder (C:\\dl / "D:x" is "D:x");
+    # refused on every OS, like a backslash.
+    if PureWindowsPath(name).drive:
+        return "it names a drive"
+    return None
 
 
 async def upload_file(
@@ -128,7 +153,32 @@ async def download_file(
 
     nas_path = normalize_path(path)
     effective_name = filename or PurePosixPath(nas_path).name
+    problem = _local_name_problem(effective_name)
+    if problem:
+        param, value = ("filename", filename) if filename else ("path", path)
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            f"Download failed: Can't save as {effective_name!r}: {problem}.",
+            retryable=False,
+            param=param,
+            value=value,
+            suggestion=(
+                "Pass a plain file name (no folders) as filename; "
+                "choose the local folder with dest_folder."
+            ),
+        )
     dest_file = local_dir / effective_name
+    if dest_file.parent != local_dir:
+        # Backstop for any name shape the rules above miss: never write outside dest_folder.
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            f"Download failed: Can't save as {effective_name!r}: it would land outside "
+            f"{local_dir}.",
+            retryable=False,
+            param="filename" if filename else "path",
+            value=filename if filename else path,
+            suggestion="Pass a plain file name (no folders) as filename.",
+        )
 
     if dest_file.exists() and not overwrite:
         error_response(
@@ -176,13 +226,9 @@ async def download_file(
             progress_callback=progress_callback,
         )
     except SynologyError as e:
-        # Clean up partial file on failure
-        if dest_file.exists():
-            try:
-                dest_file.unlink()
-                logger.debug("Cleaned up partial download: %s", dest_file)
-            except OSError:
-                logger.warning("Failed to clean up partial download: %s", dest_file)
+        # client.download() streams to a temp file and removes it on failure,
+        # so there is nothing to clean up here. Never unlink dest_file: with
+        # overwrite=True it is the user's pre-existing file.
         synology_error_response("Download", e)
     except OSError as e:
         # Filesystem rejected the write. Possibilities:
@@ -194,9 +240,6 @@ async def download_file(
         # earlier in this function. Using ``errno`` rather than substring
         # matching on the error message — the message is locale-dependent
         # and varies across OS versions, ``errno`` does not.
-        if dest_file.exists():
-            with contextlib.suppress(OSError):
-                dest_file.unlink()
         if e.errno == errno.ENOSPC:
             error_response(
                 ErrorCode.DISK_FULL,
@@ -215,13 +258,6 @@ async def download_file(
                 "Use the filename parameter to specify a compatible name."
             ),
         )
-    except Exception:
-        # Clean up partial file on unexpected failure
-        if dest_file.exists():
-            with contextlib.suppress(OSError):
-                dest_file.unlink()
-        raise
-
     result = format_status(
         f"Downloaded {effective_name} ({format_size(bytes_written)}) to {dest_file}"
     )
