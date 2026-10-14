@@ -501,6 +501,8 @@ Create one or more new folders.
 
 **Permission tier:** WRITE
 
+**Annotations:** `idempotentHint=true` (creating an existing folder succeeds); `destructiveHint=false`, since it only adds folders.
+
 **DSM API:** `SYNO.FileStation.CreateFolder` / `create`
 
 **Tool description (LLM-facing):**
