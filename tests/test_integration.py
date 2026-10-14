@@ -1552,6 +1552,36 @@ class TestErrorHandling:
             assert "zzz_nonexistent_999" in body["error"]["message"], name
             assert "list_shares" in body["error"]["message"], name
 
+    async def test_rename_onto_an_existing_name_is_refused(
+        self, nas_client: Any, tmp_path: Path
+    ) -> None:
+        """#183: rename has no overwrite option, so it stays non-destructive only if DSM
+        refuses an existing target name instead of replacing it. DSM answers 1200 (#188
+        tracks the message) for a folder onto a folder and a file onto a file."""
+        client, _, config, paths = _unpack(nas_client)
+        _skip_unless_write(config)
+        base = f"{paths['writable_folder'].rstrip('/')}/mcp_rename_clash"
+        await create_folder(client, paths=[f"{base}/a/keep_a", f"{base}/b/keep_b"])
+        (tmp_path / "x.txt").write_bytes(b"xxx")  # 3 B
+        (tmp_path / "y.txt").write_bytes(b"yyyyy")  # 5 B
+        try:
+            for name in ("x.txt", "y.txt"):
+                await upload_file(client, local_path=str(tmp_path / name), dest_folder=base)
+
+            for src, new_name in (("a", "b"), ("x.txt", "y.txt")):
+                with pytest.raises(ToolError) as exc_info:
+                    await rename(client, path=f"{base}/{src}", new_name=new_name)
+                assert "1200" in json.loads(str(exc_info.value))["error"]["message"], src
+
+            # Both folders, and what's inside each, are untouched.
+            await get_file_info(client, paths=[f"{base}/a/keep_a"])
+            await get_file_info(client, paths=[f"{base}/b/keep_b"])
+            # Both files keep their own content (told apart by size).
+            assert "3 B" in await get_file_info(client, paths=[f"{base}/x.txt"])
+            assert "5 B" in await get_file_info(client, paths=[f"{base}/y.txt"])
+        finally:
+            await delete_files(client, paths=[base])
+
     async def test_rename_invalid_path(self, nas_client: Any) -> None:
         """Rename a non-existent path should raise ToolError."""
         client, _, _, _ = _unpack(nas_client)

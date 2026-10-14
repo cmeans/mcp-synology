@@ -28,6 +28,9 @@ _ANNO_IDEMPOTENT = ToolAnnotations(
     destructiveHint=False,
     idempotentHint=True,
 )
+# move/delete remove files; copy_files, upload_file and restore_from_recycle_bin replace
+# NAS files with overwrite=true. Annotations are static, so they can't depend on
+# overwrite, and clients may auto-approve tools that aren't destructive (#183).
 _ANNO_DESTRUCTIVE = ToolAnnotations(readOnlyHint=False, destructiveHint=True)
 # download_file is READ on the NAS but writes to this machine, and with
 # overwrite=True it replaces a local file. MCP's readOnlyHint means "does not
@@ -167,6 +170,7 @@ MODULE_INFO = ModuleInfo(
                 "place. Set overwrite=true to replace existing files."
             ),
             permission_tier=PermissionTier.WRITE,
+            annotations=_ANNO_DESTRUCTIVE,
         ),
         ToolInfo(
             name="move_files",
@@ -195,6 +199,7 @@ MODULE_INFO = ModuleInfo(
                 "Does not overwrite existing NAS files by default."
             ),
             permission_tier=PermissionTier.WRITE,
+            annotations=_ANNO_DESTRUCTIVE,
         ),
         ToolInfo(
             name="restore_from_recycle_bin",
@@ -203,6 +208,7 @@ MODULE_INFO = ModuleInfo(
                 "original location or a specified destination."
             ),
             permission_tier=PermissionTier.WRITE,
+            annotations=_ANNO_DESTRUCTIVE,
         ),
     ],
     settings_schema=FileStationSettings,

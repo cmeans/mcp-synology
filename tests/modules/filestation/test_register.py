@@ -89,6 +89,18 @@ class TestFilestationModuleRegister:
         assert annos.readOnlyHint is False
         assert annos.destructiveHint is True
 
+    def test_overwrite_capable_tools_are_destructive(self) -> None:
+        """#183: with overwrite=true these replace NAS files, and annotations are static,
+        so they can't depend on overwrite. Clients may auto-approve non-destructive tools."""
+        server, _manager, ctx = _make_ctx()
+        register(ctx)
+        tools = server._tool_manager._tools
+        for name in ("copy_files", "upload_file", "restore_from_recycle_bin"):
+            annos = tools[name].annotations
+            assert annos is not None, name
+            assert annos.readOnlyHint is False, name
+            assert annos.destructiveHint is True, name
+
     def test_register_write_only_tools(self) -> None:
         write_names = {
             "create_folder",
