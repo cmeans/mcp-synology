@@ -17,6 +17,7 @@ from mcp_synology.core.errors import (
     PathNotFoundError,
     SessionExpiredError,
     SynologyError,
+    SynologyFileExistsError,
 )
 from tests.conftest import BASE_URL, make_api_cache, make_client, make_minimal_api_cache
 
@@ -544,3 +545,47 @@ class TestCreateDownloadTaskWithFile:
             )
         assert data == {"task_id": ["dbid_3"]}
         assert reauths == 1
+
+
+class TestFileStationUpload:
+    """SYNO.FileStation.Upload multipart shape (#195)."""
+
+    @respx.mock
+    async def test_overwrite_false_omits_overwrite_field(self, tmp_path: Path) -> None:
+        client = make_client(make_api_cache())
+        local = tmp_path / "report.txt"
+        local.write_bytes(b"new-bytes-38xxxxxxxxxxxxxxxxxxxxxxx")
+        route = respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 414}}
+        )
+        async with client:
+            with pytest.raises(SynologyFileExistsError):
+                await client.upload(
+                    "/volume1/Test",
+                    local,
+                    "report.txt",
+                    overwrite=False,
+                )
+        body = route.calls.last.request.content
+        assert b'name="overwrite"' not in body
+        assert b'name="path"\r\n\r\n/volume1/Test' in body
+        assert b'name="create_parents"\r\n\r\ntrue' in body
+
+    @respx.mock
+    async def test_overwrite_true_sends_overwrite_true(self, tmp_path: Path) -> None:
+        client = make_client(make_api_cache())
+        local = tmp_path / "report.txt"
+        local.write_bytes(b"replacement")
+        route = respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": True, "data": {}}
+        )
+        async with client:
+            await client.upload(
+                "/volume1/Test",
+                local,
+                "report.txt",
+                overwrite=True,
+            )
+        body = route.calls.last.request.content
+        assert b'name="overwrite"\r\n\r\ntrue' in body
+        assert b'name="overwrite"\r\n\r\nfalse' not in body

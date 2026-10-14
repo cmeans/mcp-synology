@@ -1069,32 +1069,42 @@ class TestFileTransfers:
         assert "upload_test.txt" in result
 
     async def test_02_upload_duplicate_no_overwrite(self, nas_client: Any, tmp_path: Path) -> None:
-        """Uploading the same file again without overwrite.
+        """Duplicate upload with overwrite=false must be already_exists (#195).
 
-        Note: DSM's Upload API v2 may silently skip or overwrite depending
-        on the NAS configuration. We verify it doesn't crash — the behavior
-        varies across DSM versions.
+        Synology's Upload API treats ``overwrite=false`` as *skip* (success
+        with no write). We omit the field so DSM returns 414 instead, and
+        the remote file must keep the bytes from test_01.
         """
         client, _, config, paths = _unpack(nas_client)
         _skip_unless_write(config)
 
         base = paths["writable_folder"]
         dest = f"{base}/{self._UPLOAD_DIR}"
+        remote = f"{dest}/upload_test.txt"
 
-        local_file = tmp_path / "upload_test.txt"
-        local_file.write_bytes(self._TEST_CONTENT)
+        before = await get_file_info(client, paths=[remote])
+        logger.info("upload duplicate before:\n%s", before)
 
-        # DSM may return success (silent overwrite) or raise ToolError (already exists).
-        # Either is acceptable — we just verify it doesn't crash hard.
-        try:
-            result = await upload_file(
+        local_file = tmp_path / "upload_test_dup.txt"
+        # Different size so a silent skip would leave the original size visible.
+        local_file.write_bytes(self._TEST_CONTENT + b"extra-bytes-that-must-not-land")
+
+        with pytest.raises(ToolError) as exc_info:
+            await upload_file(
                 client,
                 local_path=str(local_file),
                 dest_folder=dest,
+                filename="upload_test.txt",
+                overwrite=False,
             )
-            logger.info("upload duplicate (no overwrite):\n%s", result)
-        except ToolError as e:
-            logger.info("upload duplicate raised ToolError (expected): %s", e)
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "already_exists", f"Unexpected error: {exc_info.value}"
+        assert body["error"].get("param") == "filename"
+
+        after = await get_file_info(client, paths=[remote])
+        logger.info("upload duplicate after:\n%s", after)
+        # Original content size from test_01 must be unchanged.
+        assert f"{len(self._TEST_CONTENT)} B" in after
 
     async def test_03_upload_overwrite(self, nas_client: Any, tmp_path: Path) -> None:
         """Uploading with overwrite=True should succeed."""

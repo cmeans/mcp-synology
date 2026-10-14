@@ -500,6 +500,12 @@ class DsmClient:
         The file is opened (or re-opened on retry) within this method so the
         stream is always fresh.
 
+        ``overwrite`` mapping follows Synology's File Station Upload guide
+        (#195): ``overwrite=true`` replaces an existing file; omitting the
+        field makes DSM fail with error 414 when the name is taken. Sending
+        ``overwrite=false`` means *skip* (success with no write), which used
+        to look like a successful upload of the new bytes.
+
         Returns the parsed data dict from the JSON response envelope.
         """
         api = "SYNO.FileStation.Upload"
@@ -524,9 +530,12 @@ class DsmClient:
             "version": str(resolved_version),
             "method": "upload",
             "path": dest_folder,
-            "overwrite": str(overwrite).lower(),
             "create_parents": str(create_parents).lower(),
         }
+        # Omit overwrite when False so DSM returns 414 instead of silently
+        # skipping (#195). Only send the field for an explicit replace.
+        if overwrite:
+            form_data["overwrite"] = "true"
         # SID must be a query parameter, not a form field — the Upload API
         # does not read _sid from multipart form data.
         query_params: dict[str, str] = {}

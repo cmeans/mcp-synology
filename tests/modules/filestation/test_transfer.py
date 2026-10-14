@@ -87,6 +87,50 @@ class TestUploadFile:
         assert "overwrite=true" in body["error"]["suggestion"]
 
     @respx.mock
+    async def test_upload_omits_overwrite_false_in_multipart(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """#195: overwrite=False must omit the field so DSM can return 414."""
+        local_file = tmp_path / "report.txt"
+        local_file.write_text("hello")
+
+        route = respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 414}}
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await upload_file(
+                mock_client,
+                local_path=str(local_file),
+                dest_folder="/video/uploads",
+                overwrite=False,
+            )
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "already_exists"
+        content = route.calls.last.request.content
+        assert b'name="overwrite"' not in content
+
+    @respx.mock
+    async def test_upload_sends_overwrite_true_in_multipart(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        local_file = tmp_path / "report.txt"
+        local_file.write_text("hello")
+
+        route = respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": True, "data": {}}
+        )
+
+        await upload_file(
+            mock_client,
+            local_path=str(local_file),
+            dest_folder="/video/uploads",
+            overwrite=True,
+        )
+        content = route.calls.last.request.content
+        assert b'name="overwrite"\r\n\r\ntrue' in content
+
+    @respx.mock
     async def test_upload_overwrite_success(self, mock_client: DsmClient, tmp_path: Path) -> None:
         local_file = tmp_path / "test.txt"
         local_file.write_text("updated content")
