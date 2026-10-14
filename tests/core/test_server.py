@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from importlib.metadata import version as pkg_version
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -12,6 +13,7 @@ import pytest
 import respx
 from mcp.shared.memory import create_connected_server_and_client_session
 
+from mcp_synology import __version__
 from mcp_synology.server import (
     _BASE_INSTRUCTIONS,
     SharedClientManager,
@@ -33,6 +35,21 @@ class TestCreateServer:
         config = make_test_config()
         server = create_server(config)
         assert server is not None
+
+    def test_serverinfo_version_is_package_version(self) -> None:
+        """initialize must advertise mcp-synology's version, not the MCP SDK's (#166)."""
+        server = create_server(make_test_config())
+        assert server._mcp_server.version == __version__
+        assert server._mcp_server.version == pkg_version("mcp-synology")
+        assert server._mcp_server.version != pkg_version("mcp")
+
+    async def test_initialize_reports_package_version(self) -> None:
+        server = create_server(make_test_config())
+        async with create_connected_server_and_client_session(server._mcp_server) as session:
+            init = await session.initialize()
+        assert init.serverInfo.version == __version__
+        assert init.serverInfo.version == pkg_version("mcp-synology")
+        assert init.serverInfo.version != pkg_version("mcp")
 
     def test_server_with_read_permission(self) -> None:
         config = make_test_config(modules={"filestation": {"enabled": True, "permission": "read"}})
