@@ -1,6 +1,6 @@
 # File Station Module — Tool Specifications
 
-> **Version:** 0.6 | **Updated:** 2026-10-11. Every LLM-facing description refreshed to the shipped text (all 14 had drifted since 0.4); `get_file_info`'s `additional` is exposed (#146); timestamps are labeled UTC (#137). Earlier: 0.4 (2026-03-18) added upload_file (WRITE) and download_file (READ). Tool counts: 7 READ + 7 WRITE = 14.
+> **Version:** 0.6.1 | **Updated:** 2026-10-15. Missing download/upload dest raises structured `invalid_parameter` (#194). Earlier: 0.6 | **Updated:** 2026-10-11. Every LLM-facing description refreshed to the shipped text (all 14 had drifted since 0.4); `get_file_info`'s `additional` is exposed (#146); timestamps are labeled UTC (#137). Earlier: 0.4 (2026-03-18) added upload_file (WRITE) and download_file (READ). Tool counts: 7 READ + 7 WRITE = 14.
 > **Parent doc:** `docs/specs/architecture.md`
 >
 > Kept in sync with the code by `tests/test_module_specs.py`: tool headings, permission tiers, parameter names and the exact LLM-facing descriptions must match what ships.
@@ -413,6 +413,7 @@ Download a NAS file to a local directory on this machine.
 - **Annotations:** READ tier (it only reads the NAS), but `readOnlyHint=false`, `destructiveHint=true`, because it writes and can replace a file on this machine. Tiers guard the NAS only (see `architecture.md`).
 - The MCP server runs locally, so `dest_folder` refers to a path on the machine running the server.
 - **Local path confinement:** `dest_folder` must resolve (after `~`, `..` and symlinks) to a path inside one of the `allowed_local_paths` folders (default: the user's Downloads folder; `default_download_dir` is always allowed). Otherwise it's `permission_denied`, listing the allowed folders, before any NAS request and before the folder's existence is checked. The message shows where the path resolves to only when the path itself is inside an allowed folder (a symlink there that leads out), so a refusal doesn't reveal what exists outside. A path that can't be resolved (a NUL byte, a symlink loop) is `invalid_parameter`. The server instructions list the allowed folders under LOCAL PATHS. See `local_paths.py` and `config-schema-spec.md`.
+- **Missing destination:** if neither `dest_folder` nor `default_download_dir` is set, the tool raises `invalid_parameter` (`param=dest_folder`, non-retryable) via the structured error envelope — the same path used for other refusals — rather than returning a plain-text `[!]` success string (#194).
 
 ---
 
@@ -455,6 +456,7 @@ Upload a local file from this machine to a NAS folder.
 - `SynologyFileExistsError` (414) caught with suggestion to use `overwrite=true`.
 - The MCP server runs locally, so `local_path` refers to a path on the machine running the server.
 - **Local path confinement:** `local_path` must resolve (after `~`, `..` and symlinks) to a path inside one of the `allowed_local_paths` folders (default: the user's Downloads folder; `default_download_dir` is always allowed). Otherwise it's `permission_denied`, listing the allowed folders, before any NAS request; a symlink inside an allowed folder that points outside is refused. The server instructions list the allowed folders under LOCAL PATHS. See `local_paths.py` and `config-schema-spec.md`.
+- **Missing destination:** if neither `dest_folder` nor `default_upload_dir` is set, the tool raises `invalid_parameter` (`param=dest_folder`, non-retryable) via the structured error envelope rather than returning a plain-text `[!]` success string (#194).
 
 ---
 

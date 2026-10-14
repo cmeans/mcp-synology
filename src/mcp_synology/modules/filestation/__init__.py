@@ -11,6 +11,8 @@ from mcp.server.fastmcp import (
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field, field_validator
 
+from mcp_synology.core.errors import ErrorCode
+from mcp_synology.core.formatting import error_response
 from mcp_synology.modules import (
     ApiRequirement,
     ModuleInfo,
@@ -507,10 +509,15 @@ def register(ctx: RegisterContext) -> None:
         ) -> str:
             effective_dest = dest_folder or default_download_dir
             if not effective_dest:
-                return (
-                    "[!] No destination folder specified and no default_download_dir "
-                    "configured.\n    Provide dest_folder or set default_download_dir "
-                    "in filestation module settings."
+                error_response(
+                    ErrorCode.INVALID_PARAMETER,
+                    "No destination folder specified and no default_download_dir configured.",
+                    retryable=False,
+                    param="dest_folder",
+                    suggestion=(
+                        "Provide dest_folder or set default_download_dir in "
+                        "filestation module settings."
+                    ),
                 )
 
             client = await manager.get_client()
@@ -649,10 +656,15 @@ def register(ctx: RegisterContext) -> None:
         ) -> str:
             effective_dest = dest_folder or default_upload_dir
             if not effective_dest:
-                return (
-                    "[!] No NAS destination folder specified and no default_upload_dir "
-                    "configured.\n    Provide dest_folder or set default_upload_dir "
-                    "in filestation module settings."
+                error_response(
+                    ErrorCode.INVALID_PARAMETER,
+                    "No NAS destination folder specified and no default_upload_dir configured.",
+                    retryable=False,
+                    param="dest_folder",
+                    suggestion=(
+                        "Provide dest_folder or set default_upload_dir in "
+                        "filestation module settings."
+                    ),
                 )
 
             client = await manager.get_client()
