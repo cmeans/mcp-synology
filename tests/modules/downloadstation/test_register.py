@@ -365,3 +365,34 @@ class TestModuleInfoDescriptions:
         assert "no-op" not in desc
         assert "active" in desc and "finished" in desc
         assert "405" in desc
+
+
+class TestDownloadstationAnnotations:
+    """Clients may auto-approve tools that don't claim destructiveHint, so tools that remove
+    or overwrite state must say so."""
+
+    def _annos(self) -> dict[str, object]:
+        server, _manager, ctx = _make_ctx()
+        register(ctx)
+        return {name: tool.annotations for name, tool in server._tool_manager._tools.items()}
+
+    def test_delete_download_is_destructive(self) -> None:
+        anno = self._annos()["delete_download"]
+        assert anno.readOnlyHint is False
+        assert anno.destructiveHint is True
+
+    def test_setters_are_destructive_and_idempotent(self) -> None:
+        # Each replaces a stored value (NAS-wide settings, or a task's destination for
+        # edit_download), so the previous one is lost; repeating a call with the same
+        # arguments changes nothing more. QA R1 (#182) on edit_download.
+        annos = self._annos()
+        for name in ("set_download_config", "set_schedule", "edit_download"):
+            assert annos[name].readOnlyHint is False, name
+            assert annos[name].destructiveHint is True, name
+            assert annos[name].idempotentHint is True, name
+
+    def test_additive_writes_stay_non_destructive(self) -> None:
+        # create adds a task; pause/resume toggle a task's state without losing anything.
+        annos = self._annos()
+        for name in ("create_download", "pause_download", "resume_download"):
+            assert annos[name].destructiveHint is False, name

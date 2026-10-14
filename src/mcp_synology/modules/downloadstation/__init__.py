@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from mcp.types import ToolAnnotations
 from pydantic import BaseModel
 
 from mcp_synology.modules import (
@@ -21,6 +22,15 @@ from mcp_synology.modules import (
 
 if TYPE_CHECKING:
     from mcp_synology.modules import RegisterContext
+
+# Clients may auto-approve tools that don't claim destructiveHint. Deleting a task loses
+# it (and an unfinished task's partial data). The setters and edit_download replace a
+# stored value (NAS-wide settings, a task's destination), so the previous one is lost,
+# but repeating a call changes nothing more. pause/resume only toggle a task's state.
+_ANNO_DESTRUCTIVE = ToolAnnotations(readOnlyHint=False, destructiveHint=True)
+_ANNO_DESTRUCTIVE_IDEMPOTENT = ToolAnnotations(
+    readOnlyHint=False, destructiveHint=True, idempotentHint=True
+)
 
 
 class DownloadStationSettings(BaseModel):
@@ -136,6 +146,7 @@ MODULE_INFO = ModuleInfo(
                 "listed), so leave it false for those."
             ),
             permission_tier=PermissionTier.WRITE,
+            annotations=_ANNO_DESTRUCTIVE,
         ),
         ToolInfo(
             name="pause_download",
@@ -164,6 +175,7 @@ MODULE_INFO = ModuleInfo(
                 "Download Station (Task API v2); older versions get a clear error."
             ),
             permission_tier=PermissionTier.WRITE,
+            annotations=_ANNO_DESTRUCTIVE_IDEMPOTENT,
         ),
         ToolInfo(
             name="set_download_config",
@@ -178,6 +190,7 @@ MODULE_INFO = ModuleInfo(
                 "is set."
             ),
             permission_tier=PermissionTier.WRITE,
+            annotations=_ANNO_DESTRUCTIVE_IDEMPOTENT,
         ),
         ToolInfo(
             name="set_schedule",
@@ -192,6 +205,7 @@ MODULE_INFO = ModuleInfo(
                 "account; if that write is refused, nothing is applied."
             ),
             permission_tier=PermissionTier.WRITE,
+            annotations=_ANNO_DESTRUCTIVE_IDEMPOTENT,
         ),
     ],
     settings_schema=DownloadStationSettings,
