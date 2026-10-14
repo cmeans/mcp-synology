@@ -1297,7 +1297,7 @@ class TestCopyMoveSkippedItems:
         assert "overwrite=true" in result
 
     @respx.mock
-    async def test_copy_with_a_skipped_folder_says_partly_copied(
+    async def test_copy_with_a_skipped_folder_says_items_skipped(
         self, mock_client: DsmClient
     ) -> None:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
@@ -1307,11 +1307,15 @@ class TestCopyMoveSkippedItems:
         # QA R1 (#175): "0 of 1" alone would claim nothing was copied, but DSM still copies
         # a skipped folder's children that weren't at the destination.
         assert result.startswith(
-            "[!] Copied 0 of 1 item(s) in full to /w/dst/; 1 folder partly copied (some "
-            "items already at the destination, overwrite=false):"
+            "[!] Copied 0 of 1 item(s) in full to /w/dst/; 1 folder with items skipped "
+            "(already at the destination, overwrite=false):"
         ), result
-        assert "Partly copied (items already at the destination were skipped, the rest " in result
-        assert "were copied):\n  /w/d" in result
+        # Not "the rest were copied": DSM doesn't say whether anything was left to copy.
+        assert (
+            "Folders with items skipped (anything not already at the destination was "
+            "copied):\n  /w/d"
+        ) in result
+        assert "the rest" not in result
         assert "Skipped:" not in result
         assert "in whole or in part" not in result
         assert "overwrite=true" in result
@@ -1360,12 +1364,12 @@ class TestCopyMoveSkippedItems:
         )
         result = await copy_files(mock_client, paths=["/w/a", "/w/d", "/w/c"], dest_folder="/x")
         assert result.startswith(
-            "[!] Copied 1 of 3 item(s) in full to /x/; 1 skipped, 1 folder partly copied "
+            "[!] Copied 1 of 3 item(s) in full to /x/; 1 skipped, 1 folder with items skipped "
             "(already at the destination, overwrite=false):"
         ), result
         assert "Copied:\n  c" in result
         assert "Skipped:\n  /w/a" in result
-        assert "were copied):\n  /w/d" in result
+        assert "was copied):\n  /w/d" in result
 
     @respx.mock
     async def test_move_with_skips_does_not_claim_source_removed(
@@ -1407,7 +1411,7 @@ class TestCopyMoveSkippedItems:
         assert "moved" not in result.lower()
 
     @respx.mock
-    async def test_restore_of_a_skipped_folder_says_partly_restored(
+    async def test_restore_of_a_skipped_folder_says_items_skipped(
         self, mock_client: DsmClient
     ) -> None:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
@@ -1418,12 +1422,11 @@ class TestCopyMoveSkippedItems:
         result = await restore_from_recycle_bin(mock_client, share="video", paths=["S"])
         assert result.startswith(
             "[!] Restored from /video recycle bin: 0 of 1 item(s) in full to /video/; "
-            "1 folder partly restored"
+            "1 folder with items skipped"
         ), result
-        assert "Partly restored (items already at the destination were skipped, the rest " in (
-            result
-        )
-        assert "were restored):" in result
+        assert (
+            "Folders with items skipped (anything not already at the destination was restored):"
+        ) in result
         assert "moved" not in result.lower()
 
     @respx.mock

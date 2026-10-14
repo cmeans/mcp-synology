@@ -375,7 +375,7 @@ async def _skip_report(
 
     DSM's ``skipstatus`` says only that something was skipped for a source: all of a file,
     or some of a folder's children (the rest still went through). So each skipped source's
-    type is looked up: a file was skipped, a folder was partly done. A source whose type
+    type is looked up: a file was skipped, a folder had items skipped. A source whose type
     can't be read keeps the hedged "in whole or in part" wording.
     """
     try:
@@ -393,17 +393,16 @@ async def _skip_report(
     if files:
         parts.append(f"{len(files)} skipped")
     if folders:
-        parts.append(f"{len(folders)} folder{'s' if len(folders) > 1 else ''} partly {done}")
+        parts.append(f"{len(folders)} folder{'s' if len(folders) > 1 else ''} with items skipped")
     if unknown:
         parts.append(f"{len(unknown)} skipped in whole or in part")
     # "In full" only when a folder may have been partly done: "0 of 1" alone would claim
     # nothing went through (QA R1 on #175).
     in_full = " in full" if folders or unknown else ""
-    reason = "some items already" if folders and not (files or unknown) else "already"
     lines = [
         format_status(
             f"{verb} {len(ok)} of {len(normalized)} item(s){in_full} to {dest}/; "
-            f"{', '.join(parts)} ({reason} at the destination, overwrite=false):",
+            f"{', '.join(parts)} (already at the destination, overwrite=false):",
             success=False,
         )
     ]
@@ -419,8 +418,9 @@ async def _skip_report(
         lines.append("Skipped:")
         lines.extend(entry(p) for p in files)
     if folders:
+        # DSM doesn't say whether anything in the folder was left to copy, so don't claim it was.
         lines.append(
-            f"Partly {done} (items already at the destination were skipped, the rest were {done}):"
+            f"Folders with items skipped (anything not already at the destination was {done}):"
         )
         lines.extend(entry(p) for p in folders)
     if unknown:
@@ -794,10 +794,7 @@ def _as_restore(text: str, share_name: str) -> str:
         .replace("\nMoved:\n", "\nRestored:\n")
         .replace("\nMoved sources removed from", "\nRestored items removed from")
         .replace("were still moved.", "were still restored.")
-        .replace("folder partly moved", "folder partly restored")
-        .replace("folders partly moved", "folders partly restored")
-        .replace("\nPartly moved (", "\nPartly restored (")
-        .replace("the rest were moved):", "the rest were restored):")
+        .replace("at the destination was moved):", "at the destination was restored):")
     )
 
 
