@@ -395,6 +395,24 @@ async def find_missing_paths(client: DsmClient, paths: list[str]) -> list[tuple[
     return missing
 
 
+async def paths_isdir(client: DsmClient, paths: list[str]) -> dict[str, bool]:
+    """Return ``{path: isdir}`` for each path whose type ``getinfo`` reports.
+
+    A path DSM gives no ``isdir`` for (missing, or an unexpected shape) is left out. A
+    failed request raises ``SynologyError`` for the caller to handle.
+    """
+    version = min(2, client.negotiate_version("SYNO.FileStation.List", max_version=2))
+    kinds: dict[str, bool] = {}
+    for path in paths:
+        data = await client.request(
+            "SYNO.FileStation.List", "getinfo", version=version, params={"path": path}
+        )
+        for entry in data.get("files", []):
+            if isinstance(entry.get("isdir"), bool):
+                kinds[path] = entry["isdir"]
+    return kinds
+
+
 def missing_paths_suggestion(missing: list[tuple[str, int]]) -> str:
     """Suggestion for a call refused because paths don't exist (adds a wildcard hint)."""
     suggestion = (

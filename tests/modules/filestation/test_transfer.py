@@ -210,6 +210,10 @@ class TestDownloadFile:
         assert body["status"] == "error"
         assert body["error"]["code"] == "already_exists"
         assert "overwrite=true" in body["error"]["suggestion"]
+        # #189: the conflict is the file name (as upload_file reports it), not dest_folder.
+        assert body["error"]["param"] == "filename"
+        assert body["error"]["value"] == "movie.mkv"
+        assert str(existing) in body["error"]["message"]
 
     @respx.mock
     async def test_download_overwrite_success(self, mock_client: DsmClient, tmp_path: Path) -> None:
@@ -461,7 +465,9 @@ class TestDownloadFile:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._stream(body()))
         with pytest.raises(ToolError) as exc_info:
             await download_file(mock_client, path="/docs/report.pdf", dest_folder=str(tmp_path))
-        assert json.loads(str(exc_info.value))["error"]["code"] == "already_exists"
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "already_exists"
+        assert (error["param"], error["value"]) == ("filename", "report.pdf")  # #189
         assert dest.read_bytes() == b"CREATED MEANWHILE"
         assert sorted(p.name for p in tmp_path.iterdir()) == ["report.pdf"]  # no temp left
 

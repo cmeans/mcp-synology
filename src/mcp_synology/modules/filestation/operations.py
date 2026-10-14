@@ -19,6 +19,7 @@ from mcp_synology.modules.filestation.helpers import (
     find_missing_paths,
     missing_paths_suggestion,
     normalize_path,
+    paths_isdir,
 )
 
 if TYPE_CHECKING:
@@ -361,6 +362,77 @@ async def _copy_move_one_path(
     return (int(size) if isinstance(size, int | float) else 0), skipped
 
 
+async def _skip_report(
+    client: DsmClient,
+    verb: str,
+    dest: str,
+    normalized: list[str],
+    ok: list[str],
+    skipped_paths: list[str],
+    remove_src: bool,
+) -> list[str]:
+    """Lines for a copy/move/restore result where DSM skipped something (#171, #189).
+
+    DSM's ``skipstatus`` says only that something was skipped for a source: all of a file,
+    or some of a folder's children (the rest still went through). So each skipped source's
+    type is looked up: a file was skipped, a folder was partly done. A source whose type
+    can't be read keeps the hedged "in whole or in part" wording.
+    """
+    try:
+        kinds = await paths_isdir(client, skipped_paths)
+    except SynologyError as e:
+        # The copy already happened; report it with the hedged wording, never as an error.
+        logger.warning("Couldn't read the type of skipped sources (DSM %s): %s", e.code, e)
+        kinds = {}
+    files = [p for p in skipped_paths if kinds.get(p) is False]
+    folders = [p for p in skipped_paths if kinds.get(p) is True]
+    unknown = [p for p in skipped_paths if p not in kinds]
+    done = verb.lower()
+
+    parts = []
+    if files:
+        parts.append(f"{len(files)} skipped")
+    if folders:
+        parts.append(f"{len(folders)} folder{'s' if len(folders) > 1 else ''} partly {done}")
+    if unknown:
+        parts.append(f"{len(unknown)} skipped in whole or in part")
+    # "In full" only when a folder may have been partly done: "0 of 1" alone would claim
+    # nothing went through (QA R1 on #175).
+    in_full = " in full" if folders or unknown else ""
+    reason = "some items already" if folders and not (files or unknown) else "already"
+    lines = [
+        format_status(
+            f"{verb} {len(ok)} of {len(normalized)} item(s){in_full} to {dest}/; "
+            f"{', '.join(parts)} ({reason} at the destination, overwrite=false):",
+            success=False,
+        )
+    ]
+
+    def entry(p: str) -> str:
+        src_dir = "/".join(p.split("/")[:-1]) or "/"
+        return f"  {p}" + (f" (skipped items are still in {src_dir}/)" if remove_src else "")
+
+    if ok:
+        lines.append(f"{verb}:")
+        lines.extend(f"  {p.split('/')[-1]}" for p in ok)
+    if files:
+        lines.append("Skipped:")
+        lines.extend(entry(p) for p in files)
+    if folders:
+        lines.append(
+            f"Partly {done} (items already at the destination were skipped, the rest were {done}):"
+        )
+        lines.extend(entry(p) for p in folders)
+    if unknown:
+        lines.append("Skipped in whole or in part:")
+        lines.extend(entry(p) for p in unknown)
+        lines.append(
+            f"For a skipped folder, the parts not already at the destination were still {done}."
+        )
+    lines.append("Pass overwrite=true to replace them.")
+    return lines
+
+
 async def _copy_move(
     client: DsmClient,
     *,
@@ -438,32 +510,7 @@ async def _copy_move(
         lines = [format_status(f"{verb} {len(normalized)} item(s) to {dest}/:")]
         lines.extend(f"  {name(p)}" for p in normalized)
     else:
-        # DSM only says that it skipped something for a source (a whole file, or some of
-        # a folder's children), not what, so each such source is listed separately (#171).
-        # The count is of sources done in full: a skipped folder's other children still
-        # went through, so "0 of 1" alone would be false (QA R1 on #175).
-        lines = [
-            format_status(
-                f"{verb} {len(ok)} of {len(normalized)} item(s) in full to {dest}/; "
-                f"{len(skipped_paths)} skipped in whole or in part (already at the "
-                "destination, overwrite=false):",
-                success=False,
-            )
-        ]
-        if ok:
-            lines.append(f"{verb}:")
-            lines.extend(f"  {name(p)}" for p in ok)
-        lines.append("Skipped in whole or in part:")
-        for p in skipped_paths:
-            src_dir = "/".join(p.split("/")[:-1]) or "/"
-            lines.append(
-                f"  {p}" + (f" (skipped items are still in {src_dir}/)" if remove_src else "")
-            )
-        lines.append(
-            "For a skipped folder, the parts not already at the destination were still "
-            f"{verb.lower()}."
-        )
-        lines.append("Pass overwrite=true to replace them.")
+        lines = await _skip_report(client, verb, dest, normalized, ok, skipped_paths, remove_src)
 
     if total_processed > 0:
         lines.append(f"\nTotal size: {format_size(total_processed)}")
@@ -747,6 +794,10 @@ def _as_restore(text: str, share_name: str) -> str:
         .replace("\nMoved:\n", "\nRestored:\n")
         .replace("\nMoved sources removed from", "\nRestored items removed from")
         .replace("were still moved.", "were still restored.")
+        .replace("folder partly moved", "folder partly restored")
+        .replace("folders partly moved", "folders partly restored")
+        .replace("\nPartly moved (", "\nPartly restored (")
+        .replace("the rest were moved):", "the rest were restored):")
     )
 
 

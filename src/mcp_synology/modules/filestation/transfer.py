@@ -261,8 +261,8 @@ async def download_file(
             ErrorCode.ALREADY_EXISTS,
             f"Download failed: Local file already exists: {dest_file}",
             retryable=False,
-            param="dest_folder",
-            value=str(dest_file),
+            param="filename",
+            value=dest_file.name,
             suggestion="Use overwrite=true to replace the existing file.",
         )
 
@@ -309,8 +309,8 @@ async def download_file(
             f"Download failed: Local file already exists: {dest_file} (it was created "
             "while the download was in progress)",
             retryable=False,
-            param="dest_folder",
-            value=str(dest_file),
+            param="filename",
+            value=dest_file.name,
             suggestion="Use overwrite=true to replace the existing file.",
         )
     except SynologyError as e:
