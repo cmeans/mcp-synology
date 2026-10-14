@@ -58,6 +58,22 @@ class TestDefaultDownloadsDir:
         monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
         assert default_downloads_dir(platform="linux") == tmp_path / "Downloads"
 
+    @pytest.mark.parametrize(
+        "contents",
+        [
+            'XDG_DESKTOP_DIR="$HOME/Desktop"\n',  # no Downloads entry at all
+            'XDG_DOWNLOAD_DIR="Downloads"\n',  # neither $HOME-relative nor absolute
+        ],
+    )
+    def test_unusable_xdg_entry_falls_back_to_home_downloads(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, contents: str
+    ) -> None:
+        (tmp_path / ".config").mkdir()
+        (tmp_path / ".config" / "user-dirs.dirs").write_text(contents, encoding="utf-8")
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+        assert default_downloads_dir(platform="linux") == tmp_path / "Downloads"
+
     def test_macos_is_home_downloads(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         assert default_downloads_dir(platform="darwin") == tmp_path / "Downloads"
