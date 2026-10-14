@@ -77,11 +77,12 @@ def _lexical(path: str | Path) -> Path:
 
 
 def lexically_inside(path: str | Path, roots: list[Path]) -> bool:
-    """Whether ``path``, read literally (no symlinks followed), is inside a root."""
-    try:
-        lexical = _lexical(path)
-    except ValueError:
-        return False
+    """Whether ``path``, read literally (no symlinks followed), is inside a root.
+
+    Call it only after ``outside_allowed_roots`` resolved ``path``: anything that could
+    make this fail (a NUL byte, an unknown ``~user``) already failed there.
+    """
+    lexical = _lexical(path)
     return any(lexical == root or root in lexical.parents for root in roots)
 
 

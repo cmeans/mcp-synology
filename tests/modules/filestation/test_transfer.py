@@ -1074,3 +1074,30 @@ class TestLocalPathConfinementErrors:
             )
         message = json.loads(str(exc_info.value))["error"]["message"]
         assert f"resolves to {(tmp_path / 'out').resolve()}" in message
+
+    async def test_unknown_home_user_is_invalid_parameter(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """``~nosuchuser`` can't be expanded; that's a structured error, not a crash."""
+        with pytest.raises(ToolError) as exc_info:
+            await upload_file(
+                mock_client,
+                local_path="~mcp_no_such_user_xyz/f.txt",
+                dest_folder="/share",
+                allowed_roots=[tmp_path.resolve()],
+            )
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "invalid_parameter"
+        assert error["param"] == "local_path"
+
+    async def test_unknown_home_user_without_roots_is_invalid_parameter(
+        self, mock_client: DsmClient
+    ) -> None:
+        """Direct (unconfined) callers expand ``~`` too; an unknown user is still structured."""
+        with pytest.raises(ToolError) as exc_info:
+            await download_file(
+                mock_client, path="/share/f.txt", dest_folder="~mcp_no_such_user_xyz/dl"
+            )
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "invalid_parameter"
+        assert error["param"] == "dest_folder"

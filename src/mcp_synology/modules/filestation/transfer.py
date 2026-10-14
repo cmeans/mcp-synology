@@ -56,6 +56,21 @@ def _local_name_problem(name: str) -> str | None:
     return None
 
 
+def _expand_home(operation: str, param: str, value: str) -> Path:
+    """``~`` and ``~user`` expanded; an unknown user is ``invalid_parameter``, not a crash."""
+    try:
+        return Path(value).expanduser()
+    except RuntimeError as e:
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            f"{operation} refused: {value!r} can't be expanded: {e}",
+            retryable=False,
+            param=param,
+            value=value,
+            suggestion="Pass an absolute local path, or one starting with ~/.",
+        )
+
+
 def _refuse_outside_roots(
     operation: str, param: str, value: str, path: Path, roots: list[Path] | None
 ) -> None:
@@ -109,8 +124,8 @@ async def upload_file(
     allowed_roots: list[Path] | None = None,
 ) -> str:
     """Upload a local file to a NAS folder."""
-    local = Path(local_path).expanduser()
-    _refuse_outside_roots("Upload", "local_path", local_path, local, allowed_roots)
+    _refuse_outside_roots("Upload", "local_path", local_path, Path(local_path), allowed_roots)
+    local = _expand_home("Upload", "local_path", local_path)
     if not local.is_file():
         error_response(
             ErrorCode.NOT_FOUND,
@@ -187,9 +202,9 @@ async def download_file(
     allowed_roots: list[Path] | None = None,
 ) -> str:
     """Download a NAS file to a local directory."""
-    local_dir = Path(dest_folder).expanduser()
     # Before the existence check, so a refusal doesn't reveal what exists outside.
-    _refuse_outside_roots("Download", "dest_folder", dest_folder, local_dir, allowed_roots)
+    _refuse_outside_roots("Download", "dest_folder", dest_folder, Path(dest_folder), allowed_roots)
+    local_dir = _expand_home("Download", "dest_folder", dest_folder)
     if not local_dir.is_dir():
         error_response(
             ErrorCode.NOT_FOUND,
