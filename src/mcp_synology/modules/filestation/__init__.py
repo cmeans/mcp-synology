@@ -9,7 +9,7 @@ from mcp.server.fastmcp import (
     Context,  # noqa: TC002 — runtime import needed for FastMCP context injection
 )
 from mcp.types import ToolAnnotations
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from mcp_synology.modules import (
     ApiRequirement,
@@ -38,6 +38,16 @@ _ANNO_DESTRUCTIVE = ToolAnnotations(readOnlyHint=False, destructiveHint=True)
 _ANNO_LOCAL_WRITE = ToolAnnotations(readOnlyHint=False, destructiveHint=True)
 
 
+def _expand_setting(setting: str, entry: str) -> Path:
+    """``~`` expanded. An unknown ``~user`` raises RuntimeError, which pydantic doesn't
+    report as a validation error; re-raise it as ValueError so it does (QA R2 on #186)."""
+    try:
+        return Path(entry).expanduser()
+    except RuntimeError as e:
+        msg = f"{setting}: {entry!r} can't be expanded: {e}"
+        raise ValueError(msg) from e
+
+
 class FileStationSettings(BaseModel):
     """File Station module settings."""
 
@@ -52,6 +62,28 @@ class FileStationSettings(BaseModel):
     download_timeout: int | None = Field(default=None, ge=10, le=3600)
     default_download_dir: str | None = None
     default_upload_dir: str | None = None
+    # Local folders upload_file/download_file may use (see local_paths.py). None means
+    # the user's Downloads folder; default_download_dir is always allowed too.
+    allowed_local_paths: list[str] | None = Field(default=None, min_length=1)
+
+    @field_validator("allowed_local_paths")
+    @classmethod
+    def _absolute_local_paths(cls, value: list[str] | None) -> list[str] | None:
+        # A relative entry would resolve against the server's working directory, which
+        # depends on how the MCP client launched it (QA R1 on #186).
+        for entry in value or []:
+            if not _expand_setting("allowed_local_paths", entry).is_absolute():
+                msg = f"allowed_local_paths entries must be absolute (or start with ~): {entry!r}"
+                raise ValueError(msg)
+        return value
+
+    @field_validator("default_download_dir")
+    @classmethod
+    def _expandable_download_dir(cls, value: str | None) -> str | None:
+        if value:
+            _expand_setting("default_download_dir", value)
+        return value
+
     search_poll_interval: float = Field(default=1.0, ge=0.5, le=10.0)
 
 
@@ -217,6 +249,7 @@ MODULE_INFO = ModuleInfo(
 
 def register(ctx: RegisterContext) -> None:
     """Register File Station tools with the MCP server."""
+    from mcp_synology.modules.filestation import local_paths
     from mcp_synology.modules.filestation.helpers import ensure_known_shares
     from mcp_synology.modules.filestation.listing import (
         list_files,
@@ -250,6 +283,9 @@ def register(ctx: RegisterContext) -> None:
         else None
     )
     default_upload_dir = settings.default_upload_dir  # NAS path, no expansion
+    allowed_roots = local_paths.allowed_local_roots(
+        settings.allowed_local_paths, default_download_dir
+    )
     search_poll_interval = settings.search_poll_interval
     hide_recycle = settings.hide_recycle_in_listings
 
@@ -492,6 +528,7 @@ def register(ctx: RegisterContext) -> None:
                     overwrite=overwrite,
                     timeout=download_timeout,
                     progress_callback=_progress,
+                    allowed_roots=allowed_roots,
                 )
             )
 
@@ -636,6 +673,7 @@ def register(ctx: RegisterContext) -> None:
                     create_parents=create_parents,
                     timeout=upload_timeout,
                     progress_callback=_progress,
+                    allowed_roots=allowed_roots,
                 )
             )
 

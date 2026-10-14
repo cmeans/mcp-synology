@@ -387,6 +387,30 @@ def _withheld_tools_notice(config: AppConfig, plan: _ModulePlan) -> str:
     )
 
 
+def _local_paths_notice(plan: _ModulePlan) -> str:
+    """Name the local folders upload_file/download_file may use (allowed_local_paths)."""
+    from mcp_synology.modules.filestation import FileStationSettings
+    from mcp_synology.modules.filestation.local_paths import allowed_local_roots
+
+    for mod_name, _module, mod_config, allowed in plan:
+        if mod_name != "filestation" or not {"upload_file", "download_file"} & set(allowed):
+            continue
+        settings = FileStationSettings(**mod_config.settings)
+        default_dir = settings.default_download_dir
+        roots = allowed_local_roots(
+            settings.allowed_local_paths,
+            str(Path(default_dir).expanduser()) if default_dir else None,
+        )
+        return (
+            "\n\nLOCAL PATHS:\n"
+            "upload_file and download_file only use local paths inside these folders "
+            "(or below them): " + ", ".join(str(r) for r in roots) + ". Anything else is "
+            "refused; the user can add folders with allowed_local_paths in the filestation "
+            "settings."
+        )
+    return ""
+
+
 def create_server(config: AppConfig) -> FastMCP:
     """Create and configure the MCP server.
 
@@ -455,6 +479,7 @@ def create_server(config: AppConfig) -> FastMCP:
     if not config.instructions_file:
         # A full replacement file is the user's own; everything else gets the notice.
         instructions += _withheld_tools_notice(config, plan)
+        instructions += _local_paths_notice(plan)
 
     server = FastMCP(
         server_name,

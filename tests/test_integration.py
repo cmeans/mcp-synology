@@ -13,6 +13,7 @@ intermittent failures were the unquoted task ID (#121), not load.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 from pathlib import Path
@@ -1290,6 +1291,61 @@ class TestFileTransfers:
         target = f"{base}/{self._UPLOAD_DIR}"
         result = await delete_files(client, paths=[target], recursive=True)
         logger.info("transfer cleanup:\n%s", result)
+
+    async def test_tools_confine_local_paths(self, nas_client: Any, tmp_path: Path) -> None:
+        """Through the real server: with allowed_local_paths set, a round trip inside the
+        allowed folder works, and upload/download outside it are refused before DSM."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from mcp_synology.server import create_server
+
+        client, _, config, paths = _unpack(nas_client)
+        _skip_unless_write(config)
+        allowed, outside = tmp_path / "allowed", tmp_path / "outside"
+        allowed.mkdir()
+        outside.mkdir()
+        (allowed / "mcp_confine.txt").write_bytes(b"confined")
+        (outside / "secret.txt").write_bytes(b"secret")
+
+        confined = config.model_copy(deep=True)
+        confined.modules["filestation"].settings["allowed_local_paths"] = [str(allowed)]
+        confined.modules["filestation"].settings.pop("default_download_dir", None)
+        tools = create_server(confined)._tool_manager._tools
+        mcp_ctx = MagicMock()
+        mcp_ctx.report_progress = AsyncMock()
+        nas_dir = paths["writable_folder"].rstrip("/")
+        try:
+            await tools["upload_file"].fn(
+                ctx=mcp_ctx, local_path=str(allowed / "mcp_confine.txt"), dest_folder=nas_dir
+            )
+            (allowed / "mcp_confine.txt").unlink()
+            result = await tools["download_file"].fn(
+                ctx=mcp_ctx, path=f"{nas_dir}/mcp_confine.txt", dest_folder=str(allowed)
+            )
+            assert "Downloaded" in result
+            assert (allowed / "mcp_confine.txt").read_bytes() == b"confined"
+
+            for name, kwargs in (
+                (
+                    "upload_file",
+                    {"local_path": str(outside / "secret.txt"), "dest_folder": nas_dir},
+                ),
+                (
+                    "download_file",
+                    {"path": f"{nas_dir}/mcp_confine.txt", "dest_folder": str(outside)},
+                ),
+            ):
+                with pytest.raises(ToolError) as exc_info:
+                    await tools[name].fn(ctx=mcp_ctx, **kwargs)
+                error = json.loads(str(exc_info.value))["error"]
+                assert error["code"] == "permission_denied", (name, error)
+                assert str(allowed.resolve()) in error["message"], name
+            assert sorted(p.name for p in outside.iterdir()) == ["secret.txt"]
+            with pytest.raises(ToolError):  # the refused upload never reached the NAS
+                await get_file_info(client, paths=[f"{nas_dir}/secret.txt"])
+        finally:
+            with contextlib.suppress(ToolError):
+                await delete_files(client, paths=[f"{nas_dir}/mcp_confine.txt"])
 
 
 # ---------------------------------------------------------------------------

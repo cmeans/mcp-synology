@@ -20,14 +20,19 @@ captures `report_progress` calls.
 from __future__ import annotations
 
 import json
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
+from pydantic import ValidationError
 
 from mcp_synology.modules import RegisterContext
-from mcp_synology.modules.filestation import MODULE_INFO, register
+from mcp_synology.modules.filestation import MODULE_INFO, FileStationSettings, register
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _make_ctx(
@@ -300,6 +305,61 @@ class TestFilestationToolInvocation:
         assert "download_file-result" in result
         kwargs = mock.await_args.kwargs
         assert kwargs["dest_folder"] == "/var/incoming"
+
+    async def test_transfers_get_the_configured_allowed_roots(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """allowed_local_paths reaches both transfer tools, resolved, plus
+        default_download_dir, which is always allowed."""
+        server, _manager, ctx = _make_ctx(
+            allowed={"download_file", "upload_file"},
+            settings={
+                "allowed_local_paths": [str(tmp_path / "a")],
+                "default_download_dir": str(tmp_path / "dl"),
+            },
+        )
+        down = self._capture_call(
+            monkeypatch, "mcp_synology.modules.filestation.transfer.download_file"
+        )
+        up = self._capture_call(
+            monkeypatch, "mcp_synology.modules.filestation.transfer.upload_file"
+        )
+        register(ctx)
+        tools = server._tool_manager._tools
+        fake_mcp_ctx = MagicMock()
+        fake_mcp_ctx.report_progress = AsyncMock()
+
+        await tools["download_file"].fn(ctx=fake_mcp_ctx, path="/share/f.txt")
+        await tools["upload_file"].fn(
+            ctx=fake_mcp_ctx, local_path=str(tmp_path / "a" / "f"), dest_folder="/share"
+        )
+
+        expected = [(tmp_path / "a").resolve(), (tmp_path / "dl").resolve()]
+        assert down.await_args.kwargs["allowed_roots"] == expected
+        assert up.await_args.kwargs["allowed_roots"] == expected
+
+    async def test_transfers_default_to_the_downloads_folder(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setattr(
+            "mcp_synology.modules.filestation.local_paths.default_downloads_dir",
+            lambda: tmp_path / "Downloads",
+        )
+        server, _manager, ctx = _make_ctx(allowed={"download_file"})
+        down = self._capture_call(
+            monkeypatch, "mcp_synology.modules.filestation.transfer.download_file"
+        )
+        register(ctx)
+        fake_mcp_ctx = MagicMock()
+        await server._tool_manager._tools["download_file"].fn(
+            ctx=fake_mcp_ctx, path="/share/f.txt", dest_folder=str(tmp_path)
+        )
+        assert down.await_args.kwargs["allowed_roots"] == [(tmp_path / "Downloads").resolve()]
+
+    def test_empty_allowed_local_paths_is_rejected(self) -> None:
+        """An empty list would refuse every transfer; that's a config mistake, not a policy."""
+        with pytest.raises(ValidationError):
+            FileStationSettings(allowed_local_paths=[])
 
     async def test_create_folder_invocation(self, monkeypatch: pytest.MonkeyPatch) -> None:
         server, _manager, ctx = _make_ctx()

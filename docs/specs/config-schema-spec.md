@@ -137,6 +137,17 @@ modules:
       # Default: 120
       async_timeout: 120
 
+      # Local folders upload_file may read from and download_file may write to,
+      # including anything below them. Paths are compared after resolving ~, ..
+      # and symlinks. "/" allows everything on macOS and Linux; on Windows list
+      # each drive ("C:\\", "D:\\"). default_download_dir is always allowed too.
+      # Entries must be absolute or start with ~.
+      # Default: the user's Downloads folder (XDG user-dirs on Linux, ~/Downloads
+      # on macOS, %USERPROFILE%\Downloads on Windows)
+      # allowed_local_paths:
+      #   - ~/Downloads
+      #   - ~/Media
+
   # Example: future module (not yet implemented)
   # docker:
   #   enabled: true
@@ -219,6 +230,7 @@ Each key is a module name (e.g., `filestation`, `docker`, `system_info`). The va
 | `hide_recycle_in_listings` | `bool` | No | `true` | Hide `#recycle` folders from `list_files` output. |
 | `file_type_indicator` | `str` | No | `"emoji"` | File type display: `emoji` or `text`. |
 | `async_timeout` | `int` | No | `120` | Default timeout (seconds) for async operations. |
+| `allowed_local_paths` | `list[str]` | No | the user's Downloads folder | Local folders `upload_file` and `download_file` may use, including subfolders. Compared after resolving `~`, `..` and symlinks; `/` allows everything on macOS/Linux (on Windows, list each drive). `default_download_dir` is always allowed. Entries must be absolute or start with `~` (a relative entry would depend on the server's working directory); an empty list, a relative entry, or one that can't be resolved (a NUL byte, a symlink loop) is a config error. A path outside is refused with `permission_denied` before any NAS request; a path that can't be resolved is `invalid_parameter`. The refusal shows where a path resolves to only when the path itself is inside an allowed folder (a symlink there leading out), so it never reveals what exists outside. |
 
 ### `logging` Object
 

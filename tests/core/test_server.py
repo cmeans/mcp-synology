@@ -1003,3 +1003,36 @@ class TestPayloadBudget:
             f"(+{size - PAYLOAD_BUDGET_CHARS}). If the growth is intended, raise "
             "PAYLOAD_BUDGET_CHARS in this PR."
         )
+
+
+class TestLocalPathsNotice:
+    """The model is told which local folders upload_file/download_file may use, so it
+    picks a path that works instead of discovering the limit from a refusal."""
+
+    def _instructions(self, settings: dict[str, Any], permission: str = "write") -> str:
+        config = make_test_config(
+            modules={
+                "filestation": {"enabled": True, "permission": permission, "settings": settings}
+            }
+        )
+        return create_server(config).instructions or ""
+
+    def test_lists_the_allowed_folders(self, tmp_path: Path) -> None:
+        text = self._instructions({"allowed_local_paths": [str(tmp_path / "media")]})
+        section = text.split("LOCAL PATHS", 1)[1]
+        assert str((tmp_path / "media").resolve()) in section
+        assert "allowed_local_paths" in section
+
+    def test_read_only_connection_still_gets_it_for_download_file(self, tmp_path: Path) -> None:
+        text = self._instructions({"allowed_local_paths": [str(tmp_path)]}, permission="read")
+        assert "LOCAL PATHS" in text
+
+    def test_no_transfer_tools_means_no_section(self) -> None:
+        config = make_test_config(modules={"system": {"enabled": True, "permission": "read"}})
+        assert "LOCAL PATHS" not in (create_server(config).instructions or "")
+
+    def test_instructions_file_is_left_alone(self, tmp_path: Path) -> None:
+        f = tmp_path / "mine.md"
+        f.write_text("MINE", encoding="utf-8")
+        config = make_test_config(instructions_file=str(f))
+        assert "LOCAL PATHS" not in (create_server(config).instructions or "")

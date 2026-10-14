@@ -6,6 +6,7 @@ import asyncio
 import errno
 import json
 import os
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import patch
@@ -861,3 +862,243 @@ class TestLargeFileWarnings:
         )
         assert "[+]" in result
         assert "timeout" not in result.lower()
+
+
+class TestLocalPathConfinement:
+    """Upload and download refuse local paths outside the allowed folders, before any NAS
+    request, with the allowed folders and the setting that widens them in the error."""
+
+    @respx.mock
+    async def test_upload_outside_allowed_roots_is_refused(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        allowed = tmp_path / "Downloads"
+        allowed.mkdir()
+        secret = tmp_path / "secret.txt"
+        secret.write_bytes(b"key")
+        route = respx.route().respond(json={"success": True, "data": {}})
+
+        with pytest.raises(ToolError) as exc_info:
+            await upload_file(
+                mock_client,
+                local_path=str(secret),
+                dest_folder="/share",
+                allowed_roots=[allowed.resolve()],
+            )
+
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "permission_denied"
+        assert error["param"] == "local_path"
+        assert str(allowed.resolve()) in error["message"]
+        assert "allowed_local_paths" in error["suggestion"]
+        assert not route.called
+
+    @respx.mock
+    async def test_upload_inside_allowed_roots_proceeds(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        f = tmp_path / "ok.txt"
+        f.write_bytes(b"data")
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(json={"success": True, "data": {}})
+
+        result = await upload_file(
+            mock_client, local_path=str(f), dest_folder="/share", allowed_roots=[tmp_path.resolve()]
+        )
+        assert "Uploaded ok.txt" in result
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
+    @respx.mock
+    async def test_upload_through_a_symlink_out_of_the_root_is_refused(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        allowed = tmp_path / "Downloads"
+        allowed.mkdir()
+        secret = tmp_path / "secret.txt"
+        secret.write_bytes(b"key")
+        (allowed / "innocent.txt").symlink_to(secret)
+        route = respx.route().respond(json={"success": True, "data": {}})
+
+        with pytest.raises(ToolError) as exc_info:
+            await upload_file(
+                mock_client,
+                local_path=str(allowed / "innocent.txt"),
+                dest_folder="/share",
+                allowed_roots=[allowed.resolve()],
+            )
+        assert json.loads(str(exc_info.value))["error"]["code"] == "permission_denied"
+        assert not route.called
+
+    @respx.mock
+    async def test_download_outside_allowed_roots_is_refused(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        allowed = tmp_path / "Downloads"
+        allowed.mkdir()
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        route = respx.route().respond(content=b"x")
+
+        with pytest.raises(ToolError) as exc_info:
+            await download_file(
+                mock_client,
+                path="/share/f.txt",
+                dest_folder=str(elsewhere),
+                allowed_roots=[allowed.resolve()],
+            )
+
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "permission_denied"
+        assert error["param"] == "dest_folder"
+        assert not route.called
+        assert list(elsewhere.iterdir()) == []
+
+    @respx.mock
+    async def test_download_refusal_does_not_reveal_whether_the_folder_exists(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        with pytest.raises(ToolError) as exc_info:
+            await download_file(
+                mock_client,
+                path="/share/f.txt",
+                dest_folder=str(tmp_path / "no" / "such"),
+                allowed_roots=[(tmp_path / "Downloads").resolve()],
+            )
+        assert json.loads(str(exc_info.value))["error"]["code"] == "permission_denied"
+
+    @respx.mock
+    async def test_download_expands_home_in_dest_folder(
+        self, mock_client: DsmClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """#177: ``~`` in dest_folder means the home folder, not a folder named ``~``."""
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
+        (tmp_path / "Downloads").mkdir()
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            content=b"payload", headers={"content-type": "application/octet-stream"}
+        )
+
+        await download_file(
+            mock_client,
+            path="/share/f.txt",
+            dest_folder="~/Downloads",
+            allowed_roots=[(tmp_path / "Downloads").resolve()],
+        )
+        assert (tmp_path / "Downloads" / "f.txt").read_bytes() == b"payload"
+
+
+class TestLocalPathConfinementErrors:
+    """QA R1 (#186): unresolvable paths get a structured error; refusals don't reveal
+    where a path outside the allowed folders leads."""
+
+    async def test_nul_in_dest_folder_is_invalid_parameter(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        with pytest.raises(ToolError) as exc_info:
+            await download_file(
+                mock_client,
+                path="/share/f.txt",
+                dest_folder=str(tmp_path / "a\x00b"),
+                allowed_roots=[tmp_path.resolve()],
+            )
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "invalid_parameter"
+        assert error["param"] == "dest_folder"
+
+    async def test_nul_in_local_path_is_invalid_parameter(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        with pytest.raises(ToolError) as exc_info:
+            await upload_file(
+                mock_client,
+                local_path=str(tmp_path / "a\x00b"),
+                dest_folder="/share",
+                allowed_roots=[tmp_path.resolve()],
+            )
+        assert json.loads(str(exc_info.value))["error"]["param"] == "local_path"
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
+    @respx.mock
+    async def test_symlink_loop_gets_a_structured_error_on_every_python(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """3.11/3.12 raise RuntimeError from resolve(); 3.13 resolves the loop to itself.
+        Either way the caller gets a ToolError with a code, never a raw exception."""
+        loop = tmp_path / "loop"
+        loop.symlink_to(loop)
+        respx.route().respond(json={"success": True, "data": {}})
+        with pytest.raises(ToolError) as exc_info:
+            await upload_file(
+                mock_client,
+                local_path=str(loop),
+                dest_folder="/share",
+                allowed_roots=[tmp_path.resolve()],
+            )
+        assert json.loads(str(exc_info.value))["error"]["code"]
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
+    async def test_refusal_outside_roots_does_not_reveal_a_link_target(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        allowed = tmp_path / "Downloads"
+        allowed.mkdir()
+        secret = tmp_path / "secret-outside"
+        secret.mkdir()
+        (tmp_path / "innocent-link").symlink_to(secret)
+
+        with pytest.raises(ToolError) as exc_info:
+            await download_file(
+                mock_client,
+                path="/share/f.txt",
+                dest_folder=str(tmp_path / "innocent-link"),
+                allowed_roots=[allowed.resolve()],
+            )
+        message = json.loads(str(exc_info.value))["error"]["message"]
+        assert "secret-outside" not in message
+        assert "resolves to" not in message
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
+    async def test_refusal_explains_a_link_inside_a_root_that_leads_out(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        allowed = tmp_path / "Downloads"
+        allowed.mkdir()
+        (tmp_path / "out").mkdir()
+        (allowed / "shortcut").symlink_to(tmp_path / "out")
+
+        with pytest.raises(ToolError) as exc_info:
+            await download_file(
+                mock_client,
+                path="/share/f.txt",
+                dest_folder=str(allowed / "shortcut"),
+                allowed_roots=[allowed.resolve()],
+            )
+        message = json.loads(str(exc_info.value))["error"]["message"]
+        assert f"resolves to {(tmp_path / 'out').resolve()}" in message
+
+    async def test_unknown_home_user_is_invalid_parameter(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """``~nosuchuser`` can't be expanded; that's a structured error, not a crash."""
+        with pytest.raises(ToolError) as exc_info:
+            await upload_file(
+                mock_client,
+                local_path="~mcp_no_such_user_xyz/f.txt",
+                dest_folder="/share",
+                allowed_roots=[tmp_path.resolve()],
+            )
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "invalid_parameter"
+        assert error["param"] == "local_path"
+        assert ".." not in error["message"]  # QA R2 (#186): no doubled period
+
+    async def test_unknown_home_user_without_roots_is_invalid_parameter(
+        self, mock_client: DsmClient
+    ) -> None:
+        """Direct (unconfined) callers expand ``~`` too; an unknown user is still structured."""
+        with pytest.raises(ToolError) as exc_info:
+            await download_file(
+                mock_client, path="/share/f.txt", dest_folder="~mcp_no_such_user_xyz/dl"
+            )
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "invalid_parameter"
+        assert error["param"] == "dest_folder"
