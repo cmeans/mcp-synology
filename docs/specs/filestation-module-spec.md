@@ -423,6 +423,8 @@ Upload a local file from this machine to a NAS folder.
 
 **Permission tier:** WRITE
 
+**Annotations:** `destructiveHint=true`: with `overwrite=true` it replaces the NAS file. Annotations are static, so they can't depend on `overwrite` (#183).
+
 **DSM API:** `SYNO.FileStation.Upload` / `upload` (POST multipart — the ONE exception to the GET-only rule)
 
 **Tool description (LLM-facing):**
@@ -459,6 +461,8 @@ Upload a local file from this machine to a NAS folder.
 Restore files from a shared folder's recycle bin.
 
 **Permission tier:** WRITE
+
+**Annotations:** `destructiveHint=true`: with `overwrite=true` it replaces the file at the original location (#183).
 
 **DSM API:** `SYNO.FileStation.CopyMove` / `start` (moving from `#recycle` back out)
 
@@ -525,6 +529,8 @@ Rename a file or folder.
 
 **Permission tier:** WRITE
 
+**Annotations:** defaults (`destructiveHint=false`). It has no `overwrite` option, and DSM refuses an existing target name (error 1200, both names left intact; verified on DSM 7.1 and 7.2.2), so it never replaces anything (#183).
+
 **DSM API:** `SYNO.FileStation.Rename` / `rename`
 
 **Tool description (LLM-facing):**
@@ -552,6 +558,8 @@ Rename a file or folder.
 Copy files or folders to a destination.
 
 **Permission tier:** WRITE
+
+**Annotations:** `destructiveHint=true`: with `overwrite=true` it replaces files at the destination (#183).
 
 **DSM API:** `SYNO.FileStation.CopyMove` / `start` (with `remove_src=false`)
 
@@ -582,6 +590,8 @@ Copy files or folders to a destination.
 Move files or folders to a new location. **Source files are removed after successful transfer.**
 
 **Permission tier:** WRITE
+
+**Annotations:** `destructiveHint=true`: it removes the sources, and with `overwrite=true` replaces files at the destination.
 
 **DSM API:** `SYNO.FileStation.CopyMove` / `start` (with `remove_src=true`)
 
@@ -614,6 +624,8 @@ Source files have been removed from /video/Downloads/.
 Delete files or folders.
 
 **Permission tier:** WRITE
+
+**Annotations:** `destructiveHint=true`.
 
 **DSM API:** `SYNO.FileStation.Delete` / `start` (async) or `delete` (sync)
 

@@ -1552,6 +1552,23 @@ class TestErrorHandling:
             assert "zzz_nonexistent_999" in body["error"]["message"], name
             assert "list_shares" in body["error"]["message"], name
 
+    async def test_rename_onto_an_existing_name_is_refused(self, nas_client: Any) -> None:
+        """#183: rename has no overwrite option, so it stays non-destructive only if DSM
+        refuses an existing target name instead of replacing it."""
+        client, _, config, paths = _unpack(nas_client)
+        _skip_unless_write(config)
+        base = f"{paths['writable_folder'].rstrip('/')}/mcp_rename_clash"
+        await create_folder(client, paths=[f"{base}/a/keep_a", f"{base}/b/keep_b"])
+        try:
+            with pytest.raises(ToolError) as exc_info:
+                await rename(client, path=f"{base}/a", new_name="b")
+            logger.info("rename onto existing name: %s", exc_info.value)
+            # Both folders, and what's inside each, are untouched.
+            await get_file_info(client, paths=[f"{base}/a/keep_a"])
+            await get_file_info(client, paths=[f"{base}/b/keep_b"])
+        finally:
+            await delete_files(client, paths=[base])
+
     async def test_rename_invalid_path(self, nas_client: Any) -> None:
         """Rename a non-existent path should raise ToolError."""
         client, _, _, _ = _unpack(nas_client)
