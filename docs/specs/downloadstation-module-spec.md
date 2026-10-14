@@ -465,6 +465,8 @@ Remove tasks.
 
 **Permission tier:** WRITE
 
+**Annotations:** `destructiveHint=true`, `idempotentHint=true`: it replaces a task's destination (the previous one is lost), and repeating a call changes nothing more. `pause_download` and `resume_download` keep the defaults (`destructiveHint=false`) because they only toggle a task's state and lose nothing.
+
 **DSM API:** `SYNO.DownloadStation.Task` / `edit`, pinned to **exactly v2**
 
 **Tool description (LLM-facing):**

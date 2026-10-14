@@ -382,15 +382,17 @@ class TestDownloadstationAnnotations:
         assert anno.destructiveHint is True
 
     def test_setters_are_destructive_and_idempotent(self) -> None:
-        # Both replace NAS-wide state (the previous values are lost); repeating a call
-        # with the same arguments changes nothing more.
+        # Each replaces a stored value (NAS-wide settings, or a task's destination for
+        # edit_download), so the previous one is lost; repeating a call with the same
+        # arguments changes nothing more. QA R1 (#182) on edit_download.
         annos = self._annos()
-        for name in ("set_download_config", "set_schedule"):
+        for name in ("set_download_config", "set_schedule", "edit_download"):
             assert annos[name].readOnlyHint is False, name
             assert annos[name].destructiveHint is True, name
             assert annos[name].idempotentHint is True, name
 
     def test_additive_writes_stay_non_destructive(self) -> None:
+        # create adds a task; pause/resume toggle a task's state without losing anything.
         annos = self._annos()
         for name in ("create_download", "pause_download", "resume_download"):
             assert annos[name].destructiveHint is False, name
