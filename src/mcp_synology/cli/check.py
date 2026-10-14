@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import ssl
 import sys
+from typing import NoReturn
 
 import click
+import httpx
 import yaml
 
 from mcp_synology.cli.logging_ import _configure_logging, _init_early_logging
@@ -39,11 +42,45 @@ def check(config: str | None, verbose: bool) -> None:
     asyncio.run(_check_login(app_config))
 
 
+def _exception_chain(exc: BaseException) -> list[BaseException]:
+    """Walk ``__cause__`` / ``__context__`` without looping."""
+    chain: list[BaseException] = []
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        chain.append(current)
+        current = current.__cause__ or current.__context__
+    return chain
+
+
+def _is_tls_verification_failure(exc: BaseException) -> bool:
+    return any(isinstance(item, ssl.SSLCertVerificationError) for item in _exception_chain(exc))
+
+
+def _fail_check(message: str) -> NoReturn:
+    click.echo(click.style(message, fg="red"), err=True)
+    sys.exit(1)
+
+
+def _report_unreachable(base_url: str, host: str, exc: BaseException) -> NoReturn:
+    """Exit 1 with a clear connect/TLS message (no traceback). See #191."""
+    reason = str(exc).strip() or type(exc).__name__
+    if _is_tls_verification_failure(exc):
+        _fail_check(
+            f"TLS certificate verification failed for {host}: {reason}. "
+            "If this NAS uses Synology's default self-signed certificate, "
+            "set `verify_ssl: false` or install a trusted certificate."
+        )
+    _fail_check(f"Can't connect to {base_url}: {reason}. Check host, port and https settings.")
+
+
 async def _check_login(config: object) -> None:
     """Validate credentials by attempting a login."""
     from mcp_synology.core.auth import AuthManager
     from mcp_synology.core.client import DsmClient
     from mcp_synology.core.config import AppConfig
+    from mcp_synology.core.errors import SynologyError
 
     if not isinstance(config, AppConfig):
         raise RuntimeError("Expected AppConfig instance")
@@ -51,22 +88,28 @@ async def _check_login(config: object) -> None:
         raise RuntimeError("Config missing connection settings")
 
     protocol = "https" if config.connection.https else "http"
-    base_url = f"{protocol}://{config.connection.host}:{config.connection.port}"
+    host = config.connection.host
+    base_url = f"{protocol}://{host}:{config.connection.port}"
 
-    async with DsmClient(
-        base_url=base_url,
-        verify_ssl=config.connection.verify_ssl,
-        timeout=config.connection.timeout,
-    ) as client:
-        await client.query_api_info()
+    try:
+        async with DsmClient(
+            base_url=base_url,
+            verify_ssl=config.connection.verify_ssl,
+            timeout=config.connection.timeout,
+        ) as client:
+            await client.query_api_info()
 
-        from mcp_synology.core.errors import SynologyError
-
-        auth = AuthManager(config, client)
-        try:
+            auth = AuthManager(config, client)
             await auth.login()
             click.echo(click.style("Authentication successful!", fg="green"))
             await auth.logout()
-        except (SynologyError, OSError) as e:
-            click.echo(click.style(f"Authentication failed: {e}", fg="red"), err=True)
-            sys.exit(1)
+    except httpx.TransportError as e:
+        # httpx.ConnectError is not an OSError subclass — it used to escape
+        # and dump a traceback (#191).
+        _report_unreachable(base_url, host, e)
+    except ssl.SSLError as e:
+        # SSLError subclasses OSError; catch before the OSError branch so TLS
+        # failures get the certificate guidance instead of "Authentication failed".
+        _report_unreachable(base_url, host, e)
+    except (SynologyError, OSError) as e:
+        _fail_check(f"Authentication failed: {e}")

@@ -781,6 +781,115 @@ class TestCheckLogin:
 
         assert exc_info.value.code == 1
 
+    async def test_check_login_connect_error_clean_exit(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """httpx.ConnectError from query_api_info exits 1 with no traceback (#191)."""
+        import httpx
+
+        from mcp_synology.cli.check import _check_login
+        from tests.conftest import make_test_config
+
+        config = make_test_config()
+        fake_client = self._make_fake_client()
+        fake_client.query_api_info = AsyncMock(
+            side_effect=httpx.ConnectError("All connection attempts failed")
+        )
+
+        with (
+            patch("mcp_synology.core.client.DsmClient", return_value=fake_client),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            await _check_login(config)
+
+        assert exc_info.value.code == 1
+        err = capsys.readouterr().err
+        assert "Can't connect to http://nas:5000" in err
+        assert "All connection attempts failed" in err
+        assert "Check host, port and https settings" in err
+        assert "Traceback" not in err
+        assert "httpx.ConnectError" not in err
+
+    async def test_check_login_tls_verification_clean_exit(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """TLS verify failures get certificate guidance, not a traceback (#191)."""
+        import ssl
+
+        import httpx
+
+        from mcp_synology.cli.check import _check_login
+        from tests.conftest import make_test_config
+
+        config = make_test_config()
+        config.connection.https = True  # type: ignore[union-attr]
+        fake_client = self._make_fake_client()
+        tls_exc = httpx.ConnectError("[SSL: CERTIFICATE_VERIFY_FAILED]")
+        tls_exc.__cause__ = ssl.SSLCertVerificationError("self signed certificate")
+        fake_client.query_api_info = AsyncMock(side_effect=tls_exc)
+
+        with (
+            patch("mcp_synology.core.client.DsmClient", return_value=fake_client),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            await _check_login(config)
+
+        assert exc_info.value.code == 1
+        err = capsys.readouterr().err
+        assert "TLS certificate verification failed for nas" in err
+        assert "verify_ssl: false" in err
+        assert "Traceback" not in err
+
+    async def test_check_login_timeout_clean_exit(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """httpx timeouts from query_api_info also map to the connect message (#191)."""
+        import httpx
+
+        from mcp_synology.cli.check import _check_login
+        from tests.conftest import make_test_config
+
+        config = make_test_config()
+        fake_client = self._make_fake_client()
+        fake_client.query_api_info = AsyncMock(side_effect=httpx.ConnectTimeout(""))
+
+        with (
+            patch("mcp_synology.core.client.DsmClient", return_value=fake_client),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            await _check_login(config)
+
+        assert exc_info.value.code == 1
+        err = capsys.readouterr().err
+        assert "Can't connect to http://nas:5000" in err
+        # Empty httpx message falls back to the exception type name.
+        assert "ConnectTimeout" in err
+
+    async def test_check_login_bare_ssl_error_clean_exit(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Bare ssl.SSLError (OSError subclass) still gets TLS guidance (#191)."""
+        import ssl
+
+        from mcp_synology.cli.check import _check_login
+        from tests.conftest import make_test_config
+
+        config = make_test_config()
+        config.connection.https = True  # type: ignore[union-attr]
+        fake_client = self._make_fake_client()
+        fake_client.query_api_info = AsyncMock(
+            side_effect=ssl.SSLCertVerificationError("self signed certificate")
+        )
+
+        with (
+            patch("mcp_synology.core.client.DsmClient", return_value=fake_client),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            await _check_login(config)
+
+        assert exc_info.value.code == 1
+        err = capsys.readouterr().err
+        assert "TLS certificate verification failed for nas" in err
+        assert "Authentication failed" not in err
+
     async def test_check_login_failure_oserror(self) -> None:
         import pytest
 
