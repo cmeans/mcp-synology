@@ -157,3 +157,49 @@ class TestOutsideAllowedRoots:
         root = (tmp_path / "Downloads").resolve()
         refused = outside_allowed_roots(str(root / ".." / "x"), [root])
         assert refused == (tmp_path / "x").resolve()
+
+
+class TestUnresolvablePaths:
+    """QA R1 (#186): Path.resolve raises on a NUL byte (all versions) and on a symlink
+    loop (3.11/3.12); that must be a clear error, never a raw exception."""
+
+    def test_nul_in_a_configured_entry_is_a_config_error(self) -> None:
+        with pytest.raises(ValueError, match="allowed_local_paths"):
+            allowed_local_roots(["/tmp/a\x00b"], None)
+
+    def test_resolution_failure_at_registration_names_the_entry(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        real_resolve = Path.resolve
+
+        def _loop(self: Path, strict: bool = False) -> Path:
+            if self.name == "loop":
+                raise RuntimeError(f"Symlink loop from {self!r}")  # what 3.11/3.12 raise
+            return real_resolve(self, strict=strict)
+
+        monkeypatch.setattr(Path, "resolve", _loop)
+        with pytest.raises(ValueError, match="default_download_dir"):
+            allowed_local_roots([str(tmp_path)], str(tmp_path / "loop"))
+
+    def test_outside_allowed_roots_raises_value_error_for_nul(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match="can't be resolved"):
+            outside_allowed_roots(str(tmp_path / "a\x00b"), [tmp_path.resolve()])
+
+
+class TestAllowedLocalPathsSetting:
+    """QA R1 (#186): a relative entry would resolve against the server's working
+    directory, which depends on how the MCP client launched it."""
+
+    def test_relative_entry_is_rejected(self) -> None:
+        from pydantic import ValidationError
+
+        from mcp_synology.modules.filestation import FileStationSettings
+
+        with pytest.raises(ValidationError, match="absolute"):
+            FileStationSettings(allowed_local_paths=["Downloads"])
+
+    def test_home_relative_and_absolute_entries_are_accepted(self, tmp_path: Path) -> None:
+        from mcp_synology.modules.filestation import FileStationSettings
+
+        s = FileStationSettings(allowed_local_paths=["~/Downloads", str(tmp_path)])
+        assert s.allowed_local_paths == ["~/Downloads", str(tmp_path)]

@@ -9,7 +9,7 @@ from mcp.server.fastmcp import (
     Context,  # noqa: TC002 — runtime import needed for FastMCP context injection
 )
 from mcp.types import ToolAnnotations
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from mcp_synology.modules import (
     ApiRequirement,
@@ -55,6 +55,18 @@ class FileStationSettings(BaseModel):
     # Local folders upload_file/download_file may use (see local_paths.py). None means
     # the user's Downloads folder; default_download_dir is always allowed too.
     allowed_local_paths: list[str] | None = Field(default=None, min_length=1)
+
+    @field_validator("allowed_local_paths")
+    @classmethod
+    def _absolute_local_paths(cls, value: list[str] | None) -> list[str] | None:
+        # A relative entry would resolve against the server's working directory, which
+        # depends on how the MCP client launched it (QA R1 on #186).
+        for entry in value or []:
+            if not Path(entry).expanduser().is_absolute():
+                msg = f"allowed_local_paths entries must be absolute (or start with ~): {entry!r}"
+                raise ValueError(msg)
+        return value
+
     search_poll_interval: float = Field(default=1.0, ge=0.5, le=10.0)
 
 

@@ -62,7 +62,27 @@ def default_downloads_dir(platform: str = sys.platform) -> Path:
 
 
 def _resolve(path: str | Path) -> Path:
-    return Path(path).expanduser().resolve(strict=False)
+    """Resolve ``~``, ``..`` and symlinks. Raises ``ValueError`` when that's impossible:
+    a NUL byte (every Python), or a symlink loop (``RuntimeError`` on 3.11/3.12)."""
+    try:
+        return Path(path).expanduser().resolve(strict=False)
+    except (OSError, ValueError, RuntimeError) as e:
+        msg = f"{str(path)!r} can't be resolved: {e}"
+        raise ValueError(msg) from e
+
+
+def _lexical(path: str | Path) -> Path:
+    """``~`` and ``..`` handled, symlinks not followed."""
+    return Path(os.path.normpath(os.path.abspath(Path(path).expanduser())))
+
+
+def lexically_inside(path: str | Path, roots: list[Path]) -> bool:
+    """Whether ``path``, read literally (no symlinks followed), is inside a root."""
+    try:
+        lexical = _lexical(path)
+    except ValueError:
+        return False
+    return any(lexical == root or root in lexical.parents for root in roots)
 
 
 def allowed_local_roots(
@@ -73,12 +93,17 @@ def allowed_local_roots(
     ``configured`` (the ``allowed_local_paths`` setting) replaces the default
     Downloads folder; ``default_download_dir`` is always added.
     """
-    raw: list[str | Path] = list(configured) if configured else [default_downloads_dir()]
+    entries: list[str | Path] = list(configured) if configured else [default_downloads_dir()]
+    raw: list[tuple[str, str | Path]] = [("allowed_local_paths", e) for e in entries]
     if default_download_dir:
-        raw.append(default_download_dir)
+        raw.append(("default_download_dir", default_download_dir))
     roots: list[Path] = []
-    for entry in raw:
-        root = _resolve(entry)
+    for setting, entry in raw:
+        try:
+            root = _resolve(entry)
+        except ValueError as e:
+            msg = f"filestation setting {setting}: {e}"
+            raise ValueError(msg) from e
         if root not in roots:
             roots.append(root)
     logger.debug("Allowed local paths: %s", [str(r) for r in roots])
@@ -86,7 +111,10 @@ def allowed_local_roots(
 
 
 def outside_allowed_roots(path: str | Path, roots: list[Path]) -> Path | None:
-    """Return the resolved ``path`` if it's outside every root, else ``None``."""
+    """Return the resolved ``path`` if it's outside every root, else ``None``.
+
+    Raises ``ValueError`` if ``path`` can't be resolved.
+    """
     resolved = _resolve(path)
     if any(resolved == root or root in resolved.parents for root in roots):
         return None

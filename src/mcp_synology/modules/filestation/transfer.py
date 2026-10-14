@@ -17,7 +17,10 @@ from mcp_synology.core.formatting import (
     synology_error_response,
 )
 from mcp_synology.modules.filestation.helpers import normalize_path
-from mcp_synology.modules.filestation.local_paths import outside_allowed_roots
+from mcp_synology.modules.filestation.local_paths import (
+    lexically_inside,
+    outside_allowed_roots,
+)
 
 if TYPE_CHECKING:
     from mcp_synology.core.client import DsmClient, ProgressCallback
@@ -62,10 +65,23 @@ def _refuse_outside_roots(
     """
     if roots is None:
         return
-    refused = outside_allowed_roots(path, roots)
+    try:
+        refused = outside_allowed_roots(path, roots)
+    except ValueError as e:
+        # A NUL byte, or a symlink loop on Python 3.11/3.12 (QA R1 on #186).
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            f"{operation} refused: {e}.",
+            retryable=False,
+            param=param,
+            value=value,
+            suggestion="Pass a plain local path without NUL characters or symlink loops.",
+        )
     if refused is None:
         return
-    shown = value if str(refused) == value else f"{value} (resolves to {refused})"
+    # Explain the resolved path only for a link inside an allowed folder that leads out;
+    # for anything else it would reveal what exists outside (QA R1 on #186).
+    shown = f"{value} (resolves to {refused})" if lexically_inside(path, roots) else value
     error_response(
         ErrorCode.PERMISSION_DENIED,
         f"{operation} refused: {shown} is outside the folders this server may use on "

@@ -984,3 +984,93 @@ class TestLocalPathConfinement:
             allowed_roots=[(tmp_path / "Downloads").resolve()],
         )
         assert (tmp_path / "Downloads" / "f.txt").read_bytes() == b"payload"
+
+
+class TestLocalPathConfinementErrors:
+    """QA R1 (#186): unresolvable paths get a structured error; refusals don't reveal
+    where a path outside the allowed folders leads."""
+
+    async def test_nul_in_dest_folder_is_invalid_parameter(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        with pytest.raises(ToolError) as exc_info:
+            await download_file(
+                mock_client,
+                path="/share/f.txt",
+                dest_folder=str(tmp_path / "a\x00b"),
+                allowed_roots=[tmp_path.resolve()],
+            )
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "invalid_parameter"
+        assert error["param"] == "dest_folder"
+
+    async def test_nul_in_local_path_is_invalid_parameter(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        with pytest.raises(ToolError) as exc_info:
+            await upload_file(
+                mock_client,
+                local_path=str(tmp_path / "a\x00b"),
+                dest_folder="/share",
+                allowed_roots=[tmp_path.resolve()],
+            )
+        assert json.loads(str(exc_info.value))["error"]["param"] == "local_path"
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
+    @respx.mock
+    async def test_symlink_loop_gets_a_structured_error_on_every_python(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """3.11/3.12 raise RuntimeError from resolve(); 3.13 resolves the loop to itself.
+        Either way the caller gets a ToolError with a code, never a raw exception."""
+        loop = tmp_path / "loop"
+        loop.symlink_to(loop)
+        respx.route().respond(json={"success": True, "data": {}})
+        with pytest.raises(ToolError) as exc_info:
+            await upload_file(
+                mock_client,
+                local_path=str(loop),
+                dest_folder="/share",
+                allowed_roots=[tmp_path.resolve()],
+            )
+        assert json.loads(str(exc_info.value))["error"]["code"]
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
+    async def test_refusal_outside_roots_does_not_reveal_a_link_target(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        allowed = tmp_path / "Downloads"
+        allowed.mkdir()
+        secret = tmp_path / "secret-outside"
+        secret.mkdir()
+        (tmp_path / "innocent-link").symlink_to(secret)
+
+        with pytest.raises(ToolError) as exc_info:
+            await download_file(
+                mock_client,
+                path="/share/f.txt",
+                dest_folder=str(tmp_path / "innocent-link"),
+                allowed_roots=[allowed.resolve()],
+            )
+        message = json.loads(str(exc_info.value))["error"]["message"]
+        assert "secret-outside" not in message
+        assert "resolves to" not in message
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
+    async def test_refusal_explains_a_link_inside_a_root_that_leads_out(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        allowed = tmp_path / "Downloads"
+        allowed.mkdir()
+        (tmp_path / "out").mkdir()
+        (allowed / "shortcut").symlink_to(tmp_path / "out")
+
+        with pytest.raises(ToolError) as exc_info:
+            await download_file(
+                mock_client,
+                path="/share/f.txt",
+                dest_folder=str(allowed / "shortcut"),
+                allowed_roots=[allowed.resolve()],
+            )
+        message = json.loads(str(exc_info.value))["error"]["message"]
+        assert f"resolves to {(tmp_path / 'out').resolve()}" in message
