@@ -198,6 +198,19 @@ class TestAllowedLocalPathsSetting:
         with pytest.raises(ValidationError, match="absolute"):
             FileStationSettings(allowed_local_paths=["Downloads"])
 
+    @pytest.mark.parametrize("field", ["allowed_local_paths", "default_download_dir"])
+    def test_unknown_home_user_is_a_validation_error(self, field: str) -> None:
+        """QA R2 (#186): expanduser raises RuntimeError for ~nosuchuser, which pydantic
+        doesn't wrap; it must be a ValidationError naming the entry."""
+        from pydantic import ValidationError
+
+        from mcp_synology.modules.filestation import FileStationSettings
+
+        entry = "~mcp_no_such_user_xyz/dl"
+        value: object = [entry] if field == "allowed_local_paths" else entry
+        with pytest.raises(ValidationError, match="mcp_no_such_user_xyz"):
+            FileStationSettings(**{field: value})
+
     def test_home_relative_and_absolute_entries_are_accepted(self, tmp_path: Path) -> None:
         from mcp_synology.modules.filestation import FileStationSettings
 

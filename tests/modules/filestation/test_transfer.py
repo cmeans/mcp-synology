@@ -1089,6 +1089,7 @@ class TestLocalPathConfinementErrors:
         error = json.loads(str(exc_info.value))["error"]
         assert error["code"] == "invalid_parameter"
         assert error["param"] == "local_path"
+        assert ".." not in error["message"]  # QA R2 (#186): no doubled period
 
     async def test_unknown_home_user_without_roots_is_invalid_parameter(
         self, mock_client: DsmClient

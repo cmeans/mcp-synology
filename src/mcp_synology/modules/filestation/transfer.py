@@ -86,7 +86,7 @@ def _refuse_outside_roots(
         # A NUL byte, or a symlink loop on Python 3.11/3.12 (QA R1 on #186).
         error_response(
             ErrorCode.INVALID_PARAMETER,
-            f"{operation} refused: {e}.",
+            f"{operation} refused: {str(e).rstrip('.')}.",
             retryable=False,
             param=param,
             value=value,

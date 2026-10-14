@@ -38,6 +38,16 @@ _ANNO_DESTRUCTIVE = ToolAnnotations(readOnlyHint=False, destructiveHint=True)
 _ANNO_LOCAL_WRITE = ToolAnnotations(readOnlyHint=False, destructiveHint=True)
 
 
+def _expand_setting(setting: str, entry: str) -> Path:
+    """``~`` expanded. An unknown ``~user`` raises RuntimeError, which pydantic doesn't
+    report as a validation error; re-raise it as ValueError so it does (QA R2 on #186)."""
+    try:
+        return Path(entry).expanduser()
+    except RuntimeError as e:
+        msg = f"{setting}: {entry!r} can't be expanded: {e}"
+        raise ValueError(msg) from e
+
+
 class FileStationSettings(BaseModel):
     """File Station module settings."""
 
@@ -62,9 +72,16 @@ class FileStationSettings(BaseModel):
         # A relative entry would resolve against the server's working directory, which
         # depends on how the MCP client launched it (QA R1 on #186).
         for entry in value or []:
-            if not Path(entry).expanduser().is_absolute():
+            if not _expand_setting("allowed_local_paths", entry).is_absolute():
                 msg = f"allowed_local_paths entries must be absolute (or start with ~): {entry!r}"
                 raise ValueError(msg)
+        return value
+
+    @field_validator("default_download_dir")
+    @classmethod
+    def _expandable_download_dir(cls, value: str | None) -> str | None:
+        if value:
+            _expand_setting("default_download_dir", value)
         return value
 
     search_poll_interval: float = Field(default=1.0, ge=0.5, le=10.0)
