@@ -192,7 +192,7 @@ logging:
 | `custom_instructions` | `str` | No | — | Additional instructions prepended to the built-in server prompt (higher priority). Supports template variables: `{display_name}`, `{instance_id}`, `{host}`, `{port}`. Useful for guiding Claude on when to use this connection vs others. HTML comments (`<!-- ... -->`) are removed before the text is sent, so they can hold notes for whoever edits the file. |
 | `instructions_file` | `str` | No | — | Path to a custom `.md` file that **replaces** the built-in server instructions entirely. Copy the built-in `server.md` as a starting point. Same template variables are supported. Takes precedence over `custom_instructions`. Unlike the built-in or prepended instructions, a replacement file doesn't get the generated PERMISSIONS section (below). HTML comments (`<!-- ... -->`) are removed before the text is sent, so they can hold notes for whoever edits the file. |
 | `connection` | `object` | No | — | NAS connection details. Required unless `SYNOLOGY_HOST` env var is set. |
-| `auth` | `object` | No | `{}` | Last-resort plaintext credentials. |
+| `auth` | `object` | No | `{}` | Credentials that override the keyring (env vars override these). A username here is fine; a password or device_id is stored in plaintext. |
 | `modules` | `object` | **Yes** | — | Module enable/disable and configuration. |
 | `logging` | `object` | No | See defaults | Logging configuration. |
 
