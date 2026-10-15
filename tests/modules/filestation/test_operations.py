@@ -1359,17 +1359,26 @@ class TestCopyMoveSkippedItems:
     async def test_copy_mixed_file_and_folder_skips(self, mock_client: DsmClient) -> None:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
             side_effect=self._dsm(
-                {"/w/a": self.ALL, "/w/d": self.ALL, "/w/c": self.NONE}, dirs=frozenset({"/w/d"})
+                {
+                    "/w/a": self.ALL,
+                    "/w/b": self.ALL,
+                    "/w/d": self.ALL,
+                    "/w/e": self.ALL,
+                    "/w/c": self.NONE,
+                },
+                dirs=frozenset({"/w/d", "/w/e"}),
             )
         )
-        result = await copy_files(mock_client, paths=["/w/a", "/w/d", "/w/c"], dest_folder="/x")
+        result = await copy_files(
+            mock_client, paths=["/w/a", "/w/d", "/w/b", "/w/e", "/w/c"], dest_folder="/x"
+        )
         assert result.startswith(
-            "[!] Copied 1 of 3 item(s) in full to /x/; 1 skipped, 1 folder with items skipped "
+            "[!] Copied 1 of 5 item(s) in full to /x/; 2 skipped, 2 folders with items skipped "
             "(already at the destination, overwrite=false):"
         ), result
-        assert "Copied:\n  c" in result
-        assert "Skipped:\n  /w/a" in result
-        assert "was copied):\n  /w/d" in result
+        assert "Copied:\n  c\n" in result
+        assert "Skipped:\n  /w/a\n  /w/b\n" in result
+        assert "was copied):\n  /w/d\n  /w/e\n" in result
 
     @respx.mock
     async def test_move_with_skips_does_not_claim_source_removed(
@@ -1427,6 +1436,8 @@ class TestCopyMoveSkippedItems:
         assert (
             "Folders with items skipped (anything not already at the destination was restored):"
         ) in result
+        # The skipped items are the folder's own children, so point inside it (QA R1 on #190).
+        assert "  /video/#recycle/S (skipped items are still in /video/#recycle/S/)" in result
         assert "moved" not in result.lower()
 
     @respx.mock
@@ -1455,5 +1466,12 @@ class TestCopyMoveSkippedItems:
         result = await restore_from_recycle_bin(
             mock_client, share="video", paths=["S1/a.mkv", "S2/b.mkv"]
         )
-        assert result.startswith("[!] Restored 1 of 2 item(s) in full"), result
+        # The summary stays neutral and the per-destination result says what was skipped,
+        # so the two never disagree (QA R1 on #190).
+        assert result.startswith(
+            "[!] Restored 1 of 2 item(s) from /video recycle bin; 1 with skips "
+            "(already at the destination, overwrite=false; details below):"
+        ), result
+        assert "Skipped:\n  /video/#recycle/S2/b.mkv" in result
+        assert "in whole or in part" not in result
         assert "[+] Moved" not in result and "[!] Moved" not in result

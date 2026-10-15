@@ -407,8 +407,9 @@ async def _skip_report(
         )
     ]
 
-    def entry(p: str) -> str:
-        src_dir = "/".join(p.split("/")[:-1]) or "/"
+    def entry(p: str, folder: bool = False) -> str:
+        # A skipped folder's leftovers are its own children; a file stays in its parent.
+        src_dir = p if folder else "/".join(p.split("/")[:-1]) or ""
         return f"  {p}" + (f" (skipped items are still in {src_dir}/)" if remove_src else "")
 
     if ok:
@@ -422,7 +423,7 @@ async def _skip_report(
         lines.append(
             f"Folders with items skipped (anything not already at the destination was {done}):"
         )
-        lines.extend(entry(p) for p in folders)
+        lines.extend(entry(p, folder=True) for p in folders)
     if unknown:
         lines.append("Skipped in whole or in part:")
         lines.extend(entry(p) for p in unknown)
@@ -859,10 +860,9 @@ async def restore_from_recycle_bin(
             results.insert(
                 0,
                 format_status(
-                    f"Restored {len(results) - len(partial)} of {len(results)} item(s) in full "
-                    "from "
-                    f"/{share_name} recycle bin; {len(partial)} skipped in whole or in part "
-                    "(already at the destination, overwrite=false):",
+                    f"Restored {len(results) - len(partial)} of {len(results)} item(s) from "
+                    f"/{share_name} recycle bin; {len(partial)} with skips "
+                    "(already at the destination, overwrite=false; details below):",
                     success=False,
                 ),
             )

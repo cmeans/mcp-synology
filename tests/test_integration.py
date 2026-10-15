@@ -1506,7 +1506,10 @@ class TestErrorHandling:
             assert moved.startswith(
                 f"[!] Moved 0 of 1 item(s) in full to {base}/dst/; 1 folder with items skipped"
             ), moved
-            assert f"was moved):\n  {base}/src/d" in moved
+            # The skipped items are the folder's own children (QA R1 on #190).
+            assert f"was moved):\n  {base}/src/d (skipped items are still in {base}/src/d/)" in (
+                moved
+            )
             assert "in whole or in part" not in moved
             # The conflicting child stays in the source; the other one moved.
             await get_file_info(client, paths=[f"{base}/src/d/x.txt"])
