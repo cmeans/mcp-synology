@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [main]
 
+# Explicit read-only default for every job (#206, CodeQL actions/missing-workflow-permissions),
+# so a change to the repo's default token permissions can't widen it. Jobs that need
+# more declare their own `permissions:`, which replaces this block for that job.
+permissions:
+  contents: read
+
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 

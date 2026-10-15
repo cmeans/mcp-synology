@@ -30,7 +30,13 @@ _VERSION_CHECK_INTERVAL = 86400  # 24 hours
 # segments separated by `-` or `.` (e.g. `0.5.1`, `0.5.1-rc1`, `1.2.3.post4`).
 # Tight enough to reject `latest`, `1.2`, whitespace, or shell metacharacters
 # before the value reaches `pip install mcp-synology==<value>`.
-_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+([-.]?[a-zA-Z0-9]+)*$")
+# Each part can match only one way, so a long non-matching value fails in linear
+# time: an optional suffix glued to the patch number must start with a letter
+# (`0.6.0rc1`), and every later segment starts with its separator. The old
+# `([-.]?[a-zA-Z0-9]+)*` could split a run of letters or digits exponentially many
+# ways (ReDoS, CodeQL py/redos, #206). Matched with fullmatch, since `$` would also
+# accept a trailing newline.
+_VERSION_RE = re.compile(r"\d+\.\d+\.\d+(?:[a-zA-Z][a-zA-Z0-9]*)?(?:[-.][a-zA-Z0-9]+)*")
 
 
 def _validate_version_string(value: str) -> None:
@@ -39,7 +45,7 @@ def _validate_version_string(value: str) -> None:
     Raises click.ClickException so click renders the standard `Error: ...`
     line and exits 1 — same shape as the other CLI error paths.
     """
-    if not isinstance(value, str) or not _VERSION_RE.match(value):
+    if not isinstance(value, str) or not _VERSION_RE.fullmatch(value):
         raise click.ClickException(
             f"Invalid version string: {value!r}. "
             "Expected MAJOR.MINOR.PATCH with optional pre/post suffix "
