@@ -57,8 +57,8 @@ Several File Station APIs are non-blocking (start → poll status → stop/clean
 Any parameter accepting file sizes (`size_from`, `size_to`) accepts both raw bytes (as integers) and human-readable strings. Parsing rules:
 
 - Case-insensitive: `"500mib"`, `"500MiB"`, `"500MB"` all valid
-- Supported units: `B`, `KiB`, `MiB`, `GiB`, `TiB`, all binary (1 KiB = 1024 bytes). `KB`, `MB`, `GB`, `TB` are accepted too and mean the same binary units, because that's what users type
-- Output uses the same binary units and labels them `KiB`, `MiB`, `GiB`, `TiB` (`core/formatting.format_size`), so a size the tools print parses back unchanged
+- Supported units: `B`, `KiB`, `MiB`, `GiB`, `TiB`, `PiB`, all binary (1 KiB = 1024 bytes). `KB`, `MB`, `GB`, `TB`, `PB` are accepted too and mean the same binary units, because that's what users type
+- Output uses the same binary units and labels them `KiB`, `MiB`, `GiB`, `TiB`, `PiB` (`core/formatting.format_size`), so any size the tools print, `PiB` included, is accepted back as input
 - Decimal values allowed: `"1.5GB"`, `"0.5TB"`
 - Plain integers treated as bytes: `1048576` = 1 MiB
 - Invalid input returns a clear parse error with examples

@@ -119,15 +119,17 @@ _SIZE_UNITS: dict[str, int] = {
     "MIB": 1024**2,
     "GIB": 1024**3,
     "TIB": 1024**4,
+    "PIB": 1024**5,
     "KB": 1024,
     "MB": 1024**2,
     "GB": 1024**3,
     "TB": 1024**4,
+    "PB": 1024**5,
 }
 
 # Pattern for parsing human-readable sizes like "1.5GiB", "500 MB"
 _SIZE_PATTERN = re.compile(
-    r"^\s*(\d+(?:\.\d+)?)\s*(B|[KMGT]i?B)\s*$",
+    r"^\s*(\d+(?:\.\d+)?)\s*(B|[KMGTP]i?B)\s*$",
     re.IGNORECASE,
 )
 
@@ -196,8 +198,8 @@ def parse_human_size(value: str | int) -> int:
 
     Accepts:
         - Integers (treated as bytes): 1048576
-        - Strings: "500MiB", "2GiB", "1.5TiB" (case-insensitive). KB/MB/GB/TB are
-          accepted too and mean the same binary units.
+        - Strings: "500MiB", "2GiB", "1.5TiB" (case-insensitive), up to PiB. KB/MB/GB/TB/PB
+          are accepted too and mean the same binary units.
 
     Raises ValueError for invalid input.
     """

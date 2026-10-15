@@ -120,7 +120,8 @@ class TestParseHumanSize:
 
     def test_formatted_size_parses_back(self) -> None:
         # What the tools print (format_size) is accepted as input unchanged.
-        assert parse_human_size(format_size(1536 * 1024**2)) == 1536 * 1024**2
+        for size in (0, 1023, 1536 * 1024**2, int(1.5 * 1024**4), 1024**5, 3 * 1024**5):
+            assert parse_human_size(format_size(size)) == size
 
     def test_invalid_binary_unit(self) -> None:
         for bad in ("500iB", "500KiiB", "500KBi"):
@@ -133,7 +134,7 @@ class TestParseHumanSize:
 
     def test_invalid_unit(self) -> None:
         with pytest.raises(ValueError, match="Invalid size"):
-            parse_human_size("500PB")
+            parse_human_size("500EB")
 
 
 class TestParseMtime:

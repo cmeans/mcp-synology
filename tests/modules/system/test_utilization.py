@@ -110,7 +110,7 @@ class TestGetResourceUsage:
                 "data": {
                     "cpu": {"user_load": 5, "system_load": 2, "other_load": 0},
                     "memory": {
-                        "memory_size": 8388608,  # 8 GiB in KB
+                        "memory_size": 8388608,  # 8 GiB in KiB
                         "real_usage": 40,
                         "avail_real": 5242880,  # ~5 GiB
                         "cached": 1048576,  # 1 GiB cached
