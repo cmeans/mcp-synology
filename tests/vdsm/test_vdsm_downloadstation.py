@@ -72,7 +72,12 @@ def _unpack(nas_client: Any) -> tuple[DsmClient, Any, Any, dict[str, str]]:
 
 
 @pytest.fixture
-async def _ds_available(nas_client: Any, dsm_version: str, request: pytest.FixtureRequest) -> bool:
+async def _ds_available(
+    nas_client: Any,
+    dsm_version: str,
+    request: pytest.FixtureRequest,
+    live_clients: set[DsmClient],
+) -> bool:
     """Skip if the image has no DS; otherwise wait (once per session) for its back end."""
     client, _, _, _ = _unpack(nas_client)
     info = await client.query_api_info()
@@ -80,6 +85,12 @@ async def _ds_available(nas_client: Any, dsm_version: str, request: pytest.Fixtu
     if reason is not None:
         pytest.skip(reason)
     request.getfixturevalue("ds_backend_ready")
+    # Each client cached the API list when it logged in. For the session's first DS test
+    # that can be before the wait above, and a slow boot registers DS's APIs only after
+    # it (CI, DSM 7.1: "API 'SYNO.DownloadStation.Task' not found"). Refresh every open
+    # client; one created later logs in after the wait and is already current.
+    for open_client in list(live_clients):
+        await open_client.query_api_info()
     return True
 
 
