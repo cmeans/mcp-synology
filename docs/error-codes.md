@@ -208,8 +208,9 @@ Fix:
 - For paths: ensure the first component is a real share name from `list_shares`.
 - For search: provide a keyword with at least one non-wildcard character.
 - For a missing destination: pass `dest_folder` (a NAS folder for
-  `upload_file`, a local folder for `download_file`), or set the matching
-  default in the `filestation` module settings.
+  `upload_file`; for `download_file`, a local folder in
+  `allowed_local_paths`), or set the matching default in the `filestation`
+  module settings.
 
 ## filesystem_error
 

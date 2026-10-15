@@ -87,7 +87,7 @@ uv run pytest --cov=mcp_synology           # Tests with coverage
 
 ### Auth
 - Strategy chain auto-detects 2FA vs non-2FA on login attempt
-- Credential lookup: keyring → env vars → config file (last resort, plaintext warning)
+- Credential lookup: env vars → config file → keyring, each value resolved separately (explicit sources override the keyring default). Only a password in the config file gets the plaintext warning; a config username with the password in the keyring is the recommended setup (#167)
 - DSM session name format: `MCPSynology_{instance_id}_{unique_id}`
 - Lazy keepalive (re-auth on next request, no proactive pings)
 

@@ -50,7 +50,7 @@ A thin async HTTP client that knows DSM request/response conventions but nothing
 Owns session lifecycle and credential retrieval. See [Auth Architecture](#auth-architecture) for the full design.
 
 **Responsibilities:**
-- Retrieve credentials from the storage hierarchy (keyring → env vars → config values)
+- Retrieve credentials from the storage hierarchy (env vars → config values → keyring)
 - Login, logout, session refresh via `SYNO.API.Auth` (v6 recommended)
 - Device token flow for 2FA-enabled accounts
 - Provide valid session ID to the DSM client on demand
@@ -251,11 +251,11 @@ The auth manager auto-detects the appropriate authentication path rather than re
 
 Three secrets need to persist: username, password, and (after 2FA bootstrap) device_id.
 
-**Storage hierarchy** (checked in order):
+**Storage hierarchy** (checked in order; each of the three values is resolved separately, and the first source that has it wins):
 
-1. **OS keyring** (preferred) — via the Python `keyring` library. Delegates to macOS Keychain, Windows Credential Manager, or Linux Secret Service (GNOME Keyring / KWallet). The setup CLI writes credentials here by default. This is the secure-by-default path.
-2. **Environment variables** (fallback) — `SYNOLOGY_USERNAME`, `SYNOLOGY_PASSWORD`, `SYNOLOGY_DEVICE_ID`. Covers headless environments, Docker deployments, and CI where no keyring daemon is available.
-3. **YAML config values** (last resort) — directly in the config file. Documented with a clear warning that this stores credentials in plaintext on disk. For quick testing only, not recommended for real use.
+1. **Environment variables** (explicit override) — `SYNOLOGY_USERNAME`, `SYNOLOGY_PASSWORD`, `SYNOLOGY_DEVICE_ID`. Covers headless environments, Docker deployments, and CI where no keyring daemon is available.
+2. **YAML config values** — directly in the config file. A username here is fine: it isn't a secret, and a config username with the password in the keyring is the recommended setup. A password (or device_id) here is stored in plaintext on disk; the server warns about a config password at startup (#167).
+3. **OS keyring** (the default) — via the Python `keyring` library. Delegates to macOS Keychain, Windows Credential Manager, or Linux Secret Service (GNOME Keyring / KWallet). The setup CLI writes credentials here by default. This is the secure-by-default path; the explicit sources above override it.
 
 All three secrets (including device_id) are stored in the keyring when available. The keyring library auto-detects the appropriate backend; on headless systems without a keyring daemon, the setup CLI warns the user and falls back to env var guidance.
 
