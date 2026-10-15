@@ -82,7 +82,7 @@ keyring del mcp-synology/192-168-1-100 device_id
 When authenticating, mcp-synology checks these sources in order:
 
 1. **Environment variables** (highest priority) — `SYNOLOGY_USERNAME`, `SYNOLOGY_PASSWORD`, `SYNOLOGY_DEVICE_ID`
-2. **Config file** — `auth.username`, `auth.password` — triggers a plaintext warning
+2. **Config file** — `auth.username`, `auth.password` — a password here triggers a plaintext warning at startup. A username alone doesn't: a config username with the password in the keyring is the recommended setup
 3. **OS keyring** (default) — set via `mcp-synology setup`
 
 Explicit sources (env vars, config file) override the implicit default (keyring). This means setting `SYNOLOGY_PASSWORD=x` will always use that password, even if the keyring has a different one stored.

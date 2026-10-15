@@ -46,7 +46,7 @@ class ConnectionConfig(BaseModel):
 
 
 class AuthConfig(BaseModel):
-    """Authentication credentials (last-resort plaintext)."""
+    """Credentials that override the keyring; a password here is plaintext on disk."""
 
     username: str | None = None
     password: str | None = None
