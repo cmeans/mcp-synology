@@ -15,6 +15,7 @@ import httpx
 from mcp.server.fastmcp import FastMCP
 from mcp.types import Icon
 
+from mcp_synology import __version__
 from mcp_synology.core.auth import AuthManager
 from mcp_synology.core.client import DsmClient
 from mcp_synology.core.errors import ErrorCode
@@ -486,6 +487,9 @@ def create_server(config: AppConfig) -> FastMCP:
         instructions=instructions,
         icons=_load_icons(),
     )
+    # FastMCP 1.x passes no version to the low-level server, which then reports the mcp
+    # SDK's own version in serverInfo (#166).
+    server._mcp_server.version = __version__
 
     logger.debug("Creating MCP server")
 
