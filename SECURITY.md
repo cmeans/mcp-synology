@@ -62,8 +62,8 @@ a private channel.
 **In scope**
 
 - Credential-handling issues in the auth manager
-  (`src/mcp_synology/core/auth.py`) — OS keyring storage, env-var
-  fallback, plaintext-config-file last-resort path, the
+  (`src/mcp_synology/core/auth.py`) — OS keyring storage, the
+  env-var and config-file overrides (a config password is plaintext), the
   `MCPSynology_{instance_id}_{unique_id}` session-name format, and
   the lazy-keepalive design.
 - Session-error retry logic in the DSM client

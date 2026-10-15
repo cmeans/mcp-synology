@@ -312,7 +312,7 @@ jobs:
 - Version negotiation (pick highest compatible version)
 
 **Auth tests (`test_auth.py`):**
-- Credential resolution hierarchy (keyring → env → config)
+- Credential resolution hierarchy (env → config → keyring)
 - Strategy chain: no 2FA, 2FA with device token, 2FA without device token (error)
 - Session re-auth on error 106/107/119
 - Re-auth lock prevents concurrent re-auth

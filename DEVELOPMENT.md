@@ -19,6 +19,20 @@ uv run pytest                              # Run unit tests (no NAS needed)
 uv run pytest --cov=mcp_synology           # Tests with coverage
 ```
 
+### Measuring the tool payload
+
+`scripts/measure_tools.py` reports what the server sends a model before any conversation (tool schemas, descriptions and instructions), for an offline all-modules config that can't reach a NAS (#163):
+
+```bash
+uv run python scripts/measure_tools.py                    # full report to .cache/measure/
+uv run python scripts/measure_tools.py --no-external      # size and tokens only
+uv run python scripts/measure_tools.py --compare OLD.json # difference from an earlier report
+```
+
+- **Contents:** size in characters, mcpscore and `tdqs lint` (pinned versions run via `uvx`; no tool is ever called). With `ANTHROPIC_API_KEY` set, also exact Claude token counts and, with `--tdqs-score`, `tdqs score` graded by Claude. `--ollama URL --ollama-model M` adds Ollama prompt tokens. See the script's `--help`.
+- **CI:** the non-blocking `tool-quality` job runs it on every PR, writes the report to the job summary and uploads it as the `tool-quality` artifact.
+- **Budget test:** `tests/core/test_server.py::TestPayloadBudget::test_payload_within_budget` fails when the served payload grows past `PAYLOAD_BUDGET_CHARS`. If the growth is intended, raise the budget in the same PR and say why.
+
 ## Integration Tests
 
 Integration tests run against a real Synology NAS. They verify the full stack — HTTP, auth, and all module operations.

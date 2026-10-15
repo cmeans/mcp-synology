@@ -88,18 +88,21 @@ connection:
   timeout: 30
 
 # ─── Authentication ──────────────────────────────────────────────
-# Credentials are resolved in this order:
-#   1. OS keyring (preferred — populated by `mcp-synology setup`)
-#   2. Environment variables: SYNOLOGY_USERNAME, SYNOLOGY_PASSWORD,
-#      SYNOLOGY_DEVICE_ID
-#   3. Values in this section (⚠ plaintext on disk — testing only)
+# Each value (username, password, device_id) is resolved separately;
+# the first source that has it wins:
+#   1. Environment variables: SYNOLOGY_USERNAME, SYNOLOGY_PASSWORD,
+#      SYNOLOGY_DEVICE_ID (explicit override)
+#   2. Values in this section
+#   3. OS keyring (the default, populated by `mcp-synology setup`)
 #
-# For production use, run `mcp-synology setup` and leave this
-# section empty or omitted entirely.
+# Recommended: run `mcp-synology setup`, which stores the password and
+# any 2FA device token in the keyring. A username here is fine: it
+# isn't a secret.
 auth:
-  # ⚠ INSECURE: Plaintext credentials. Use keyring or env vars instead.
-  # These exist as a last resort for environments where neither is available.
   # username: my_mcp_user
+  # ⚠ INSECURE: a password or device_id here is stored in plaintext on
+  # disk (the server warns about a password at startup). Use the keyring
+  # or env vars instead.
   # password: my_password
   # device_id: AbCdEf123456    # From 2FA bootstrap
 
@@ -189,7 +192,7 @@ logging:
 | `custom_instructions` | `str` | No | — | Additional instructions prepended to the built-in server prompt (higher priority). Supports template variables: `{display_name}`, `{instance_id}`, `{host}`, `{port}`. Useful for guiding Claude on when to use this connection vs others. HTML comments (`<!-- ... -->`) are removed before the text is sent, so they can hold notes for whoever edits the file. |
 | `instructions_file` | `str` | No | — | Path to a custom `.md` file that **replaces** the built-in server instructions entirely. Copy the built-in `server.md` as a starting point. Same template variables are supported. Takes precedence over `custom_instructions`. Unlike the built-in or prepended instructions, a replacement file doesn't get the generated PERMISSIONS section (below). HTML comments (`<!-- ... -->`) are removed before the text is sent, so they can hold notes for whoever edits the file. |
 | `connection` | `object` | No | — | NAS connection details. Required unless `SYNOLOGY_HOST` env var is set. |
-| `auth` | `object` | No | `{}` | Last-resort plaintext credentials. |
+| `auth` | `object` | No | `{}` | Credentials that override the keyring (env vars override these). A username here is fine; a password or device_id is stored in plaintext. |
 | `modules` | `object` | **Yes** | — | Module enable/disable and configuration. |
 | `logging` | `object` | No | See defaults | Logging configuration. |
 
@@ -300,7 +303,7 @@ Certain config values can be overridden by environment variables. This supports 
 | `SYNOLOGY_INSTANCE_ID` | `instance_id` | — |
 | `SYNOLOGY_LOG_LEVEL` | `logging.level` | — |
 
-**Precedence:** Environment variables override config file values. Keyring overrides both for credentials (keyring is checked first, then env vars, then config file).
+**Precedence:** Environment variables override config file values. For credentials the keyring comes last: env vars, then the config file, then the keyring (`core/auth.py`), each value resolved separately. Explicit sources override the keyring default.
 
 ---
 
