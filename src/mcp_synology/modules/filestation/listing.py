@@ -52,7 +52,7 @@ def _volume_name(real_path: object) -> str:
 
 
 def _volume_free(volume_status: object) -> str:
-    """Free space of the share's volume, e.g. ``1.5 TB of 36.6 TB``."""
+    """Free space of the share's volume, e.g. ``1.5 TiB of 36.6 TiB``."""
     if not isinstance(volume_status, dict) or "freespace" not in volume_status:
         return "—"
     free = format_size(int(volume_status["freespace"]))

@@ -178,12 +178,12 @@ class TestFormatTransferProgress:
         assert format_transfer_progress(downloaded=0, total=0) == "0 B / 0 B (—)"
 
     def test_partial(self) -> None:
-        # 512 MB / 1 GB = exactly 50% (512 * 1024 * 1024 / 1024 * 1024 * 1024)
+        # 512 MiB / 1 GiB = exactly 50% (512 * 1024 * 1024 / 1024 * 1024 * 1024)
         out = format_transfer_progress(downloaded=512 * 1024 * 1024, total=1024 * 1024 * 1024)
         assert "(50%)" in out
         # Tightened beyond plan: assert the unit too so a future change to
         # format_size's boundary doesn't pass silently.
-        assert "512 MB" in out
+        assert "512 MiB" in out
 
     def test_complete(self) -> None:
         out = format_transfer_progress(downloaded=1000, total=1000)
@@ -204,7 +204,7 @@ class TestFormatSpeed:
     def test_positive_renders_size_per_sec(self) -> None:
         out = format_speed(1024 * 1024)
         assert "/s" in out
-        assert "1" in out  # 1 MB rendered as "1 MB" by format_size
+        assert "1" in out  # 1 MiB rendered as "1 MiB" by format_size
 
 
 class TestFormatEta:

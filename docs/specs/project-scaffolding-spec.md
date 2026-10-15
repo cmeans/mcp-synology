@@ -363,7 +363,7 @@ jobs:
 
 `test_helpers.py`:
 - Path normalization: leading `/`, shared folder validation
-- Human-readable size parsing: `"500MB"`, `"2GB"`, `"1.5TB"`, case insensitivity, decimals, error cases
+- Human-readable size parsing: `"500MiB"`, `"2GiB"`, `"1.5TiB"` and the KB/MB/GB/TB spellings (same binary units), case insensitivity, decimals, error cases
 - Async polling wrapper: timeout, progress callback
 
 #### 3. Integration Tests (real NAS, local only)

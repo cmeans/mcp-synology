@@ -303,7 +303,7 @@ class TestListing:
         result = await list_shares(client)
         assert "0 B" not in result, result
         assert re.search(r"volume\w*\d", result), result
-        assert re.search(r"\d+(\.\d)? [KMGT]?B of \d+(\.\d)? [KMGT]?B", result), result
+        assert re.search(r"\d+(\.\d)? (?:[KMGT]i)?B of \d+(\.\d)? (?:[KMGT]i)?B", result), result
         assert "get_dir_size" in result
 
     async def test_list_files_existing_share(self, nas_client: Any) -> None:
@@ -1689,7 +1689,7 @@ class TestSystemInfo:
         client, _, _, _ = _unpack(nas_client)
         result = await get_system_info(client)
         assert "RAM" in result
-        assert "MB" in result
+        assert "MiB" in result
 
 
 @pytest.mark.integration

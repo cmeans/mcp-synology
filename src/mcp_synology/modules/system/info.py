@@ -95,7 +95,7 @@ async def get_system_info(client: DsmClient) -> str:
     # Use explicit None-check so a (theoretical) 0 value isn't misread as missing.
     ram = dsm["ram"] if dsm.get("ram") is not None else core.get("ram_size")
     if ram:
-        pairs.append(("RAM", f"{ram} MB"))
+        pairs.append(("RAM", f"{ram} MiB"))
 
     # Temperature — 0°C is technically a valid reading (cold-room install),
     # so distinguish missing from zero with explicit None-checks.

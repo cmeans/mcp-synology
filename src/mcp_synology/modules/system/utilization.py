@@ -66,11 +66,11 @@ def _format_memory(mem: dict[str, Any]) -> list[tuple[str, str]]:
     if total:
         total_mb = total // 1024
         avail_mb = avail // 1024 if avail else 0
-        detail = f"{total_mb} MB total"
+        detail = f"{total_mb} MiB total"
         if avail_mb:
-            detail += f", {avail_mb} MB available"
+            detail += f", {avail_mb} MiB available"
         if cached:
-            detail += f", {cached // 1024} MB cached"
+            detail += f", {cached // 1024} MiB cached"
         pairs.append(("Memory detail", detail))
     if swap_used:
         pairs.append(("Swap in", f"{swap_used} pages/s"))

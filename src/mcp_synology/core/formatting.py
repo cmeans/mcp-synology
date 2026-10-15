@@ -238,17 +238,17 @@ def synology_error_response(operation: str, exc: SynologyError) -> NoReturn:
     )
 
 
-_SIZE_UNITS = ["B", "KB", "MB", "GB", "TB", "PB"]
+_SIZE_UNITS = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"]
 
 
 def format_size(size_bytes: int) -> str:
-    """Format a byte count as a human-readable string (binary units).
+    """Format a byte count as a human-readable string in binary units (KiB = 1024 bytes).
 
     Examples:
         0 -> "0 B"
-        1024 -> "1.0 KB"
-        1536 -> "1.5 KB"
-        1073741824 -> "1.0 GB"
+        1024 -> "1 KiB"
+        1536 -> "1.5 KiB"
+        1073741824 -> "1 GiB"
     """
     if size_bytes == 0:
         return "0 B"

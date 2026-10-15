@@ -32,8 +32,8 @@ class TestGetDownloadStats:
             json=ok({"speed_download": 5242880, "speed_upload": 1048576})
         )
         result = await get_download_stats(mock_client)
-        assert "5 MB/s" in result
-        assert "1 MB/s" in result
+        assert "5 MiB/s" in result
+        assert "1 MiB/s" in result
 
     @respx.mock
     async def test_includes_emule_when_present(self, mock_client: DsmClient) -> None:

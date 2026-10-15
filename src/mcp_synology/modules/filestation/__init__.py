@@ -137,7 +137,7 @@ MODULE_INFO = ModuleInfo(
                 "modification date. The pattern parameter is a keyword/substring "
                 "match on filenames (not glob). "
                 'Use extension for file type filtering (e.g., extension="mkv"). '
-                'Accepts human-readable sizes like "500MB". '
+                'Accepts human-readable sizes like "500MiB". '
                 'mtime_from / mtime_to accept ISO 8601 ("2026-04-01T12:00:00+00:00"), '
                 'a calendar date ("YYYY-MM-DD"), or Unix epoch seconds; naive dates '
                 "are treated as UTC. "
