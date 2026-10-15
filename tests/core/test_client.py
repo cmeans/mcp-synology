@@ -544,3 +544,157 @@ class TestCreateDownloadTaskWithFile:
             )
         assert data == {"task_id": ["dbid_3"]}
         assert reauths == 1
+
+
+class TestUpload:
+    """DsmClient.upload(): the File Station multipart POST. #211 covered the overwrite
+    field through upload_file; these test the client itself, including the re-auth retry
+    (the gap #200 pointed at)."""
+
+    @staticmethod
+    def _field(body: bytes, name: str, value: str) -> bool:
+        return f'name="{name}"\r\n\r\n{value}\r\n'.encode() in body
+
+    @respx.mock
+    async def test_multipart_shape(self, tmp_path: Path) -> None:
+        client = make_client(make_api_cache())
+        client.sid = "the-sid"
+        local = tmp_path / "report.txt"
+        local.write_bytes(b"hello")
+        route = respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": True, "data": {"blSkip": False, "file": "report.txt"}}
+        )
+        async with client:
+            data = await client.upload("/video/in", local, "report.txt")
+        assert data == {"blSkip": False, "file": "report.txt"}
+        request = route.calls.last.request
+        # The Upload API reads _sid from the query string only, never the form.
+        assert dict(request.url.params) == {"_sid": "the-sid"}
+        body = request.content
+        assert b'name="_sid"' not in body
+        for name, value in [
+            ("api", "SYNO.FileStation.Upload"),
+            ("version", "2"),
+            ("method", "upload"),
+            ("path", "/video/in"),
+            ("create_parents", "true"),
+        ]:
+            assert self._field(body, name, value), name
+        assert b'name="file"; filename="report.txt"' in body
+        assert b"\r\n\r\nhello\r\n" in body
+
+    @respx.mock
+    @pytest.mark.parametrize("overwrite", [False, True])
+    async def test_overwrite_sent_only_when_true(self, tmp_path: Path, overwrite: bool) -> None:
+        """DSM reads overwrite=false as "skip" and answers success (#195)."""
+        client = make_client(make_api_cache())
+        local = tmp_path / "a.txt"
+        local.write_bytes(b"a")
+        route = respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": True, "data": {}}
+        )
+        async with client:
+            await client.upload("/video", local, "a.txt", overwrite=overwrite)
+        body = route.calls.last.request.content
+        assert (b'name="overwrite"' in body) is overwrite
+        if overwrite:
+            assert self._field(body, "overwrite", "true")
+
+    @respx.mock
+    @pytest.mark.parametrize("overwrite", [False, True])
+    async def test_session_error_retries_once_with_the_file_and_overwrite_intact(
+        self, tmp_path: Path, overwrite: bool
+    ) -> None:
+        """The retry reopens the file (the first handle is closed) and keeps the same
+        overwrite handling, so a retried upload can't turn into a silent skip."""
+        client = make_client(make_api_cache())
+        client.sid = "old_sid"
+        local = tmp_path / "a.txt"
+        local.write_bytes(b"payload")
+        reauths = 0
+
+        async def fake_reauth() -> None:
+            nonlocal reauths
+            reauths += 1
+            client.sid = "new_sid"
+
+        client.set_re_auth_callback(fake_reauth)
+        route = respx.post(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=[
+                httpx.Response(200, json={"success": False, "error": {"code": 119}}),
+                httpx.Response(200, json={"success": True, "data": {"blSkip": False}}),
+            ]
+        )
+        async with client:
+            data = await client.upload("/video", local, "a.txt", overwrite=overwrite)
+        assert data == {"blSkip": False}
+        assert reauths == 1
+        first, second = (c.request for c in route.calls)
+        assert first.url.params["_sid"] == "old_sid"
+        assert second.url.params["_sid"] == "new_sid"
+        for request in (first, second):
+            assert b"\r\n\r\npayload\r\n" in request.content
+            assert (b'name="overwrite"' in request.content) is overwrite
+
+    @respx.mock
+    async def test_session_error_on_the_retry_is_not_retried_again(self, tmp_path: Path) -> None:
+        client = make_client(make_api_cache())
+        local = tmp_path / "a.txt"
+        local.write_bytes(b"a")
+        reauths = 0
+
+        async def fake_reauth() -> None:
+            nonlocal reauths
+            reauths += 1
+
+        client.set_re_auth_callback(fake_reauth)
+        route = respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 106}}
+        )
+        async with client:
+            with pytest.raises(SessionExpiredError):
+                await client.upload("/video", local, "a.txt")
+        assert reauths == 1
+        assert route.call_count == 2
+
+    @respx.mock
+    async def test_failed_reauth_raises_original_session_error(self, tmp_path: Path) -> None:
+        client = make_client(make_api_cache())
+        local = tmp_path / "a.txt"
+        local.write_bytes(b"a")
+
+        async def failing_reauth() -> None:
+            raise SynologyError("login failed")
+
+        client.set_re_auth_callback(failing_reauth)
+        route = respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 106}}
+        )
+        async with client:
+            with pytest.raises(SessionExpiredError):
+                await client.upload("/video", local, "a.txt")
+        assert route.call_count == 1
+
+    @respx.mock
+    async def test_file_exists_raises_typed_error(self, tmp_path: Path) -> None:
+        from mcp_synology.core.errors import SynologyFileExistsError
+
+        client = make_client(make_api_cache())
+        local = tmp_path / "a.txt"
+        local.write_bytes(b"a")
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 414}}
+        )
+        async with client:
+            with pytest.raises(SynologyFileExistsError):
+                await client.upload("/video", local, "a.txt")
+
+    async def test_upload_api_absent_raises_api_not_found(self, tmp_path: Path) -> None:
+        cache = make_api_cache()
+        del cache["SYNO.FileStation.Upload"]
+        client = make_client(cache)
+        local = tmp_path / "a.txt"
+        local.write_bytes(b"a")
+        async with client:
+            with pytest.raises(ApiNotFoundError):
+                await client.upload("/video", local, "a.txt")
