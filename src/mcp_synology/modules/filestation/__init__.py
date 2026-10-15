@@ -249,6 +249,8 @@ MODULE_INFO = ModuleInfo(
 
 def register(ctx: RegisterContext) -> None:
     """Register File Station tools with the MCP server."""
+    from mcp_synology.core.errors import ErrorCode
+    from mcp_synology.core.formatting import error_response
     from mcp_synology.modules.filestation import local_paths
     from mcp_synology.modules.filestation.helpers import ensure_known_shares
     from mcp_synology.modules.filestation.listing import (
@@ -507,10 +509,18 @@ def register(ctx: RegisterContext) -> None:
         ) -> str:
             effective_dest = dest_folder or default_download_dir
             if not effective_dest:
-                return (
-                    "[!] No destination folder specified and no default_download_dir "
-                    "configured.\n    Provide dest_folder or set default_download_dir "
-                    "in filestation module settings."
+                # A structured error, so a client checking isError doesn't read it as success
+                # (#194).
+                error_response(
+                    ErrorCode.INVALID_PARAMETER,
+                    "Download failed: No destination folder specified and no "
+                    "default_download_dir configured.",
+                    retryable=False,
+                    param="dest_folder",
+                    suggestion=(
+                        "Provide dest_folder (a local folder), or set default_download_dir "
+                        "in filestation module settings."
+                    ),
                 )
 
             client = await manager.get_client()
@@ -649,10 +659,17 @@ def register(ctx: RegisterContext) -> None:
         ) -> str:
             effective_dest = dest_folder or default_upload_dir
             if not effective_dest:
-                return (
-                    "[!] No NAS destination folder specified and no default_upload_dir "
-                    "configured.\n    Provide dest_folder or set default_upload_dir "
-                    "in filestation module settings."
+                # Structured, like every other refusal from this tool (#194).
+                error_response(
+                    ErrorCode.INVALID_PARAMETER,
+                    "Upload failed: No NAS destination folder specified and no "
+                    "default_upload_dir configured.",
+                    retryable=False,
+                    param="dest_folder",
+                    suggestion=(
+                        "Provide dest_folder (a NAS folder such as /video), or set "
+                        "default_upload_dir in filestation module settings."
+                    ),
                 )
 
             client = await manager.get_client()

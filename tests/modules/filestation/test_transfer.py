@@ -87,6 +87,50 @@ class TestUploadFile:
         assert "overwrite=true" in body["error"]["suggestion"]
 
     @respx.mock
+    @pytest.mark.parametrize(("overwrite", "sent"), [(False, None), (True, "true")])
+    async def test_upload_sends_overwrite_only_when_true(
+        self, mock_client: DsmClient, tmp_path: Path, overwrite: bool, sent: str | None
+    ) -> None:
+        """DSM reads overwrite=false as "skip" and reports success; only an omitted
+        overwrite makes it fail with 414 (#195, DSM 7.2.2 probe)."""
+        local_file = tmp_path / "test.txt"
+        local_file.write_text("hello")
+        route = respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": True, "data": {"blSkip": False, "file": "test.txt", "progress": 1}}
+        )
+
+        await upload_file(
+            mock_client, local_path=str(local_file), dest_folder="/video", overwrite=overwrite
+        )
+        body = route.calls.last.request.content
+        if sent is None:
+            assert b'name="overwrite"' not in body
+        else:
+            assert b'name="overwrite"\r\n\r\n' + sent.encode() + b"\r\n" in body
+
+    @respx.mock
+    async def test_upload_skipped_by_dsm_is_already_exists(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """DSM's skip answer (success, blSkip=true; the file is left alone) is never
+        reported as uploaded (#195)."""
+        local_file = tmp_path / "test.txt"
+        local_file.write_text("hello")
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": True, "data": {"blSkip": True, "file": "r.txt", "progress": 1}}
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await upload_file(
+                mock_client, local_path=str(local_file), dest_folder="/video", filename="r.txt"
+            )
+        err = json.loads(str(exc_info.value))["error"]
+        assert err["code"] == "already_exists"
+        assert err["param"] == "filename"
+        assert err["value"] == "r.txt"
+        assert "overwrite=true" in err["suggestion"]
+
+    @respx.mock
     async def test_upload_overwrite_success(self, mock_client: DsmClient, tmp_path: Path) -> None:
         local_file = tmp_path / "test.txt"
         local_file.write_text("updated content")

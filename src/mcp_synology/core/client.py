@@ -524,9 +524,13 @@ class DsmClient:
             "version": str(resolved_version),
             "method": "upload",
             "path": dest_folder,
-            "overwrite": str(overwrite).lower(),
             "create_parents": str(create_parents).lower(),
         }
+        # Only send overwrite=true. DSM reads overwrite=false as "skip": it answers success
+        # with data.blSkip=true and leaves the existing file alone. With the parameter
+        # omitted it fails with 414 (file exists) instead (#195, DSM 7.1 and 7.2.2).
+        if overwrite:
+            form_data["overwrite"] = "true"
         # SID must be a query parameter, not a form field — the Upload API
         # does not read _sid from multipart form data.
         query_params: dict[str, str] = {}
