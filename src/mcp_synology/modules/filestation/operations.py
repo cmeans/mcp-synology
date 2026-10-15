@@ -744,7 +744,7 @@ async def delete_files(
     outside_bin: list[str] = []
     for p in normalized:
         parts = p.split("/")
-        if len(parts) > 2 and parts[2].lower() == "#recycle":
+        if len(parts) > 2 and parts[2] == "#recycle":
             in_bin.setdefault(parts[1], []).append(p)
         else:
             outside_bin.append(p)

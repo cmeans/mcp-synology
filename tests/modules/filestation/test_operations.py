@@ -455,6 +455,23 @@ class TestDeleteFiles:
         assert "/video/keep-recoverable.mkv" not in permanent
 
     @respx.mock
+    async def test_delete_from_a_differently_cased_folder_is_not_the_bin(
+        self, mock_client: DsmClient
+    ) -> None:
+        """Only DSM's exact `#recycle` is the bin, as in restore and listing.
+
+        A user folder named `#Recycle` on a share with a recycle bin goes to the
+        bin like any other path, so it stays recoverable.
+        """
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_async_task_side_effect())
+        result = await delete_files(
+            mock_client, paths=["/video/#Recycle/x.mkv"], recycle_bin_status={"video": True}
+        )
+        assert result.startswith("[+] Deleted 1 item(s):")
+        assert "Recycle bin is enabled on /video" in result
+        assert "permanent" not in result
+
+    @respx.mock
     async def test_delete_from_recycle_bin_skips_the_recycle_probe(
         self, mock_client: DsmClient
     ) -> None:
