@@ -5,8 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
-from mcp.server.fastmcp import (
-    Context,  # noqa: TC002 — runtime import needed for FastMCP context injection
+from mcp.server.mcpserver import (
+    Context,  # noqa: TC002 — runtime import needed for MCPServer context injection
 )
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field, field_validator
@@ -24,18 +24,18 @@ if TYPE_CHECKING:
 
 # Annotations for tools that need explicit overrides
 _ANNO_IDEMPOTENT = ToolAnnotations(
-    readOnlyHint=False,
-    destructiveHint=False,
-    idempotentHint=True,
+    read_only_hint=False,
+    destructive_hint=False,
+    idempotent_hint=True,
 )
 # move/delete remove files; copy_files, upload_file and restore_from_recycle_bin replace
 # NAS files with overwrite=true. Annotations are static, so they can't depend on
 # overwrite, and clients may auto-approve tools that aren't destructive (#183).
-_ANNO_DESTRUCTIVE = ToolAnnotations(readOnlyHint=False, destructiveHint=True)
+_ANNO_DESTRUCTIVE = ToolAnnotations(read_only_hint=False, destructive_hint=True)
 # download_file is READ on the NAS but writes to this machine, and with
 # overwrite=True it replaces a local file. MCP's readOnlyHint means "does not
 # modify its environment", and clients may auto-approve tools that claim it.
-_ANNO_LOCAL_WRITE = ToolAnnotations(readOnlyHint=False, destructiveHint=True)
+_ANNO_LOCAL_WRITE = ToolAnnotations(read_only_hint=False, destructive_hint=True)
 
 
 def _expand_setting(setting: str, entry: str) -> Path:
@@ -502,7 +502,7 @@ def register(ctx: RegisterContext) -> None:
             annotations=_tool_annos["download_file"],
         )
         async def tool_download_file(
-            ctx: Context,  # type: ignore[type-arg]
+            ctx: Context,
             path: str,
             dest_folder: str | None = None,
             filename: str | None = None,
@@ -651,7 +651,7 @@ def register(ctx: RegisterContext) -> None:
             annotations=_tool_annos["upload_file"],
         )
         async def tool_upload_file(
-            ctx: Context,  # type: ignore[type-arg]
+            ctx: Context,
             local_path: str,
             dest_folder: str | None = None,
             filename: str | None = None,

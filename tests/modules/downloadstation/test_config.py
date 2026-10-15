@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 import pytest
 import respx
-from mcp.server.fastmcp.exceptions import ToolError
+from mcp.server.mcpserver.exceptions import ToolError
 
 from mcp_synology.modules.downloadstation.config import (
     get_download_config,

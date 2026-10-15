@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed
+
+- Requires mcp 2.x (`mcp>=2.3,<3`; was `>=1.15.0,<2`). The server is now built on `MCPServer`, mcp 2.x's renamed `FastMCP`. Tool names, schemas, descriptions and results are unchanged: the payload a model receives is the same size (16,039 chars measured, 20,911 for the full `tools/list`), and clients on the 2025-11-25 and 2026-07-28 protocol versions both connect. Schema compaction and the reported server version now use documented 2.x APIs instead of private SDK attributes. mcp 2.x would send a model only "Error executing tool <name>" for an exception other than a structured error, hiding login failures' "run mcp-synology setup" guidance; a login failure is now a structured `auth_failed` error (any DSM error keeps its own code), and other errors keep their message as in 1.x. Installing alongside a package that needs `mcp<2` is no longer possible (#226) — closes #114
+
 ## 0.7.0 (2026-10-15)
 
 **Upgrading from 0.6.x:** `upload_file` and `download_file` now only use local folders listed in the new File Station setting `allowed_local_paths`, which defaults to your Downloads folder (#186). An upload from, or a download to, any other local folder is refused with `permission_denied` until you add that folder, for example:

@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 import pytest
 import respx
-from mcp.server.fastmcp.exceptions import ToolError
+from mcp.server.mcpserver.exceptions import ToolError
 
 from mcp_synology.modules.filestation.listing import list_files
 from mcp_synology.modules.filestation.metadata import get_dir_size

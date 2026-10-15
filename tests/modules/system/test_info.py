@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 import pytest
 import respx
-from mcp.server.fastmcp.exceptions import ToolError
+from mcp.server.mcpserver.exceptions import ToolError
 
 from mcp_synology.core.state import ApiInfoEntry
 from mcp_synology.modules.system.info import get_system_info
