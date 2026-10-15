@@ -2,16 +2,27 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import datetime
 import os
+import socket
+import ssl
+import threading
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+import respx
 from click.testing import CliRunner
 
 from mcp_synology import __version__
 from mcp_synology.cli import main
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 
 class TestCli:
@@ -539,6 +550,193 @@ class TestEmitClaudeDesktopSnippet:
 
         assert result.exit_code == 0
         assert "DBUS_SESSION_BUS_ADDRESS" not in result.output
+
+
+def _closed_port() -> int:
+    """A local port with nothing listening on it."""
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port: int = sock.getsockname()[1]
+    return port
+
+
+def _check_config(tmp_path: Path, port: int, *, https: bool = False) -> Path:
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        "schema_version: 1\n"
+        "connection:\n"
+        "  host: 127.0.0.1\n"
+        f"  port: {port}\n"
+        f"  https: {'true' if https else 'false'}\n"
+        "  timeout: 5\n"
+        "auth:\n"
+        "  username: x\n"
+        "  password: y\n"
+        "modules:\n"
+        "  filestation:\n"
+        "    enabled: true\n"
+    )
+    return config_file
+
+
+@pytest.fixture
+def self_signed_tls_port(tmp_path: Path) -> Iterator[int]:
+    """A real local TLS server with a self-signed certificate, like a stock Synology NAS."""
+    pytest.importorskip("cryptography")
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "127.0.0.1")])
+    now = datetime.datetime.now(datetime.UTC)
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(minutes=5))
+        .not_valid_after(now + datetime.timedelta(hours=1))
+        .sign(key, hashes.SHA256())
+    )
+    cert_file, key_file = tmp_path / "cert.pem", tmp_path / "key.pem"
+    cert_file.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    key_file.write_bytes(
+        key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+    )
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(cert_file, key_file)
+
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen()
+    listener.settimeout(0.2)
+    stop = threading.Event()
+
+    def serve() -> None:
+        while not stop.is_set():
+            try:
+                conn, _ = listener.accept()
+            except TimeoutError:
+                continue
+            with contextlib.suppress(OSError), ctx.wrap_socket(conn, server_side=True):
+                pass  # the client rejects the certificate during the handshake
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    try:
+        yield listener.getsockname()[1]
+    finally:
+        stop.set()
+        thread.join()
+        listener.close()
+
+
+class TestCheckConnectionFailures:
+    """#191: an unreachable NAS is a red error line and exit 1, never an httpx traceback."""
+
+    def test_closed_port(self, tmp_path: Path) -> None:
+        port = _closed_port()
+        result = CliRunner().invoke(main, ["check", "-c", str(_check_config(tmp_path, port))])
+        assert result.exit_code == 1, result.output
+        assert f"Error: Can't connect to http://127.0.0.1:{port}: ConnectError" in result.output
+        assert "Check the host, port and https settings." in result.output
+        assert "Traceback" not in result.output
+        assert not isinstance(result.exception, httpx.HTTPError)
+
+    def test_tls_verification_failure(self, tmp_path: Path, self_signed_tls_port: int) -> None:
+        config = _check_config(tmp_path, self_signed_tls_port, https=True)
+        result = CliRunner().invoke(main, ["check", "-c", str(config)])
+        assert result.exit_code == 1, result.output
+        assert "Error: TLS certificate verification failed for 127.0.0.1" in result.output
+        assert "CERTIFICATE_VERIFY_FAILED" in result.output
+        assert "verify_ssl: false" in result.output
+        assert "Traceback" not in result.output
+
+    @respx.mock
+    def test_timeout_with_empty_message_names_the_error(self, tmp_path: Path) -> None:
+        respx.get("http://127.0.0.1:5000/webapi/query.cgi").mock(
+            side_effect=httpx.ConnectTimeout("")
+        )
+        result = CliRunner().invoke(main, ["check", "-c", str(_check_config(tmp_path, 5000))])
+        assert result.exit_code == 1, result.output
+        assert "Can't connect to http://127.0.0.1:5000: ConnectTimeout." in result.output
+
+    @respx.mock
+    def test_failure_during_login_is_reported_the_same_way(self, tmp_path: Path) -> None:
+        respx.get("http://127.0.0.1:5000/webapi/query.cgi").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "success": True,
+                    "data": {
+                        "SYNO.API.Auth": {"path": "entry.cgi", "minVersion": 1, "maxVersion": 7}
+                    },
+                },
+            )
+        )
+        respx.get("http://127.0.0.1:5000/webapi/entry.cgi").mock(
+            side_effect=httpx.ReadError("connection reset")
+        )
+        result = CliRunner().invoke(main, ["check", "-c", str(_check_config(tmp_path, 5000))])
+        assert result.exit_code == 1, result.output
+        assert "Can't connect to http://127.0.0.1:5000: ReadError: connection reset" in (
+            result.output
+        )
+        assert "Traceback" not in result.output
+
+    def test_no_enabled_module_is_reported(self, tmp_path: Path) -> None:
+        """#168: check reports a config with every module disabled like any config error."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "schema_version: 1\n"
+            "connection:\n"
+            "  host: 192.168.1.100\n"
+            "modules:\n"
+            "  filestation:\n"
+            "    enabled: false\n"
+        )
+        result = CliRunner().invoke(main, ["check", "-c", str(config_file)])
+        assert result.exit_code == 1
+        assert "No module is enabled" in result.output
+        assert "Traceback" not in result.output
+
+
+class TestSetupConnectionFailures:
+    """#191: setup connects the same way as check, so it fails the same clean way."""
+
+    def _config(self, port: int) -> Any:
+        from mcp_synology.core.config import AppConfig
+
+        return AppConfig(
+            schema_version=1,
+            connection={"host": "127.0.0.1", "port": port, "timeout": 5},
+            modules={"filestation": {"enabled": True}},
+        )
+
+    def test_connect_and_login_closed_port(self, capsys: pytest.CaptureFixture[str]) -> None:
+        from mcp_synology.cli.setup import _connect_and_login
+
+        port = _closed_port()
+        with pytest.raises(SystemExit) as exc:
+            asyncio.run(_connect_and_login(self._config(port), "x", "y", "svc", False))
+        assert exc.value.code == 1
+        assert f"Can't connect to http://127.0.0.1:{port}" in capsys.readouterr().err
+
+    def test_setup_login_closed_port(self, capsys: pytest.CaptureFixture[str]) -> None:
+        from mcp_synology.cli.setup import _setup_login
+
+        port = _closed_port()
+        with pytest.raises(SystemExit) as exc:
+            asyncio.run(_setup_login(self._config(port), "x", "y", "svc"))
+        assert exc.value.code == 1
+        assert f"Can't connect to http://127.0.0.1:{port}" in capsys.readouterr().err
 
 
 class TestCheckCommand:

@@ -113,7 +113,18 @@ class AppConfig(BaseModel, extra="forbid"):
             raise ValueError(msg)
 
         if not self.modules:
-            msg = "At least one module must be configured."
+            msg = (
+                "At least one module must be configured, "
+                "e.g. modules: {filestation: {enabled: true}}."
+            )
+            raise ValueError(msg)
+        if not any(mod.enabled for mod in self.modules.values()):
+            # A server with no enabled module has 0 tools: almost certainly a config mistake.
+            listed = ", ".join(sorted(self.modules))
+            msg = (
+                f"No module is enabled (listed with enabled: false: {listed}). "
+                "Enable at least one, e.g. filestation: {enabled: true}."
+            )
             raise ValueError(msg)
 
         # Apply default port from https setting
@@ -221,18 +232,17 @@ def _merge_env_overrides(raw: dict[str, Any]) -> dict[str, Any]:
 
 def _emit_warnings(config: AppConfig) -> None:
     """Emit warnings for insecure or unusual config."""
-    if config.auth.username or config.auth.password:
-        creds_from_env = bool(
-            os.environ.get("SYNOLOGY_USERNAME") or os.environ.get("SYNOLOGY_PASSWORD")
-        )
-        if creds_from_env:
+    # A username alone isn't a secret (keyring password + config username is the
+    # recommended setup), so only a password triggers the warning (#167).
+    if config.auth.password:
+        if os.environ.get("SYNOLOGY_PASSWORD"):
             logger.warning(
-                "Credentials provided via environment variables. "
+                "Password provided via the SYNOLOGY_PASSWORD environment variable. "
                 "Consider using 'mcp-synology setup' to store them securely in the OS keyring."
             )
         else:
             logger.warning(
-                "Plaintext credentials found in config file. "
+                "Plaintext password found in config file. "
                 "Use 'mcp-synology setup' to store credentials securely in the OS keyring."
             )
 

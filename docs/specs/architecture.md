@@ -354,7 +354,7 @@ $ mcp-synology setup --config ~/.config/mcp-synology/primary.yaml
 
 - `mcp-synology serve` — normal MCP server mode (launched by Claude Desktop)
 - `mcp-synology setup` — interactive credential setup and 2FA bootstrap
-- `mcp-synology check` — validate stored credentials can authenticate (for debugging, does not start the server)
+- `mcp-synology check` — validate stored credentials can authenticate (for debugging, does not start the server). A NAS it can't reach (connection refused, DNS, timeout) or whose TLS certificate fails verification is reported as one red error line and exit 1, never a traceback; `setup` uses the same handling (#191)
 
 **Documentation flow:** install → create config with host/port → run `mcp-synology setup` → add server entry to Claude Desktop config → restart Claude Desktop.
 
