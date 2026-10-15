@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import TYPE_CHECKING, Any
 from unittest.mock import patch
 
 import pytest
+import yaml
 
 from mcp_synology.core.config import (
     AppConfig,
@@ -137,6 +139,73 @@ class TestAppConfig:
         log = LoggingConfig()
         assert log.level == "info"
         assert log.file is None
+
+
+class TestEnabledModules:
+    """#168: a config whose modules are all ``enabled: false`` would start with 0 tools."""
+
+    def test_empty_modules_rejected(self) -> None:
+        raw = _minimal_raw()
+        raw["modules"] = {}
+        with pytest.raises(ValueError, match="At least one module must be configured"):
+            AppConfig(**raw)
+
+    def test_every_module_disabled_rejected(self) -> None:
+        raw = _minimal_raw()
+        raw["modules"] = {"filestation": {"enabled": False}, "system": {"enabled": False}}
+        with pytest.raises(ValueError, match="No module is enabled") as exc:
+            AppConfig(**raw)
+        assert "filestation, system" in str(exc.value)
+        assert "filestation: {enabled: true}" in str(exc.value)
+
+    def test_one_enabled_among_disabled_accepted(self) -> None:
+        raw = _minimal_raw()
+        raw["modules"] = {"filestation": {"enabled": False}, "system": {"enabled": True}}
+        config = AppConfig(**raw)
+        assert config.modules["system"].enabled
+
+
+class TestCredentialWarnings:
+    """#167: only a password is a secret; a username alone gets no plaintext warning."""
+
+    @staticmethod
+    def _load(tmp_path: Path, auth: dict[str, str], env: dict[str, str] | None = None) -> None:
+        raw = _minimal_raw()
+        raw["auth"] = auth
+        path = tmp_path / "config.yaml"
+        path.write_text(yaml.safe_dump(raw))
+        clean = {k: v for k, v in os.environ.items() if not k.startswith("SYNOLOGY_")}
+        with patch.dict(os.environ, {**clean, **(env or {})}, clear=True):
+            load_config(str(path))
+
+    def test_username_only_no_warning(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level(logging.WARNING, logger="mcp_synology.core.config")
+        self._load(tmp_path, {"username": "nobody"})
+        assert "Plaintext" not in caplog.text
+        assert "environment variable" not in caplog.text
+
+    def test_password_in_file_warns(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+        caplog.set_level(logging.WARNING, logger="mcp_synology.core.config")
+        self._load(tmp_path, {"username": "nobody", "password": "s3cret"})
+        assert "Plaintext password found in config file" in caplog.text
+
+    def test_password_from_env_gets_env_wording(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level(logging.WARNING, logger="mcp_synology.core.config")
+        self._load(tmp_path, {"username": "nobody"}, {"SYNOLOGY_PASSWORD": "s3cret"})
+        assert "SYNOLOGY_PASSWORD environment variable" in caplog.text
+        assert "Plaintext" not in caplog.text
+
+    def test_username_from_env_only_no_warning(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level(logging.WARNING, logger="mcp_synology.core.config")
+        self._load(tmp_path, {}, {"SYNOLOGY_USERNAME": "nobody"})
+        assert "Plaintext" not in caplog.text
+        assert "environment variable" not in caplog.text
 
 
 class TestDeriveInstanceId:
