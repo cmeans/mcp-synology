@@ -259,7 +259,7 @@ At startup, the config is validated with Pydantic. Validation failures produce c
 - `schema_version` is higher than what this server version supports (with upgrade guidance)
 - `connection.host` is missing AND `SYNOLOGY_HOST` env var is not set
 - `connection.port` is not a valid port number (1–65535)
-- `modules` is missing or empty (no modules = no tools = useless server)
+- `modules` is missing or empty, or no listed module is enabled (every module `enabled: false`). Either way the server would have no tools. The error names the listed modules and shows the fix (`filestation: {enabled: true}`); `check` and `setup` report it like any other config error (#168)
 - `instance_id` contains characters other than `a-z`, `0-9`, `-` (after lowercasing)
 - Unknown top-level keys (catch typos early — strict schema)
 - `permission` value is not one of `read`, `write`, `admin`
@@ -268,7 +268,7 @@ At startup, the config is validated with Pydantic. Validation failures produce c
 
 ### Warnings (server starts, but user is alerted)
 
-- `auth.username` or `auth.password` are present in the config file → warn about plaintext credentials, recommend keyring
+- `auth.password` is present in the config file → warn about a plaintext password, recommend keyring. A password from `SYNOLOGY_PASSWORD` gets an env-var variant of the warning instead. `auth.username` alone isn't a secret and gets no warning: a config username with the password in the keyring is the recommended setup (#167)
 - `connection.https` is `false` → info-level note that credentials are sent in cleartext (acceptable on a trusted LAN, risky otherwise)
 - `connection.verify_ssl` is `false` → warn that SSL verification is disabled
 - A module is listed but `enabled: false` → info-level note (helps users remember they disabled something)
