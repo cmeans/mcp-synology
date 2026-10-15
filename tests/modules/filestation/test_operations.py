@@ -407,6 +407,75 @@ class TestDeleteFiles:
         assert "enabled" in result
         assert "NOT enabled" in result
 
+    @respx.mock
+    async def test_delete_from_recycle_bin_is_permanent(self, mock_client: DsmClient) -> None:
+        """Deleting inside /<share>/#recycle empties it for good (#220).
+
+        DSM keeps no second copy, so the share's recycle-bin setting doesn't
+        make these recoverable. Seen on seska (DSM 7.1.1): the old wording said
+        "files can be recovered" after emptying the bin.
+        """
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_async_task_side_effect())
+        result = await delete_files(
+            mock_client,
+            paths=["/Test-Resources/#recycle/a.txt", "/Test-Resources/#recycle/old"],
+            recycle_bin_status={"Test-Resources": True},
+        )
+        assert result.startswith("[+] Permanently deleted 2 item(s):")
+        assert "can be recovered" not in result
+        assert "recycle bin on /Test-Resources" in result
+        assert "cannot be recovered" in result
+
+    @respx.mock
+    async def test_delete_the_recycle_folder_itself_is_permanent(
+        self, mock_client: DsmClient
+    ) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_async_task_side_effect())
+        result = await delete_files(
+            mock_client, paths=["/video/#recycle"], recycle_bin_status={"video": True}
+        )
+        assert result.startswith("[+] Permanently deleted 1 item(s):")
+        assert "can be recovered" not in result
+
+    @respx.mock
+    async def test_delete_mixed_bin_and_regular_paths(self, mock_client: DsmClient) -> None:
+        """A call mixing bin and non-bin paths names the bin paths as permanent."""
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_async_task_side_effect())
+        result = await delete_files(
+            mock_client,
+            paths=["/video/keep-recoverable.mkv", "/video/#recycle/gone.mkv"],
+            recycle_bin_status={"video": True},
+        )
+        assert result.startswith("[+] Deleted 2 item(s):")
+        recoverable, _, permanent = result.partition("⚠")
+        assert "Recycle bin is enabled on /video" in recoverable
+        assert "except the items deleted from the recycle bin itself" in recoverable
+        assert "/video/#recycle/gone.mkv" in permanent
+        assert "cannot be recovered" in permanent
+        assert "/video/keep-recoverable.mkv" not in permanent
+
+    @respx.mock
+    async def test_delete_from_recycle_bin_skips_the_recycle_probe(
+        self, mock_client: DsmClient
+    ) -> None:
+        """A share whose deleted paths are all in its bin needs no recycle probe."""
+        recycle_status: dict[str, bool] = {}
+        route = respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=_async_task_side_effect()
+        )
+        await delete_files(
+            mock_client,
+            paths=["/scratch/#recycle/x.bin"],
+            recycle_bin_status=recycle_status,
+        )
+        listed = [
+            dict(c.request.url.params).get("folder_path")
+            for c in route.calls
+            if dict(c.request.url.params).get("method") == "list"
+        ]
+        assert listed == []
+        assert recycle_status == {}
+
     async def test_delete_empty_paths_list_returns_not_found(self, mock_client: DsmClient) -> None:
         """Empty paths list short-circuits to a not_found error before any
         DSM call is attempted. Defensive guard added with the per-path

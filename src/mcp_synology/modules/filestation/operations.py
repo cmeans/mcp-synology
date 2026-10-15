@@ -738,6 +738,17 @@ async def delete_files(
         )
         deleted.append(p)
 
+    # A path inside a share's bin (/<share>/#recycle, or the bin itself) is gone for
+    # good whatever the share's setting: DSM keeps no second copy (#220).
+    in_bin: dict[str, list[str]] = {}
+    outside_bin: list[str] = []
+    for p in normalized:
+        parts = p.split("/")
+        if len(parts) > 2 and parts[2].lower() == "#recycle":
+            in_bin.setdefault(parts[1], []).append(p)
+        else:
+            outside_bin.append(p)
+
     # Determine recycle bin status per share. Probes lazily on first observation
     # via `ensure_recycle_status` so the dict stays empty until we actually need
     # the answer; pre-#37 the dict was never populated and every share was
@@ -749,13 +760,13 @@ async def delete_files(
     if recycle_bin_status is None:
         # Defensive: caller passed nothing. Skip probing; preserve prior
         # default-true messaging for the touched shares.
-        for p in normalized:
+        for p in outside_bin:
             parts = p.split("/")
             share_name = parts[1] if len(parts) > 1 else ""
             shares_with_recycle.add(share_name)
     else:
         seen: set[str] = set()
-        for p in normalized:
+        for p in outside_bin:
             parts = p.split("/")
             share_name = parts[1] if len(parts) > 1 else ""
             if share_name in seen:
@@ -775,9 +786,24 @@ async def delete_files(
 
     lines.extend(
         f"\nRecycle bin is enabled on /{share} \u2014 "
-        f"files can be recovered with list_recycle_bin and restore_from_recycle_bin."
+        f"files can be recovered with list_recycle_bin and restore_from_recycle_bin"
+        + (", except the items deleted from the recycle bin itself." if share in in_bin else ".")
         for share in sorted(shares_with_recycle)
     )
+    for share, bin_paths in sorted(in_bin.items()):
+        # Name the bin items only when the call also deleted others, so it's clear
+        # which ones are gone for good.
+        if outside_bin:
+            lines.append(
+                f"\n\u26a0 Deleted from the recycle bin on /{share} \u2014 permanent, "
+                "these cannot be recovered:"
+            )
+            lines.extend(f"  {p}" for p in bin_paths)
+        else:
+            lines.append(
+                f"\n\u26a0 Deleted from the recycle bin on /{share} \u2014 permanent, "
+                "these cannot be recovered."
+            )
     lines.extend(
         f"\n\u26a0 Recycle bin is NOT enabled on /{share} \u2014 these files cannot be recovered."
         for share in sorted(shares_without_recycle)

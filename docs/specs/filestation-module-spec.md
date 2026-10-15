@@ -636,7 +636,7 @@ Delete files or folders.
 
 **Tool description (LLM-facing):**
 > Delete files or folders. If the share has a recycle bin, files can be recovered. Otherwise deletion
-> is permanent.
+> is permanent, as is deleting inside /<share>/#recycle.
 
 **Parameters:**
 
@@ -666,10 +666,23 @@ Recycle bin is enabled on /video — files can be recovered with list_recycle_bi
 ⚠ Recycle bin is NOT enabled on /docker — these files cannot be recovered.
 ```
 
+**Response shape (deleted from the recycle bin, #220):**
+
+```
+✓ Permanently deleted 2 items:
+  📄 /video/#recycle/old_video.srt (38 KiB)
+  📁 /video/#recycle/temp/ (3 items, 156 MiB)
+
+⚠ Deleted from the recycle bin on /video — permanent, these cannot be recovered.
+```
+
+When the same call also deletes paths outside the bin, the header says `Deleted`, the share's recycle-bin note adds ", except the items deleted from the recycle bin itself", and the `⚠` line ends with `:` and lists the bin paths.
+
 **Design notes:**
 - Response adapts based on cached recycle bin status of the target share.
 - User treats delete as done either way — the recycle bin note is a safety net, not a required step.
 - If paths span shares with different recycle bin statuses, group the response accordingly.
+- **Deleting from the bin is permanent (#220):** a path inside `/<share>/#recycle` (or the bin folder itself) is treated as permanent whatever the share's setting, because DSM keeps no second copy (seen on DSM 7.1.1: `list_recycle_bin` showed 0 items afterward). Such a share isn't probed for its recycle status unless the call also deletes paths outside its bin.
 - **Missing paths (#162):** every path is checked with `getinfo` before anything is deleted. Any missing path refuses the whole call with `not_found` naming the missing paths and saying nothing was deleted. When a missing path contains `*` or `?`, the suggestion explains that paths aren't wildcard patterns and points to `search_files`. DSM itself finishes a Delete task for a missing path without an error (`total: -1`, empty `path`), so that status is also treated as not found, which covers a path that disappears between the check and the delete.
 - **Per-item errors and overlaps:** a Delete task can finish with an `errors` list and no `error` key, e.g. 900 for a non-recursive delete of a non-empty folder, which DSM leaves in place. That is a structured error (with a `recursive=true` hint), never "Deleted". Paths listed twice, or inside another listed path, are collapsed before any task runs (delete, move and restore), and a later failure names the paths already deleted. Copy collapses only paths listed twice: copying a folder and a path inside it is two copies (`dest/a` and `dest/b`).
 - **Task cleanup:** DSM releases a finished Delete task itself and answers `stop` with error 401 (DSM 7.1 and 7.2.2), so `stop` runs only for a task that didn't finish (timeout, polling error, cancellation).
