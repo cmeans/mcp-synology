@@ -273,17 +273,24 @@ class TestFilestationToolInvocation:
         await progress_cb(50, 100)
         fake_mcp_ctx.report_progress.assert_awaited_once()
 
-    async def test_download_file_no_dest_returns_error(self) -> None:
-        """No dest_folder and no default_download_dir → bare error string returned."""
-        server, _manager, ctx = _make_ctx(allowed={"download_file"})
+    async def test_download_file_no_dest_raises_structured_error(self) -> None:
+        """No dest_folder and no default_download_dir → a structured error, not text (#194)."""
+        server, manager, ctx = _make_ctx(allowed={"download_file"})
         register(ctx)
 
         fake_mcp_ctx = MagicMock()
-        result = await server._tool_manager._tools["download_file"].fn(
-            ctx=fake_mcp_ctx,
-            path="/share/file.txt",
-        )
-        assert "No destination folder" in result
+        with pytest.raises(ToolError) as exc:
+            await server._tool_manager._tools["download_file"].fn(
+                ctx=fake_mcp_ctx,
+                path="/share/file.txt",
+            )
+        err = json.loads(str(exc.value))["error"]
+        assert err["code"] == "invalid_parameter"
+        assert err["param"] == "dest_folder"
+        assert err["retryable"] is False
+        assert "No destination folder" in err["message"]
+        assert "default_download_dir" in err["suggestion"]
+        manager.get_client.assert_not_called()
 
     async def test_download_file_uses_default_download_dir(
         self, monkeypatch: pytest.MonkeyPatch
@@ -433,15 +440,22 @@ class TestFilestationToolInvocation:
         await kwargs["progress_callback"](75, 100)
         fake_mcp_ctx.report_progress.assert_awaited_once()
 
-    async def test_upload_file_no_dest_returns_error(self) -> None:
-        server, _manager, ctx = _make_ctx(allowed={"upload_file"})
+    async def test_upload_file_no_dest_raises_structured_error(self) -> None:
+        server, manager, ctx = _make_ctx(allowed={"upload_file"})
         register(ctx)
         fake_mcp_ctx = MagicMock()
-        result = await server._tool_manager._tools["upload_file"].fn(
-            ctx=fake_mcp_ctx,
-            local_path="/local/file.txt",
-        )
-        assert "No NAS destination folder" in result
+        with pytest.raises(ToolError) as exc:
+            await server._tool_manager._tools["upload_file"].fn(
+                ctx=fake_mcp_ctx,
+                local_path="/local/file.txt",
+            )
+        err = json.loads(str(exc.value))["error"]
+        assert err["code"] == "invalid_parameter"
+        assert err["param"] == "dest_folder"
+        assert err["retryable"] is False
+        assert "No NAS destination folder" in err["message"]
+        assert "default_upload_dir" in err["suggestion"]
+        manager.get_client.assert_not_called()
 
     async def test_upload_file_uses_default_upload_dir(
         self, monkeypatch: pytest.MonkeyPatch

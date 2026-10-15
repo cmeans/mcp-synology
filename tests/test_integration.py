@@ -1069,11 +1069,9 @@ class TestFileTransfers:
         assert "upload_test.txt" in result
 
     async def test_02_upload_duplicate_no_overwrite(self, nas_client: Any, tmp_path: Path) -> None:
-        """Uploading the same file again without overwrite.
-
-        Note: DSM's Upload API v2 may silently skip or overwrite depending
-        on the NAS configuration. We verify it doesn't crash — the behavior
-        varies across DSM versions.
+        """Uploading over an existing file without overwrite is refused, and the NAS file is
+        left alone (#195). DSM reads overwrite=false as "skip" (success, blSkip=true), so it
+        used to be reported as uploaded.
         """
         client, _, config, paths = _unpack(nas_client)
         _skip_unless_write(config)
@@ -1081,20 +1079,24 @@ class TestFileTransfers:
         base = paths["writable_folder"]
         dest = f"{base}/{self._UPLOAD_DIR}"
 
+        # Same name, different size, so a replaced file would show.
         local_file = tmp_path / "upload_test.txt"
-        local_file.write_bytes(self._TEST_CONTENT)
+        local_file.write_bytes(self._TEST_CONTENT * 2)
 
-        # DSM may return success (silent overwrite) or raise ToolError (already exists).
-        # Either is acceptable — we just verify it doesn't crash hard.
-        try:
-            result = await upload_file(
-                client,
-                local_path=str(local_file),
-                dest_folder=dest,
-            )
-            logger.info("upload duplicate (no overwrite):\n%s", result)
-        except ToolError as e:
-            logger.info("upload duplicate raised ToolError (expected): %s", e)
+        with pytest.raises(ToolError) as exc_info:
+            await upload_file(client, local_path=str(local_file), dest_folder=dest)
+        err = json.loads(str(exc_info.value))["error"]
+        assert err["code"] == "already_exists", err
+        assert err["param"] == "filename"
+        assert err["value"] == "upload_test.txt"
+
+        info = await client.request(
+            "SYNO.FileStation.List",
+            "getinfo",
+            version=2,
+            params={"path": f"{dest}/upload_test.txt", "additional": '["size"]'},
+        )
+        assert info["files"][0]["additional"]["size"] == len(self._TEST_CONTENT)
 
     async def test_03_upload_overwrite(self, nas_client: Any, tmp_path: Path) -> None:
         """Uploading with overwrite=True should succeed."""
