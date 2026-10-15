@@ -120,7 +120,7 @@ class TestParseHumanSize:
 
     def test_formatted_size_parses_back(self) -> None:
         # What the tools print (format_size) is accepted as input unchanged.
-        for size in (0, 1023, 1536 * 1024**2, int(1.5 * 1024**4), 1024**5, 3 * 1024**5):
+        for size in (0, 1023, 1536 * 1024**2, int(1.5 * 1024**4), 1024**5, 3 * 1024**5, 1024**6):
             assert parse_human_size(format_size(size)) == size
 
     def test_invalid_binary_unit(self) -> None:
