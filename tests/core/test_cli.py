@@ -979,6 +979,33 @@ class TestCheckLogin:
 
         assert exc_info.value.code == 1
 
+    async def test_check_api_query_failure_exits_cleanly(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A DSM error from the API query (a reachable NAS) is a red line and exit 1,
+        and login is never attempted (#191)."""
+        import pytest
+
+        from mcp_synology.cli.check import _check_login
+        from mcp_synology.core.errors import SynologyError
+        from tests.conftest import make_test_config
+
+        config = make_test_config()
+        fake_client = self._make_fake_client()
+        fake_client.query_api_info = AsyncMock(side_effect=SynologyError("Unknown error"))
+        fake_auth_cls = MagicMock()
+
+        with (
+            patch("mcp_synology.core.client.DsmClient", return_value=fake_client),
+            patch("mcp_synology.core.auth.AuthManager", fake_auth_cls),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            await _check_login(config)
+
+        assert exc_info.value.code == 1
+        assert "Error: DSM API query failed: Unknown error" in capsys.readouterr().err
+        fake_auth_cls.assert_not_called()
+
     async def test_check_login_failure_oserror(self) -> None:
         import pytest
 
