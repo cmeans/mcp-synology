@@ -111,18 +111,25 @@ def validate_additional(values: list[str] | None, *, tool_name: str) -> None:
         )
 
 
-# Size unit multipliers (binary: 1 KB = 1024 bytes)
+# Size unit multipliers, all binary (1 KiB = 1024 bytes). Output is labeled KiB/MiB/...;
+# input also takes KB/MB/... with the same binary meaning, since that's what users type.
 _SIZE_UNITS: dict[str, int] = {
     "B": 1,
+    "KIB": 1024,
+    "MIB": 1024**2,
+    "GIB": 1024**3,
+    "TIB": 1024**4,
+    "PIB": 1024**5,
     "KB": 1024,
     "MB": 1024**2,
     "GB": 1024**3,
     "TB": 1024**4,
+    "PB": 1024**5,
 }
 
-# Pattern for parsing human-readable sizes like "1.5GB", "500 MB"
+# Pattern for parsing human-readable sizes like "1.5GiB", "500 MB"
 _SIZE_PATTERN = re.compile(
-    r"^\s*(\d+(?:\.\d+)?)\s*(B|KB|MB|GB|TB)\s*$",
+    r"^\s*(\d+(?:\.\d+)?)\s*(B|[KMGTP]i?B)\s*$",
     re.IGNORECASE,
 )
 
@@ -191,7 +198,8 @@ def parse_human_size(value: str | int) -> int:
 
     Accepts:
         - Integers (treated as bytes): 1048576
-        - Strings: "500MB", "2GB", "1.5TB" (case-insensitive, binary units)
+        - Strings: "500MiB", "2GiB", "1.5TiB" (case-insensitive), up to PiB. KB/MB/GB/TB/PB
+          are accepted too and mean the same binary units.
 
     Raises ValueError for invalid input.
     """
@@ -205,7 +213,7 @@ def parse_human_size(value: str | int) -> int:
     if not match:
         msg = (
             f"Invalid size '{value}'. "
-            f"Use a number (bytes) or a human-readable size like '500MB', '2GB', '1.5TB'."
+            f"Use a number (bytes) or a human-readable size like '500MiB', '2GiB', '1.5TiB'."
         )
         raise ValueError(msg)
 

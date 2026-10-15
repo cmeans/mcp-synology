@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Files larger than this get a timeout warning in the output.
-_LARGE_FILE_THRESHOLD = 1024 * 1024 * 1024  # 1 GB
+_LARGE_FILE_THRESHOLD = 1024 * 1024 * 1024  # 1 GiB
 
 # Separators rejected in a local file name on every OS, not just the host's:
 # a name with a backslash is a path on Windows even when this runs on POSIX.

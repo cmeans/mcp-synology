@@ -169,8 +169,8 @@ Download Station queue (all)
 =================================================================================================================================
   ID         Title                    Type  Status   Size    Progress                Down  Up          ETA  Completed
   ─────────  ───────────────────────  ────  ───────  ──────  ──────────────────────  ────  ──────────  ───  ───────────────────────
-  dbid_2554  Mrs Biggs  (2012) 720p   bt    seeding  4.2 GB  4.2 GB / 4.2 GB (100%)  —     —           —    2025-09-27 13:23:43 UTC
-  dbid_4010  Cleddau Series 2 (2026)  bt    seeding  6.5 GB  6.5 GB / 6.5 GB (100%)  —     100.9 KB/s  —    2025-10-11 20:01:33 UTC
+  dbid_2554  Mrs Biggs  (2012) 720p   bt    seeding  4.2 GiB  4.2 GiB / 4.2 GiB (100%)  —     —           —    2025-09-27 13:23:43 UTC
+  dbid_4010  Cleddau Series 2 (2026)  bt    seeding  6.5 GiB  6.5 GiB / 6.5 GiB (100%)  —     100.9 KiB/s  —    2025-10-11 20:01:33 UTC
 
 1214 task(s) total; showing 1–2. Pass offset=2 for the next page.
 ```
@@ -245,7 +245,7 @@ Queue-wide throughput.
 Download Station throughput
 ====================================
   Download (total):  —
-  Upload (total):    176.0 KB/s
+  Upload (total):    176.0 KiB/s
 ```
 
 **Design notes:**

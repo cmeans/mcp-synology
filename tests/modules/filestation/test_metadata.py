@@ -285,7 +285,7 @@ class TestGetDirSize:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
 
         result = await get_dir_size(mock_client, path="/video/TV Shows/The Bear")
-        assert "42.6 GB" in result
+        assert "42.6 GiB" in result
         assert "186" in result
         assert "12" in result
 

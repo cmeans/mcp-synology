@@ -74,7 +74,7 @@ class TestGetSystemInfo:
         assert "Intel Celeron J4125" in result
         assert "4 cores" in result
         assert "2000 MHz" in result
-        assert "8192 MB" in result
+        assert "8192 MiB" in result
         assert "42°C" in result
         assert "pool.ntp.org" in result
 
