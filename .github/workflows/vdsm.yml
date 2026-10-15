@@ -102,7 +102,11 @@ jobs:
         # print pytest's summary path and upload logs (#107 was cancelled
         # at the job timeout with neither).
         timeout-minutes: 30
-        run: uv run pytest -m vdsm -v --no-cov --log-cli-level=INFO --dsm-version "${DSM_VERSION}"
+        # tests/vdsm must be on the command line: --dsm-version is defined in
+        # tests/vdsm/conftest.py, which pytest only loads early enough to register
+        # options when the directory is given. It collects the same 108 tests as
+        # `pytest -m vdsm` from the root.
+        run: uv run pytest tests/vdsm -m vdsm -v --no-cov --log-cli-level=INFO --dsm-version "${DSM_VERSION}"
 
       - name: Upload logs on failure
         if: failure() || cancelled()
