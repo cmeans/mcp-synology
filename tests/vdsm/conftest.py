@@ -459,6 +459,17 @@ async def refresh_search_index(
     return _refresh
 
 
+# Every client a _user_session fixture has open, so a fixture that waits for a package
+# (ds_backend_ready) can refresh the API cache of clients created before the wait.
+_LIVE_CLIENTS: set[DsmClient] = set()
+
+
+@pytest.fixture
+def live_clients() -> set[DsmClient]:
+    """The DsmClients currently logged in by nas_client, admin_client or fresh_client."""
+    return _LIVE_CLIENTS
+
+
 async def _user_session(
     config: AppConfig, test_paths: dict[str, str], dsm_version: str, label: str
 ) -> Any:
@@ -472,7 +483,11 @@ async def _user_session(
         auth = AuthManager(config, client)
         sid = await auth.login()
         logger.info("vDSM %s authenticated, SID=%s... (DSM %s)", label, sid[:8], dsm_version)
-        yield client, auth, config, test_paths
+        _LIVE_CLIENTS.add(client)
+        try:
+            yield client, auth, config, test_paths
+        finally:
+            _LIVE_CLIENTS.discard(client)
         await auth.logout()
 
 
