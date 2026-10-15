@@ -217,7 +217,8 @@ MODULE_INFO = ModuleInfo(
             name="delete_files",
             description=(
                 "Delete files or folders. If the share has a recycle bin, files can be "
-                "recovered. Otherwise deletion is permanent."
+                "recovered. Otherwise deletion is permanent, as is deleting inside "
+                "/<share>/#recycle."
             ),
             permission_tier=PermissionTier.WRITE,
             annotations=_ANNO_DESTRUCTIVE,
