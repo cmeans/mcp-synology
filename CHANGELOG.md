@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed
+
+- Dependabot no longer proposes major `mcp` updates. mcp 2.x removed `mcp.server.fastmcp`, and grouped Python updates can't leave one package out, so the major bump would block every other update. The rule comes out when the mcp 2.x migration (#114) merges (#224)
+
 ## 0.7.0 (2026-10-15)
 
 **Upgrading from 0.6.x:** `upload_file` and `download_file` now only use local folders listed in the new File Station setting `allowed_local_paths`, which defaults to your Downloads folder (#186). An upload from, or a download to, any other local folder is refused with `permission_denied` until you add that folder, for example:

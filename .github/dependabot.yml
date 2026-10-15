@@ -34,6 +34,12 @@ updates:
       time: "06:00"
       timezone: "America/Chicago"
     open-pull-requests-limit: 5
+    # mcp 2.x removed mcp.server.fastmcp, and the grouped PR can't leave one
+    # package out, so a major mcp bump would hold back every other update
+    # (#179). The migration is #114; remove this rule when it merges.
+    ignore:
+      - dependency-name: "mcp"
+        update-types: ["version-update:semver-major"]
     groups:
       python:
         patterns:
