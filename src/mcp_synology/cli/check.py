@@ -67,17 +67,44 @@ def connection_failure_message(base_url: str, host: str, exc: BaseException) -> 
     return f"Can't connect to {base_url}: {reason}. Check the host, port and https settings."
 
 
+_NOT_DSM = "Is this a Synology DSM address? Check the host, port and https settings."
+
+
+def not_dsm_message(base_url: str, status: int | None) -> str:
+    """One clean line for a server that answers but isn't DSM's API (QA R1 on #210).
+
+    A wrong host or port often reaches some other web server: a 404 or 500, or a 200
+    HTML page such as a router login. ``status`` is None when the reply wasn't JSON.
+    """
+    if status is None:
+        return f"{base_url} didn't return a DSM API response (not JSON). {_NOT_DSM}"
+    message = f"{base_url} answered HTTP {status}, not a DSM API response."
+    if status == 400 and base_url.startswith("http://"):
+        # DSM's nginx answers plain HTTP sent to its HTTPS port (5001) with 400.
+        message += " Plain HTTP sent to an HTTPS port gets 400; is https: true needed?"
+    return f"{message} {_NOT_DSM}"
+
+
 @contextlib.contextmanager
 def exit_on_connection_failure(base_url: str, host: str) -> Iterator[None]:
-    """Turn an unreachable NAS into a red error line and exit 1 (check and setup, #191)."""
+    """Turn a NAS that can't be reached, or a server that isn't DSM, into a red error
+    line and exit 1 instead of a traceback (check and setup, #191)."""
+    import json
+
     import httpx
 
     try:
         yield
     except httpx.TransportError as e:
         message = connection_failure_message(base_url, host, e)
-        click.echo(click.style(f"Error: {message}", fg="red"), err=True)
-        sys.exit(1)
+    except httpx.HTTPStatusError as e:
+        message = not_dsm_message(base_url, e.response.status_code)
+    except json.JSONDecodeError:
+        message = not_dsm_message(base_url, None)
+    else:
+        return
+    click.echo(click.style(f"Error: {message}", fg="red"), err=True)
+    sys.exit(1)
 
 
 async def _check_login(config: object) -> None:

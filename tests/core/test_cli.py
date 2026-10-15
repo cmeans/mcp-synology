@@ -691,6 +691,49 @@ class TestCheckConnectionFailures:
         )
         assert "Traceback" not in result.output
 
+    @pytest.mark.parametrize("status", [404, 500])
+    @respx.mock
+    def test_http_error_status_is_not_dsm(self, tmp_path: Path, status: int) -> None:
+        """A wrong host or port often reaches another web server (QA R1 on #210)."""
+        respx.get("http://127.0.0.1:5000/webapi/query.cgi").mock(
+            return_value=httpx.Response(status, text="<html>nope</html>")
+        )
+        result = CliRunner().invoke(main, ["check", "-c", str(_check_config(tmp_path, 5000))])
+        assert result.exit_code == 1, result.output
+        assert (
+            f"Error: http://127.0.0.1:5000 answered HTTP {status}, not a DSM API response. "
+            "Is this a Synology DSM address? Check the host, port and https settings."
+        ) in result.output
+        assert "Plain HTTP" not in result.output
+        assert "Traceback" not in result.output
+        assert not isinstance(result.exception, httpx.HTTPError)
+
+    @respx.mock
+    def test_http_400_over_plain_http_suggests_https(self, tmp_path: Path) -> None:
+        """DSM's nginx answers plain HTTP on its HTTPS port (5001) with 400."""
+        respx.get("http://127.0.0.1:5001/webapi/query.cgi").mock(
+            return_value=httpx.Response(400, text="The plain HTTP request was sent to HTTPS port")
+        )
+        result = CliRunner().invoke(main, ["check", "-c", str(_check_config(tmp_path, 5001))])
+        assert result.exit_code == 1, result.output
+        assert "answered HTTP 400, not a DSM API response." in result.output
+        assert "is https: true needed?" in result.output
+
+    @respx.mock
+    def test_html_page_is_not_dsm(self, tmp_path: Path) -> None:
+        """A 200 HTML page (e.g. a router login) isn't JSON."""
+        respx.get("http://127.0.0.1:5000/webapi/query.cgi").mock(
+            return_value=httpx.Response(200, text="<html><title>Router login</title></html>")
+        )
+        result = CliRunner().invoke(main, ["check", "-c", str(_check_config(tmp_path, 5000))])
+        assert result.exit_code == 1, result.output
+        assert (
+            "Error: http://127.0.0.1:5000 didn't return a DSM API response (not JSON). "
+            "Is this a Synology DSM address?"
+        ) in result.output
+        assert "Traceback" not in result.output
+        assert "JSONDecodeError" not in result.output
+
     def test_no_enabled_module_is_reported(self, tmp_path: Path) -> None:
         """#168: check reports a config with every module disabled like any config error."""
         config_file = tmp_path / "config.yaml"
@@ -737,6 +780,34 @@ class TestSetupConnectionFailures:
             asyncio.run(_setup_login(self._config(port), "x", "y", "svc"))
         assert exc.value.code == 1
         assert f"Can't connect to http://127.0.0.1:{port}" in capsys.readouterr().err
+
+    @pytest.mark.parametrize(
+        ("response", "expected"),
+        [
+            (httpx.Response(404, text="nope"), "answered HTTP 404, not a DSM API response."),
+            (httpx.Response(200, text="<html></html>"), "didn't return a DSM API response"),
+        ],
+    )
+    @pytest.mark.parametrize("which", ["_connect_and_login", "_setup_login"])
+    @respx.mock
+    def test_server_that_is_not_dsm(
+        self,
+        capsys: pytest.CaptureFixture[str],
+        which: str,
+        response: httpx.Response,
+        expected: str,
+    ) -> None:
+        """QA R1 on #210: both setup connect paths report a non-DSM server cleanly."""
+        from mcp_synology.cli import setup
+
+        respx.get("http://127.0.0.1:5000/webapi/query.cgi").mock(return_value=response)
+        args = ("x", "y", "svc", False) if which == "_connect_and_login" else ("x", "y", "svc")
+        with pytest.raises(SystemExit) as exc:
+            asyncio.run(getattr(setup, which)(self._config(5000), *args))
+        assert exc.value.code == 1
+        err = capsys.readouterr().err
+        assert f"Error: http://127.0.0.1:5000 {expected}" in err
+        assert "Is this a Synology DSM address?" in err
 
 
 class TestCheckCommand:
