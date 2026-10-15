@@ -7,7 +7,7 @@ import logging
 import os
 import shutil
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NoReturn
 
 from mcp_synology.core.errors import ErrorCode, SynologyError, SynologyFileExistsError
 from mcp_synology.core.formatting import (
@@ -144,16 +144,7 @@ async def upload_file(
     if progress_callback:
         await progress_callback(0, file_size)
 
-    try:
-        await client.upload(
-            dest,
-            local,
-            effective_name,
-            overwrite=overwrite,
-            create_parents=create_parents,
-            timeout=timeout,
-        )
-    except SynologyFileExistsError:
+    def already_exists() -> NoReturn:
         error_response(
             ErrorCode.ALREADY_EXISTS,
             f"Upload failed: File '{effective_name}' already exists in {dest}.",
@@ -162,6 +153,18 @@ async def upload_file(
             value=effective_name,
             suggestion="Use overwrite=true to replace the existing file.",
         )
+
+    try:
+        data = await client.upload(
+            dest,
+            local,
+            effective_name,
+            overwrite=overwrite,
+            create_parents=create_parents,
+            timeout=timeout,
+        )
+    except SynologyFileExistsError:
+        already_exists()
     except SynologyError as e:
         synology_error_response("Upload", e)
     except OSError as e:
@@ -173,6 +176,11 @@ async def upload_file(
             value=local_path,
             suggestion="Check file permissions and that the file is not locked.",
         )
+
+    if data.get("blSkip"):
+        # DSM skipped the file and kept the existing one (it does this for overwrite=false,
+        # which upload() no longer sends). Never report it as uploaded (#195).
+        already_exists()
 
     # Report completion
     if progress_callback:

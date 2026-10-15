@@ -393,7 +393,7 @@ Download a NAS file to a local directory on this machine.
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
 | `path` | `str` | **Yes** | — | NAS file path to download. |
-| `dest_folder` | `str` | **Yes** | — | Local directory to save the file to. |
+| `dest_folder` | `str` | No | `default_download_dir` | Local directory to save the file to. With neither set, `invalid_parameter` (`param: dest_folder`) before any NAS request (#194). |
 | `filename` | `str` | No | `None` | Rename on download (defaults to the NAS filename). Must be a plain file name: no `/` or `\`, not `.` or `..`, no NUL, no drive (`D:x`); otherwise `invalid_parameter` before the NAS is contacted. The same rule applies to a name taken from the NAS path. |
 | `overwrite` | `bool` | No | `false` | Replace existing local file. |
 
@@ -438,7 +438,7 @@ Upload a local file from this machine to a NAS folder.
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
 | `local_path` | `str` | **Yes** | — | Local file path on this machine. |
-| `dest_folder` | `str` | **Yes** | — | NAS destination folder. |
+| `dest_folder` | `str` | No | `default_upload_dir` | NAS destination folder. With neither set, `invalid_parameter` (`param: dest_folder`) before any NAS request (#194). |
 | `filename` | `str` | No | `None` | Rename on upload (defaults to the local filename). |
 | `overwrite` | `bool` | No | `false` | Replace existing NAS file. |
 | `create_parents` | `bool` | No | `true` | Create missing parent directories on the NAS. |
@@ -453,7 +453,7 @@ Upload a local file from this machine to a NAS folder.
 - Upload uses POST multipart — the only DSM API call that requires POST. Documented clearly in the client method.
 - File is streamed from disk, not buffered in memory.
 - On session error (106/107/119), re-auth and retry with a fresh file handle.
-- `SynologyFileExistsError` (414) caught with suggestion to use `overwrite=true`.
+- **`overwrite` is sent only when true (#195).** DSM's Upload reads `overwrite=false` as *skip*: it answers success with `data.blSkip: true` and leaves the existing file alone (verified on DSM 7.2.2; it took ~10 s). With `overwrite` omitted, DSM fails with 414 instead (also after ~10 s). So `overwrite=false` omits the parameter, and both 414 and a `blSkip: true` answer become `already_exists` (`param: filename`, value = the effective name) with a suggestion to use `overwrite=true`. A skipped upload is never reported as uploaded.
 - The MCP server runs locally, so `local_path` refers to a path on the machine running the server.
 - **Local path confinement:** `local_path` must resolve (after `~`, `..` and symlinks) to a path inside one of the `allowed_local_paths` folders (default: the user's Downloads folder; `default_download_dir` is always allowed). Otherwise it's `permission_denied`, listing the allowed folders, before any NAS request; a symlink inside an allowed folder that points outside is refused. The server instructions list the allowed folders under LOCAL PATHS. See `local_paths.py` and `config-schema-spec.md`.
 
