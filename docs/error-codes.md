@@ -183,6 +183,9 @@ Common causes:
   allowed in rename — use copy/move to relocate a file).
 - A path is empty, all whitespace, or has no share component.
 - A search keyword normalizes to empty after wildcard processing.
+- `upload_file` or `download_file` was called without `dest_folder`, and no
+  default is configured (`default_upload_dir` or `default_download_dir` in the
+  `filestation` module settings). The error's `param` is `dest_folder`.
 - The request was too large for DSM to accept (HTTP 414 "Request-URI Too Large").
   Long magnet links and multi-URI lists are sent in the request body to avoid
   this; if it still happens, split the request.
@@ -204,6 +207,9 @@ Fix:
   directories, use the copy or move tool.
 - For paths: ensure the first component is a real share name from `list_shares`.
 - For search: provide a keyword with at least one non-wildcard character.
+- For a missing destination: pass `dest_folder` (a NAS folder for
+  `upload_file`, a local folder for `download_file`), or set the matching
+  default in the `filestation` module settings.
 
 ## filesystem_error
 
