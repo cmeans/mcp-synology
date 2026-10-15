@@ -1209,6 +1209,8 @@ class TestFileTransfers:
             )
         body = json.loads(str(exc_info.value))
         assert body["error"]["code"] == "already_exists"
+        assert (body["error"]["param"], body["error"]["value"]) == ("filename", existing.name)
+        assert existing.read_text() == "existing local content"
         logger.info("download no overwrite raised ToolError: %s", exc_info.value)
 
     async def test_09_download_nonexistent(self, nas_client: Any, tmp_path: Path) -> None:
@@ -1457,12 +1459,19 @@ class TestErrorHandling:
             copied = await copy_files(
                 client, paths=[f"{base}/src/f.txt"], dest_folder=f"{base}/dst"
             )
-            assert copied.startswith("[!]"), copied
-            assert "skipped" in copied and "overwrite=true" in copied
+            # #189: a skipped file is reported as skipped, with no folder hedging.
+            assert copied.startswith(
+                f"[!] Copied 0 of 1 item(s) to {base}/dst/; 1 skipped (already at the "
+                "destination, overwrite=false):"
+            ), copied
+            assert f"Skipped:\n  {base}/src/f.txt" in copied
+            assert "in whole or in part" not in copied and "folder" not in copied
+            assert "overwrite=true" in copied
             info = await get_file_info(client, paths=[f"{base}/dst/f.txt"])
             assert "3 B" in info  # the old file is untouched
             moved = await move_files(client, paths=[f"{base}/src/f.txt"], dest_folder=f"{base}/dst")
-            assert moved.startswith("[!]"), moved
+            assert moved.startswith("[!] Moved 0 of 1 item(s) to"), moved
+            assert f"Skipped:\n  {base}/src/f.txt (skipped items are still in" in moved
             assert "have been removed" not in moved
             assert "f.txt" in await get_file_info(client, paths=[f"{base}/src/f.txt"])
             assert "3 B" in await get_file_info(client, paths=[f"{base}/dst/f.txt"])  # unchanged
@@ -1477,7 +1486,7 @@ class TestErrorHandling:
     ) -> None:
         """QA R1 (#175): moving folder d onto a destination that already has d/x.txt moves
         d/y.txt and skips x.txt. DSM says only "all", so the count is of items moved in
-        full (0 of 1), and the result says a skipped folder's other parts still moved."""
+        full (0 of 1), and the result lists the folder as having items skipped (#189)."""
         client, _, config, paths = _unpack(nas_client)
         _skip_unless_write(config)
         base = f"{paths['writable_folder'].rstrip('/')}/mcp_skip_merge"
@@ -1494,8 +1503,14 @@ class TestErrorHandling:
                 client, local_path=str(tmp_path / "old" / "x.txt"), dest_folder=f"{base}/dst/d"
             )
             moved = await move_files(client, paths=[f"{base}/src/d"], dest_folder=f"{base}/dst")
-            assert moved.startswith("[!] Moved 0 of 1 item(s) in full"), moved
-            assert "were still moved" in moved
+            assert moved.startswith(
+                f"[!] Moved 0 of 1 item(s) in full to {base}/dst/; 1 folder with items skipped"
+            ), moved
+            # The skipped items are the folder's own children (QA R1 on #190).
+            assert f"was moved):\n  {base}/src/d (skipped items are still in {base}/src/d/)" in (
+                moved
+            )
+            assert "in whole or in part" not in moved
             # The conflicting child stays in the source; the other one moved.
             await get_file_info(client, paths=[f"{base}/src/d/x.txt"])
             with pytest.raises(ToolError):

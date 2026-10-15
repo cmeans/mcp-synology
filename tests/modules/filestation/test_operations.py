@@ -1234,7 +1234,11 @@ class TestCopyMoveSkippedItems:
 
     @staticmethod
     def _dsm(
-        skipstatus_by_path: dict[str, object], overwrite_sent: list[str] | None = None
+        skipstatus_by_path: dict[str, object],
+        overwrite_sent: list[str] | None = None,
+        *,
+        dirs: frozenset[str] = frozenset(),
+        no_type: frozenset[str] = frozenset(),
     ) -> object:
         started: list[str] = []
 
@@ -1243,7 +1247,9 @@ class TestCopyMoveSkippedItems:
             method = params.get("method", "")
             if method == "getinfo":
                 path = params["path"]
-                entry = {"isdir": False, "name": path.rsplit("/", 1)[-1], "path": path}
+                entry: dict[str, object] = {"name": path.rsplit("/", 1)[-1], "path": path}
+                if path not in no_type:
+                    entry["isdir"] = path in dirs
                 return httpx.Response(200, json={"success": True, "data": {"files": [entry]}})
             if method == "start":
                 started.append(params.get("path", ""))
@@ -1276,19 +1282,103 @@ class TestCopyMoveSkippedItems:
         assert "skipped" not in result
 
     @respx.mock
-    async def test_copy_with_skips_says_so(self, mock_client: DsmClient) -> None:
+    async def test_copy_with_a_skipped_file_says_skipped(self, mock_client: DsmClient) -> None:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm({"/w/a": self.ALL}))
         result = await copy_files(mock_client, paths=["/w/a"], dest_folder="/w/dst")
+        # #189: a skipped file was skipped, full stop; folder wording would only confuse.
+        assert result.startswith(
+            "[!] Copied 0 of 1 item(s) to /w/dst/; 1 skipped (already at the destination, "
+            "overwrite=false):"
+        ), result
+        assert "Skipped:\n  /w/a" in result
+        assert "in whole or in part" not in result
+        assert "folder" not in result
+        assert "Copied:" not in result  # nothing to list as fully copied
+        assert "overwrite=true" in result
+
+    @respx.mock
+    async def test_copy_with_a_skipped_folder_says_items_skipped(
+        self, mock_client: DsmClient
+    ) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._dsm({"/w/d": self.ALL}, dirs=frozenset({"/w/d"}))
+        )
+        result = await copy_files(mock_client, paths=["/w/d"], dest_folder="/w/dst")
         # QA R1 (#175): "0 of 1" alone would claim nothing was copied, but DSM still copies
         # a skipped folder's children that weren't at the destination.
+        assert result.startswith(
+            "[!] Copied 0 of 1 item(s) in full to /w/dst/; 1 folder with items skipped "
+            "(already at the destination, overwrite=false):"
+        ), result
+        # Not "the rest were copied": DSM doesn't say whether anything was left to copy.
+        assert (
+            "Folders with items skipped (anything not already at the destination was "
+            "copied):\n  /w/d"
+        ) in result
+        assert "the rest" not in result
+        assert "Skipped:" not in result
+        assert "in whole or in part" not in result
+        assert "overwrite=true" in result
+
+    @respx.mock
+    async def test_copy_skip_of_unknown_type_keeps_hedged_wording(
+        self, mock_client: DsmClient
+    ) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._dsm({"/w/a": self.ALL}, no_type=frozenset({"/w/a"}))
+        )
+        result = await copy_files(mock_client, paths=["/w/a"], dest_folder="/w/dst")
         assert result.startswith("[!] Copied 0 of 1 item(s) in full to /w/dst/"), result
         assert "Skipped in whole or in part:\n  /w/a" in result
         assert (
             "For a skipped folder, the parts not already at the destination were still copied"
             in result
         )
-        assert "Copied:" not in result  # nothing to list as fully copied
-        assert "overwrite=true" in result
+
+    @respx.mock
+    async def test_copy_skip_type_lookup_failure_keeps_hedged_wording(
+        self, mock_client: DsmClient
+    ) -> None:
+        inner = self._dsm({"/w/a": self.ALL})
+        getinfo_calls: list[str] = []
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            if request.url.params.get("method") == "getinfo":
+                getinfo_calls.append(request.url.params["path"])
+                if len(getinfo_calls) > 1:  # the first is the up-front existence check
+                    return httpx.Response(200, json={"success": False, "error": {"code": 401}})
+            return inner(request)  # type: ignore[operator, no-any-return]
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        result = await copy_files(mock_client, paths=["/w/a"], dest_folder="/w/dst")
+        # The copy already happened: a failed type lookup must not turn it into an error.
+        assert result.startswith("[!] Copied 0 of 1 item(s) in full to /w/dst/"), result
+        assert "Skipped in whole or in part:\n  /w/a" in result
+
+    @respx.mock
+    async def test_copy_mixed_file_and_folder_skips(self, mock_client: DsmClient) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._dsm(
+                {
+                    "/w/a": self.ALL,
+                    "/w/b": self.ALL,
+                    "/w/d": self.ALL,
+                    "/w/e": self.ALL,
+                    "/w/c": self.NONE,
+                },
+                dirs=frozenset({"/w/d", "/w/e"}),
+            )
+        )
+        result = await copy_files(
+            mock_client, paths=["/w/a", "/w/d", "/w/b", "/w/e", "/w/c"], dest_folder="/x"
+        )
+        assert result.startswith(
+            "[!] Copied 1 of 5 item(s) in full to /x/; 2 skipped, 2 folders with items skipped "
+            "(already at the destination, overwrite=false):"
+        ), result
+        assert "Copied:\n  c\n" in result
+        assert "Skipped:\n  /w/a\n  /w/b\n" in result
+        assert "was copied):\n  /w/d\n  /w/e\n" in result
 
     @respx.mock
     async def test_move_with_skips_does_not_claim_source_removed(
@@ -1299,7 +1389,7 @@ class TestCopyMoveSkippedItems:
         assert result.startswith("[!]"), result
         assert "have been removed" not in result
         assert "still in /w" in result
-        assert "were still moved" in result
+        assert "Skipped:\n  /w/a (skipped items are still in /w/)" in result
 
     @respx.mock
     async def test_mixed_names_only_the_skipped_path(self, mock_client: DsmClient) -> None:
@@ -1307,9 +1397,9 @@ class TestCopyMoveSkippedItems:
             side_effect=self._dsm({"/w/a": self.NONE, "/v/b": self.ALL})
         )
         result = await move_files(mock_client, paths=["/w/a", "/v/b"], dest_folder="/w/dst")
-        assert result.startswith("[!] Moved 1 of 2 item(s) in full to /w/dst/"), result
-        moved = result[result.index("Moved:\n") : result.index("Skipped in whole or in part:")]
-        skipped = result[result.index("Skipped in whole or in part:") :]
+        assert result.startswith("[!] Moved 1 of 2 item(s) to /w/dst/; 1 skipped"), result
+        moved = result[result.index("Moved:\n") : result.index("Skipped:")]
+        skipped = result[result.index("Skipped:") :]
         assert "  a" in moved and "b" not in moved
         assert "/v/b" in skipped and "/w/a" not in skipped
         assert "Moved sources removed from /w/: a" in result
@@ -1323,11 +1413,32 @@ class TestCopyMoveSkippedItems:
             side_effect=self._dsm({"/video/#recycle/a.mkv": self.ALL})
         )
         result = await restore_from_recycle_bin(mock_client, share="video", paths=["a.mkv"])
-        assert result.startswith("[!] Restored from /video recycle bin: 0 of 1 item(s) in full"), (
-            result
+        assert result.startswith(
+            "[!] Restored from /video recycle bin: 0 of 1 item(s) to /video/; 1 skipped"
+        ), result
+        assert "Skipped:\n  /video/#recycle/a.mkv (skipped items are still in" in result
+        assert "moved" not in result.lower()
+
+    @respx.mock
+    async def test_restore_of_a_skipped_folder_says_items_skipped(
+        self, mock_client: DsmClient
+    ) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._dsm(
+                {"/video/#recycle/S": self.ALL}, dirs=frozenset({"/video/#recycle/S"})
+            )
         )
-        assert "recycle bin" in result and "skipped" in result
-        assert "were still restored" in result and "moved" not in result.lower()
+        result = await restore_from_recycle_bin(mock_client, share="video", paths=["S"])
+        assert result.startswith(
+            "[!] Restored from /video recycle bin: 0 of 1 item(s) in full to /video/; "
+            "1 folder with items skipped"
+        ), result
+        assert (
+            "Folders with items skipped (anything not already at the destination was restored):"
+        ) in result
+        # The skipped items are the folder's own children, so point inside it (QA R1 on #190).
+        assert "  /video/#recycle/S (skipped items are still in /video/#recycle/S/)" in result
+        assert "moved" not in result.lower()
 
     @respx.mock
     async def test_overwrite_true_has_no_skipstatus(self, mock_client: DsmClient) -> None:
@@ -1355,5 +1466,12 @@ class TestCopyMoveSkippedItems:
         result = await restore_from_recycle_bin(
             mock_client, share="video", paths=["S1/a.mkv", "S2/b.mkv"]
         )
-        assert result.startswith("[!] Restored 1 of 2 item(s) in full"), result
+        # The summary stays neutral and the per-destination result says what was skipped,
+        # so the two never disagree (QA R1 on #190).
+        assert result.startswith(
+            "[!] Restored 1 of 2 item(s) from /video recycle bin; 1 with skips "
+            "(already at the destination, overwrite=false; details below):"
+        ), result
+        assert "Skipped:\n  /video/#recycle/S2/b.mkv" in result
+        assert "in whole or in part" not in result
         assert "[+] Moved" not in result and "[!] Moved" not in result
