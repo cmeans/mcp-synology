@@ -45,9 +45,11 @@ class TestCreateServer:
         assert server is not None
 
     def test_server_with_disabled_module(self) -> None:
-        config = make_test_config(modules={"filestation": {"enabled": False}})
-        server = create_server(config)
-        assert server is not None
+        config = make_test_config(
+            modules={"filestation": {"enabled": False}, "system": {"enabled": True}}
+        )
+        tools = {t.name for t in create_server(config)._tool_manager.list_tools()}
+        assert tools == {"get_system_info", "get_resource_usage"}
 
     def test_server_with_unknown_module(self) -> None:
         config = make_test_config(
@@ -858,6 +860,18 @@ async def _served(server: FastMCP) -> tuple[list[Any], str]:
         init = await session.initialize()
         tools = (await session.list_tools()).tools
     return list(tools), init.instructions or ""
+
+
+class TestServerInfo:
+    async def test_initialize_reports_mcp_synology_version(self) -> None:
+        """#166: FastMCP 1.x sent the mcp SDK's version as serverInfo.version."""
+        from importlib.metadata import version
+
+        server = create_server(make_test_config())
+        async with create_connected_server_and_client_session(server._mcp_server) as session:
+            init = await session.initialize()
+        assert init.serverInfo.version == version("mcp-synology")
+        assert init.serverInfo.version != version("mcp")
 
 
 class TestServedSchemas:

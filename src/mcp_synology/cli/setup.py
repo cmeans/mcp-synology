@@ -13,6 +13,7 @@ from typing import Any
 import click
 import yaml
 
+from mcp_synology.cli.check import exit_on_connection_failure
 from mcp_synology.cli.logging_ import _configure_logging, _init_early_logging
 
 _CONFIG_DIR = Path.home() / ".config" / "mcp-synology"
@@ -341,30 +342,31 @@ async def _connect_and_login(
 
     result: dict[str, Any] = {"success": False}
 
-    async with DsmClient(
-        base_url=base_url,
-        verify_ssl=config.connection.verify_ssl,
-        timeout=config.connection.timeout,
-    ) as client:
-        await client.query_api_info()
+    with exit_on_connection_failure(base_url, config.connection.host):
+        async with DsmClient(
+            base_url=base_url,
+            verify_ssl=config.connection.verify_ssl,
+            timeout=config.connection.timeout,
+        ) as client:
+            await client.query_api_info()
 
-        login_result = await _attempt_login(client, username, password, service)
-        if not login_result["success"]:
-            return result
+            login_result = await _attempt_login(client, username, password, service)
+            if not login_result["success"]:
+                return result
 
-        # Fetch NAS hostname
-        dsm_info = await client.fetch_dsm_info()
-        nas_hostname = dsm_info.get("hostname") or ""
-        if nas_hostname:
-            result["hostname"] = nas_hostname
-        dsm_version = dsm_info.get("version_string", "")
-        if dsm_version:
-            result["dsm_version"] = dsm_version
+            # Fetch NAS hostname
+            dsm_info = await client.fetch_dsm_info()
+            nas_hostname = dsm_info.get("hostname") or ""
+            if nas_hostname:
+                result["hostname"] = nas_hostname
+            dsm_version = dsm_info.get("version_string", "")
+            if dsm_version:
+                result["dsm_version"] = dsm_version
 
-        # Logout
-        await client.request("SYNO.API.Auth", "logout", version=6, params={})
+            # Logout
+            await client.request("SYNO.API.Auth", "logout", version=6, params={})
 
-        result["success"] = True
+            result["success"] = True
 
     return result
 
@@ -382,20 +384,21 @@ async def _setup_login(config: object, username: str, password: str, service: st
     protocol = "https" if config.connection.https else "http"
     base_url = f"{protocol}://{config.connection.host}:{config.connection.port}"
 
-    async with DsmClient(
-        base_url=base_url,
-        verify_ssl=config.connection.verify_ssl,
-        timeout=config.connection.timeout,
-    ) as client:
-        await client.query_api_info()
+    with exit_on_connection_failure(base_url, config.connection.host):
+        async with DsmClient(
+            base_url=base_url,
+            verify_ssl=config.connection.verify_ssl,
+            timeout=config.connection.timeout,
+        ) as client:
+            await client.query_api_info()
 
-        login_result = await _attempt_login(client, username, password, service)
-        if not login_result["success"]:
-            return
+            login_result = await _attempt_login(client, username, password, service)
+            if not login_result["success"]:
+                return
 
-        # Logout
-        if client.sid:
-            await client.request("SYNO.API.Auth", "logout", version=6, params={})
+            # Logout
+            if client.sid:
+                await client.request("SYNO.API.Auth", "logout", version=6, params={})
 
 
 def _emit_claude_desktop_snippet(config: Any, config_path: Path) -> None:

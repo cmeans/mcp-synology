@@ -383,6 +383,9 @@ class TestValidateVersionString:
             "0.5.1.dev1",
             "1.2.3-alpha.1",
             "10.20.30",
+            "0.6.0rc1",
+            "0.7.0.dev1",
+            "1.2.3a1.post2.dev3",
         ],
     )
     def test_accepts_valid_versions(self, value: str) -> None:
@@ -404,6 +407,9 @@ class TestValidateVersionString:
             "v1.2.3",  # leading letter prefix
             "1.2.3/../etc/passwd",
             "==1.2.3",
+            "1.2.3\n",  # `$` would allow a trailing newline; fullmatch doesn't
+            "1.2.3--rc1",  # two separators in a row
+            "1.2.3..",
         ],
     )
     def test_rejects_invalid_versions(self, value: str) -> None:
@@ -545,3 +551,22 @@ class TestDoRevert:
         loaded = yaml.safe_load((state_dir / "global.yaml").read_text())
         assert loaded["previous_version"] is None
         assert loaded["auto_upgrade"] is False
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "0.0.0" + "a" * 5000 + "!",
+            "0.0.0" + "0" * 5000 + "!",
+            "0.0.0a" + ".a1" * 3000 + "!",
+            "0.0.0" + "-a" * 3000 + "-",
+        ],
+    )
+    def test_long_invalid_input_fails_fast(self, value: str) -> None:
+        """#206 (CodeQL py/redos): the old pattern took ~5 s at 26 characters and
+        doubled with each one; these are thousands of characters long."""
+        import time
+
+        start = time.perf_counter()
+        with pytest.raises(click.ClickException):
+            v._validate_version_string(value)
+        assert time.perf_counter() - start < 0.1

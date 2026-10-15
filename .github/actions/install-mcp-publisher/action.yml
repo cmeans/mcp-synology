@@ -1,9 +1,9 @@
 name: Install mcp-publisher
-description: Download a pinned release of mcp-publisher from the official MCP registry repo
+description: Download a pinned release of mcp-publisher from the official MCP registry repo, verify its SHA-256, then extract it
 
 inputs:
   version:
-    description: "mcp-publisher release tag (e.g. v1.7.6). Bump when a new release is needed."
+    description: "mcp-publisher release tag (e.g. v1.7.6). Bump when a new release is needed, and add its SHA-256 hashes below."
     required: false
     # v1.7.6 is required: the registry server in v1.7.6 binds GitHub OIDC
     # token exchange to a per-deployment audience
@@ -19,13 +19,40 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Download and extract mcp-publisher
+    - name: Download, verify and extract mcp-publisher
       shell: bash
       env:
         VERSION: ${{ inputs.version }}
       run: |
+        set -euo pipefail
         os=$(uname -s | tr '[:upper:]' '[:lower:]')
         arch=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
-        curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/download/${VERSION}/mcp-publisher_${os}_${arch}.tar.gz" \
-          | tar xz mcp-publisher
+        asset="mcp-publisher_${os}_${arch}.tar.gz"
+        # SHA-256 of each pinned release asset (#204). Release assets can be replaced
+        # after release (upstream releases aren't immutable), and publish.yml runs this
+        # binary with an OIDC token that can publish to the MCP registry, so it runs only
+        # if it matches. Recorded when pinning, never fetched at run time (that would come
+        # from the same mutable source). v1.7.6 hashes: GitHub's asset digests, the
+        # release's registry_1.7.6_checksums.txt and a local sha256sum all agree, and
+        # `cosign verify-blob` on each asset's .sigstore.json bundle verified it was signed
+        # by a modelcontextprotocol/registry GitHub Actions workflow. When bumping
+        # `version`, add the new release's hashes here the same way, in the same PR.
+        case "${VERSION}/${asset}" in
+          v1.7.6/mcp-publisher_linux_amd64.tar.gz)
+            expected=bcc96ca630cae4cf503b4550bd4a17462d42ad4819273bee56f4385bb059ddee ;;
+          v1.7.6/mcp-publisher_linux_arm64.tar.gz)
+            expected=22deae91ede89d72e1e3095765749078d4116a634d21e6debc502130423c6444 ;;
+          *)
+            echo "::error::No pinned SHA-256 for ${asset} at ${VERSION}; add it to .github/actions/install-mcp-publisher/action.yml"
+            exit 1 ;;
+        esac
+        curl -fsSL -o "${asset}" \
+          "https://github.com/modelcontextprotocol/registry/releases/download/${VERSION}/${asset}"
+        if ! echo "${expected}  ${asset}" | sha256sum -c --strict -; then
+          echo "::error::${asset} (${VERSION}) does not match its pinned SHA-256; refusing to run it"
+          rm -f "${asset}"
+          exit 1
+        fi
+        tar xzf "${asset}" mcp-publisher
+        rm -f "${asset}"
         ./mcp-publisher --version
