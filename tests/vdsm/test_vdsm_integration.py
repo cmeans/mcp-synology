@@ -4,8 +4,8 @@ This module re-exports test classes from test_integration.py so they run
 against the virtual-dsm container instead of a real NAS. The nas_client
 fixture in this directory's conftest.py provides the virtual-dsm connection.
 
-Run with: uv run pytest -m vdsm -v --log-cli-level=INFO
-Override version: uv run pytest -m vdsm --dsm-version 7.1
+Run with: uv run pytest tests/vdsm -m vdsm -v --log-cli-level=INFO
+Override version: uv run pytest tests/vdsm -m vdsm --dsm-version 7.1
 """
 
 from __future__ import annotations

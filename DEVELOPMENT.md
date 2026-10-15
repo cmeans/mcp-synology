@@ -127,10 +127,12 @@ This manual step is a one-time investment per DSM version. Automating Storage Ma
 ### Running
 
 ```bash
-uv run pytest -m vdsm -v --log-cli-level=INFO --no-cov   # Default (7.2.2)
-uv run pytest -m vdsm -v --dsm-version 7.1 --no-cov      # Specific version
-uv run pytest -m vdsm -v -k "TestConnection" --no-cov     # Single test class
+uv run pytest tests/vdsm -m vdsm -v --log-cli-level=INFO --no-cov   # Default (7.2.2)
+uv run pytest tests/vdsm -m vdsm -v --dsm-version 7.1 --no-cov      # Specific version
+uv run pytest tests/vdsm -m vdsm -v -k "TestConnection" --no-cov     # Single test class
 ```
+
+Pass `tests/vdsm` (or a file in it): pytest registers `--dsm-version` from `tests/vdsm/conftest.py` only when that directory is on the command line, so from the repo root without it, `--dsm-version` fails with "unrecognized arguments".
 
 Note: `--no-cov` is recommended for vdsm runs since the coverage floor (95%) applies globally and vdsm tests alone won't meet it.
 
