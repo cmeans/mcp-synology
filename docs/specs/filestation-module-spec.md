@@ -56,10 +56,11 @@ Several File Station APIs are non-blocking (start → poll status → stop/clean
 
 Any parameter accepting file sizes (`size_from`, `size_to`) accepts both raw bytes (as integers) and human-readable strings. Parsing rules:
 
-- Case-insensitive: `"500mb"`, `"500MB"`, `"500Mb"` all valid
-- Supported units: `B`, `KB`, `MB`, `GB`, `TB` (binary: 1 KB = 1024 bytes)
+- Case-insensitive: `"500mib"`, `"500MiB"`, `"500MB"` all valid
+- Supported units: `B`, `KiB`, `MiB`, `GiB`, `TiB`, all binary (1 KiB = 1024 bytes). `KB`, `MB`, `GB`, `TB` are accepted too and mean the same binary units, because that's what users type
+- Output uses the same binary units and labels them `KiB`, `MiB`, `GiB`, `TiB` (`core/formatting.format_size`), so a size the tools print parses back unchanged
 - Decimal values allowed: `"1.5GB"`, `"0.5TB"`
-- Plain integers treated as bytes: `1048576` = 1 MB
+- Plain integers treated as bytes: `1048576` = 1 MiB
 - Invalid input returns a clear parse error with examples
 
 ### Recycle Bin Awareness
@@ -129,10 +130,10 @@ Shared Folders on [NAS hostname]
 ═══════════════════════════════════════════════════
   Name     Path      Volume   Free               Owner  Recycle Bin
   ───────  ────────  ───────  ─────────────────  ─────  ───────────
-  docker   /docker   volume1  1.5 TB of 36.6 TB  admin  enabled
-  music    /music    volume1  1.5 TB of 36.6 TB  admin  enabled
-  photo    /photo    volume1  1.5 TB of 36.6 TB  admin  enabled
-  video    /video    volume2  812 GB of 7.3 TB   admin  enabled
+  docker   /docker   volume1  1.5 TiB of 36.6 TiB  admin  enabled
+  music    /music    volume1  1.5 TiB of 36.6 TiB  admin  enabled
+  photo    /photo    volume1  1.5 TiB of 36.6 TiB  admin  enabled
+  video    /video    volume2  812 GiB of 7.3 TiB   admin  enabled
 
 4 shared folders found.
 
@@ -185,8 +186,8 @@ Contents of /video/TV Shows (5 items)
   📁     Breaking Bad/  —       2024-08-15 10:30:00 UTC
   📁     Severance/     —       2024-08-15 10:30:00 UTC
   📁     The Bear/      —       2024-08-15 10:30:00 UTC
-  📄     show.nfo       2 KB    2024-04-03 11:25:00 UTC
-  🎬     clip.mp4       284 MB  2024-08-15 10:30:00 UTC
+  📄     show.nfo       2 KiB    2024-04-03 11:25:00 UTC
+  🎬     clip.mp4       284 MiB  2024-08-15 10:30:00 UTC
 
 5 of 5 items.
 ```
@@ -227,7 +228,7 @@ File Info: /video/Movies/Dune Part Two (2024)/Dune.Part.Two.2024.mkv
   Path:           /video/Movies/Dune Part Two (2024)/Dune.Part.Two.2024.mkv
   Real path:      /volume1/video/Movies/Dune Part Two (2024)/Dune.Part.Two.2024.mkv
   Type:           File
-  Size:           18.4 GB
+  Size:           18.4 GiB
   Owner:          admin (users)
   Modified:       2025-02-18 13:42:05 UTC
   Created:        2025-02-18 13:40:12 UTC
@@ -257,7 +258,7 @@ Search for files by name, type, size, or modification date within a given scope.
 **Tool description (LLM-facing):**
 > Search recursively for files by keyword, extension, size, or modification date. The pattern
 > parameter is a keyword/substring match on filenames (not glob). Use extension for file type
-> filtering (e.g., extension="mkv"). Accepts human-readable sizes like "500MB". mtime_from / mtime_to
+> filtering (e.g., extension="mkv"). Accepts human-readable sizes like "500MiB". mtime_from / mtime_to
 > accept ISO 8601 ("2026-04-01T12:00:00+00:00"), a calendar date ("YYYY-MM-DD"), or Unix epoch
 > seconds; naive dates are treated as UTC. For directory contents or sizes, use list_files or
 > get_dir_size instead.
@@ -270,7 +271,7 @@ Search for files by name, type, size, or modification date within a given scope.
 | `pattern` | `str` | No | `None` | Filename glob pattern (e.g., `*.mkv`, `*Severance*`). |
 | `extension` | `str` | No | `None` | File extension filter (e.g., `mkv`, `srt`). Without the dot. |
 | `filetype` | `str` | No | `"all"` | Filter: `all`, `file`, `dir`. |
-| `size_from` | `str \| int` | No | `None` | Minimum file size. Accepts bytes (int) or human-readable (`"500MB"`, `"2GB"`). |
+| `size_from` | `str \| int` | No | `None` | Minimum file size. Accepts bytes (int) or human-readable (`"500MiB"`, `"2GiB"`; `"500MB"` means the same). |
 | `size_to` | `str \| int` | No | `None` | Maximum file size. Same format as `size_from`. |
 | `mtime_from` | `str` | No | `None` | Modified after this date (ISO 8601 or `YYYY-MM-DD`). |
 | `mtime_to` | `str` | No | `None` | Modified before this date. |
@@ -286,8 +287,8 @@ Search results in /video (pattern: *Severance*, excluding: *.torrent)
 ═══════════════════════════════════════════════════
   Type  Name                         Path                                          Size        Modified
   ────  ───────────────────────      ──────────────────────────────────────        ─────────   ──────────────
-  🎬    Severance.S02E10.mkv         /video/Downloads/                             1.8 GB      2025-03-10
-  📄    Severance.S02E10.srt         /video/Downloads/                             45 KB       2025-03-10
+  🎬    Severance.S02E10.mkv         /video/Downloads/                             1.8 GiB      2025-03-10
+  📄    Severance.S02E10.srt         /video/Downloads/                             45 KiB       2025-03-10
 
 2 results found (1 excluded by filter).
 ```
@@ -324,7 +325,7 @@ Calculate the total size of a directory (recursive).
 ```
 Directory Size: /video/TV Shows/The Bear
 ═══════════════════════════════════════════════════
-  Total size:     42.6 GB
+  Total size:     42.6 GiB
   Files:          186
   Directories:    12
 ```
@@ -360,9 +361,9 @@ Contents of /video/#recycle (3 items)
 ====================================================
   Type  Name           Size    Modified
   ────  ─────────────  ──────  ───────────────────────
-  🎬     old-movie.mkv  4.5 GB  2024-03-14 12:30:00 UTC
+  🎬     old-movie.mkv  4.5 GiB  2024-03-14 12:30:00 UTC
   📁     Season 3/      —       2024-03-08 09:00:00 UTC
-  📄     notes.txt      1 KB    2024-03-01 11:00:00 UTC
+  📄     notes.txt      1 KiB    2024-03-01 11:00:00 UTC
 
 3 of 3 items.
 ```
@@ -399,7 +400,7 @@ Download a NAS file to a local directory on this machine.
 **Response shape:**
 
 ```
-[+] Downloaded movie.mkv (4.2 GB) to /home/user/Downloads/movie.mkv
+[+] Downloaded movie.mkv (4.2 GiB) to /home/user/Downloads/movie.mkv
 ```
 
 **Design notes:**
@@ -445,7 +446,7 @@ Upload a local file from this machine to a NAS folder.
 **Response shape:**
 
 ```
-[+] Uploaded report.pdf (2.4 MB) to /documents/reports/
+[+] Uploaded report.pdf (2.4 MiB) to /documents/reports/
 ```
 
 **Design notes:**
@@ -485,8 +486,8 @@ Restore files from a shared folder's recycle bin.
 
 ```
 ✓ Restored 2 items from /video recycle bin:
-  🎬 old_episode.mkv (1.2 GB) → /video/TV Shows/Some Show/Season 1/
-  📄 old_episode.srt (38 KB) → /video/TV Shows/Some Show/Season 1/
+  🎬 old_episode.mkv (1.2 GiB) → /video/TV Shows/Some Show/Season 1/
+  📄 old_episode.srt (38 KiB) → /video/TV Shows/Some Show/Season 1/
 ```
 
 **Design notes:**
@@ -583,8 +584,8 @@ Copy files or folders to a destination.
 
 ```
 ✓ Copied 2 items to /video/Archive/:
-  🎬 Severance.S02E09.mkv (1.7 GB)
-  📄 Severance.S02E09.srt (42 KB)
+  🎬 Severance.S02E09.mkv (1.7 GiB)
+  📄 Severance.S02E09.srt (42 KiB)
 ```
 
 ---
@@ -615,8 +616,8 @@ Move files or folders to a new location. **Source files are removed after succes
 
 ```
 ✓ Moved 2 items to /video/TV Shows/Severance/Season 2/:
-  🎬 Severance.S02E10.mkv (1.8 GB)
-  📄 Severance.S02E10.srt (45 KB)
+  🎬 Severance.S02E10.mkv (1.8 GiB)
+  📄 Severance.S02E10.srt (45 KiB)
 
 Source files have been removed from /video/Downloads/.
 ```
@@ -648,9 +649,9 @@ Delete files or folders.
 
 ```
 ✓ Deleted 3 items:
-  🎬 /video/Downloads/old_video.mkv (2.1 GB)
-  📄 /video/Downloads/old_video.srt (38 KB)
-  📁 /video/Downloads/temp/ (3 items, 156 MB)
+  🎬 /video/Downloads/old_video.mkv (2.1 GiB)
+  📄 /video/Downloads/old_video.srt (38 KiB)
+  📁 /video/Downloads/temp/ (3 items, 156 MiB)
 
 Recycle bin is enabled on /video — files can be recovered with list_recycle_bin and restore_from_recycle_bin.
 ```
@@ -659,8 +660,8 @@ Recycle bin is enabled on /video — files can be recovered with list_recycle_bi
 
 ```
 ✓ Permanently deleted 2 items:
-  📄 /docker/temp/old_config.json (4 KB)
-  📄 /docker/temp/old_log.txt (128 KB)
+  📄 /docker/temp/old_config.json (4 KiB)
+  📄 /docker/temp/old_log.txt (128 KiB)
 
 ⚠ Recycle bin is NOT enabled on /docker — these files cannot be recovered.
 ```
@@ -702,7 +703,7 @@ Recycle bin is enabled on /video — files can be recovered with list_recycle_bi
 For the weekly "move new episodes" workflow:
 
 1. **Search** — `search_files(folder_path="/video/Downloads", pattern="*Severance*", exclude_pattern="*.torrent")`
-2. **Review** — LLM presents matches to the user with a count: "Found 2 files matching *Severance* (excluding .torrent files): Severance.S02E10.mkv (1.8 GB) and Severance.S02E10.srt (45 KB). Move these to /video/TV Shows/Severance/Season 2/?"
+2. **Review** — LLM presents matches to the user with a count: "Found 2 files matching *Severance* (excluding .torrent files): Severance.S02E10.mkv (1.8 GiB) and Severance.S02E10.srt (45 KiB). Move these to /video/TV Shows/Severance/Season 2/?"
 3. **Act** — User confirms → `move_files(paths=[...], dest_folder="/video/TV Shows/Severance/Season 2/")`
 
 ### Why Atomic Tools Beat a Super-Tool
@@ -737,8 +738,8 @@ All file paths start with a shared folder name: /video/..., /music/..., etc.
 Call list_shares first to discover available shared folders and their permissions.
 
 FILE SIZES:
-Size parameters accept human-readable values: "500MB", "2GB", "1.5TB".
-Supported units: B, KB, MB, GB, TB (binary, 1 KB = 1024 bytes).
+Sizes are binary (1 KiB = 1024 bytes). Size parameters accept "500MiB", "2GiB",
+"1.5TiB"; KB/MB/GB/TB mean the same binary units.
 
 WORKING WITH FILES:
 - Start with list_shares to discover available paths
@@ -775,7 +776,7 @@ Atomic tools with search → review → move pattern taught via MCP server instr
 
 ### 3. Human-Readable File Sizes ✓
 
-Size parameters accept `int` (bytes) or `str` (`"500MB"`, `"2GB"`, `"1.5TB"`). Case-insensitive, decimals allowed. Documented in MCP server instructions.
+Size parameters accept `int` (bytes) or `str` (`"500MiB"`, `"2GiB"`, `"1.5TiB"`; `KB`/`MB`/`GB`/`TB` mean the same binary units). Case-insensitive, decimals allowed. Documented in MCP server instructions.
 
 ### 4. Tool Description Strategy ✓
 

@@ -29,7 +29,7 @@ class TestFormatTable:
     def test_basic_table(self) -> None:
         result = format_table(
             headers=["Name", "Size"],
-            rows=[["file.txt", "1 KB"], ["image.png", "2 MB"]],
+            rows=[["file.txt", "1 KiB"], ["image.png", "2 MiB"]],
         )
         assert "Name" in result
         assert "file.txt" in result
@@ -60,7 +60,7 @@ class TestFormatTable:
 
 class TestFormatKeyValue:
     def test_basic_pairs(self) -> None:
-        result = format_key_value([("Name", "test.txt"), ("Size", "1 KB")])
+        result = format_key_value([("Name", "test.txt"), ("Size", "1 KiB")])
         assert "Name:" in result
         assert "test.txt" in result
 
@@ -143,17 +143,17 @@ class TestFormatSize:
         assert format_size(500) == "500 B"
 
     def test_kilobytes(self) -> None:
-        assert format_size(1024) == "1 KB"
-        assert format_size(1536) == "1.5 KB"
+        assert format_size(1024) == "1 KiB"
+        assert format_size(1536) == "1.5 KiB"
 
     def test_megabytes(self) -> None:
-        assert format_size(1048576) == "1 MB"
+        assert format_size(1048576) == "1 MiB"
 
     def test_gigabytes(self) -> None:
-        assert format_size(1073741824) == "1 GB"
+        assert format_size(1073741824) == "1 GiB"
 
     def test_terabytes(self) -> None:
-        assert format_size(1099511627776) == "1 TB"
+        assert format_size(1099511627776) == "1 TiB"
 
 
 class TestFormatTimestamp:

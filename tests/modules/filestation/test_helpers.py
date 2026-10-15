@@ -13,6 +13,7 @@ import respx
 from mcp.server.fastmcp.exceptions import ToolError
 
 from mcp_synology.core.errors import SynologyError
+from mcp_synology.core.formatting import format_size
 from mcp_synology.modules.filestation.helpers import (
     correct_recycle_status_from_observation,
     ensure_known_shares,
@@ -106,6 +107,25 @@ class TestParseHumanSize:
 
     def test_with_spaces(self) -> None:
         assert parse_human_size("  500 MB  ") == 500 * 1024**2
+
+    def test_binary_unit_names(self) -> None:
+        assert parse_human_size("1KiB") == 1024
+        assert parse_human_size("500MiB") == 500 * 1024**2
+        assert parse_human_size("2GiB") == 2 * 1024**3
+        assert parse_human_size("1.5TiB") == int(1.5 * 1024**4)
+        assert parse_human_size("500mib") == 500 * 1024**2
+
+    def test_kb_and_kib_mean_the_same(self) -> None:
+        assert parse_human_size("500MB") == parse_human_size("500MiB")
+
+    def test_formatted_size_parses_back(self) -> None:
+        # What the tools print (format_size) is accepted as input unchanged.
+        assert parse_human_size(format_size(1536 * 1024**2)) == 1536 * 1024**2
+
+    def test_invalid_binary_unit(self) -> None:
+        for bad in ("500iB", "500KiiB", "500KBi"):
+            with pytest.raises(ValueError, match="Invalid size"):
+                parse_human_size(bad)
 
     def test_invalid_input(self) -> None:
         with pytest.raises(ValueError, match="Invalid size"):

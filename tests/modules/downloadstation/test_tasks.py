@@ -310,7 +310,7 @@ class TestListDownloadsColumnsAndSort:
         result = await list_downloads(mock_client)
         header = result.splitlines()[2]
         assert "Down" in header and "Up" in header and "Speed" not in header
-        assert "24.5 KB/s" in result
+        assert "24.5 KiB/s" in result
 
     @respx.mock
     async def test_completed_column(self, mock_client: DsmClient) -> None:

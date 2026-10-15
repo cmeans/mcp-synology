@@ -230,7 +230,7 @@ class TestListSharesVolumeSpace:
         assert "0 B" not in result
         assert "Size" not in result
         assert "Volume" in result and "volume1" in result
-        assert "1.5 TB of 36.6 TB" in result
+        assert "1.5 TiB of 36.6 TiB" in result
         assert "get_dir_size" in result  # a share's own usage lives there
         assert "per volume" in result
 

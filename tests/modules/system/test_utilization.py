@@ -110,10 +110,10 @@ class TestGetResourceUsage:
                 "data": {
                     "cpu": {"user_load": 5, "system_load": 2, "other_load": 0},
                     "memory": {
-                        "memory_size": 8388608,  # 8 GB in KB
+                        "memory_size": 8388608,  # 8 GiB in KB
                         "real_usage": 40,
-                        "avail_real": 5242880,  # ~5 GB
-                        "cached": 1048576,  # 1 GB cached
+                        "avail_real": 5242880,  # ~5 GiB
+                        "cached": 1048576,  # 1 GiB cached
                         "si_disk": 25,  # active swap-in
                     },
                     "disk": {"disk": []},
@@ -121,7 +121,7 @@ class TestGetResourceUsage:
             }
         )
         result = await get_resource_usage(mock_client)
-        assert "1024 MB cached" in result
+        assert "1024 MiB cached" in result
         assert "Swap in" in result
         assert "25 pages/s" in result
 

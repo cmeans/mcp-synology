@@ -18,8 +18,8 @@ All file paths start with a shared folder name: /video/..., /music/..., etc.
 Call list_shares first to discover available shared folders and their permissions.
 
 FILE SIZES:
-Size parameters accept human-readable values: "500MB", "2GB", "1.5TB".
-Supported units: B, KB, MB, GB, TB (binary, 1 KB = 1024 bytes).
+Sizes are binary (1 KiB = 1024 bytes). Size parameters accept "500MiB", "2GiB",
+"1.5TiB"; KB/MB/GB/TB mean the same binary units.
 
 WORKING WITH FILES:
 - Start with list_shares to discover available paths

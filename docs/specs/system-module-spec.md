@@ -86,7 +86,7 @@ System Info
   Model:        DS1618+
   Firmware:     DSM 7.1.1-42962 Update 9
   CPU:          C3538 (4 cores) @ 2100 MHz
-  RAM:          4096 MB
+  RAM:          4096 MiB
   Temperature:  49°C
   Uptime:       123d 3h 9m
   System time:  Sun Oct 11 21:54:52 2026
@@ -122,11 +122,11 @@ Resource Usage
   CPU load avg:     1m=0.81  5m=1.06  15m=1.21
   CPU usage:        17% (system=7%, user=10%)
   Memory usage:     74%
-  Memory detail:    4096 MB total, 171 MB available, 824 MB cached
+  Memory detail:    4096 MiB total, 171 MiB available, 824 MiB cached
   Swap in:          1 pages/s
-  Network (total):  ↓ 296.3 KB/s  ↑ 457.8 KB/s
-  Network (eth0):   ↓ 15.4 KB/s  ↑ 73.8 KB/s
-  Disk (sda):       1% busy  R=135.2 KB/s  W=234.8 KB/s
+  Network (total):  ↓ 296.3 KiB/s  ↑ 457.8 KiB/s
+  Network (eth0):   ↓ 15.4 KiB/s  ↑ 73.8 KiB/s
+  Disk (sda):       1% busy  R=135.2 KiB/s  W=234.8 KiB/s
 ```
 
 **Design notes:**
