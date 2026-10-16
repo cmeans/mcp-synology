@@ -891,6 +891,7 @@ class TestServerInfo:
         for icon in icons:
             if icon.mime_type == "image/svg+xml":
                 assert icon.src.startswith("https://"), icon.src
+                assert icon.sizes == ["any"]
                 continue
             prefix = "data:image/png;base64,"
             assert icon.src.startswith(prefix)

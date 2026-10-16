@@ -71,6 +71,7 @@ def _load_icons() -> list[Icon]:
             Icon(
                 src=f"{_ICON_BASE_URL}/mcp-synology-logo-{theme}.svg",
                 mime_type="image/svg+xml",
+                sizes=["any"],  # the spec's value for scalable formats
                 theme=theme,
             )
         )
