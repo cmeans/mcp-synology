@@ -94,6 +94,15 @@ async def _guarded_post(
     return resp
 
 
+_DSM_CALL_ATTR = "mcp_synology_dsm_call"
+
+
+def dsm_call_of(exc: BaseException) -> str | None:
+    """The ``API/method`` a network error happened on, if ``DsmClient`` recorded it (#237)."""
+    call = getattr(exc, _DSM_CALL_ATTR, None)
+    return call if isinstance(call, str) else None
+
+
 def _check_status(resp: httpx.Response, label: str) -> None:
     """Raise ``DsmHttpError`` for a non-2xx answer, in place of ``raise_for_status()``.
 
@@ -407,11 +416,17 @@ class DsmClient:
             log_params,
         )
 
-        if post_form:
-            query = {"_sid": req_params.pop("_sid")} if "_sid" in req_params else {}
-            resp = await http.post(url, params=query, data=req_params)
-        else:
-            resp = await http.get(url, params=req_params)
+        try:
+            if post_form:
+                query = {"_sid": req_params.pop("_sid")} if "_sid" in req_params else {}
+                resp = await http.post(url, params=query, data=req_params)
+            else:
+                resp = await http.get(url, params=req_params)
+        except httpx.TransportError as e:
+            # Name the call without changing the exception's type: get_client() and
+            # `check` rely on httpx.TransportError to report an unreachable NAS (#237).
+            setattr(e, _DSM_CALL_ATTR, f"{api}/{method}")
+            raise
         if resp.status_code == 414:
             raise RequestTooLongError(
                 f"{api}/{method}: DSM rejected the request with HTTP 414 (Request-URI Too Large).",
@@ -597,6 +612,9 @@ class DsmClient:
                 files={"file": (filename, fh, "application/octet-stream")},
                 timeout=httpx.Timeout(timeout),
             )
+        except httpx.TransportError as e:
+            setattr(e, _DSM_CALL_ATTR, f"{api}/upload")
+            raise
         finally:
             fh.close()
 
