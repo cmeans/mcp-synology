@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import TYPE_CHECKING, Any
+
+import httpx
 
 from mcp_synology.core.errors import ErrorCode, SynologyError, error_from_code
 from mcp_synology.core.formatting import (
@@ -20,6 +23,7 @@ from mcp_synology.modules.filestation.helpers import (
     missing_paths_suggestion,
     normalize_path,
     paths_isdir,
+    unanswered_status_response,
 )
 
 if TYPE_CHECKING:
@@ -259,14 +263,16 @@ async def _copy_move_one_path(
 
     taskid = start_data.get("taskid", "")
 
-    elapsed = 0.0
+    # Wall-clock deadline: a slow status request counts too (#237).
+    deadline = time.monotonic() + timeout
     interval = 0.5
     status: dict[str, Any] = {}
     poll_error: SynologyError | None = None
+    unanswered: httpx.TransportError | None = None
     timed_out = False
 
     try:
-        while elapsed < timeout:
+        while time.monotonic() < deadline:
             try:
                 status = await client.request(
                     "SYNO.FileStation.CopyMove",
@@ -277,6 +283,9 @@ async def _copy_move_one_path(
             except SynologyError as e:
                 poll_error = e
                 break
+            except httpx.TransportError as e:
+                unanswered = e
+                break
 
             logger.debug("%s status (%s): %s", operation, path, status)
 
@@ -284,7 +293,6 @@ async def _copy_move_one_path(
                 break
 
             await asyncio.sleep(interval)
-            elapsed += interval
         else:
             timed_out = True
     finally:
@@ -298,14 +306,26 @@ async def _copy_move_one_path(
 
     if poll_error:
         synology_error_response(f"{operation} files", poll_error)
+    if unanswered:
+        unanswered_status_response(
+            f"{operation} files",
+            path,
+            unanswered,
+            task_stopped=True,
+            already=_already_done(operation, done),
+        )
     if timed_out:
         error_response(
             ErrorCode.TIMEOUT,
-            f"{operation} files failed: timed out after {timeout}s on path: {path}",
+            f"{operation} files failed: timed out after {timeout}s on path: {path}. "
+            "The task was stopped and may be partly done." + _already_done(operation, done),
             retryable=True,
             param="timeout",
             value=timeout,
-            suggestion="The operation may still be running on the NAS.",
+            suggestion=(
+                "List the destination to see where it got to before retrying; "
+                "copy_move_timeout in the File Station settings allows longer."
+            ),
         )
 
     if "error" in status:
@@ -560,14 +580,16 @@ async def _delete_one_path(
 
     taskid = start_data.get("taskid", "")
 
-    elapsed = 0.0
+    # Wall-clock deadline: a slow status request counts too (#237).
+    deadline = time.monotonic() + timeout
     interval = 0.5
     status: dict[str, Any] = {}
     poll_error: SynologyError | None = None
+    unanswered: httpx.TransportError | None = None
     timed_out = False
 
     try:
-        while elapsed < timeout:
+        while time.monotonic() < deadline:
             try:
                 status = await client.request(
                     "SYNO.FileStation.Delete",
@@ -578,6 +600,9 @@ async def _delete_one_path(
             except SynologyError as e:
                 poll_error = e
                 break
+            except httpx.TransportError as e:
+                unanswered = e
+                break
 
             logger.debug("Delete status (%s): %s", path, status)
 
@@ -585,7 +610,6 @@ async def _delete_one_path(
                 break
 
             await asyncio.sleep(interval)
-            elapsed += interval
         else:
             timed_out = True
     finally:
@@ -603,14 +627,26 @@ async def _delete_one_path(
 
     if poll_error:
         synology_error_response("Delete files", poll_error)
+    if unanswered:
+        unanswered_status_response(
+            "Delete files",
+            path,
+            unanswered,
+            task_stopped=True,
+            already=_already_done("Delete", done),
+        )
     if timed_out:
         error_response(
             ErrorCode.TIMEOUT,
-            f"Delete files failed: timed out after {timeout}s on path: {path}",
+            f"Delete files failed: timed out after {timeout}s on path: {path}. "
+            "The task was stopped and may be partly done." + _already_done("Delete", done),
             retryable=True,
             param="timeout",
             value=timeout,
-            suggestion="The operation may still be running on the NAS.",
+            suggestion=(
+                "List the path to see what's left before retrying; "
+                "delete_timeout in the File Station settings allows longer."
+            ),
         )
 
     if "error" in status:

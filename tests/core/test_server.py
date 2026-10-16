@@ -1057,6 +1057,32 @@ class TestToolErrorDetail:
         assert record.levelno == logging.INFO
         assert not record.exc_info
 
+    async def test_network_timeout_is_a_structured_timeout(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """httpx timeouts stringify to '': the model got "Error executing tool
+        delete_files: " with nothing after it (#237)."""
+        with caplog.at_level(logging.INFO, logger="mcp"):
+            text = await self._call(httpx.ReadTimeout(""))
+        err = self._structured(text)
+        assert err["code"] == "timeout"
+        assert err["message"] == "DSM didn't answer in time (ReadTimeout)."
+        assert err["retryable"] is True
+        assert "connection.timeout" in err["suggestion"]
+        assert self._tool_log(caplog).levelno == logging.INFO  # anticipated, not a crash
+
+    async def test_dropped_connection_is_unavailable(self) -> None:
+        text = await self._call(httpx.RemoteProtocolError("Server disconnected"))
+        err = self._structured(text)
+        assert err["code"] == "unavailable"
+        assert err["message"] == (
+            "The connection to DSM failed (RemoteProtocolError: Server disconnected)."
+        )
+
+    async def test_crash_with_empty_message_names_the_exception(self) -> None:
+        text = await self._call(RuntimeError(""))
+        assert text == "Error executing tool list_shares: RuntimeError"
+
     async def test_tool_error_passes_through_unchanged(self) -> None:
         from mcp.server.mcpserver.exceptions import ToolError
 

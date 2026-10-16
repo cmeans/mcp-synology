@@ -7,11 +7,14 @@ import json
 import logging
 import re
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, NoReturn
+
+import httpx
 
 from mcp_synology.core.client import DsmClient
 from mcp_synology.core.errors import ErrorCode, SynologyError
 from mcp_synology.core.formatting import error_response
+from mcp_synology.core.redaction import redact_urls
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +36,48 @@ def dsm_str(value: str) -> str:
 # (esausilva/synology-api-sdk#1), never seen on vdsm 7.1/7.2.2 or a real
 # DS1618+, so it's a fallback, not the default.
 _QUOTED_TASKID_REJECTED = frozenset({599, 600})
+
+
+def describe_transport_error(exc: httpx.TransportError) -> str:
+    """``ReadTimeout``, or ``ConnectError: [Errno 111] ...``; never empty (#237).
+
+    httpx's timeouts stringify to ``''``. Any URL in the text is redacted.
+    """
+    text = redact_urls(str(exc))
+    return f"{type(exc).__name__}: {text}" if text else type(exc).__name__
+
+
+def unanswered_status_response(
+    operation: str,
+    path: str,
+    exc: httpx.TransportError,
+    *,
+    task_stopped: bool,
+    already: str = "",
+    suggestion: str | None = None,
+) -> NoReturn:
+    """Raise the structured error for a background task whose status DSM stopped answering.
+
+    DSM can stall for longer than the connection timeout while it deletes or copies
+    very large files (#237); httpx's error used to escape with an empty message.
+    """
+    timed_out = isinstance(exc, httpx.TimeoutException)
+    what = "didn't answer" if timed_out else "lost the connection during"
+    stopped = " The task was stopped and may be partly done." if task_stopped else ""
+    error_response(
+        ErrorCode.TIMEOUT if timed_out else ErrorCode.UNAVAILABLE,
+        f"{operation} failed: DSM {what} a status request on path: {path}"
+        f" ({describe_transport_error(exc)}).{stopped}{already}",
+        retryable=True,
+        param="path",
+        value=path,
+        suggestion=suggestion
+        or (
+            "List the path to see where it got to before retrying. DSM can stall on very "
+            "large files; a larger connection timeout (connection.timeout in the config) "
+            "gives it longer to answer, or use DSM's own File Station for this one."
+        ),
+    )
 
 
 async def task_request(

@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import TYPE_CHECKING, Any
+
+import httpx
 
 from mcp_synology.core.errors import ErrorCode, SynologyError, error_from_code
 from mcp_synology.core.formatting import (
@@ -19,6 +22,7 @@ from mcp_synology.core.formatting import (
 from mcp_synology.modules.filestation.helpers import (
     normalize_path,
     task_request,
+    unanswered_status_response,
     validate_additional,
 )
 
@@ -225,19 +229,24 @@ async def get_dir_size(
 
     # Poll for completion. Use try/finally to ensure task is always stopped,
     # preventing orphaned processes that consume CPU on the NAS.
-    elapsed = 0.0
+    # Wall-clock deadline: a slow status request counts too (#237).
+    deadline = time.monotonic() + timeout
     interval = 0.5
     poll_error: SynologyError | None = None
+    unanswered: httpx.TransportError | None = None
     result: str | None = None
 
     try:
-        while elapsed < timeout:
+        while time.monotonic() < deadline:
             try:
                 # 599 here used to be read as "finished too fast to measure";
                 # it was the unquoted task ID matching no task (#121).
                 status = await task_request(client, "SYNO.FileStation.DirSize", "status", taskid)
             except SynologyError as e:
                 poll_error = e
+                break
+            except httpx.TransportError as e:
+                unanswered = e
                 break
 
             if status.get("finished", False):
@@ -256,12 +265,22 @@ async def get_dir_size(
                 break
 
             await asyncio.sleep(interval)
-            elapsed += interval
     finally:
         await _stop_dirsize_task(client, taskid)
 
     if poll_error:
         synology_error_response("Get directory size", poll_error)
+    if unanswered:
+        unanswered_status_response(
+            "Get directory size",
+            normalized,
+            unanswered,
+            task_stopped=False,
+            suggestion=(
+                "Try a subdirectory, or give DSM longer to answer with connection.timeout "
+                "in the config."
+            ),
+        )
     if result:
         return result
 

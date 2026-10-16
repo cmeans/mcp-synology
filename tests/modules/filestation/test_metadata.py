@@ -454,3 +454,32 @@ class TestGetFileInfoAdditionalValidation:
         )
         assert "File type" not in result
         assert "Mount point" not in result
+
+
+class TestGetDirSizeUnansweredStatus:
+    """#237: a status request DSM doesn't answer is a structured error, not an empty one."""
+
+    @respx.mock
+    async def test_read_timeout(self, mock_client: DsmClient) -> None:
+        methods: list[str] = []
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            method = dict(request.url.params).get("method", "")
+            methods.append(method)
+            if method == "start":
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "ds-9"}})
+            if method == "status":
+                raise httpx.ReadTimeout("")
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        with pytest.raises(ToolError) as exc_info:
+            await get_dir_size(mock_client, path="/homes/cmeans")
+        assert "stop" in methods
+        err = json.loads(str(exc_info.value))["error"]
+        assert err["code"] == "timeout"
+        assert err["message"] == (
+            "Get directory size failed: DSM didn't answer a status request on path: "
+            "/homes/cmeans (ReadTimeout)."
+        )
+        assert err["suggestion"].startswith("Try a subdirectory")

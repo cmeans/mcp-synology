@@ -280,6 +280,12 @@ Common causes:
 - The NAS can't be reached at all: it's off or asleep, the network or VPN is
   down, or the configured host or port is wrong. The message starts "Can't
   reach the NAS at …" and names the URL and the timeout.
+- DSM stopped answering partway through. While it deletes or copies very large
+  files (multi-TB Time Machine bundles, VM images), DSM can stall for longer
+  than the connection timeout (`connection.timeout`, default 30 s). A copy,
+  move, delete or `get_dir_size` reports "DSM didn't answer a status request
+  on path: …" and stops the task; other tools report "DSM didn't answer in
+  time" (an `unavailable` error instead if the connection dropped).
 
 Fix:
 
@@ -299,6 +305,13 @@ Otherwise:
    unquoted, so DSM lost most tasks and never cleaned them up, which looked
    like an exhausted search service; see #121.)
 3. For copy, move, and delete: split the operation into smaller batches.
+   mcp-synology stops a task it gives up on, so a timed-out copy, move or
+   delete may be partly done: list the path before retrying. The task's time
+   limit is `async_timeout` (default 120 s, or `copy_move_timeout`,
+   `delete_timeout`, `dir_size_timeout` and `search_timeout` per operation) and
+   counts the whole time, including slow status requests. For a stalling DSM,
+   a larger `connection.timeout` helps; for a one-off huge delete, DSM's own
+   File Station has no client timeout.
 4. To clear suspected orphaned tasks: stop and start the File Station package
    from **Package Center**. mcp-synology cleans up its own tasks via
    `try/finally`, but tasks from earlier crashed runs may persist.
