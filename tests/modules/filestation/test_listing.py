@@ -156,14 +156,9 @@ class TestListShares:
         assert body["error"]["code"] == "permission_denied"
 
     @respx.mock
-    async def test_list_shares_additional_round_trips(self, mock_client: DsmClient) -> None:
-        """Closes #41: caller-supplied `additional` reaches DSM verbatim.
-
-        The pre-fix tool registration didn't surface `additional`, so callers
-        could not request fields like `mount_point_type` / `volume_status`.
-        Round-trip test: pass a non-default list and confirm the DSM request
-        carries the values in the documented `["a","b"]` form.
-        """
+    async def test_list_shares_requests_what_the_table_shows(self, mock_client: DsmClient) -> None:
+        """#149: only the fields the table shows (Volume, Owner, Free) are fetched; the
+        `additional` parameter, which accepted fields the table dropped, is gone."""
         captured: list[dict[str, str]] = []
 
         def side_effect(request: httpx.Request) -> httpx.Response:
@@ -171,21 +166,9 @@ class TestListShares:
             return httpx.Response(200, json={"success": True, "data": {"shares": [], "total": 0}})
 
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
-        await list_shares(
-            mock_client,
-            additional=["mount_point_type", "volume_status"],
-        )
+        await list_shares(mock_client)
         assert len(captured) == 1
-        assert captured[0]["additional"] == '["mount_point_type","volume_status"]'
-
-    async def test_list_shares_rejects_unknown_additional(self, mock_client: DsmClient) -> None:
-        """Unknown `additional` field is rejected before any DSM round-trip."""
-        with pytest.raises(ToolError) as exc_info:
-            await list_shares(mock_client, additional=["sze"])
-        body = json.loads(str(exc_info.value))
-        assert body["status"] == "error"
-        assert body["error"]["code"] == "invalid_parameter"
-        assert "sze" in body["error"]["message"]
+        assert captured[0]["additional"] == '["real_path","owner","volume_status"]'
 
 
 def _share(name: str, real_path: str | None, volume: dict[str, object] | None) -> dict[str, object]:
@@ -246,11 +229,11 @@ class TestListSharesVolumeSpace:
 
     @respx.mock
     async def test_missing_fields_show_a_dash(self, mock_client: DsmClient) -> None:
-        """A caller's own `additional` may leave out real_path or volume_status."""
+        """DSM may leave out real_path or volume_status for a share."""
         respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
             json={"success": True, "data": {"shares": [_share("video", None, None)]}}
         )
-        result = await list_shares(mock_client, additional=["owner"])
+        result = await list_shares(mock_client)
         assert "0 B" not in result
         assert "—" in result
         assert "per volume" not in result  # no free space shown, so no note
@@ -290,7 +273,7 @@ class TestListFiles:
 
     @respx.mock
     async def test_list_files_size_dash_when_not_requested(self, mock_client: DsmClient) -> None:
-        """QA on #146: additional without "size" must not show a file as "0 B"."""
+        """QA on #146: a file DSM sends without "size" must not show as "0 B"."""
         respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
             json={
                 "success": True,
@@ -302,7 +285,7 @@ class TestListFiles:
                 },
             }
         )
-        result = await list_files(mock_client, path="/video", additional=["owner"])
+        result = await list_files(mock_client, path="/video")
         assert "clip.mp4" in result
         assert "0 B" not in result
 
@@ -353,8 +336,8 @@ class TestListFiles:
         assert body["error"]["code"] == "not_found"
 
     @respx.mock
-    async def test_list_files_additional_round_trips(self, mock_client: DsmClient) -> None:
-        """Closes #41: caller-supplied `additional` reaches DSM verbatim."""
+    async def test_list_files_requests_what_the_table_shows(self, mock_client: DsmClient) -> None:
+        """#149: only Size and Modified are shown, so only size and time are fetched."""
         captured: list[dict[str, str]] = []
 
         def side_effect(request: httpx.Request) -> httpx.Response:
@@ -362,21 +345,9 @@ class TestListFiles:
             return httpx.Response(200, json={"success": True, "data": {"files": [], "total": 0}})
 
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
-        await list_files(
-            mock_client,
-            path="/video",
-            additional=["real_path", "size", "owner", "time", "perm"],
-        )
+        await list_files(mock_client, path="/video")
         assert len(captured) == 1
-        assert captured[0]["additional"] == '["real_path","size","owner","time","perm"]'
-
-    async def test_list_files_rejects_unknown_additional(self, mock_client: DsmClient) -> None:
-        with pytest.raises(ToolError) as exc_info:
-            await list_files(mock_client, path="/video", additional=["junk"])
-        body = json.loads(str(exc_info.value))
-        assert body["status"] == "error"
-        assert body["error"]["code"] == "invalid_parameter"
-        assert "junk" in body["error"]["message"]
+        assert captured[0]["additional"] == '["size","time"]'
 
 
 class TestListRecycleBin:
