@@ -19,7 +19,7 @@ from mcp.types import Icon
 
 from mcp_synology import __version__
 from mcp_synology.core.auth import AuthManager
-from mcp_synology.core.client import DsmClient
+from mcp_synology.core.client import DsmClient, dsm_call_of
 from mcp_synology.core.errors import ErrorCode, SynologyError
 from mcp_synology.core.formatting import error_response, synology_error_response
 from mcp_synology.core.redaction import redact_urls
@@ -132,7 +132,15 @@ def _transport_error_response(exc: httpx.TransportError) -> NoReturn:
     timed_out = isinstance(exc, httpx.TimeoutException)
     text = redact_urls(str(exc))
     detail = f"{type(exc).__name__}: {text}" if text else type(exc).__name__
-    what = "DSM didn't answer in time" if timed_out else "The connection to DSM failed"
+    call = dsm_call_of(exc)
+    if timed_out:
+        what = f"DSM didn't answer {call} in time" if call else "DSM didn't answer in time"
+    else:
+        what = (
+            f"The connection to DSM failed during {call}"
+            if call
+            else "The connection to DSM failed"
+        )
     error_response(
         ErrorCode.TIMEOUT if timed_out else ErrorCode.UNAVAILABLE,
         f"{what} ({detail}).",

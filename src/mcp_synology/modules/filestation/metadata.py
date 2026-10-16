@@ -275,7 +275,6 @@ async def get_dir_size(
             "Get directory size",
             normalized,
             unanswered,
-            task_stopped=False,
             suggestion=(
                 "Try a subdirectory, or give DSM longer to answer with connection.timeout "
                 "in the config."

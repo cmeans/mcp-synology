@@ -979,6 +979,29 @@ class TestNoSecretsInErrors:
         assert "passwd=***" in text
 
 
+class TestNetworkErrorNamesTheCall:
+    """QA R1 on #239: a network error in a tool names the DSM API and method (#237)."""
+
+    @respx.mock
+    async def test_tool_timeout(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SYNOLOGY_USERNAME", "chris")
+        monkeypatch.setenv("SYNOLOGY_PASSWORD", "pw")
+        respx.get(f"{BASE_URL}/webapi/query.cgi").respond(json=TestNoSecretsInErrors._INFO)
+        respx.post(f"{BASE_URL}/webapi/auth.cgi").respond(
+            json={"success": True, "data": {"sid": "sid"}}
+        )
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=httpx.ReadTimeout(""))
+        server = create_server(make_test_config())
+        async with Client(server) as client:
+            result = await client.call_tool("list_shares", {})
+        text = " ".join(getattr(c, "text", "") for c in result.content)
+        err = json.loads(text.removeprefix("Error executing tool list_shares: "))["error"]
+        assert err["code"] == "timeout"
+        assert err["message"] == (
+            "DSM didn't answer SYNO.FileStation.List/list_share in time (ReadTimeout)."
+        )
+
+
 class TestToolErrorDetail:
     """mcp 2.x sends only "Error executing tool <name>" for an exception that isn't a
     ToolError; v1 included the message. Login failures escape as AuthenticationError,

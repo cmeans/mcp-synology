@@ -52,7 +52,7 @@ def unanswered_status_response(
     path: str,
     exc: httpx.TransportError,
     *,
-    task_stopped: bool,
+    task_note: str = "",
     already: str = "",
     suggestion: str | None = None,
 ) -> NoReturn:
@@ -63,11 +63,11 @@ def unanswered_status_response(
     """
     timed_out = isinstance(exc, httpx.TimeoutException)
     what = "didn't answer" if timed_out else "lost the connection during"
-    stopped = " The task was stopped and may be partly done." if task_stopped else ""
+    note = f" {task_note}" if task_note else ""
     error_response(
         ErrorCode.TIMEOUT if timed_out else ErrorCode.UNAVAILABLE,
         f"{operation} failed: DSM {what} a status request on path: {path}"
-        f" ({describe_transport_error(exc)}).{stopped}{already}",
+        f" ({describe_transport_error(exc)}).{note}{already}",
         retryable=True,
         param="path",
         value=path,

@@ -38,14 +38,31 @@ async def _stop_background_task(
     taskid: str,
     version: int,
     task_logger: logging.Logger,
-) -> None:
-    """Stop a background task (CopyMove, Delete). Logs warnings on failure."""
+) -> bool:
+    """Stop a background task (CopyMove, Delete). Logs warnings on failure.
+
+    Returns whether DSM confirmed the stop, so an error message never claims a task
+    was stopped when DSM, stalled, didn't answer the stop either (QA R1 on #239).
+    """
     try:
         await client.request(api, "stop", version=version, params={"taskid": taskid})
     except SynologyError as e:
         task_logger.warning("%s task cleanup failed for %s: %s", api, taskid, e)
     except Exception:
         task_logger.warning("%s task cleanup failed for %s", api, taskid, exc_info=True)
+    else:
+        return True
+    return False
+
+
+def _task_note(stopped: bool) -> str:
+    """What happened to a background task mcp-synology gave up on (#237)."""
+    if stopped:
+        return "The task was stopped and may be partly done."
+    return (
+        "mcp-synology couldn't stop the task (DSM didn't answer); it may still be "
+        "running on the NAS, and may be partly done."
+    )
 
 
 async def create_folder(
@@ -196,6 +213,11 @@ def _collapse_overlaps(paths: list[str], *, drop_nested: bool = True) -> list[st
     return out
 
 
+def _already_done_sentence(operation: str, done: list[str] | None) -> str:
+    """``_already_done`` for after a full sentence: no leading period (QA R1 on #239)."""
+    return _already_done(operation, done).removeprefix(".")
+
+
 def _already_done(operation: str, done: list[str] | None) -> str:
     """Name the items a multi-path operation finished before a later one failed."""
     if not done:
@@ -270,6 +292,7 @@ async def _copy_move_one_path(
     poll_error: SynologyError | None = None
     unanswered: httpx.TransportError | None = None
     timed_out = False
+    stopped = False
 
     try:
         while time.monotonic() < deadline:
@@ -296,7 +319,7 @@ async def _copy_move_one_path(
         else:
             timed_out = True
     finally:
-        await _stop_background_task(
+        stopped = await _stop_background_task(
             client,
             "SYNO.FileStation.CopyMove",
             taskid,
@@ -311,14 +334,15 @@ async def _copy_move_one_path(
             f"{operation} files",
             path,
             unanswered,
-            task_stopped=True,
-            already=_already_done(operation, done),
+            task_note=_task_note(stopped),
+            already=_already_done_sentence(operation, done),
         )
     if timed_out:
         error_response(
             ErrorCode.TIMEOUT,
             f"{operation} files failed: timed out after {timeout}s on path: {path}. "
-            "The task was stopped and may be partly done." + _already_done(operation, done),
+            + _task_note(stopped)
+            + _already_done_sentence(operation, done),
             retryable=True,
             param="timeout",
             value=timeout,
@@ -587,6 +611,7 @@ async def _delete_one_path(
     poll_error: SynologyError | None = None
     unanswered: httpx.TransportError | None = None
     timed_out = False
+    stopped = False
 
     try:
         while time.monotonic() < deadline:
@@ -617,7 +642,7 @@ async def _delete_one_path(
         # (DSM 7.1 and 7.2.2), which logged a cleanup warning on every delete. Stop
         # only a task that didn't finish (timeout, polling error, cancellation).
         if not status.get("finished", False):
-            await _stop_background_task(
+            stopped = await _stop_background_task(
                 client,
                 "SYNO.FileStation.Delete",
                 taskid,
@@ -632,14 +657,15 @@ async def _delete_one_path(
             "Delete files",
             path,
             unanswered,
-            task_stopped=True,
-            already=_already_done("Delete", done),
+            task_note=_task_note(stopped),
+            already=_already_done_sentence("Delete", done),
         )
     if timed_out:
         error_response(
             ErrorCode.TIMEOUT,
             f"Delete files failed: timed out after {timeout}s on path: {path}. "
-            "The task was stopped and may be partly done." + _already_done("Delete", done),
+            + _task_note(stopped)
+            + _already_done_sentence("Delete", done),
             retryable=True,
             param="timeout",
             value=timeout,

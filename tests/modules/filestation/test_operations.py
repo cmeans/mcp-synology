@@ -1632,8 +1632,37 @@ class TestUnansweredStatus:
         with pytest.raises(ToolError) as exc_info:
             await delete_files(mock_client, paths=["/video/a", "/video/b"])
         message = json.loads(str(exc_info.value))["error"]["message"]
-        assert "on path: /video/b (ReadTimeout)" in message
-        assert message.endswith("Already deleted before this failure: /video/a")
+        # One period between sentences (QA R1 on #239 found "partly done.. Already").
+        assert message == (
+            "Delete files failed: DSM didn't answer a status request on path: /video/b "
+            "(ReadTimeout). The task was stopped and may be partly done. "
+            "Already deleted before this failure: /video/a"
+        )
+
+    @respx.mock
+    async def test_stop_unanswered_too_says_so(self, mock_client: DsmClient) -> None:
+        """QA R1 on #239: when DSM is stalled, `stop` likely gets no answer either; the
+        message must not claim the task was stopped."""
+        methods: list[str] = []
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            method = dict(request.url.params).get("method", "")
+            methods.append(method)
+            if method == "start":
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "d-1"}})
+            if method in ("status", "stop"):
+                raise httpx.ReadTimeout("")
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        with pytest.raises(ToolError) as exc_info:
+            await delete_files(mock_client, paths=["/Backups/huge"])
+        assert "stop" in methods
+        assert json.loads(str(exc_info.value))["error"]["message"] == (
+            "Delete files failed: DSM didn't answer a status request on path: /Backups/huge "
+            "(ReadTimeout). mcp-synology couldn't stop the task (DSM didn't answer); it may "
+            "still be running on the NAS, and may be partly done."
+        )
 
     @respx.mock
     async def test_copy_connection_lost(self, mock_client: DsmClient) -> None:
@@ -1680,5 +1709,44 @@ class TestUnansweredStatus:
         assert methods.count("status") == 3
         err = json.loads(str(exc_info.value))["error"]
         assert err["code"] == "timeout"
-        assert "The task was stopped and may be partly done." in err["message"]
+        assert err["message"] == (
+            "Delete files failed: timed out after 30.0s on path: /video/slow. "
+            "The task was stopped and may be partly done."
+        )
         assert "delete_timeout" in err["suggestion"]
+
+    @respx.mock
+    async def test_timed_out_copy_names_paths_already_done(
+        self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import mcp_synology.modules.filestation.operations as ops
+
+        now = [0.0]
+        monkeypatch.setattr(ops.time, "monotonic", lambda: now[0])
+        monkeypatch.setattr(ops.asyncio, "sleep", AsyncMock())
+        methods: list[str] = []
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            method = dict(request.url.params).get("method", "")
+            methods.append(method)
+            if method == "start":
+                n = methods.count("start")
+                return httpx.Response(200, json={"success": True, "data": {"taskid": f"c-{n}"}})
+            if method == "status":
+                if methods.count("start") == 1:
+                    return httpx.Response(
+                        200, json={"success": True, "data": {"finished": True, "processed_size": 1}}
+                    )
+                now[0] += 10.0
+                return httpx.Response(200, json={"success": True, "data": {"finished": False}})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        with pytest.raises(ToolError) as exc_info:
+            await copy_files(
+                mock_client, paths=["/video/a", "/video/b"], dest_folder="/x", timeout=30.0
+            )
+        assert json.loads(str(exc_info.value))["error"]["message"] == (
+            "Copy files failed: timed out after 30.0s on path: /video/b. The task was "
+            "stopped and may be partly done. Already copied before this failure: /video/a"
+        )
