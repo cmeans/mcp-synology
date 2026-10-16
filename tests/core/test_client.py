@@ -287,6 +287,87 @@ class TestHttpErrorStatus:
         self._assert_no_url(exc.value, "SIDSECRET")
 
 
+class TestRequestPostForm:
+    """request(post_form=True): the login-only POST (#235). The parameters go in the
+    form body, _sid stays in the query string, and the rest of request() applies."""
+
+    @respx.mock
+    async def test_body_and_query(self) -> None:
+        from urllib.parse import parse_qsl
+
+        client = make_client(make_api_cache())
+        client.sid = "the-sid"
+        route = respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": True, "data": {"sid": "new"}}
+        )
+        async with client:
+            data = await client.request(
+                "SYNO.API.Auth",
+                "login",
+                version=6,
+                params={"account": "chris", "passwd": "S3cret#PW&x=1", "format": "sid"},
+                post_form=True,
+            )
+        assert data == {"sid": "new"}
+        request = route.calls.last.request
+        assert dict(request.url.params) == {"_sid": "the-sid"}
+        assert "S3cret" not in str(request.url)
+        assert dict(parse_qsl(request.content.decode())) == {
+            "api": "SYNO.API.Auth",
+            "version": "6",
+            "method": "login",
+            "account": "chris",
+            "passwd": "S3cret#PW&x=1",
+            "format": "sid",
+        }
+
+    @respx.mock
+    async def test_dsm_error_and_log(self, caplog: pytest.LogCaptureFixture) -> None:
+        import logging
+
+        from mcp_synology.core.errors import AuthenticationError
+
+        client = make_client(make_api_cache())
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 400}}
+        )
+        async with client:
+            with (
+                caplog.at_level(logging.DEBUG, logger="mcp_synology.core.client"),
+                pytest.raises(AuthenticationError),
+            ):
+                await client.request(
+                    "SYNO.API.Auth",
+                    "login",
+                    version=6,
+                    params={"account": "chris", "passwd": "S3cretPW"},
+                    post_form=True,
+                )
+        assert "DSM POST: SYNO.API.Auth/login v6" in caplog.text
+        assert "S3cretPW" not in caplog.text
+
+    @respx.mock
+    async def test_session_retry_stays_post(self) -> None:
+        client = make_client(make_api_cache())
+        client.sid = "old"
+        route = respx.post(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=[
+                httpx.Response(200, json={"success": False, "error": {"code": 106}}),
+                httpx.Response(200, json={"success": True, "data": {"ok": 1}}),
+            ]
+        )
+
+        async def reauth() -> None:
+            client.sid = "new"
+
+        client.set_re_auth_callback(reauth)
+        async with client:
+            data = await client.request("SYNO.API.Auth", "login", version=6, post_form=True)
+        assert data == {"ok": 1}
+        assert route.call_count == 2
+        assert dict(route.calls.last.request.url.params) == {"_sid": "new"}
+
+
 class TestRequestFormPost:
     """Form-POST variant of request() — the scoped exception to the GET-only
     rule, used only for DS URI Task.create (#123 item 9a)."""

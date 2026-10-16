@@ -35,6 +35,7 @@ A thin async HTTP client that knows DSM request/response conventions but nothing
 **Responsibilities:**
 - Build request URLs from API name + version + method
 - Inject session ID into requests (from auth manager)
+- Send every request as a GET, with two scoped exceptions sent as form POSTs: Download Station URI `Task.create` (#123) and `SYNO.API.Auth` `login` (#235), which keeps the password, OTP code and device token out of URLs and so out of DSM and proxy access logs
 - Parse the standard `{success, data, error}` response envelope
 - Map error codes to typed Python exceptions (common codes shared across all APIs, plus API-specific codes)
 - Call `SYNO.API.Info` with `query=ALL` at startup; cache the result as a map of API name → `{path, minVersion, maxVersion}`

@@ -427,7 +427,7 @@ Upload a local file from this machine to a NAS folder.
 
 **Annotations:** `destructiveHint=true`: with `overwrite=true` it replaces the NAS file. Annotations are static, so they can't depend on `overwrite` (#183).
 
-**DSM API:** `SYNO.FileStation.Upload` / `upload` (POST multipart — the ONE exception to the GET-only rule)
+**DSM API:** `SYNO.FileStation.Upload` / `upload` (POST multipart — one of the exceptions to the GET-only rule, with Download Station `Task.create` (#123) and the `SYNO.API.Auth` login (#235); see CLAUDE.md)
 
 **Tool description (LLM-facing):**
 > Upload a local file from this machine to a NAS folder. Provide the local file path. dest_folder is
@@ -450,7 +450,7 @@ Upload a local file from this machine to a NAS folder.
 ```
 
 **Design notes:**
-- Upload uses POST multipart — the only DSM API call that requires POST. Documented clearly in the client method.
+- Upload uses POST multipart, one of the scoped exceptions to the GET-only rule (with Download Station `Task.create`, #123, and the login, #235; see CLAUDE.md). Documented clearly in the client method.
 - File is streamed from disk, not buffered in memory.
 - On session error (106/107/119), re-auth and retry with a fresh file handle.
 - **`overwrite` is sent only when true (#195).** DSM's Upload reads `overwrite=false` as *skip*: it answers success with `data.blSkip: true` and leaves the existing file alone (verified on DSM 7.2.2; it took ~10 s). With `overwrite` omitted, DSM fails with 414 instead (also after ~10 s). So `overwrite=false` omits the parameter, and both 414 and a `blSkip: true` answer become `already_exists` (`param: filename`, value = the effective name) with a suggestion to use `overwrite=true`. A skipped upload is never reported as uploaded.

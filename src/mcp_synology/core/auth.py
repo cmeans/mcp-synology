@@ -225,7 +225,10 @@ class AuthManager:
             logger.debug("Login path: simple (no device token)")
 
         try:
-            data = await self._client.request("SYNO.API.Auth", "login", version=6, params=params)
+            # A POST keeps the password out of the URL (#235).
+            data = await self._client.request(
+                "SYNO.API.Auth", "login", version=6, params=params, post_form=True
+            )
         except SynologyError as e:
             if e.code == _ERROR_2FA_REQUIRED:
                 if device_id:
