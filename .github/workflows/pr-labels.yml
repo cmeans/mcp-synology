@@ -1,7 +1,7 @@
 name: PR Label Automation
 
 # Handles label transitions triggered by PR events (push, label, unlabel).
-# CI-completion promotion lives in pr-labels-ci.yml (separate workflow_run trigger).
+# Labeling on CI and vdsm completion lives in pr-labels-ci.yml (separate workflow_run trigger).
 on:
   pull_request:
     branches: [main]
@@ -9,7 +9,7 @@ on:
 
 permissions:
   pull-requests: write
-  checks: read
+  actions: read  # on-unlabel reads CI and vdsm job results
 
 jobs:
   # When a PR is opened or new commits are pushed, reset to Awaiting CI.
@@ -59,9 +59,10 @@ jobs:
               --body "New commits pushed while QA was active. QA review invalidated — resetting to Awaiting CI."
           fi
 
-  # When Dev Active is removed manually, check if CI already passed.
-  # If yes, promote straight to Ready for QA. If no, Awaiting CI is
-  # already present and on-ci-pass will promote when CI completes.
+  # When Dev Active is removed manually, check whether the head commit's CI and
+  # vdsm runs already passed. If yes, promote straight to Ready for QA; if a job
+  # failed, set CI Failed; if either is still running, Awaiting CI stays and
+  # pr-labels-ci.yml promotes when they complete.
   on-unlabel:
     if: >-
       github.event.action == 'unlabeled'
@@ -72,34 +73,61 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          PR=${{ github.event.pull_request.number }}
-          REPO=${{ github.repository }}
+          # pass / fail / pending for the head commit across CI and vdsm, judged
+          # job by job: vdsm's jobs are continue-on-error, so a run's conclusion
+          # says "success" even when one failed (#241). tool-quality is
+          # report-only. Keep in sync with pr-labels-ci.yml.
+          STATE=pass
+          for WF in ci.yml vdsm.yml; do
+            RUN=$(gh api "repos/$REPO/actions/workflows/$WF/runs?head_sha=$HEAD_SHA&event=pull_request&per_page=1" \
+              --jq '.workflow_runs[0] // empty | "\(.id) \(.status)"')
+            if [ -z "$RUN" ]; then
+              echo "$WF: no run yet for $HEAD_SHA"
+              STATE=pending; continue
+            fi
+            read -r RUN_ID RUN_STATUS <<< "$RUN"
+            if [ "$RUN_STATUS" != completed ]; then
+              echo "$WF: run $RUN_ID is $RUN_STATUS"
+              STATE=pending; continue
+            fi
+            BAD=$(gh api --paginate "repos/$REPO/actions/runs/$RUN_ID/jobs" \
+              --jq '.jobs[] | select(.name != "tool-quality" and .conclusion != "success" and .conclusion != "skipped") | "\(.name): \(.conclusion)"')
+            if [ -n "$BAD" ]; then
+              echo "$WF: run $RUN_ID has failed jobs:"; echo "$BAD"
+              STATE=fail; break
+            fi
+            echo "$WF: run $RUN_ID passed"
+          done
+          echo "Checks on $HEAD_SHA: $STATE"
 
-          # Check if CI already passed for the head commit
-          HEAD_SHA=${{ github.event.pull_request.head.sha }}
-          CI_CONCLUSION=$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$HEAD_SHA" \
-            --jq '.workflow_runs[0].conclusion // empty' 2>/dev/null) || true
-
-          if [ "$CI_CONCLUSION" = "success" ]; then
-            # CI passed — promote to Ready for QA
-            REMOVE=""
-            if echo "$PR_LABELS" | grep -q '"Awaiting CI"'; then
-              REMOVE="Awaiting CI"
-            fi
-            if echo "$PR_LABELS" | grep -q '"CI Failed"'; then
-              REMOVE="${REMOVE:+$REMOVE,}CI Failed"
-            fi
-            if [ -n "$REMOVE" ]; then
-              gh pr edit "$PR" --repo "$REPO" --remove-label "$REMOVE"
-            fi
-            gh pr edit "$PR" --repo "$REPO" --add-label "Ready for QA"
-          else
-            # CI hasn't passed — Awaiting CI should already be present
-            if ! echo "$PR_LABELS" | grep -q '"Awaiting CI"'; then
-              gh pr edit "$PR" --repo "$REPO" --add-label "Awaiting CI"
-            fi
-          fi
+          has() { echo "$PR_LABELS" | grep -q "\"$1\""; }
+          case "$STATE" in
+            pass)
+              REMOVE=""
+              has "Awaiting CI" && REMOVE="Awaiting CI"
+              has "CI Failed" && REMOVE="${REMOVE:+$REMOVE,}CI Failed"
+              if [ -n "$REMOVE" ]; then
+                gh pr edit "$PR" --repo "$REPO" --remove-label "$REMOVE"
+              fi
+              gh pr edit "$PR" --repo "$REPO" --add-label "Ready for QA"
+              ;;
+            fail)
+              if has "Awaiting CI"; then
+                gh pr edit "$PR" --repo "$REPO" --remove-label "Awaiting CI"
+              fi
+              gh pr edit "$PR" --repo "$REPO" --add-label "CI Failed"
+              ;;
+            pending)
+              # Awaiting CI should already be present
+              if ! has "Awaiting CI"; then
+                gh pr edit "$PR" --repo "$REPO" --add-label "Awaiting CI"
+              fi
+              ;;
+          esac
 
   # When a workflow label is added, clean up labels that no longer apply.
   # Only runs for labels that have cleanup rules.
