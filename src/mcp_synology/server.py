@@ -165,14 +165,24 @@ class _SynologyServer(MCPServer):
         ``SharedClientManager.get_client()``), so without this the model loses hints
         like "run mcp-synology setup". A ``SynologyError`` becomes the usual structured
         error; anything else keeps 1.x's text.
+
+        Both get the "Error executing tool <name>: " prefix the SDK puts on a
+        ``ToolError`` raised inside a handler, so every error reads the same. A
+        ``SynologyError`` stays a plain ``ToolError`` (logged at INFO, no traceback);
+        anything else stays an ``UnexpectedToolError``, which the SDK logs at ERROR
+        with the traceback.
         """
+        prefix = f"Error executing tool {name}: "
         try:
             return await super().call_tool(name, arguments, context)
         except UnexpectedToolError as exc:
             cause = exc.__cause__
             if isinstance(cause, SynologyError):
-                synology_error_response(name, cause)
-            raise ToolError(f"Error executing tool {name}: {cause}") from cause
+                try:
+                    synology_error_response(name, cause)
+                except ToolError as structured:
+                    raise ToolError(f"{prefix}{structured}") from cause
+            raise UnexpectedToolError(f"{prefix}{cause}") from cause
 
 
 # A comment that fills its whole line (allowing indentation) goes with its line break;

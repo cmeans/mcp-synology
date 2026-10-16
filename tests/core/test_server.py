@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -889,6 +890,19 @@ class TestToolErrorDetail:
         assert result.is_error
         return " ".join(getattr(c, "text", "") for c in result.content)
 
+    @staticmethod
+    def _structured(text: str) -> dict[str, Any]:
+        """The error envelope, after the prefix every tool error carries (QA round 1, #226)."""
+        prefix = "Error executing tool list_shares: "
+        assert text.startswith(prefix), text
+        error: dict[str, Any] = json.loads(text.removeprefix(prefix))["error"]
+        return error
+
+    @staticmethod
+    def _tool_log(caplog: pytest.LogCaptureFixture) -> logging.LogRecord:
+        (record,) = [r for r in caplog.records if r.name.startswith("mcp") and "Tool" in r.msg]
+        return record
+
     async def test_login_failure_is_a_structured_auth_error(self) -> None:
         from mcp_synology.core.errors import AuthenticationError
 
@@ -897,7 +911,7 @@ class TestToolErrorDetail:
                 "No credentials found.", suggestion="Run 'mcp-synology setup' to store them."
             )
         )
-        err = json.loads(text[text.index("{") :])["error"]
+        err = self._structured(text)
         assert err["code"] == "auth_failed"
         assert "No credentials found." in err["message"]
         assert "list_shares" in err["message"]
@@ -908,22 +922,43 @@ class TestToolErrorDetail:
         from mcp_synology.core.errors import DsmUnavailableError
 
         text = await self._call(DsmUnavailableError("DSM is restarting", code=150))
-        err = json.loads(text[text.index("{") :])["error"]
+        err = self._structured(text)
         assert err["code"] == "unavailable"
         assert "DSM error 150" in err["message"]
         assert err["retryable"] is False  # the class's own flag, carried through
 
     async def test_unexpected_exception_keeps_its_message(self) -> None:
         text = await self._call(KeyError("model"))
-        assert "list_shares" in text
-        assert "'model'" in text
+        assert text == "Error executing tool list_shares: 'model'"
+
+    async def test_unexpected_exception_is_logged_as_a_crash(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A real bug must reach the server log at ERROR with its traceback (QA round 1)."""
+        with caplog.at_level(logging.INFO, logger="mcp"):
+            await self._call(KeyError("model"))
+        record = self._tool_log(caplog)
+        assert record.levelno == logging.ERROR
+        assert record.exc_info is not None
+        assert isinstance(record.exc_info[1].__cause__, KeyError)
+
+    async def test_synology_error_is_logged_as_anticipated(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from mcp_synology.core.errors import AuthenticationError
+
+        with caplog.at_level(logging.INFO, logger="mcp"):
+            await self._call(AuthenticationError("No credentials found."))
+        record = self._tool_log(caplog)
+        assert record.levelno == logging.INFO
+        assert not record.exc_info
 
     async def test_tool_error_passes_through_unchanged(self) -> None:
         from mcp.server.mcpserver.exceptions import ToolError
 
         text = await self._call(ToolError('{"status": "error", "error": {"code": "timeout"}}'))
         assert text.endswith('{"status": "error", "error": {"code": "timeout"}}')
-        assert text.count("Error executing tool") <= 1
+        assert text.count("Error executing tool") == 1
 
 
 class TestServedSchemas:
