@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 from typing import TYPE_CHECKING, Any
@@ -873,6 +874,32 @@ class TestServerInfo:
         assert info is not None
         assert info.version == version("mcp-synology")
         assert info.version != version("mcp")
+
+    async def test_initialize_lists_svg_and_png_icons(self) -> None:
+        """#229: clients that display icons must support PNG; SVG is only a SHOULD."""
+        server = create_server(make_test_config())
+        async with Client(server) as client:
+            info = client.server_info
+        assert info is not None
+        icons = info.icons or []
+        assert sorted((i.mime_type, i.theme) for i in icons) == [
+            ("image/png", "dark"),
+            ("image/png", "light"),
+            ("image/svg+xml", "dark"),
+            ("image/svg+xml", "light"),
+        ]
+        for icon in icons:
+            if icon.mime_type == "image/svg+xml":
+                assert icon.src.startswith("https://"), icon.src
+                assert icon.sizes == ["any"]
+                continue
+            prefix = "data:image/png;base64,"
+            assert icon.src.startswith(prefix)
+            png = base64.b64decode(icon.src.removeprefix(prefix), validate=True)
+            assert png.startswith(b"\x89PNG\r\n\x1a\n")
+            assert icon.sizes == ["128x128"]
+            # The declared size is the image's: width and height from the IHDR chunk.
+            assert png[16:24] == (128).to_bytes(4, "big") * 2
 
 
 class TestToolErrorDetail:

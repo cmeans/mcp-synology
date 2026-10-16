@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import base64
 import logging
 import platform
 import re
@@ -53,18 +54,35 @@ _BASE_INSTRUCTIONS = _load_instruction("server.md")
 _ICON_BASE_URL = "https://raw.githubusercontent.com/cmeans/mcp-synology/main/src/mcp_synology/icons"
 
 
+_PNG_ICON_SIZE = 128
+
+
 def _load_icons() -> list[Icon]:
-    """Return Icon objects pointing to hosted SVGs on GitHub."""
+    """Return the server's icons: hosted SVGs, plus embedded PNGs (#229).
+
+    The MCP spec requires clients that display icons to support PNG, but SVG only
+    SHOULD be supported. The PNGs are ``data:`` URIs because the spec lets clients
+    refuse icon URLs from another origin, and a stdio server has none.
+    """
     icons: list[Icon] = []
-    theme_map: dict[Literal["light", "dark"], str] = {
-        "light": "mcp-synology-logo-light.svg",
-        "dark": "mcp-synology-logo-dark.svg",
-    }
-    for theme, filename in theme_map.items():
+    themes: tuple[Literal["light", "dark"], ...] = ("light", "dark")
+    for theme in themes:
         icons.append(
             Icon(
-                src=f"{_ICON_BASE_URL}/{filename}",
+                src=f"{_ICON_BASE_URL}/mcp-synology-logo-{theme}.svg",
                 mime_type="image/svg+xml",
+                sizes=["any"],  # the spec's value for scalable formats
+                theme=theme,
+            )
+        )
+    icon_dir = Path(__file__).parent / "icons"
+    for theme in themes:
+        png = (icon_dir / f"mcp-synology-{theme}-{_PNG_ICON_SIZE}.png").read_bytes()
+        icons.append(
+            Icon(
+                src=f"data:image/png;base64,{base64.b64encode(png).decode('ascii')}",
+                mime_type="image/png",
+                sizes=[f"{_PNG_ICON_SIZE}x{_PNG_ICON_SIZE}"],
                 theme=theme,
             )
         )
