@@ -7,6 +7,7 @@ on:
 
 permissions:
   statuses: write
+  pull-requests: read
 
 jobs:
   qa-approved:
@@ -15,16 +16,40 @@ jobs:
       - name: Set QA status
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          EVENT_SHA: ${{ github.event.pull_request.head.sha }}
+          ACTION: ${{ github.event.action }}
         run: |
-          if echo '${{ toJSON(github.event.pull_request.labels.*.name) }}' | grep -q '"QA Approved"'; then
-            STATE="success"
-            DESC="QA testing completed"
-          else
-            STATE="pending"
-            DESC="Waiting for QA — add 'QA Approved' label when testing is complete"
+          set -euo pipefail
+          PENDING="Waiting for QA — add 'QA Approved' label when testing is complete"
+          post() {
+            gh api "repos/$REPO/statuses/$EVENT_SHA" --method POST \
+              -f state="$1" -f description="$2" -f context="QA Gate" > /dev/null
+            echo "QA Gate: $1 on $EVENT_SHA"
+          }
+
+          # A new commit can't have been approved yet (#217). The push event's label
+          # list still holds "QA Approved" for a moment, until pr-labels.yml removes
+          # it, and that removal (made with GITHUB_TOKEN) never triggers this
+          # workflow again, so reading labels here left new commits green.
+          case "$ACTION" in
+            opened|synchronize|reopened)
+              post pending "$PENDING"
+              exit 0
+              ;;
+          esac
+
+          # labeled / unlabeled: decide from the PR as it is now, not the event payload.
+          read -r HEAD APPROVED < <(gh api "repos/$REPO/pulls/$PR" \
+            --jq '[.head.sha, ([.labels[].name] | index("QA Approved") != null)] | @tsv')
+          if [ "$HEAD" != "$EVENT_SHA" ]; then
+            # A newer commit landed after this label event; its own run sets its status.
+            echo "Stale event: $EVENT_SHA is no longer the head ($HEAD); not changing QA Gate"
+            exit 0
           fi
-          gh api repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha }} \
-            --method POST \
-            -f state="$STATE" \
-            -f description="$DESC" \
-            -f context="QA Gate"
+          if [ "$APPROVED" = "true" ]; then
+            post success "QA testing completed"
+          else
+            post pending "$PENDING"
+          fi
