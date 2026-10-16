@@ -979,6 +979,29 @@ class TestNoSecretsInErrors:
         assert "passwd=***" in text
 
 
+class TestNetworkErrorNamesTheCall:
+    """QA R1 on #239: a network error in a tool names the DSM API and method (#237)."""
+
+    @respx.mock
+    async def test_tool_timeout(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SYNOLOGY_USERNAME", "chris")
+        monkeypatch.setenv("SYNOLOGY_PASSWORD", "pw")
+        respx.get(f"{BASE_URL}/webapi/query.cgi").respond(json=TestNoSecretsInErrors._INFO)
+        respx.post(f"{BASE_URL}/webapi/auth.cgi").respond(
+            json={"success": True, "data": {"sid": "sid"}}
+        )
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=httpx.ReadTimeout(""))
+        server = create_server(make_test_config())
+        async with Client(server) as client:
+            result = await client.call_tool("list_shares", {})
+        text = " ".join(getattr(c, "text", "") for c in result.content)
+        err = json.loads(text.removeprefix("Error executing tool list_shares: "))["error"]
+        assert err["code"] == "timeout"
+        assert err["message"] == (
+            "DSM didn't answer SYNO.FileStation.List/list_share in time (ReadTimeout)."
+        )
+
+
 class TestToolErrorDetail:
     """mcp 2.x sends only "Error executing tool <name>" for an exception that isn't a
     ToolError; v1 included the message. Login failures escape as AuthenticationError,
@@ -1056,6 +1079,32 @@ class TestToolErrorDetail:
         record = self._tool_log(caplog)
         assert record.levelno == logging.INFO
         assert not record.exc_info
+
+    async def test_network_timeout_is_a_structured_timeout(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """httpx timeouts stringify to '': the model got "Error executing tool
+        delete_files: " with nothing after it (#237)."""
+        with caplog.at_level(logging.INFO, logger="mcp"):
+            text = await self._call(httpx.ReadTimeout(""))
+        err = self._structured(text)
+        assert err["code"] == "timeout"
+        assert err["message"] == "DSM didn't answer in time (ReadTimeout)."
+        assert err["retryable"] is True
+        assert "connection.timeout" in err["suggestion"]
+        assert self._tool_log(caplog).levelno == logging.INFO  # anticipated, not a crash
+
+    async def test_dropped_connection_is_unavailable(self) -> None:
+        text = await self._call(httpx.RemoteProtocolError("Server disconnected"))
+        err = self._structured(text)
+        assert err["code"] == "unavailable"
+        assert err["message"] == (
+            "The connection to DSM failed (RemoteProtocolError: Server disconnected)."
+        )
+
+    async def test_crash_with_empty_message_names_the_exception(self) -> None:
+        text = await self._call(RuntimeError(""))
+        assert text == "Error executing tool list_shares: RuntimeError"
 
     async def test_tool_error_passes_through_unchanged(self) -> None:
         from mcp.server.mcpserver.exceptions import ToolError

@@ -19,7 +19,7 @@ from mcp.types import Icon
 
 from mcp_synology import __version__
 from mcp_synology.core.auth import AuthManager
-from mcp_synology.core.client import DsmClient
+from mcp_synology.core.client import DsmClient, dsm_call_of
 from mcp_synology.core.errors import ErrorCode, SynologyError
 from mcp_synology.core.formatting import error_response, synology_error_response
 from mcp_synology.core.redaction import redact_urls
@@ -127,6 +127,32 @@ def _unreachable_error(base_url: str, timeout: float, exc: httpx.TransportError)
     )
 
 
+def _transport_error_response(exc: httpx.TransportError) -> NoReturn:
+    """Raise a structured error for a network failure after the client connected (#237)."""
+    timed_out = isinstance(exc, httpx.TimeoutException)
+    text = redact_urls(str(exc))
+    detail = f"{type(exc).__name__}: {text}" if text else type(exc).__name__
+    call = dsm_call_of(exc)
+    if timed_out:
+        what = f"DSM didn't answer {call} in time" if call else "DSM didn't answer in time"
+    else:
+        what = (
+            f"The connection to DSM failed during {call}"
+            if call
+            else "The connection to DSM failed"
+        )
+    error_response(
+        ErrorCode.TIMEOUT if timed_out else ErrorCode.UNAVAILABLE,
+        f"{what} ({detail}).",
+        retryable=True,
+        suggestion=(
+            "DSM may be busy (e.g. with a very large delete or copy). Try again shortly; if "
+            "this was a change, check whether it applied first. connection.timeout in the "
+            "config gives DSM longer to answer."
+        ),
+    )
+
+
 _NULL_SCHEMA = {"type": "null"}
 
 
@@ -190,6 +216,11 @@ class _SynologyServer(MCPServer):
         ``SynologyError`` stays a plain ``ToolError`` (logged at INFO, no traceback);
         anything else stays an ``UnexpectedToolError``, which the SDK logs at ERROR
         with the traceback.
+
+        A network error talking to DSM (httpx ``TransportError``, e.g. a ``ReadTimeout``
+        while DSM is busy) is anticipated too: a structured ``timeout`` or
+        ``unavailable`` error. httpx timeouts stringify to ``''``, which reached the
+        model as "Error executing tool delete_files: " (#237).
         """
         prefix = f"Error executing tool {name}: "
         try:
@@ -203,7 +234,14 @@ class _SynologyServer(MCPServer):
                     raise ToolError(f"{prefix}{structured}") from cause
             # Backstop for #232: a crash naming a DSM URL mustn't hand the model its
             # passwd or _sid. Known DSM HTTP failures never carry the URL (DsmHttpError).
-            raise UnexpectedToolError(f"{prefix}{redact_urls(str(cause))}") from cause
+            if isinstance(cause, httpx.TransportError):
+                try:
+                    _transport_error_response(cause)
+                except ToolError as structured:
+                    raise ToolError(f"{prefix}{structured}") from cause
+            # Never an empty message: httpx-style errors stringify to '' (#237).
+            text = redact_urls(str(cause)) if cause is not None else ""
+            raise UnexpectedToolError(f"{prefix}{text or type(cause).__name__}") from cause
 
 
 # A comment that fills its whole line (allowing indentation) goes with its line break;
