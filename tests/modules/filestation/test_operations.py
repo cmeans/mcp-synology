@@ -1660,8 +1660,8 @@ class TestUnansweredStatus:
         assert "stop" in methods
         assert json.loads(str(exc_info.value))["error"]["message"] == (
             "Delete files failed: DSM didn't answer a status request on path: /Backups/huge "
-            "(ReadTimeout). mcp-synology couldn't stop the task (DSM didn't answer); it may "
-            "still be running on the NAS, and may be partly done."
+            "(ReadTimeout). mcp-synology couldn't confirm the task stopped; it may still "
+            "be running on the NAS, and may be partly done."
         )
 
     @respx.mock
@@ -1678,6 +1678,38 @@ class TestUnansweredStatus:
         assert err["message"].startswith(
             "Copy files failed: DSM lost the connection during a status request on path: "
             "/video/big.mkv (RemoteProtocolError: Server disconnected)."
+        )
+
+    @respx.mock
+    async def test_stop_refused_after_timeout(
+        self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """QA R2 on #239: DSM answers `stop` with 401 (e.g. the task finished between the
+        last poll and the stop). The message mustn't say DSM didn't answer."""
+        import mcp_synology.modules.filestation.operations as ops
+
+        now = [0.0]
+        monkeypatch.setattr(ops.time, "monotonic", lambda: now[0])
+        monkeypatch.setattr(ops.asyncio, "sleep", AsyncMock())
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            method = dict(request.url.params).get("method", "")
+            if method == "start":
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "d-1"}})
+            if method == "status":
+                now[0] += 31.0
+                return httpx.Response(200, json={"success": True, "data": {"finished": False}})
+            if method == "stop":
+                return httpx.Response(200, json={"success": False, "error": {"code": 401}})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        with pytest.raises(ToolError) as exc_info:
+            await delete_files(mock_client, paths=["/video/x"], timeout=30.0)
+        assert json.loads(str(exc_info.value))["error"]["message"] == (
+            "Delete files failed: timed out after 30.0s on path: /video/x. mcp-synology "
+            "couldn't confirm the task stopped; it may still be running on the NAS, and "
+            "may be partly done."
         )
 
     @respx.mock

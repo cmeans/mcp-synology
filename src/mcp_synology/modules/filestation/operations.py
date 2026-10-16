@@ -59,9 +59,11 @@ def _task_note(stopped: bool) -> str:
     """What happened to a background task mcp-synology gave up on (#237)."""
     if stopped:
         return "The task was stopped and may be partly done."
+    # Not "DSM didn't answer": DSM may also have refused the stop (e.g. 401 for a task
+    # that finished just before it), QA R2 on #239.
     return (
-        "mcp-synology couldn't stop the task (DSM didn't answer); it may still be "
-        "running on the NAS, and may be partly done."
+        "mcp-synology couldn't confirm the task stopped; it may still be running on the "
+        "NAS, and may be partly done."
     )
 
 

@@ -284,8 +284,10 @@ Common causes:
   files (multi-TB Time Machine bundles, VM images), DSM can stall for longer
   than the connection timeout (`connection.timeout`, default 30 s). A copy,
   move, delete or `get_dir_size` reports "DSM didn't answer a status request
-  on path: …" and stops the task; other tools report "DSM didn't answer in
-  time" (an `unavailable` error instead if the connection dropped).
+  on path: …" and asks DSM to stop the task; the message says whether DSM
+  confirmed the stop. Other tools name the DSM call, e.g. "DSM didn't answer
+  SYNO.FileStation.List/list_share in time" (an `unavailable` error, "The
+  connection to DSM failed during …", if the connection dropped).
 
 Fix:
 
@@ -305,8 +307,10 @@ Otherwise:
    unquoted, so DSM lost most tasks and never cleaned them up, which looked
    like an exhausted search service; see #121.)
 3. For copy, move, and delete: split the operation into smaller batches.
-   mcp-synology stops a task it gives up on, so a timed-out copy, move or
-   delete may be partly done: list the path before retrying. The task's time
+   mcp-synology asks DSM to stop a task it gives up on, so a timed-out copy,
+   move or delete may be partly done; and when the message says it "couldn't
+   confirm the task stopped", the task may still be running on the NAS. Either
+   way, list the path before retrying. The task's time
    limit is `async_timeout` (default 120 s, or `copy_move_timeout`,
    `delete_timeout`, `dir_size_timeout` and `search_timeout` per operation) and
    counts the whole time, including slow status requests. For a stalling DSM,
