@@ -330,19 +330,11 @@ def register(ctx: RegisterContext) -> None:
         async def tool_list_shares(
             sort_by: str = "name",
             sort_direction: str = "asc",
-            additional: list[str] | None = None,
         ) -> str:
-            """`additional`: optional list of DSM metadata fields. Valid values:
-            real_path, size, owner, time, perm, mount_point_type, volume_status.
-            Defaults to ["real_path", "owner", "perm", "volume_status"]; DSM sends
-            no size for a share (#151). Unknown values are rejected before
-            reaching DSM.
-            """
             client = await manager.get_client()
             return manager.with_update_notice(
                 await list_shares(
                     client,
-                    additional=additional,
                     sort_by=sort_by,
                     sort_direction=sort_direction,
                     recycle_bin_status=recycle_status,
@@ -366,12 +358,7 @@ def register(ctx: RegisterContext) -> None:
             sort_direction: str = "asc",
             offset: int = 0,
             limit: int = 200,
-            additional: list[str] | None = None,
         ) -> str:
-            """`additional`: optional list of DSM metadata fields. Valid values:
-            real_path, size, owner, time, perm, type, mount_point_type. Defaults
-            to ["size", "time"]. Unknown values are rejected before reaching DSM.
-            """
             client = await manager.get_client()
             await ensure_known_shares(client, [path], known_shares)
             return manager.with_update_notice(
@@ -384,7 +371,6 @@ def register(ctx: RegisterContext) -> None:
                     sort_direction=sort_direction,
                     offset=offset,
                     limit=limit,
-                    additional=additional,
                     hide_recycle=hide_recycle,
                     file_type_indicator=indicator,
                 )
@@ -438,12 +424,7 @@ def register(ctx: RegisterContext) -> None:
             exclude_pattern: str | None = None,
             recursive: bool = True,
             limit: int = 500,
-            additional: list[str] | None = None,
         ) -> str:
-            """`additional`: optional list of DSM metadata fields. Valid values:
-            real_path, size, owner, time, perm, type. Defaults to ["size", "time"].
-            Unknown values are rejected before reaching DSM.
-            """
             client = await manager.get_client()
             await ensure_known_shares(client, [folder_path], known_shares)
             return manager.with_update_notice(
@@ -460,7 +441,6 @@ def register(ctx: RegisterContext) -> None:
                     exclude_pattern=exclude_pattern,
                     recursive=recursive,
                     limit=limit,
-                    additional=additional,
                     file_type_indicator=indicator,
                     timeout=search_timeout,
                     poll_interval=search_poll_interval,

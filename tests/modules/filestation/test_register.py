@@ -200,6 +200,17 @@ class TestFilestationToolInvocation:
         await server._tool_manager._tools["get_file_info"].fn(paths=["/a"], additional=["size"])
         assert mock.await_args.kwargs["additional"] == ["size"]
 
+    async def test_listing_tools_take_no_additional(self) -> None:
+        """#149: list_shares, list_files and search_files accepted `additional` fields
+        their tables never show. The parameter is gone; get_file_info keeps it."""
+        server, _manager, ctx = _make_ctx()
+        register(ctx)
+        tools = {t.name: t for t in await server.list_tools()}
+        for name in ("list_shares", "list_files", "search_files"):
+            assert "additional" not in tools[name].input_schema["properties"], name
+            assert "additional" not in (tools[name].description or ""), name
+        assert "additional" in tools["get_file_info"].input_schema["properties"]
+
     async def test_get_file_info_description_names_additional(self) -> None:
         """QA on #146: the client sees only the tool description, not the handler's
         docstring, so the description itself has to name `additional` and its values."""
