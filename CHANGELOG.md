@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- **QA Gate no longer stays green on a commit pushed after QA Approved** (#242) — `qa-gate.yml` decided from the push event's label list, which still held **QA Approved** for a couple of seconds until `pr-labels.yml` removed it, and that removal never re-ran the gate, so the new, unreviewed commit kept a green QA Gate. A new commit (opened, synchronize, reopened) now always gets **pending**. On a label change the gate reads the PR's current labels and head from the API, marks success only when **QA Approved** is on the current head, and ignores a label event for a commit that's no longer the head. The label list is no longer interpolated into the script (zizmor's template-injection finding) — closes #217
+
 ## 0.8.0 (2026-10-16)
 
 **Upgrading from 0.7.x:** mcp-synology now runs on the mcp 2.x SDK (`mcp>=2.3,<3`, #226). Tools, their schemas and their results are unchanged, and clients on both the 2025-11-25 and 2026-07-28 protocol versions connect. Three things to know:
