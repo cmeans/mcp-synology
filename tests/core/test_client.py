@@ -368,6 +368,40 @@ class TestRequestPostForm:
         assert dict(route.calls.last.request.url.params) == {"_sid": "new"}
 
 
+class TestTransportErrorNamesTheCall:
+    """#237: a network error keeps its httpx type (get_client() and `check` rely on it)
+    but records which DSM API/method it happened on."""
+
+    @respx.mock
+    async def test_request(self) -> None:
+        from mcp_synology.core.client import dsm_call_of
+
+        client = make_client(make_api_cache())
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=httpx.ReadTimeout(""))
+        async with client:
+            with pytest.raises(httpx.ReadTimeout) as exc:
+                await client.request("SYNO.FileStation.List", "list_share")
+        assert dsm_call_of(exc.value) == "SYNO.FileStation.List/list_share"
+
+    @respx.mock
+    async def test_upload(self, tmp_path: Path) -> None:
+        from mcp_synology.core.client import dsm_call_of
+
+        client = make_client(make_api_cache())
+        local = tmp_path / "a.txt"
+        local.write_bytes(b"a")
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=httpx.ConnectError("refused"))
+        async with client:
+            with pytest.raises(httpx.ConnectError) as exc:
+                await client.upload("/video", local, "a.txt")
+        assert dsm_call_of(exc.value) == "SYNO.FileStation.Upload/upload"
+
+    def test_untagged(self) -> None:
+        from mcp_synology.core.client import dsm_call_of
+
+        assert dsm_call_of(httpx.ReadTimeout("")) is None
+
+
 class TestRequestFormPost:
     """Form-POST variant of request() — the scoped exception to the GET-only
     rule, used only for DS URI Task.create (#123 item 9a)."""
