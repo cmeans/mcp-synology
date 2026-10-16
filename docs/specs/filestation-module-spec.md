@@ -427,7 +427,7 @@ Upload a local file from this machine to a NAS folder.
 
 **Annotations:** `destructiveHint=true`: with `overwrite=true` it replaces the NAS file. Annotations are static, so they can't depend on `overwrite` (#183).
 
-**DSM API:** `SYNO.FileStation.Upload` / `upload` (POST multipart — the ONE exception to the GET-only rule)
+**DSM API:** `SYNO.FileStation.Upload` / `upload` (POST multipart — one of the exceptions to the GET-only rule, with Download Station `Task.create` (#123) and the `SYNO.API.Auth` login (#235); see CLAUDE.md)
 
 **Tool description (LLM-facing):**
 > Upload a local file from this machine to a NAS folder. Provide the local file path. dest_folder is

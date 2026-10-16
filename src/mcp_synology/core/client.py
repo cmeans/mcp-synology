@@ -392,11 +392,11 @@ class DsmClient:
         log_params = _log_safe(req_params)
         retry_tag = " (retry)" if _is_retry else ""
 
-        # Always use GET with query params. DSM v2 APIs work with GET, and we
-        # pin all APIs to v2 to avoid v3 JSON request format issues. The
-        # requestFormat field in the API info is metadata about what the API
-        # supports, not a mandate to POST — on DSM 7.1, every FileStation API
-        # reports requestFormat=JSON even at v2.
+        # GET with query params, except post_form (login only, #235). DSM v2 APIs
+        # work with GET, and we pin all APIs to v2 to avoid v3 JSON request
+        # format issues. The requestFormat field in the API info is metadata
+        # about what the API supports, not a mandate to POST — on DSM 7.1,
+        # every FileStation API reports requestFormat=JSON even at v2.
         logger.debug(
             "DSM %s%s: %s/%s v%d — %s",
             "POST" if post_form else "GET",
