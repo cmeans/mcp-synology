@@ -141,9 +141,10 @@ Two required sections:
    to manually approve the workflow run (GitHub policy for fork PRs).
    Your PR will sit with no checks until a maintainer clicks "Approve
    and run." This is not a signal that you're being ignored.
-2. **Label automation takes over.** After CI passes, the PR
-   auto-promotes from `Awaiting CI` → `Ready for QA`. You don't need
-   to do anything.
+2. **Label automation takes over.** After CI and the vdsm integration
+   tests pass, the PR auto-promotes from `Awaiting CI` → `Ready for QA`.
+   If a job in either fails, it gets `CI Failed`. You don't need to do
+   anything.
 3. **Maintainer reviews.** If there are issues, the PR gets
    `QA Failed` and a review comment. Push your fix; labels reset
    automatically.
