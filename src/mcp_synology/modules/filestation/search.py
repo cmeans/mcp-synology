@@ -23,7 +23,6 @@ from mcp_synology.modules.filestation.helpers import (
     parse_human_size,
     parse_mtime,
     task_request,
-    validate_additional,
 )
 
 if TYPE_CHECKING:
@@ -57,16 +56,11 @@ async def search_files(
     exclude_pattern: str | None = None,
     recursive: bool = True,
     limit: int = 500,
-    additional: list[str] | None = None,
     file_type_indicator: str = "emoji",
     timeout: float = 120.0,
     poll_interval: float = 1.0,
 ) -> str:
     """Search for files by name, type, size, or modification date."""
-    validate_additional(additional, tool_name="Search files")
-    if additional is None:
-        additional = ["size", "time"]
-
     logger = logging.getLogger(__name__)
 
     normalized = normalize_path(folder_path)
@@ -139,7 +133,7 @@ async def search_files(
                     taskid,
                     version=search_version,
                     params={
-                        "additional": '["' + '","'.join(additional) + '"]',
+                        "additional": '["size","time"]',  # what the table shows (#149)
                         "limit": str(limit),
                         "offset": "0",
                     },

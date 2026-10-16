@@ -21,7 +21,6 @@ from mcp_synology.modules.filestation.helpers import (
     ensure_recycle_status,
     file_type_icon,
     normalize_path,
-    validate_additional,
 )
 
 logger = logging.getLogger(__name__)
@@ -61,10 +60,15 @@ def _volume_free(volume_status: object) -> str:
     return f"{text}, read-only" if volume_status.get("readonly") else text
 
 
+# The fields each table shows; nothing else is fetched (#149). No "size": DSM's
+# list_share never returns one for a share (#151).
+_SHARE_FIELDS = '["real_path","owner","volume_status"]'
+_FILE_FIELDS = '["size","time"]'
+
+
 async def list_shares(
     client: DsmClient,
     *,
-    additional: list[str] | None = None,
     sort_by: str = "name",
     sort_direction: str = "asc",
     recycle_bin_status: dict[str, bool] | None = None,
@@ -72,11 +76,6 @@ async def list_shares(
     file_type_indicator: str = "emoji",
 ) -> str:
     """List all shared folders on the NAS."""
-    validate_additional(additional, tool_name="List shares")
-    if additional is None:
-        # No "size": DSM's list_share never returns one for a share (#151).
-        additional = ["real_path", "owner", "perm", "volume_status"]
-
     sort_by = _resolve_sort_by(sort_by)
 
     try:
@@ -84,7 +83,7 @@ async def list_shares(
             "SYNO.FileStation.List",
             "list_share",
             params={
-                "additional": '["' + '","'.join(additional) + '"]',
+                "additional": _SHARE_FIELDS,
                 "sort_by": sort_by,
                 "sort_direction": sort_direction,
             },
@@ -146,7 +145,6 @@ async def list_files(
     client: DsmClient,
     *,
     path: str,
-    additional: list[str] | None = None,
     pattern: str | None = None,
     filetype: str = "all",
     sort_by: str = "name",
@@ -157,9 +155,6 @@ async def list_files(
     file_type_indicator: str = "emoji",
 ) -> str:
     """List files and folders within a directory path."""
-    validate_additional(additional, tool_name="List files")
-    if additional is None:
-        additional = ["size", "time"]
 
     normalized = normalize_path(path)
 
@@ -167,7 +162,7 @@ async def list_files(
 
     params: dict[str, Any] = {
         "folder_path": normalized,
-        "additional": '["' + '","'.join(additional) + '"]',
+        "additional": _FILE_FIELDS,
         "filetype": filetype,
         "sort_by": sort_by,
         "sort_direction": sort_direction,

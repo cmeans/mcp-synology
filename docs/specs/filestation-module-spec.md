@@ -1,6 +1,6 @@
 # File Station Module — Tool Specifications
 
-> **Version:** 0.6 | **Updated:** 2026-10-11. Every LLM-facing description refreshed to the shipped text (all 14 had drifted since 0.4); `get_file_info`'s `additional` is exposed (#146); timestamps are labeled UTC (#137). Earlier: 0.4 (2026-03-18) added upload_file (WRITE) and download_file (READ). Tool counts: 7 READ + 7 WRITE = 14.
+> **Version:** 0.6.1 | **Updated:** 2026-10-16. `list_shares`, `list_files` and `search_files` no longer take `additional`, which accepted fields their tables never showed (#149). 0.6 (2026-10-11): every LLM-facing description refreshed to the shipped text (all 14 had drifted since 0.4); `get_file_info`'s `additional` is exposed (#146); timestamps are labeled UTC (#137). Earlier: 0.4 (2026-03-18) added upload_file (WRITE) and download_file (READ). Tool counts: 7 READ + 7 WRITE = 14.
 > **Parent doc:** `docs/specs/architecture.md`
 >
 > Kept in sync with the code by `tests/test_module_specs.py`: tool headings, permission tiers, parameter names and the exact LLM-facing descriptions must match what ships.
@@ -69,7 +69,7 @@ Synology's recycle bin is implemented as a `#recycle` subfolder within each shar
 
 **At module initialization:**
 - Query `SYNO.FileStation.Info` / `get` to check NAS-level settings
-- Query `list_share` with `additional=["perm"]` to identify which shares exist
+- Query `list_share` to identify which shares exist
 - For each share, check if `#recycle` exists (lightweight: attempt `list` on `/<share>/#recycle/` with `limit=0`)
 - Cache recycle bin status per shared folder
 
@@ -119,7 +119,6 @@ List all shared folders (top-level mount points) on the NAS.
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `additional` | `list[str]` | No | `["real_path", "owner", "perm", "volume_status"]` | Metadata fields to include. Options: `real_path`, `size`, `owner`, `time`, `perm`, `mount_point_type`, `volume_status`. DSM's `list_share` returns no `size` for a share (seen on DSM 7.1 and 7.2), so the default doesn't ask for it (#151). |
 | `sort_by` | `str` | No | `"name"` | Sort field. Options: `name`, `user`, `mtime`, `crtime`. (DSM also accepts `size`, but with no share size it has no useful effect: on vdsm, `size` with `desc` just reverses name order.) |
 | `sort_direction` | `str` | No | `"asc"` | Sort direction: `asc` or `desc`. |
 
@@ -147,7 +146,7 @@ Example: to list files in the video share, use list_files(path="/video")
 - The footer text teaches the LLM how to use the paths in subsequent tool calls.
 - Volume comes from the first component of `real_path`; Free comes from `volume_status` (`freespace` of `totalspace`, marked `read-only` when `readonly`). A missing field shows `—`, and the per-volume note appears only when some Free value is shown. There is deliberately no per-share size: DSM doesn't send one, and the old Size column read as "0 B" for every share (#151).
 - The "Recycle Bin" column shows enabled/disabled status per share (from the cached startup check).
-- When `additional` includes `perm`, include a column indicating read-only vs read-write access for the service account.
+- No `additional` parameter (#149): the tool always fetches `real_path`, `owner` and `volume_status`, the fields its columns show. It used to accept any field (`perm`, `time`, `mount_point_type`, …) and silently drop the ones it doesn't show.
 
 ---
 
@@ -168,7 +167,6 @@ List files and folders within a given directory path.
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
 | `path` | `str` | **Yes** | — | Folder path to list (e.g., `/video/TV Shows`). |
-| `additional` | `list[str]` | No | `["size", "time"]` | Metadata fields to include. Options: `real_path`, `size`, `owner`, `time`, `perm`, `type`, `mount_point_type`. |
 | `pattern` | `str` | No | `None` | Glob pattern filter (e.g., `*.mkv`, `*holiday*`). |
 | `filetype` | `str` | No | `"all"` | Filter by type: `all`, `file`, `dir`. |
 | `sort_by` | `str` | No | `"name"` | Sort field. Options: `name`, `size`, `user`, `mtime`, `crtime`, `atime`, `type`. |
@@ -217,7 +215,7 @@ Get detailed metadata for one or more specific files or folders.
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
 | `paths` | `list[str]` | **Yes** | — | One or more file/folder paths. |
-| `additional` | `list[str]` | No | `["real_path", "size", "owner", "time", "perm"]` | Metadata fields to include. Same options as `list_files`. |
+| `additional` | `list[str]` | No | `["real_path", "size", "owner", "time", "perm"]` | Metadata fields to include. Options: `real_path`, `size`, `owner`, `time`, `perm`, `type`, `mount_point_type`. The only File Station tool with this parameter: the listing tools show fixed columns (#149). |
 
 **Response shape (single file):**
 
@@ -278,7 +276,6 @@ Search for files by name, type, size, or modification date within a given scope.
 | `exclude_pattern` | `str` | No | `None` | Glob pattern to exclude from results (e.g., `*.torrent`). Applied client-side after DSM returns results. |
 | `recursive` | `bool` | No | `true` | Search subdirectories. |
 | `limit` | `int` | No | `500` | Max results to return. |
-| `additional` | `list[str]` | No | `["size", "time"]` | Metadata fields for results. |
 
 **Response shape:**
 

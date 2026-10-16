@@ -219,12 +219,12 @@ class TestValidateAdditional:
             ["size"],
             ["size", "time"],
             ["real_path", "size", "owner", "perm"],
-            ["mount_point_type", "volume_status"],
+            ["mount_point_type"],
             ["type"],
         ],
     )
     def test_accepts_valid_or_empty(self, value: list[str] | None) -> None:
-        validate_additional(value, tool_name="List shares")  # no exception
+        validate_additional(value, tool_name="Get file info")  # no exception
 
     @pytest.mark.parametrize(
         "value,bad",
@@ -233,22 +233,27 @@ class TestValidateAdditional:
             (["size", "tme"], "tme"),
             (["mount_point_type", "junk"], "junk"),
             (["", "size"], ""),
+            # get_file_info never shows volume_status (only list_share returns it),
+            # so it's rejected rather than silently dropped (QA R1 on #240).
+            (["volume_status"], "volume_status"),
         ],
     )
     def test_rejects_unknown(self, value: list[str], bad: str) -> None:
         with pytest.raises(ToolError) as exc:
-            validate_additional(value, tool_name="List shares")
+            validate_additional(value, tool_name="Get file info")
         body = str(exc.value)
-        assert "List shares failed" in body
+        assert "Get file info failed" in body
         assert bad in body
-        # Suggestion lists every supported field.
-        for field in ("real_path", "size", "owner", "time", "perm", "type"):
-            assert field in body
 
-    def test_tool_name_appears_in_error(self) -> None:
+    def test_suggestion_lists_exactly_what_get_file_info_shows(self) -> None:
+        import json
+
         with pytest.raises(ToolError) as exc:
-            validate_additional(["bogus"], tool_name="Search files")
-        assert "Search files failed" in str(exc.value)
+            validate_additional(["bogus"], tool_name="Get file info")
+        suggestion = json.loads(str(exc.value))["error"]["suggestion"]
+        assert suggestion == (
+            "Supported fields: mount_point_type, owner, perm, real_path, size, time, type."
+        )
 
 
 class TestMatchesPattern:
