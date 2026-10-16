@@ -15,7 +15,7 @@ You are connected to a Synology NAS via the mcp-synology File Station module.
 
 PATH FORMAT:
 All file paths start with a shared folder name: /video/..., /music/..., etc.
-Call list_shares first to discover available shared folders and their permissions.
+Call list_shares first to discover available shared folders.
 
 FILE SIZES:
 Sizes are binary (1 KiB = 1024 bytes). Size parameters accept "500MiB", "2GiB",

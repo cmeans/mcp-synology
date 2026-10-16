@@ -236,7 +236,7 @@ class TestSearchFiles:
 
     @respx.mock
     async def test_search_size_dash_when_not_requested(self, mock_client: DsmClient) -> None:
-        """QA on #146: additional without "size" must not show a file as "0 B"."""
+        """QA on #146: a file DSM sends without "size" must not show as "0 B"."""
 
         def side_effect(request: httpx.Request) -> httpx.Response:
             method = dict(request.url.params).get("method")
@@ -250,15 +250,13 @@ class TestSearchFiles:
             return httpx.Response(200, json={"success": True, "data": {}})
 
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
-        result = await search_files(
-            mock_client, folder_path="/video", pattern="a", additional=["owner"]
-        )
+        result = await search_files(mock_client, folder_path="/video", pattern="a")
         assert "a.iso" in result
         assert "0 B" not in result
 
     @respx.mock
-    async def test_search_additional_round_trips(self, mock_client: DsmClient) -> None:
-        """Closes #41: caller-supplied `additional` reaches DSM verbatim.
+    async def test_search_requests_what_the_table_shows(self, mock_client: DsmClient) -> None:
+        """#149: only Size and Modified are shown, so only size and time are fetched.
 
         For Search, `additional` is sent on the `list` (poll) request, not on
         `start` — DSM returns the full file metadata at poll time.
@@ -279,21 +277,5 @@ class TestSearchFiles:
 
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
 
-        await search_files(
-            mock_client,
-            folder_path="/video",
-            additional=["size", "time", "perm"],
-        )
-        assert captured_list.get("additional") == '["size","time","perm"]'
-
-    async def test_search_rejects_unknown_additional(self, mock_client: DsmClient) -> None:
-        with pytest.raises(ToolError) as exc_info:
-            await search_files(
-                mock_client,
-                folder_path="/video",
-                additional=["nope"],
-            )
-        body = json.loads(str(exc_info.value))
-        assert body["status"] == "error"
-        assert body["error"]["code"] == "invalid_parameter"
-        assert "nope" in body["error"]["message"]
+        await search_files(mock_client, folder_path="/video")
+        assert captured_list.get("additional") == '["size","time"]'
