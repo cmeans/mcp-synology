@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from typing import TYPE_CHECKING
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -21,6 +22,8 @@ from mcp_synology.modules.filestation.operations import (
 from tests.conftest import BASE_URL
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from mcp_synology.core.client import DsmClient
 
 
@@ -1561,3 +1564,221 @@ class TestCopyMoveSkippedItems:
         assert "Skipped:\n  /video/#recycle/S2/b.mkv" in result
         assert "in whole or in part" not in result
         assert "[+] Moved" not in result and "[!] Moved" not in result
+
+
+class TestUnansweredStatus:
+    """#237: a network error on a status poll (DSM stalling on a huge delete) escaped as a
+    raw httpx error whose message is empty. It's now a structured error that says the
+    task was stopped and may be partly done, and the deadline is wall-clock time."""
+
+    @staticmethod
+    def _dsm(
+        task_prefix: str, status_effect: Exception | None, methods: list[str]
+    ) -> Callable[[httpx.Request], httpx.Response]:
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            method = params.get("method", "")
+            methods.append(method)
+            if method == "start":
+                n = methods.count("start")
+                return httpx.Response(
+                    200, json={"success": True, "data": {"taskid": f"{task_prefix}-{n}"}}
+                )
+            if method == "status":
+                if status_effect is not None:
+                    raise status_effect
+                return httpx.Response(200, json={"success": True, "data": {"finished": False}})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        return side_effect
+
+    @respx.mock
+    async def test_delete_read_timeout(self, mock_client: DsmClient) -> None:
+        methods: list[str] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._dsm("del", httpx.ReadTimeout(""), methods)
+        )
+        with pytest.raises(ToolError) as exc_info:
+            await delete_files(mock_client, paths=["/Backups/huge.sparsebundle"])
+        assert "stop" in methods  # the task is never left running
+        err = json.loads(str(exc_info.value))["error"]
+        assert err["code"] == "timeout"
+        assert err["message"] == (
+            "Delete files failed: DSM didn't answer a status request on path: "
+            "/Backups/huge.sparsebundle (ReadTimeout). The task was stopped and may be "
+            "partly done."
+        )
+        assert err["param"] == "path"
+        assert "connection.timeout" in err["suggestion"]
+
+    @respx.mock
+    async def test_delete_names_paths_already_done(self, mock_client: DsmClient) -> None:
+        methods: list[str] = []
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            method = params.get("method", "")
+            methods.append(method)
+            if method == "start":
+                n = methods.count("start")
+                return httpx.Response(200, json={"success": True, "data": {"taskid": f"d-{n}"}})
+            if method == "status":
+                if methods.count("start") == 1:
+                    return httpx.Response(200, json={"success": True, "data": {"finished": True}})
+                raise httpx.ReadTimeout("")
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        with pytest.raises(ToolError) as exc_info:
+            await delete_files(mock_client, paths=["/video/a", "/video/b"])
+        message = json.loads(str(exc_info.value))["error"]["message"]
+        # One period between sentences (QA R1 on #239 found "partly done.. Already").
+        assert message == (
+            "Delete files failed: DSM didn't answer a status request on path: /video/b "
+            "(ReadTimeout). The task was stopped and may be partly done. "
+            "Already deleted before this failure: /video/a"
+        )
+
+    @respx.mock
+    async def test_stop_unanswered_too_says_so(self, mock_client: DsmClient) -> None:
+        """QA R1 on #239: when DSM is stalled, `stop` likely gets no answer either; the
+        message must not claim the task was stopped."""
+        methods: list[str] = []
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            method = dict(request.url.params).get("method", "")
+            methods.append(method)
+            if method == "start":
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "d-1"}})
+            if method in ("status", "stop"):
+                raise httpx.ReadTimeout("")
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        with pytest.raises(ToolError) as exc_info:
+            await delete_files(mock_client, paths=["/Backups/huge"])
+        assert "stop" in methods
+        assert json.loads(str(exc_info.value))["error"]["message"] == (
+            "Delete files failed: DSM didn't answer a status request on path: /Backups/huge "
+            "(ReadTimeout). mcp-synology couldn't confirm the task stopped; it may still "
+            "be running on the NAS, and may be partly done."
+        )
+
+    @respx.mock
+    async def test_copy_connection_lost(self, mock_client: DsmClient) -> None:
+        methods: list[str] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._dsm("cm", httpx.RemoteProtocolError("Server disconnected"), methods)
+        )
+        with pytest.raises(ToolError) as exc_info:
+            await copy_files(mock_client, paths=["/video/big.mkv"], dest_folder="/video/Archive")
+        assert "stop" in methods
+        err = json.loads(str(exc_info.value))["error"]
+        assert err["code"] == "unavailable"
+        assert err["message"].startswith(
+            "Copy files failed: DSM lost the connection during a status request on path: "
+            "/video/big.mkv (RemoteProtocolError: Server disconnected)."
+        )
+
+    @respx.mock
+    async def test_stop_refused_after_timeout(
+        self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """QA R2 on #239: DSM answers `stop` with 401 (e.g. the task finished between the
+        last poll and the stop). The message mustn't say DSM didn't answer."""
+        import mcp_synology.modules.filestation.operations as ops
+
+        now = [0.0]
+        monkeypatch.setattr(ops.time, "monotonic", lambda: now[0])
+        monkeypatch.setattr(ops.asyncio, "sleep", AsyncMock())
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            method = dict(request.url.params).get("method", "")
+            if method == "start":
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "d-1"}})
+            if method == "status":
+                now[0] += 31.0
+                return httpx.Response(200, json={"success": True, "data": {"finished": False}})
+            if method == "stop":
+                return httpx.Response(200, json={"success": False, "error": {"code": 401}})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        with pytest.raises(ToolError) as exc_info:
+            await delete_files(mock_client, paths=["/video/x"], timeout=30.0)
+        assert json.loads(str(exc_info.value))["error"]["message"] == (
+            "Delete files failed: timed out after 30.0s on path: /video/x. mcp-synology "
+            "couldn't confirm the task stopped; it may still be running on the NAS, and "
+            "may be partly done."
+        )
+
+    @respx.mock
+    async def test_deadline_counts_slow_status_requests(
+        self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Each status request "takes" 10 s on a fake clock. With a 30 s timeout the old
+        sleep-counting loop polled 60 times; the wall-clock deadline stops after 3."""
+        import mcp_synology.modules.filestation.operations as ops
+
+        now = [0.0]
+        monkeypatch.setattr(ops.time, "monotonic", lambda: now[0])
+        monkeypatch.setattr(ops.asyncio, "sleep", AsyncMock())
+        methods: list[str] = []
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            method = dict(request.url.params).get("method", "")
+            methods.append(method)
+            if method == "start":
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "slow"}})
+            if method == "status":
+                now[0] += 10.0
+                return httpx.Response(200, json={"success": True, "data": {"finished": False}})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        with pytest.raises(ToolError) as exc_info:
+            await delete_files(mock_client, paths=["/video/slow"], timeout=30.0)
+        assert methods.count("status") == 3
+        err = json.loads(str(exc_info.value))["error"]
+        assert err["code"] == "timeout"
+        assert err["message"] == (
+            "Delete files failed: timed out after 30.0s on path: /video/slow. "
+            "The task was stopped and may be partly done."
+        )
+        assert "delete_timeout" in err["suggestion"]
+
+    @respx.mock
+    async def test_timed_out_copy_names_paths_already_done(
+        self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import mcp_synology.modules.filestation.operations as ops
+
+        now = [0.0]
+        monkeypatch.setattr(ops.time, "monotonic", lambda: now[0])
+        monkeypatch.setattr(ops.asyncio, "sleep", AsyncMock())
+        methods: list[str] = []
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            method = dict(request.url.params).get("method", "")
+            methods.append(method)
+            if method == "start":
+                n = methods.count("start")
+                return httpx.Response(200, json={"success": True, "data": {"taskid": f"c-{n}"}})
+            if method == "status":
+                if methods.count("start") == 1:
+                    return httpx.Response(
+                        200, json={"success": True, "data": {"finished": True, "processed_size": 1}}
+                    )
+                now[0] += 10.0
+                return httpx.Response(200, json={"success": True, "data": {"finished": False}})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        with pytest.raises(ToolError) as exc_info:
+            await copy_files(
+                mock_client, paths=["/video/a", "/video/b"], dest_folder="/x", timeout=30.0
+            )
+        assert json.loads(str(exc_info.value))["error"]["message"] == (
+            "Copy files failed: timed out after 30.0s on path: /video/b. The task was "
+            "stopped and may be partly done. Already copied before this failure: /video/a"
+        )
