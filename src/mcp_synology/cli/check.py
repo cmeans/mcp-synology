@@ -93,12 +93,14 @@ def exit_on_connection_failure(base_url: str, host: str) -> Iterator[None]:
 
     import httpx
 
+    from mcp_synology.core.errors import DsmHttpError
+
     try:
         yield
     except httpx.TransportError as e:
         message = connection_failure_message(base_url, host, e)
-    except httpx.HTTPStatusError as e:
-        message = not_dsm_message(base_url, e.response.status_code)
+    except DsmHttpError as e:
+        message = not_dsm_message(base_url, e.status)
     except json.JSONDecodeError:
         message = not_dsm_message(base_url, None)
     else:
@@ -127,10 +129,12 @@ async def _check_login(config: object) -> None:
             verify_ssl=config.connection.verify_ssl,
             timeout=config.connection.timeout,
         ) as client:
-            from mcp_synology.core.errors import SynologyError
+            from mcp_synology.core.errors import DsmHttpError, SynologyError
 
             try:
                 await client.query_api_info()
+            except DsmHttpError:
+                raise  # not DSM's API: exit_on_connection_failure says so
             except SynologyError as e:
                 click.echo(click.style(f"Error: DSM API query failed: {e}", fg="red"), err=True)
                 sys.exit(1)
@@ -140,6 +144,14 @@ async def _check_login(config: object) -> None:
                 await auth.login()
                 click.echo(click.style("Authentication successful!", fg="green"))
                 await auth.logout()
+            except DsmHttpError as e:
+                # Its own suggestion says to run check; this is check (QA round 1, #233).
+                next_step = "Check the NAS, or the proxy in front of it, and try again."
+                message = f"Authentication failed: {e} {next_step}"
+                click.echo(click.style(message, fg="red"), err=True)
+                sys.exit(1)
             except (SynologyError, OSError) as e:
-                click.echo(click.style(f"Authentication failed: {e}", fg="red"), err=True)
+                hint = getattr(e, "suggestion", None)
+                detail = f"{e} {hint}" if hint else str(e)
+                click.echo(click.style(f"Authentication failed: {detail}", fg="red"), err=True)
                 sys.exit(1)

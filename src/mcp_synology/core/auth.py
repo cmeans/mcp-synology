@@ -188,12 +188,13 @@ class AuthManager:
                 logger.debug("Keyring OS-level error: %s", e, exc_info=True)
 
         if not username or not password:
-            msg = (
-                "No credentials found. Run 'mcp-synology setup' to store credentials "
-                "in the OS keyring, or set SYNOLOGY_USERNAME and SYNOLOGY_PASSWORD "
-                "environment variables."
+            raise AuthenticationError(
+                "No credentials found.",
+                suggestion=(
+                    "Run 'mcp-synology setup' to store credentials in the OS keyring, "
+                    "or set SYNOLOGY_USERNAME and SYNOLOGY_PASSWORD environment variables."
+                ),
             )
-            raise AuthenticationError(msg)
 
         logger.debug(
             "Credentials resolved: user=%s, has_password=yes, has_device_id=%s",

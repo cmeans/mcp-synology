@@ -138,9 +138,13 @@ class TestCredentialResolution:
         with (
             patch.dict(os.environ, _clean_env(), clear=True),
             patch("mcp_synology.core.auth.kr", _no_keyring()),
-            pytest.raises(AuthenticationError, match="No credentials"),
+            pytest.raises(AuthenticationError, match="No credentials") as exc,
         ):
             auth._resolve_credentials()
+        # The hint is a suggestion, so the structured auth_failed error carries it (#232).
+        assert str(exc.value) == "No credentials found."
+        assert "mcp-synology setup" in (exc.value.suggestion or "")
+        assert "SYNOLOGY_PASSWORD" in (exc.value.suggestion or "")
 
     # --- Empty / whitespace-only credentials at each strategy level (closes #35) ---
     #

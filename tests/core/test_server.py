@@ -902,6 +902,83 @@ class TestServerInfo:
             assert png[16:24] == (128).to_bytes(4, "big") * 2
 
 
+class TestNoSecretsInErrors:
+    """#232: an HTTP error status from DSM put the request URL, with passwd or _sid,
+    into the error text the model got and into the ERROR log's traceback."""
+
+    _INFO = {
+        "success": True,
+        "data": {
+            "SYNO.API.Auth": {"path": "auth.cgi", "minVersion": 1, "maxVersion": 6},
+            "SYNO.FileStation.List": {"path": "entry.cgi", "minVersion": 1, "maxVersion": 2},
+        },
+    }
+
+    @staticmethod
+    def _logged(caplog: pytest.LogCaptureFixture) -> str:
+        import traceback
+
+        text = caplog.text
+        for record in caplog.records:
+            if record.exc_info:
+                text += "".join(traceback.format_exception(*record.exc_info))
+        return text
+
+    @pytest.fixture
+    def creds(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SYNOLOGY_USERNAME", "chris")
+        monkeypatch.setenv("SYNOLOGY_PASSWORD", "S3cretPW")
+
+    async def _call(self, caplog: pytest.LogCaptureFixture) -> str:
+        server = create_server(make_test_config())
+        with caplog.at_level(logging.DEBUG):
+            async with Client(server) as client:
+                result = await client.call_tool("list_shares", {})
+        assert result.is_error
+        return " ".join(getattr(c, "text", "") for c in result.content)
+
+    @respx.mock
+    @pytest.mark.usefixtures("creds")
+    async def test_login_http_error(self, caplog: pytest.LogCaptureFixture) -> None:
+        respx.get(f"{BASE_URL}/webapi/query.cgi").respond(json=self._INFO)
+        respx.get(f"{BASE_URL}/webapi/auth.cgi").respond(status_code=502)
+        text = await self._call(caplog)
+        assert "S3cretPW" not in text
+        assert "S3cretPW" not in self._logged(caplog)
+        err = json.loads(text.removeprefix("Error executing tool list_shares: "))["error"]
+        assert err["code"] == "unavailable"
+        assert "SYNO.API.Auth/login: DSM answered HTTP 502." in err["message"]
+        assert err["retryable"] is True
+
+    @respx.mock
+    @pytest.mark.usefixtures("creds")
+    async def test_tool_http_error(self, caplog: pytest.LogCaptureFixture) -> None:
+        respx.get(f"{BASE_URL}/webapi/query.cgi").respond(json=self._INFO)
+        respx.get(f"{BASE_URL}/webapi/auth.cgi").respond(
+            json={"success": True, "data": {"sid": "SIDSECRET"}}
+        )
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(status_code=500)
+        text = await self._call(caplog)
+        assert "SIDSECRET" not in text
+        assert "SIDSECRET" not in self._logged(caplog)
+        assert '"code": "unavailable"' in text
+        assert "SYNO.FileStation.List/list_share: DSM answered HTTP 500." in text
+
+    async def test_crash_text_is_redacted(self) -> None:
+        """Backstop: any other exception naming a DSM URL loses its query values."""
+        crash = RuntimeError(
+            "boom for url 'http://nas:5000/webapi/auth.cgi?account=chris&passwd=S3cretPW'"
+        )
+        server = create_server(make_test_config())
+        with patch.object(SharedClientManager, "get_client", side_effect=crash):
+            async with Client(server) as client:
+                result = await client.call_tool("list_shares", {})
+        text = " ".join(getattr(c, "text", "") for c in result.content)
+        assert text.startswith("Error executing tool list_shares: boom for url ")
+        assert "S3cretPW" not in text
+        assert "passwd=***" in text
+
+
 class TestToolErrorDetail:
     """mcp 2.x sends only "Error executing tool <name>" for an exception that isn't a
     ToolError; v1 included the message. Login failures escape as AuthenticationError,

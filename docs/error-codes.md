@@ -319,9 +319,12 @@ resolved or routed to. See **Can't reach the NAS?** under Fix.
 
 The HTTP-status case (e.g. `502 Bad Gateway` from DSM's web server while a
 package such as Download Station is still starting) is reported with the
-status in the message. As with `timeout`, a `create_download` that fails this
-way may still have been applied, so it is marked `retryable=false`; check
-`list_downloads` before retrying.
+status in the message, along with the DSM API and method (for example
+`SYNO.FileStation.List/list_share: DSM answered HTTP 500.`); the request URL is
+never included, since it carries the password or session ID. A 5xx on any
+other call is `retryable=true`, and a 4xx is `retryable=false`. As with
+`timeout`, a `create_download` that fails this way may still have been applied,
+so it is marked `retryable=false`; check `list_downloads` before retrying.
 
 The empty-payload case affects `get_system_info`, `get_resource_usage`, and
 similar metric tools. The API responded `success=true` but the data block was missing or empty.

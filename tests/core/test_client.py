@@ -210,6 +210,83 @@ class TestRequestHttp414:
         assert "414" in str(exc.value)
 
 
+class TestHttpErrorStatus:
+    """#232: a non-2xx answer is a DsmHttpError naming the status, API and method.
+    httpx's raise_for_status() put the full URL, with passwd or _sid, in the error."""
+
+    @staticmethod
+    def _assert_no_url(exc: BaseException, *secrets: str) -> None:
+        text = str(exc)
+        assert "http://" not in text
+        for secret in secrets:
+            assert secret not in text
+        assert exc.__cause__ is None
+        assert exc.__context__ is None
+
+    @respx.mock
+    @pytest.mark.parametrize(("status", "retryable"), [(500, True), (502, True), (403, False)])
+    async def test_request(self, status: int, retryable: bool) -> None:
+        from mcp_synology.core.errors import DsmHttpError, ErrorCode
+
+        client = make_client(make_api_cache())
+        client.sid = "SIDSECRET"
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(status_code=status)
+        async with client:
+            with pytest.raises(DsmHttpError) as exc:
+                await client.request("SYNO.FileStation.List", "list_share")
+        assert str(exc.value) == f"SYNO.FileStation.List/list_share: DSM answered HTTP {status}."
+        assert exc.value.status == status
+        assert exc.value.code is None  # HTTP status, not a DSM error code
+        assert exc.value.error_code == ErrorCode.UNAVAILABLE
+        assert exc.value.retryable is retryable
+        assert "mcp-synology check" in (exc.value.suggestion or "")
+        self._assert_no_url(exc.value, "SIDSECRET")
+
+    @respx.mock
+    async def test_login_does_not_leak_the_password(self) -> None:
+        from mcp_synology.core.errors import DsmHttpError
+
+        client = make_client(make_api_cache())
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(status_code=502)
+        async with client:
+            with pytest.raises(DsmHttpError) as exc:
+                await client.request(
+                    "SYNO.API.Auth",
+                    "login",
+                    version=6,
+                    params={"account": "chris", "passwd": "S3cretPW", "format": "sid"},
+                )
+        assert str(exc.value) == "SYNO.API.Auth/login: DSM answered HTTP 502."
+        self._assert_no_url(exc.value, "S3cretPW")
+
+    @respx.mock
+    async def test_query_api_info(self) -> None:
+        from mcp_synology.core.errors import DsmHttpError
+
+        respx.get(f"{BASE_URL}/webapi/query.cgi").respond(status_code=404)
+        async with DsmClient(base_url=BASE_URL) as client:
+            with pytest.raises(DsmHttpError) as exc:
+                await client.query_api_info()
+        assert str(exc.value) == "SYNO.API.Info/query: DSM answered HTTP 404."
+        assert exc.value.retryable is False
+        self._assert_no_url(exc.value)
+
+    @respx.mock
+    async def test_upload(self, tmp_path: Path) -> None:
+        from mcp_synology.core.errors import DsmHttpError
+
+        client = make_client(make_api_cache())
+        client.sid = "SIDSECRET"
+        local = tmp_path / "a.txt"
+        local.write_bytes(b"a")
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(status_code=500)
+        async with client:
+            with pytest.raises(DsmHttpError) as exc:
+                await client.upload("/video", local, "a.txt")
+        assert str(exc.value) == "SYNO.FileStation.Upload/upload: DSM answered HTTP 500."
+        self._assert_no_url(exc.value, "SIDSECRET")
+
+
 class TestRequestFormPost:
     """Form-POST variant of request() — the scoped exception to the GET-only
     rule, used only for DS URI Task.create (#123 item 9a)."""

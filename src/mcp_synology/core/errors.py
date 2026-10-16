@@ -134,15 +134,33 @@ class InvalidParameterError(SynologyError):
 
 
 class DsmUnavailableError(SynologyError):
-    """DSM answered with a non-2xx HTTP status (e.g. a 502 from its web server).
+    """DSM answered a non-idempotent POST with a non-2xx HTTP status (e.g. a 502).
 
-    Raised only for the non-idempotent Download Station ``Task.create`` POSTs
-    (``request_form_post`` and ``create_download_task_with_file``), also when
-    DSM can't be reached. DSM may already have applied the request, so a
-    blind retry could duplicate it: not retryable.
+    Other calls raise ``DsmHttpError``. Raised only for the Download Station
+    ``Task.create`` POSTs (``request_form_post`` and
+    ``create_download_task_with_file``), also when DSM can't be reached. DSM may
+    already have applied the request, so a blind retry could duplicate it: not
+    retryable.
     """
 
     error_code = ErrorCode.UNAVAILABLE
+
+
+class DsmHttpError(SynologyError):
+    """DSM, or a proxy in front of it, answered a GET or an upload with a non-2xx status.
+
+    The message names the status, API and method, never the URL: DSM requests carry
+    ``passwd`` (login) or ``_sid`` in the query string, and httpx's
+    ``raise_for_status()`` put that URL in the error text the model and the log got
+    (#232). A 5xx is retryable; anything else isn't.
+    """
+
+    error_code = ErrorCode.UNAVAILABLE
+
+    def __init__(self, message: str, status: int, suggestion: str | None = None):
+        super().__init__(message, suggestion=suggestion)
+        self.status = status
+        self.retryable = status >= 500
 
 
 class DsmTimeoutError(SynologyError):
