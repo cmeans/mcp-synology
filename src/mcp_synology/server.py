@@ -22,6 +22,7 @@ from mcp_synology.core.auth import AuthManager
 from mcp_synology.core.client import DsmClient
 from mcp_synology.core.errors import ErrorCode, SynologyError
 from mcp_synology.core.formatting import error_response, synology_error_response
+from mcp_synology.core.redaction import redact_urls
 from mcp_synology.core.state import ServerState
 from mcp_synology.modules import PermissionTier, RegisterContext, filter_tools_by_permission
 from mcp_synology.modules import downloadstation as _downloadstation_mod
@@ -182,7 +183,7 @@ class _SynologyServer(MCPServer):
         added the message. Login failures reach here as ``AuthenticationError`` (from
         ``SharedClientManager.get_client()``), so without this the model loses hints
         like "run mcp-synology setup". A ``SynologyError`` becomes the usual structured
-        error; anything else keeps 1.x's text.
+        error; anything else keeps 1.x's text, with any URL in it redacted (#232).
 
         Both get the "Error executing tool <name>: " prefix the SDK puts on a
         ``ToolError`` raised inside a handler, so every error reads the same. A
@@ -200,7 +201,9 @@ class _SynologyServer(MCPServer):
                     synology_error_response(name, cause)
                 except ToolError as structured:
                     raise ToolError(f"{prefix}{structured}") from cause
-            raise UnexpectedToolError(f"{prefix}{cause}") from cause
+            # Backstop for #232: a crash naming a DSM URL mustn't hand the model its
+            # passwd or _sid. Known DSM HTTP failures never carry the URL (DsmHttpError).
+            raise UnexpectedToolError(f"{prefix}{redact_urls(str(cause))}") from cause
 
 
 # A comment that fills its whole line (allowing indentation) goes with its line break;

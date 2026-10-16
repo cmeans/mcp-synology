@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 import httpx
 
 from mcp_synology.core.errors import (
+    DsmHttpError,
     DsmTimeoutError,
     DsmUnavailableError,
     RequestTooLongError,
@@ -91,6 +92,26 @@ async def _guarded_post(
             suggestion=_MAY_HAVE_APPLIED,
         )
     return resp
+
+
+def _check_status(resp: httpx.Response, label: str) -> None:
+    """Raise ``DsmHttpError`` for a non-2xx answer, in place of ``raise_for_status()``.
+
+    httpx's ``HTTPStatusError`` names the full request URL, which carries ``passwd``
+    or ``_sid``, so it reached the model and the server log (#232). Building the
+    error from the status means no exception ever holds the URL.
+    """
+    if resp.is_success:
+        return
+    status = resp.status_code
+    if status >= 500:
+        suggestion = (
+            "DSM, or a proxy in front of it, had a server error. Try again shortly; "
+            "if it keeps happening, run 'mcp-synology check'."
+        )
+    else:
+        suggestion = "Run 'mcp-synology check' to verify the host, port and https settings."
+    raise DsmHttpError(f"{label}: DSM answered HTTP {status}.", status, suggestion=suggestion)
 
 
 def _publish_download(tmp_file: Path, dest_file: Path, *, overwrite: bool) -> None:
@@ -207,7 +228,7 @@ class DsmClient:
 
         logger.debug("Querying API info: GET %s", url)
         resp = await http.get(url, params=params)
-        resp.raise_for_status()
+        _check_status(resp, "SYNO.API.Info/query")
         body = resp.json()
 
         if not body.get("success"):
@@ -383,7 +404,7 @@ class DsmClient:
                 f"{api}/{method}: DSM rejected the request with HTTP 414 (Request-URI Too Large).",
                 suggestion="Reduce the size of the request (e.g. fewer URIs per call).",
             )
-        resp.raise_for_status()
+        _check_status(resp, f"{api}/{method}")
         body = resp.json()
 
         if body.get("success"):
@@ -564,7 +585,7 @@ class DsmClient:
         finally:
             fh.close()
 
-        resp.raise_for_status()
+        _check_status(resp, f"{api}/upload")
         body = resp.json()
 
         if body.get("success"):
