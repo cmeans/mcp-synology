@@ -276,6 +276,7 @@ async def _attempt_login(
             "login",
             version=6,
             params={"account": username, "passwd": password, "format": "sid"},
+            post_form=True,  # keeps the password out of the URL (#235)
         )
     except SynologyError as e:
         if e.code == 403:
@@ -295,6 +296,7 @@ async def _attempt_login(
                         "device_name": "MCPSynology",
                         "format": "sid",
                     },
+                    post_form=True,
                 )
                 device_id = data.get("did", "")
                 if device_id:

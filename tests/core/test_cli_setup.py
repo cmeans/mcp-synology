@@ -105,8 +105,11 @@ class TestAttemptLogin:
         assert result["sid"] == "sid-after-2fa"
         # Device token stored under the service
         set_pw.assert_called_once_with("service", "device_id", "device-token-xyz")
-        # Both requests issued
+        # Both requests issued, each as a POST so the password and OTP code stay
+        # out of the URL (#235)
         assert request.await_count == 2
+        assert [c.kwargs.get("post_form") for c in request.await_args_list] == [True, True]
+        assert request.await_args_list[1].kwargs["params"]["otp_code"] == "123456"
 
     async def test_login_2fa_required_then_success_without_device_token(self) -> None:
         """2FA succeeds but DSM doesn't echo back a `did` — still succeeds."""

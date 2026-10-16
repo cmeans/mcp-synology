@@ -343,6 +343,7 @@ class DsmClient:
         version: int | None = None,
         params: dict[str, Any] | None = None,
         *,
+        post_form: bool = False,
         _is_retry: bool = False,
     ) -> dict[str, Any]:
         """Make a DSM API request.
@@ -351,6 +352,13 @@ class DsmClient:
         response envelope, and handles error codes.
 
         On session errors (106/107/119), triggers re-auth and retries once.
+
+        ``post_form`` sends the parameters as a form-encoded POST body instead of
+        the query string, with ``_sid`` (if any) still in the query string. It is a
+        scoped exception to the GET-only rule, used ONLY for ``SYNO.API.Auth``
+        ``login`` (#235): GET put ``passwd``, ``otp_code`` and ``device_id`` in the
+        URL, where DSM's and any reverse proxy's access logs record it. Verified on
+        DSM 7.1 and 7.2.2. Everything else stays on GET.
         """
         http = self._get_http()
 
@@ -390,7 +398,8 @@ class DsmClient:
         # supports, not a mandate to POST — on DSM 7.1, every FileStation API
         # reports requestFormat=JSON even at v2.
         logger.debug(
-            "DSM GET%s: %s/%s v%d — %s",
+            "DSM %s%s: %s/%s v%d — %s",
+            "POST" if post_form else "GET",
             retry_tag,
             api,
             method,
@@ -398,7 +407,11 @@ class DsmClient:
             log_params,
         )
 
-        resp = await http.get(url, params=req_params)
+        if post_form:
+            query = {"_sid": req_params.pop("_sid")} if "_sid" in req_params else {}
+            resp = await http.post(url, params=query, data=req_params)
+        else:
+            resp = await http.get(url, params=req_params)
         if resp.status_code == 414:
             raise RequestTooLongError(
                 f"{api}/{method}: DSM rejected the request with HTTP 414 (Request-URI Too Large).",
@@ -429,7 +442,9 @@ class DsmClient:
                 await self._re_auth_callback()
             except SynologyError:
                 raise error_from_code(code, api) from None
-            return await self.request(api, method, version, params, _is_retry=True)
+            return await self.request(
+                api, method, version, params, post_form=post_form, _is_retry=True
+            )
 
         raise error_from_code(code, api)
 

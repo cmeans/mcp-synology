@@ -941,7 +941,7 @@ class TestNoSecretsInErrors:
     @pytest.mark.usefixtures("creds")
     async def test_login_http_error(self, caplog: pytest.LogCaptureFixture) -> None:
         respx.get(f"{BASE_URL}/webapi/query.cgi").respond(json=self._INFO)
-        respx.get(f"{BASE_URL}/webapi/auth.cgi").respond(status_code=502)
+        respx.post(f"{BASE_URL}/webapi/auth.cgi").respond(status_code=502)
         text = await self._call(caplog)
         assert "S3cretPW" not in text
         assert "S3cretPW" not in self._logged(caplog)
@@ -954,7 +954,7 @@ class TestNoSecretsInErrors:
     @pytest.mark.usefixtures("creds")
     async def test_tool_http_error(self, caplog: pytest.LogCaptureFixture) -> None:
         respx.get(f"{BASE_URL}/webapi/query.cgi").respond(json=self._INFO)
-        respx.get(f"{BASE_URL}/webapi/auth.cgi").respond(
+        respx.post(f"{BASE_URL}/webapi/auth.cgi").respond(
             json={"success": True, "data": {"sid": "SIDSECRET"}}
         )
         respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(status_code=500)

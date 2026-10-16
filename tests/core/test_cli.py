@@ -681,7 +681,7 @@ class TestCheckConnectionFailures:
                 },
             )
         )
-        respx.get("http://127.0.0.1:5000/webapi/entry.cgi").mock(
+        respx.post("http://127.0.0.1:5000/webapi/entry.cgi").mock(
             side_effect=httpx.ReadError("connection reset")
         )
         result = CliRunner().invoke(main, ["check", "-c", str(_check_config(tmp_path, 5000))])

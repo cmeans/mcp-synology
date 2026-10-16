@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from typing import Any
 from unittest.mock import MagicMock, patch
+from urllib.parse import parse_qsl
 
 import httpx
 import pytest
@@ -261,7 +262,7 @@ class TestCredentialResolution:
 class TestLogin:
     @respx.mock
     async def test_simple_login(self) -> None:
-        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(
             json={"success": True, "data": {"sid": "test-sid-123"}}
         )
 
@@ -275,10 +276,14 @@ class TestLogin:
                 sid = await auth.login()
 
         assert sid == "test-sid-123"
+        (call,) = respx.calls
+        assert call.request.method == "POST"
+        assert dict(call.request.url.params) == {}  # no passwd in the URL (#235)
+        assert dict(parse_qsl(call.request.content.decode()))["passwd"] == "secret"
 
     @respx.mock
     async def test_login_with_device_id(self) -> None:
-        route = respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+        route = respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(
             json={"success": True, "data": {"sid": "2fa-sid-456"}}
         )
 
@@ -294,15 +299,19 @@ class TestLogin:
                 sid = await auth.login()
 
         assert sid == "2fa-sid-456"
-        request_params = dict(route.calls[0].request.url.params)
-        assert request_params["device_id"] == "dev123"
+        request = route.calls[0].request
+        form = dict(parse_qsl(request.content.decode()))
+        assert form["device_id"] == "dev123"
+        assert form["passwd"] == "secret"
+        # The secrets travel in the POST body, never in the URL (#235).
+        assert dict(request.url.params) == {}
 
     @respx.mock
     async def test_rejected_device_token_says_so(self) -> None:
         """A stored device token DSM no longer trusts also gets 403. The error
         used to say "no device token is available", which sent users looking
         for a token that was there."""
-        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(
             json={"success": False, "error": {"code": 403}}
         )
         config = _make_config(
@@ -323,7 +332,7 @@ class TestLogin:
 
     @respx.mock
     async def test_2fa_required_without_device_id(self) -> None:
-        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(
             json={"success": False, "error": {"code": 403}}
         )
 
@@ -349,11 +358,12 @@ class TestReAuth:
             params = dict(request.url.params)
             if params.get("method") == "list_share" and call_count == 1:
                 return httpx.Response(200, json={"success": False, "error": {"code": 106}})
-            if params.get("method") == "login":
-                return httpx.Response(200, json={"success": True, "data": {"sid": "new-sid"}})
             return httpx.Response(200, json={"success": True, "data": {"shares": []}})
 
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": True, "data": {"sid": "new-sid"}}
+        )
 
         config = _make_config(auth={"username": "admin", "password": "secret"})
         async with _make_client() as client:
@@ -378,7 +388,7 @@ class TestReAuth:
 
     @respx.mock
     async def test_get_session_logs_in_when_no_sid(self) -> None:
-        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(
             json={"success": True, "data": {"sid": "fresh-sid"}}
         )
         config = _make_config(auth={"username": "admin", "password": "secret"})
@@ -406,11 +416,12 @@ class TestOnReauthCallbacks:
             params = dict(request.url.params)
             if params.get("method") == "list_share" and call_count == 1:
                 return httpx.Response(200, json={"success": False, "error": {"code": 106}})
-            if params.get("method") == "login":
-                return httpx.Response(200, json={"success": True, "data": {"sid": "new-sid"}})
             return httpx.Response(200, json={"success": True, "data": {"shares": []}})
 
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": True, "data": {"sid": "new-sid"}}
+        )
 
         invocations: list[str] = []
 
@@ -441,11 +452,12 @@ class TestOnReauthCallbacks:
             params = dict(request.url.params)
             if params.get("method") == "list_share" and call_count == 1:
                 return httpx.Response(200, json={"success": False, "error": {"code": 106}})
-            if params.get("method") == "login":
-                return httpx.Response(200, json={"success": True, "data": {"sid": "new-sid"}})
             return httpx.Response(200, json={"success": True, "data": {"shares": []}})
 
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": True, "data": {"sid": "new-sid"}}
+        )
 
         invocations: list[str] = []
 
@@ -858,7 +870,7 @@ class TestLoginErrorPaths:
         """A non-403 SynologyError on login is re-raised, not wrapped."""
         from mcp_synology.core.errors import SynologyError
 
-        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(
             json={"success": False, "error": {"code": 400}}
         )
 
@@ -875,7 +887,7 @@ class TestLoginErrorPaths:
     @respx.mock
     async def test_login_succeeds_but_no_sid_raises(self) -> None:
         """DSM returns success=True but no sid in data → AuthenticationError."""
-        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(
             json={"success": True, "data": {}}  # no sid
         )
 

@@ -9,6 +9,7 @@
 ### Changed
 
 - **Requires mcp 2.x** (#226) — `mcp>=2.3,<3`; was `>=1.15.0,<2`. The server is now built on `MCPServer`, mcp 2.x's renamed `FastMCP`. Tool names, schemas, descriptions and results are unchanged: the payload a model receives is the same size (16,039 chars measured, 20,911 for the full `tools/list`), and clients on the 2025-11-25 and 2026-07-28 protocol versions both connect. Schema compaction and the reported server version now use documented 2.x APIs instead of private SDK attributes. mcp 2.x would send a model only "Error executing tool <name>" for an exception other than a structured error, hiding login failures' "run mcp-synology setup" guidance; a login failure is now a structured `auth_failed` error (any DSM error keeps its own code), and other errors keep their message as in 1.x. Every tool error now starts with "Error executing tool <name>: ", including login failures. A crash in a tool is logged at ERROR with its traceback; an anticipated error (a structured one, or a DSM error) at INFO without one. Installing alongside a package that needs `mcp<2` is no longer possible — closes #114
+- **Login is sent as a POST** (#236) — `SYNO.API.Auth` login used a GET, so the password (and, with 2FA, the OTP code and device token) was in the request URL, where DSM's web server and any reverse proxy in front of it can log it. The login, including `mcp-synology setup`'s 2FA login, now sends them in a form POST body; the session ID and every other call are unchanged. Verified on DSM 7.1 and 7.2.2 — closes #235
 
 ### Fixed
 
