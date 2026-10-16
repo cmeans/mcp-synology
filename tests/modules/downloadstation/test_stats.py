@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 import respx
-from mcp.server.fastmcp.exceptions import ToolError
+from mcp.server.mcpserver.exceptions import ToolError
 
 from mcp_synology.modules.downloadstation.stats import get_download_stats
 from tests.modules.downloadstation.dsm import captured, err, get_route, ok

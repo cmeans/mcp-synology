@@ -24,7 +24,7 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 from mcp_synology.modules import RegisterContext
 from mcp_synology.server import _MODULE_REGISTRY
@@ -63,7 +63,7 @@ def _normalize(text: str) -> str:
 
 
 def _registered(module: Any) -> dict[str, Any]:
-    server = FastMCP("spec-check")
+    server = MCPServer("spec-check")
     module.register(
         RegisterContext(
             server=server,

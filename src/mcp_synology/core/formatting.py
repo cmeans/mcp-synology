@@ -187,7 +187,7 @@ def error_response(
     Raises:
         ToolError: always — this function never returns.
     """
-    from mcp.server.fastmcp.exceptions import ToolError
+    from mcp.server.mcpserver.exceptions import ToolError
 
     from mcp_synology.core.errors import HELP_URLS
 

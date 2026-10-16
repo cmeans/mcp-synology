@@ -5,7 +5,7 @@
 ## Stack
 
 - **Language:** Python
-- **MCP SDK:** `mcp.server.fastmcp` from the official Python MCP SDK (`mcp` package) — NOT the standalone `fastmcp` package by PrefectHQ, which has diverged into a larger framework
+- **MCP SDK:** `mcp.server.mcpserver.MCPServer` from the official Python MCP SDK (`mcp` package, 2.x; `mcp.server.fastmcp.FastMCP` in 1.x) — NOT the standalone `fastmcp` package by PrefectHQ, which has diverged into a larger framework
 - **HTTP client:** httpx (async)
 - **Distribution:** uvx (from GitHub), Docker as secondary option
 - **Project/dependency management:** uv
@@ -16,8 +16,8 @@
 ### Why Python
 
 - Developer (Chris) is proficient in Python and can effectively review AI-generated code for correctness and idiom
-- Existing MCP project (clipboard-mcp) is Python — familiar patterns for FastMCP tool registration, pyproject.toml, uvx distribution
-- Python MCP SDK is mature: FastMCP decorator-based APIs, async support, Pydantic validation, solid Streamable HTTP transport story
+- Existing MCP project (clipboard-mcp) is Python — familiar patterns for FastMCP (now `MCPServer`) tool registration, pyproject.toml, uvx distribution
+- Python MCP SDK is mature: FastMCP (now `MCPServer`) decorator-based APIs, async support, Pydantic validation, solid Streamable HTTP transport story
 - No meaningful deployment disadvantage vs TypeScript for the target audience (Synology NAS users are technical)
 
 ---
@@ -134,7 +134,7 @@ async def register(server, client, allowed_tools: set[str]):
     ...
 ```
 
-The server calls `register()` for each enabled module, passing only the tool names that passed permission filtering. The module registers FastMCP tool handlers for those tools.
+The server calls `register()` for each enabled module, passing only the tool names that passed permission filtering. The module registers `MCPServer` tool handlers for those tools.
 
 #### Version Dispatch Pattern
 
@@ -170,7 +170,7 @@ Top-level MCP server entry point.
    b. Validate `required_apis` against API info cache (warn or skip if unsupported)
    c. Filter `tools` by configured permission tier → produce `allowed_tools` set
    d. Call `module.register(server, client, allowed_tools)`
-5. Start FastMCP transport (stdio initially; Streamable HTTP later)
+5. Start the `MCPServer` transport (stdio initially; Streamable HTTP later)
 
 ---
 

@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 import respx
-from mcp.server.fastmcp.exceptions import ToolError
+from mcp.server.mcpserver.exceptions import ToolError
 
 from mcp_synology.core.errors import SynologyError
 from mcp_synology.core.formatting import format_size

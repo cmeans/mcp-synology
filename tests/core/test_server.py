@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 import respx
-from mcp.shared.memory import create_connected_server_and_client_session
+from mcp.client import Client
+from mcp.server.mcpserver import MCPServer
 
 from mcp_synology.server import (
     _BASE_INSTRUCTIONS,
@@ -24,8 +26,6 @@ from tests.conftest import BASE_URL, make_test_config
 if TYPE_CHECKING:
     from collections.abc import Iterator
     from pathlib import Path
-
-    from mcp.server.fastmcp import FastMCP
 
 
 class TestCreateServer:
@@ -613,7 +613,7 @@ class TestSharedClientManagerUnreachableNas:
     async def test_transport_failure_is_a_structured_error(
         self, raised: type[Exception], code: str
     ) -> None:
-        from mcp.server.fastmcp.exceptions import ToolError
+        from mcp.server.mcpserver.exceptions import ToolError
 
         manager = SharedClientManager(make_test_config())
         respx.get(f"{BASE_URL}/webapi/query.cgi").mock(side_effect=raised)
@@ -627,7 +627,7 @@ class TestSharedClientManagerUnreachableNas:
 
     @respx.mock
     async def test_half_open_client_is_closed_and_next_call_retries(self) -> None:
-        from mcp.server.fastmcp.exceptions import ToolError
+        from mcp.server.mcpserver.exceptions import ToolError
 
         from mcp_synology.core.client import DsmClient
 
@@ -854,24 +854,111 @@ def _walk(node: Any) -> Iterator[Any]:
             yield from _walk(value)
 
 
-async def _served(server: FastMCP) -> tuple[list[Any], str]:
+async def _served(server: MCPServer) -> tuple[list[Any], str]:
     """Tools and instructions exactly as an MCP client receives them."""
-    async with create_connected_server_and_client_session(server._mcp_server) as session:
-        init = await session.initialize()
-        tools = (await session.list_tools()).tools
-    return list(tools), init.instructions or ""
+    async with Client(server) as client:
+        tools = (await client.list_tools()).tools
+        instructions = client.instructions
+    return list(tools), instructions or ""
 
 
 class TestServerInfo:
     async def test_initialize_reports_mcp_synology_version(self) -> None:
-        """#166: FastMCP 1.x sent the mcp SDK's version as serverInfo.version."""
+        """#166: mcp 1.x's FastMCP sent the mcp SDK's version as serverInfo.version."""
         from importlib.metadata import version
 
         server = create_server(make_test_config())
-        async with create_connected_server_and_client_session(server._mcp_server) as session:
-            init = await session.initialize()
-        assert init.serverInfo.version == version("mcp-synology")
-        assert init.serverInfo.version != version("mcp")
+        async with Client(server) as client:
+            info = client.server_info
+        assert info is not None
+        assert info.version == version("mcp-synology")
+        assert info.version != version("mcp")
+
+
+class TestToolErrorDetail:
+    """mcp 2.x sends only "Error executing tool <name>" for an exception that isn't a
+    ToolError; v1 included the message. Login failures escape as AuthenticationError,
+    so without the server's call_tool() override the model would lose "run mcp-synology
+    setup" and every other auth hint (#114)."""
+
+    @staticmethod
+    async def _call(exc: Exception) -> str:
+        server = create_server(make_test_config())
+        with patch.object(SharedClientManager, "get_client", side_effect=exc):
+            async with Client(server) as client:
+                result = await client.call_tool("list_shares", {})
+        assert result.is_error
+        return " ".join(getattr(c, "text", "") for c in result.content)
+
+    @staticmethod
+    def _structured(text: str) -> dict[str, Any]:
+        """The error envelope, after the prefix every tool error carries (QA round 1, #226)."""
+        prefix = "Error executing tool list_shares: "
+        assert text.startswith(prefix), text
+        error: dict[str, Any] = json.loads(text.removeprefix(prefix))["error"]
+        return error
+
+    @staticmethod
+    def _tool_log(caplog: pytest.LogCaptureFixture) -> logging.LogRecord:
+        (record,) = [r for r in caplog.records if r.name.startswith("mcp") and "Tool" in r.msg]
+        return record
+
+    async def test_login_failure_is_a_structured_auth_error(self) -> None:
+        from mcp_synology.core.errors import AuthenticationError
+
+        text = await self._call(
+            AuthenticationError(
+                "No credentials found.", suggestion="Run 'mcp-synology setup' to store them."
+            )
+        )
+        err = self._structured(text)
+        assert err["code"] == "auth_failed"
+        assert "No credentials found." in err["message"]
+        assert "list_shares" in err["message"]
+        assert err["suggestion"] == "Run 'mcp-synology setup' to store them."
+        assert err["help_url"].endswith("#auth_failed")
+
+    async def test_other_synology_error_keeps_its_code(self) -> None:
+        from mcp_synology.core.errors import DsmUnavailableError
+
+        text = await self._call(DsmUnavailableError("DSM is restarting", code=150))
+        err = self._structured(text)
+        assert err["code"] == "unavailable"
+        assert "DSM error 150" in err["message"]
+        assert err["retryable"] is False  # the class's own flag, carried through
+
+    async def test_unexpected_exception_keeps_its_message(self) -> None:
+        text = await self._call(KeyError("model"))
+        assert text == "Error executing tool list_shares: 'model'"
+
+    async def test_unexpected_exception_is_logged_as_a_crash(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A real bug must reach the server log at ERROR with its traceback (QA round 1)."""
+        with caplog.at_level(logging.INFO, logger="mcp"):
+            await self._call(KeyError("model"))
+        record = self._tool_log(caplog)
+        assert record.levelno == logging.ERROR
+        assert record.exc_info is not None
+        assert isinstance(record.exc_info[1].__cause__, KeyError)
+
+    async def test_synology_error_is_logged_as_anticipated(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from mcp_synology.core.errors import AuthenticationError
+
+        with caplog.at_level(logging.INFO, logger="mcp"):
+            await self._call(AuthenticationError("No credentials found."))
+        record = self._tool_log(caplog)
+        assert record.levelno == logging.INFO
+        assert not record.exc_info
+
+    async def test_tool_error_passes_through_unchanged(self) -> None:
+        from mcp.server.mcpserver.exceptions import ToolError
+
+        text = await self._call(ToolError('{"status": "error", "error": {"code": "timeout"}}'))
+        assert text.endswith('{"status": "error", "error": {"code": "timeout"}}')
+        assert text.count("Error executing tool") == 1
 
 
 class TestServedSchemas:
@@ -881,7 +968,7 @@ class TestServedSchemas:
         tools, _ = await _served(create_server(make_test_config(modules=ALL_MODULES)))
         assert len(tools) == 28
         for tool in tools:
-            for node in _walk(tool.inputSchema):
+            for node in _walk(tool.input_schema):
                 if isinstance(node, dict):
                     assert "title" not in node, tool.name
                     assert {"type": "null"} not in node.get("anyOf", []), tool.name
@@ -908,11 +995,10 @@ class TestServedSchemas:
             return {**real, **rest}
         return kept
 
-    def test_nothing_else_lost(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        config = make_test_config(modules=ALL_MODULES)
-        compacted = {t.name: t.parameters for t in create_server(config)._tool_manager.list_tools()}
-        monkeypatch.setattr("mcp_synology.server._compact_tool_schemas", lambda server: None)
-        raw = {t.name: t.parameters for t in create_server(config)._tool_manager.list_tools()}
+    async def test_nothing_else_lost(self) -> None:
+        server = create_server(make_test_config(modules=ALL_MODULES))
+        compacted = {t.name: t.input_schema for t in await server.list_tools()}
+        raw = {t.name: t.input_schema for t in await MCPServer.list_tools(server)}
         assert compacted.keys() == raw.keys()
         for name, schema in raw.items():
             # Exhaustive: every key the rule doesn't remove (items, enum, description,
@@ -926,15 +1012,14 @@ class TestServedSchemas:
         (#114) fails here instead of silently rejecting clients that send nulls."""
         respx.get(f"{BASE_URL}/webapi/query.cgi").mock(side_effect=httpx.ConnectError("down"))
         server = create_server(make_test_config(modules=ALL_MODULES))
-        async with create_connected_server_and_client_session(server._mcp_server) as session:
-            await session.initialize()
-            result = await session.call_tool("search_files", {"folder_path": "/x", "pattern": None})
+        async with Client(server) as client:
+            result = await client.call_tool("search_files", {"folder_path": "/x", "pattern": None})
         text = " ".join(getattr(c, "text", "") for c in result.content)
-        assert result.isError
+        assert result.is_error
         assert "validation error" not in text.lower(), text
         assert "unavailable" in text, text  # got past validation and reached the NAS call
 
-    def test_validation_still_accepts_explicit_null_and_omission(self) -> None:
+    async def test_validation_still_accepts_explicit_null_and_omission(self) -> None:
         server = create_server(make_test_config(modules=ALL_MODULES))
         tool = server._tool_manager.get_tool("search_files")
         assert tool is not None
@@ -943,7 +1028,8 @@ class TestServedSchemas:
         omitted = arg_model.model_validate({"folder_path": "/x"})
         assert explicit.pattern is None
         assert omitted.pattern is None
-        assert json.dumps(tool.parameters).count('"null"') == 0
+        (served,) = [t for t in await server.list_tools() if t.name == "search_files"]
+        assert json.dumps(served.input_schema).count('"null"') == 0
 
 
 class TestInstructionComments:
@@ -1010,7 +1096,7 @@ PAYLOAD_BUDGET_CHARS = 16_019
 class TestPayloadBudget:
     async def test_payload_within_budget(self) -> None:
         tools, instructions = await _served(create_server(make_test_config(modules=ALL_MODULES)))
-        size = sum(len(json.dumps(t.inputSchema)) + len(t.description or "") for t in tools)
+        size = sum(len(json.dumps(t.input_schema)) + len(t.description or "") for t in tools)
         size += len(instructions)
         assert size <= PAYLOAD_BUDGET_CHARS, (
             f"served payload is {size} chars, budget {PAYLOAD_BUDGET_CHARS} "

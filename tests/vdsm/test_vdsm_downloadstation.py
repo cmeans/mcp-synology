@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import urlencode
 
 import pytest
-from mcp.server.fastmcp.exceptions import ToolError
+from mcp.server.mcpserver.exceptions import ToolError
 
 from tests.vdsm.golden_image import download_station_skip_reason, load_golden_meta
 

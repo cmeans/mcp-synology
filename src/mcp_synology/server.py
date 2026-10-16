@@ -1,4 +1,4 @@
-"""FastMCP server initialization, module loading, and startup."""
+"""MCP server initialization, module loading, and startup."""
 
 from __future__ import annotations
 
@@ -9,17 +9,18 @@ import platform
 import re
 import signal
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NoReturn
+from typing import TYPE_CHECKING, Any, Literal, NoReturn
 
 import httpx
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError, UnexpectedToolError
 from mcp.types import Icon
 
 from mcp_synology import __version__
 from mcp_synology.core.auth import AuthManager
 from mcp_synology.core.client import DsmClient
-from mcp_synology.core.errors import ErrorCode
-from mcp_synology.core.formatting import error_response
+from mcp_synology.core.errors import ErrorCode, SynologyError
+from mcp_synology.core.formatting import error_response, synology_error_response
 from mcp_synology.core.state import ServerState
 from mcp_synology.modules import PermissionTier, RegisterContext, filter_tools_by_permission
 from mcp_synology.modules import downloadstation as _downloadstation_mod
@@ -29,6 +30,10 @@ from mcp_synology.modules import system as _system_mod
 if TYPE_CHECKING:
     from collections.abc import Callable
     from types import ModuleType
+
+    from mcp.server.mcpserver import Context
+    from mcp.types import CallToolResult, InputRequiredResult
+    from mcp.types import Tool as MCPTool
 
     from mcp_synology.core.config import AppConfig, ModuleConfig
 
@@ -51,12 +56,15 @@ _ICON_BASE_URL = "https://raw.githubusercontent.com/cmeans/mcp-synology/main/src
 def _load_icons() -> list[Icon]:
     """Return Icon objects pointing to hosted SVGs on GitHub."""
     icons: list[Icon] = []
-    theme_map = {"light": "mcp-synology-logo-light.svg", "dark": "mcp-synology-logo-dark.svg"}
+    theme_map: dict[Literal["light", "dark"], str] = {
+        "light": "mcp-synology-logo-light.svg",
+        "dark": "mcp-synology-logo-dark.svg",
+    }
     for theme, filename in theme_map.items():
         icons.append(
-            Icon(  # type: ignore[call-arg]
+            Icon(
                 src=f"{_ICON_BASE_URL}/{filename}",
-                mimeType="image/svg+xml",
+                mime_type="image/svg+xml",
                 theme=theme,
             )
         )
@@ -110,7 +118,7 @@ def _compact_schema(node: Any) -> Any:
     collapses ``{"anyOf": [T, {"type": "null"}], "default": null}`` into ``T``:
     the parameter stays out of ``required``, so leaving it out still means "not
     set". Everything else is kept, including ``description``/``enum``/``examples``.
-    FastMCP validates arguments against each function's pydantic model, not this
+    MCPServer validates arguments against each function's pydantic model, not this
     advertised schema, so what the server accepts doesn't change.
     """
     if isinstance(node, list):
@@ -133,14 +141,48 @@ def _compact_schema(node: Any) -> Any:
     return out
 
 
-def _compact_tool_schemas(server: FastMCP) -> None:
-    """Compact every registered tool's advertised input schema in place (#163).
+class _SynologyServer(MCPServer):
+    """MCPServer with compacted tool schemas and error details kept (#114).
 
-    Uses mcp 1.x's ``FastMCP._tool_manager``; the mcp 2.x migration (#114) must keep
-    this behavior (``TestServedSchemas`` checks what a real client session receives).
+    mcp 2.x documents ``list_tools()`` and ``call_tool()`` as what the protocol handlers
+    call, so these overrides take effect without touching SDK internals.
     """
-    for tool in server._tool_manager.list_tools():
-        tool.parameters = _compact_schema(tool.parameters)
+
+    async def list_tools(self) -> list[MCPTool]:
+        """Serve each tool's input schema compacted (#163)."""
+        return [
+            tool.model_copy(update={"input_schema": _compact_schema(tool.input_schema)})
+            for tool in await super().list_tools()
+        ]
+
+    async def call_tool(
+        self, name: str, arguments: dict[str, Any], context: Context[Any, Any] | None = None
+    ) -> CallToolResult | InputRequiredResult:
+        """Keep the message of an exception that isn't a ``ToolError``.
+
+        mcp 2.x sends the model only "Error executing tool <name>" for one, where 1.x
+        added the message. Login failures reach here as ``AuthenticationError`` (from
+        ``SharedClientManager.get_client()``), so without this the model loses hints
+        like "run mcp-synology setup". A ``SynologyError`` becomes the usual structured
+        error; anything else keeps 1.x's text.
+
+        Both get the "Error executing tool <name>: " prefix the SDK puts on a
+        ``ToolError`` raised inside a handler, so every error reads the same. A
+        ``SynologyError`` stays a plain ``ToolError`` (logged at INFO, no traceback);
+        anything else stays an ``UnexpectedToolError``, which the SDK logs at ERROR
+        with the traceback.
+        """
+        prefix = f"Error executing tool {name}: "
+        try:
+            return await super().call_tool(name, arguments, context)
+        except UnexpectedToolError as exc:
+            cause = exc.__cause__
+            if isinstance(cause, SynologyError):
+                try:
+                    synology_error_response(name, cause)
+                except ToolError as structured:
+                    raise ToolError(f"{prefix}{structured}") from cause
+            raise UnexpectedToolError(f"{prefix}{cause}") from cause
 
 
 # A comment that fills its whole line (allowing indentation) goes with its line break;
@@ -412,10 +454,10 @@ def _local_paths_notice(plan: _ModulePlan) -> str:
     return ""
 
 
-def create_server(config: AppConfig) -> FastMCP:
+def create_server(config: AppConfig) -> MCPServer:
     """Create and configure the MCP server.
 
-    This sets up the FastMCP instance and registers tools based on
+    This sets up the MCP server instance and registers tools based on
     module configuration and permission tiers.
     """
     # Populate template variables in the instructions so Claude can
@@ -482,14 +524,12 @@ def create_server(config: AppConfig) -> FastMCP:
         instructions += _withheld_tools_notice(config, plan)
         instructions += _local_paths_notice(plan)
 
-    server = FastMCP(
+    server = _SynologyServer(
         server_name,
         instructions=instructions,
         icons=_load_icons(),
+        version=__version__,
     )
-    # FastMCP 1.x passes no version to the low-level server, which then reports the mcp
-    # SDK's own version in serverInfo (#166).
-    server._mcp_server.version = __version__
 
     logger.debug("Creating MCP server")
 
@@ -516,5 +556,4 @@ def create_server(config: AppConfig) -> FastMCP:
         )
         module.register(ctx)
 
-    _compact_tool_schemas(server)
     return server

@@ -63,7 +63,7 @@ def _served(config_path: Path) -> tuple[list[dict[str, Any]], str]:
     server = create_server(load_config(str(config_path)))
     tools = asyncio.run(server.list_tools())
     served = [
-        {"name": t.name, "description": t.description or "", "input_schema": t.inputSchema}
+        {"name": t.name, "description": t.description or "", "input_schema": t.input_schema}
         for t in tools
     ]
     return served, server.instructions or ""

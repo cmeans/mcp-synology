@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 from mcp.types import ToolAnnotations
 
 if TYPE_CHECKING:
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server.mcpserver import MCPServer
     from pydantic import BaseModel
 
     from mcp_synology.server import SharedClientManager
@@ -88,7 +88,7 @@ class ModuleInfo:
 class RegisterContext:
     """Context passed to each module's register() function."""
 
-    server: FastMCP
+    server: MCPServer
     manager: SharedClientManager
     allowed_tools: set[str]
     settings_dict: dict[str, Any]
@@ -98,8 +98,8 @@ class RegisterContext:
 def default_annotations(tier: PermissionTier) -> ToolAnnotations:
     """Return default ToolAnnotations for a permission tier."""
     if tier == PermissionTier.READ:
-        return ToolAnnotations(readOnlyHint=True, destructiveHint=False)
-    return ToolAnnotations(readOnlyHint=False, destructiveHint=False)
+        return ToolAnnotations(read_only_hint=True, destructive_hint=False)
+    return ToolAnnotations(read_only_hint=False, destructive_hint=False)
 
 
 class VersionedHandler:

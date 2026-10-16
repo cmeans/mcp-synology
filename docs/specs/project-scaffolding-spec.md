@@ -13,7 +13,7 @@ mcp-synology/
 │       ├── __main__.py              # `python -m mcp_synology` entry point
 │       ├── py.typed                 # PEP 561 marker — ship type information
 │       ├── cli.py                   # CLI: serve, setup, check (click-based)
-│       ├── server.py                # FastMCP server init, module loading, startup
+│       ├── server.py                # MCPServer init, module loading, startup
 │       │
 │       ├── core/
 │       │   ├── __init__.py
@@ -120,7 +120,7 @@ classifiers = [
     "Topic :: System :: Systems Administration",
 ]
 dependencies = [
-    "mcp>=1.15.0,<2",         # Official MCP Python SDK v1 (includes FastMCP; 2.x removed it)
+    "mcp>=2.3,<3",            # Official MCP Python SDK 2.x (MCPServer)
     "httpx>=0.27",             # Async HTTP client for DSM API calls
     "pyyaml>=6.0",             # YAML config parsing (safe_load only)
     "keyring>=25.0",           # OS-native credential storage
@@ -180,7 +180,7 @@ addopts = "-m 'not integration'"
 
 ### Dependency Notes
 
-- **`mcp>=1.15.0,<2`**: The official Python MCP SDK. Floor is 1.15.0 (first release with `mcp.types.Icon`); capped below 2.0 because mcp 2.0.0 removed `mcp.server.fastmcp`. Provides `mcp.server.fastmcp.FastMCP`, `Context`, type definitions, and stdio transport. We do NOT use the standalone `fastmcp` package by PrefectHQ.
+- **`mcp>=2.3,<3`**: The official Python MCP SDK. Floor is 2.3.0, the release the 2.x migration (#114) was tested against; 1.x (`mcp.server.fastmcp`) is no longer supported. Provides `mcp.server.mcpserver.MCPServer`, `Context`, type definitions, and stdio transport. 2.x brings its own HTTP client (`httpx2`) and `opentelemetry-api` (a no-op unless an OpenTelemetry SDK is configured); the DSM client keeps using `httpx`. We do NOT use the standalone `fastmcp` package by PrefectHQ.
 - **`httpx>=0.27`**: Async HTTP client. Used by the DSM API client for all NAS communication. Cleaner API than `aiohttp`, better testing story via `respx`.
 - **`keyring>=25.0`**: OS-native credential storage. Auto-detects macOS Keychain, Windows Credential Manager, or Linux Secret Service.
 - **`pydantic>=2.0`**: Config validation, module settings schemas, type coercion.
@@ -413,7 +413,7 @@ Detailed instructions for Claude Code when working on this repo:
 MCP server for Synology NAS devices. Layered architecture:
 - **Core** (`core/`): DSM API client, auth manager, config loader, formatters, errors
 - **Modules** (`modules/`): Feature-specific tool handlers (File Station first)
-- **Server** (`server.py`): FastMCP initialization, module loading, startup sequence
+- **Server** (`server.py`): `MCPServer` initialization, module loading, startup sequence
 - **CLI** (`cli.py`): click-based CLI with serve/setup/check subcommands
 
 ## Architecture & Design Docs
@@ -428,7 +428,7 @@ and their rationale — don't reinvent or contradict them without discussion.
 ## Key Conventions
 
 ### SDK & Dependencies
-- `mcp.server.fastmcp` from the official `mcp` package — NOT the standalone `fastmcp` by PrefectHQ
+- `mcp.server.mcpserver` from the official `mcp` package — NOT the standalone `fastmcp` by PrefectHQ
 - `httpx` for all HTTP (async), `respx` for mocking in tests
 - `click` for CLI, `pydantic` for validation, `keyring` for credentials
 - `yaml.safe_load()` ONLY — never `yaml.load()`

@@ -5,7 +5,7 @@ inside `if "<tool>" in ctx.allowed_tools:` blocks. The previous test_server.py
 tests only verified `server is not None`, which walked the registration
 decorators but not the inner tool closures. These tests:
 
-1. Construct a real FastMCP + a mocked SharedClientManager + RegisterContext
+1. Construct a real MCPServer + a mocked SharedClientManager + RegisterContext
 2. Call register() with the full set of allowed tools
 3. Pull each tool function via server._tool_manager._tools[name].fn
 4. Mock the underlying domain function and invoke the tool, asserting the
@@ -24,8 +24,8 @@ from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from mcp.server.fastmcp import FastMCP
-from mcp.server.fastmcp.exceptions import ToolError
+from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import ValidationError
 
 from mcp_synology.modules import RegisterContext
@@ -38,8 +38,8 @@ if TYPE_CHECKING:
 def _make_ctx(
     allowed: set[str] | None = None,
     settings: dict | None = None,
-) -> tuple[FastMCP, MagicMock, RegisterContext]:
-    server = FastMCP("test-fs")
+) -> tuple[MCPServer, MagicMock, RegisterContext]:
+    server = MCPServer("test-fs")
     manager = MagicMock()
     fake_client = MagicMock()
     manager.get_client = AsyncMock(return_value=fake_client)
@@ -91,8 +91,8 @@ class TestFilestationModuleRegister:
         register(ctx)
         annos = server._tool_manager._tools["download_file"].annotations
         assert annos is not None
-        assert annos.readOnlyHint is False
-        assert annos.destructiveHint is True
+        assert annos.read_only_hint is False
+        assert annos.destructive_hint is True
 
     def test_overwrite_capable_tools_are_destructive(self) -> None:
         """#183: with overwrite=true these replace NAS files, and annotations are static,
@@ -103,8 +103,8 @@ class TestFilestationModuleRegister:
         for name in ("copy_files", "upload_file", "restore_from_recycle_bin"):
             annos = tools[name].annotations
             assert annos is not None, name
-            assert annos.readOnlyHint is False, name
-            assert annos.destructiveHint is True, name
+            assert annos.read_only_hint is False, name
+            assert annos.destructive_hint is True, name
 
     def test_register_write_only_tools(self) -> None:
         write_names = {
@@ -524,7 +524,7 @@ class TestFilestationShareValidation:
     """#160: every path-taking tool checks the share name before its own DSM call."""
 
     @staticmethod
-    def _ctx_with_shares(*names: str) -> tuple[FastMCP, MagicMock, RegisterContext]:
+    def _ctx_with_shares(*names: str) -> tuple[MCPServer, MagicMock, RegisterContext]:
         server, manager, ctx = _make_ctx()
         client = MagicMock()
 

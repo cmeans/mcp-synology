@@ -14,7 +14,7 @@ Layered design: core → modules → server/CLI.
 
 - **Core** (`src/mcp_synology/core/`): DSM API client (async httpx), auth manager (session lifecycle, 2FA, keyring), YAML+Pydantic config loader, shared response formatters, typed exception hierarchy
 - **Modules** (`src/mcp_synology/modules/`): Feature-specific tool handlers. Each module declares `MODULE_INFO` with API requirements and tool metadata. File Station (14 tools: 7 READ + 7 WRITE), System (2 tools: get_system_info, get_resource_usage), Download Station (12 tools: 5 READ + 7 WRITE; opt-in)
-- **Server** (`src/mcp_synology/server.py`): FastMCP initialization, module loading, startup
+- **Server** (`src/mcp_synology/server.py`): MCP server (`MCPServer` subclass) initialization, module loading, startup
 - **CLI** (`src/mcp_synology/cli/`): click-based package with `serve`, `setup`, `check` subcommands
 
 Modules are domain-split: `listing.py`, `search.py`, `metadata.py`, `operations.py`, `helpers.py` — grouped by what they do, not permission tier.
@@ -48,7 +48,7 @@ uv run pytest --cov=mcp_synology           # Tests with coverage
 ## Key Conventions
 
 ### Stack & Dependencies
-- **MCP SDK:** `mcp.server.fastmcp.FastMCP` from the official `mcp` package — NOT the standalone `fastmcp` by PrefectHQ
+- **MCP SDK:** `mcp.server.mcpserver.MCPServer` from the official `mcp` package (2.x; 1.x called it `mcp.server.fastmcp.FastMCP`) — NOT the standalone `fastmcp` by PrefectHQ. `server.py`'s `_SynologyServer` overrides only the documented `list_tools()` (schema compaction, #163) and `call_tool()` (keeps the message of a non-`ToolError` exception, which 2.x would hide, #114). Don't reach into private SDK attributes
 - **HTTP:** `httpx` (async only) for all NAS communication, `respx` for mocking in tests
 - **Config:** `pyyaml` — always `yaml.safe_load()`, never `yaml.load()`
 - **Credentials:** `keyring` (OS-native backends)

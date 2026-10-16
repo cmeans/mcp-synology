@@ -94,7 +94,7 @@ API-specific error codes are mapped to human-readable messages with actionable s
 MCP tool descriptions are the primary way the LLM learns what each tool does. Given that MCP resources and prompts are not yet well-leveraged by most clients, tool descriptions should be self-sufficient:
 
 - **Each tool description includes:** one-sentence purpose, key behavioral notes (destructive? async?), and the most important parameter names.
-- **Avoid repetition across tools.** Shared knowledge (path format, size parsing, common patterns) goes in the MCP server's `instructions` field (set via `FastMCP(instructions=...)`), which the LLM receives once at connection time.
+- **Avoid repetition across tools.** Shared knowledge (path format, size parsing, common patterns) goes in the MCP server's `instructions` field (set via `MCPServer(instructions=...)`), which the LLM receives once at connection time.
 - **Server instructions include:** path format guidance, size parsing examples, the search → review → act workflow pattern, recycle bin location convention, and the `list_shares` "start here" recommendation.
 - **Keep tool descriptions under ~200 words** to avoid context window bloat when the LLM has many tools available.
 
@@ -741,7 +741,7 @@ This is outside the MCP server's scope but worth documenting as a power-user pat
 
 ## MCP Server Instructions
 
-The `FastMCP(instructions=...)` string provides shared knowledge at connection time:
+The `MCPServer(instructions=...)` string provides shared knowledge at connection time:
 
 ```
 You are connected to a Synology NAS via the mcp-synology File Station module.
@@ -793,7 +793,7 @@ Size parameters accept `int` (bytes) or `str` (`"500MiB"`, `"2GiB"`, `"1.5TiB"`;
 
 ### 4. Tool Description Strategy ✓
 
-Detailed per-tool descriptions (~200 words max), shared knowledge in `FastMCP(instructions=...)`, no cross-tool repetition.
+Detailed per-tool descriptions (~200 words max), shared knowledge in `MCPServer(instructions=...)`, no cross-tool repetition.
 
 ---
 

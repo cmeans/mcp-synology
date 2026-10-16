@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 from mcp_synology.modules import RegisterContext
 from mcp_synology.modules.downloadstation import MODULE_INFO, register
@@ -18,8 +18,8 @@ from mcp_synology.modules.downloadstation import MODULE_INFO, register
 def _make_ctx(
     allowed: set[str] | None = None,
     settings: dict | None = None,
-) -> tuple[FastMCP, MagicMock, RegisterContext]:
-    server = FastMCP("test-ds")
+) -> tuple[MCPServer, MagicMock, RegisterContext]:
+    server = MCPServer("test-ds")
     manager = MagicMock()
     fake_client = MagicMock()
     manager.get_client = AsyncMock(return_value=fake_client)
@@ -378,8 +378,8 @@ class TestDownloadstationAnnotations:
 
     def test_delete_download_is_destructive(self) -> None:
         anno = self._annos()["delete_download"]
-        assert anno.readOnlyHint is False
-        assert anno.destructiveHint is True
+        assert anno.read_only_hint is False
+        assert anno.destructive_hint is True
 
     def test_setters_are_destructive_and_idempotent(self) -> None:
         # Each replaces a stored value (NAS-wide settings, or a task's destination for
@@ -387,12 +387,12 @@ class TestDownloadstationAnnotations:
         # arguments changes nothing more. QA R1 (#182) on edit_download.
         annos = self._annos()
         for name in ("set_download_config", "set_schedule", "edit_download"):
-            assert annos[name].readOnlyHint is False, name
-            assert annos[name].destructiveHint is True, name
-            assert annos[name].idempotentHint is True, name
+            assert annos[name].read_only_hint is False, name
+            assert annos[name].destructive_hint is True, name
+            assert annos[name].idempotent_hint is True, name
 
     def test_additive_writes_stay_non_destructive(self) -> None:
         # create adds a task; pause/resume toggle a task's state without losing anything.
         annos = self._annos()
         for name in ("create_download", "pause_download", "resume_download"):
-            assert annos[name].destructiveHint is False, name
+            assert annos[name].destructive_hint is False, name

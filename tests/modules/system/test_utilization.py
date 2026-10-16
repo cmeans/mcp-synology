@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 import respx
-from mcp.server.fastmcp.exceptions import ToolError
+from mcp.server.mcpserver.exceptions import ToolError
 
 from mcp_synology.core.state import ApiInfoEntry
 from mcp_synology.modules.system.utilization import get_resource_usage

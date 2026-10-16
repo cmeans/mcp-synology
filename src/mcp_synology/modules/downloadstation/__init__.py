@@ -27,9 +27,9 @@ if TYPE_CHECKING:
 # it (and an unfinished task's partial data). The setters and edit_download replace a
 # stored value (NAS-wide settings, a task's destination), so the previous one is lost,
 # but repeating a call changes nothing more. pause/resume only toggle a task's state.
-_ANNO_DESTRUCTIVE = ToolAnnotations(readOnlyHint=False, destructiveHint=True)
+_ANNO_DESTRUCTIVE = ToolAnnotations(read_only_hint=False, destructive_hint=True)
 _ANNO_DESTRUCTIVE_IDEMPOTENT = ToolAnnotations(
-    readOnlyHint=False, destructiveHint=True, idempotentHint=True
+    read_only_hint=False, destructive_hint=True, idempotent_hint=True
 )
 
 

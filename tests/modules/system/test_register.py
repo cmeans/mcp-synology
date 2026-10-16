@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 from mcp_synology.modules import RegisterContext
 from mcp_synology.modules.system import MODULE_INFO, register
@@ -23,9 +23,9 @@ if TYPE_CHECKING:
     import pytest
 
 
-def _make_ctx(allowed: set[str] | None = None) -> tuple[FastMCP, MagicMock, RegisterContext]:
-    """Create a real FastMCP server + mock manager + RegisterContext for tests."""
-    server = FastMCP("test-system")
+def _make_ctx(allowed: set[str] | None = None) -> tuple[MCPServer, MagicMock, RegisterContext]:
+    """Create a real MCPServer + mock manager + RegisterContext for tests."""
+    server = MCPServer("test-system")
     manager = MagicMock()
     fake_client = MagicMock()
     manager.get_client = AsyncMock(return_value=fake_client)

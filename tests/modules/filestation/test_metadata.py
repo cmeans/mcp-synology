@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 import httpx
 import pytest
 import respx
-from mcp.server.fastmcp.exceptions import ToolError
+from mcp.server.mcpserver.exceptions import ToolError
 
 from mcp_synology.modules.filestation.metadata import get_dir_size, get_file_info
 from tests.conftest import BASE_URL
