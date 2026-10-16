@@ -16,9 +16,8 @@ on:
     workflows: [CI]
     types: [completed]
 
-permissions:
-  pull-requests: write
-  checks: read
+# No token permissions by default; each job asks only for what it uses (#203).
+permissions: {}
 
 jobs:
   # When CI passes on a PR branch, promote from Awaiting CI to Ready for QA.
@@ -29,29 +28,25 @@ jobs:
       && github.event.workflow_run.event == 'pull_request'
       && github.event.workflow_run.head_branch != github.event.repository.default_branch
     runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
     steps:
       - name: Promote to Ready for QA
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
-          RUN_ID: ${{ github.event.workflow_run.id }}
-          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
         run: |
-          # Look up the associated PR.
-          # The API can 404 after a force-push (orphaned run).
-          # Capture output only on success so 404 body doesn't leak into $PR.
-          PR=""
-          API_OUT=$(gh api "repos/$REPO/actions/runs/$RUN_ID/pull_requests" \
-            --jq '.[0].number // empty' 2>&1) && PR="$API_OUT" || true
-
-          # Fallback: pull_requests array is empty for dependabot PRs.
-          # Search by head branch instead. HEAD_BRANCH comes via env
-          # (not a direct GHA expression) because fork PR branch names
-          # are contributor-controlled and allow shell metacharacters.
-          if [ -z "$PR" ]; then
-            PR=$(gh pr list --repo "$REPO" --head "$HEAD_BRANCH" --state open \
-              --json number --jq '.[0].number // empty' 2>/dev/null) || true
-          fi
+          # Find the open PR whose head commit AND head repository match this run
+          # (#203). Never by branch name: a fork chooses its branch name, so a fork
+          # branch named after a maintainer branch used to relabel the maintainer's
+          # PR. Covers same-repo, Dependabot and fork PRs alike; a run whose commit
+          # is no longer any PR's head (force-pushed away) matches nothing.
+          PR=$(gh pr list --repo "$REPO" --state open --limit 100 \
+            --json number,headRefOid,headRepositoryOwner,headRepository \
+            --jq '[.[] | select(.headRefOid == env.HEAD_SHA and (.headRepositoryOwner.login + "/" + .headRepository.name) == env.HEAD_REPO) | .number] | first // empty' \
+            2>/dev/null) || true
 
           if [ -z "$PR" ]; then
             echo "No PR associated with this workflow run — exiting"
@@ -85,24 +80,25 @@ jobs:
       && github.event.workflow_run.event == 'pull_request'
       && github.event.workflow_run.head_branch != github.event.repository.default_branch
     runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
     steps:
       - name: Set CI Failed
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
-          RUN_ID: ${{ github.event.workflow_run.id }}
-          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
         run: |
-          PR=""
-          API_OUT=$(gh api "repos/$REPO/actions/runs/$RUN_ID/pull_requests" \
-            --jq '.[0].number // empty' 2>&1) && PR="$API_OUT" || true
-
-          # HEAD_BRANCH comes via env (not a direct GHA expression)
-          # because fork PR branch names are contributor-controlled.
-          if [ -z "$PR" ]; then
-            PR=$(gh pr list --repo "$REPO" --head "$HEAD_BRANCH" --state open \
-              --json number --jq '.[0].number // empty' 2>/dev/null) || true
-          fi
+          # Find the open PR whose head commit AND head repository match this run
+          # (#203). Never by branch name: a fork chooses its branch name, so a fork
+          # branch named after a maintainer branch used to relabel the maintainer's
+          # PR. Covers same-repo, Dependabot and fork PRs alike; a run whose commit
+          # is no longer any PR's head (force-pushed away) matches nothing.
+          PR=$(gh pr list --repo "$REPO" --state open --limit 100 \
+            --json number,headRefOid,headRepositoryOwner,headRepository \
+            --jq '[.[] | select(.headRefOid == env.HEAD_SHA and (.headRepositoryOwner.login + "/" + .headRepository.name) == env.HEAD_REPO) | .number] | first // empty' \
+            2>/dev/null) || true
 
           if [ -z "$PR" ]; then
             echo "No PR associated with this workflow run — exiting"

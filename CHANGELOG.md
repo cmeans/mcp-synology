@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- **CI label automation finds a PR by its head commit, not its branch name** (#241) — `pr-labels-ci.yml` looked up the PR for a finished CI run by branch name whenever GitHub didn't link one, which is always the case for fork PRs. A fork could name its branch after an open maintainer branch and get that maintainer PR moved to Ready for QA before its own CI passed, or marked CI Failed. It now matches the open PR whose head commit and head repository are the run's, so a fork's CI only ever labels the fork's own PR. The workflow's token permissions are now granted per job (`pull-requests: write`), and the unused `checks: read` is gone — closes #203
+
 ## 0.8.0 (2026-10-16)
 
 **Upgrading from 0.7.x:** mcp-synology now runs on the mcp 2.x SDK (`mcp>=2.3,<3`, #226). Tools, their schemas and their results are unchanged, and clients on both the 2025-11-25 and 2026-07-28 protocol versions connect. Three things to know:
