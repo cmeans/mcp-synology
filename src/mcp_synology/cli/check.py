@@ -144,6 +144,12 @@ async def _check_login(config: object) -> None:
                 await auth.login()
                 click.echo(click.style("Authentication successful!", fg="green"))
                 await auth.logout()
+            except DsmHttpError as e:
+                # Its own suggestion says to run check; this is check (QA round 1, #233).
+                next_step = "Check the NAS, or the proxy in front of it, and try again."
+                message = f"Authentication failed: {e} {next_step}"
+                click.echo(click.style(message, fg="red"), err=True)
+                sys.exit(1)
             except (SynologyError, OSError) as e:
                 hint = getattr(e, "suggestion", None)
                 detail = f"{e} {hint}" if hint else str(e)
