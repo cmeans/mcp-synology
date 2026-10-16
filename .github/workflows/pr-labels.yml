@@ -1,7 +1,7 @@
 name: PR Label Automation
 
 # Handles label transitions triggered by PR events (push, label, unlabel).
-# CI-completion promotion lives in pr-labels-ci.yml (separate workflow_run trigger).
+# Labeling on CI and vdsm completion lives in pr-labels-ci.yml (separate workflow_run trigger).
 on:
   pull_request:
     branches: [main]
