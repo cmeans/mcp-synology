@@ -69,12 +69,10 @@ async def task_request(
         return await client.request(api, method, version=version, params={**base, "taskid": taskid})
 
 
-# Union of `additional` field values DSM 7.x accepts across SYNO.FileStation.List
-# and SYNO.FileStation.Search. Tighter per-API whitelisting isn't worth the
-# maintenance cost — DSM silently ignores values that don't apply to a given
-# endpoint (e.g. `mount_point_type` on a non-share path simply doesn't appear
-# in the response), so the union acts as a typo-and-injection guard without
-# blocking valid use cases. Documented in `docs/specs/filestation-module-spec.md`.
+# The `additional` fields get_file_info accepts: exactly the ones its output shows,
+# so nothing requested is silently dropped (#149). It's the only tool with the
+# parameter; the listing tools fetch fixed fields. `volume_status` is left out: only
+# list_share returns it. Documented in `docs/specs/filestation-module-spec.md`.
 _VALID_ADDITIONAL_FIELDS: frozenset[str] = frozenset(
     {
         "real_path",
@@ -84,7 +82,6 @@ _VALID_ADDITIONAL_FIELDS: frozenset[str] = frozenset(
         "perm",
         "type",
         "mount_point_type",
-        "volume_status",
     }
 )
 

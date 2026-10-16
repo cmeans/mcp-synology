@@ -4,7 +4,7 @@
 
 ### Changed
 
-- **`list_shares`, `list_files` and `search_files` no longer take `additional`** (#240) — they accepted DSM metadata fields (`owner`, `perm`, `real_path`, `type`, `mount_point_type`, …) that their tables never show, so a request for them silently did nothing. They now always fetch what their columns show: `real_path`, `owner` and `volume_status` for shares; `size` and `time` for files and search results. Per-file owner, permissions, real path and type are still available from `get_file_info`, which keeps `additional`. The tool schemas a model receives shrink by about 200 characters, and the server instructions no longer say `list_shares` shows permissions — closes #149
+- **`list_shares`, `list_files` and `search_files` no longer take `additional`** (#240) — they accepted DSM metadata fields (`owner`, `perm`, `real_path`, `type`, `mount_point_type`, …) that their tables never show, so a request for them silently did nothing. They now always fetch what their columns show: `real_path`, `owner` and `volume_status` for shares; `size` and `time` for files and search results. Per-file owner, permissions, real path and type are still available from `get_file_info`, which keeps `additional` and now rejects `volume_status`, the one accepted field it never showed (only `list_share` returns it). The tool schemas a model receives shrink by about 200 characters, and the server instructions no longer say `list_shares` shows permissions — closes #149
 
 ## 0.8.0 (2026-10-16)
 
