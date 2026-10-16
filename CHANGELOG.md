@@ -4,7 +4,7 @@
 
 ### Added
 
-- **PNG server icons** (#TBD) — closes #229. `serverInfo.icons` now lists light and dark 128px PNGs, embedded as `data:` URIs, alongside the hosted SVGs. The MCP spec requires clients that display icons to support PNG but SVG only SHOULD be supported, and lets them refuse icon URLs from another origin, which a stdio server doesn't have. The `initialize` response grows by about 20 KB; tool payloads are unchanged. claude.ai and Claude Desktop don't show it yet: they take a local server's icon only from a desktop extension's manifest (anthropics/claude-ai-mcp#152).
+- **PNG server icons** (#230) — closes #229. `serverInfo.icons` now lists light and dark 128px PNGs, embedded as `data:` URIs, alongside the hosted SVGs. The MCP spec requires clients that display icons to support PNG but SVG only SHOULD be supported, and lets them refuse icon URLs from another origin, which a stdio server doesn't have. The `initialize` response grows by about 20 KB; tool payloads are unchanged. claude.ai and Claude Desktop don't show it yet: they take a local server's icon only from a desktop extension's manifest (anthropics/claude-ai-mcp#152).
 
 ### Changed
 
