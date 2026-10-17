@@ -161,7 +161,9 @@ class MonotonicProgress:
 
     One tool call has one progress token, so a multi-path call wraps its callback once
     and every path's task shares it: a heartbeat, or a count that doesn't exceed the
-    last value sent (e.g. path 2 starting near 0), is raised by ``_PROGRESS_STEP``.
+    last value sent (e.g. path 2 starting near 0), is raised by ``_PROGRESS_STEP`` and
+    sent without a total, like a heartbeat, so a client never shows it against the
+    wrong total (50.001 of 10); the message still has the real figures.
     Progress is best-effort: a failing callback is logged at DEBUG, never raised.
     """
 
@@ -179,6 +181,7 @@ class MonotonicProgress:
     async def __call__(self, value: float, total: float | None, message: str) -> None:
         if self._last is not None and value <= self._last:
             value = self._last + _PROGRESS_STEP
+            total = None
         self._last = value
         try:
             await self._callback(value, total, message)

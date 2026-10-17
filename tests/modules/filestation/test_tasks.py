@@ -301,7 +301,8 @@ class TestPollTask:
         assert all(b > a for a, b in zip(values, values[1:], strict=False))
         assert values[0] == 0
         assert values[-1] == 9
-        assert [s[1] for s in sent] == [None, None, None, 342, 342]
+        # The 0 of 342 after the heartbeats is raised, so it goes without a total.
+        assert [s[1] for s in sent] == [None, None, None, None, 342]
         assert sent[3][2] == "x: 0 of 342 items"
 
     @respx.mock

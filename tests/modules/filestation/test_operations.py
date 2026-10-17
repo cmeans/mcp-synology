@@ -2032,9 +2032,11 @@ class TestProgressAcrossPaths:
 
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
         sent: list[float] = []
+        totals: list[float | None] = []
 
         async def on_progress(progress: float, total: float | None, message: str) -> None:
             sent.append(progress)
+            totals.append(total)
 
         await delete_files(
             mock_client,
@@ -2045,6 +2047,8 @@ class TestProgressAcrossPaths:
         assert len(sent) == 3
         assert sent[0] == 50
         assert all(b > a for a, b in zip(sent, sent[1:], strict=False))
+        # A raised value is sent without a total, so no client shows 50.001 of 10.
+        assert totals == [100, None, None]
 
 
 class TestDeleteSummaryRecycleProbe:
