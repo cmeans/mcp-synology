@@ -188,24 +188,31 @@ class TestPollTask:
         assert calls.count("stop") == 1
         assert timeouts == {"status": 30, "stop": 90}
 
+    @pytest.mark.parametrize(
+        "exc",
+        [httpx.ReadTimeout("slow"), httpx.ConnectError("refused"), httpx.RemoteProtocolError("x")],
+    )
     @respx.mock
-    async def test_poll_transport_error_stops(
-        self, mock_client: DsmClient, clock: list[float]
+    async def test_poll_transport_error_is_a_stall_handoff(
+        self, mock_client: DsmClient, clock: list[float], exc: Exception
     ) -> None:
+        """#245, maintainer decision 2026-10-17: a NAS that stops answering during the
+        wait hands the task off instead of stopping it."""
         calls: list[str] = []
 
         def side_effect(request: httpx.Request) -> httpx.Response:
             calls.append(_method(request))
-            if _method(request) == "status":
-                raise httpx.ReadTimeout("slow")
-            return _ok({})
+            if _method(request) == "status" and calls.count("status") > 1:
+                raise exc
+            return _ok(RUNNING)
 
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
         result = await poll_task(mock_client, api=API, version=2, taskid="t1", wait=30, label="x")
-        assert result.outcome == "unanswered"
-        assert result.stopped is True
-        assert isinstance(result.error, httpx.TransportError)
-        assert calls.count("stop") == 1
+        assert result.outcome == "stalled"
+        assert result.stopped is False
+        assert result.error is exc
+        assert result.status["processed_num"] == 8  # the last answered status
+        assert "stop" not in calls
 
     @respx.mock
     async def test_poll_error_stops(self, mock_client: DsmClient, clock: list[float]) -> None:

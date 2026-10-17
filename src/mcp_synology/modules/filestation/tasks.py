@@ -151,18 +151,6 @@ async def _stop_background_task(
     return False
 
 
-def _task_note(stopped: bool) -> str:
-    """What happened to a background task mcp-synology gave up on (#237)."""
-    if stopped:
-        return "The task was stopped and may be partly done."
-    # Not "DSM didn't answer": DSM may also have refused the stop (e.g. 401 for a task
-    # that finished just before it), QA R2 on #239.
-    return (
-        "mcp-synology couldn't confirm the task stopped; it may still be running on the "
-        "NAS, and may be partly done."
-    )
-
-
 ProgressCallback = Callable[[float, float | None, str], Awaitable[None]]
 # How much a progress value that wouldn't otherwise increase is raised by.
 _PROGRESS_STEP = 0.001
@@ -170,12 +158,25 @@ _PROGRESS_STEP = 0.001
 
 @dataclass
 class PollResult:
-    """How a poll of a background task ended."""
+    """How a poll of a background task ended.
+
+    ``stalled``: a status request got no answer (a transport error); the task was left
+    running, like ``handoff`` (#245, maintainer decision 2026-10-17).
+    """
 
     status: dict[str, Any]
-    outcome: Literal["finished", "handoff", "poll_error", "unanswered"]
+    outcome: Literal["finished", "handoff", "poll_error", "stalled"]
     error: Exception | None = None
     stopped: bool = False
+
+
+@dataclass
+class Handoff:
+    """A task left running on the NAS: its handle, last status, and the stall if any."""
+
+    handle: Handle
+    status: dict[str, Any]
+    stall: httpx.TransportError | None = None
 
 
 def _progress_numbers(status: dict[str, Any]) -> tuple[int, int, str] | None:
@@ -228,8 +229,10 @@ async def poll_task(
 ) -> PollResult:
     """Poll a File Station task until it finishes or ``wait`` seconds pass.
 
-    A task still running at the deadline is handed off (left running, not stopped).
-    A polling failure or an unanswered status request stops the task; so does
+    A task still running at the deadline is handed off (left running, not stopped),
+    and so is one whose status request gets no answer (``stalled``: a transport error,
+    since a DSM stalled by a huge delete is still working; maintainer decision
+    2026-10-17). A DSM error on a status request stops the task; so does
     cancellation, which then propagates. The deadline is wall-clock (#237).
     """
     quoted = dsm_str(taskid)
@@ -269,7 +272,10 @@ async def poll_task(
             except SynologyError as e:
                 return PollResult(status, "poll_error", e, await stop())
             except httpx.TransportError as e:
-                return PollResult(status, "unanswered", e, await stop())
+                # No answer: DSM is probably busy with this very task. Leave it running
+                # and hand it off; never stop it (#245, maintainer decision 2026-10-17).
+                logger.debug("%s status (%s) unanswered, handing off: %r", api, label, e)
+                return PollResult(status, "stalled", e)
 
             logger.debug("%s status (%s): %s", api, label, status)
 
@@ -316,15 +322,30 @@ def handoff_reply(
     status: dict[str, Any],
     done: list[str],
     not_started: list[str],
+    stall: httpx.TransportError | None = None,
 ) -> str:
     """The reply for a task handed off after the wait: the handle and what to do next.
 
     ``verb`` is "Still deleting", "Still copying", "Still moving" or "Still restoring".
+    ``stall``: the status request DSM didn't answer, for a task handed off because the
+    NAS stopped answering (#245, maintainer decision 2026-10-17).
     """
-    past = _PAST.get(verb.split()[-1].lower(), "done")
+    gerund = verb.split()[-1].lower()
+    past = _PAST.get(gerund, "done")
+    if stall is None:
+        first = (
+            f"{verb} on the NAS: {path} ({progress_text(status)}). This operation keeps "
+            "running after this reply, so nothing more needs to be done to finish it."
+        )
+    else:
+        last = f"; last progress: {progress_text(status)}" if status else ""
+        first = (
+            f"The NAS stopped answering while {gerund} {path} "
+            f"({describe_transport_error(stall)}{last}). It's probably still running there; "
+            "don't start it again."
+        )
     lines = [
-        f"{verb} on the NAS: {path} ({progress_text(status)}). This operation keeps running "
-        "after this reply, so nothing more needs to be done to finish it.",
+        first,
         f"Handle: `{handle}`",
         "To check on it, call file_task with this handle. To stop it, call file_task with "
         'action="stop" (it may then be partly done).',

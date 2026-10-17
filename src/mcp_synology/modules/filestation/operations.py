@@ -21,15 +21,14 @@ from mcp_synology.modules.filestation.helpers import (
     missing_paths_suggestion,
     normalize_path,
     paths_isdir,
-    unanswered_status_response,
 )
 from mcp_synology.modules.filestation.tasks import (
     Handle,
     HandleKind,
+    Handoff,
     ProgressCallback,
     TaskRecord,
     TaskRecords,
-    _task_note,
     handoff_reply,
     poll_task,
     running_task,
@@ -218,11 +217,6 @@ def _collapse_overlaps(paths: list[str], *, drop_nested: bool = True) -> list[st
     return out
 
 
-def _already_done_sentence(operation: str, done: list[str] | None) -> str:
-    """``_already_done`` for after a full sentence: no leading period (QA R1 on #239)."""
-    return _already_done(operation, done).removeprefix(".")
-
-
 def _already_done(operation: str, done: list[str] | None) -> str:
     """Name the items a multi-path operation finished before a later one failed."""
     if not done:
@@ -265,17 +259,16 @@ async def _copy_move_one_path(
     timeout: float,
     done: list[str] | None = None,
     on_progress: ProgressCallback | None = None,
-    handoff_status: dict[str, Any] | None = None,
-) -> tuple[int, bool] | Handle:
+) -> tuple[int, bool] | Handoff:
     """Copy or move a single path via DSM async-task pattern.
 
     Returns the `processed_size` byte count from the completed task (and whether DSM
     skipped items that already existed at the destination, #171) so the
-    caller can sum sizes across all per-path tasks, or the task's Handle when it
-    outlived ``timeout`` and was handed off (#245; the last status is copied into
-    ``handoff_status``). Raises ToolError on failure (via
-    error_response/synology_error_response). A task that errors out or is canceled is
-    stopped, so orphaned tasks can't accumulate on the NAS.
+    caller can sum sizes across all per-path tasks, or a Handoff when the task outlived
+    ``timeout`` or DSM stopped answering its status requests (#245). Raises ToolError on
+    failure (via error_response/synology_error_response). A task that DSM reports an
+    error for, or whose call is canceled, is stopped, so orphaned tasks can't
+    accumulate on the NAS.
     """
     try:
         start_data = await client.request(
@@ -307,20 +300,10 @@ async def _copy_move_one_path(
     if result.outcome == "poll_error":
         assert isinstance(result.error, SynologyError)
         synology_error_response(f"{operation} files", result.error)
-    if result.outcome == "unanswered":
-        assert isinstance(result.error, httpx.TransportError)
-        unanswered_status_response(
-            f"{operation} files",
-            path,
-            result.error,
-            task_note=_task_note(result.stopped),
-            already=_already_done_sentence(operation, done),
-        )
-    if result.outcome == "handoff":
+    if result.outcome in ("handoff", "stalled"):
         # Left running on the NAS, not stopped (#245): the caller gets a handle.
-        if handoff_status is not None:
-            handoff_status.update(result.status)
-        return Handle(_KIND[operation], taskid)
+        stall = result.error if isinstance(result.error, httpx.TransportError) else None
+        return Handoff(Handle(_KIND[operation], taskid), result.status, stall)
     return _copy_move_result(result.status, path, operation, done)
 
 
@@ -512,14 +495,13 @@ async def _copy_move(
     done = list(already_done or [])
     skipped_paths: list[str] = []
     for i, p in enumerate(normalized):
-        handoff_status: dict[str, Any] = {}
         # A copy of the same source to another destination is a different operation; a
         # move (or restore) of a source that is already moving anywhere is not.
         match: dict[str, Any] = {"remove_src": remove_src}
         if not remove_src:
             match["dest_folder_path"] = dest
         running = await running_task(client, api="SYNO.FileStation.CopyMove", path=p, params=match)
-        outcome: tuple[int, bool] | Handle
+        outcome: tuple[int, bool] | Handoff
         task_dest, task_overwrite = dest, overwrite
         if running is not None:
             started = running.get("params") or {}
@@ -528,8 +510,7 @@ async def _copy_move(
             if isinstance(started.get("overwrite"), bool):
                 task_overwrite = started["overwrite"]
             # Never start a second task on a path that already has one (#245).
-            outcome = Handle(_KIND[operation], str(running["taskid"]))
-            handoff_status.update(running)
+            outcome = Handoff(Handle(_KIND[operation], str(running["taskid"])), running)
         else:
             outcome = await _copy_move_one_path(
                 client,
@@ -542,18 +523,20 @@ async def _copy_move(
                 timeout=timeout,
                 done=done,
                 on_progress=on_progress,
-                handoff_status=handoff_status,
             )
-        if isinstance(outcome, Handle):
+        if isinstance(outcome, Handoff):
             if records is not None:
                 records.add(
-                    TaskRecord(handle=outcome, paths=[p], dest=task_dest, overwrite=task_overwrite)
+                    TaskRecord(
+                        handle=outcome.handle, paths=[p], dest=task_dest, overwrite=task_overwrite
+                    )
                 )
             reply = handoff_reply(
                 verb=f"Still {_PRESENT[operation].lower()}",
                 path=p,
-                handle=outcome,
-                status=handoff_status,
+                handle=outcome.handle,
+                status=outcome.status,
+                stall=outcome.stall,
                 done=done,
                 not_started=normalized[i + 1 :] + list(later or []),
             )
@@ -621,14 +604,13 @@ async def _delete_one_path(
     timeout: float,
     done: list[str] | None = None,
     on_progress: ProgressCallback | None = None,
-    handoff_status: dict[str, Any] | None = None,
-) -> Handle | None:
+) -> Handoff | None:
     """Delete a single path via DSM async-task pattern.
 
     Raises ToolError (via error_response/synology_error_response) on failure;
-    returns None when the delete finished, or the task's Handle when it outlived
-    ``timeout`` and was handed off (the last status is copied into ``handoff_status``).
-    A task that errors out or is canceled is stopped.
+    returns None when the delete finished, or a Handoff when the task outlived
+    ``timeout`` or DSM stopped answering its status requests (#245). A task that DSM
+    reports an error for, or whose call is canceled, is stopped.
     """
     try:
         start_data = await client.request(
@@ -660,20 +642,10 @@ async def _delete_one_path(
     if result.outcome == "poll_error":
         assert isinstance(result.error, SynologyError)
         synology_error_response("Delete files", result.error)
-    if result.outcome == "unanswered":
-        assert isinstance(result.error, httpx.TransportError)
-        unanswered_status_response(
-            "Delete files",
-            path,
-            result.error,
-            task_note=_task_note(result.stopped),
-            already=_already_done_sentence("Delete", done),
-        )
-    if result.outcome == "handoff":
+    if result.outcome in ("handoff", "stalled"):
         # Left running on the NAS, not stopped (#245): the caller gets a handle.
-        if handoff_status is not None:
-            handoff_status.update(status)
-        return Handle("delete", taskid)
+        stall = result.error if isinstance(result.error, httpx.TransportError) else None
+        return Handoff(Handle("delete", taskid), status, stall)
 
     _delete_result(status, path, recursive=recursive, done=done)
     return None
@@ -800,15 +772,13 @@ async def delete_files(
 
     deleted: list[str] = []
     for i, p in enumerate(normalized):
-        handoff_status: dict[str, Any] = {}
         running = await running_task(client, api="SYNO.FileStation.Delete", path=p)
-        handle: Handle | None
+        handoff: Handoff | None
         if running is not None:
             # Never start a second delete of a path that already has one running (#245).
-            handle = Handle("delete", str(running["taskid"]))
-            handoff_status.update(running)
+            handoff = Handoff(Handle("delete", str(running["taskid"])), running)
         else:
-            handle = await _delete_one_path(
+            handoff = await _delete_one_path(
                 client,
                 p,
                 recursive=recursive,
@@ -816,9 +786,9 @@ async def delete_files(
                 timeout=timeout,
                 done=deleted,
                 on_progress=on_progress,
-                handoff_status=handoff_status,
             )
-        if handle is not None:
+        if handoff is not None:
+            handle = handoff.handle
             # No DSM request between the handoff and the reply: a recycle-bin probe to a
             # DSM stalled by this very delete would lose the handle (#245). Keep only a
             # cached answer; the final result probes lazily (_delete_summary).
@@ -836,7 +806,8 @@ async def delete_files(
                 verb="Still deleting",
                 path=p,
                 handle=handle,
-                status=handoff_status,
+                status=handoff.status,
+                stall=handoff.stall,
                 done=deleted,
                 not_started=normalized[i + 1 :],
             )
