@@ -1,6 +1,6 @@
 # File Station Module — Tool Specifications
 
-> **Version:** 0.6.1 | **Updated:** 2026-10-16. `list_shares`, `list_files` and `search_files` no longer take `additional`, which accepted fields their tables never showed (#149). 0.6 (2026-10-11): every LLM-facing description refreshed to the shipped text (all 14 had drifted since 0.4); `get_file_info`'s `additional` is exposed (#146); timestamps are labeled UTC (#137). Earlier: 0.4 (2026-03-18) added upload_file (WRITE) and download_file (READ). Tool counts: 7 READ + 7 WRITE = 14.
+> **Version:** 0.7 | **Updated:** 2026-10-16. A long `delete_files`, `copy_files`, `move_files` or `restore_from_recycle_bin` hands its DSM task off after a capped wait instead of stopping it, reports progress while it waits, and the new `file_task` (WRITE) follows up on or stops a handed-off task (#245). 0.6.1: `list_shares`, `list_files` and `search_files` no longer take `additional`, which accepted fields their tables never showed (#149). 0.6 (2026-10-11): every LLM-facing description refreshed to the shipped text (all 14 had drifted since 0.4); `get_file_info`'s `additional` is exposed (#146); timestamps are labeled UTC (#137). Earlier: 0.4 (2026-03-18) added upload_file (WRITE) and download_file (READ). Tool counts: 7 READ + 8 WRITE = 15.
 > **Parent doc:** `docs/specs/architecture.md`
 >
 > Kept in sync with the code by `tests/test_module_specs.py`: tool headings, permission tiers, parameter names and the exact LLM-facing descriptions must match what ships.
@@ -23,7 +23,7 @@ MODULE_INFO = ModuleInfo(
         ApiRequirement(api_name="SYNO.FileStation.Upload", min_version=1, optional=True),
         ApiRequirement(api_name="SYNO.FileStation.Download", min_version=1, optional=True),
     ],
-    tools=[...],  # See individual tool specs below; 7 READ + 7 WRITE = 14 total
+    tools=[...],  # See individual tool specs below; 7 READ + 8 WRITE = 15 total
 )
 ```
 
@@ -46,9 +46,10 @@ All tools use the shared core formatters (`format_table`, `format_key_value`, `f
 
 Several File Station APIs are non-blocking (start → poll status → stop/clean). These are abstracted internally — the tool starts the operation, polls at ~500ms intervals, reports progress via MCP progress notifications when available, and returns the final result.
 
-- **Default timeout:** 120 seconds (configurable per-tool via module config if needed).
-- **On timeout:** Stop the background task, return an error with the last known progress.
-- **Progress reporting:** Via `ctx.report_progress(current, total)` using the MCP progress notification protocol. Whether the client renders this visually depends on the client implementation.
+- **Search and DirSize:** wait up to `search_timeout` / `dir_size_timeout` (default `async_timeout`, 120 s). On timeout, stop the background task and return an error with the last known progress.
+- **Delete and CopyMove hand off (#245):** `delete_files` waits up to `delete_timeout`; `copy_files`, `move_files` and `restore_from_recycle_bin` up to `copy_move_timeout`. Unset, the wait is **30 s** (`async_timeout` doesn't apply), and it's capped at **600 s** whatever the setting, below known client timeouts. A task still running when the wait ends is **not stopped**: the reply is a normal (non-error) result saying it's still running on the NAS, with its progress and a handle (`delete:<taskid>`, `copy:…`, `move:…`, `restore:…`) for `file_task`. In a multi-path call the remaining paths aren't started and are listed as `Not started:`. A cancelled call (the user, or a client's own timeout) still stops the task. A task finishing within the wait gives the same result as before. The server keeps an in-memory record per handed-off task (last 50, 24 h, lost on restart) so `file_task` can give the original tool's result shape. A path that already has a running task of the same kind isn't started twice; the reply returns that task's handle.
+- **Running-task discovery (#245):** where `file_task` is registered, the first successful client of a server process lists the user's running Delete/CopyMove tasks (`SYNO.FileStation.BackgroundTask` `list` v2), seeds the task records from each task's start params, and appends a one-time note (after any update notice) to the first File Station reply naming them and their handles. Any failure is logged at DEBUG and ignored; nothing is shown when nothing is running.
+- **Progress reporting:** Via `ctx.report_progress(current, total, message)` using the MCP progress notification protocol. Delete and CopyMove send it while waiting (about one every 2 s, only when the numbers change), e.g. `Deleting /s/x: 124,219 of 200,400 items`; CopyMove counts bytes. While DSM is still counting (`progress: -1`) a heartbeat with no total is sent. Whether the client renders this visually depends on the client implementation.
 - **Failures without an `error` key:** a finished task can still have failed. CopyMove lists a missing source under `errors` (`[{"code": 408, "path": ...}]`), and a Delete of a missing path finishes with `total: -1` (DSM 7.1 and 7.2.2). Both are reported as structured errors naming the path, never as success (#162).
 - **Missing sources are refused up front:** `copy_files`, `move_files` and `restore_from_recycle_bin` check every source with `getinfo` (restore checks the full `#recycle` paths) and refuse the whole call before anything moves, the same policy as `delete_files`. Conflicts with `overwrite=false` are not errors: DSM skips them (`"skipstatus": {"status": "all"}`, no `errors` key) and copies the rest. `skipstatus` is `{"status": "none"}` when nothing was skipped and absent with `overwrite=true`; `"all"` means at least one item was skipped (a whole file, or some of a folder's children), not which. A result with skips starts with `[!]` and a count, then separate `Copied:`/`Moved:` and skip lists. Since `skipstatus` doesn't say what was skipped, each skipped source's type is read with `getinfo` (only when something was skipped): a file goes under `Skipped:` (`[!] Copied 0 of 1 item(s) to <dest>/; 1 skipped …`), and a folder under `Folders with items skipped (anything not already at the destination was copied):` (`… 1 folder with items skipped …`), because DSM still copies or moves the children that weren't at the destination. It doesn't claim anything else was copied: DSM doesn't say whether any children were left to copy. With a folder, K counts the sources done `in full`. A source whose type can't be read (a failed or unexpected `getinfo`) keeps the hedged `Skipped in whole or in part:` list and a note that a skipped folder's other parts still went through (#189). For a move or restore it says skipped items are still at the source (for a skipped folder, inside that folder; otherwise in the source's parent), and names the sources it did remove. It suggests `overwrite=true`. A multi-destination restore with a skip leads with a neutral `[!]` summary line, `Restored K of N item(s) from /<share> recycle bin; M with skips (already at the destination, overwrite=false; details below):`, and the per-destination results below it say which files or folders were skipped (#171, #190). Because paths are processed one task at a time, a later failure names the items already done before it.
 
@@ -414,7 +415,7 @@ Download a NAS file to a local directory on this machine.
 
 ---
 
-## WRITE Tier Tools (7 tools)
+## WRITE Tier Tools (8 tools)
 
 ### 8. `upload_file`
 
@@ -492,6 +493,7 @@ Restore files from a shared folder's recycle bin.
 - Original location inferred by stripping the `#recycle` path component: `/video/#recycle/Shows/Ep1.mkv` → `/video/Shows/Ep1.mkv`.
 - If `dest_folder` is specified, all files go there flat.
 - If original parent no longer exists, auto-create it.
+- **Long operations (#245):** hands off after the capped wait instead of stopping (see "Async Operations"); the reply's handle works with `file_task`.
 
 ---
 
@@ -585,6 +587,9 @@ Copy files or folders to a destination.
   📄 Severance.S02E09.srt (42 KiB)
 ```
 
+**Design notes:**
+- **Long operations (#245):** hands off after the capped wait instead of stopping (see "Async Operations"); the reply's handle works with `file_task`.
+
 ---
 
 ### 13. `move_files`
@@ -618,6 +623,9 @@ Move files or folders to a new location. **Source files are removed after succes
 
 Source files have been removed from /video/Downloads/.
 ```
+
+**Design notes:**
+- **Long operations (#245):** hands off after the capped wait instead of stopping (see "Async Operations"); the reply's handle works with `file_task`.
 
 ---
 
@@ -682,7 +690,54 @@ When the same call also deletes paths outside the bin, the header says `Deleted`
 - **Deleting from the bin is permanent (#220):** a path inside `/<share>/#recycle` (or the bin folder itself) is treated as permanent whatever the share's setting, because DSM keeps no second copy (seen on DSM 7.1.1: `list_recycle_bin` showed 0 items afterward). Such a share isn't probed for its recycle status unless the call also deletes paths outside its bin.
 - **Missing paths (#162):** every path is checked with `getinfo` before anything is deleted. Any missing path refuses the whole call with `not_found` naming the missing paths and saying nothing was deleted. When a missing path contains `*` or `?`, the suggestion explains that paths aren't wildcard patterns and points to `search_files`. DSM itself finishes a Delete task for a missing path without an error (`total: -1`, empty `path`), so that status is also treated as not found, which covers a path that disappears between the check and the delete.
 - **Per-item errors and overlaps:** a Delete task can finish with an `errors` list and no `error` key, e.g. 900 for a non-recursive delete of a non-empty folder, which DSM leaves in place. That is a structured error (with a `recursive=true` hint), never "Deleted". Paths listed twice, or inside another listed path, are collapsed before any task runs (delete, move and restore), and a later failure names the paths already deleted. Copy collapses only paths listed twice: copying a folder and a path inside it is two copies (`dest/a` and `dest/b`).
-- **Task cleanup:** DSM releases a finished Delete task itself and answers `stop` with error 401 (DSM 7.1 and 7.2.2), so `stop` runs only for a task that didn't finish (timeout, polling error, cancellation).
+- **Task cleanup:** DSM releases a finished Delete task itself and answers `stop` with error 401 (DSM 7.1 and 7.2.2), so `stop` runs only for a task that didn't finish (polling error, cancellation). A task still running when the wait ends is handed off, not stopped (#245).
+- **Handoff reply (#245):**
+
+```
+Still deleting on the NAS: /Backups/X (8 of 342 items, 2%). This operation keeps running after this reply, so nothing more needs to be done to finish it.
+Handle: `delete:FileStation_179219158016597225`
+To check on it, call file_task with this handle. To stop it, call file_task with action="stop" (it may then be partly done).
+Not started: /Backups/Y, /Backups/Z. Run them again once this one finishes.
+```
+
+---
+
+### 15. `file_task`
+
+Follow up on, list, or stop a delete, copy, move or restore that was handed off to run on the NAS (#245).
+
+**Permission tier:** WRITE (only write connections can start these tasks, and `stop` changes NAS state)
+
+**Annotations:** `readOnlyHint=false`, `destructiveHint=false`, `idempotentHint=true`.
+
+**DSM API:** `SYNO.FileStation.BackgroundTask` / `list` v2 (no handle); `SYNO.FileStation.Delete` or `SYNO.FileStation.CopyMove` / `status`, `stop` v2 (the handle's prefix picks the API; task IDs are JSON-quoted, #121)
+
+**Tool description (LLM-facing):**
+> Follow up on a delete, copy, move or restore that is still running on the NAS. Those tools hand
+> off long operations and return a handle such as `delete:FileStation_…`, because the NAS keeps
+> working after the reply. With a handle: `action="status"` shows progress, or the final result
+> once finished; `action="stop"` stops it, and the operation may then be partly done. Without a
+> handle: lists this user's running operations, which is useful in a new chat or after a restart.
+> Handles only work for the same NAS user.
+
+**Parameters:**
+
+| Name | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `handle` | `str` | No | `None` | The handle from a delete/copy/move/restore reply. Omit it to list running operations. |
+| `action` | `"status"` or `"stop"` | No | `"status"` | `status` (default) or `stop`. |
+
+**Response shapes:**
+
+- **No handle:** a table of this user's running Delete/CopyMove tasks (handle, operation, path(s), started, progress), or `No File Station delete, copy or move tasks are running for this user.` On a DSM without `BackgroundTask` `list` (102-104), it says listing isn't available and to use the handle from the reply.
+- **status, running:** `Still deleting on the NAS: /Backups/X (124,219 of 200,400 items, 62%). Handle: ...`, saying it keeps running without anything more and how to stop it.
+- **status, finished:** the original tool's result (deleted paths and recycle-bin wording, copy/move/restore skips and errors) when the server holds a record for the handle (from the handoff or from discovery); otherwise a generic result from DSM's final status (`Delete finished: 200,400 items processed.`, any DSM errors and skips) and a suggestion to list the path. DSM forgets a finished task after one read, so the final status is kept in the record.
+- **status, unknown handle (599):** the remembered final result if there is one; otherwise `No running task with this handle. It finished, was stopped, or was started by a different DSM user. List the path to see what's left.`
+- **stop:** `Stopped <kind> of <path>; it may be partly done. List the path to see what's left.` A stop answered with 401 or 599 says the task had already finished or isn't running.
+
+**Design notes:**
+- **Handle format:** `delete:<taskid>`, `copy:<taskid>`, `move:<taskid>` or `restore:<taskid>`. Backticks, quotes, surrounding spaces and a trailing period are stripped. Anything else is `invalid_parameter` (param `handle`) before any DSM call, so a handle can never reach another API.
+- **Records:** in memory, per server instance (one DSM user), last 50 handles for 24 h, lost on restart. DSM's own per-user 599 covers other users' handles.
 
 ---
 
@@ -770,6 +825,14 @@ Deleted files on those shares can be recovered:
 - list_recycle_bin to see recently deleted files
 - restore_from_recycle_bin to recover them
 The recycle bin lives at /<share>/#recycle/ internally.
+
+LONG OPERATIONS:
+A large delete, copy, move or restore can outlast one reply. The tool then hands it off:
+the NAS keeps working, and the reply gives a handle. Tell the user it's still running,
+and include the progress. Don't poll in a loop; check with file_task when the user asks,
+or before doing anything that depends on the result, such as reusing the destination or
+reporting space freed. Never start the same operation again while it's running. If the
+user wants it cancelled, use file_task action="stop", and say the result may be partial.
 ```
 
 ---

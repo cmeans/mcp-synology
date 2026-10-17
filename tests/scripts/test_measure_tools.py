@@ -33,9 +33,9 @@ def test_offline_config_uses_test_net_and_all_modules(mt: ModuleType, tmp_path: 
     assert "password" not in text
 
 
-def test_measure_size_counts_all_28_tools(mt: ModuleType, tmp_path: Path) -> None:
+def test_measure_size_counts_all_29_tools(mt: ModuleType, tmp_path: Path) -> None:
     size = mt.measure_size(mt.write_offline_config(tmp_path))
-    assert size["tools"] == 28
+    assert size["tools"] == 29
     assert size["total"] == size["schemas"] + size["descriptions"] + size["instructions"]
     assert size["schema_titles"] == 0
 

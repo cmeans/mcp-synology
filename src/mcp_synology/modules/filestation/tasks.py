@@ -445,18 +445,19 @@ async def discover_running_tasks(client: DsmClient, records: TaskRecords) -> str
     """
     try:
         tasks = await _list_running(client)
+        if not tasks:
+            return None
+        lines = [f"Note: {len(tasks)} operation(s) still running on the NAS:"]
+        for task in tasks:
+            records.add(task.record())
+            lines.append(
+                f"  {_describe(task.handle.kind, task.paths, task.dest)} "
+                f"({progress_text(task.task)}), handle `{task.handle}`"
+            )
     except Exception as e:
+        # Malformed task data included: discovery must never fail a tool call.
         logger.debug("Running-task discovery failed, ignoring: %s", e)
         return None
-    if not tasks:
-        return None
-    lines = [f"Note: {len(tasks)} operation(s) still running on the NAS:"]
-    for task in tasks:
-        records.add(task.record())
-        lines.append(
-            f"  {_describe(task.handle.kind, task.paths, task.dest)} "
-            f"({progress_text(task.task)}), handle `{task.handle}`"
-        )
     lines.append("Use file_task to check on them or stop them.")
     return "\n".join(lines)
 
@@ -587,7 +588,7 @@ async def file_task(
                 return f"That task had already finished or isn't running. {_LIST_HINT}"
             synology_error_response("Stop task", e)
         what = ", ".join(paths) if paths else f"`{parsed}`"
-        return f"Stopped {parsed.kind} of {what}. {_task_note(True)} {_LIST_HINT}"
+        return f"Stopped {parsed.kind} of {what}; it may be partly done. {_LIST_HINT}"
 
     try:
         status = await client.request(

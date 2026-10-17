@@ -621,6 +621,17 @@ class TestDiscover:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_router({"list": reply}))
         assert await discover_running_tasks(mock_client, TaskRecords()) is None
 
+    @respx.mock
+    async def test_discover_malformed_task_never_raises(self, mock_client: DsmClient) -> None:
+        """A task whose numbers aren't numbers must not break the first tool call."""
+        from mcp_synology.modules.filestation.tasks import discover_running_tasks
+
+        bad = {**LIST_DELETE, "processed_num": "lots", "total": 10}
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=_router({"list": _list_reply(bad)})
+        )
+        assert await discover_running_tasks(mock_client, TaskRecords()) is None
+
 
 class TestFileTask:
     @respx.mock
@@ -778,8 +789,9 @@ class TestFileTask:
         text = await file_task(mock_client, records=records, handle=str(h), action="stop")
         assert calls == [("SYNO.FileStation.CopyMove", "stop")]
         assert dict(route.calls.last.request.url.params)["taskid"] == '"FileStation_M1"'
-        assert text.startswith("Stopped move of /s/b. The task was stopped and may be partly done.")
-        assert "list" in text.lower()
+        assert text == (
+            "Stopped move of /s/b; it may be partly done. List the path to see what's left."
+        )
 
     @respx.mock
     @pytest.mark.parametrize("code", [401, 599])

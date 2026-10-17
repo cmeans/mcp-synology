@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Annotated, Literal
 
 from mcp.server.mcpserver import (
     Context,  # noqa: TC002 — runtime import needed for MCPServer context injection
@@ -20,7 +21,10 @@ from mcp_synology.modules import (
 )
 
 if TYPE_CHECKING:
+    from mcp_synology.core.client import DsmClient
     from mcp_synology.modules import RegisterContext
+
+logger = logging.getLogger(__name__)
 
 # Annotations for tools that need explicit overrides
 _ANNO_IDEMPOTENT = ToolAnnotations(
@@ -177,7 +181,7 @@ MODULE_INFO = ModuleInfo(
             permission_tier=PermissionTier.READ,
             annotations=_ANNO_LOCAL_WRITE,
         ),
-        # WRITE tools (7)
+        # WRITE tools (8)
         ToolInfo(
             name="create_folder",
             description=(
@@ -243,6 +247,21 @@ MODULE_INFO = ModuleInfo(
             permission_tier=PermissionTier.WRITE,
             annotations=_ANNO_DESTRUCTIVE,
         ),
+        ToolInfo(
+            name="file_task",
+            description=(
+                "Follow up on a delete, copy, move or restore that is still running on the "
+                "NAS. Those tools hand off long operations and return a handle such as "
+                "`delete:FileStation_…`, because the NAS keeps working after the reply. "
+                'With a handle: `action="status"` shows progress, or the final result once '
+                'finished; `action="stop"` stops it, and the operation may then be partly '
+                "done. Without a handle: lists this user's running operations, which is "
+                "useful in a new chat or after a restart. Handles only work for the same "
+                "NAS user."
+            ),
+            permission_tier=PermissionTier.WRITE,
+            annotations=_ANNO_IDEMPOTENT,
+        ),
     ],
     settings_schema=FileStationSettings,
 )
@@ -269,13 +288,22 @@ def register(ctx: RegisterContext) -> None:
         restore_from_recycle_bin,
     )
     from mcp_synology.modules.filestation.search import search_files
+    from mcp_synology.modules.filestation.tasks import (
+        ProgressCallback,
+        TaskRecords,
+        discover_running_tasks,
+        file_task,
+    )
     from mcp_synology.modules.filestation.transfer import download_file, upload_file
 
     settings = FileStationSettings(**ctx.settings_dict)
     indicator = settings.file_type_indicator
     search_timeout = float(settings.search_timeout or settings.async_timeout)
-    copy_move_timeout = float(settings.copy_move_timeout or settings.async_timeout)
-    delete_timeout = float(settings.delete_timeout or settings.async_timeout)
+    # Delete/copy/move/restore wait this long, then hand the task off to run on (#245).
+    # 30 s unless set; capped at 10 minutes, below known client timeouts (a client's
+    # timeout arrives as a cancel, which stops the task). async_timeout doesn't apply.
+    delete_wait = min(float(settings.delete_timeout or 30), 600.0)
+    copy_move_wait = min(float(settings.copy_move_timeout or 30), 600.0)
     dir_size_timeout = float(settings.dir_size_timeout or settings.async_timeout)
     upload_timeout = float(settings.upload_timeout or 300)
     download_timeout = float(settings.download_timeout or 300)
@@ -320,6 +348,42 @@ def register(ctx: RegisterContext) -> None:
     def _desc(name: str) -> str:
         return next(t.description for t in MODULE_INFO.tools if t.name == name)
 
+    # Handed-off tasks this server process knows about (#245), shared by the four
+    # operations that hand off and file_task.
+    records = TaskRecords()
+    # Discovery of tasks still running from before this process (#245): once, at the
+    # first successful client; its note goes on the first reply after it. Only where
+    # file_task exists, since the note tells the model to use it.
+    discovery: dict[str, str | bool | None] = {
+        "pending": "file_task" in ctx.allowed_tools,
+        "note": None,
+    }
+
+    async def _fs_client() -> DsmClient:
+        """The DSM client; the first success also runs running-task discovery."""
+        client = await manager.get_client()
+        if discovery["pending"]:
+            discovery["pending"] = False
+            try:
+                discovery["note"] = await discover_running_tasks(client, records)
+            except Exception as e:
+                # Never fail (or retry) the tool call over discovery.
+                logger.debug("Running-task discovery failed, ignoring: %s", e)
+        return client
+
+    def _reply(result: str) -> str:
+        """The tool result plus the update notice and, once, the discovery note."""
+        text = manager.with_update_notice(result)
+        note = discovery["note"]
+        if isinstance(note, str):
+            discovery["note"] = None
+            text += f"\n\n---\n{note}"
+        return text
+
+    def _progress(mcp_ctx: Context) -> ProgressCallback:
+        """Forward a task's progress (with its message) to the client."""
+        return lambda p, t, m: mcp_ctx.report_progress(p, t, m)
+
     if "list_shares" in ctx.allowed_tools:
 
         @server.tool(
@@ -331,8 +395,8 @@ def register(ctx: RegisterContext) -> None:
             sort_by: str = "name",
             sort_direction: str = "asc",
         ) -> str:
-            client = await manager.get_client()
-            return manager.with_update_notice(
+            client = await _fs_client()
+            return _reply(
                 await list_shares(
                     client,
                     sort_by=sort_by,
@@ -359,9 +423,9 @@ def register(ctx: RegisterContext) -> None:
             offset: int = 0,
             limit: int = 200,
         ) -> str:
-            client = await manager.get_client()
+            client = await _fs_client()
             await ensure_known_shares(client, [path], known_shares)
-            return manager.with_update_notice(
+            return _reply(
                 await list_files(
                     client,
                     path=path,
@@ -390,9 +454,9 @@ def register(ctx: RegisterContext) -> None:
             sort_direction: str = "desc",
             limit: int = 100,
         ) -> str:
-            client = await manager.get_client()
+            client = await _fs_client()
             await ensure_known_shares(client, [share], known_shares)
-            return manager.with_update_notice(
+            return _reply(
                 await list_recycle_bin(
                     client,
                     share=share,
@@ -425,9 +489,9 @@ def register(ctx: RegisterContext) -> None:
             recursive: bool = True,
             limit: int = 500,
         ) -> str:
-            client = await manager.get_client()
+            client = await _fs_client()
             await ensure_known_shares(client, [folder_path], known_shares)
-            return manager.with_update_notice(
+            return _reply(
                 await search_files(
                     client,
                     folder_path=folder_path,
@@ -455,11 +519,9 @@ def register(ctx: RegisterContext) -> None:
             annotations=_tool_annos["get_file_info"],
         )
         async def tool_get_file_info(paths: list[str], additional: list[str] | None = None) -> str:
-            client = await manager.get_client()
+            client = await _fs_client()
             await ensure_known_shares(client, paths, known_shares)
-            return manager.with_update_notice(
-                await get_file_info(client, paths=paths, additional=additional)
-            )
+            return _reply(await get_file_info(client, paths=paths, additional=additional))
 
     if "get_dir_size" in ctx.allowed_tools:
 
@@ -469,10 +531,10 @@ def register(ctx: RegisterContext) -> None:
             annotations=_tool_annos["get_dir_size"],
         )
         async def tool_get_dir_size(path: str) -> str:
-            client = await manager.get_client()
+            client = await _fs_client()
             await ensure_known_shares(client, [path], known_shares)
             result = await get_dir_size(client, path=path, timeout=dir_size_timeout)
-            return manager.with_update_notice(result)
+            return _reply(result)
 
     if "download_file" in ctx.allowed_tools:
 
@@ -504,13 +566,13 @@ def register(ctx: RegisterContext) -> None:
                     ),
                 )
 
-            client = await manager.get_client()
+            client = await _fs_client()
             await ensure_known_shares(client, [path], known_shares)
 
             async def _progress(current: int, total: int | None) -> None:
                 await ctx.report_progress(float(current), float(total) if total else None)
 
-            return manager.with_update_notice(
+            return _reply(
                 await download_file(
                     client,
                     path=path,
@@ -535,10 +597,10 @@ def register(ctx: RegisterContext) -> None:
             paths: list[str],
             force_parent: bool = True,
         ) -> str:
-            client = await manager.get_client()
+            client = await _fs_client()
             await ensure_known_shares(client, paths, known_shares)
             result = await create_folder(client, paths=paths, force_parent=force_parent)
-            return manager.with_update_notice(result)
+            return _reply(result)
 
     if "rename" in ctx.allowed_tools:
 
@@ -548,9 +610,9 @@ def register(ctx: RegisterContext) -> None:
             annotations=_tool_annos["rename"],
         )
         async def tool_rename(path: str, new_name: str) -> str:
-            client = await manager.get_client()
+            client = await _fs_client()
             await ensure_known_shares(client, [path], known_shares)
-            return manager.with_update_notice(await rename(client, path=path, new_name=new_name))
+            return _reply(await rename(client, path=path, new_name=new_name))
 
     if "copy_files" in ctx.allowed_tools:
 
@@ -560,19 +622,22 @@ def register(ctx: RegisterContext) -> None:
             annotations=_tool_annos["copy_files"],
         )
         async def tool_copy_files(
+            ctx: Context,
             paths: list[str],
             dest_folder: str,
             overwrite: bool = False,
         ) -> str:
-            client = await manager.get_client()
+            client = await _fs_client()
             await ensure_known_shares(client, [*paths, dest_folder], known_shares)
-            return manager.with_update_notice(
+            return _reply(
                 await copy_files(
                     client,
                     paths=paths,
                     dest_folder=dest_folder,
                     overwrite=overwrite,
-                    timeout=copy_move_timeout,
+                    timeout=copy_move_wait,
+                    records=records,
+                    on_progress=_progress(ctx),
                 )
             )
 
@@ -584,19 +649,22 @@ def register(ctx: RegisterContext) -> None:
             annotations=_tool_annos["move_files"],
         )
         async def tool_move_files(
+            ctx: Context,
             paths: list[str],
             dest_folder: str,
             overwrite: bool = False,
         ) -> str:
-            client = await manager.get_client()
+            client = await _fs_client()
             await ensure_known_shares(client, [*paths, dest_folder], known_shares)
-            return manager.with_update_notice(
+            return _reply(
                 await move_files(
                     client,
                     paths=paths,
                     dest_folder=dest_folder,
                     overwrite=overwrite,
-                    timeout=copy_move_timeout,
+                    timeout=copy_move_wait,
+                    records=records,
+                    on_progress=_progress(ctx),
                 )
             )
 
@@ -608,18 +676,21 @@ def register(ctx: RegisterContext) -> None:
             annotations=_tool_annos["delete_files"],
         )
         async def tool_delete_files(
+            ctx: Context,
             paths: list[str],
             recursive: bool = True,
         ) -> str:
-            client = await manager.get_client()
+            client = await _fs_client()
             await ensure_known_shares(client, paths, known_shares)
-            return manager.with_update_notice(
+            return _reply(
                 await delete_files(
                     client,
                     paths=paths,
                     recursive=recursive,
                     recycle_bin_status=recycle_status,
-                    timeout=delete_timeout,
+                    timeout=delete_wait,
+                    records=records,
+                    on_progress=_progress(ctx),
                 )
             )
 
@@ -653,7 +724,7 @@ def register(ctx: RegisterContext) -> None:
                     ),
                 )
 
-            client = await manager.get_client()
+            client = await _fs_client()
             await ensure_known_shares(
                 client, [d] if (d := dest_folder or default_upload_dir) else [], known_shares
             )
@@ -661,7 +732,7 @@ def register(ctx: RegisterContext) -> None:
             async def _progress(current: int, total: int | None) -> None:
                 await ctx.report_progress(float(current), float(total) if total else None)
 
-            return manager.with_update_notice(
+            return _reply(
                 await upload_file(
                     client,
                     local_path=local_path,
@@ -683,22 +754,49 @@ def register(ctx: RegisterContext) -> None:
             annotations=_tool_annos["restore_from_recycle_bin"],
         )
         async def tool_restore_from_recycle_bin(
+            ctx: Context,
             share: str,
             paths: list[str],
             dest_folder: str | None = None,
             overwrite: bool = False,
         ) -> str:
-            client = await manager.get_client()
+            client = await _fs_client()
             await ensure_known_shares(
                 client, [share, *([dest_folder] if dest_folder else [])], known_shares
             )
-            return manager.with_update_notice(
+            return _reply(
                 await restore_from_recycle_bin(
                     client,
                     share=share,
                     paths=paths,
                     dest_folder=dest_folder,
                     overwrite=overwrite,
-                    timeout=delete_timeout,
+                    timeout=copy_move_wait,
+                    records=records,
+                    on_progress=_progress(ctx),
                 )
             )
+
+    if "file_task" in ctx.allowed_tools:
+
+        @server.tool(
+            name="file_task",
+            description=_desc("file_task"),
+            annotations=_tool_annos["file_task"],
+        )
+        async def tool_file_task(
+            handle: Annotated[
+                str | None,
+                Field(
+                    description=(
+                        "The handle from a delete/copy/move/restore reply. Omit it to list "
+                        "running operations."
+                    )
+                ),
+            ] = None,
+            action: Annotated[
+                Literal["status", "stop"], Field(description="`status` (default) or `stop`.")
+            ] = "status",
+        ) -> str:
+            client = await _fs_client()
+            return _reply(await file_task(client, records=records, handle=handle, action=action))
