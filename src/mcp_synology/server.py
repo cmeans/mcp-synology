@@ -491,8 +491,8 @@ def _withheld_tools_notice(config: AppConfig, plan: _ModulePlan) -> str:
 
 def _local_paths_notice(plan: _ModulePlan) -> str:
     """Name the local folders upload_file/download_file may use (allowed_local_paths)."""
+    from mcp_synology.core.local_paths import allowed_local_roots
     from mcp_synology.modules.filestation import FileStationSettings
-    from mcp_synology.modules.filestation.local_paths import allowed_local_roots
 
     for mod_name, _module, mod_config, allowed in plan:
         if mod_name != "filestation" or not {"upload_file", "download_file"} & set(allowed):

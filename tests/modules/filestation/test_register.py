@@ -372,7 +372,7 @@ class TestFilestationToolInvocation:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         monkeypatch.setattr(
-            "mcp_synology.modules.filestation.local_paths.default_downloads_dir",
+            "mcp_synology.core.local_paths.default_downloads_dir",
             lambda: tmp_path / "Downloads",
         )
         server, _manager, ctx = _make_ctx(allowed={"download_file"})

@@ -16,11 +16,8 @@ from mcp_synology.core.formatting import (
     format_status,
     synology_error_response,
 )
+from mcp_synology.core.local_paths import refuse_outside_roots
 from mcp_synology.modules.filestation.helpers import normalize_path
-from mcp_synology.modules.filestation.local_paths import (
-    lexically_inside,
-    outside_allowed_roots,
-)
 
 if TYPE_CHECKING:
     from mcp_synology.core.client import DsmClient, ProgressCallback
@@ -71,46 +68,6 @@ def _expand_home(operation: str, param: str, value: str) -> Path:
         )
 
 
-def _refuse_outside_roots(
-    operation: str, param: str, value: str, path: Path, roots: list[Path] | None
-) -> None:
-    """Refuse a local path outside the allowed folders (``allowed_local_paths``).
-
-    ``roots`` of ``None`` means unconfined (direct callers); the tools always pass them.
-    """
-    if roots is None:
-        return
-    try:
-        refused = outside_allowed_roots(path, roots)
-    except ValueError as e:
-        # A NUL byte, or a symlink loop on Python 3.11/3.12 (QA R1 on #186).
-        error_response(
-            ErrorCode.INVALID_PARAMETER,
-            f"{operation} refused: {str(e).rstrip('.')}.",
-            retryable=False,
-            param=param,
-            value=value,
-            suggestion="Pass a plain local path without NUL characters or symlink loops.",
-        )
-    if refused is None:
-        return
-    # Explain the resolved path only for a link inside an allowed folder that leads out;
-    # for anything else it would reveal what exists outside (QA R1 on #186).
-    shown = f"{value} (resolves to {refused})" if lexically_inside(path, roots) else value
-    error_response(
-        ErrorCode.PERMISSION_DENIED,
-        f"{operation} refused: {shown} is outside the folders this server may use on "
-        f"this machine: {', '.join(str(r) for r in roots)}.",
-        retryable=False,
-        param=param,
-        value=value,
-        suggestion=(
-            "Use a path inside one of those folders, or ask the user to add the folder "
-            "to allowed_local_paths in the filestation module settings."
-        ),
-    )
-
-
 async def upload_file(
     client: DsmClient,
     *,
@@ -124,7 +81,9 @@ async def upload_file(
     allowed_roots: list[Path] | None = None,
 ) -> str:
     """Upload a local file to a NAS folder."""
-    _refuse_outside_roots("Upload", "local_path", local_path, Path(local_path), allowed_roots)
+    refuse_outside_roots(
+        "Upload", "local_path", local_path, Path(local_path), allowed_roots, module="filestation"
+    )
     local = _expand_home("Upload", "local_path", local_path)
     if not local.is_file():
         error_response(
@@ -211,7 +170,14 @@ async def download_file(
 ) -> str:
     """Download a NAS file to a local directory."""
     # Before the existence check, so a refusal doesn't reveal what exists outside.
-    _refuse_outside_roots("Download", "dest_folder", dest_folder, Path(dest_folder), allowed_roots)
+    refuse_outside_roots(
+        "Download",
+        "dest_folder",
+        dest_folder,
+        Path(dest_folder),
+        allowed_roots,
+        module="filestation",
+    )
     local_dir = _expand_home("Download", "dest_folder", dest_folder)
     if not local_dir.is_dir():
         error_response(
