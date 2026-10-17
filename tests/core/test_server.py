@@ -1278,6 +1278,13 @@ class TestLocalPathsNotice:
         assert str((tmp_path / "media").resolve()) in section
         assert "allowed_local_paths" in section
 
+    def test_lists_the_shared_folders(self, tmp_path: Path) -> None:
+        """#257: the top-level list alone decides the folders (no Downloads default)."""
+        config = make_test_config(allowed_local_paths=[str(tmp_path / "shared")])
+        section = (create_server(config).instructions or "").split("LOCAL PATHS", 1)[1]
+        assert str((tmp_path / "shared").resolve()) in section
+        assert "Downloads" not in section
+
     def test_read_only_connection_still_gets_it_for_download_file(self, tmp_path: Path) -> None:
         text = self._instructions({"allowed_local_paths": [str(tmp_path)]}, permission="read")
         assert "LOCAL PATHS" in text

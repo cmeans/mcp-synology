@@ -489,7 +489,7 @@ def _withheld_tools_notice(config: AppConfig, plan: _ModulePlan) -> str:
     )
 
 
-def _local_paths_notice(plan: _ModulePlan) -> str:
+def _local_paths_notice(config: AppConfig, plan: _ModulePlan) -> str:
     """Name the local folders upload_file/download_file may use (allowed_local_paths)."""
     from mcp_synology.core.local_paths import allowed_local_roots
     from mcp_synology.modules.filestation import FileStationSettings
@@ -502,6 +502,8 @@ def _local_paths_notice(plan: _ModulePlan) -> str:
         roots = allowed_local_roots(
             settings.allowed_local_paths,
             str(Path(default_dir).expanduser()) if default_dir else None,
+            shared_paths=config.allowed_local_paths,
+            module="filestation",
         )
         return (
             "\n\nLOCAL PATHS:\n"
@@ -581,7 +583,7 @@ def create_server(config: AppConfig) -> MCPServer:
     if not config.instructions_file:
         # A full replacement file is the user's own; everything else gets the notice.
         instructions += _withheld_tools_notice(config, plan)
-        instructions += _local_paths_notice(plan)
+        instructions += _local_paths_notice(config, plan)
 
     server = _SynologyServer(
         server_name,
@@ -612,6 +614,7 @@ def create_server(config: AppConfig) -> MCPServer:
             allowed_tools=allowed_tools,
             settings_dict=mod_config.settings,
             display_name=config.display_name,
+            allowed_local_paths=config.allowed_local_paths,
         )
         module.register(ctx)
 

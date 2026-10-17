@@ -303,7 +303,10 @@ def register(ctx: RegisterContext) -> None:
     )
     default_upload_dir = settings.default_upload_dir  # NAS path, no expansion
     allowed_roots = local_paths.allowed_local_roots(
-        settings.allowed_local_paths, default_download_dir
+        settings.allowed_local_paths,
+        default_download_dir,
+        shared_paths=ctx.allowed_local_paths,
+        module="filestation",
     )
     search_poll_interval = settings.search_poll_interval
     hide_recycle = settings.hide_recycle_in_listings
