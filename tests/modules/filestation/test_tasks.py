@@ -266,7 +266,72 @@ class TestPollTask:
             interval=0.1,
         )
         assert result.outcome == "finished"
-        assert 1 <= on_progress.await_count <= 2
+        assert on_progress.await_count == 1
+
+    @respx.mock
+    async def test_poll_progress_skips_unchanged_numbers(
+        self, mock_client: DsmClient, clock: list[float]
+    ) -> None:
+        statuses = iter(
+            [
+                {"finished": False, "processed_num": 5, "total": 10},
+                {"finished": False, "processed_num": 5, "total": 10},
+                {"finished": False, "processed_num": 6, "total": 10},
+                {"finished": True},
+            ]
+        )
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=lambda request: _ok(next(statuses))
+        )
+        on_progress = AsyncMock()
+        await poll_task(
+            mock_client,
+            api=API,
+            version=2,
+            taskid="t1",
+            wait=30,
+            label="x",
+            on_progress=on_progress,
+            progress_every=0.5,
+        )
+        assert [c.args[0] for c in on_progress.await_args_list] == [5, 6]
+
+    @respx.mock
+    async def test_poll_anyio_cancel_scope_still_stops(
+        self, mock_client: DsmClient, clock: list[float], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The MCP SDK cancels via level-triggered anyio scopes; stop must be shielded."""
+        import anyio
+
+        import mcp_synology.modules.filestation.tasks as tasks
+
+        calls: list[str] = []
+        blocked = asyncio.Event()
+
+        async def side_effect(request: httpx.Request) -> httpx.Response:
+            calls.append(_method(request))
+            if _method(request) == "stop":
+                await anyio.sleep(0)  # a checkpoint: re-cancelled here unless shielded
+                calls.append("stop-done")
+            return _ok(RUNNING if _method(request) == "status" else {})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+
+        async def blocked_sleep(seconds: float) -> None:
+            blocked.set()
+            await anyio.sleep_forever()
+
+        monkeypatch.setattr(tasks.asyncio, "sleep", blocked_sleep)
+        async with anyio.create_task_group() as tg:
+
+            async def run() -> None:
+                await poll_task(mock_client, api=API, version=2, taskid="t1", wait=30, label="x")
+
+            tg.start_soon(run)
+            await blocked.wait()
+            tg.cancel_scope.cancel()
+        assert calls.count("stop") == 1
+        assert "stop-done" in calls
 
     @respx.mock
     async def test_poll_reauth_mid_wait(self, mock_client: DsmClient, clock: list[float]) -> None:

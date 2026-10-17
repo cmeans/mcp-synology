@@ -11,6 +11,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, get_args
 
+import anyio
 import httpx
 
 from mcp_synology.core.errors import ErrorCode, SynologyError
@@ -198,6 +199,7 @@ async def poll_task(
     deadline = time.monotonic() + wait
     status: dict[str, Any] = {}
     last_progress: float | None = None
+    last_numbers: tuple[Any, Any] | None = None
 
     async def stop() -> bool:
         return await _stop_background_task(client, api, quoted, version, logger)
@@ -223,17 +225,22 @@ async def poll_task(
                 if last_progress is None or now - last_progress >= progress_every:
                     total = status.get("total") or 0
                     if total > 0:
-                        last_progress = now
                         processed = status.get("processed_num") or 0
-                        await on_progress(
-                            processed, total, f"{label}: {processed:,} of {total:,} items"
-                        )
+                        if (processed, total) != last_numbers:
+                            last_progress = now
+                            last_numbers = (processed, total)
+                            await on_progress(
+                                processed, total, f"{label}: {processed:,} of {total:,} items"
+                            )
                     elif status.get("progress") == -1:
                         last_progress = now
                         await on_progress(0, None, f"{label}: counting items")
 
             await asyncio.sleep(interval)
     except asyncio.CancelledError:
-        await stop()
+        # anyio cancel scopes (the MCP SDK's) are level-triggered: shield the stop or
+        # it is cancelled again at once and the NAS task is orphaned.
+        with anyio.CancelScope(shield=True):
+            await stop()
         raise
     return PollResult(status, "handoff")
