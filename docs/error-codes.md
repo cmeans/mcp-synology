@@ -281,6 +281,21 @@ for a `file_task` that DSM doesn't answer.
 have created the task, so check `list_downloads` before retrying (mcp-synology
 never retries it automatically, to avoid duplicate downloads).
 
+### The client's own timeout
+
+The MCP client can give up on a call before mcp-synology does. Claude Code
+aborts a tool call that sends no result and no progress notification for an
+idle window: 30 minutes by default for a stdio server (5 minutes for HTTP
+servers). That abort comes from the client, not from DSM or mcp-synology. To
+raise the window, set `CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT` (milliseconds; `0`
+turns the check off), or add a `timeout` field (milliseconds) to this server's
+MCP config entry, which also sets a hard limit per call; see
+[Claude Code's MCP docs](https://code.claude.com/docs/en/mcp). Delete, copy,
+move and restore send progress notifications while they wait, so they stay
+under the idle limit. `get_dir_size` and `search_files` don't send progress
+yet (#252), so a long one can hit it: raise the client's limit, or narrow the
+path.
+
 ### Not an error: a handed-off operation
 
 A delete, copy, move or restore that's still running when the call's wait
@@ -295,9 +310,12 @@ partly done), and no handle lists the running operations. Only a canceled
 call (the user, or a client's own timeout) or a DSM error stops the task.
 
 The same goes for a NAS that stops answering status requests during the wait
-(a network timeout or dropped connection; since 2026-10-17): the task isn't
-stopped, and the reply starts "The NAS stopped answering while deleting …
-It's probably still running there; don't start it again.", with the handle.
+(a network timeout or dropped connection), or whose answer can't be read (for
+example a login page from a captive portal or reverse proxy): the task isn't
+stopped, and the reply starts "The NAS stopped answering while deleting …" or
+"The NAS's status reply couldn't be read while deleting … (JSONDecodeError)",
+then "It's probably still running there; don't start it again.", with the
+handle.
 Check on it with `file_task` rather than starting it again.
 
 `file_task` answers a handle DSM no longer knows with a normal reply, not an
