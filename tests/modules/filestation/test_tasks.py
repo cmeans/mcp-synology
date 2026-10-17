@@ -14,6 +14,7 @@ import respx
 from mcp.server.mcpserver.exceptions import ToolError
 
 from mcp_synology.modules.filestation.tasks import (
+    DiscoveryNote,
     Handle,
     TaskRecord,
     TaskRecords,
@@ -760,7 +761,7 @@ class TestDiscover:
             side_effect=_router({"list": _list_reply(LIST_DELETE, LIST_MOVE, LIST_DONE)})
         )
         records = TaskRecords()
-        note = await discover_running_tasks(mock_client, records)
+        found = await discover_running_tasks(mock_client, records)
 
         delete = records.get(Handle("delete", "FileStation_D1"))
         assert delete is not None
@@ -773,12 +774,21 @@ class TestDiscover:
         assert move.overwrite is False
         assert records.get(Handle("delete", "FileStation_OLD")) is None
 
+        assert found is not None
+        note = found.text()
         assert note is not None
         assert note.startswith("Note: 2 operation(s) still running on the NAS:")
         assert "deleting /s/a (8 of 342 items, 2%), handle `delete:FileStation_D1`" in note
         assert "moving /s/b" in note
         assert "handle `move:FileStation_M1`" in note
         assert note.endswith("Use file_task to check on them or stop them.")
+        # A file_task reply about one of them leaves that one out.
+        rest = found.text(skip="delete:FileStation_D1")
+        assert rest is not None
+        assert rest.startswith("Note: 1 operation(s) still running on the NAS:")
+        assert "FileStation_D1" not in rest
+        assert "handle `move:FileStation_M1`" in rest
+        assert DiscoveryNote({"delete:X": "  x"}).text(skip="delete:X") is None
 
     @respx.mock
     async def test_discover_restore_and_copy_kinds(self, mock_client: DsmClient) -> None:
@@ -798,9 +808,11 @@ class TestDiscover:
             side_effect=_router({"list": _list_reply(restore, copy)})
         )
         records = TaskRecords()
-        note = await discover_running_tasks(mock_client, records)
+        found = await discover_running_tasks(mock_client, records)
         assert records.get(Handle("restore", "FileStation_R1")) is not None
         assert records.get(Handle("copy", "FileStation_C1")) is not None
+        assert found is not None
+        note = found.text()
         assert note is not None
         assert "restoring /s/#recycle/x" in note
         assert "copying /s/b" in note
@@ -1131,7 +1143,29 @@ class TestFileTask:
         assert [m for _, m in calls] == ["status"]
         assert text == (
             "No running task with this handle. It finished, was stopped, or was started by a "
-            "different DSM user. List the path to see what's left."
+            "different DSM user. Nothing was stopped. List the path to see what's left."
+        )
+
+    @respx.mock
+    async def test_file_task_stop_forgotten_with_record_says_nothing_stopped(
+        self, mock_client: DsmClient
+    ) -> None:
+        """QA round 3: "or was stopped" alone reads as "your stop worked"."""
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        calls: list[tuple[str, str]] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=_router({"status": _err(599), "stop": _ok({})}, calls)
+        )
+        h = Handle("delete", "FileStation_D1")
+        records = TaskRecords()
+        records.add(TaskRecord(handle=h, paths=["/qa/vanish-y"]))
+        text = await file_task(mock_client, records=records, handle=str(h), action="stop")
+        assert [m for _, m in calls] == ["status"]
+        assert text == (
+            "The delete of /qa/vanish-y is no longer running on the NAS: it finished or was "
+            "stopped, and DSM no longer has its result. Nothing was stopped. List the path to "
+            "see what's left."
         )
 
     @respx.mock

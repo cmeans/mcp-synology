@@ -400,7 +400,9 @@ async def test_discovery_seeds_records_in_a_new_session(
 
         async with admin_session() as other:
             records = TaskRecords()
-            note = await discover_running_tasks(other, records)
+            found = await discover_running_tasks(other, records)
+            assert found is not None
+            note = found.text()
             assert note is not None
             assert note.startswith("Note: 1 operation(s) still running on the NAS:"), note
             assert f"deleting {path} (" in note

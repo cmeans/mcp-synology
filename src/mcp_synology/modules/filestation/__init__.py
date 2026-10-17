@@ -290,10 +290,12 @@ def register(ctx: RegisterContext) -> None:
     )
     from mcp_synology.modules.filestation.search import search_files
     from mcp_synology.modules.filestation.tasks import (
+        DiscoveryNote,
         ProgressCallback,
         TaskRecords,
         discover_running_tasks,
         file_task,
+        parse_handle,
     )
     from mcp_synology.modules.filestation.transfer import download_file, upload_file
 
@@ -355,7 +357,7 @@ def register(ctx: RegisterContext) -> None:
     # Discovery of tasks still running from before this process (#245): once, at the
     # first successful client; its note goes on the first reply after it. Only where
     # file_task exists, since the note tells the model to use it.
-    discovery: dict[str, str | bool | None] = {
+    discovery: dict[str, DiscoveryNote | bool | None] = {
         "pending": "file_task" in ctx.allowed_tools,
         "note": None,
     }
@@ -372,18 +374,19 @@ def register(ctx: RegisterContext) -> None:
                 logger.debug("Running-task discovery failed, ignoring: %s", e)
         return client
 
-    def _reply(result: str, *, note: bool = True) -> str:
+    def _reply(result: str, *, skip: str | None = None, listed: bool = False) -> str:
         """The tool result plus the update notice and, once, the discovery note.
 
-        ``note=False`` (file_task) drops the note: it only points at file_task, and a
-        file_task reply would repeat the same task right below its own answer.
+        A file_task reply leaves out the task it's about (``skip``), so the note doesn't
+        repeat it right below, and a file_task list (``listed``) already shows them all.
         """
         text = manager.with_update_notice(result)
         pending = discovery["note"]
-        if isinstance(pending, str):
+        if isinstance(pending, DiscoveryNote):
             discovery["note"] = None
-            if note:
-                text += f"\n\n---\n{pending}"
+            note = None if listed else pending.text(skip=skip)
+            if note is not None:
+                text += f"\n\n---\n{note}"
         return text
 
     def _progress_cb(mcp_ctx: Context) -> ProgressCallback:
@@ -805,7 +808,8 @@ def register(ctx: RegisterContext) -> None:
             ] = "status",
         ) -> str:
             client = await _fs_client()
-            return _reply(
-                await file_task(client, records=records, handle=handle, action=action),
-                note=False,
-            )
+            result = await file_task(client, records=records, handle=handle, action=action)
+            if handle is None:
+                return _reply(result, listed=True)
+            # file_task has validated the handle by now.
+            return _reply(result, skip=str(parse_handle(handle)))

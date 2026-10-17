@@ -559,7 +559,28 @@ def _describe(kind: HandleKind, paths: list[str], dest: str | None) -> str:
     return f"{_GERUND[kind]} {where}{to}"
 
 
-async def discover_running_tasks(client: DsmClient, records: TaskRecords) -> str | None:
+@dataclass
+class DiscoveryNote:
+    """The one-time note about tasks found running at a process's first connection."""
+
+    lines: dict[str, str]  # handle -> "  deleting /s/a (8 of 342 items, 2%), handle `...`"
+
+    def text(self, *, skip: str | None = None) -> str | None:
+        """The note, leaving out ``skip`` (the handle a file_task reply is about); None
+        when nothing is left."""
+        rest = [line for handle, line in self.lines.items() if handle != skip]
+        if not rest:
+            return None
+        return "\n".join(
+            [
+                f"Note: {len(rest)} operation(s) still running on the NAS:",
+                *rest,
+                "Use file_task to check on them or stop them.",
+            ]
+        )
+
+
+async def discover_running_tasks(client: DsmClient, records: TaskRecords) -> DiscoveryNote | None:
     """Seed ``records`` from this user's running tasks; the one-time note, or None.
 
     Run once at the first connection of a server process, so a later file_task status
@@ -569,10 +590,10 @@ async def discover_running_tasks(client: DsmClient, records: TaskRecords) -> str
         tasks = await _list_running(client)
         if not tasks:
             return None
-        lines = [f"Note: {len(tasks)} operation(s) still running on the NAS:"]
+        lines: dict[str, str] = {}
         for task in tasks:
             records.add(task.record())
-            lines.append(
+            lines[str(task.handle)] = (
                 f"  {_describe(task.handle.kind, task.paths, task.dest)} "
                 f"({progress_text(task.task)}), handle `{task.handle}`"
             )
@@ -580,8 +601,7 @@ async def discover_running_tasks(client: DsmClient, records: TaskRecords) -> str
         # Malformed task data included: discovery must never fail a tool call.
         logger.debug("Running-task discovery failed, ignoring: %s", e)
         return None
-    lines.append("Use file_task to check on them or stop them.")
-    return "\n".join(lines)
+    return DiscoveryNote(lines)
 
 
 async def _list_reply(client: DsmClient) -> str:
@@ -762,16 +782,20 @@ async def file_task(
         return data
 
     def gone() -> str:
+        # A stop request must hear that this call stopped nothing ("or was stopped"
+        # alone reads as "your stop worked").
+        nothing = " Nothing was stopped." if action == "stop" else ""
         if paths:
             # Ours, but DSM has let it go: a finished Delete is forgotten unless a status
             # read caught it finishing, so there's no result left to give.
             return (
                 f"The {parsed.kind} of {', '.join(paths)} is no longer running on the NAS: "
-                f"it finished or was stopped, and DSM no longer has its result. {_LIST_HINT}"
+                f"it finished or was stopped, and DSM no longer has its result.{nothing} "
+                f"{_LIST_HINT}"
             )
         return (
             "No running task with this handle. It finished, was stopped, or was started by "
-            f"a different DSM user. {_LIST_HINT}"
+            f"a different DSM user.{nothing} {_LIST_HINT}"
         )
 
     status = await status_or_none()

@@ -762,6 +762,11 @@ RUNNING_DELETE = {
     "taskid": "FileStation_D1",
     "total": 342,
 }
+RUNNING_DELETE_2 = {
+    **RUNNING_DELETE,
+    "params": {"accurate_progress": True, "path": ["/s/two"], "recursive": True},
+    "taskid": "FileStation_D2",
+}
 
 
 class TestDiscoveryAtFirstConnection:
@@ -801,15 +806,39 @@ class TestDiscoveryAtFirstConnection:
         assert (params["api"], params["method"]) == ("SYNO.FileStation.BackgroundTask", "list")
 
     @respx.mock
-    async def test_file_task_reply_drops_the_discovery_note(
-        self, monkeypatch: pytest.MonkeyPatch, mock_client: DsmClient
+    @pytest.mark.parametrize(
+        ("tasks", "kwargs", "first"),
+        [
+            # Only the task the reply is about: no note, it would repeat that task.
+            ([RUNNING_DELETE], {"handle": "delete:FileStation_D1"}, "STATUS"),
+            # Others too (QA round 3): they're still named, minus the one asked about.
+            (
+                [RUNNING_DELETE, RUNNING_DELETE_2],
+                {"handle": " `delete:FileStation_D1`. "},
+                "STATUS\n\n---\nNote: 1 operation(s) still running on the NAS:\n"
+                "  deleting /s/two (8 of 342 items, 2%), handle `delete:FileStation_D2`\n"
+                "Use file_task to check on them or stop them.",
+            ),
+            # The list: it shows them all already.
+            ([RUNNING_DELETE, RUNNING_DELETE_2], {}, "STATUS"),
+        ],
+        ids=["only-that-task", "other-tasks", "list"],
+    )
+    async def test_file_task_reply_and_the_discovery_note(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        mock_client: DsmClient,
+        tasks: list[dict[str, object]],
+        kwargs: dict[str, str],
+        first: str,
     ) -> None:
-        """file_task first: no note (it would repeat the task), and none on later replies."""
+        """file_task first: the note leaves out the task the reply is about; either way
+        it's used up, so later replies don't carry it."""
         from tests.conftest import BASE_URL
 
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
             return_value=httpx.Response(
-                200, json={"success": True, "data": {"tasks": [RUNNING_DELETE], "total": 1}}
+                200, json={"success": True, "data": {"tasks": tasks, "total": len(tasks)}}
             )
         )
         monkeypatch.setattr(
@@ -819,7 +848,7 @@ class TestDiscoveryAtFirstConnection:
         manager.with_update_notice = MagicMock(side_effect=lambda s: s)
         self._wire(manager, mock_client, monkeypatch)
         register(ctx)
-        assert await server._tool_manager._tools["file_task"].fn() == "STATUS"
+        assert await server._tool_manager._tools["file_task"].fn(**kwargs) == first
         assert await server._tool_manager._tools["list_shares"].fn() == "SHARES"
 
     @respx.mock
