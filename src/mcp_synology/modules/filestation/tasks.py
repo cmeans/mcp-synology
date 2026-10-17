@@ -34,6 +34,9 @@ HandleKind = Literal["delete", "copy", "move", "restore"]
 _KINDS: tuple[str, ...] = get_args(HandleKind)
 _TASKID_RE = re.compile(r"^[A-Za-z0-9_]{1,80}$")
 _DECORATION = " \t\r\n`'\"*.,;:()[]<>"
+# DSM 7.1 sometimes answers a Delete stop only after ~60 s, although the stop takes
+# effect at once; the default request timeout would report a working stop as unanswered.
+STOP_TIMEOUT = 90.0
 
 
 @dataclass(frozen=True)
@@ -135,7 +138,9 @@ async def _stop_background_task(
     was stopped when DSM, stalled, didn't answer the stop either (QA R1 on #239).
     """
     try:
-        await client.request(api, "stop", version=version, params={"taskid": taskid})
+        await client.request(
+            api, "stop", version=version, params={"taskid": taskid}, timeout=STOP_TIMEOUT
+        )
     except SynologyError as e:
         task_logger.warning("%s task cleanup failed for %s: %s", api, taskid, e)
     except Exception:
@@ -648,7 +653,13 @@ async def file_task(
             final = await _final_text(client, parsed, status, record)
             return f"{_NOT_STOPPED}\n{final}"
         try:
-            await client.request(parsed.api, "stop", version=version, params={"taskid": taskid})
+            await client.request(
+                parsed.api,
+                "stop",
+                version=version,
+                params={"taskid": taskid},
+                timeout=STOP_TIMEOUT,
+            )
         except SynologyError as e:
             if e.code in (401, 599):
                 return f"That task had already finished or isn't running. {_LIST_HINT}"

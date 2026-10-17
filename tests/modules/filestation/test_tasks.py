@@ -93,6 +93,11 @@ def _method(request: httpx.Request) -> str:
     return dict(request.url.params).get("method", "")
 
 
+def _read_timeout(request: httpx.Request) -> float:
+    timeout: dict[str, float] = request.extensions["timeout"]
+    return timeout["read"]
+
+
 @pytest.fixture
 def clock(monkeypatch: pytest.MonkeyPatch) -> list[float]:
     """Fake clock; each fake sleep advances it by its argument."""
@@ -156,10 +161,12 @@ class TestPollTask:
         import mcp_synology.modules.filestation.tasks as tasks
 
         calls: list[str] = []
+        timeouts: dict[str, float] = {}
         polled = asyncio.Event()
 
         def side_effect(request: httpx.Request) -> httpx.Response:
             calls.append(_method(request))
+            timeouts[_method(request)] = _read_timeout(request)
             return _ok(RUNNING if _method(request) == "status" else {})
 
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
@@ -179,6 +186,7 @@ class TestPollTask:
         with pytest.raises(asyncio.CancelledError):
             await task
         assert calls.count("stop") == 1
+        assert timeouts == {"status": 30, "stop": 90}
 
     @respx.mock
     async def test_poll_transport_error_stops(
@@ -201,7 +209,10 @@ class TestPollTask:
 
     @respx.mock
     async def test_poll_error_stops(self, mock_client: DsmClient, clock: list[float]) -> None:
+        timeouts: dict[str, float] = {}
+
         def side_effect(request: httpx.Request) -> httpx.Response:
+            timeouts[_method(request)] = _read_timeout(request)
             if _method(request) == "status":
                 return httpx.Response(200, json={"success": False, "error": {"code": 599}})
             return _ok({})
@@ -211,6 +222,8 @@ class TestPollTask:
         assert result.outcome == "poll_error"
         assert result.stopped is True
         assert result.error is not None
+        # DSM 7.1 can take ~60 s to answer a Delete stop that worked at once (#245).
+        assert timeouts == {"status": 30, "stop": 90}
 
     @respx.mock
     async def test_poll_progress_counting_then_numbers(
@@ -792,6 +805,7 @@ class TestFileTask:
             ("SYNO.FileStation.CopyMove", "stop"),
         ]
         assert dict(route.calls.last.request.url.params)["taskid"] == '"FileStation_M1"'
+        assert [_read_timeout(c.request) for c in route.calls] == [30, 90]
         assert text == (
             "Stopped move of /s/b; it may be partly done. List the path to see what's left."
         )
