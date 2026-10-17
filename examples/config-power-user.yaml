@@ -42,7 +42,7 @@ modules:
       upload_timeout: 600
       download_timeout: 600
       default_download_dir: ~/Downloads
-      allowed_local_paths:  # added to the top-level list (default: Downloads)
+      allowed_local_paths:  # adds to a top-level list; without one, replaces the Downloads default
         - ~/Downloads
         - ~/Media
       default_upload_dir: /home/uploads
@@ -52,8 +52,9 @@ modules:
     enabled: true  # needs the Download Station package on the NAS
     permission: write
     settings:
-      allowed_local_paths:  # folders create_download may read .torrent/.nzb files from,
-        - ~/Torrents        # added to the top-level list (default: Downloads)
+      allowed_local_paths:  # folders create_download may read .torrent/.nzb files from;
+        - ~/Downloads       # adds to a top-level list; without one, replaces the Downloads
+        - ~/Torrents        # default, so ~/Downloads is listed to keep it
 
 logging:
   level: debug

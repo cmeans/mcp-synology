@@ -197,7 +197,8 @@ def refuse_outside_roots(
             suggestion=(
                 "Use a path inside one of those folders, or ask the user to add the folder "
                 "to allowed_local_paths (at the top level of the config for every module, "
-                f"or in the {module} module settings)."
+                f"or in the {module} module settings, which replace the Downloads default "
+                "when there's no top-level list)."
             ),
         )
 

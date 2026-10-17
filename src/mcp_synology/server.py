@@ -530,7 +530,8 @@ def _local_paths_notice(config: AppConfig, plan: _ModulePlan) -> str:
         "\n\nLOCAL PATHS:\n"
         + "\n".join(lines)
         + "\nAnything else is refused; the user can add folders with allowed_local_paths, "
-        "at the top level of the config for every module or in a module's settings."
+        "at the top level of the config for every module or in a module's settings "
+        "(without a top-level list, a module's list replaces the Downloads default)."
     )
 
 
