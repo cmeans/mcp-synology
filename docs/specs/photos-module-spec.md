@@ -133,7 +133,9 @@ Photos writes ratings, descriptions, tags, taken-time changes and rotations **in
 
 ### Writes that report success for nothing
 
-DSM answers **success** for these when an ID doesn't exist (verified on both versions unless noted): `Browse.Item delete`, `Browse.Album delete`, `Browse.Item add_tag` (`error_list: []`), `NormalAlbum add_item` with a missing item, `Browse.Folder delete` on 1.3.4 (`error_list: []`; 1.9.1 answers 117), and `Person merge` with a missing `merged_id` (it returns the target unchanged; real NAS, 1.3.4). **Writes without permission do the same.** A Shared Space user with only `entry` access (no folder permission) got **success** for `Browse.Item set` (`error_list: []`) and `Browse.Item delete`, and neither took effect: an admin read-back showed the rating unchanged and the item still there (verified on both versions, `qa1_team_*`). `BackgroundTask.File delete` answered 803 for the same user. So deletes use the background task (see Deletes), and `edit_photo` and `tag_photos` read the items back after writing and report any item whose value didn't change as not changed (no permission, or still being indexed).
+DSM answers **success** for these when an ID doesn't exist (verified on both versions unless noted): `Browse.Item delete`, `Browse.Album delete`, `Browse.Item add_tag` (`error_list: []`), `NormalAlbum add_item` with a missing item, `Browse.Folder delete` on 1.3.4 (`error_list: []`; 1.9.1 answers 117), and `Person merge` with a missing `merged_id` (it returns the target unchanged; real NAS, 1.3.4). **Writes without permission do the same.** A Shared Space user with only `entry` access (no folder permission) got **success** for `Browse.Item set` (`error_list: []`), `Browse.Item add_tag` (`error_list: []`) and `Browse.Item delete`, and none took effect: admin read-backs showed the rating and tags unchanged and the item still there (verified on both versions, `qa1_team_*`, `qa2_*`). `BackgroundTask.File delete` answered 803 for the same user. That user's `Browse.Item get` answers **success with an empty list** for those items (not 803; verified on both), exactly as for an unknown ID, and `get_tag` an empty `intersection`/`union`.
+
+So the ID check below catches this case too, before anything is sent: an item the user can't see comes back missing from `get`, and is reported as "not found, or no permission for its Shared Space folder". Deletes also use the background task, which answers 803 on its own (see Deletes).
 
 So every tool that takes IDs **checks them first** (one `get` or `list` call) and reports unknown IDs as `not_found` without sending the write. `error_list` in a reply lists IDs DSM did reject (seen for `add_tag` on an item still being indexed); those are reported per item.
 
@@ -212,7 +214,7 @@ Photos-specific codes, dispatched when the API name starts with `SYNO.Foto`. Cod
 | 803 | No permission on that Shared Space folder | `permission_denied` (see Prerequisites) |
 | 901 | People (face recognition) disabled (from the 1.3.4 client; not reproduced) | `unavailable` |
 | 950 | Smart album condition references a tag/person/folder that no longer exists | `invalid_parameter` |
-| 953 | Smart album condition with `user_id` null (verified on both, `qa1_condalbum-create-null-user`). A condition with no `user_id` key at all gets 120 instead | `invalid_parameter` |
+| 953 | Smart album condition with `user_id` null (verified on both, `qa1_condalbum-create-null-user`). A condition with no `user_id` key at all gets 120 (`name: condition`, `reason: type`) from both `create` and `peek_item_count` (verified on both, `qa2_condalbum-create-no-user-key`, `qa1_condalbum-peek-no-user`) | `invalid_parameter` |
 
 The 1.3.4 upload code treats 604, 605 and 622 as non-retryable too; their meanings weren't reproduced and they map to `dsm_error` with the code.
 
@@ -564,6 +566,8 @@ Album 9 "Trip 2024" is shared.
 | `item_id` | `int` | No | — | `set_cover`. |
 | `space` | `str` | No | `"personal"` | |
 
+**Annotations:** `destructiveHint=true`, `idempotentHint=true`: `rename` and `set_cover` replace the previous name or cover (as `edit_person`). File Station's `rename` is non-destructive only because DSM refuses an existing name there; whether Photos does is open item 1.
+
 **Response shape:** `Created /Trips/2024/Day 1 (id 33, personal space).` · `Renamed folder 33 to /Trips/2024/Day One.` · `Folder 33's cover is now item 41.`
 
 **Design notes:** reply `folder` has `id`, full-path `name`, `parent`. Creating a folder whose name exists in the parent: checked at the vdsm gate (the capture created same-named folders only under different parents).
@@ -690,8 +694,8 @@ Still running at `task_timeout`: `Still copying on the NAS (2 of 9 done). Handle
 
 ```
 Added tags beach, 2024 to 3 item(s) (personal space).
-  Not changed: 41 (no permission, or still being indexed)
-  Not found: 999999
+  Rejected by DSM: 41 (error_list; e.g. still being indexed)
+  Not found, or no permission for its Shared Space folder: 999999
 Photos rewrites tagged files, so their dates and sizes change.
 ```
 
@@ -730,11 +734,12 @@ Photos rewrites tagged files, so their dates and sizes change.
 
 ```
 Edited 2 item(s) (personal space): rating 4, description.
-  Not changed: 52 (no permission, or still being indexed)
+  Rejected by DSM: 52 (error_list)
+  Not found, or no permission for its Shared Space folder: 999999
 Photos rewrites edited files, so their dates and sizes change.
 ```
 
-**Design notes:** DSM accepted two fields in one `set` (verified), but the tool sends one `set` per field, as the web client does, so a failure names the field. Batches of 100 IDs (a **new** module constant, as the web client's `BATCH_UPDATE_SIZE`). `taken_time` and `shift_hours` are mutually exclusive. Every edited item is read back (`get`), since a Shared Space user without folder permission gets success with no effect (see Writes that report success).
+**Design notes:** DSM accepted two fields in one `set` (verified), but the tool sends one `set` per field, as the web client does, so a failure names the field. Batches of 100 IDs (a **new** module constant, as the web client's `BATCH_UPDATE_SIZE`). `taken_time` and `shift_hours` are mutually exclusive. IDs are checked with `get` first, which also catches items in a Shared Space folder the user has no permission for: `set` would answer success and do nothing (see Writes that report success).
 
 ---
 
@@ -925,7 +930,7 @@ Maintainer, 2026-10-17: whatever is best for each call, not one forced rule. See
 Forced by 1.9.1 re-numbering tags on re-index. See Edits rewrite the original files.
 
 ### 3. Validate IDs before writes, read edits back ✓
-DSM reports success for unknown IDs on six write methods, and for `Item.set`/`Item.delete` by a Shared Space user without folder permission while doing nothing.
+DSM reports success for unknown IDs on six write methods, and for `Item.set`/`add_tag`/`delete` by a Shared Space user without folder permission while doing nothing. That user's `get` returns those items as missing, so one check covers both.
 
 ### 4. Tool set versus #258 ✓ (this spec)
 - `edit_tag` dropped (maintainer, 2026-10-17: no extra tool). Photos has no tag rename or delete method, but a tag with no items disappears, so both are `tag_photos` over the tag's items, as its description says. `delete_photo_collections` became `delete_photo_albums`.
