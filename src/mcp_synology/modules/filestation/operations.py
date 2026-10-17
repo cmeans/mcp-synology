@@ -25,46 +25,12 @@ from mcp_synology.modules.filestation.helpers import (
     paths_isdir,
     unanswered_status_response,
 )
+from mcp_synology.modules.filestation.tasks import _stop_background_task, _task_note
 
 if TYPE_CHECKING:
     from mcp_synology.core.client import DsmClient
 
 logger = logging.getLogger(__name__)
-
-
-async def _stop_background_task(
-    client: DsmClient,
-    api: str,
-    taskid: str,
-    version: int,
-    task_logger: logging.Logger,
-) -> bool:
-    """Stop a background task (CopyMove, Delete). Logs warnings on failure.
-
-    Returns whether DSM confirmed the stop, so an error message never claims a task
-    was stopped when DSM, stalled, didn't answer the stop either (QA R1 on #239).
-    """
-    try:
-        await client.request(api, "stop", version=version, params={"taskid": taskid})
-    except SynologyError as e:
-        task_logger.warning("%s task cleanup failed for %s: %s", api, taskid, e)
-    except Exception:
-        task_logger.warning("%s task cleanup failed for %s", api, taskid, exc_info=True)
-    else:
-        return True
-    return False
-
-
-def _task_note(stopped: bool) -> str:
-    """What happened to a background task mcp-synology gave up on (#237)."""
-    if stopped:
-        return "The task was stopped and may be partly done."
-    # Not "DSM didn't answer": DSM may also have refused the stop (e.g. 401 for a task
-    # that finished just before it), QA R2 on #239.
-    return (
-        "mcp-synology couldn't confirm the task stopped; it may still be running on the "
-        "NAS, and may be partly done."
-    )
 
 
 async def create_folder(
