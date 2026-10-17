@@ -1987,6 +1987,102 @@ class TestDeleteHandoff:
         assert record.recycle == {}
 
 
+class TestProgressAcrossPaths:
+    """#245 re-review: a multi-path call shares one MCP progress token, so the values sent
+    must keep increasing from one path's task to the next."""
+
+    @respx.mock
+    async def test_delete_two_paths_progress_never_decreases(
+        self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import mcp_synology.modules.filestation.tasks as tasks
+
+        monkeypatch.setattr(tasks.asyncio, "sleep", AsyncMock())
+        statuses = {
+            "FileStation_A": iter(
+                [
+                    {"finished": False, "processed_num": 50, "total": 100},
+                    {"finished": True},
+                ]
+            ),
+            "FileStation_B": iter(
+                [
+                    {"finished": False, "processed_num": 3, "total": 10},
+                    {"finished": False, "processed_num": 7, "total": 10},
+                    {"finished": True},
+                ]
+            ),
+        }
+        now = [0.0]
+        monkeypatch.setattr(tasks.time, "monotonic", lambda: now[0])
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            method = params.get("method", "")
+            if method == "start":
+                name = params["path"].rsplit("/", 1)[-1].upper()
+                return httpx.Response(
+                    200, json={"success": True, "data": {"taskid": f"FileStation_{name}"}}
+                )
+            if method == "status":
+                now[0] += 5.0
+                data = next(statuses[params["taskid"].strip('"')])
+                return httpx.Response(200, json={"success": True, "data": data})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        sent: list[float] = []
+
+        async def on_progress(progress: float, total: float | None, message: str) -> None:
+            sent.append(progress)
+
+        await delete_files(
+            mock_client,
+            paths=["/s/a", "/s/b"],
+            recycle_bin_status={"s": True},
+            on_progress=on_progress,
+        )
+        assert len(sent) == 3
+        assert sent[0] == 50
+        assert all(b > a for a, b in zip(sent, sent[1:], strict=False))
+
+
+class TestDeleteSummaryRecycleProbe:
+    """#245 re-review: the lazy recycle-bin probe in the final summary must not turn a
+    finished delete into an error when DSM doesn't answer it."""
+
+    @respx.mock
+    async def test_unanswered_probe_still_returns_summary(self, mock_client: DsmClient) -> None:
+        from mcp_synology.modules.filestation.operations import _delete_summary
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=httpx.ReadTimeout(""))
+        recycle: dict[str, bool] = {}
+        text = await _delete_summary(mock_client, ["/share/big"], recycle)
+        assert text.startswith("[+] Deleted 1 item(s):\n  /share/big")
+        assert "Permanently" not in text
+        assert "Couldn't check whether /share has its recycle bin enabled" in text
+        assert recycle == {}  # nothing cached, so a later call probes again
+
+    @respx.mock
+    async def test_file_task_final_result_survives_unanswered_probe(
+        self, mock_client: DsmClient
+    ) -> None:
+        from mcp_synology.modules.filestation.tasks import TaskRecord, file_task
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            if params.get("method") == "status":
+                return httpx.Response(200, json={"success": True, "data": {"finished": True}})
+            raise httpx.ReadTimeout("")
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        records = TaskRecords()
+        h = Handle("delete", "FileStation_BIG")
+        records.add(TaskRecord(handle=h, paths=["/share/big"], recursive=True))
+        text = await file_task(mock_client, records=records, handle=str(h))
+        assert text.startswith("[+] Deleted 1 item(s):\n  /share/big")
+
+
 class TestCopyMoveHandoff:
     """#245: a copy, move or restore that outlives the wait is handed off with a handle."""
 

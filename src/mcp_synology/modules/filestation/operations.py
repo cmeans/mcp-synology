@@ -26,6 +26,7 @@ from mcp_synology.modules.filestation.tasks import (
     Handle,
     HandleKind,
     Handoff,
+    MonotonicProgress,
     ProgressCallback,
     TaskRecord,
     TaskRecords,
@@ -482,6 +483,8 @@ async def _copy_move(
         )
 
     normalized = _collapse_overlaps([normalize_path(p) for p in paths], drop_nested=remove_src)
+    # One progress token per tool call: keep its values increasing across paths (#245).
+    on_progress = MonotonicProgress.wrap(on_progress)
     dest = normalize_path(dest_folder)
 
     # Pin to version 2 — v3 uses JSON request format with different
@@ -748,6 +751,8 @@ async def delete_files(
         )
 
     normalized = _collapse_overlaps([normalize_path(p) for p in paths])
+    # One progress token per tool call: keep its values increasing across paths (#245).
+    on_progress = MonotonicProgress.wrap(on_progress)
 
     # Refuse the whole call if any path is missing (#162): DSM "deletes" a missing path
     # without an error, and a partial delete of a mistyped list is worse than none.
@@ -842,6 +847,7 @@ async def _delete_summary(
     # on session re-auth (see `_register_recycle_status_invalidator` in __init__).
     shares_with_recycle: set[str] = set()
     shares_without_recycle: set[str] = set()
+    shares_unknown: set[str] = set()
     if recycle_bin_status is None:
         # Defensive: caller passed nothing. Skip probing; preserve prior
         # default-true messaging for the touched shares.
@@ -857,13 +863,20 @@ async def _delete_summary(
             if share_name in seen:
                 continue
             seen.add(share_name)
-            enabled = await ensure_recycle_status(client, share_name, recycle_bin_status)
+            try:
+                enabled = await ensure_recycle_status(client, share_name, recycle_bin_status)
+            except httpx.TransportError as e:
+                # DSM didn't answer (e.g. right after finishing a huge delete): the
+                # delete is done, so report it without the recycle-bin line (#245).
+                logger.debug("Recycle-bin probe on /%s unanswered: %r", share_name, e)
+                shares_unknown.add(share_name)
+                continue
             if enabled:
                 shares_with_recycle.add(share_name)
             else:
                 shares_without_recycle.add(share_name)
 
-    has_recycle = bool(shares_with_recycle)
+    has_recycle = bool(shares_with_recycle or shares_unknown)
     verb = "Deleted" if has_recycle else "Permanently deleted"
 
     lines = [format_status(f"{verb} {len(normalized)} item(s):")]
@@ -892,6 +905,11 @@ async def _delete_summary(
     lines.extend(
         f"\n\u26a0 Recycle bin is NOT enabled on /{share} \u2014 these files cannot be recovered."
         for share in sorted(shares_without_recycle)
+    )
+    lines.extend(
+        f"\nCouldn't check whether /{share} has its recycle bin enabled (DSM didn't answer); "
+        "list_recycle_bin shows whether these files can be recovered."
+        for share in sorted(shares_unknown)
     )
 
     return "\n".join(lines)
@@ -927,6 +945,8 @@ async def restore_from_recycle_bin(
     destinations, the items after the handed-off one are listed as not started.
     """
     share_name = share.strip("/").split("/")[0]
+    # One progress token per tool call, shared by every destination's task (#245).
+    on_progress = MonotonicProgress.wrap(on_progress)
 
     # Normalize recycle bin paths
     full_paths: list[str] = []

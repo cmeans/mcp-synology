@@ -156,6 +156,36 @@ ProgressCallback = Callable[[float, float | None, str], Awaitable[None]]
 _PROGRESS_STEP = 0.001
 
 
+class MonotonicProgress:
+    """A progress callback whose values always increase, as MCP requires.
+
+    One tool call has one progress token, so a multi-path call wraps its callback once
+    and every path's task shares it: a heartbeat, or a count that doesn't exceed the
+    last value sent (e.g. path 2 starting near 0), is raised by ``_PROGRESS_STEP``.
+    Progress is best-effort: a failing callback is logged at DEBUG, never raised.
+    """
+
+    def __init__(self, callback: ProgressCallback) -> None:
+        self._callback = callback
+        self._last: float | None = None
+
+    @classmethod
+    def wrap(cls, callback: ProgressCallback | None) -> MonotonicProgress | None:
+        """``callback`` as a MonotonicProgress (itself if it already is one)."""
+        if callback is None or isinstance(callback, cls):
+            return callback
+        return cls(callback)
+
+    async def __call__(self, value: float, total: float | None, message: str) -> None:
+        if self._last is not None and value <= self._last:
+            value = self._last + _PROGRESS_STEP
+        self._last = value
+        try:
+            await self._callback(value, total, message)
+        except Exception:
+            logger.debug("Progress notification failed (%s), ignoring", message, exc_info=True)
+
+
 @dataclass
 class PollResult:
     """How a poll of a background task ended.
@@ -240,28 +270,10 @@ async def poll_task(
     status: dict[str, Any] = {}
     last_progress: float | None = None
     last_numbers: tuple[int, int] | None = None
-    last_sent: float | None = None
+    report = MonotonicProgress.wrap(on_progress)
 
     async def stop() -> bool:
         return await _stop_background_task(client, api, quoted, version, logger)
-
-    async def report(value: float, total: float | None, message: str) -> None:
-        """Send a progress notification; MCP requires the value to increase each time.
-
-        Heartbeats (no total yet) keep the client's idle timer from firing, so they
-        get a tiny increase of their own; a real count that doesn't exceed the last
-        value sent (e.g. 0 after the heartbeats) is nudged up by the same step.
-        Progress is best-effort: a failing callback is logged, never fatal.
-        """
-        nonlocal last_sent
-        assert on_progress is not None
-        if last_sent is not None and value <= last_sent:
-            value = last_sent + _PROGRESS_STEP
-        last_sent = value
-        try:
-            await on_progress(value, total, message)
-        except Exception:
-            logger.debug("Progress notification failed for %s, ignoring", label, exc_info=True)
 
     try:
         while time.monotonic() < deadline:
@@ -282,7 +294,7 @@ async def poll_task(
             if status.get("finished", False):
                 return PollResult(status, "finished")
 
-            if on_progress is not None:
+            if report is not None:
                 now = time.monotonic()
                 if last_progress is None or now - last_progress >= progress_every:
                     numbers = _progress_numbers(status)
