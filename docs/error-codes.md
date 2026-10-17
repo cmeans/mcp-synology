@@ -276,7 +276,7 @@ an HTTP request to DSM timed out, or the NAS couldn't be reached in time.**
 
 Affects search and `get_dir_size`, which run as asynchronous DSM tasks that
 mcp-synology polls and stops at their time limit, and a status or stop request
-for a copy, move, delete, restore or `file_task` that DSM doesn't answer.
+for a `file_task` that DSM doesn't answer.
 `create_download` can also time out on the HTTP request itself; DSM may still
 have created the task, so check `list_downloads` before retrying (mcp-synology
 never retries it automatically, to avoid duplicate downloads).
@@ -292,7 +292,13 @@ running after this reply", with the progress and a handle such as
 it are listed as "Not started". Follow up with `file_task`: `action="status"`
 shows progress or the final result, `action="stop"` stops it (it may then be
 partly done), and no handle lists the running operations. Only a canceled
-call (the user, or a client's own timeout) stops the task.
+call (the user, or a client's own timeout) or a DSM error stops the task.
+
+The same goes for a NAS that stops answering status requests during the wait
+(a network timeout or dropped connection; since 2026-10-17): the task isn't
+stopped, and the reply starts "The NAS stopped answering while deleting …
+It's probably still running there; don't start it again.", with the handle.
+Check on it with `file_task` rather than starting it again.
 
 `file_task` answers a handle DSM no longer knows with a normal reply, not an
 error: the final result if this server remembers it, otherwise "No running
@@ -313,10 +319,11 @@ Common causes:
   reach the NAS at …" and names the URL and the timeout.
 - DSM stopped answering partway through. While it deletes or copies very large
   files (multi-TB Time Machine bundles, VM images), DSM can stall for longer
-  than the connection timeout (`connection.timeout`, default 30 s). A copy,
-  move, delete or `get_dir_size` reports "DSM didn't answer a status request
-  on path: …" and asks DSM to stop the task; the message says whether DSM
-  confirmed the stop. Other tools name the DSM call, e.g. "DSM didn't answer
+  than the connection timeout (`connection.timeout`, default 30 s).
+  `get_dir_size` then reports "DSM didn't answer a status request on path: …"
+  and asks DSM to stop the task; the message says whether DSM confirmed the
+  stop. (A copy, move, delete or restore is handed off instead; see above.)
+  Other tools name the DSM call, e.g. "DSM didn't answer
   SYNO.FileStation.List/list_share in time" (an `unavailable` error, "The
   connection to DSM failed during …", if the connection dropped).
 - `file_task` didn't get an answer to its status or stop request for a
@@ -342,13 +349,11 @@ Otherwise:
    more specific keyword. (Before 0.6.0, mcp-synology sent search task IDs
    unquoted, so DSM lost most tasks and never cleaned them up, which looked
    like an exhausted search service; see #121.)
-3. For copy, move, delete and restore: a long operation isn't an error, it's
-   handed off (see above). An error means DSM stopped answering status
-   requests during the wait: mcp-synology then asks DSM to stop the task, so
-   it may be partly done, and when the message says it "couldn't confirm the
-   task stopped", it may still be running on the NAS. Call `file_task` (no
-   handle) to see whether it's still running, and list the path before
-   retrying. For a stalling DSM, a larger `connection.timeout` helps. For
+3. For copy, move, delete and restore: a long operation isn't an error, and
+   neither is a NAS that stops answering during the wait; both are handed off
+   (see above). Call `file_task` with the handle, or with no handle, to see
+   whether it's still running, and don't start it again. For a stalling DSM,
+   a larger `connection.timeout` helps. For
    search and `get_dir_size`, the time limit is `async_timeout` (default
    120 s, or `search_timeout` and `dir_size_timeout`), counting the whole
    time, including slow status requests.
