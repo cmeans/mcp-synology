@@ -675,6 +675,14 @@ async def _delete_one_path(
             handoff_status.update(status)
         return Handle("delete", taskid)
 
+    _delete_result(status, path, recursive=recursive, done=done)
+    return None
+
+
+def _delete_result(
+    status: dict[str, Any], path: str, *, recursive: bool, done: list[str] | None = None
+) -> None:
+    """Raise ToolError if a finished Delete status reports a failure; else return."""
     if "error" in status:
         err = status["error"]
         err_code = err.get("code", 0) if isinstance(err, dict) else err
@@ -730,7 +738,6 @@ async def _delete_one_path(
             value=path,
             suggestion=missing_paths_suggestion([(path, 408)]),
         )
-    return None
 
 
 async def delete_files(

@@ -461,3 +461,414 @@ class TestRunningTaskFor:
         )
         api = "SYNO.FileStation.Delete"
         assert await running_task_for(mock_client, api=api, path="/s/a") is None
+
+
+# Shapes from the vdsm probe (BackgroundTask.list v2, DSM 7.1 and 7.2.2).
+CRTIME = 1792197001
+LIST_DELETE = {
+    "api": "SYNO.FileStation.Delete",
+    "crtime": CRTIME,
+    "finished": False,
+    "method": "start",
+    "params": {"accurate_progress": True, "path": ["/s/a"], "recursive": True},
+    "path": "",
+    "processed_num": 8,
+    "processing_path": "",
+    "progress": 0.02,
+    "taskid": "FileStation_D1",
+    "total": 342,
+    "version": 2,
+}
+LIST_MOVE = {
+    "api": "SYNO.FileStation.CopyMove",
+    "crtime": CRTIME,
+    "finished": False,
+    "method": "start",
+    "params": {
+        "dest_folder_path": "/s/d",
+        "overwrite": False,
+        "path": ["/s/b"],
+        "remove_src": True,
+    },
+    "path": "",
+    "processed_size": 0,
+    "processing_path": "",
+    "progress": -1,
+    "taskid": "FileStation_M1",
+    "total": 0,
+    "version": 2,
+}
+LIST_DONE = {**LIST_DELETE, "finished": True, "taskid": "FileStation_OLD"}
+DELETE_FINISHED = {
+    "finished": True,
+    "found_dir_num": 400,
+    "found_file_num": 200000,
+    "has_dir": True,
+    "path": "",
+    "processed_num": 200400,
+    "processing_path": "/s/a/d248/472",
+    "progress": 1,
+    "total": 200400,
+}
+MOVE_FINISHED = {
+    "dest_folder_path": "/s/d",
+    "finished": True,
+    "path": "",
+    "processed_size": 2048,
+    "progress": 1,
+    "skipstatus": {"status": "none"},
+    "status": "PROCESSING",
+    "total": 2048,
+}
+
+
+def _list_reply(*tasks: dict[str, Any]) -> httpx.Response:
+    return _ok({"offset": 0, "tasks": list(tasks), "total": len(tasks)})
+
+
+def _err(code: int) -> httpx.Response:
+    return httpx.Response(200, json={"success": False, "error": {"code": code}})
+
+
+def _router(replies: dict[str, Any], calls: list[tuple[str, str]] | None = None) -> Any:
+    """Route by DSM method; a value that is an exception is raised."""
+
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        params = dict(request.url.params)
+        if calls is not None:
+            calls.append((params.get("api", ""), params.get("method", "")))
+        reply = replies[params.get("method", "")]
+        if isinstance(reply, Exception):
+            raise reply
+        assert isinstance(reply, httpx.Response)
+        return reply
+
+    return side_effect
+
+
+class TestDiscover:
+    @respx.mock
+    async def test_discover_seeds_records_and_returns_note(self, mock_client: DsmClient) -> None:
+        from mcp_synology.modules.filestation.tasks import discover_running_tasks
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=_router({"list": _list_reply(LIST_DELETE, LIST_MOVE, LIST_DONE)})
+        )
+        records = TaskRecords()
+        note = await discover_running_tasks(mock_client, records)
+
+        delete = records.get(Handle("delete", "FileStation_D1"))
+        assert delete is not None
+        assert delete.paths == ["/s/a"]
+        assert delete.recursive is True
+        move = records.get(Handle("move", "FileStation_M1"))
+        assert move is not None
+        assert move.paths == ["/s/b"]
+        assert move.dest == "/s/d"
+        assert move.overwrite is False
+        assert records.get(Handle("delete", "FileStation_OLD")) is None
+
+        assert note is not None
+        assert note.startswith("Note: 2 operation(s) still running on the NAS:")
+        assert "deleting /s/a (8 of 342 items, 2%), handle `delete:FileStation_D1`" in note
+        assert "moving /s/b" in note
+        assert "handle `move:FileStation_M1`" in note
+        assert note.endswith("Use file_task to check on them or stop them.")
+
+    @respx.mock
+    async def test_discover_restore_and_copy_kinds(self, mock_client: DsmClient) -> None:
+        from mcp_synology.modules.filestation.tasks import discover_running_tasks
+
+        restore = {
+            **LIST_MOVE,
+            "taskid": "FileStation_R1",
+            "params": {**LIST_MOVE["params"], "path": ["/s/#recycle/x"]},  # type: ignore[dict-item]
+        }
+        copy = {
+            **LIST_MOVE,
+            "taskid": "FileStation_C1",
+            "params": {**LIST_MOVE["params"], "remove_src": False},  # type: ignore[dict-item]
+        }
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=_router({"list": _list_reply(restore, copy)})
+        )
+        records = TaskRecords()
+        note = await discover_running_tasks(mock_client, records)
+        assert records.get(Handle("restore", "FileStation_R1")) is not None
+        assert records.get(Handle("copy", "FileStation_C1")) is not None
+        assert note is not None
+        assert "restoring /s/#recycle/x" in note
+        assert "copying /s/b" in note
+
+    @respx.mock
+    async def test_discover_nothing_running_returns_none(self, mock_client: DsmClient) -> None:
+        from mcp_synology.modules.filestation.tasks import discover_running_tasks
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=_router({"list": _list_reply(LIST_DONE)})
+        )
+        records = TaskRecords()
+        assert await discover_running_tasks(mock_client, records) is None
+        assert records.get(Handle("delete", "FileStation_OLD")) is None
+
+    @respx.mock
+    @pytest.mark.parametrize("reply", [_err(599), httpx.ReadTimeout("")])
+    async def test_discover_list_error_returns_none(
+        self, mock_client: DsmClient, reply: Any
+    ) -> None:
+        from mcp_synology.modules.filestation.tasks import discover_running_tasks
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_router({"list": reply}))
+        assert await discover_running_tasks(mock_client, TaskRecords()) is None
+
+
+class TestFileTask:
+    @respx.mock
+    async def test_file_task_status_after_discover_gives_full_result(
+        self, mock_client: DsmClient
+    ) -> None:
+        from mcp_synology.modules.filestation.operations import _copy_move_summary
+        from mcp_synology.modules.filestation.tasks import discover_running_tasks, file_task
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=_router({"list": _list_reply(LIST_MOVE), "status": _ok(MOVE_FINISHED)})
+        )
+        records = TaskRecords()
+        await discover_running_tasks(mock_client, records)
+        text = await file_task(mock_client, records=records, handle="move:FileStation_M1")
+        expected = await _copy_move_summary(mock_client, ["/s/b"], "/s/d", True, 2048, [])
+        assert text == expected
+
+    @respx.mock
+    async def test_file_task_list(self, mock_client: DsmClient) -> None:
+        from mcp_synology.core.formatting import format_timestamp
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        calls: list[tuple[str, str]] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=_router({"list": _list_reply(LIST_DELETE, LIST_MOVE, LIST_DONE)}, calls)
+        )
+        text = await file_task(mock_client, records=TaskRecords())
+        assert calls == [("SYNO.FileStation.BackgroundTask", "list")]
+        assert "delete:FileStation_D1" in text
+        assert "move:FileStation_M1" in text
+        assert "FileStation_OLD" not in text
+        assert "/s/a" in text
+        assert "/s/b" in text
+        assert format_timestamp(CRTIME) in text
+        assert "8 of 342 items, 2%" in text
+
+    @respx.mock
+    async def test_file_task_list_empty(self, mock_client: DsmClient) -> None:
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_router({"list": _list_reply()}))
+        text = await file_task(mock_client, records=TaskRecords())
+        assert text == "No File Station delete, copy or move tasks are running for this user."
+
+    @respx.mock
+    async def test_file_task_list_unavailable(self, mock_client: DsmClient) -> None:
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_router({"list": _err(103)}))
+        text = await file_task(mock_client, records=TaskRecords())
+        assert "isn't available on this DSM version" in text
+
+    @respx.mock
+    async def test_file_task_status_running(self, mock_client: DsmClient) -> None:
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        calls: list[tuple[str, str]] = []
+        route = respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=_router({"status": _ok(RUNNING)}, calls)
+        )
+        records = TaskRecords()
+        records.add(TaskRecord(handle=Handle("delete", "FileStation_D1"), paths=["/s/a"]))
+        text = await file_task(mock_client, records=records, handle="delete:FileStation_D1")
+        assert calls == [("SYNO.FileStation.Delete", "status")]
+        assert dict(route.calls.last.request.url.params)["taskid"] == '"FileStation_D1"'
+        assert "/s/a" in text
+        assert "8 of 342 items, 2%" in text
+        assert "delete:FileStation_D1" in text
+        rec = records.get(Handle("delete", "FileStation_D1"))
+        assert rec is not None
+        assert rec.final_status is None
+
+    @respx.mock
+    async def test_file_task_status_finished_with_record(self, mock_client: DsmClient) -> None:
+        from mcp_synology.modules.filestation.operations import _delete_summary
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=_router({"status": _ok(DELETE_FINISHED)})
+        )
+        h = Handle("delete", "FileStation_D1")
+        records = TaskRecords()
+        records.add(TaskRecord(handle=h, paths=["/s/a"], recursive=True, recycle={"s": False}))
+        text = await file_task(mock_client, records=records, handle=str(h))
+        assert text == await _delete_summary(mock_client, ["/s/a"], {"s": False})
+        rec = records.get(h)
+        assert rec is not None
+        assert rec.final_status == DELETE_FINISHED
+
+    @respx.mock
+    async def test_file_task_status_finished_restore_wording(self, mock_client: DsmClient) -> None:
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=_router({"status": _ok(MOVE_FINISHED)})
+        )
+        h = Handle("restore", "FileStation_R1")
+        records = TaskRecords()
+        records.add(TaskRecord(handle=h, paths=["/s/#recycle/x"], dest="/s", overwrite=False))
+        text = await file_task(mock_client, records=records, handle=str(h))
+        assert "Restored from /s recycle bin:" in text
+
+    @respx.mock
+    async def test_file_task_status_finished_without_record(self, mock_client: DsmClient) -> None:
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        finished = {**DELETE_FINISHED, "errors": [{"code": 408, "path": "/s/a/x"}]}
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=_router({"status": _ok(finished)})
+        )
+        records = TaskRecords()
+        text = await file_task(mock_client, records=records, handle="delete:FileStation_D9")
+        assert text.startswith("Delete finished: 200,400 items processed.")
+        assert "/s/a/x (DSM error 408)" in text
+        rec = records.get(Handle("delete", "FileStation_D9"))
+        assert rec is not None
+        assert rec.final_status == finished
+
+    @respx.mock
+    async def test_file_task_status_599_uses_cached_final(self, mock_client: DsmClient) -> None:
+        from mcp_synology.modules.filestation.operations import _delete_summary
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_router({"status": _err(599)}))
+        h = Handle("delete", "FileStation_D1")
+        records = TaskRecords()
+        records.add(TaskRecord(handle=h, paths=["/s/a"], recursive=True, recycle={"s": True}))
+        records.set_final(h, DELETE_FINISHED)
+        text = await file_task(mock_client, records=records, handle=str(h))
+        assert text == await _delete_summary(mock_client, ["/s/a"], {"s": True})
+
+    @respx.mock
+    async def test_file_task_status_599_unknown(self, mock_client: DsmClient) -> None:
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_router({"status": _err(599)}))
+        text = await file_task(mock_client, records=TaskRecords(), handle="copy:FileStation_X")
+        assert text == (
+            "No running task with this handle. It finished, was stopped, or was started by a "
+            "different DSM user. List the path to see what's left."
+        )
+
+    @respx.mock
+    async def test_file_task_stop(self, mock_client: DsmClient) -> None:
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        calls: list[tuple[str, str]] = []
+        route = respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=_router({"stop": _ok({})}, calls)
+        )
+        h = Handle("move", "FileStation_M1")
+        records = TaskRecords()
+        records.add(TaskRecord(handle=h, paths=["/s/b"], dest="/s/d"))
+        text = await file_task(mock_client, records=records, handle=str(h), action="stop")
+        assert calls == [("SYNO.FileStation.CopyMove", "stop")]
+        assert dict(route.calls.last.request.url.params)["taskid"] == '"FileStation_M1"'
+        assert text.startswith("Stopped move of /s/b. The task was stopped and may be partly done.")
+        assert "list" in text.lower()
+
+    @respx.mock
+    @pytest.mark.parametrize("code", [401, 599])
+    async def test_file_task_stop_already_finished(self, mock_client: DsmClient, code: int) -> None:
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_router({"stop": _err(code)}))
+        text = await file_task(
+            mock_client, records=TaskRecords(), handle="delete:FileStation_D1", action="stop"
+        )
+        assert text.startswith("That task had already finished or isn't running.")
+
+    @respx.mock
+    async def test_file_task_bad_handle_no_dsm_call(self, mock_client: DsmClient) -> None:
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        route = respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(return_value=_ok({}))
+        with pytest.raises(ToolError) as exc_info:
+            await file_task(mock_client, records=TaskRecords(), handle="search:X")
+        assert json.loads(str(exc_info.value))["error"]["code"] == "invalid_parameter"
+        assert not route.called
+
+    @respx.mock
+    async def test_file_task_generic_copy_with_skips_and_error(
+        self, mock_client: DsmClient
+    ) -> None:
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        finished = {
+            **MOVE_FINISHED,
+            "skipstatus": {"status": "all"},
+            "error": {"code": 1002},
+            "path": "/s/b/x",
+        }
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=_router({"status": _ok(finished)})
+        )
+        text = await file_task(mock_client, records=TaskRecords(), handle="copy:FileStation_C9")
+        assert text.startswith("Copy finished: 2 KiB processed.")
+        assert "/s/b/x (DSM error 1002)" in text
+        assert "skipped" in text
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        ("method", "action"), [("status", "status"), ("stop", "stop"), ("list", "status")]
+    )
+    async def test_file_task_other_dsm_errors_raise(
+        self, mock_client: DsmClient, method: str, action: Any
+    ) -> None:
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_router({method: _err(105)}))
+        handle = None if method == "list" else "delete:FileStation_D1"
+        with pytest.raises(ToolError):
+            await file_task(mock_client, records=TaskRecords(), handle=handle, action=action)
+
+    @respx.mock
+    async def test_file_task_list_skips_malformed_entries(self, mock_client: DsmClient) -> None:
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        bad = [
+            "x",
+            {**LIST_DELETE, "params": None},
+            {**LIST_DELETE, "params": {"path": 5}},
+            {**LIST_DELETE, "taskid": "bad id!"},
+            {**LIST_DELETE, "api": "SYNO.FileStation.Search", "taskid": "S1"},
+        ]
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=_router({"list": _ok({"tasks": bad})})
+        )
+        text = await file_task(mock_client, records=TaskRecords())
+        assert text == "No File Station delete, copy or move tasks are running for this user."
+
+    @respx.mock
+    async def test_file_task_finished_with_record_errors_like_delete_files(
+        self, mock_client: DsmClient
+    ) -> None:
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        finished = {**DELETE_FINISHED, "errors": [{"code": 900, "path": "/s/a"}]}
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=_router({"status": _ok(finished)})
+        )
+        h = Handle("delete", "FileStation_D1")
+        records = TaskRecords()
+        records.add(TaskRecord(handle=h, paths=["/s/a"], recursive=False))
+        with pytest.raises(ToolError) as exc_info:
+            await file_task(mock_client, records=records, handle=str(h))
+        assert "/s/a (DSM error 900)" in str(exc_info.value)
+        rec = records.get(h)
+        assert rec is not None
+        assert rec.final_status == finished

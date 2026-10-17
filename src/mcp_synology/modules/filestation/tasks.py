@@ -15,7 +15,13 @@ import anyio
 import httpx
 
 from mcp_synology.core.errors import ErrorCode, SynologyError
-from mcp_synology.core.formatting import error_response, format_size
+from mcp_synology.core.formatting import (
+    error_response,
+    format_size,
+    format_table,
+    format_timestamp,
+    synology_error_response,
+)
 from mcp_synology.modules.filestation.helpers import dsm_str
 
 if TYPE_CHECKING:
@@ -305,6 +311,82 @@ def handoff_reply(
     return "\n".join(lines)
 
 
+@dataclass
+class RunningTask:
+    """A running Delete/CopyMove task of this user, as ``BackgroundTask.list`` shows it."""
+
+    handle: Handle
+    paths: list[str]
+    params: dict[str, Any]
+    task: dict[str, Any]
+
+    @property
+    def dest(self) -> str | None:
+        dest = self.params.get("dest_folder_path")
+        return dest if isinstance(dest, str) else None
+
+    def record(self) -> TaskRecord:
+        """A task record from the task's start ``params``."""
+        overwrite = self.params.get("overwrite")
+        recursive = self.params.get("recursive")
+        return TaskRecord(
+            handle=self.handle,
+            paths=list(self.paths),
+            dest=self.dest,
+            overwrite=overwrite if isinstance(overwrite, bool) else None,
+            recursive=recursive if isinstance(recursive, bool) else None,
+        )
+
+
+def _in_recycle_bin(path: str) -> bool:
+    parts = path.split("/")
+    return len(parts) > 2 and parts[2] == "#recycle"
+
+
+def _task_kind(api: Any, params: dict[str, Any], paths: list[str]) -> HandleKind | None:
+    """The handle kind of a listed task: from its API, ``remove_src`` and source paths."""
+    if api == "SYNO.FileStation.Delete":
+        return "delete"
+    if api != "SYNO.FileStation.CopyMove":
+        return None
+    if params.get("remove_src") is not True:
+        return "copy"
+    return "restore" if any(_in_recycle_bin(p) for p in paths) else "move"
+
+
+async def _list_running(client: DsmClient) -> list[RunningTask]:
+    """This user's running Delete/CopyMove tasks, from ``SYNO.FileStation.BackgroundTask``
+    ``list`` v2, which shows each task's start ``params`` (``path`` as a list; CopyMove
+    also ``dest_folder_path``, ``overwrite``, ``remove_src`` as JSON booleans; vdsm 7.1 and
+    7.2.2). An unexpected reply shape counts as nothing running. Raises DSM and transport
+    errors.
+    """
+    data = await client.request("SYNO.FileStation.BackgroundTask", "list", version=2)
+    tasks = data.get("tasks") if isinstance(data, dict) else None
+    if not isinstance(tasks, list):
+        logger.debug("BackgroundTask list reply has no task list: %r", data)
+        return []
+    running: list[RunningTask] = []
+    for task in tasks:
+        if not isinstance(task, dict) or task.get("finished"):
+            continue
+        params = task.get("params")
+        taskid = task.get("taskid")
+        if not isinstance(params, dict) or not isinstance(taskid, str):
+            continue
+        paths = params.get("path")
+        if isinstance(paths, str):
+            paths = [paths]
+        if not isinstance(paths, list) or not _TASKID_RE.match(taskid):
+            continue
+        paths = [p for p in paths if isinstance(p, str)]
+        kind = _task_kind(task.get("api"), params, paths)
+        if kind is None:
+            continue
+        running.append(RunningTask(Handle(kind, taskid), paths, params, task))
+    return running
+
+
 async def running_task(
     client: DsmClient,
     *,
@@ -314,37 +396,21 @@ async def running_task(
 ) -> dict[str, Any] | None:
     """This user's running (unfinished) task of ``api`` on ``path``, as DSM lists it.
 
-    From ``SYNO.FileStation.BackgroundTask`` ``list`` v2, which shows each task's start
-    ``params`` (``path`` as a list; CopyMove also ``dest_folder_path``, ``overwrite``,
-    ``remove_src`` as JSON booleans; vdsm 7.1 and 7.2.2). ``params``, if given, must
-    match too. None if there is none, or if ``list`` fails: the check is a guard, never
-    a reason to refuse an operation.
+    ``params``, if given, must match the task's start params too. None if there is
+    none, or if ``list`` fails: the check is a guard, never a reason to refuse an
+    operation.
     """
     try:
-        data = await client.request("SYNO.FileStation.BackgroundTask", "list", version=2)
+        tasks = await _list_running(client)
     except (SynologyError, httpx.TransportError) as e:
         logger.debug("BackgroundTask list failed, skipping the running-task check: %s", e)
         return None
-    tasks = data.get("tasks") if isinstance(data, dict) else None
-    if not isinstance(tasks, list):
-        # An unexpected reply shape counts as nothing running, like a failed list.
-        logger.debug("BackgroundTask list reply has no task list: %r", data)
-        return None
     for task in tasks:
-        if not isinstance(task, dict) or task.get("api") != api or task.get("finished"):
+        if task.handle.api != api or path not in task.paths:
             continue
-        started = task.get("params")
-        if not isinstance(started, dict):
+        if params and any(task.params.get(k) != v for k, v in params.items()):
             continue
-        paths = started.get("path")
-        if isinstance(paths, str):
-            paths = [paths]
-        if not isinstance(paths, list) or path not in paths:
-            continue
-        if params and any(started.get(k) != v for k, v in params.items()):
-            continue
-        if task.get("taskid"):
-            return task
+        return task.task
     return None
 
 
@@ -352,3 +418,201 @@ async def running_task_for(client: DsmClient, *, api: str, path: str) -> str | N
     """The taskid of this user's running task of ``api`` on ``path``, or None."""
     task = await running_task(client, api=api, path=path)
     return str(task["taskid"]) if task else None
+
+
+_GERUND: dict[HandleKind, str] = {
+    "delete": "deleting",
+    "copy": "copying",
+    "move": "moving",
+    "restore": "restoring",
+}
+_LIST_HINT = "List the path to see what's left."
+_UNAVAILABLE_CODES = (102, 103, 104)
+
+
+def _describe(kind: HandleKind, paths: list[str], dest: str | None) -> str:
+    """``deleting /s/a`` or ``moving /s/b to /s/d/``."""
+    where = ", ".join(paths) or "(path unknown)"
+    to = f" to {dest}/" if dest and kind != "delete" else ""
+    return f"{_GERUND[kind]} {where}{to}"
+
+
+async def discover_running_tasks(client: DsmClient, records: TaskRecords) -> str | None:
+    """Seed ``records`` from this user's running tasks; the one-time note, or None.
+
+    Run once at the first connection of a server process, so a later file_task status
+    after a restart gives the full result. Any failure is logged at DEBUG and ignored.
+    """
+    try:
+        tasks = await _list_running(client)
+    except Exception as e:
+        logger.debug("Running-task discovery failed, ignoring: %s", e)
+        return None
+    if not tasks:
+        return None
+    lines = [f"Note: {len(tasks)} operation(s) still running on the NAS:"]
+    for task in tasks:
+        records.add(task.record())
+        lines.append(
+            f"  {_describe(task.handle.kind, task.paths, task.dest)} "
+            f"({progress_text(task.task)}), handle `{task.handle}`"
+        )
+    lines.append("Use file_task to check on them or stop them.")
+    return "\n".join(lines)
+
+
+async def _list_reply(client: DsmClient) -> str:
+    try:
+        tasks = await _list_running(client)
+    except SynologyError as e:
+        if e.code in _UNAVAILABLE_CODES:
+            return (
+                "Listing running tasks isn't available on this DSM version. Use the handle "
+                "from the delete, copy, move or restore reply to check on a task."
+            )
+        synology_error_response("List running tasks", e)
+    if not tasks:
+        return "No File Station delete, copy or move tasks are running for this user."
+    rows = []
+    for task in tasks:
+        crtime = task.task.get("crtime")
+        started = format_timestamp(crtime) if isinstance(crtime, int | float) else "unknown"
+        to = f" -> {task.dest}/" if task.dest and task.handle.kind != "delete" else ""
+        rows.append(
+            [
+                f"`{task.handle}`",
+                task.handle.kind,
+                ", ".join(task.paths) + to,
+                started,
+                progress_text(task.task),
+            ]
+        )
+    return format_table(
+        ["Handle", "Operation", "Path(s)", "Started", "Progress"],
+        rows,
+        title=f"Running File Station tasks ({len(rows)})",
+    )
+
+
+async def _final_text(
+    client: DsmClient, handle: Handle, status: dict[str, Any], record: TaskRecord | None
+) -> str:
+    """A finished task's result: the original tool's text when the record allows it."""
+    from mcp_synology.modules.filestation.operations import (  # local: operations imports tasks
+        _as_restore,
+        _copy_move_result,
+        _copy_move_summary,
+        _delete_result,
+        _delete_summary,
+    )
+
+    if record is not None and len(record.paths) == 1:
+        path = record.paths[0]
+        if handle.kind == "delete":
+            recursive = record.recursive if record.recursive is not None else True
+            _delete_result(status, path, recursive=recursive)
+            return await _delete_summary(client, record.paths, record.recycle)
+        if record.dest is not None:
+            operation = handle.kind.capitalize()
+            size, skipped = _copy_move_result(status, path, operation)
+            text = await _copy_move_summary(
+                client,
+                record.paths,
+                record.dest,
+                handle.kind != "copy",
+                size,
+                [path] if skipped else [],
+            )
+            if handle.kind == "restore":
+                text = _as_restore(text, path.split("/")[1])
+            return text
+    return _generic_final(handle, status)
+
+
+def _generic_final(handle: Handle, status: dict[str, Any]) -> str:
+    """A finished task's result without a record: what DSM's final status says."""
+    if handle.kind == "delete":
+        done = f"{int(status.get('processed_num') or 0):,} items processed"
+    else:
+        done = f"{format_size(int(status.get('processed_size') or 0))} processed"
+    lines = [f"{handle.kind.capitalize()} finished: {done}."]
+    failed: list[str] = []
+    error = status.get("error")
+    if error:
+        code = error.get("code", 0) if isinstance(error, dict) else error
+        failed.append(f"{status.get('path') or 'task'} (DSM error {code})")
+    errors = status.get("errors")
+    if isinstance(errors, list):
+        failed.extend(
+            f"{e.get('path') or 'item'} (DSM error {e.get('code', 0)})"
+            for e in errors
+            if isinstance(e, dict)
+        )
+    if failed:
+        lines.append("DSM reported errors: " + "; ".join(failed) + ".")
+    skip = status.get("skipstatus")
+    skip_value = skip.get("status") if isinstance(skip, dict) else skip
+    if skip_value not in (None, "", "none"):
+        lines.append("Some items were skipped (already at the destination, overwrite=false).")
+    lines.append("List the path to see the details.")
+    return "\n".join(lines)
+
+
+async def file_task(
+    client: DsmClient,
+    *,
+    records: TaskRecords,
+    handle: str | None = None,
+    action: Literal["status", "stop"] = "status",
+) -> str:
+    """List, follow up on, or stop a handed-off delete/copy/move/restore (#245).
+
+    Without a handle: this user's running Delete/CopyMove tasks. With one: its
+    progress or final result (``status``), or stop it (``stop``). The handle is
+    validated before any DSM call; its prefix picks the API.
+    """
+    if handle is None:
+        return await _list_reply(client)
+    parsed = parse_handle(handle)
+    record = records.get(parsed)
+    version = min(2, client.negotiate_version(parsed.api, max_version=2))
+    taskid = dsm_str(parsed.taskid)
+    paths = record.paths if record is not None else []
+
+    if action == "stop":
+        try:
+            await client.request(parsed.api, "stop", version=version, params={"taskid": taskid})
+        except SynologyError as e:
+            if e.code in (401, 599):
+                return f"That task had already finished or isn't running. {_LIST_HINT}"
+            synology_error_response("Stop task", e)
+        what = ", ".join(paths) if paths else f"`{parsed}`"
+        return f"Stopped {parsed.kind} of {what}. {_task_note(True)} {_LIST_HINT}"
+
+    try:
+        status = await client.request(
+            parsed.api, "status", version=version, params={"taskid": taskid}
+        )
+    except SynologyError as e:
+        if e.code != 599:
+            synology_error_response("Check task", e)
+        if record is not None and record.final_status is not None:
+            return await _final_text(client, parsed, record.final_status, record)
+        return (
+            "No running task with this handle. It finished, was stopped, or was started by "
+            f"a different DSM user. {_LIST_HINT}"
+        )
+    logger.debug("%s status (%s): %s", parsed.api, parsed, status)
+
+    if status.get("finished"):
+        records.set_final(parsed, status)
+        return await _final_text(client, parsed, status, record)
+
+    dest = record.dest if record is not None else None
+    where = _describe(parsed.kind, paths, dest).partition(" ")[2] if paths else ""
+    what = f"{_GERUND[parsed.kind]} on the NAS" + (f": {where}" if where else "")
+    return (
+        f"Still {what} ({progress_text(status)}). Handle: `{parsed}`\n"
+        "It keeps running without anything more from you. Check again later, or call "
+        'file_task with action="stop" to stop it (it may then be partly done).'
+    )
