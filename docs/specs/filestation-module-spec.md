@@ -716,7 +716,7 @@ Follow up on, list, or stop a delete, copy, move or restore that was handed off 
 
 **Permission tier:** WRITE (only write connections can start these tasks, and `stop` changes NAS state)
 
-**Annotations:** `readOnlyHint=false`, `destructiveHint=false`, `idempotentHint=true`.
+**Annotations:** `readOnlyHint=false`, `destructiveHint=true`: `action="stop"` can leave a move or delete half done, and annotations are static, so they follow the worst case (#183).
 
 **DSM API:** `SYNO.FileStation.BackgroundTask` / `list` v2 (no handle); `SYNO.FileStation.Delete` or `SYNO.FileStation.CopyMove` / `status`, `stop` v2 (the handle's prefix picks the API; task IDs are JSON-quoted, #121)
 

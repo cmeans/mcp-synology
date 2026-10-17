@@ -260,7 +260,8 @@ MODULE_INFO = ModuleInfo(
                 "NAS user."
             ),
             permission_tier=PermissionTier.WRITE,
-            annotations=_ANNO_IDEMPOTENT,
+            # Worst case (#183): action="stop" can leave a move or delete half done.
+            annotations=_ANNO_DESTRUCTIVE,
         ),
     ],
     settings_schema=FileStationSettings,

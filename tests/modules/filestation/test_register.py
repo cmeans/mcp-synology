@@ -636,8 +636,9 @@ class TestFileTaskAndHandoff:
         annos = tool.annotations
         assert annos is not None
         assert annos.read_only_hint is False
-        assert annos.destructive_hint is False
-        assert annos.idempotent_hint is True
+        # Worst case (#183): action="stop" can leave a move half done (QA R1 on #251).
+        assert annos.destructive_hint is True
+        assert annos.idempotent_hint is not True
 
         read_names = {t.name for t in MODULE_INFO.tools if t.permission_tier.name == "READ"}
         server, _manager, ctx = _make_ctx(allowed=read_names)
