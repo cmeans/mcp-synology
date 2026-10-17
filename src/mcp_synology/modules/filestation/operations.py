@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -33,6 +34,7 @@ from mcp_synology.modules.filestation.tasks import (
     handoff_reply,
     poll_task,
     running_task,
+    task_started,
 )
 
 if TYPE_CHECKING:
@@ -271,6 +273,7 @@ async def _copy_move_one_path(
     error for, or whose call is canceled, is stopped, so orphaned tasks can't
     accumulate on the NAS.
     """
+    started = time.time()
     try:
         start_data = await client.request(
             "SYNO.FileStation.CopyMove",
@@ -304,7 +307,7 @@ async def _copy_move_one_path(
     if result.outcome in ("handoff", "stalled"):
         # Left running on the NAS, not stopped (#245): the caller gets a handle.
         stall = result.error if result.outcome == "stalled" else None
-        return Handoff(Handle(_KIND[operation], taskid), result.status, stall)
+        return Handoff(Handle(_KIND[operation], taskid), result.status, stall, started)
     return _copy_move_result(result.status, path, operation, done)
 
 
@@ -513,7 +516,11 @@ async def _copy_move(
             if isinstance(started.get("overwrite"), bool):
                 task_overwrite = started["overwrite"]
             # Never start a second task on a path that already has one (#245).
-            outcome = Handoff(Handle(_KIND[operation], str(running["taskid"])), running)
+            outcome = Handoff(
+                Handle(_KIND[operation], str(running["taskid"])),
+                running,
+                started=task_started(running),
+            )
         else:
             outcome = await _copy_move_one_path(
                 client,
@@ -531,7 +538,11 @@ async def _copy_move(
             if records is not None:
                 records.add(
                     TaskRecord(
-                        handle=outcome.handle, paths=[p], dest=task_dest, overwrite=task_overwrite
+                        handle=outcome.handle,
+                        paths=[p],
+                        dest=task_dest,
+                        overwrite=task_overwrite,
+                        started=outcome.started,
                     )
                 )
             reply = handoff_reply(
@@ -615,6 +626,7 @@ async def _delete_one_path(
     ``timeout`` or DSM stopped answering its status requests (#245). A task that DSM
     reports an error for, or whose call is canceled, is stopped.
     """
+    started = time.time()
     try:
         start_data = await client.request(
             "SYNO.FileStation.Delete",
@@ -648,7 +660,7 @@ async def _delete_one_path(
     if result.outcome in ("handoff", "stalled"):
         # Left running on the NAS, not stopped (#245): the caller gets a handle.
         stall = result.error if result.outcome == "stalled" else None
-        return Handoff(Handle("delete", taskid), status, stall)
+        return Handoff(Handle("delete", taskid), status, stall, started)
 
     _delete_result(status, path, recursive=recursive, done=done)
     return None
@@ -781,7 +793,9 @@ async def delete_files(
         handoff: Handoff | None
         if running is not None:
             # Never start a second delete of a path that already has one running (#245).
-            handoff = Handoff(Handle("delete", str(running["taskid"])), running)
+            handoff = Handoff(
+                Handle("delete", str(running["taskid"])), running, started=task_started(running)
+            )
         else:
             handoff = await _delete_one_path(
                 client,
@@ -805,7 +819,13 @@ async def delete_files(
                 recycle[share_name] = recycle_bin_status[share_name]
             if records is not None:
                 records.add(
-                    TaskRecord(handle=handle, paths=[p], recursive=recursive, recycle=recycle)
+                    TaskRecord(
+                        handle=handle,
+                        paths=[p],
+                        recursive=recursive,
+                        recycle=recycle,
+                        started=handoff.started,
+                    )
                 )
             reply = handoff_reply(
                 verb="Still deleting",

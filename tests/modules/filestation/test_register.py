@@ -801,6 +801,28 @@ class TestDiscoveryAtFirstConnection:
         assert (params["api"], params["method"]) == ("SYNO.FileStation.BackgroundTask", "list")
 
     @respx.mock
+    async def test_file_task_reply_drops_the_discovery_note(
+        self, monkeypatch: pytest.MonkeyPatch, mock_client: DsmClient
+    ) -> None:
+        """file_task first: no note (it would repeat the task), and none on later replies."""
+        from tests.conftest import BASE_URL
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            return_value=httpx.Response(
+                200, json={"success": True, "data": {"tasks": [RUNNING_DELETE], "total": 1}}
+            )
+        )
+        monkeypatch.setattr(
+            "mcp_synology.modules.filestation.tasks.file_task", AsyncMock(return_value="STATUS")
+        )
+        server, manager, ctx = _make_ctx()
+        manager.with_update_notice = MagicMock(side_effect=lambda s: s)
+        self._wire(manager, mock_client, monkeypatch)
+        register(ctx)
+        assert await server._tool_manager._tools["file_task"].fn() == "STATUS"
+        assert await server._tool_manager._tools["list_shares"].fn() == "SHARES"
+
+    @respx.mock
     async def test_discovery_seeds_file_task_records(
         self, monkeypatch: pytest.MonkeyPatch, mock_client: DsmClient
     ) -> None:

@@ -1714,6 +1714,7 @@ class TestStallHandoff:
         record = records.get(Handle("delete", "FileStation_HUGE.SPARSEBUNDLE"))
         assert record is not None
         assert record.paths == ["/Backups/huge.sparsebundle"]
+        assert record.started is not None  # our start request, for "running for N min"
 
     @respx.mock
     @pytest.mark.parametrize(
@@ -1798,6 +1799,7 @@ class TestStallHandoff:
         record = records.get(Handle(kind, "FileStation_BIG"))  # type: ignore[arg-type]
         assert record is not None
         assert record.dest == "/s/dst"
+        assert record.started is not None
 
     @respx.mock
     async def test_restore_hands_off(self, mock_client: DsmClient) -> None:
@@ -2369,7 +2371,9 @@ class TestDuplicateStart:
         assert "Handle: `delete:FileStation_179219158016597225`" in result
         assert "Still deleting on the NAS: /s/big (124,219 of 200,400 items, 62%)" in result
         assert "already running" in result
-        assert records.get(Handle("delete", "FileStation_179219158016597225")) is not None
+        record = records.get(Handle("delete", "FileStation_179219158016597225"))
+        assert record is not None
+        assert record.started == 1792191585  # DSM's crtime, not this call's time
 
     @respx.mock
     async def test_duplicate_check_tolerates_list_failure(self, mock_client: DsmClient) -> None:
@@ -2488,3 +2492,4 @@ class TestDuplicateStart:
         record = records.get(Handle("copy", "FileStation_179219158016597225"))
         assert record is not None
         assert (record.dest, record.overwrite) == ("/s/dst", True)
+        assert record.started == 1792191585

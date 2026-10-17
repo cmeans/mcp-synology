@@ -253,8 +253,8 @@ MODULE_INFO = ModuleInfo(
                 "Follow up on a delete, copy, move or restore that is still running on the "
                 "NAS. Those tools hand off long operations and return a handle such as "
                 "`delete:FileStation_…`, because the NAS keeps working after the reply. "
-                'With a handle: `action="status"` shows progress, or the final result once '
-                'finished; `action="stop"` stops it, and the operation may then be partly '
+                'With a handle: `action="status"` shows progress, or the final result if DSM '
+                'still has it; `action="stop"` stops it, and the operation may then be partly '
                 "done. Without a handle: lists this user's running operations, which is "
                 "useful in a new chat or after a restart. Handles only work for the same "
                 "NAS user."
@@ -372,13 +372,18 @@ def register(ctx: RegisterContext) -> None:
                 logger.debug("Running-task discovery failed, ignoring: %s", e)
         return client
 
-    def _reply(result: str) -> str:
-        """The tool result plus the update notice and, once, the discovery note."""
+    def _reply(result: str, *, note: bool = True) -> str:
+        """The tool result plus the update notice and, once, the discovery note.
+
+        ``note=False`` (file_task) drops the note: it only points at file_task, and a
+        file_task reply would repeat the same task right below its own answer.
+        """
         text = manager.with_update_notice(result)
-        note = discovery["note"]
-        if isinstance(note, str):
+        pending = discovery["note"]
+        if isinstance(pending, str):
             discovery["note"] = None
-            text += f"\n\n---\n{note}"
+            if note:
+                text += f"\n\n---\n{pending}"
         return text
 
     def _progress_cb(mcp_ctx: Context) -> ProgressCallback:
@@ -800,4 +805,7 @@ def register(ctx: RegisterContext) -> None:
             ] = "status",
         ) -> str:
             client = await _fs_client()
-            return _reply(await file_task(client, records=records, handle=handle, action=action))
+            return _reply(
+                await file_task(client, records=records, handle=handle, action=action),
+                note=False,
+            )

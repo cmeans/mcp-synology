@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock
 
@@ -48,6 +49,31 @@ def test_parse_handle_rejects(bad: str) -> None:
     body = json.loads(str(exc_info.value))
     assert body["error"]["code"] == "invalid_parameter"
     assert body["error"]["param"] == "handle"
+
+
+@pytest.mark.parametrize(
+    ("seconds", "text"),
+    [(20, "under a minute"), (14 * 60, "14 min"), (89 * 60, "89 min"), (125 * 60, "2 h 5 min")],
+)
+def test_elapsed_text(seconds: float, text: str) -> None:
+    from mcp_synology.modules.filestation.tasks import _elapsed_text
+
+    assert _elapsed_text(seconds) == text
+
+
+@pytest.mark.parametrize(
+    ("task", "started"),
+    [
+        ({"crtime": 1792197001}, 1792197001.0),
+        ({}, None),
+        ({"crtime": 0}, None),
+        ({"crtime": "x"}, None),
+    ],
+)
+def test_task_started(task: dict[str, Any], started: float | None) -> None:
+    from mcp_synology.modules.filestation.tasks import task_started
+
+    assert task_started(task) == started
 
 
 def _rec(n: int) -> TaskRecord:
@@ -722,6 +748,7 @@ class TestDiscover:
         assert delete is not None
         assert delete.paths == ["/s/a"]
         assert delete.recursive is True
+        assert delete.started == CRTIME
         move = records.get(Handle("move", "FileStation_M1"))
         assert move is not None
         assert move.paths == ["/s/b"]
@@ -865,6 +892,33 @@ class TestFileTask:
         rec = records.get(Handle("delete", "FileStation_D1"))
         assert rec is not None
         assert rec.final_status is None
+        assert "running for" not in text  # no start time known
+        assert "a count that hasn't moved doesn't mean it's stuck" in text
+        assert "stopping and starting it again doesn't make it faster" in text
+
+    @respx.mock
+    async def test_file_task_status_running_says_how_long(self, mock_client: DsmClient) -> None:
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=_router({"status": _ok(RUNNING)})
+        )
+        records = TaskRecords()
+        h = Handle("delete", "FileStation_D1")
+        records.add(TaskRecord(handle=h, paths=["/s/a"], started=time.time() - 14 * 60))
+        text = await file_task(mock_client, records=records, handle=str(h))
+        assert "(8 of 342 items, 2%; running for 14 min)" in text
+
+    @respx.mock
+    async def test_file_task_status_running_copy_wording(self, mock_client: DsmClient) -> None:
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=_router({"status": _ok(RUNNING)})
+        )
+        text = await file_task(mock_client, records=TaskRecords(), handle="copy:FileStation_C1")
+        assert "A busy NAS can go minutes without visible progress" in text
+        assert "counts finished items" not in text
 
     @respx.mock
     async def test_file_task_status_finished_with_record(self, mock_client: DsmClient) -> None:
@@ -934,6 +988,23 @@ class TestFileTask:
         assert text == (
             "No running task with this handle. It finished, was stopped, or was started by a "
             "different DSM user. List the path to see what's left."
+        )
+
+    @respx.mock
+    async def test_file_task_status_599_with_record_names_the_path(
+        self, mock_client: DsmClient
+    ) -> None:
+        """A finished Delete no status read caught: DSM has forgotten it, the record hasn't."""
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_router({"status": _err(599)}))
+        h = Handle("delete", "FileStation_D1")
+        records = TaskRecords()
+        records.add(TaskRecord(handle=h, paths=["/Backups/X"]))
+        text = await file_task(mock_client, records=records, handle=str(h))
+        assert text == (
+            "The delete of /Backups/X is no longer running on the NAS; it most likely finished, "
+            "and DSM no longer has its result. List the path to see what's left."
         )
 
     @respx.mock

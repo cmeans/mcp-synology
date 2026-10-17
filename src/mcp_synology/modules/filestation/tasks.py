@@ -83,6 +83,7 @@ class TaskRecord:
     recursive: bool | None = None
     recycle: dict[str, bool] = field(default_factory=dict)
     final_status: dict[str, Any] | None = None
+    started: float | None = None  # epoch seconds, for "running for 14 min"
 
 
 class TaskRecords:
@@ -215,6 +216,7 @@ class Handoff:
     handle: Handle
     status: dict[str, Any]
     stall: Exception | None = None
+    started: float | None = None  # epoch seconds: our start request, or DSM's crtime
 
 
 def _progress_numbers(status: dict[str, Any]) -> tuple[int, int, str] | None:
@@ -239,6 +241,22 @@ def _no_total_text(status: dict[str, Any]) -> str:
         # CopyMove: no byte total yet, though it may already be copying (vdsm).
         return "no progress figures from DSM yet"
     return "counting items"
+
+
+def task_started(task: dict[str, Any]) -> float | None:
+    """A ``BackgroundTask.list`` task's start time (``crtime``, epoch seconds), if given."""
+    crtime = task.get("crtime")
+    return float(crtime) if isinstance(crtime, int | float) and crtime > 0 else None
+
+
+def _elapsed_text(seconds: float) -> str:
+    """``under a minute``, ``14 min`` or ``2 h 5 min``."""
+    minutes = round(seconds / 60)
+    if minutes < 1:
+        return "under a minute"
+    if minutes < 90:
+        return f"{minutes} min"
+    return f"{minutes // 60} h {minutes % 60} min"
 
 
 def progress_text(status: dict[str, Any]) -> str:
@@ -420,6 +438,7 @@ class RunningTask:
             dest=self.dest,
             overwrite=overwrite if isinstance(overwrite, bool) else None,
             recursive=recursive if isinstance(recursive, bool) else None,
+            started=task_started(self.task),
         )
 
 
@@ -725,6 +744,13 @@ async def file_task(
         return data
 
     def gone() -> str:
+        if paths:
+            # Ours, but DSM has let it go: a finished Delete is forgotten unless a status
+            # read caught it finishing, so there's no result left to give.
+            return (
+                f"The {parsed.kind} of {', '.join(paths)} is no longer running on the NAS; "
+                f"it most likely finished, and DSM no longer has its result. {_LIST_HINT}"
+            )
         return (
             "No running task with this handle. It finished, was stopped, or was started by "
             f"a different DSM user. {_LIST_HINT}"
@@ -781,8 +807,20 @@ async def file_task(
     dest = record.dest if record is not None else None
     where = _describe(parsed.kind, paths, dest).partition(" ")[2] if paths else ""
     what = f"{_GERUND[parsed.kind]} on the NAS" + (f": {where}" if where else "")
+    progress = progress_text(status)
+    started = record.started if record is not None else None
+    if started is not None:
+        progress += f"; running for {_elapsed_text(time.time() - started)}"
+    slow = (
+        "Progress counts finished items, and one large file can take many minutes on a "
+        "busy NAS, so a count that hasn't moved doesn't mean it's stuck."
+        if parsed.kind == "delete"
+        else "A busy NAS can go minutes without visible progress; that doesn't mean it's stuck."
+    )
     return (
-        f"Still {what} ({progress_text(status)}). Handle: `{parsed}`\n"
-        "It keeps running without anything more from you. Check again later, or call "
-        'file_task with action="stop" to stop it (it may then be partly done).'
+        f"Still {what} ({progress}). Handle: `{parsed}`\n"
+        f"{slow} It keeps running without anything more from you; stopping and starting it "
+        "again doesn't make it faster. "
+        "Check again later, or, if the user wants it canceled, call file_task with "
+        'action="stop" (it may then be partly done).'
     )
