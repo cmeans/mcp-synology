@@ -564,8 +564,8 @@ async def create_download(
                 retryable=False,
                 param="username" if username is not None else "password",
             )
-        path = Path(torrent_file_path).expanduser()
-        if path.suffix.lower() not in _TORRENT_SUFFIXES:
+        raw = Path(torrent_file_path)
+        if raw.suffix.lower() not in _TORRENT_SUFFIXES:
             error_response(
                 ErrorCode.INVALID_PARAMETER,
                 f"Create download refused: {torrent_file_path!r} isn't a .torrent or .nzb file.",
@@ -574,14 +574,39 @@ async def create_download(
                 value=torrent_file_path,
                 suggestion="Pass a local .torrent or .nzb file, or a magnet or URL as `uri`.",
             )
+        # Unexpanded: an unknown ~user is refused like any path outside (#257 review).
         refuse_outside_roots(
             "Create download",
             "torrent_file_path",
             torrent_file_path,
-            path,
+            raw,
             local_roots,
             module="downloadstation",
+            hide_unknown_users=True,
         )
+        try:
+            path = raw.expanduser()
+        except RuntimeError as e:  # only reachable unconfined (local_roots=None)
+            error_response(
+                ErrorCode.INVALID_PARAMETER,
+                f"Create download refused: {torrent_file_path!r} can't be expanded: {e}",
+                retryable=False,
+                param="torrent_file_path",
+                value=torrent_file_path,
+                suggestion="Pass an absolute local path, or one starting with ~/.",
+            )
+        # The rule is about the file that's sent: a .torrent link to another file type
+        # inside the folders is refused too (#257 review).
+        if path.resolve().suffix.lower() not in _TORRENT_SUFFIXES:
+            error_response(
+                ErrorCode.INVALID_PARAMETER,
+                f"Create download refused: {torrent_file_path!r} links to a file that isn't "
+                "a .torrent or .nzb file.",
+                retryable=False,
+                param="torrent_file_path",
+                value=torrent_file_path,
+                suggestion="Pass the .torrent or .nzb file itself.",
+            )
         if not path.is_file():
             error_response(
                 ErrorCode.NOT_FOUND,

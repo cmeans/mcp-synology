@@ -145,11 +145,22 @@ modules:
       # and symlinks. "/" allows everything on macOS and Linux; on Windows list
       # each drive ("C:\\", "D:\\"). default_download_dir is always allowed too.
       # Entries must be absolute or start with ~.
-      # Default: the user's Downloads folder (XDG user-dirs on Linux, ~/Downloads
-      # on macOS, %USERPROFILE%\Downloads on Windows)
+      # Added to the top-level allowed_local_paths when that's set (#257).
+      # Default, with no top-level list: the user's Downloads folder (XDG
+      # user-dirs on Linux, ~/Downloads on macOS, %USERPROFILE%\Downloads on
+      # Windows)
       # allowed_local_paths:
       #   - ~/Downloads
       #   - ~/Media
+
+  # downloadstation:
+  #   enabled: true
+  #   permission: write
+  #   settings:
+  #     # Folders create_download may read .torrent/.nzb files from, added to the
+  #     # top-level allowed_local_paths (same default rule as File Station's).
+  #     allowed_local_paths:
+  #       - ~/Torrents
 
   # Example: future module (not yet implemented)
   # docker:
