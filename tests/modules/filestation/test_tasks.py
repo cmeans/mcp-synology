@@ -19,6 +19,7 @@ from mcp_synology.modules.filestation.tasks import (
     parse_handle,
     poll_task,
     progress_text,
+    running_task_for,
 )
 from tests.conftest import BASE_URL
 
@@ -364,3 +365,90 @@ def test_progress_text() -> None:
         "8 of 342 items, 2%"
     )
     assert progress_text({"progress": -1, "total": 0}) == "counting items"
+    # CopyMove reports bytes (processed_size), not items.
+    assert progress_text({"processed_size": 1 << 30, "total": 4 << 30, "progress": 0.25}) == (
+        "1 GiB of 4 GiB, 25%"
+    )
+    assert progress_text({"processed_size": 0, "progress": -1, "total": 0}) == (
+        "no progress figures from DSM yet"
+    )
+
+
+@respx.mock
+async def test_poll_progress_in_bytes_for_copymove(
+    mock_client: DsmClient, clock: list[float]
+) -> None:
+    statuses = iter(
+        [
+            {"finished": False, "processed_size": 1 << 30, "total": 4 << 30, "progress": 0.25},
+            {"finished": True},
+        ]
+    )
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=lambda request: _ok(next(statuses)))
+    on_progress = AsyncMock()
+    await poll_task(
+        mock_client,
+        api="SYNO.FileStation.CopyMove",
+        version=2,
+        taskid="t1",
+        wait=30,
+        label="Copying /x",
+        on_progress=on_progress,
+    )
+    assert [c.args for c in on_progress.await_args_list] == [
+        (1 << 30, 4 << 30, "Copying /x: 1 GiB of 4 GiB")
+    ]
+
+
+class TestRunningTaskFor:
+    TASKS = [
+        {
+            "api": "SYNO.FileStation.CopyMove",
+            "finished": False,
+            "params": {"path": ["/s/a"], "dest_folder_path": "/s/d", "remove_src": False},
+            "taskid": "FileStation_C",
+        },
+        {
+            "api": "SYNO.FileStation.Delete",
+            "finished": True,
+            "params": {"path": ["/s/a"], "recursive": True},
+            "taskid": "FileStation_DONE",
+        },
+        {
+            "api": "SYNO.FileStation.Delete",
+            "finished": False,
+            "params": {"path": "/s/a", "recursive": True},
+            "taskid": "FileStation_D",
+        },
+    ]
+
+    @respx.mock
+    async def test_finds_running_task_of_api_for_path(self, mock_client: DsmClient) -> None:
+        route = respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            return_value=_ok({"offset": 0, "tasks": self.TASKS, "total": 3})
+        )
+        api = "SYNO.FileStation.Delete"
+        assert await running_task_for(mock_client, api=api, path="/s/a") == "FileStation_D"
+        assert await running_task_for(mock_client, api=api, path="/s/b") is None
+        assert (
+            await running_task_for(mock_client, api="SYNO.FileStation.CopyMove", path="/s/a")
+            == "FileStation_C"
+        )
+        params = dict(route.calls[0].request.url.params)
+        assert params["api"] == "SYNO.FileStation.BackgroundTask"
+        assert params["method"] == "list"
+        assert params["version"] == "2"
+
+    @respx.mock
+    async def test_list_failure_is_none(self, mock_client: DsmClient) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            return_value=httpx.Response(200, json={"success": False, "error": {"code": 599}})
+        )
+        api = "SYNO.FileStation.Delete"
+        assert await running_task_for(mock_client, api=api, path="/s/a") is None
+
+    @respx.mock
+    async def test_unanswered_list_is_none(self, mock_client: DsmClient) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=httpx.ReadTimeout(""))
+        api = "SYNO.FileStation.Delete"
+        assert await running_task_for(mock_client, api=api, path="/s/a") is None

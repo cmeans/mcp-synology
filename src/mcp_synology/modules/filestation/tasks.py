@@ -15,7 +15,7 @@ import anyio
 import httpx
 
 from mcp_synology.core.errors import ErrorCode, SynologyError
-from mcp_synology.core.formatting import error_response
+from mcp_synology.core.formatting import error_response, format_size
 from mcp_synology.modules.filestation.helpers import dsm_str
 
 if TYPE_CHECKING:
@@ -164,17 +164,40 @@ class PollResult:
     stopped: bool = False
 
 
+def _progress_numbers(status: dict[str, Any]) -> tuple[int, int, str] | None:
+    """``(processed, total, "x of y")`` from a status, or None while DSM has no total.
+
+    Delete counts items (``processed_num``); CopyMove counts bytes (``processed_size``;
+    vdsm 7.1 and 7.2.2), so a copy of empty files never gets a total.
+    """
+    total = status.get("total") or 0
+    if not isinstance(total, int | float) or total <= 0:
+        return None
+    if "processed_num" not in status and "processed_size" in status:
+        size = int(status.get("processed_size") or 0)
+        return size, int(total), f"{format_size(size)} of {format_size(int(total))}"
+    processed = int(status.get("processed_num") or 0)
+    return processed, int(total), f"{processed:,} of {int(total):,} items"
+
+
+def _no_total_text(status: dict[str, Any]) -> str:
+    """Progress wording while DSM reports no total (``progress: -1``)."""
+    if "processed_num" not in status and "processed_size" in status:
+        # CopyMove: no byte total yet, though it may already be copying (vdsm).
+        return "no progress figures from DSM yet"
+    return "counting items"
+
+
 def progress_text(status: dict[str, Any]) -> str:
     """Human-readable progress of a task status, e.g. ``8 of 342 items, 2%``."""
-    total = status.get("total") or 0
-    if total > 0:
-        processed = status.get("processed_num") or 0
-        text = f"{processed:,} of {total:,} items"
-        progress = status.get("progress")
-        if isinstance(progress, int | float) and progress >= 0:
-            text += f", {round(progress * 100)}%"
-        return text
-    return "counting items"
+    numbers = _progress_numbers(status)
+    if numbers is None:
+        return _no_total_text(status)
+    text = numbers[2]
+    progress = status.get("progress")
+    if isinstance(progress, int | float) and progress >= 0:
+        text += f", {round(progress * 100)}%"
+    return text
 
 
 async def poll_task(
@@ -199,7 +222,7 @@ async def poll_task(
     deadline = time.monotonic() + wait
     status: dict[str, Any] = {}
     last_progress: float | None = None
-    last_numbers: tuple[Any, Any] | None = None
+    last_numbers: tuple[int, int] | None = None
 
     async def stop() -> bool:
         return await _stop_background_task(client, api, quoted, version, logger)
@@ -223,18 +246,16 @@ async def poll_task(
             if on_progress is not None:
                 now = time.monotonic()
                 if last_progress is None or now - last_progress >= progress_every:
-                    total = status.get("total") or 0
-                    if total > 0:
-                        processed = status.get("processed_num") or 0
+                    numbers = _progress_numbers(status)
+                    if numbers is not None:
+                        processed, total, text = numbers
                         if (processed, total) != last_numbers:
                             last_progress = now
                             last_numbers = (processed, total)
-                            await on_progress(
-                                processed, total, f"{label}: {processed:,} of {total:,} items"
-                            )
+                            await on_progress(processed, total, f"{label}: {text}")
                     elif status.get("progress") == -1:
                         last_progress = now
-                        await on_progress(0, None, f"{label}: counting items")
+                        await on_progress(0, None, f"{label}: {_no_total_text(status)}")
 
             await asyncio.sleep(interval)
     except asyncio.CancelledError:
@@ -282,3 +303,47 @@ def handoff_reply(
             f"Not started: {', '.join(not_started)}. Run them again once this one finishes."
         )
     return "\n".join(lines)
+
+
+async def running_task(
+    client: DsmClient,
+    *,
+    api: str,
+    path: str,
+    params: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """This user's running (unfinished) task of ``api`` on ``path``, as DSM lists it.
+
+    From ``SYNO.FileStation.BackgroundTask`` ``list`` v2, which shows each task's start
+    ``params`` (``path`` as a list; CopyMove also ``dest_folder_path``, ``overwrite``,
+    ``remove_src`` as JSON booleans; vdsm 7.1 and 7.2.2). ``params``, if given, must
+    match too. None if there is none, or if ``list`` fails: the check is a guard, never
+    a reason to refuse an operation.
+    """
+    try:
+        data = await client.request("SYNO.FileStation.BackgroundTask", "list", version=2)
+    except (SynologyError, httpx.TransportError) as e:
+        logger.debug("BackgroundTask list failed, skipping the running-task check: %s", e)
+        return None
+    for task in data.get("tasks") or []:
+        if not isinstance(task, dict) or task.get("api") != api or task.get("finished"):
+            continue
+        started = task.get("params")
+        if not isinstance(started, dict):
+            continue
+        paths = started.get("path")
+        if isinstance(paths, str):
+            paths = [paths]
+        if not isinstance(paths, list) or path not in paths:
+            continue
+        if params and any(started.get(k) != v for k, v in params.items()):
+            continue
+        if task.get("taskid"):
+            return task
+    return None
+
+
+async def running_task_for(client: DsmClient, *, api: str, path: str) -> str | None:
+    """The taskid of this user's running task of ``api`` on ``path``, or None."""
+    task = await running_task(client, api=api, path=path)
+    return str(task["taskid"]) if task else None

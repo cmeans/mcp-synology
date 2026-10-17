@@ -493,6 +493,8 @@ class TestDeleteFiles:
             dict(c.request.url.params).get("folder_path")
             for c in route.calls
             if dict(c.request.url.params).get("method") == "list"
+            # BackgroundTask list is the running-task check (#245), not a recycle probe.
+            and dict(c.request.url.params).get("api") == "SYNO.FileStation.List"
         ]
         assert listed == []
         assert recycle_status == {}
@@ -562,11 +564,13 @@ class TestBackgroundTaskErrors:
 
     @respx.mock
     async def test_copy_timeout(self, mock_client: DsmClient) -> None:
-        """Copy task that never finishes within timeout → timeout error."""
+        """Copy task that outlives the wait is handed off, not stopped (#245)."""
+        methods: list[str] = []
 
         def side_effect(request: httpx.Request) -> httpx.Response:
             params = dict(request.url.params)
             method = params.get("method", "")
+            methods.append(method)
             if method == "start":
                 return httpx.Response(200, json={"success": True, "data": {"taskid": "cm-1"}})
             if method == "status":
@@ -575,19 +579,15 @@ class TestBackgroundTaskErrors:
 
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
 
-        with pytest.raises(ToolError) as exc_info:
-            await copy_files(
-                mock_client,
-                paths=["/video/huge.mkv"],
-                dest_folder="/video/Archive",
-                timeout=1.0,
-            )
-        body = json.loads(str(exc_info.value))
-        assert body["error"]["code"] == "timeout"
-        assert body["error"]["retryable"] is True
-        assert "Copy files" in body["error"]["message"]
-        assert body["error"]["param"] == "timeout"
-        assert body["error"]["value"] == 1.0
+        result = await copy_files(
+            mock_client,
+            paths=["/video/huge.mkv"],
+            dest_folder="/video/Archive",
+            timeout=1.0,
+        )
+        assert "stop" not in methods
+        assert "Still copying on the NAS: /video/huge.mkv" in result
+        assert "Handle: `copy:cm-1`" in result
 
     @respx.mock
     async def test_copy_task_completes_with_error(self, mock_client: DsmClient) -> None:
@@ -1672,24 +1672,18 @@ class TestUnansweredStatus:
         )
 
     @respx.mock
-    async def test_stop_refused_after_timeout(
-        self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_stop_refused_after_unanswered_status(self, mock_client: DsmClient) -> None:
         """QA R2 on #239: DSM answers `stop` with 401 (e.g. the task finished between the
-        last poll and the stop). The message mustn't say DSM didn't answer."""
-        import mcp_synology.modules.filestation.operations as ops
-
-        now = [0.0]
-        monkeypatch.setattr(ops.time, "monotonic", lambda: now[0])
-        monkeypatch.setattr(ops.asyncio, "sleep", AsyncMock())
+        last poll and the stop). The message mustn't say DSM didn't answer. (A copy that
+        outlives the wait is handed off since #245, so this covers a path that still
+        stops: an unanswered status request.)"""
 
         def side_effect(request: httpx.Request) -> httpx.Response:
             method = dict(request.url.params).get("method", "")
             if method == "start":
                 return httpx.Response(200, json={"success": True, "data": {"taskid": "d-1"}})
             if method == "status":
-                now[0] += 31.0
-                return httpx.Response(200, json={"success": True, "data": {"finished": False}})
+                raise httpx.ReadTimeout("")
             if method == "stop":
                 return httpx.Response(200, json={"success": False, "error": {"code": 401}})
             return httpx.Response(200, json={"success": True, "data": {}})
@@ -1698,9 +1692,9 @@ class TestUnansweredStatus:
         with pytest.raises(ToolError) as exc_info:
             await copy_files(mock_client, paths=["/video/x"], dest_folder="/x", timeout=30.0)
         assert json.loads(str(exc_info.value))["error"]["message"] == (
-            "Copy files failed: timed out after 30.0s on path: /video/x. mcp-synology "
-            "couldn't confirm the task stopped; it may still be running on the NAS, and "
-            "may be partly done."
+            "Copy files failed: DSM didn't answer a status request on path: /video/x "
+            "(ReadTimeout). mcp-synology couldn't confirm the task stopped; it may still "
+            "be running on the NAS, and may be partly done."
         )
 
     @respx.mock
@@ -1709,7 +1703,7 @@ class TestUnansweredStatus:
     ) -> None:
         """Each status request "takes" 10 s on a fake clock. With a 30 s timeout the old
         sleep-counting loop polled 60 times; the wall-clock deadline stops after 3."""
-        import mcp_synology.modules.filestation.operations as ops
+        import mcp_synology.modules.filestation.tasks as ops
 
         now = [0.0]
         monkeypatch.setattr(ops.time, "monotonic", lambda: now[0])
@@ -1734,10 +1728,10 @@ class TestUnansweredStatus:
         assert "Handle: `delete:slow`" in result
 
     @respx.mock
-    async def test_timed_out_copy_names_paths_already_done(
+    async def test_handed_off_copy_names_paths_already_done(
         self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        import mcp_synology.modules.filestation.operations as ops
+        import mcp_synology.modules.filestation.tasks as ops
 
         now = [0.0]
         monkeypatch.setattr(ops.time, "monotonic", lambda: now[0])
@@ -1760,14 +1754,14 @@ class TestUnansweredStatus:
             return httpx.Response(200, json={"success": True, "data": {}})
 
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
-        with pytest.raises(ToolError) as exc_info:
-            await copy_files(
-                mock_client, paths=["/video/a", "/video/b"], dest_folder="/x", timeout=30.0
-            )
-        assert json.loads(str(exc_info.value))["error"]["message"] == (
-            "Copy files failed: timed out after 30.0s on path: /video/b. The task was "
-            "stopped and may be partly done. Already copied before this failure: /video/a"
+        result = await copy_files(
+            mock_client, paths=["/video/a", "/video/b"], dest_folder="/x", timeout=30.0
         )
+        # Handed off at the deadline, not stopped (#245).
+        assert "stop" not in methods
+        assert methods.count("status") == 4
+        assert "Still copying on the NAS: /video/b" in result
+        assert "Already copied: /video/a." in result
 
 
 class TestDeleteHandoff:
@@ -1896,3 +1890,282 @@ class TestDeleteHandoff:
         )
         assert seen
         assert seen[0][:2] == (8, 342)
+
+
+class TestCopyMoveHandoff:
+    """#245: a copy, move or restore that outlives the wait is handed off with a handle."""
+
+    @staticmethod
+    def _dsm(
+        calls: list[dict[str, str]],
+        *,
+        finish: set[str] | None = None,
+    ) -> Callable[[httpx.Request], httpx.Response]:
+        finish = finish or set()
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            method = params.get("method", "")
+            calls.append(params)
+            if params.get("api") == "SYNO.FileStation.CopyMove":
+                if method == "start":
+                    name = params["path"].rsplit("/", 1)[-1].removesuffix(".mkv")
+                    return httpx.Response(
+                        200,
+                        json={"success": True, "data": {"taskid": f"FileStation_{name.upper()}"}},
+                    )
+                if method == "status":
+                    tid = params["taskid"].strip('"')
+                    if tid.removeprefix("FileStation_").lower() in finish:
+                        return httpx.Response(
+                            200, json={"success": True, "data": {"finished": True}}
+                        )
+                    # CopyMove reports bytes, not items (vdsm 7.1 and 7.2.2).
+                    data = {
+                        "finished": False,
+                        "processed_size": 1 << 30,
+                        "total": 4 << 30,
+                        "progress": 0.25,
+                    }
+                    return httpx.Response(200, json={"success": True, "data": data})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        return side_effect
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        ("tool", "kind", "verb"), [(copy_files, "copy", "copying"), (move_files, "move", "moving")]
+    )
+    async def test_copy_move_hands_off(
+        self, mock_client: DsmClient, tool: Callable[..., object], kind: str, verb: str
+    ) -> None:
+        calls: list[dict[str, str]] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm(calls))
+        records = TaskRecords()
+        result = await tool(  # type: ignore[misc]
+            mock_client,
+            paths=["/s/big"],
+            dest_folder="/s/dst",
+            overwrite=True,
+            timeout=1,
+            records=records,
+        )
+        assert f"Still {verb} on the NAS: /s/big (1 GiB of 4 GiB, 25%)" in result
+        assert f"Handle: `{kind}:FileStation_BIG`" in result
+        assert not [c for c in calls if c.get("method") == "stop"]
+        record = records.get(Handle(kind, "FileStation_BIG"))  # type: ignore[arg-type]
+        assert record is not None
+        assert record.paths == ["/s/big"]
+        assert record.dest == "/s/dst"
+        assert record.overwrite is True
+
+    @respx.mock
+    async def test_copy_hands_off(self, mock_client: DsmClient) -> None:
+        calls: list[dict[str, str]] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm(calls, finish={"a"}))
+        result = await copy_files(
+            mock_client, paths=["/s/a", "/s/b", "/s/c"], dest_folder="/s/dst", timeout=1
+        )
+        assert "Still copying on the NAS: /s/b" in result
+        assert "Handle: `copy:FileStation_B`" in result
+        assert "Already copied: /s/a." in result
+        assert "Not started: /s/c." in result
+        started = [c["path"] for c in calls if c.get("method") == "start"]
+        assert started == ["/s/a", "/s/b"]
+
+    @respx.mock
+    async def test_move_hands_off(self, mock_client: DsmClient) -> None:
+        calls: list[dict[str, str]] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm(calls))
+        result = await move_files(mock_client, paths=["/s/big"], dest_folder="/s/dst", timeout=1)
+        assert result.startswith("Still moving on the NAS: /s/big")
+        assert "Handle: `move:FileStation_BIG`" in result
+        assert not [c for c in calls if c.get("method") == "stop"]
+
+    @respx.mock
+    async def test_restore_hands_off(self, mock_client: DsmClient) -> None:
+        calls: list[dict[str, str]] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm(calls))
+        records = TaskRecords()
+        result = await restore_from_recycle_bin(
+            mock_client, share="video", paths=["Shows/big"], timeout=1, records=records
+        )
+        assert result.startswith("Still restoring on the NAS: /video/#recycle/Shows/big")
+        assert "Handle: `restore:FileStation_BIG`" in result
+        assert not [c for c in calls if c.get("method") == "stop"]
+        record = records.get(Handle("restore", "FileStation_BIG"))
+        assert record is not None
+        assert record.paths == ["/video/#recycle/Shows/big"]
+        assert record.dest == "/video/Shows"
+        assert record.overwrite is False
+
+    @respx.mock
+    async def test_restore_multi_destination_not_started(self, mock_client: DsmClient) -> None:
+        calls: list[dict[str, str]] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm(calls))
+        result = await restore_from_recycle_bin(
+            mock_client, share="video", paths=["Shows/a", "Movies/b"], timeout=1
+        )
+        assert "Still restoring on the NAS: /video/#recycle/Shows/a" in result
+        assert "Not started: /video/#recycle/Movies/b." in result
+        started = [c["path"] for c in calls if c.get("method") == "start"]
+        assert started == ["/video/#recycle/Shows/a"]
+
+    @respx.mock
+    async def test_restore_multi_destination_hands_off_second(self, mock_client: DsmClient) -> None:
+        calls: list[dict[str, str]] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm(calls, finish={"a"}))
+        result = await restore_from_recycle_bin(
+            mock_client, share="video", paths=["Shows/a", "Movies/b", "Docs/c"], timeout=1
+        )
+        assert result.startswith("[+] Restored from /video recycle bin")
+        assert "Still restoring on the NAS: /video/#recycle/Movies/b" in result
+        assert "Already restored: /video/#recycle/Shows/a." in result
+        assert "Not started: /video/#recycle/Docs/c." in result
+
+    @respx.mock
+    async def test_copy_progress_callback_called(self, mock_client: DsmClient) -> None:
+        calls: list[dict[str, str]] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm(calls))
+        seen: list[tuple[float, float | None, str]] = []
+
+        async def on_progress(progress: float, total: float | None, message: str) -> None:
+            seen.append((progress, total, message))
+
+        await copy_files(
+            mock_client, paths=["/s/a"], dest_folder="/s/dst", timeout=1, on_progress=on_progress
+        )
+        assert seen[0] == (1 << 30, 4 << 30, "Copying /s/a: 1 GiB of 4 GiB")
+
+    @respx.mock
+    async def test_copy_cancel_stops(self, mock_client: DsmClient) -> None:
+        import asyncio
+
+        calls: list[dict[str, str]] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm(calls))
+        task = asyncio.create_task(
+            copy_files(mock_client, paths=["/s/a"], dest_folder="/s/dst", timeout=30)
+        )
+        await asyncio.sleep(0.3)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert len([c for c in calls if c.get("method") == "stop"]) == 1
+
+
+class TestDuplicateStart:
+    """#245: a path that already has a running task gets that task's handle, not a second
+    task."""
+
+    @staticmethod
+    def _dsm(
+        calls: list[dict[str, str]], listing: httpx.Response
+    ) -> Callable[[httpx.Request], httpx.Response]:
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            calls.append(params)
+            if params.get("api") == "SYNO.FileStation.BackgroundTask":
+                return listing
+            method = params.get("method", "")
+            if method == "start":
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "new-1"}})
+            if method == "status":
+                return httpx.Response(200, json={"success": True, "data": {"finished": True}})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        return side_effect
+
+    @staticmethod
+    def _listing(*tasks: dict[str, object]) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "success": True,
+                "data": {"offset": 0, "tasks": list(tasks), "total": len(tasks)},
+            },
+        )
+
+    _RUNNING_DELETE = {
+        "api": "SYNO.FileStation.Delete",
+        "crtime": 1792191585,
+        "finished": False,
+        "method": "start",
+        "params": {"accurate_progress": True, "path": ["/s/big"], "recursive": True},
+        "processed_num": 124219,
+        "progress": 0.62,
+        "taskid": "FileStation_179219158016597225",
+        "total": 200400,
+        "version": 2,
+    }
+
+    @respx.mock
+    async def test_delete_refuses_duplicate_start(self, mock_client: DsmClient) -> None:
+        calls: list[dict[str, str]] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._dsm(calls, self._listing(self._RUNNING_DELETE))
+        )
+        records = TaskRecords()
+        result = await delete_files(
+            mock_client, paths=["/s/big"], recycle_bin_status={"s": True}, records=records
+        )
+        assert not [c for c in calls if c.get("method") == "start"]
+        assert "Handle: `delete:FileStation_179219158016597225`" in result
+        assert "Still deleting on the NAS: /s/big (124,219 of 200,400 items, 62%)" in result
+        assert "already running" in result
+        assert records.get(Handle("delete", "FileStation_179219158016597225")) is not None
+
+    @respx.mock
+    async def test_duplicate_check_tolerates_list_failure(self, mock_client: DsmClient) -> None:
+        calls: list[dict[str, str]] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._dsm(
+                calls, httpx.Response(200, json={"success": False, "error": {"code": 599}})
+            )
+        )
+        result = await delete_files(mock_client, paths=["/s/big"], recycle_bin_status={"s": True})
+        assert [c["path"] for c in calls if c.get("method") == "start"] == ["/s/big"]
+        assert result.startswith("[+] Deleted 1 item(s)")
+
+    @respx.mock
+    async def test_finished_or_other_path_is_not_a_duplicate(self, mock_client: DsmClient) -> None:
+        calls: list[dict[str, str]] = []
+        finished = {**self._RUNNING_DELETE, "finished": True}
+        other = {**self._RUNNING_DELETE, "params": {"path": ["/s/big/sub"]}, "taskid": "x"}
+        copy = {**self._RUNNING_DELETE, "api": "SYNO.FileStation.CopyMove", "taskid": "y"}
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._dsm(calls, self._listing(finished, other, copy))
+        )
+        await delete_files(mock_client, paths=["/s/big"], recycle_bin_status={"s": True})
+        assert [c["path"] for c in calls if c.get("method") == "start"] == ["/s/big"]
+
+    @respx.mock
+    async def test_copy_refuses_duplicate_start(self, mock_client: DsmClient) -> None:
+        calls: list[dict[str, str]] = []
+        running = {
+            **self._RUNNING_DELETE,
+            "api": "SYNO.FileStation.CopyMove",
+            "params": {"path": ["/s/big"], "dest_folder_path": "/s/dst", "remove_src": False},
+        }
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._dsm(calls, self._listing(running))
+        )
+        result = await copy_files(mock_client, paths=["/s/big"], dest_folder="/s/dst")
+        assert not [c for c in calls if c.get("method") == "start"]
+        assert "Still copying on the NAS: /s/big" in result
+        assert "Handle: `copy:FileStation_179219158016597225`" in result
+
+    @respx.mock
+    async def test_copy_to_another_destination_is_not_a_duplicate(
+        self, mock_client: DsmClient
+    ) -> None:
+        calls: list[dict[str, str]] = []
+        running = {
+            **self._RUNNING_DELETE,
+            "api": "SYNO.FileStation.CopyMove",
+            "params": {"path": ["/s/big"], "dest_folder_path": "/s/other", "remove_src": False},
+        }
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._dsm(calls, self._listing(running))
+        )
+        await copy_files(mock_client, paths=["/s/big"], dest_folder="/s/dst")
+        assert [c["path"] for c in calls if c.get("method") == "start"] == ["/s/big"]
