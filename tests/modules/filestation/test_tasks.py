@@ -452,3 +452,12 @@ class TestRunningTaskFor:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=httpx.ReadTimeout(""))
         api = "SYNO.FileStation.Delete"
         assert await running_task_for(mock_client, api=api, path="/s/a") is None
+
+    @respx.mock
+    @pytest.mark.parametrize("data", [[], {"tasks": None}, {"tasks": "x"}, {}])
+    async def test_unexpected_reply_shape_is_none(self, mock_client: DsmClient, data: Any) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            return_value=httpx.Response(200, json={"success": True, "data": data})
+        )
+        api = "SYNO.FileStation.Delete"
+        assert await running_task_for(mock_client, api=api, path="/s/a") is None

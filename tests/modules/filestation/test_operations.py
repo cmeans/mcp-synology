@@ -2169,3 +2169,65 @@ class TestDuplicateStart:
         )
         await copy_files(mock_client, paths=["/s/big"], dest_folder="/s/dst")
         assert [c["path"] for c in calls if c.get("method") == "start"] == ["/s/big"]
+
+    @respx.mock
+    @pytest.mark.parametrize(("tool", "kind"), [(move_files, "move"), (copy_files, None)])
+    async def test_move_of_a_moving_source_to_another_destination_is_a_duplicate(
+        self, mock_client: DsmClient, tool: Callable[..., object], kind: str | None
+    ) -> None:
+        """A source already moving anywhere can't be moved again; a copy to another
+        destination is still a different operation (fix round 1)."""
+        calls: list[dict[str, str]] = []
+        running = {
+            **self._RUNNING_DELETE,
+            "api": "SYNO.FileStation.CopyMove",
+            "params": {
+                "path": ["/s/big"],
+                "dest_folder_path": "/s/other",
+                "overwrite": True,
+                "remove_src": True,
+            },
+        }
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._dsm(calls, self._listing(running))
+        )
+        records = TaskRecords()
+        result = await tool(  # type: ignore[misc]
+            mock_client, paths=["/s/big"], dest_folder="/s/dst", records=records
+        )
+        started = [c for c in calls if c.get("method") == "start"]
+        if kind is None:
+            # A copy never matches a running move.
+            assert [c["path"] for c in started] == ["/s/big"]
+            return
+        assert not started
+        assert result.startswith(
+            "A move of /s/big (to /s/other/) was already running on the NAS, so no second one "
+            "was started."
+        )
+        assert "Handle: `move:FileStation_179219158016597225`" in result
+        record = records.get(Handle("move", "FileStation_179219158016597225"))
+        assert record is not None
+        # What the NAS is actually doing, not what this call asked for.
+        assert record.dest == "/s/other"
+        assert record.overwrite is True
+
+    @respx.mock
+    async def test_running_copy_record_falls_back_to_request(self, mock_client: DsmClient) -> None:
+        calls: list[dict[str, str]] = []
+        running = {
+            **self._RUNNING_DELETE,
+            "api": "SYNO.FileStation.CopyMove",
+            "params": {"path": ["/s/big"], "dest_folder_path": "/s/dst", "remove_src": False},
+        }
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._dsm(calls, self._listing(running))
+        )
+        records = TaskRecords()
+        result = await copy_files(
+            mock_client, paths=["/s/big"], dest_folder="/s/dst", overwrite=True, records=records
+        )
+        assert result.startswith("A copy of /s/big was already running")
+        record = records.get(Handle("copy", "FileStation_179219158016597225"))
+        assert record is not None
+        assert (record.dest, record.overwrite) == ("/s/dst", True)

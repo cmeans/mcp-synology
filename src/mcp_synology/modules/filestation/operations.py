@@ -188,11 +188,15 @@ _KIND: dict[str, HandleKind] = {
 }
 
 
-def _already_running(operation: str, path: str) -> str:
-    """Lead line when a path already had a running task, so none was started (#245)."""
+def _already_running(operation: str, path: str, dest: str | None = None) -> str:
+    """Lead line when a path already had a running task, so none was started (#245).
+
+    ``dest`` names the running task's destination when it isn't the one asked for.
+    """
+    to = f" (to {dest}/)" if dest else ""
     return (
-        f"A {operation.lower()} of {path} was already running on the NAS, so no second one "
-        "was started."
+        f"A {operation.lower()} of {path}{to} was already running on the NAS, so no second "
+        "one was started."
     )
 
 
@@ -509,14 +513,20 @@ async def _copy_move(
     skipped_paths: list[str] = []
     for i, p in enumerate(normalized):
         handoff_status: dict[str, Any] = {}
-        running = await running_task(
-            client,
-            api="SYNO.FileStation.CopyMove",
-            path=p,
-            params={"dest_folder_path": dest, "remove_src": remove_src},
-        )
+        # A copy of the same source to another destination is a different operation; a
+        # move (or restore) of a source that is already moving anywhere is not.
+        match: dict[str, Any] = {"remove_src": remove_src}
+        if not remove_src:
+            match["dest_folder_path"] = dest
+        running = await running_task(client, api="SYNO.FileStation.CopyMove", path=p, params=match)
         outcome: tuple[int, bool] | Handle
+        task_dest, task_overwrite = dest, overwrite
         if running is not None:
+            started = running.get("params") or {}
+            if isinstance(started.get("dest_folder_path"), str):
+                task_dest = started["dest_folder_path"]
+            if isinstance(started.get("overwrite"), bool):
+                task_overwrite = started["overwrite"]
             # Never start a second task on a path that already has one (#245).
             outcome = Handle(_KIND[operation], str(running["taskid"]))
             handoff_status.update(running)
@@ -536,7 +546,9 @@ async def _copy_move(
             )
         if isinstance(outcome, Handle):
             if records is not None:
-                records.add(TaskRecord(handle=outcome, paths=[p], dest=dest, overwrite=overwrite))
+                records.add(
+                    TaskRecord(handle=outcome, paths=[p], dest=task_dest, overwrite=task_overwrite)
+                )
             reply = handoff_reply(
                 verb=f"Still {_PRESENT[operation].lower()}",
                 path=p,
@@ -546,7 +558,8 @@ async def _copy_move(
                 not_started=normalized[i + 1 :] + list(later or []),
             )
             if running is not None:
-                reply = _already_running(operation, p) + "\n" + reply
+                other = task_dest if task_dest != dest else None
+                reply = _already_running(operation, p, other) + "\n" + reply
             return reply, True
         size, skipped = outcome
         total_processed += size

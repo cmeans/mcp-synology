@@ -325,7 +325,12 @@ async def running_task(
     except (SynologyError, httpx.TransportError) as e:
         logger.debug("BackgroundTask list failed, skipping the running-task check: %s", e)
         return None
-    for task in data.get("tasks") or []:
+    tasks = data.get("tasks") if isinstance(data, dict) else None
+    if not isinstance(tasks, list):
+        # An unexpected reply shape counts as nothing running, like a failed list.
+        logger.debug("BackgroundTask list reply has no task list: %r", data)
+        return None
+    for task in tasks:
         if not isinstance(task, dict) or task.get("api") != api or task.get("finished"):
             continue
         started = task.get("params")
