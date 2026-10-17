@@ -781,13 +781,16 @@ class TestFileTask:
 
         calls: list[tuple[str, str]] = []
         route = respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
-            side_effect=_router({"stop": _ok({})}, calls)
+            side_effect=_router({"status": _ok(RUNNING), "stop": _ok({})}, calls)
         )
         h = Handle("move", "FileStation_M1")
         records = TaskRecords()
         records.add(TaskRecord(handle=h, paths=["/s/b"], dest="/s/d"))
         text = await file_task(mock_client, records=records, handle=str(h), action="stop")
-        assert calls == [("SYNO.FileStation.CopyMove", "stop")]
+        assert calls == [
+            ("SYNO.FileStation.CopyMove", "status"),
+            ("SYNO.FileStation.CopyMove", "stop"),
+        ]
         assert dict(route.calls.last.request.url.params)["taskid"] == '"FileStation_M1"'
         assert text == (
             "Stopped move of /s/b; it may be partly done. List the path to see what's left."
@@ -796,13 +799,147 @@ class TestFileTask:
     @respx.mock
     @pytest.mark.parametrize("code", [401, 599])
     async def test_file_task_stop_already_finished(self, mock_client: DsmClient, code: int) -> None:
+        """Running at the status read, gone by the stop (a race): not "Stopped"."""
         from mcp_synology.modules.filestation.tasks import file_task
 
-        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_router({"stop": _err(code)}))
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=_router({"status": _ok(RUNNING), "stop": _err(code)})
+        )
         text = await file_task(
             mock_client, records=TaskRecords(), handle="delete:FileStation_D1", action="stop"
         )
         assert text.startswith("That task had already finished or isn't running.")
+
+    @respx.mock
+    async def test_file_task_stop_finished_unread_copy_is_not_stopped(
+        self, mock_client: DsmClient
+    ) -> None:
+        """CopyMove stop answers success for a finished task; status first says so."""
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        calls: list[tuple[str, str]] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=_router({"status": _ok(MOVE_FINISHED), "stop": _ok({})}, calls)
+        )
+        h = Handle("copy", "FileStation_C1")
+        records = TaskRecords()
+        text = await file_task(mock_client, records=records, handle=str(h), action="stop")
+        assert ("SYNO.FileStation.CopyMove", "stop") not in calls
+        assert text.startswith(
+            "That task had already finished, so nothing was stopped.\nCopy finished: "
+        ), text
+        rec = records.get(h)
+        assert rec is not None
+        assert rec.final_status == MOVE_FINISHED
+
+    @respx.mock
+    async def test_file_task_stop_finished_with_record(self, mock_client: DsmClient) -> None:
+        from mcp_synology.modules.filestation.operations import _delete_summary
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=_router({"status": _ok(DELETE_FINISHED), "stop": _err(401)})
+        )
+        h = Handle("delete", "FileStation_D1")
+        records = TaskRecords()
+        records.add(TaskRecord(handle=h, paths=["/s/a"], recursive=True, recycle={"s": False}))
+        text = await file_task(mock_client, records=records, handle=str(h), action="stop")
+        summary = await _delete_summary(mock_client, ["/s/a"], {"s": False})
+        assert text == f"That task had already finished, so nothing was stopped.\n{summary}"
+
+    @respx.mock
+    @pytest.mark.parametrize("kind", ["copy", "delete"])
+    async def test_file_task_stop_unknown_is_not_stopped(
+        self, mock_client: DsmClient, kind: str
+    ) -> None:
+        """Unknown, forgotten or another user's task (599): no stop, the status reply."""
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        calls: list[tuple[str, str]] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=_router({"status": _err(599), "stop": _ok({})}, calls)
+        )
+        text = await file_task(
+            mock_client, records=TaskRecords(), handle=f"{kind}:FileStation_X", action="stop"
+        )
+        assert [m for _, m in calls] == ["status"]
+        assert text == (
+            "No running task with this handle. It finished, was stopped, or was started by a "
+            "different DSM user. List the path to see what's left."
+        )
+
+    @respx.mock
+    async def test_file_task_stop_599_with_cached_final(self, mock_client: DsmClient) -> None:
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=_router({"status": _err(599), "stop": _ok({})})
+        )
+        h = Handle("copy", "FileStation_C1")
+        records = TaskRecords()
+        records.set_final(h, MOVE_FINISHED)
+        text = await file_task(mock_client, records=records, handle=str(h), action="stop")
+        assert text.startswith(
+            "That task had already finished, so nothing was stopped.\nCopy finished: "
+        ), text
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        ("exc", "code"),
+        [(httpx.ReadTimeout("t"), "timeout"), (httpx.ConnectError("refused"), "unavailable")],
+    )
+    async def test_file_task_stop_unanswered_stop(
+        self, mock_client: DsmClient, exc: Exception, code: str
+    ) -> None:
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=_router({"status": _ok(RUNNING), "stop": exc})
+        )
+        with pytest.raises(ToolError) as exc_info:
+            await file_task(
+                mock_client, records=TaskRecords(), handle="delete:FileStation_D1", action="stop"
+            )
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == code
+        assert error["message"].startswith("Stop task failed: DSM ")
+        assert "the stop request for `delete:FileStation_D1`" in error["message"]
+        assert "The stop may or may not have taken effect." in error["message"]
+        assert "file_task" in error["suggestion"]
+
+    @respx.mock
+    async def test_file_task_stop_unanswered_status(self, mock_client: DsmClient) -> None:
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        calls: list[tuple[str, str]] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=_router({"status": httpx.ReadTimeout("t"), "stop": _ok({})}, calls)
+        )
+        with pytest.raises(ToolError) as exc_info:
+            await file_task(
+                mock_client, records=TaskRecords(), handle="copy:FileStation_C1", action="stop"
+            )
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "timeout"
+        assert "didn't answer the status request" in error["message"]
+        assert "(ReadTimeout: t)" in error["message"]
+        assert error["message"].endswith("Nothing was stopped.")
+        assert [m for _, m in calls] == ["status"]
+
+    @respx.mock
+    async def test_file_task_status_unanswered(self, mock_client: DsmClient) -> None:
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=_router({"status": httpx.ConnectError("refused")})
+        )
+        with pytest.raises(ToolError) as exc_info:
+            await file_task(mock_client, records=TaskRecords(), handle="copy:FileStation_C1")
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "unavailable"
+        assert error["message"].startswith(
+            "Check task failed: DSM lost the connection during the status request"
+        )
 
     @respx.mock
     async def test_file_task_bad_handle_no_dsm_call(self, mock_client: DsmClient) -> None:
@@ -843,7 +980,9 @@ class TestFileTask:
     ) -> None:
         from mcp_synology.modules.filestation.tasks import file_task
 
-        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_router({method: _err(105)}))
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=_router({"status": _ok(RUNNING), method: _err(105)})
+        )
         handle = None if method == "list" else "delete:FileStation_D1"
         with pytest.raises(ToolError):
             await file_task(mock_client, records=TaskRecords(), handle=handle, action=action)

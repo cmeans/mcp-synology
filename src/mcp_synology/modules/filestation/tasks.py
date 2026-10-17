@@ -9,7 +9,7 @@ import time
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal, get_args
+from typing import TYPE_CHECKING, Any, Literal, NoReturn, get_args
 
 import anyio
 import httpx
@@ -22,7 +22,7 @@ from mcp_synology.core.formatting import (
     format_timestamp,
     synology_error_response,
 )
-from mcp_synology.modules.filestation.helpers import dsm_str
+from mcp_synology.modules.filestation.helpers import describe_transport_error, dsm_str
 
 if TYPE_CHECKING:
     from mcp_synology.core.client import DsmClient
@@ -559,6 +559,29 @@ def _generic_final(handle: Handle, status: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+_NOT_STOPPED = "That task had already finished, so nothing was stopped."
+
+
+def _unanswered(
+    handle: Handle, exc: httpx.TransportError, *, operation: str, request: str, note: str
+) -> NoReturn:
+    """Raise the structured error for a status or stop request DSM didn't answer (#237)."""
+    timed_out = isinstance(exc, httpx.TimeoutException)
+    what = "didn't answer" if timed_out else "lost the connection during"
+    error_response(
+        ErrorCode.TIMEOUT if timed_out else ErrorCode.UNAVAILABLE,
+        f"{operation} failed: DSM {what} the {request} request for `{handle}` "
+        f"({describe_transport_error(exc)}).{note}",
+        retryable=True,
+        param="handle",
+        value=str(handle),
+        suggestion=(
+            "Call file_task with this handle to see whether the task is still running, "
+            "or list the path to see what's left."
+        ),
+    )
+
+
 async def file_task(
     client: DsmClient,
     *,
@@ -570,7 +593,9 @@ async def file_task(
 
     Without a handle: this user's running Delete/CopyMove tasks. With one: its
     progress or final result (``status``), or stop it (``stop``). The handle is
-    validated before any DSM call; its prefix picks the API.
+    validated before any DSM call; its prefix picks the API. ``stop`` reads the status
+    first and stops only a task that is still running: CopyMove ``stop`` answers success
+    for any taskid, so its answer alone can't say whether anything was stopped.
     """
     if handle is None:
         return await _list_reply(client)
@@ -580,29 +605,69 @@ async def file_task(
     taskid = dsm_str(parsed.taskid)
     paths = record.paths if record is not None else []
 
+    async def status_or_none() -> dict[str, Any] | None:
+        """The task's status, or None when DSM doesn't have it (599)."""
+        try:
+            data: dict[str, Any] = await client.request(
+                parsed.api, "status", version=version, params={"taskid": taskid}
+            )
+        except SynologyError as e:
+            if e.code != 599:
+                synology_error_response("Stop task" if action == "stop" else "Check task", e)
+            return None
+        except httpx.TransportError as e:
+            stopping = action == "stop"
+            _unanswered(
+                parsed,
+                e,
+                operation="Stop task" if stopping else "Check task",
+                request="status",
+                note=" Nothing was stopped." if stopping else "",
+            )
+        return data
+
+    def gone() -> str:
+        return (
+            "No running task with this handle. It finished, was stopped, or was started by "
+            f"a different DSM user. {_LIST_HINT}"
+        )
+
+    status = await status_or_none()
+
     if action == "stop":
+        # Read the status first: CopyMove stop answers success for any taskid, finished,
+        # forgotten or another user's (vdsm 7.1 and 7.2.2), so stop alone can't tell.
+        if status is None:
+            if record is not None and record.final_status is not None:
+                final = await _final_text(client, parsed, record.final_status, record)
+                return f"{_NOT_STOPPED}\n{final}"
+            return gone()
+        logger.debug("%s status before stop (%s): %s", parsed.api, parsed, status)
+        if status.get("finished"):
+            records.set_final(parsed, status)
+            final = await _final_text(client, parsed, status, record)
+            return f"{_NOT_STOPPED}\n{final}"
         try:
             await client.request(parsed.api, "stop", version=version, params={"taskid": taskid})
         except SynologyError as e:
             if e.code in (401, 599):
                 return f"That task had already finished or isn't running. {_LIST_HINT}"
             synology_error_response("Stop task", e)
+        except httpx.TransportError as e:
+            _unanswered(
+                parsed,
+                e,
+                operation="Stop task",
+                request="stop",
+                note=" The stop may or may not have taken effect.",
+            )
         what = ", ".join(paths) if paths else f"`{parsed}`"
         return f"Stopped {parsed.kind} of {what}; it may be partly done. {_LIST_HINT}"
 
-    try:
-        status = await client.request(
-            parsed.api, "status", version=version, params={"taskid": taskid}
-        )
-    except SynologyError as e:
-        if e.code != 599:
-            synology_error_response("Check task", e)
+    if status is None:
         if record is not None and record.final_status is not None:
             return await _final_text(client, parsed, record.final_status, record)
-        return (
-            "No running task with this handle. It finished, was stopped, or was started by "
-            f"a different DSM user. {_LIST_HINT}"
-        )
+        return gone()
     logger.debug("%s status (%s): %s", parsed.api, parsed, status)
 
     if status.get("finished"):

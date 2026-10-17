@@ -17,14 +17,18 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import re
 import time
 from typing import TYPE_CHECKING, Any
 
 import pytest
+from mcp.server.mcpserver.exceptions import ToolError
 
 from mcp_synology.core.auth import AuthManager
 from mcp_synology.core.client import DsmClient
+from mcp_synology.core.errors import SynologyError
+from mcp_synology.modules.filestation.helpers import dsm_str
 from mcp_synology.modules.filestation.operations import (
     copy_files,
     delete_files,
@@ -55,6 +59,7 @@ FINISH_WITHIN = 300  # seconds a handed-off task gets to finish
 _HANDLE = re.compile(r"Handle: `((?:delete|copy|move|restore):FileStation_\w+)`")
 _NO_RUNNING = "No running task with this handle."
 _ALREADY_FINISHED = "That task had already finished or isn't running."
+_NOT_STOPPED = "That task had already finished, so nothing was stopped."
 
 
 def _handle(reply: str) -> str:
@@ -77,12 +82,17 @@ class Nas:
         return out
 
     def tree(self, share_path: str, dirs: int = DIRS, per_dir: int = PER_DIR) -> str:
-        """Build ``dirs`` x ``per_dir`` empty files at ``share_path`` (e.g. /writable/x)."""
+        """Build ``dirs`` x ``per_dir`` empty files at ``share_path`` (e.g. /writable/x).
+
+        ``sync`` flushes them first: on DSM 7.1 a Delete ``stop`` right after the tree was
+        built sometimes took over 60 s to answer, while the same stop answered in 1 s on
+        a settled tree.
+        """
         vol = f"/volume1{share_path}"
         self.created.append(vol)
         self.run(
             f"mkdir -p {vol} && cd {vol} && for d in \\$(seq 1 {dirs}); do mkdir d\\$d; "
-            f"(cd d\\$d && seq 1 {per_dir} | xargs touch); done; chmod -R 777 {vol}",
+            f"(cd d\\$d && seq 1 {per_dir} | xargs touch); done; chmod -R 777 {vol} && sync",
             timeout=600,
         )
         return share_path
@@ -107,7 +117,8 @@ class Nas:
 
     def cleanup(self) -> None:
         if self.created:
-            _ssh(self.container, self.password, f"rm -rf {' '.join(self.created)}", 600)
+            rc, out = _ssh(self.container, self.password, f"rm -rf {' '.join(self.created)}", 600)
+            assert rc == 0, f"cleanup rm -rf {self.created} failed (rc={rc}): {out[-500:]}"
 
 
 @pytest.fixture
@@ -169,8 +180,8 @@ async def _stopped_at_exit(client: DsmClient, records: TaskRecords) -> AsyncIter
             except Exception as e:
                 reply = f"{type(e).__name__}: {e}"
             print(f"cleanup stop {handle}: {reply}")
-        # Fail here, not in a later test, if a task outlives its test.
-        deadline = time.monotonic() + 30
+        # Fail here, not in a later test, if a task outlives its test (90 s: see _stop).
+        deadline = time.monotonic() + 90
         while handles:
             listing = await file_task(client, records=records)
             if not any(f"`{h}`" in listing for h in handles):
@@ -194,6 +205,36 @@ async def _until_finished(
     return reply, seen
 
 
+async def _stop(client: DsmClient, records: TaskRecords, handle: str, expected: str) -> None:
+    """Stop a running task: "Stopped ...", or DSM 7.1's late answer as a structured timeout.
+
+    DSM 7.1 sometimes answers a Delete ``stop`` only after about 60 s, although the
+    delete halts at once (the file count froze at the stop; seen in 4 of 7 full 7.1
+    runs, never on 7.2.2). With the 30 s client timeout, file_task then reports a
+    ``timeout`` saying the stop may or may not have taken effect.
+    """
+    try:
+        stopped = await file_task(client, records=records, handle=handle, action="stop")
+    except ToolError as e:
+        error = json.loads(str(e))["error"]
+        assert error["code"] == "timeout", error
+        assert "The stop may or may not have taken effect." in error["message"], error
+        print(f"stop of {handle} answered late (DSM 7.1 stall): {error['message']}")
+        return
+    assert stopped.startswith(expected), stopped
+
+
+async def _gone(client: DsmClient, records: TaskRecords, handle: str) -> str:
+    """Status until DSM no longer has the task (up to 90 s, for a late-answered stop)."""
+    deadline = time.monotonic() + 90
+    reply = await file_task(client, records=records, handle=handle)
+    while not reply.startswith(_NO_RUNNING):
+        assert time.monotonic() < deadline, reply
+        await asyncio.sleep(2)
+        reply = await file_task(client, records=records, handle=handle)
+    return reply
+
+
 def _admin(admin_client: Any) -> DsmClient:
     client: DsmClient = admin_client[0]
     return client
@@ -209,27 +250,32 @@ async def test_delete_handoff_then_status_until_finished(
     path = nas.tree("/writable/del245a")
     records = TaskRecords()
 
-    reply = await delete_files(
-        client, paths=[path], recycle_bin_status={}, timeout=WAIT, records=records
-    )
-    assert reply.startswith(f"Still deleting on the NAS: {path} ("), reply
-    handle = _handle(reply)
-    assert handle.startswith("delete:")
-
-    async with admin_session() as other:
-        first = await file_task(other, records=records, handle=handle)
-        assert first.startswith(f"Still deleting on the NAS: {path} ("), first
-        assert f"Handle: `{handle}`" in first
-
-        final, _ = await _until_finished(
-            lambda: file_task(other, records=records, handle=handle),
-            still="Still deleting",
+    async with _stopped_at_exit(client, records) as handles:
+        reply = await delete_files(
+            client, paths=[path], recycle_bin_status={}, timeout=WAIT, records=records
         )
-        assert "Permanently deleted 1 item(s):" in final, final
-        assert path in final
-        # DSM forgets the task after its final status; the record keeps the result.
-        again = await file_task(other, records=records, handle=handle)
-        assert again == final
+        assert reply.startswith(f"Still deleting on the NAS: {path} ("), reply
+        handle = _handle(reply)
+        handles.append(handle)
+        assert handle.startswith("delete:")
+
+        async with admin_session() as other:
+            first = await file_task(other, records=records, handle=handle)
+            assert first.startswith(f"Still deleting on the NAS: {path} ("), first
+            assert f"Handle: `{handle}`" in first
+
+            final, _ = await _until_finished(
+                lambda: file_task(other, records=records, handle=handle),
+                still="Still deleting",
+            )
+            assert "Permanently deleted 1 item(s):" in final, final
+            assert path in final
+            # DSM forgets the task after its final status; the record keeps the result.
+            again = await file_task(other, records=records, handle=handle)
+            assert again == final
+            # A stop now stops nothing, and says so.
+            stop = await file_task(other, records=records, handle=handle, action="stop")
+            assert stop == f"{_NOT_STOPPED}\n{final}"
 
     assert not nas.exists(path)
 
@@ -239,28 +285,28 @@ async def test_delete_handoff_then_stop(admin_client: Any, admin_session: Any, n
     path = nas.tree("/writable/del245b")
     records = TaskRecords()
 
-    reply = await delete_files(
-        client, paths=[path], recycle_bin_status={}, timeout=WAIT, records=records
-    )
-    handle = _handle(reply)
-    # Stop once files are going (a stop while DSM still counts deletes nothing).
-    deadline = time.monotonic() + 60
-    while nas.count(path) == TREE_FILES:
-        assert time.monotonic() < deadline, "the delete never started removing files"
-        await asyncio.sleep(0.5)
+    async with _stopped_at_exit(client, records) as handles:
+        reply = await delete_files(
+            client, paths=[path], recycle_bin_status={}, timeout=WAIT, records=records
+        )
+        handle = _handle(reply)
+        handles.append(handle)
+        # Stop once files are going (a stop while DSM still counts deletes nothing).
+        deadline = time.monotonic() + 60
+        while nas.count(path) == TREE_FILES:
+            assert time.monotonic() < deadline, "the delete never started removing files"
+            await asyncio.sleep(0.5)
 
-    async with admin_session() as other:
-        stopped = await file_task(other, records=records, handle=handle, action="stop")
-        assert stopped.startswith(f"Stopped delete of {path}; it may be partly done."), stopped
-        left = nas.count(path)
-        await asyncio.sleep(10)
-        assert nas.count(path) == left
-        assert 0 < left < TREE_FILES
+        async with admin_session() as other:
+            await _stop(other, records, handle, f"Stopped delete of {path}; it may be partly done.")
+            left = nas.count(path)
+            await asyncio.sleep(10)
+            assert nas.count(path) == left
+            assert 0 < left < TREE_FILES
 
-        after = await file_task(other, records=records, handle=handle)
-        assert after.startswith(_NO_RUNNING), after
-        again = await file_task(other, records=records, handle=handle, action="stop")
-        assert again.startswith(_ALREADY_FINISHED), again
+            await _gone(other, records, handle)
+            again = await file_task(other, records=records, handle=handle, action="stop")
+            assert again.startswith(_NO_RUNNING), again
 
 
 async def test_file_task_list_shows_running_delete(admin_client: Any, nas: Nas) -> None:
@@ -314,7 +360,7 @@ async def test_other_user_cannot_see_handle(
         assert status.startswith(_NO_RUNNING), status
         assert "started by a different DSM user" in status
         stop = await file_task(user_client, records=theirs, handle=handle, action="stop")
-        assert stop.startswith(_ALREADY_FINISHED), stop
+        assert stop.startswith(_NO_RUNNING), stop
         listing = await file_task(user_client, records=theirs)
         assert listing.startswith("No File Station delete, copy or move tasks are running")
         assert reauth_spy.reauths == 0, reauth_spy.codes
@@ -330,27 +376,30 @@ async def test_discovery_seeds_records_in_a_new_session(
     """A restarted server (new session, empty records) still gives the full result."""
     client = _admin(admin_client)
     path = nas.tree("/writable/del245e")
+    started = TaskRecords()
 
-    reply = await delete_files(
-        client, paths=[path], recycle_bin_status={}, timeout=WAIT, records=TaskRecords()
-    )
-    handle = _handle(reply)
-
-    async with admin_session() as other:
-        records = TaskRecords()
-        note = await discover_running_tasks(other, records)
-        assert note is not None
-        assert note.startswith("Note: 1 operation(s) still running on the NAS:"), note
-        assert f"deleting {path} (" in note
-        assert f"handle `{handle}`" in note
-
-        final, _ = await _until_finished(
-            lambda: file_task(other, records=records, handle=handle),
-            still="Still deleting",
+    async with _stopped_at_exit(client, started) as handles:
+        reply = await delete_files(
+            client, paths=[path], recycle_bin_status={}, timeout=WAIT, records=started
         )
-        assert "Permanently deleted 1 item(s):" in final, final
-        assert path in final
-        assert await discover_running_tasks(other, TaskRecords()) is None
+        handle = _handle(reply)
+        handles.append(handle)
+
+        async with admin_session() as other:
+            records = TaskRecords()
+            note = await discover_running_tasks(other, records)
+            assert note is not None
+            assert note.startswith("Note: 1 operation(s) still running on the NAS:"), note
+            assert f"deleting {path} (" in note
+            assert f"handle `{handle}`" in note
+
+            final, _ = await _until_finished(
+                lambda: file_task(other, records=records, handle=handle),
+                still="Still deleting",
+            )
+            assert "Permanently deleted 1 item(s):" in final, final
+            assert path in final
+            assert await discover_running_tasks(other, TaskRecords()) is None
 
 
 # --- Copy -----------------------------------------------------------------
@@ -379,12 +428,11 @@ async def test_copy_handoff_then_status_until_finished(
             assert f"`{handle}`" in listing
             assert f"{src} -> {dest}/" in listing
 
-            # Another user's stop gets CopyMove's blanket success, but stops nothing:
-            # the copy still finishes in full below.
+            # Another user can't see or stop it; the copy still finishes in full below.
             theirs = await file_task(user_client, records=TaskRecords(), handle=handle)
             assert theirs.startswith(_NO_RUNNING), theirs
             stop = await file_task(user_client, records=TaskRecords(), handle=handle, action="stop")
-            assert stop.startswith(f"Stopped copy of `{handle}`"), stop
+            assert stop.startswith(_NO_RUNNING), stop
 
             final, seen = await _until_finished(
                 lambda: file_task(other, records=records, handle=handle),
@@ -403,32 +451,36 @@ async def test_copy_handoff_then_stop(admin_client: Any, admin_session: Any, nas
     dest = nas.folder("/writable/cp245b_dst")
     records = TaskRecords()
 
-    reply = await copy_files(client, paths=[src], dest_folder=dest, timeout=WAIT, records=records)
-    handle = _handle(reply)
+    async with _stopped_at_exit(client, records) as handles:
+        reply = await copy_files(
+            client, paths=[src], dest_folder=dest, timeout=WAIT, records=records
+        )
+        handle = _handle(reply)
+        handles.append(handle)
 
-    async with admin_session() as other:
-        stopped = await file_task(other, records=records, handle=handle, action="stop")
-        assert stopped.startswith(f"Stopped copy of {src}; it may be partly done."), stopped
-        copied = nas.count(dest)
-        await asyncio.sleep(10)
-        assert nas.count(dest) == copied
-        assert copied < TREE_FILES
-        after = await file_task(other, records=records, handle=handle)
-        assert after.startswith(_NO_RUNNING), after
+        async with admin_session() as other:
+            await _stop(other, records, handle, f"Stopped copy of {src}; it may be partly done.")
+            copied = nas.count(dest)
+            await asyncio.sleep(10)
+            assert nas.count(dest) == copied
+            assert copied < TREE_FILES
+            await _gone(other, records, handle)
 
 
-async def test_copymove_stop_answers_success_for_any_taskid(admin_client: Any, nas: Nas) -> None:
-    """CopyMove ``stop`` answers success for a task that already finished, read or not.
+async def test_stop_of_a_finished_or_unknown_copy_stops_nothing(
+    admin_client: Any, nas: Nas
+) -> None:
+    """file_task never says "Stopped" for a copy that had finished or that DSM doesn't know.
 
-    Unlike Delete (401 for a task it no longer has, #162), DSM 7.1 and 7.2.2 answer
-    CopyMove ``stop`` with success for a finished task whose final status nobody read,
-    for one it already forgot, and for a made-up task ID. So file_task can't tell a
-    stopped copy from one that had finished: it says "Stopped ... may be partly done".
+    DSM behavior (7.1 and 7.2.2) this guards against, pinned at the raw API level:
+    CopyMove ``stop`` answers success for any task ID (finished and unread, forgotten,
+    made up), unlike Delete ``stop``, which answers 401 for a task it doesn't have.
     """
     client = _admin(admin_client)
     src = nas.tree("/writable/cp245c", dirs=2, per_dir=5)
     dest = nas.folder("/writable/cp245c_dst")
     copymove = "SYNO.FileStation.CopyMove"
+    made_up = "FileStation_00000000DEADBEEF"
 
     async def start() -> str:
         data = await client.request(
@@ -455,30 +507,35 @@ async def test_copymove_stop_answers_success_for_any_taskid(admin_client: Any, n
             assert time.monotonic() < deadline, f"the small copy never finished: {task}"
             await asyncio.sleep(1)
 
+    async def raw_stop(api: str, taskid: str) -> object:
+        try:
+            return await client.request(api, "stop", version=2, params={"taskid": dsm_str(taskid)})
+        except SynologyError as e:
+            return e.code
+
+    # DSM behavior: stop answers success for a finished, unread CopyMove task...
+    taskid = await start()
+    await finished_unread(taskid)
+    assert await raw_stop(copymove, taskid) == {}
+    # ...for one it has forgotten, and for a made-up ID; Delete answers 401.
+    assert await raw_stop(copymove, taskid) == {}
+    assert await raw_stop(copymove, made_up) == {}
+    assert await raw_stop("SYNO.FileStation.Delete", made_up) == 401
+
+    # file_task: a finished, unread copy gives its result and stops nothing.
     records = TaskRecords()
-    # Finished, final status not read yet.
     taskid = await start()
     await finished_unread(taskid)
     stop = await file_task(client, records=records, handle=f"copy:{taskid}", action="stop")
-    assert stop.startswith(f"Stopped copy of `copy:{taskid}`; it may be partly done."), stop
-    status = await file_task(client, records=records, handle=f"copy:{taskid}")
-    assert status.startswith(_NO_RUNNING), status
+    assert stop.startswith(f"{_NOT_STOPPED}\nCopy finished: "), stop
     assert nas.count(f"{dest}/cp245c") == 10
-
-    # Finished and its final status read (DSM then forgets it: 599).
-    taskid = await start()
-    await finished_unread(taskid)
-    final = await file_task(client, records=records, handle=f"copy:{taskid}")
-    assert final.startswith("Copy finished"), final
-    stop = await file_task(client, records=records, handle=f"copy:{taskid}", action="stop")
-    assert stop.startswith(f"Stopped copy of `copy:{taskid}`"), stop
-
-    # A task ID DSM never issued: CopyMove says success, Delete says 401.
-    made_up = "FileStation_00000000DEADBEEF"
-    stop = await file_task(client, records=records, handle=f"copy:{made_up}", action="stop")
-    assert stop.startswith(f"Stopped copy of `copy:{made_up}`"), stop
-    stop = await file_task(client, records=records, handle=f"delete:{made_up}", action="stop")
-    assert stop.startswith(_ALREADY_FINISHED), stop
+    # Forgotten by DSM now; the record still has the result.
+    again = await file_task(client, records=records, handle=f"copy:{taskid}", action="stop")
+    assert again == stop
+    # Forgotten, with no record (a new server process), and made up: no running task.
+    for handle in (f"copy:{taskid}", f"copy:{made_up}", f"delete:{made_up}"):
+        reply = await file_task(client, records=TaskRecords(), handle=handle, action="stop")
+        assert reply.startswith(_NO_RUNNING), (handle, reply)
 
 
 # --- Move and restore -----------------------------------------------------
