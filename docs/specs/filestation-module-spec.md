@@ -824,7 +824,8 @@ Some shares have a recycle bin enabled (shown in list_shares output).
 Deleted files on those shares can be recovered:
 - list_recycle_bin to see recently deleted files
 - restore_from_recycle_bin to recover them
-The recycle bin lives at /<share>/#recycle/ internally.
+The recycle bin lives at /<share>/#recycle/ internally. Deleting anything
+inside it is permanent.
 
 LONG OPERATIONS:
 A large delete, copy, move or restore can outlast one reply. The tool then hands it off:

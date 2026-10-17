@@ -380,7 +380,7 @@ def register(ctx: RegisterContext) -> None:
             text += f"\n\n---\n{note}"
         return text
 
-    def _progress(mcp_ctx: Context) -> ProgressCallback:
+    def _progress_cb(mcp_ctx: Context) -> ProgressCallback:
         """Forward a task's progress (with its message) to the client."""
         return lambda p, t, m: mcp_ctx.report_progress(p, t, m)
 
@@ -637,7 +637,7 @@ def register(ctx: RegisterContext) -> None:
                     overwrite=overwrite,
                     timeout=copy_move_wait,
                     records=records,
-                    on_progress=_progress(ctx),
+                    on_progress=_progress_cb(ctx),
                 )
             )
 
@@ -664,7 +664,7 @@ def register(ctx: RegisterContext) -> None:
                     overwrite=overwrite,
                     timeout=copy_move_wait,
                     records=records,
-                    on_progress=_progress(ctx),
+                    on_progress=_progress_cb(ctx),
                 )
             )
 
@@ -690,7 +690,7 @@ def register(ctx: RegisterContext) -> None:
                     recycle_bin_status=recycle_status,
                     timeout=delete_wait,
                     records=records,
-                    on_progress=_progress(ctx),
+                    on_progress=_progress_cb(ctx),
                 )
             )
 
@@ -773,7 +773,7 @@ def register(ctx: RegisterContext) -> None:
                     overwrite=overwrite,
                     timeout=copy_move_wait,
                     records=records,
-                    on_progress=_progress(ctx),
+                    on_progress=_progress_cb(ctx),
                 )
             )
 

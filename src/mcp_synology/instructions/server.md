@@ -72,6 +72,7 @@ Deleted files on those shares can be recovered:
 - restore_from_recycle_bin to recover them
 The recycle bin lives at /<share>/#recycle/ internally. Deleting anything
 inside it is permanent.
+
 LONG OPERATIONS:
 A large delete, copy, move or restore can outlast one reply. The tool then hands it off:
 the NAS keeps working, and the reply gives a handle. Tell the user it's still running,
