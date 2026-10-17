@@ -115,7 +115,7 @@ Tested against DSM 7.1 (Download Station 3.9-4627) and DSM 7.2.2 (Download Stati
 - **Interactive setup** — guided configuration that creates your config, stores credentials, handles 2FA, and emits a Claude Desktop snippet
 - **Permission tiers** — READ or WRITE per module, enforced at tool registration. Tiers control what the server can do on the NAS; `download_file`, which writes on this machine, is annotated as destructive so your client can confirm it. A read-only connection tells the model which tools it withholds and how to enable them, so the model doesn't claim the server can't do it
 - **Long operations keep running** — a large delete, copy, move or recycle-bin restore reports progress while the call waits, and if it's still running when the wait ends (30 s by default) the NAS keeps working on it: the reply gives a handle for `file_task`, which checks on it, lists running operations or stops one. See [File Station settings](#file-station-settings)
-- **Local path confinement** — `upload_file` and `download_file` only use local folders listed in `allowed_local_paths` (File Station settings), by default your Downloads folder. Symlinks and `..` are resolved first, so they can't lead outside. Set it to `["/"]` to allow everything (macOS/Linux)
+- **Local path confinement** — `upload_file`, `download_file` and `create_download`'s torrent files only use local folders listed in `allowed_local_paths`, by default your Downloads folder. Set it at the top level of the config for every module, and add folders per module in that module's settings. `create_download` only reads `.torrent` and `.nzb` files. Symlinks and `..` are resolved first, so they can't lead outside. Set it to `["/"]` to allow everything (macOS/Linux)
 - **2FA support** — auto-detected; device token bootstrap with automatic silent re-auth
 - **Secure credentials** — OS keyring integration that works transparently on macOS, Windows, and Linux (including from Claude Desktop). See [docs/credentials.md](docs/credentials.md).
 - **Multi-NAS** — manage multiple NAS devices with separate configs, credentials, and state
@@ -297,7 +297,7 @@ For delete, copy, move and restore, the timeout is **how long a call waits befor
 
 Other settings:
 
-- `allowed_local_paths` — local folders `upload_file` and `download_file` may use, including subfolders (default: your Downloads folder). See **Local path confinement** under [Features](#features).
+- `allowed_local_paths` — local folders `upload_file` and `download_file` may use, including subfolders (default: your Downloads folder). A top-level `allowed_local_paths` applies to every module and this list adds to it. See **Local path confinement** under [Features](#features).
 - `default_download_dir` — local folder `download_file` uses when no `dest_folder` is given. It's always allowed.
 - `default_upload_dir` — NAS folder `upload_file` uses when no `dest_folder` is given.
 - `hide_recycle_in_listings` — hide `#recycle` folders from `list_files` (default: `false`).
