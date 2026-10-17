@@ -100,6 +100,20 @@ If the account isn't an admin, read **Accounts** below first: a non-admin needs 
 - **Settings.** `get_download_config` shows the user's own view, not the NAS-wide settings. `set_download_config` can change only the user's own `default_destination`; the speed limits are NAS-wide and are refused, because DSM accepts and then silently ignores them from a non-admin.
 - **Schedule.** The weekly plan and limited-speed rates in `get_schedule` / `set_schedule` need an admin. A non-admin can still turn the schedule on or off, and that switch is NAS-wide.
 
+**Torrent files.** `create_download` with `torrent_file_path` uploads a local `.torrent` or `.nzb` file, and only from the allowed local folders: by default your Downloads folder. Anything else is refused before the file is read, including a link that points to another kind of file. To use another folder, add it to `allowed_local_paths`, either at the top level of the config (every module) or under this module's settings:
+
+```yaml
+modules:
+  downloadstation:
+    enabled: true
+    permission: write
+    settings:
+      allowed_local_paths:
+        - ~/Torrents
+```
+
+See **Local path confinement** under [Features](#features). Magnet links and URLs (`uri`) aren't affected.
+
 **Known limits:**
 
 - `create_download` returns no task IDs for URLs that use `username` / `password`.

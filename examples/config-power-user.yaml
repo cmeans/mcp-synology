@@ -51,6 +51,9 @@ modules:
   downloadstation:
     enabled: true  # needs the Download Station package on the NAS
     permission: write
+    settings:
+      allowed_local_paths:  # folders create_download may read .torrent/.nzb files from,
+        - ~/Torrents        # added to the top-level list (default: Downloads)
 
 logging:
   level: debug
