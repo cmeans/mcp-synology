@@ -1817,6 +1817,68 @@ class TestStallHandoff:
         assert records.get(Handle("restore", "FileStation_BIG")) is not None
 
     @respx.mock
+    async def test_unreadable_html_status_reply_hands_off(self, mock_client: DsmClient) -> None:
+        """QA R1 on #251: a 200 text/html status reply (a captive portal or a reverse
+        proxy's login page) can't be parsed. The task is handed off, never lost."""
+        calls: list[dict[str, str]] = []
+        dsm = self._dsm(calls, httpx.ReadTimeout(""))
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            if params.get("method") == "status":
+                calls.append(params)
+                return httpx.Response(
+                    200,
+                    text="<html><body>Proxy login secret-token-123</body></html>",
+                    headers={"content-type": "text/html"},
+                )
+            return dsm(request)
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        records = TaskRecords()
+        result = await delete_files(
+            mock_client, paths=["/s/big"], recycle_bin_status={"s": True}, records=records
+        )
+        assert not self._stops(calls)
+        assert result.startswith(
+            "The NAS's status reply couldn't be read while deleting /s/big (JSONDecodeError). "
+            "It's probably still running there; don't start it again.\n"
+            "Handle: `delete:FileStation_BIG`\n"
+        )
+        assert "secret-token" not in result
+        assert "http" not in result.lower()
+        assert records.get(Handle("delete", "FileStation_BIG")) is not None
+
+    @respx.mock
+    async def test_unexpected_exception_on_status_hands_off_copy(
+        self, mock_client: DsmClient
+    ) -> None:
+        """A status reply that is JSON but not an object (here a list) breaks parsing in
+        the client with an AttributeError: any unexpected exception hands off too."""
+        calls: list[dict[str, str]] = []
+        dsm = self._dsm(calls, httpx.ReadTimeout(""))
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            if params.get("method") == "status":
+                calls.append(params)
+                return httpx.Response(200, json=["detail that must not leak"])
+            return dsm(request)
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        records = TaskRecords()
+        result = await copy_files(
+            mock_client, paths=["/s/big"], dest_folder="/s/dst", records=records
+        )
+        assert not self._stops(calls)
+        assert result.startswith(
+            "The NAS's status reply couldn't be read while copying /s/big (AttributeError)."
+        )
+        assert "must not leak" not in result
+        assert "Handle: `copy:FileStation_BIG`" in result
+        assert records.get(Handle("copy", "FileStation_BIG")) is not None
+
+    @respx.mock
     async def test_start_transport_error_unchanged(self, mock_client: DsmClient) -> None:
         """No task ID yet, so no handle: the start's network error surfaces as before."""
 

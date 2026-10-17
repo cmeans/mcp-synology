@@ -193,8 +193,9 @@ class MonotonicProgress:
 class PollResult:
     """How a poll of a background task ended.
 
-    ``stalled``: a status request got no answer (a transport error); the task was left
-    running, like ``handoff`` (#245, maintainer decision 2026-10-17).
+    ``stalled``: a status request got no answer (a transport error) or an answer that
+    couldn't be read (any other exception); the task was left running, like
+    ``handoff`` (#245, maintainer decision 2026-10-17).
     """
 
     status: dict[str, Any]
@@ -205,11 +206,15 @@ class PollResult:
 
 @dataclass
 class Handoff:
-    """A task left running on the NAS: its handle, last status, and the stall if any."""
+    """A task left running on the NAS: its handle, last status, and the stall if any.
+
+    ``stall`` is the status request's error: a ``TransportError`` (no answer) or any
+    other exception (an answer that couldn't be read).
+    """
 
     handle: Handle
     status: dict[str, Any]
-    stall: httpx.TransportError | None = None
+    stall: Exception | None = None
 
 
 def _progress_numbers(status: dict[str, Any]) -> tuple[int, int, str] | None:
@@ -263,10 +268,11 @@ async def poll_task(
     """Poll a File Station task until it finishes or ``wait`` seconds pass.
 
     A task still running at the deadline is handed off (left running, not stopped),
-    and so is one whose status request gets no answer (``stalled``: a transport error,
-    since a DSM stalled by a huge delete is still working; maintainer decision
-    2026-10-17). A DSM error on a status request stops the task; so does
-    cancellation, which then propagates. The deadline is wall-clock (#237).
+    and so is one whose status request gets no answer or an answer that can't be read
+    (``stalled``: a transport error, since a DSM stalled by a huge delete is still
+    working, or any other unexpected exception; maintainer decision 2026-10-17). A DSM
+    error on a status request stops the task; so does cancellation, which then
+    propagates. The deadline is wall-clock (#237).
     """
     quoted = dsm_str(taskid)
     deadline = time.monotonic() + wait
@@ -281,15 +287,26 @@ async def poll_task(
     try:
         while time.monotonic() < deadline:
             try:
-                status = await client.request(
+                reply: Any = await client.request(
                     api, "status", version=version, params={"taskid": quoted}
                 )
+                if not isinstance(reply, dict):
+                    raise TypeError("status data is not an object")
+                status = reply
             except SynologyError as e:
                 return PollResult(status, "poll_error", e, await stop())
             except httpx.TransportError as e:
                 # No answer: DSM is probably busy with this very task. Leave it running
                 # and hand it off; never stop it (#245, maintainer decision 2026-10-17).
                 logger.debug("%s status (%s) unanswered, handing off: %r", api, label, e)
+                return PollResult(status, "stalled", e)
+            except Exception as e:
+                # An answer that can't be read, e.g. a 200 text/html page from a captive
+                # portal or a reverse proxy's login: the task may well still be running,
+                # so hand it off like a stall rather than lose it (QA R1 on #251).
+                logger.warning(
+                    "%s status (%s) unreadable, handing off: %s", api, label, type(e).__name__
+                )
                 return PollResult(status, "stalled", e)
 
             logger.debug("%s status (%s): %s", api, label, status)
@@ -337,13 +354,15 @@ def handoff_reply(
     status: dict[str, Any],
     done: list[str],
     not_started: list[str],
-    stall: httpx.TransportError | None = None,
+    stall: Exception | None = None,
 ) -> str:
     """The reply for a task handed off after the wait: the handle and what to do next.
 
     ``verb`` is "Still deleting", "Still copying", "Still moving" or "Still restoring".
-    ``stall``: the status request DSM didn't answer, for a task handed off because the
-    NAS stopped answering (#245, maintainer decision 2026-10-17).
+    ``stall``: the status request's error, for a task handed off because the NAS stopped
+    answering, or its answer couldn't be read (#245, maintainer decision 2026-10-17).
+    For an unreadable answer only the exception type is shown, never its text, which
+    may quote the body.
     """
     gerund = verb.split()[-1].lower()
     past = _PAST.get(gerund, "done")
@@ -354,10 +373,13 @@ def handoff_reply(
         )
     else:
         last = f"; last progress: {progress_text(status)}" if status else ""
+        if isinstance(stall, httpx.TransportError):
+            what, why = "The NAS stopped answering", describe_transport_error(stall)
+        else:
+            what, why = "The NAS's status reply couldn't be read", type(stall).__name__
         first = (
-            f"The NAS stopped answering while {gerund} {path} "
-            f"({describe_transport_error(stall)}{last}). It's probably still running there; "
-            "don't start it again."
+            f"{what} while {gerund} {path} ({why}{last}). It's probably still running "
+            "there; don't start it again."
         )
     lines = [
         first,

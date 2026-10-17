@@ -303,7 +303,7 @@ async def _copy_move_one_path(
         synology_error_response(f"{operation} files", result.error)
     if result.outcome in ("handoff", "stalled"):
         # Left running on the NAS, not stopped (#245): the caller gets a handle.
-        stall = result.error if isinstance(result.error, httpx.TransportError) else None
+        stall = result.error if result.outcome == "stalled" else None
         return Handoff(Handle(_KIND[operation], taskid), result.status, stall)
     return _copy_move_result(result.status, path, operation, done)
 
@@ -647,7 +647,7 @@ async def _delete_one_path(
         synology_error_response("Delete files", result.error)
     if result.outcome in ("handoff", "stalled"):
         # Left running on the NAS, not stopped (#245): the caller gets a handle.
-        stall = result.error if isinstance(result.error, httpx.TransportError) else None
+        stall = result.error if result.outcome == "stalled" else None
         return Handoff(Handle("delete", taskid), status, stall)
 
     _delete_result(status, path, recursive=recursive, done=done)

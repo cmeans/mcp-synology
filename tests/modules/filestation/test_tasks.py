@@ -215,6 +215,71 @@ class TestPollTask:
         assert "stop" not in calls
 
     @respx.mock
+    async def test_poll_unexpected_exception_is_a_handoff_without_stop(
+        self, mock_client: DsmClient, clock: list[float]
+    ) -> None:
+        """QA R1 on #251: an unreadable status reply hands off like a stall."""
+        calls: list[str] = []
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            calls.append(_method(request))
+            return httpx.Response(200, text="<html>login</html>")
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        result = await poll_task(mock_client, api=API, version=2, taskid="t1", wait=30, label="x")
+        assert result.outcome == "stalled"
+        assert isinstance(result.error, ValueError)
+        assert result.stopped is False
+        assert calls == ["status"]
+
+    @respx.mock
+    async def test_poll_status_data_not_an_object_is_a_handoff(
+        self, mock_client: DsmClient, clock: list[float]
+    ) -> None:
+        """``success: true`` with a non-object ``data`` can't be read as a status."""
+        calls: list[str] = []
+        replies = iter([_ok(RUNNING), httpx.Response(200, json={"success": True, "data": [1]})])
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            calls.append(_method(request))
+            return next(replies)
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        result = await poll_task(mock_client, api=API, version=2, taskid="t1", wait=30, label="x")
+        assert result.outcome == "stalled"
+        assert isinstance(result.error, TypeError)
+        assert result.status == RUNNING  # the last readable status
+        assert calls == ["status", "status"]
+
+    @pytest.mark.parametrize(
+        "stop_reply",
+        [
+            httpx.Response(200, json={"success": False, "error": {"code": 401}}),
+            httpx.ReadTimeout(""),
+        ],
+    )
+    @respx.mock
+    async def test_poll_error_stop_not_confirmed(
+        self, mock_client: DsmClient, clock: list[float], stop_reply: Any
+    ) -> None:
+        """A DSM error stops the task; a refused or unanswered stop is reported as such."""
+        calls: list[str] = []
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            calls.append(_method(request))
+            if _method(request) == "status":
+                return httpx.Response(200, json={"success": False, "error": {"code": 599}})
+            if isinstance(stop_reply, Exception):
+                raise stop_reply
+            return stop_reply
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        result = await poll_task(mock_client, api=API, version=2, taskid="t1", wait=30, label="x")
+        assert result.outcome == "poll_error"
+        assert result.stopped is False
+        assert calls == ["status", "stop"]
+
+    @respx.mock
     async def test_poll_error_stops(self, mock_client: DsmClient, clock: list[float]) -> None:
         timeouts: dict[str, float] = {}
         connects: dict[str, float] = {}
