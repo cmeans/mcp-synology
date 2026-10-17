@@ -1243,8 +1243,8 @@ class TestInstructionComments:
 # for ALL_MODULES. Raise this deliberately, in the same PR, when adding text a model needs
 # (e.g. #129's parameter descriptions); the review then sees the growth. Set by #163 to the
 # compacted size + 2%. Raised by #245 (file_task and the "Long operations" instructions) to
-# the size scripts/measure_tools.py reports: 15,831 -> 17,187.
-PAYLOAD_BUDGET_CHARS = 17_187
+# the size scripts/measure_tools.py reports: 15,831 -> 17,186.
+PAYLOAD_BUDGET_CHARS = 17_186
 
 
 class TestPayloadBudget:

@@ -35,7 +35,8 @@ _KINDS: tuple[str, ...] = get_args(HandleKind)
 _TASKID_RE = re.compile(r"^[A-Za-z0-9_]{1,80}$")
 _DECORATION = " \t\r\n`'\"*.,;:()[]<>"
 # DSM 7.1 sometimes answers a Delete stop only after ~60 s, although the stop takes
-# effect at once; the default request timeout would report a working stop as unanswered.
+# effect at once; the default read timeout would report a working stop as unanswered.
+# Read timeout only: connect, write and pool keep the client's default.
 STOP_TIMEOUT = 90.0
 
 
@@ -139,7 +140,7 @@ async def _stop_background_task(
     """
     try:
         await client.request(
-            api, "stop", version=version, params={"taskid": taskid}, timeout=STOP_TIMEOUT
+            api, "stop", version=version, params={"taskid": taskid}, read_timeout=STOP_TIMEOUT
         )
     except SynologyError as e:
         task_logger.warning("%s task cleanup failed for %s: %s", api, taskid, e)
@@ -163,6 +164,8 @@ def _task_note(stopped: bool) -> str:
 
 
 ProgressCallback = Callable[[float, float | None, str], Awaitable[None]]
+# How much a progress value that wouldn't otherwise increase is raised by.
+_PROGRESS_STEP = 0.001
 
 
 @dataclass
@@ -234,9 +237,28 @@ async def poll_task(
     status: dict[str, Any] = {}
     last_progress: float | None = None
     last_numbers: tuple[int, int] | None = None
+    last_sent: float | None = None
 
     async def stop() -> bool:
         return await _stop_background_task(client, api, quoted, version, logger)
+
+    async def report(value: float, total: float | None, message: str) -> None:
+        """Send a progress notification; MCP requires the value to increase each time.
+
+        Heartbeats (no total yet) keep the client's idle timer from firing, so they
+        get a tiny increase of their own; a real count that doesn't exceed the last
+        value sent (e.g. 0 after the heartbeats) is nudged up by the same step.
+        Progress is best-effort: a failing callback is logged, never fatal.
+        """
+        nonlocal last_sent
+        assert on_progress is not None
+        if last_sent is not None and value <= last_sent:
+            value = last_sent + _PROGRESS_STEP
+        last_sent = value
+        try:
+            await on_progress(value, total, message)
+        except Exception:
+            logger.debug("Progress notification failed for %s, ignoring", label, exc_info=True)
 
     try:
         while time.monotonic() < deadline:
@@ -263,15 +285,15 @@ async def poll_task(
                         if (processed, total) != last_numbers:
                             last_progress = now
                             last_numbers = (processed, total)
-                            await on_progress(processed, total, f"{label}: {text}")
+                            await report(processed, total, f"{label}: {text}")
                     elif status.get("progress") == -1:
                         last_progress = now
-                        await on_progress(0, None, f"{label}: {_no_total_text(status)}")
+                        await report(0, None, f"{label}: {_no_total_text(status)}")
 
             await asyncio.sleep(interval)
     except asyncio.CancelledError:
         # anyio cancel scopes (the MCP SDK's) are level-triggered: shield the stop or
-        # it is cancelled again at once and the NAS task is orphaned.
+        # it is canceled again at once and the NAS task is orphaned.
         with anyio.CancelScope(shield=True):
             await stop()
         raise
@@ -598,10 +620,23 @@ async def file_task(
 
     Without a handle: this user's running Delete/CopyMove tasks. With one: its
     progress or final result (``status``), or stop it (``stop``). The handle is
-    validated before any DSM call; its prefix picks the API. ``stop`` reads the status
+    validated before any DSM call; its prefix picks the API. ``stop`` without a handle
+    is ``invalid_parameter`` (it never lists or stops anything). ``stop`` reads the status
     first and stops only a task that is still running: CopyMove ``stop`` answers success
     for any taskid, so its answer alone can't say whether anything was stopped.
     """
+    if action == "stop" and (handle is None or not handle.strip()):
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            "Stopping needs a handle; nothing was stopped.",
+            retryable=False,
+            param="handle",
+            value=handle,
+            suggestion=(
+                "Call file_task without a handle to list the running operations and their "
+                'handles, then call it again with the handle and action="stop".'
+            ),
+        )
     if handle is None:
         return await _list_reply(client)
     parsed = parse_handle(handle)
@@ -658,7 +693,7 @@ async def file_task(
                 "stop",
                 version=version,
                 params={"taskid": taskid},
-                timeout=STOP_TIMEOUT,
+                read_timeout=STOP_TIMEOUT,
             )
         except SynologyError as e:
             if e.code in (401, 599):

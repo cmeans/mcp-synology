@@ -274,7 +274,7 @@ async def _copy_move_one_path(
     caller can sum sizes across all per-path tasks, or the task's Handle when it
     outlived ``timeout`` and was handed off (#245; the last status is copied into
     ``handoff_status``). Raises ToolError on failure (via
-    error_response/synology_error_response). A task that errors out or is cancelled is
+    error_response/synology_error_response). A task that errors out or is canceled is
     stopped, so orphaned tasks can't accumulate on the NAS.
     """
     try:
@@ -628,7 +628,7 @@ async def _delete_one_path(
     Raises ToolError (via error_response/synology_error_response) on failure;
     returns None when the delete finished, or the task's Handle when it outlived
     ``timeout`` and was handed off (the last status is copied into ``handoff_status``).
-    A task that errors out or is cancelled is stopped.
+    A task that errors out or is canceled is stopped.
     """
     try:
         start_data = await client.request(

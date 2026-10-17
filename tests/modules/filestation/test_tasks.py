@@ -210,9 +210,11 @@ class TestPollTask:
     @respx.mock
     async def test_poll_error_stops(self, mock_client: DsmClient, clock: list[float]) -> None:
         timeouts: dict[str, float] = {}
+        connects: dict[str, float] = {}
 
         def side_effect(request: httpx.Request) -> httpx.Response:
             timeouts[_method(request)] = _read_timeout(request)
+            connects[_method(request)] = request.extensions["timeout"]["connect"]
             if _method(request) == "status":
                 return httpx.Response(200, json={"success": False, "error": {"code": 599}})
             return _ok({})
@@ -224,6 +226,7 @@ class TestPollTask:
         assert result.error is not None
         # DSM 7.1 can take ~60 s to answer a Delete stop that worked at once (#245).
         assert timeouts == {"status": 30, "stop": 90}
+        assert connects == {"status": 30, "stop": 30}
 
     @respx.mock
     async def test_poll_progress_counting_then_numbers(
@@ -255,6 +258,78 @@ class TestPollTask:
             (0, None, "Deleting /x: counting items"),
             (5, 10, "Deleting /x: 5 of 10 items"),
         ]
+
+    @respx.mock
+    async def test_poll_progress_always_increases(
+        self, mock_client: DsmClient, clock: list[float]
+    ) -> None:
+        """MCP: progress must increase with each notification, heartbeats included."""
+        statuses = iter(
+            [
+                {"finished": False, "progress": -1, "total": 0},
+                {"finished": False, "progress": -1, "total": 0},
+                {"finished": False, "progress": -1, "total": 0},
+                {"finished": False, "processed_num": 0, "total": 342, "progress": 0},
+                {"finished": False, "processed_num": 9, "total": 342, "progress": 0.03},
+                {"finished": True},
+            ]
+        )
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=lambda request: _ok(next(statuses))
+        )
+        on_progress = AsyncMock()
+        await poll_task(
+            mock_client,
+            api=API,
+            version=2,
+            taskid="t1",
+            wait=30,
+            label="x",
+            on_progress=on_progress,
+            progress_every=0.5,
+        )
+        sent = [c.args for c in on_progress.await_args_list]
+        assert len(sent) == 5
+        values = [s[0] for s in sent]
+        assert all(b > a for a, b in zip(values, values[1:], strict=False))
+        assert values[0] == 0
+        assert values[-1] == 9
+        assert [s[1] for s in sent] == [None, None, None, 342, 342]
+        assert sent[3][2] == "x: 0 of 342 items"
+
+    @respx.mock
+    async def test_poll_progress_callback_error_keeps_polling(
+        self, mock_client: DsmClient, clock: list[float]
+    ) -> None:
+        """Progress is best-effort: a failing callback neither ends the wait nor stops."""
+        calls: list[str] = []
+        statuses = iter(
+            [
+                {"finished": False, "processed_num": 5, "total": 10},
+                {"finished": False, "processed_num": 6, "total": 10},
+                {"finished": True},
+            ]
+        )
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            calls.append(_method(request))
+            return _ok(next(statuses))
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        on_progress = AsyncMock(side_effect=RuntimeError("stream closed"))
+        result = await poll_task(
+            mock_client,
+            api=API,
+            version=2,
+            taskid="t1",
+            wait=30,
+            label="x",
+            on_progress=on_progress,
+            progress_every=0.5,
+        )
+        assert result.outcome == "finished"
+        assert on_progress.await_count == 2
+        assert calls == ["status", "status", "status"]
 
     @respx.mock
     async def test_poll_progress_throttled(
@@ -325,7 +400,7 @@ class TestPollTask:
         async def side_effect(request: httpx.Request) -> httpx.Response:
             calls.append(_method(request))
             if _method(request) == "stop":
-                await anyio.sleep(0)  # a checkpoint: re-cancelled here unless shielded
+                await anyio.sleep(0)  # a checkpoint: re-canceled here unless shielded
                 calls.append("stop-done")
             return _ok(RUNNING if _method(request) == "status" else {})
 
@@ -806,6 +881,8 @@ class TestFileTask:
         ]
         assert dict(route.calls.last.request.url.params)["taskid"] == '"FileStation_M1"'
         assert [_read_timeout(c.request) for c in route.calls] == [30, 90]
+        # Only the read timeout is raised for the stop (#245); connect keeps the default.
+        assert [c.request.extensions["timeout"]["connect"] for c in route.calls] == [30, 30]
         assert text == (
             "Stopped move of /s/b; it may be partly done. List the path to see what's left."
         )
@@ -954,6 +1031,23 @@ class TestFileTask:
         assert error["message"].startswith(
             "Check task failed: DSM lost the connection during the status request"
         )
+
+    @pytest.mark.parametrize("handle", [None, "", "  "])
+    @respx.mock
+    async def test_file_task_stop_without_handle_is_invalid(
+        self, mock_client: DsmClient, handle: str | None
+    ) -> None:
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        route = respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(return_value=_ok({}))
+        with pytest.raises(ToolError) as exc_info:
+            await file_task(mock_client, records=TaskRecords(), handle=handle, action="stop")
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "invalid_parameter"
+        assert error["param"] == "handle"
+        assert "Stopping needs a handle" in error["message"]
+        assert "file_task without a handle" in error["suggestion"]
+        assert not route.called
 
     @respx.mock
     async def test_file_task_bad_handle_no_dsm_call(self, mock_client: DsmClient) -> None:

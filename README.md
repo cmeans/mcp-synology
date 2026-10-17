@@ -291,7 +291,7 @@ Timeouts are in seconds (10–3600 accepted) and count wall-clock time:
 | `search_timeout`, `dir_size_timeout` | `async_timeout` | Per-tool time limits for `search_files` and `get_dir_size`. The NAS task is stopped when the limit runs out. |
 | `upload_timeout`, `download_timeout` | `300` | Time limits for `upload_file` and `download_file`. |
 
-For delete, copy, move and restore, the timeout is **how long a call waits before handing off**, not a limit on the operation. An operation that finishes within the wait returns its result as usual. One that's still running is left running on the NAS, and the reply gives a handle, such as `delete:FileStation_…`, to use with `file_task`: check its progress or final result, or stop it. `file_task` with no handle lists the operations still running. The wait is capped at 600 s whatever the setting, because an MCP client that gives up on a call cancels it, and a cancelled call stops the operation.
+For delete, copy, move and restore, the timeout is **how long a call waits before handing off**, not a limit on the operation. An operation that finishes within the wait returns its result as usual. One that's still running is left running on the NAS, and the reply gives a handle, such as `delete:FileStation_…`, to use with `file_task`: check its progress or final result, or stop it. `file_task` with no handle lists the operations still running. The wait is capped at 600 s whatever the setting, because an MCP client that gives up on a call cancels it, and a canceled call stops the operation.
 
 Other settings:
 

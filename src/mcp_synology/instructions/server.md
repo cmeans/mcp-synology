@@ -79,4 +79,4 @@ the NAS keeps working, and the reply gives a handle. Tell the user it's still ru
 and include the progress. Don't poll in a loop; check with file_task when the user asks,
 or before doing anything that depends on the result, such as reusing the destination or
 reporting space freed. Never start the same operation again while it's running. If the
-user wants it cancelled, use file_task action="stop", and say the result may be partial.
+user wants it canceled, use file_task action="stop", and say the result may be partial.

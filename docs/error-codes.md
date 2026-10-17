@@ -201,6 +201,8 @@ Common causes:
   A handle is `delete:`, `copy:`, `move:` or `restore:` followed by DSM's task
   ID, e.g. `delete:FileStation_179219158016597225`. It's checked before any
   DSM call, so a malformed handle never reaches the NAS.
+- `file_task` with `action="stop"` and no handle (or an empty one). Stopping
+  needs a handle; nothing is listed or stopped.
 
 Fix:
 
@@ -289,7 +291,7 @@ running after this reply", with the progress and a handle such as
 `delete:FileStation_179219158016597225`. In a multi-path call, the paths after
 it are listed as "Not started". Follow up with `file_task`: `action="status"`
 shows progress or the final result, `action="stop"` stops it (it may then be
-partly done), and no handle lists the running operations. Only a cancelled
+partly done), and no handle lists the running operations. Only a canceled
 call (the user, or a client's own timeout) stops the task.
 
 `file_task` answers a handle DSM no longer knows with a normal reply, not an
