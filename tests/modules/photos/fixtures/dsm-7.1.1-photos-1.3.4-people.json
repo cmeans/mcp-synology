@@ -1,5 +1,5 @@
 {
- "_provenance": "Live capture, real NAS (DS1618+, DSM 7.1.1, Synology Photos 1.3.4), non-admin user, personal space with real face clusters, 2026-10-17, for #258. Anonymized: person names and filenames are replaced; IDs, counts and shapes are as captured. Only reversible writes were made (rename and restore, hide and unhide).",
+ "_provenance": "Live capture, real NAS (DS1618+, DSM 7.1.1, Synology Photos 1.3.4), non-admin user, personal space with real face clusters, 2026-10-17, for #258. Anonymized: person names and filenames are replaced; IDs, counts and shapes are as captured. Only reversible writes were made (rename and restore, hide and unhide, set_cover and restore by photo id).",
  "person-count": {
   "request": {
    "api": "SYNO.Foto.Browse.Person",
@@ -976,6 +976,240 @@
     "item_count": 70,
     "name": "Person 1",
     "show": true
+   },
+   "success": true
+  }
+ },
+ "cover_person-get-before": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Person",
+   "method": "get",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[12]",
+    "additional": "[\"thumbnail\"]"
+   }
+  },
+  "response": {
+   "data": {
+    "list": [
+     {
+      "additional": {
+       "thumbnail": {
+        "cache_key": "26_1792180199"
+       }
+      },
+      "cover": 3,
+      "id": 12,
+      "item_count": 70,
+      "name": "Person 1",
+      "show": true
+     }
+    ]
+   },
+   "success": true
+  }
+ },
+ "cover_person-items": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "list",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "person_id": "12",
+    "offset": "0",
+    "limit": "3"
+   }
+  },
+  "response": {
+   "success": true,
+   "data": {
+    "list": [
+     {
+      "id": 2121,
+      "filename": "photo-2121.jpg",
+      "filesize": 1344220,
+      "time": 1792183869,
+      "indexed_time": 1792183869917,
+      "owner_user_id": 2,
+      "folder_id": 109,
+      "type": "photo"
+     },
+     {
+      "id": 2106,
+      "filename": "photo-2106.jpg",
+      "filesize": 1646100,
+      "time": 1792183853,
+      "indexed_time": 1792183853422,
+      "owner_user_id": 2,
+      "folder_id": 109,
+      "type": "photo"
+     },
+     {
+      "id": 2004,
+      "filename": "photo-2004.jpg",
+      "filesize": 1771490,
+      "time": 1792183733,
+      "indexed_time": 1792183733794,
+      "owner_user_id": 2,
+      "folder_id": 109,
+      "type": "photo"
+     }
+    ]
+   }
+  }
+ },
+ "cover_person-set-cover": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Person",
+   "method": "set_cover",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "12",
+    "photo_id": "2121"
+   }
+  },
+  "response": {
+   "data": {
+    "additional": {
+     "thumbnail": {
+      "cache_key": "2121_1792202606"
+     }
+    },
+    "cover": 1810,
+    "id": 12,
+    "item_count": 70,
+    "name": "Person 1",
+    "show": true
+   },
+   "success": true
+  }
+ },
+ "cover_person-get-after-cover": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Person",
+   "method": "get",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[12]"
+   }
+  },
+  "response": {
+   "data": {
+    "list": [
+     {
+      "cover": 1810,
+      "id": 12,
+      "item_count": 70,
+      "name": "Person 1",
+      "show": true
+     }
+    ]
+   },
+   "success": true
+  }
+ },
+ "cover_person-set-cover-restore": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Person",
+   "method": "set_cover",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "12",
+    "photo_id": "3"
+   }
+  },
+  "response": {
+   "error": {
+    "code": 117
+   },
+   "success": false
+  }
+ },
+ "cover_person-get-restored": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Person",
+   "method": "get",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[12]"
+   }
+  },
+  "response": {
+   "data": {
+    "list": [
+     {
+      "cover": 1810,
+      "id": 12,
+      "item_count": 70,
+      "name": "Person 1",
+      "show": true
+     }
+    ]
+   },
+   "success": true
+  }
+ },
+ "cover_fix_person-set-cover-restore-by-photo": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Person",
+   "method": "set_cover",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "12",
+    "photo_id": "26"
+   }
+  },
+  "response": {
+   "data": {
+    "additional": {
+     "thumbnail": {
+      "cache_key": "26_1792180199"
+     }
+    },
+    "cover": 3,
+    "id": 12,
+    "item_count": 70,
+    "name": "Person 1",
+    "show": true
+   },
+   "success": true
+  }
+ },
+ "cover_fix_person-get-restored": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Person",
+   "method": "get",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[12]",
+    "additional": "[\"thumbnail\"]"
+   }
+  },
+  "response": {
+   "data": {
+    "list": [
+     {
+      "additional": {
+       "thumbnail": {
+        "cache_key": "26_1792180199"
+       }
+      },
+      "cover": 3,
+      "id": 12,
+      "item_count": 70,
+      "name": "Person 1",
+      "show": true
+     }
+    ]
    },
    "success": true
   }

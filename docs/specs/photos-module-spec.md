@@ -3,7 +3,7 @@
 > **Version:** 0.1 (draft for review) | **Updated:** 2026-10-17. Written before the code (#258), from live request and reply captures. Tool count: 4 READ + 15 WRITE = 19.
 > **Parent doc:** `docs/specs/architecture.md`
 >
-> **Verified on:** DSM 7.1 with Synology Photos 1.3.4 and DSM 7.2.2 with Photos 1.9.1 (vdsm; non-admin and admin personas), and a real NAS (DS1618+, DSM 7.1.1, Photos 1.3.4; non-admin, personal space with 944 items and 150 face clusters). Every request shape here was sent and its reply recorded. Request shapes were first taken from the Photos web client (`react.js` in 1.3.4, `react_bundle.js` in 1.9.1), since Synology publishes no Photos API guide.
+> **Verified on:** DSM 7.1 with Synology Photos 1.3.4 and DSM 7.2.2 with Photos 1.9.1 (vdsm; non-admin and admin personas), and a real NAS (DS1618+, DSM 7.1.1, Photos 1.3.4; non-admin, personal space with 944 items and 150 face clusters). Request shapes were first taken from the Photos web client (`react.js` in 1.3.4, `react_bundle.js` in 1.9.1), since Synology publishes no Photos API guide, then sent and their replies recorded. A claim marked **verified** has a capture in the fixtures; one marked **web client** comes only from the client's code and is checked at the implementation PR's vdsm gate (open item 1).
 >
 > **Fixtures:** `tests/modules/photos/fixtures/dsm-7.1-photos-1.3.4.json`, `dsm-7.2.2-photos-1.9.1.json` (vdsm, synthetic library) and `dsm-7.1.1-photos-1.3.4-people.json` (the real NAS, People only, names and filenames anonymized). Keys are capture labels; each value holds the request as sent and DSM's reply.
 >
@@ -16,8 +16,8 @@ MODULE_INFO = ModuleInfo(
     name="photos",
     description="Browse, search, organize and share a Synology Photos library",
     required_apis=[
-        ApiRequirement(api_name="SYNO.Foto.Browse.Item", min_version=1),
-        ApiRequirement(api_name="SYNO.Foto.Browse.Folder", min_version=1),
+        ApiRequirement(api_name="SYNO.Foto.Browse.Item", min_version=2),
+        ApiRequirement(api_name="SYNO.Foto.Browse.Folder", min_version=2),
         ApiRequirement(api_name="SYNO.Foto.Browse.Album", min_version=1, optional=True),
         ApiRequirement(api_name="SYNO.Foto.Browse.NormalAlbum", min_version=1, optional=True),
         ApiRequirement(api_name="SYNO.Foto.Browse.ConditionAlbum", min_version=2, optional=True),
@@ -35,6 +35,9 @@ MODULE_INFO = ModuleInfo(
         ApiRequirement(api_name="SYNO.Foto.Sharing.Misc", min_version=1, optional=True),
         ApiRequirement(api_name="SYNO.Foto.PhotoRequest", min_version=1, optional=True),
         ApiRequirement(api_name="SYNO.Foto.UserInfo", min_version=1, optional=True),
+        ApiRequirement(api_name="SYNO.Foto.Browse.Concept", min_version=2, optional=True),  # 1.9.1
+        ApiRequirement(api_name="SYNO.Foto.Setting.Admin", min_version=1, optional=True),  # read only
+        ApiRequirement(api_name="SYNO.Foto.Setting.TeamSpace", min_version=1, optional=True),  # read only
         # Shared Space mirrors (SYNO.FotoTeam.*) are resolved per call, not required.
     ],
     tools=[...],  # 4 READ + 15 WRITE, below
@@ -44,8 +47,9 @@ MODULE_INFO = ModuleInfo(
 
 class PhotosSettings(BaseModel):
     # Local folders upload_photos may read from and download_photos may write to, added
-    # to the top-level allowed_local_paths (#257). Unset with no top-level list: the
-    # Downloads folder (download) and the Pictures folder (upload).
+    # to the top-level allowed_local_paths, exactly as File Station's and Download
+    # Station's lists (#257, core/local_paths.allowed_local_roots): with no top-level
+    # list, this list, or else the Downloads folder.
     allowed_local_paths: list[str] | None = None
     # Seconds copy_photos / move_photos wait before handing the task off (default 30,
     # cap 600), as File Station's copy_move_timeout (#245).
@@ -68,7 +72,8 @@ Photos keeps two libraries, and the **API prefix** picks one; there's no space p
 | Shared | `SYNO.FotoTeam.*` | id `1` | the `photo` shared folder |
 
 - Every tool that touches items, folders, tags, people or places takes `space` (`personal`, default, or `shared`) and sends to the matching prefix.
-- **Albums, sharing links, photo requests, favorites and task status are personal-only APIs** (`SYNO.Foto.Browse.Album`, `NormalAlbum`, `ConditionAlbum`, `Sharing.*`, `PhotoRequest`, `BackgroundTask.Info`). Album and request tools take no `space`. Task status for Shared Space copies and moves is still read through `SYNO.Foto.BackgroundTask.Info` (verified).
+- **Albums, sharing links, photo requests and task status are personal-only APIs** (`SYNO.Foto.Browse.Album`, `NormalAlbum`, `ConditionAlbum`, `Sharing.*`, `PhotoRequest`, `BackgroundTask.Info`), so album and share-link tools take no `space`. Two exceptions take one anyway: `photo_request`'s `space` picks the destination library (`library: personal_space|shared_space`, verified for personal), and `photo_task` follows tasks of both spaces, since Shared Space task status is read through `SYNO.Foto.BackgroundTask.Info` too (verified).
+- **Favorites work in both spaces on 1.9.1:** `SYNO.FotoTeam.Browse.Item set_favorite` v7 and `get` with `additional: ["favorite"]` (verified, admin). Whether a Shared Space favorite is per user wasn't checked (open item 1).
 - **IDs belong to a space.** A Shared Space item ID looked up through `SYNO.Foto.Browse.Item get` returns an empty list (verified), not an error. Tools never mix IDs across spaces; a reply's `owner_user_id` of `0` means Shared Space.
 
 ### Prerequisites and the errors that report them
@@ -80,8 +85,9 @@ These are setup problems, not tool misuse, so each message names the fix.
 | **160** | The user lacks the Photos application privilege (`SYNO.Foto.AppInstance`). Every `SYNO.Foto*` call answers 160. | "This account can't use Synology Photos." An admin grants it in Control Panel > Application Privileges > Synology Photos. |
 | **602** | The user home service is off, so there's no personal space. | "Personal space needs the user home service." An admin enables it in Control Panel > User & Group > Advanced > User Home. |
 | **801** | Shared Space is disabled, **or** the user has no Shared Space permission. DSM answers the same code for both (verified: disabled on the real NAS; enabled but not granted on vdsm). | "Shared Space is off, or this account has no access to it." An admin enables it in Synology Photos > Settings > Shared Space and grants access there. |
+| **803** | The user has Shared Space access (role `entry`) but no permission on that folder (verified on both versions: `Item.list`, `Folder.create`, `BackgroundTask.File delete`). | "No permission for this Shared Space folder." A Shared Space manager grants folder permissions in Synology Photos; the reply passes DSM's code through. |
 
-160 and 801 never trigger a re-auth (they aren't session errors).
+160, 801 and 803 never trigger a re-auth (they aren't session errors). Shared Space access is granted with `Setting.TeamSpace update_permission` (`list: [{action, type, id, permission: "entry"|"management", auto_backup}]`, verified); folder-level view/download/upload rights sit on top of `entry` (`SYNO.FotoTeam.Sharing.FolderPermission`, out of scope, Decision 6).
 
 ### Transport
 
@@ -96,20 +102,28 @@ Chosen **per call on its merits** (maintainer, 2026-10-17: no transport is force
 - **`api`/`method`/`version` must be in a POST body.** A POST that has them only in the query string and an empty body (a method with no parameters) fails with **101** (verified on both versions).
 - **Every value is JSON-encoded**, strings included (`name="My album"`), as File Station's JSON-format APIs require (#121): an unquoted value that is valid JSON is read as that type (a folder renamed to `2024` would get the number). `Thumbnail get` accepts its values quoted or unquoted (verified).
 - The 1.9.1 web client fetches thumbnails from a new path (`synofoto/api/v2/p|t/Thumbnail/get`); the `entry.cgi` form used here still works on 1.9.1 (verified).
-- **Implementation:** `DsmClient.request(..., post_form=True)` exists for login (#235). The implementation PR widens its documented scope to the Photos module (moving `api`/`method`/`version` into the body when posting), and keeps the re-auth retry.
+- **Implementation:** `DsmClient.request(..., post_form=True)` already sends `api`/`method`/`version` in the body with only `_sid` in the query string, and keeps the re-auth retry (#235). Only its documented scope changes: the `CLAUDE.md` #235 bullet and the comment in `request()`.
+- **Empty-body 101, verified:** a POST of `UserInfo me` with `api`/`method`/`version` only in the query string and an empty body answered 101 on both versions (`qa1_post-empty-body-query-only`).
 
 ### Versions
 
 Each call uses the lowest version that supports what it sends, verified on both DSM versions; a feature that needs a newer version uses it only where the NAS registers it, and is refused locally elsewhere.
 
-- **Base pins (both versions):** `Browse.Item` list v2 (v1 rejects `rating` in `additional`, 120 on both), get/set/list_with_filter/count_with_filter v2, count/delete/add_tag/remove_tag/get_tag/get_exif v1; `Browse.Folder` list/get v2, others v1; `Browse.Album` list v2, others v1; `NormalAlbum` v1; `ConditionAlbum` create/set_condition/peek_item_count v2, get/suggest v1; `Search.Filter list` v2; `Thumbnail get` v2; `Download download` v1; `Upload.Item` v1; everything else v1.
+- **Base pins (both versions), every call that isn't v1:**
+  - `Browse.Item`: list, get, set, list_with_filter, count_with_filter at v2. `list` is v2 because v1 rejects `rating` in `additional` (120, verified on both: `qa1_item-list-rating-v1`).
+  - `Browse.Folder`: list, get, set_cover at v2.
+  - `Browse.Album list` v2.
+  - `ConditionAlbum`: create, set_condition, peek_item_count at v2.
+  - `Browse.Person merge` v2.
+  - `Search.Filter list` v2; `Sharing.Misc list_shared_with_me_album` v2; `Thumbnail get` v2.
+  - Everything else at v1, including `Browse.Item` count/delete/add_tag/remove_tag/get_tag/get_exif, `NormalAlbum`, `Download download`, `Upload.Item`, `BackgroundTask.*` and `Setting.*`.
 - **Favorites (1.9.1, `Browse.Item` v7 only):** `set_favorite`, `get`/`list` with `additional: ["favorite"]`, `list` with `favorite_only`, and `list_with_filter`/`count_with_filter` with `favorite: [true]` all need **v7**. v1–v6 answer 120 ("favorite is not supported"; verified each). **On 1.3.4 the same favorite filters are silently ignored** (every item comes back, verified), so the tool refuses them locally there.
 - **Concepts (1.9.1):** `Browse.Concept` v2 and `Browse.Item list` v7 with `concept_id`.
 - 1.9.1 registers higher versions of most APIs (`Browse.Item` v7, `Album` v5, `Upload.Item` v8…). They're used only for the features above; the 1.9.1 web client itself uses lower versions than the server registers for several APIs, so "max version" is never assumed safe.
 
 ### Edits rewrite the original files
 
-Photos writes ratings, descriptions, tags, taken-time changes and rotations **into the original file** and then re-indexes it (verified: every such edit grew the JPEG by a few hundred bytes on both versions). So the file's modification time and size change, which backup and sync tools will see as a new version. Every write tool that does this says so in its description.
+Photos writes ratings, descriptions, tags, taken-time changes and rotations **into the original file** and then re-indexes it (verified on both versions: the first such edit grew the JPEG by about 2.5 KB, later ones by a few hundred bytes). So the file's modification time and size change, which backup and sync tools will see as a new version. Every write tool that does this says so in its description.
 
 **Tag IDs aren't stable on 1.9.1.** After a re-index on DSM 7.2.2, an existing tag came back with a new ID (5 became 7), and a smart album condition still holding ID 5 then failed with **950**. On 7.1 the ID stayed put. So:
 
@@ -119,7 +133,9 @@ Photos writes ratings, descriptions, tags, taken-time changes and rotations **in
 
 ### Writes that report success for nothing
 
-DSM answers **success** for these when an ID doesn't exist (verified on both versions unless noted): `Browse.Item delete`, `Browse.Album delete`, `Browse.Item add_tag` (`error_list: []`), `NormalAlbum add_item` with a missing item, `Browse.Folder delete` on 1.3.4 (`error_list: []`; 1.9.1 answers 117), and `Person merge` with a missing `merged_id` (it returns the target unchanged; real NAS, 1.3.4). So every tool that takes IDs **checks them first** (one `get` or `list` call) and reports unknown IDs as `not_found` without sending the write. `error_list` in a reply lists IDs DSM did reject (seen for `add_tag` on an item still being indexed); those are reported per item.
+DSM answers **success** for these when an ID doesn't exist (verified on both versions unless noted): `Browse.Item delete`, `Browse.Album delete`, `Browse.Item add_tag` (`error_list: []`), `NormalAlbum add_item` with a missing item, `Browse.Folder delete` on 1.3.4 (`error_list: []`; 1.9.1 answers 117), and `Person merge` with a missing `merged_id` (it returns the target unchanged; real NAS, 1.3.4). **Writes without permission do the same.** A Shared Space user with only `entry` access (no folder permission) got **success** for `Browse.Item set` (`error_list: []`) and `Browse.Item delete`, and neither took effect: an admin read-back showed the rating unchanged and the item still there (verified on both versions, `qa1_team_*`). `BackgroundTask.File delete` answered 803 for the same user. So deletes use the background task (see Deletes), and `edit_photo` and `tag_photos` read the items back after writing and report any item whose value didn't change as not changed (no permission, or still being indexed).
+
+So every tool that takes IDs **checks them first** (one `get` or `list` call) and reports unknown IDs as `not_found` without sending the write. `error_list` in a reply lists IDs DSM did reject (seen for `add_tag` on an item still being indexed); those are reported per item.
 
 ### Missing features (by API, not by choice)
 
@@ -163,7 +179,7 @@ An upload returns an item ID at once, but Photos indexes it afterwards (seconds 
 
 Item and folder deletes use **`BackgroundTask.File delete`** (`item_id: [..]`, `folder_id: [..]`), a background task like copy and move: it exists on both versions (verified), the 1.9.1 web client uses it, and a large delete then reports progress and hands off instead of blocking. `Browse.Item delete` and `Browse.Folder delete` also work synchronously on both versions (verified) but are not used.
 
-Photos has no trash of its own. Deletes go to the **DSM recycle bin of the share that holds the space**, when that share has one. Verified on the real NAS: a deleted personal-space folder appeared under `/home/#recycle/Photos/`. Delete tools say "moved to the recycle bin if the share has one enabled, otherwise permanent". Photos 1.9.1's admin settings report `enable_personal_dsm_recycle_bin` and `enable_shared_dsm_recycle_bin` (whether the backing share has a recycle bin; the 1.9.1 client warns admins when it's off). The tools read them where available to say which case applies.
+Photos has no trash of its own. Deletes go to the **DSM recycle bin of the share that holds the space**, when that share has one. Verified on the real NAS: a deleted personal-space folder appeared under `/home/#recycle/Photos/`. Photos 1.9.1's `Setting.Admin get` v1 reports `enable_personal_dsm_recycle_bin` and `enable_shared_dsm_recycle_bin` (whether the backing share has a recycle bin; the 1.9.1 client warns admins when it's off). A **non-admin can read it** (verified on both versions); 1.3.4's reply has no such fields. The delete tools read it on 1.9.1 and say "moved to the recycle bin" or "deleted permanently (no recycle bin on that share)"; on 1.3.4, or if the read fails, they say "moved to the share's recycle bin if it has one". Reading this setting (and `Setting.TeamSpace get` for `enable_person`) is in scope; changing Photos settings is not (Decision 6).
 
 ### Background tasks (copy, move, delete)
 
@@ -184,7 +200,7 @@ Photos-specific codes, dispatched when the API name starts with `SYNO.Foto`. Cod
 | Code | Seen when (verified) | Mapped to |
 |---|---|---|
 | 101 | `Item.set` with an unsupported field (`gps`) | `invalid_parameter` |
-| 103 | Method doesn't exist on this Photos version | `not_supported` |
+| 103 | Method doesn't exist on this Photos version | `not_supported` (a **new** `ErrorCode`; `docs/error-codes.md` gets a section for it) |
 | 117 | `abort_task` for an unknown task (both versions); `Browse.Folder delete` on a missing ID (1.9.1 only) | `not_found` |
 | 120 | Missing or ill-typed parameter (`errors.name`, `errors.reason`: `required`, `type`, `condition`, or a sentence such as "favorite is not supported") | `invalid_parameter` naming the field |
 | 160 | No Photos application privilege | `permission_denied` (see Prerequisites) |
@@ -193,9 +209,10 @@ Photos-specific codes, dispatched when the API name starts with `SYNO.Foto`. Cod
 | 621 | Upload into a folder that doesn't exist | `not_found` |
 | 642 | Folder doesn't exist (`Folder.get`) | `not_found` |
 | 801 | Shared Space disabled or not granted | `permission_denied` (see Prerequisites) |
+| 803 | No permission on that Shared Space folder | `permission_denied` (see Prerequisites) |
 | 901 | People (face recognition) disabled (from the 1.3.4 client; not reproduced) | `unavailable` |
 | 950 | Smart album condition references a tag/person/folder that no longer exists | `invalid_parameter` |
-| 953 | Smart album condition invalid (e.g. `user_id` null) | `invalid_parameter` |
+| 953 | Smart album condition with `user_id` null (verified on both, `qa1_condalbum-create-null-user`). A condition with no `user_id` key at all gets 120 instead | `invalid_parameter` |
 
 The 1.3.4 upload code treats 604, 605 and 622 as non-retryable too; their meanings weren't reproduced and they map to `dsm_error` with the code.
 
@@ -209,7 +226,7 @@ Browse or search items.
 
 **Permission tier:** READ
 
-**DSM API:** one of `Browse.Item list` v1 (a single folder, album, person, tag or place), `Browse.Item list_with_filter` v2 (date range, type, rating, favorite, or combinations), `Search.Search list_item` v1 (keyword); the total from the matching `count` / `count_with_filter` / `count_item`
+**DSM API:** one of `Browse.Item list` v2 (a single folder, album, person, tag or place), `Browse.Item list_with_filter` v2 (date range, type, rating, favorite, or combinations), `Search.Search list_item` v1 (keyword); the total from the matching `count` / `count_with_filter` / `count_item`
 
 **Tool description (LLM-facing):**
 > List photos and videos in Synology Photos, newest first by default. Narrow by one of folder, album,
@@ -240,6 +257,21 @@ Browse or search items.
 | `sort_direction` | `str` | No | `"desc"` | `asc` or `desc`. |
 | `offset` | `int` | No | `0` | |
 | `limit` | `int` | No | `50` | 1–500. |
+
+**Response shape:**
+
+```
+Photos in /Trips/2024 (personal space; newest first)
+==============================================================================
+  ID   Filename          Taken                    Type   Size      Folder
+  ───  ────────────────  ───────────────────────  ─────  ────────  ───────────
+  41   beach-sunset.jpg  2024-07-04 19:30:00 UTC  photo  50.1 KiB  /Trips/2024
+  36   clip-test.mp4     2024-07-06 07:00:00 UTC  video  22.2 KiB  /Trips/2024
+
+2 item(s) total; showing 1–2.
+```
+
+The heading names the source (folder path, album, person, tag, place, concept or `search "<keyword>"`) and the filters. A full page ends with `Pass offset=N for the next page.`; an offset past the end shows `No items to display.` and the total. A row still being indexed has `(indexing)` after its taken time.
 
 **Design notes:**
 - **One source, filters on top.** A single `folder`/`person`/`tag`/`place` with no other filter uses `Item.list` (`folder_id`, `person_id`, `general_tag_id`, `geocoding_id`; all but `geocoding_id` verified, that one from the web client). Anything else uses `list_with_filter`, whose filter keys are lists of IDs: `folder: [id]`, `person`, `general_tag`, `geocoding`, `time: [{start_time, end_time}]`, `item_type` (`[-1]` photos, `[-2]` videos; verified on both versions), `rating` (`[min..5]`), and on 1.9.1 `favorite: [true]` (v7). With `person` and `general_tag` the web client adds `person_policy`/`general_tag_policy: "or"`.
@@ -278,7 +310,7 @@ Albums, people, tags, places and folders.
 | `offset` | `int` | No | `0` | |
 | `limit` | `int` | No | `100` | |
 
-**Response shape:** a table per type. Albums: id, name, type (`normal`/`condition`), items, shared (privacy type), date range. People: id, name (`(unnamed)` for `""`), items, hidden. Tags: id, name, items. Places: id, name, country, items. Folders: id, path, shared.
+**Response shape:** a table per type. Albums: id, name, type (`normal`/`condition`), items, shared (privacy type), date range. People: id, name (`(unnamed)` for `""`), items, hidden. Tags: id, name, items. Places: id, name, country, items. Folders: id, path, shared. Concepts: id, name, items, hidden. Every table ends with `N <type>(s) total; showing a–b.`
 
 **Design notes:**
 - Folder `name` in replies is the **full path** within the space (`/mcp-spec-capture/2024`).
@@ -308,6 +340,25 @@ One or more items in full.
 | `ids` | `list[int]` | **Yes** | — | Item IDs from `list_photos`. |
 | `space` | `str` | No | `"personal"` | |
 | `exif` | `bool` | No | `false` | Adds `get_exif`'s full key/value list (one call per item). |
+
+**Response shape:** one block per item, then a line per ID not found.
+
+```
+Item 41: beach-sunset.jpg
+  Folder:       /Trips/2024 (personal space)
+  Taken:        2024-07-04 19:30:00 UTC
+  Size:         50.1 KiB · 1600×1200 · photo
+  Rating:       4 · favorite: yes (1.9.1+)
+  Description:  spec capture
+  Tags:         beach, 2024
+  People:       Person 1, (unnamed)
+  Location:     41.8781, -87.6298 · Chicago, Cook County, Illinois, United States
+  Camera:       MCPTest SeedCam 1 · lens — · f/— · — s · ISO —
+
+Not found: 999999
+```
+
+With `exif=true`, a `EXIF` table (key, value) from `get_exif` follows each block.
 
 **Design notes:**
 - An unknown ID is simply missing from `list` (no error); the tool reports it as not found.
@@ -339,6 +390,17 @@ Originals or thumbnails to a local folder.
 | `size` | `str` | No | `"original"` | `original`, `xl`, `m` or `sm`. |
 | `space` | `str` | No | `"personal"` | |
 | `overwrite` | `bool` | No | `false` | |
+
+**Annotations:** READ tier (it only reads the NAS), but `readOnlyHint=false`, `destructiveHint=true`, as `download_file`: it writes, and with `overwrite=true` replaces, files on this machine.
+
+**Response shape:**
+
+```
+Downloaded 2 of 3 item(s) to /home/user/Downloads (original)
+  41  beach-sunset.jpg   50.1 KiB
+  36  clip-test.mp4      22.2 KiB
+  12  not downloaded: the m preview isn't generated yet (converting); try again shortly
+```
 
 **Design notes:**
 - **One request per item**, written under its filename (`<stem>_<size>.jpg` for previews). Two or more `item_id`s in one request make DSM return a zip (verified, `application/zip`), which the tool avoids so names and errors stay per item.
@@ -372,7 +434,19 @@ Originals or thumbnails to a local folder.
 | `on_duplicate` | `str` | No | `"rename"` | `rename` or `skip` (DSM `duplicate`: `rename` / `ignore`). |
 | `album` | `str` | No | — | Album ID or unique name to add the uploads to (personal only). |
 
-**Response shape:** per file, the new item ID and DSM's `action`: `new`, `rename` (kept both, as `name_1.jpg`) or `ignore` (skipped; the reply's `id` is the **existing** item's).
+DSM's `action` per file: `new`, `rename` (kept both, as `name_1.jpg`) or `ignore` (skipped; the reply's `id` is the **existing** item's).
+
+**Response shape:**
+
+```
+Uploaded 3 file(s) to /Trips/2024 (personal space)
+  beach-sunset.jpg    new      id 41
+  beach-sunset.jpg    renamed  id 47 (as beach-sunset_1.jpg)
+  forest-trail.jpg    skipped  id 12 (already there)
+  notes.txt           failed   Photos doesn't support this file type (620)
+Added 2 item(s) to album "Trip 2024".
+Photos indexes new items over the next seconds to minutes; taken dates and previews appear then.
+```
 
 **Design notes:**
 - `mtime` is the local file's modification time in seconds; Photos uses it as the taken time until EXIF is indexed.
@@ -402,6 +476,17 @@ Originals or thumbnails to a local folder.
 | `name` | `str` | No | — | New name (`create`, `create_smart`, `rename`, `copy`). |
 | `ids` | `list[int]` | No | — | Items (`create`, `add`, `remove`); one for `set_cover`. |
 | `condition` | `dict` | No | — | `create_smart` / `set_condition`; see design notes. |
+
+**Annotations:** `destructiveHint=true`: `remove`, `rename` and `set_condition` replace what the album held, and annotations can't depend on `action` (#183).
+
+**Response shape:** one line per action, then the album as it now is.
+
+```
+Created album "Trip 2024" (id 9) with 2 item(s).
+Album 9: Trip 2024 · normal · 2 item(s) · 2024-07-04 – 2024-07-06 · not shared
+```
+
+`create_smart` / `set_condition` add `Matches N item(s) now.` from `peek_item_count`. `add`/`remove` list IDs DSM rejected in `error_list`, and IDs that don't exist (checked first).
 
 **Design notes:**
 - Album names needn't be unique: DSM created a second album with the same name (verified). `create` warns when the name already exists; name lookup then needs the ID.
@@ -434,6 +519,19 @@ Originals or thumbnails to a local folder.
 | `expires` | `str` | No | — | `YYYY-MM-DD` (end of day UTC) or `never` (`0`). |
 | `members` | `list[dict]` | No | — | `{name, type: user|group, role: view|download|upload|none}`; `none` removes. Names resolved with `list_user_group`. |
 
+**Annotations:** `destructiveHint=true`: `stop` and `update` replace the link's settings (an old password or public access is gone).
+
+**Response shape:**
+
+```
+Album 9 "Trip 2024" is shared.
+  Link:      https://nas.example:5001/mo/sharing/6kJOJFJVq
+  Public:    view · password: yes · expires 2030-03-17 23:59:59 UTC
+  Members:   alex (download), family (view)
+```
+
+`stop` says `Album 9 is no longer shared; the link stops working (DSM keeps it, so sharing again may restore it).` On an HTTP connection, a line says the password crossed the network unencrypted.
+
 **Design notes:**
 - `share` sends `set_shared` `enabled: true`, then `update` for any settings; the reply has `passphrase` and `sharing_link` (`http(s)://<host>/mo/sharing/<passphrase>`). `stop` sends `enabled: false`; its reply still carries the passphrase and link (verified), so re-sharing probably restores the same link (checked at the vdsm gate).
 - `update`'s `permission` entries: public `{action: "update", role: "view"|"download", member: {type: "public"}}` or `{action: "delete", member: {type: "public"}}`; members `{action, role, member: {type, id}}`.
@@ -447,7 +545,7 @@ Originals or thumbnails to a local folder.
 
 **Permission tier:** WRITE
 
-**DSM API:** `Browse.Folder create` v1 (`target_id`, `name`), `rename` v1 (`id`, `name`), `set_cover` v2 (`id`, `id_item: [..]`)
+**DSM API:** `Browse.Folder create` v1 (`target_id`, `name`), `rename` v1 (`id`, `name`), `set_cover` v2 (`id`, `id_item: [..]`; verified on both, `qa1_folder-set-cover`)
 
 **Tool description (LLM-facing):**
 > Create or rename a folder in Synology Photos, or set its cover photo. action: create (name inside
@@ -465,6 +563,8 @@ Originals or thumbnails to a local folder.
 | `name` | `str` | No | — | New leaf name (`create`, `rename`). |
 | `item_id` | `int` | No | — | `set_cover`. |
 | `space` | `str` | No | `"personal"` | |
+
+**Response shape:** `Created /Trips/2024/Day 1 (id 33, personal space).` · `Renamed folder 33 to /Trips/2024/Day One.` · `Folder 33's cover is now item 41.`
 
 **Design notes:** reply `folder` has `id`, full-path `name`, `parent`. Creating a folder whose name exists in the parent: checked at the vdsm gate (the capture created same-named folders only under different parents).
 
@@ -493,6 +593,16 @@ Originals or thumbnails to a local folder.
 | `dest_space` | `str` | No | — | `personal` or `shared`; cross-space copies are allowed (web client). |
 | `on_conflict` | `str` | No | `"skip"` | `skip` or `overwrite`. |
 
+**Annotations:** `destructiveHint=true`: with `on_conflict="overwrite"` it replaces files at the destination (as `copy_files`, #183).
+
+**Response shape:**
+
+```
+Copied 3 item(s) and 1 folder to /Albums/Best (personal space): 4 done, 1 skipped (already there), 0 overwritten.
+```
+
+Still running at `task_timeout`: `Still copying on the NAS (2 of 9 done). Handle: photos:14 — check with photo_task.` Failed items from `get_error_detail` follow as `  item 41: <reason>` lines.
+
 **Design notes:** the task's `skip` and `overwrite` counters are reported (verified: a repeat copy with `skip` finished with `skip: 1`). `get_error_detail` (scalar `id`) lists failed items. Cross-space: the call goes to the **destination's** API and `extra_info` carries `{"version": 2, "source_library": "personal_space"|"shared_space"}` as a JSON **string**, JSON-encoded again (web client; cross-space verified at the vdsm gate). `Browse.Item copy/move` also exist (they require `action`) but the web client doesn't use them; neither does this module.
 
 ---
@@ -520,6 +630,10 @@ Originals or thumbnails to a local folder.
 | `dest_space` | `str` | No | — | |
 | `on_conflict` | `str` | No | `"skip"` | |
 
+**Annotations:** `destructiveHint=true`: it removes the sources, and with `on_conflict="overwrite"` replaces files at the destination (as `move_files`).
+
+**Response shape:** as `copy_photos`, with "Moved".
+
 ---
 
 ### 11. `photo_task`
@@ -539,6 +653,10 @@ Originals or thumbnails to a local folder.
 |------|------|----------|---------|-------------|
 | `handle` | `str` | No | — | `photos:<task id>`. |
 | `action` | `str` | No | `"status"` | `status`, `stop` or `clear`. |
+
+**Annotations:** `readOnlyHint=false`, `destructiveHint=true`: `stop` can leave a move or delete half done (as `file_task`, #183).
+
+**Response shape:** with a handle, one line: `photos:14 copy to /Albums/Best: processing, 2 of 9 done (0 skipped, 0 overwritten), running 1 min 12 s.` or the final result in the starting tool's shape. Without a handle, a table: handle, operation, target folder, status, done/total, started (UTC). `clear` says how many finished tasks were removed.
 
 **Design notes:** an unknown ID: `get_status` returns an empty list, `abort_task` 117; both are `not_found`. Tasks are per user and cover both spaces.
 
@@ -565,6 +683,17 @@ Originals or thumbnails to a local folder.
 | `ids` | `list[int]` | **Yes** | — | Items. |
 | `tags` | `list[str]` | **Yes** | — | Tag names. |
 | `space` | `str` | No | `"personal"` | |
+
+**Annotations:** `destructiveHint=true`: `remove` takes tags off items (and a tag with no items left disappears).
+
+**Response shape:**
+
+```
+Added tags beach, 2024 to 3 item(s) (personal space).
+  Not changed: 41 (no permission, or still being indexed)
+  Not found: 999999
+Photos rewrites tagged files, so their dates and sizes change.
+```
 
 **Design notes:** names are resolved right before the call (see tag IDs); one `add_tag` per batch of up to 100 items carries all the tags, never repeated calls on the same item. The reply reports `error_list` items. `get_tag` (`intersection`, `union`) confirms the result. Tags are per space.
 
@@ -595,7 +724,17 @@ Originals or thumbnails to a local folder.
 | `rotate` | `str` | No | — | `left` (`counter_clockwise`, verified) or `right` (`clockwise`, in the client's enum, checked at the vdsm gate). |
 | `favorite` | `bool` | No | — | 1.9.1+ (verified set and unset). On 1.3.4, `not_supported`. |
 
-**Design notes:** DSM accepted two fields in one `set` (verified), but the tool sends one `set` per field, as the web client does, so a failure names the field. Batches of 100 IDs (`BATCH_UPDATE_SIZE`). `taken_time` and `shift_hours` are mutually exclusive.
+**Annotations:** `destructiveHint=true`, `idempotentHint=true`: each field replaces the previous value (a description or taken time is lost), and repeating the call changes nothing more.
+
+**Response shape:**
+
+```
+Edited 2 item(s) (personal space): rating 4, description.
+  Not changed: 52 (no permission, or still being indexed)
+Photos rewrites edited files, so their dates and sizes change.
+```
+
+**Design notes:** DSM accepted two fields in one `set` (verified), but the tool sends one `set` per field, as the web client does, so a failure names the field. Batches of 100 IDs (a **new** module constant, as the web client's `BATCH_UPDATE_SIZE`). `taken_time` and `shift_hours` are mutually exclusive. Every edited item is read back (`get`), since a Shared Space user without folder permission gets success with no effect (see Writes that report success).
 
 ---
 
@@ -620,7 +759,15 @@ Originals or thumbnails to a local folder.
 | `item_id` | `int` | No | — | `set_cover`: a photo of that person. |
 | `space` | `str` | No | `"personal"` | |
 
-**Design notes:** rename and hide/unhide verified on the real NAS (and reverted). `set` returns the person (`id`, `name`, `item_count`, `cover`, `show`). People in Shared Space need Shared Space People enabled (`enable_person` in `Setting.TeamSpace get`, off on a fresh install).
+**Annotations:** `destructiveHint=true`, `idempotentHint=true`: `rename` and `set_cover` replace the previous name or cover.
+
+**Response shape:** the person after the change: `Person 12: Jo (70 items, visible, cover: item 26).`
+
+**Design notes:**
+- rename, hide/unhide and `set_cover` verified on the real NAS, and reverted.
+- **A person's `cover` is a face ID, not an item ID:** `set_cover` takes `photo_id` (an item of that person) and DSM picks that item's face, so `cover` came back as face 1810 for item 2121. Restoring needs the item, which the person's thumbnail `cache_key` names (`26_…` is item 26); sending the old `cover` value as `photo_id` failed with 117.
+- `set` returns the person (`id`, `name`, `item_count`, `cover`, `show`).
+- People in Shared Space need Shared Space People enabled: `enable_person` in `Setting.TeamSpace get`, off on a fresh install and readable by a non-admin (verified on both). When it's off, the tool says so instead of showing an empty list.
 
 ---
 
@@ -648,13 +795,25 @@ Originals or thumbnails to a local folder.
 | `max_file_mib` | `int` | No | — | `filesize_limit` in bytes; `0` none. |
 | `expires` | `str` | No | — | `YYYY-MM-DD` or `never`. |
 
+**Annotations:** `destructiveHint=true`: `delete` removes a request whose link others may hold, and `update` replaces its settings.
+
+**Response shape:** `create` and `update`:
+
+```
+Photo request "mcp spec" → /Trips/2024 (personal space)
+  Link:      https://nas.example:5001/mo/request/IQwpTmKug
+  Limit:     10 MiB per file · expires never
+```
+
+`list` shows a table (request, subject, folder, size limit, expires, link); `delete` confirms the request.
+
 **Design notes:** `create` sends `passphrase: ""`; the reply has `passphrase`, `sharing_link` (`…/mo/request/<passphrase>`), `folder_id`, `is_folder_valid`. `delete` takes `passphrase: [..]`. `PhotoRequest get` exists (verified) though the client doesn't call it.
 
 ---
 
 ### 16. `merge_people`
 
-**Permission tier:** WRITE (destructive)
+**Permission tier:** WRITE
 
 **DSM API:** `Browse.Person merge` v2 (`target_id`, `merged_id: [..]`, `name`)
 
@@ -671,13 +830,17 @@ Originals or thumbnails to a local folder.
 | `name` | `str` | No | — | Name after the merge; default the target's. |
 | `space` | `str` | No | `"personal"` | |
 
+**Annotations:** `destructiveHint=true` (irreversible).
+
+**Response shape:** `Merged 2 people into person 12 "Jo" (now 84 items).`, then any IDs or names not found (checked first, nothing merged if any is missing).
+
 **Design notes:** a missing `merged_id` is silently ignored by DSM (verified), so all IDs are checked first. Not run with real IDs during capture (irreversible); the request shape is the web client's, and the reply shape (the target person) is from the missing-ID call.
 
 ---
 
 ### 17. `delete_photos`
 
-**Permission tier:** WRITE (destructive)
+**Permission tier:** WRITE
 
 **DSM API:** `BackgroundTask.File delete` v1 (`item_id: [..]`, `folder_id: []`); `BackgroundTask.Info get_status` v1
 
@@ -694,13 +857,17 @@ Originals or thumbnails to a local folder.
 | `ids` | `list[int]` | **Yes** | — | |
 | `space` | `str` | No | `"personal"` | |
 
+**Annotations:** `destructiveHint=true`.
+
+**Response shape:** `Deleted 3 item(s) (personal space); they're in the recycle bin of the share.` (or `deleted permanently: that share has no recycle bin`, or `in the share's recycle bin if it has one` when the setting can't be read; see Deletes). Not-found IDs and DSM-rejected items follow per line; a long delete hands off like `copy_photos`.
+
 **Design notes:** IDs are checked with `get` first; unknown ones are reported, not sent (the synchronous delete reports success for them; the task's behavior with an unknown ID is checked at the vdsm gate). The server instructions carry the same confirm-first guidance as `delete_files`.
 
 ---
 
 ### 18. `delete_photo_folders`
 
-**Permission tier:** WRITE (destructive)
+**Permission tier:** WRITE
 
 **DSM API:** `BackgroundTask.File delete` v1 (`item_id: []`, `folder_id: [..]`); `BackgroundTask.Info get_status` v1
 
@@ -717,13 +884,17 @@ Originals or thumbnails to a local folder.
 | `folders` | `list[str]` | **Yes** | — | Folder IDs or paths. The space root is refused locally. |
 | `space` | `str` | No | `"personal"` | |
 
+**Annotations:** `destructiveHint=true`.
+
+**Response shape:** as `delete_photos`, naming the folders and the item count they held (`Deleted /Trips/2023 (128 items) …`).
+
 **Design notes:** verified (with `Browse.Folder delete`): deleting a folder removed its items and subfolders, and on the real NAS it landed in `/home/#recycle/Photos/<name>`. Failed items come from `get_error_detail`.
 
 ---
 
 ### 19. `delete_photo_albums`
 
-**Permission tier:** WRITE (destructive)
+**Permission tier:** WRITE
 
 **DSM API:** `Browse.Album delete` v1 (`id: [..]`)
 
@@ -737,6 +908,10 @@ Originals or thumbnails to a local folder.
 |------|------|----------|---------|-------------|
 | `albums` | `list[str]` | **Yes** | — | Album IDs or unique names. |
 
+**Annotations:** `destructiveHint=true`.
+
+**Response shape:** `Deleted 2 album(s): 9 "Trip 2024", 12 "Best of"; their photos stay where they are.` Albums that didn't exist (checked first) are listed.
+
 **Design notes:** destructive because an album's selection and share link can't be recovered, though no files are deleted.
 
 ---
@@ -749,8 +924,8 @@ Maintainer, 2026-10-17: whatever is best for each call, not one forced rule. See
 ### 2. Tags by name, never by cached ID ✓
 Forced by 1.9.1 re-numbering tags on re-index. See Edits rewrite the original files.
 
-### 3. Validate IDs before writes ✓
-DSM reports success for unknown IDs on six write methods.
+### 3. Validate IDs before writes, read edits back ✓
+DSM reports success for unknown IDs on six write methods, and for `Item.set`/`Item.delete` by a Shared Space user without folder permission while doing nothing.
 
 ### 4. Tool set versus #258 ✓ (this spec)
 - `edit_tag` dropped (maintainer, 2026-10-17: no extra tool). Photos has no tag rename or delete method, but a tag with no items disappears, so both are `tag_photos` over the tag's items, as its description says. `delete_photo_collections` became `delete_photo_albums`.
@@ -770,14 +945,14 @@ Maintainer, 2026-10-17 (the first group), with the 1.9.1-only additions found af
 - face-level People edits (`separate`, `delete_face`, `list_face`)
 - photo requests' guest uploads
 - timeline and streaming (`Browse.Timeline`, `Browse.Unit`, `Streaming`)
-- Photos administration (`Setting.*`, `Index` reindex)
+- Photos administration: changing `Setting.*`, `Index` reindex. *Reading* `Setting.Admin get` (recycle-bin flags) and `Setting.TeamSpace get` (`enable_person`) is in scope; both work for a non-admin (verified)
 - added from the 1.9.1 diff: similar-photo stacks (`Browse.Similar*`), concept edits (`set_visibility`, `hide_item`, `set_cover`), manual face tagging (`Person add_face`, `Upload.Face`), `RegeneratePreview`, album and folder zip downloads
 
 ---
 
 ## Remaining Open Items
 
-1. **Checked at the implementation PR's vdsm gate:** keyword search over descriptions and tags; `rotate=right`; same-name folder in one parent; cross-space copy and move; `BackgroundTask.File delete` with an unknown ID; re-sharing after `stop`; the recycle-bin flags on 7.2.2; People and concepts on vdsm (clusters may not form without a GPU; then they're fixture- and real-NAS-tested only).
+1. **From the web client only, checked at the implementation PR's vdsm gate:** keyword search over descriptions and tags; `Item.list` by `geocoding_id` and `Item.count` by `geocoding_id`; `rotate=right`; a same-name folder in one parent; cross-space copy and move (`extra_info`); `BackgroundTask.File delete` with an unknown ID; re-sharing after `stop`; the recycle-bin flags turning off when a share's recycle bin is off; whether a Shared Space favorite is per user; error 901 (People disabled); People and concepts on vdsm (clusters may not form without a GPU; then they're fixture- and real-NAS-tested only); a Shared Space user **with** folder view rights trying to edit or delete (needs `FolderPermission`, out of scope; the entry-only case is verified).
 2. **A 119 right after login** was seen once on 7.2.2 (the first call of a fresh session; the retry was clean). It looks like #176's flake; the client's normal re-auth covers it.
 3. **Out of scope:** see Resolved Design Decision 6.
 4. **Payload:** measured in the implementation PR, with `PAYLOAD_BUDGET_CHARS` raised and the growth stated.
