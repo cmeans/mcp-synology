@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- **Synology Photos module spec** (#262, for #258) — `docs/specs/photos-module-spec.md` designs the planned `photos` module before any code: 20 tools (4 READ + 16 WRITE) covering browsing and search, albums and smart albums, share links, folders, tags, people, edits, uploads and downloads, copy/move/delete as background tasks with handles, and photo requests, in both the personal space and Shared Space. It was written from live request and reply captures on DSM 7.1 (Photos 1.3.4) and 7.2.2 (Photos 1.9.1) on vdsm and on a real NAS, and records what the captures found: edits rewrite the original files, tag IDs can change on 1.9.1, six write methods report success for IDs that don't exist, favorites and concepts exist only on 1.9.1 (where they need API v7), and the errors that mean Photos isn't set up for the account (160, 602, 801). The captures are committed as test fixtures under `tests/modules/photos/fixtures/` (People from the real NAS anonymized). `CLAUDE.md` records the maintainer's decision that GET is no longer a blanket rule: a new module chooses its transport per call, and Photos uses form POST for its JSON calls
+
 ## 0.9.0 (2026-10-17)
 
 **Upgrading from 0.8.x:** long File Station operations now hand off instead of stopping, and Download Station's torrent files are confined to the allowed local folders. Four things to know:

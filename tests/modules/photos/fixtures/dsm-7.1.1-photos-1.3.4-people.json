@@ -1,0 +1,983 @@
+{
+ "_provenance": "Live capture, real NAS (DS1618+, DSM 7.1.1, Synology Photos 1.3.4), non-admin user, personal space with real face clusters, 2026-10-17, for #258. Anonymized: person names and filenames are replaced; IDs, counts and shapes are as captured. Only reversible writes were made (rename and restore, hide and unhide).",
+ "person-count": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Person",
+   "method": "count",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "show_more": "true",
+    "show_hidden": "true"
+   }
+  },
+  "response": {
+   "data": {
+    "count": 150
+   },
+   "success": true
+  }
+ },
+ "person-list": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Person",
+   "method": "list",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "offset": "0",
+    "limit": "10",
+    "additional": "[\"thumbnail\"]",
+    "show_more": "true",
+    "show_hidden": "true"
+   }
+  },
+  "response": {
+   "data": {
+    "list": [
+     {
+      "additional": {
+       "thumbnail": {
+        "cache_key": "26_"
+       }
+      },
+      "cover": 3,
+      "id": 12,
+      "item_count": 70,
+      "name": "Person 1",
+      "show": true
+     },
+     {
+      "additional": {
+       "thumbnail": {
+        "cache_key": "26_"
+       }
+      },
+      "cover": 2,
+      "id": 11,
+      "item_count": 45,
+      "name": "Person 2",
+      "show": true
+     },
+     {
+      "additional": {
+       "thumbnail": {
+        "cache_key": "24_1792180202"
+       }
+      },
+      "cover": 11,
+      "id": 19,
+      "item_count": 33,
+      "name": "Person 3",
+      "show": true
+     },
+     {
+      "additional": {
+       "thumbnail": {
+        "cache_key": "1721_1792201920"
+       }
+      },
+      "cover": 346,
+      "id": 308,
+      "item_count": 30,
+      "name": "Person 4",
+      "show": true
+     },
+     {
+      "additional": {
+       "thumbnail": {
+        "cache_key": "1736_1792201949"
+       }
+      },
+      "cover": 1281,
+      "id": 317,
+      "item_count": 28,
+      "name": "Person 5",
+      "show": true
+     }
+    ]
+   },
+   "success": true
+  }
+ },
+ "person-list-default": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Person",
+   "method": "list",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "offset": "0",
+    "limit": "10",
+    "additional": "[\"thumbnail\"]"
+   }
+  },
+  "response": {
+   "data": {
+    "list": [
+     {
+      "additional": {
+       "thumbnail": {
+        "cache_key": "26_"
+       }
+      },
+      "cover": 3,
+      "id": 12,
+      "item_count": 70,
+      "name": "Person 1",
+      "show": true
+     },
+     {
+      "additional": {
+       "thumbnail": {
+        "cache_key": "26_"
+       }
+      },
+      "cover": 2,
+      "id": 11,
+      "item_count": 45,
+      "name": "Person 2",
+      "show": true
+     },
+     {
+      "additional": {
+       "thumbnail": {
+        "cache_key": "24_1792180202"
+       }
+      },
+      "cover": 11,
+      "id": 19,
+      "item_count": 33,
+      "name": "Person 3",
+      "show": true
+     },
+     {
+      "additional": {
+       "thumbnail": {
+        "cache_key": "1721_1792201920"
+       }
+      },
+      "cover": 346,
+      "id": 308,
+      "item_count": 30,
+      "name": "Person 4",
+      "show": true
+     },
+     {
+      "additional": {
+       "thumbnail": {
+        "cache_key": "1736_1792201949"
+       }
+      },
+      "cover": 1281,
+      "id": 317,
+      "item_count": 28,
+      "name": "Person 5",
+      "show": true
+     }
+    ]
+   },
+   "success": true
+  }
+ },
+ "person-get": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Person",
+   "method": "get",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[12]",
+    "additional": "[\"thumbnail\"]"
+   }
+  },
+  "response": {
+   "data": {
+    "list": [
+     {
+      "additional": {
+       "thumbnail": {
+        "cache_key": "26_1792180199"
+       }
+      },
+      "cover": 3,
+      "id": 12,
+      "item_count": 70,
+      "name": "Person 1",
+      "show": true
+     }
+    ]
+   },
+   "success": true
+  }
+ },
+ "item-list-by-person": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "list",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "person_id": "12",
+    "offset": "0",
+    "limit": "3",
+    "additional": "[\"person\", \"thumbnail\"]"
+   }
+  },
+  "response": {
+   "success": true,
+   "data": {
+    "list": [
+     {
+      "id": 2121,
+      "filename": "photo-2121.jpg",
+      "filesize": 1344220,
+      "time": 1792183869,
+      "indexed_time": 1792183869917,
+      "owner_user_id": 2,
+      "folder_id": 109,
+      "type": "photo",
+      "additional": {
+       "person": [
+        {
+         "id": 12,
+         "name": "Person 1",
+         "item_count": 70,
+         "show": true,
+         "additional": {
+          "thumbnail": {
+           "cache_key": "26_1792180199"
+          }
+         }
+        },
+        {
+         "id": 11,
+         "name": "Person 2",
+         "item_count": 45,
+         "show": true,
+         "additional": {
+          "thumbnail": {
+           "cache_key": "26_"
+          }
+         }
+        },
+        {
+         "id": 207,
+         "name": "Person 6",
+         "item_count": 25,
+         "show": true,
+         "additional": {
+          "thumbnail": {
+           "cache_key": "2122_1792202607"
+          }
+         }
+        },
+        {
+         "id": 818,
+         "name": "",
+         "item_count": 3,
+         "show": true,
+         "additional": {
+          "thumbnail": {
+           "cache_key": "1907_1792202217"
+          }
+         }
+        },
+        {
+         "id": 985,
+         "name": "",
+         "item_count": 2,
+         "show": true,
+         "additional": {
+          "thumbnail": {
+           "cache_key": "2186_1792202714"
+          }
+         }
+        },
+        {
+         "id": 1003,
+         "name": "",
+         "item_count": 1,
+         "show": true,
+         "additional": {
+          "thumbnail": {
+           "cache_key": "2121_1792202606"
+          }
+         }
+        },
+        {
+         "id": 1004,
+         "name": "",
+         "item_count": 1,
+         "show": true,
+         "additional": {
+          "thumbnail": {
+           "cache_key": "2121_"
+          }
+         }
+        }
+       ],
+       "thumbnail": {
+        "m": "ready",
+        "xl": "ready",
+        "preview": "broken",
+        "sm": "ready",
+        "cache_key": "2121_1792202606",
+        "unit_id": 2121
+       }
+      }
+     },
+     {
+      "id": 2106,
+      "filename": "photo-2106.jpg",
+      "filesize": 1646100,
+      "time": 1792183853,
+      "indexed_time": 1792183853422,
+      "owner_user_id": 2,
+      "folder_id": 109,
+      "type": "photo",
+      "additional": {
+       "person": [
+        {
+         "id": 12,
+         "name": "Person 1",
+         "item_count": 70,
+         "show": true,
+         "additional": {
+          "thumbnail": {
+           "cache_key": "26_1792180199"
+          }
+         }
+        },
+        {
+         "id": 11,
+         "name": "Person 2",
+         "item_count": 45,
+         "show": true,
+         "additional": {
+          "thumbnail": {
+           "cache_key": "26_"
+          }
+         }
+        },
+        {
+         "id": 207,
+         "name": "Person 6",
+         "item_count": 25,
+         "show": true,
+         "additional": {
+          "thumbnail": {
+           "cache_key": "2122_1792202607"
+          }
+         }
+        },
+        {
+         "id": 216,
+         "name": "Person 11",
+         "item_count": 15,
+         "show": true,
+         "additional": {
+          "thumbnail": {
+           "cache_key": "1757_1792201982"
+          }
+         }
+        },
+        {
+         "id": 211,
+         "name": "",
+         "item_count": 6,
+         "show": true,
+         "additional": {
+          "thumbnail": {
+           "cache_key": "2007_1792202392"
+          }
+         }
+        },
+        {
+         "id": 218,
+         "name": "",
+         "item_count": 3,
+         "show": true,
+         "additional": {
+          "thumbnail": {
+           "cache_key": "2007_"
+          }
+         }
+        },
+        {
+         "id": 217,
+         "name": "",
+         "item_count": 2,
+         "show": true,
+         "additional": {
+          "thumbnail": {
+           "cache_key": "2106_1792202577"
+          }
+         }
+        },
+        {
+         "id": 219,
+         "name": "",
+         "item_count": 1,
+         "show": true,
+         "additional": {
+          "thumbnail": {
+           "cache_key": "2106_"
+          }
+         }
+        }
+       ],
+       "thumbnail": {
+        "m": "ready",
+        "xl": "ready",
+        "preview": "broken",
+        "sm": "ready",
+        "cache_key": "2106_1792202577",
+        "unit_id": 2106
+       }
+      }
+     },
+     {
+      "id": 2004,
+      "filename": "photo-2004.jpg",
+      "filesize": 1771490,
+      "time": 1792183733,
+      "indexed_time": 1792183733794,
+      "owner_user_id": 2,
+      "folder_id": 109,
+      "type": "photo",
+      "additional": {
+       "person": [
+        {
+         "id": 12,
+         "name": "Person 1",
+         "item_count": 70,
+         "show": true,
+         "additional": {
+          "thumbnail": {
+           "cache_key": "26_1792180199"
+          }
+         }
+        },
+        {
+         "id": 11,
+         "name": "Person 2",
+         "item_count": 45,
+         "show": true,
+         "additional": {
+          "thumbnail": {
+           "cache_key": "26_"
+          }
+         }
+        },
+        {
+         "id": 19,
+         "name": "Person 3",
+         "item_count": 33,
+         "show": true,
+         "additional": {
+          "thumbnail": {
+           "cache_key": "24_1792180202"
+          }
+         }
+        },
+        {
+         "id": 308,
+         "name": "Person 4",
+         "item_count": 30,
+         "show": true,
+         "additional": {
+          "thumbnail": {
+           "cache_key": "1721_1792201920"
+          }
+         }
+        },
+        {
+         "id": 302,
+         "name": "Person 10",
+         "item_count": 16,
+         "show": true,
+         "additional": {
+          "thumbnail": {
+           "cache_key": "1982_1792202340"
+          }
+         }
+        },
+        {
+         "id": 16,
+         "name": "Person 12",
+         "item_count": 12,
+         "show": true,
+         "additional": {
+          "thumbnail": {
+           "cache_key": "1709_1792201895"
+          }
+         }
+        },
+        {
+         "id": 301,
+         "name": "Person 13",
+         "item_count": 12,
+         "show": true,
+         "additional": {
+          "thumbnail": {
+           "cache_key": "1841_1792202102"
+          }
+         }
+        },
+        {
+         "id": 300,
+         "name": "Person 14",
+         "item_count": 11,
+         "show": true,
+         "additional": {
+          "thumbnail": {
+           "cache_key": "2130_1792202624"
+          }
+         }
+        },
+        {
+         "id": 309,
+         "name": "Person 15",
+         "item_count": 5,
+         "show": true,
+         "additional": {
+          "thumbnail": {
+           "cache_key": "1667_1792201825"
+          }
+         }
+        },
+        {
+         "id": 20,
+         "name": "",
+         "item_count": 10,
+         "show": true,
+         "additional": {
+          "thumbnail": {
+           "cache_key": "25_1792180198"
+          }
+         }
+        },
+        {
+         "id": 303,
+         "name": "",
+         "item_count": 5,
+         "show": true,
+         "additional": {
+          "thumbnail": {
+           "cache_key": "1982_"
+          }
+         }
+        },
+        {
+         "id": 299,
+         "name": "",
+         "item_count": 3,
+         "show": true,
+         "additional": {
+          "thumbnail": {
+           "cache_key": "1937_1792202270"
+          }
+         }
+        },
+        {
+         "id": 304,
+         "name": "",
+         "item_count": 1,
+         "show": true,
+         "additional": {
+          "thumbnail": {
+           "cache_key": "2004_1792202385"
+          }
+         }
+        },
+        {
+         "id": 305,
+         "name": "",
+         "item_count": 1,
+         "show": true,
+         "additional": {
+          "thumbnail": {
+           "cache_key": "2004_"
+          }
+         }
+        },
+        {
+         "id": 306,
+         "name": "",
+         "item_count": 1,
+         "show": true,
+         "additional": {
+          "thumbnail": {
+           "cache_key": "2004_"
+          }
+         }
+        },
+        {
+         "id": 307,
+         "name": "",
+         "item_count": 1,
+         "show": true,
+         "additional": {
+          "thumbnail": {
+           "cache_key": "2004_"
+          }
+         }
+        },
+        {
+         "id": 310,
+         "name": "",
+         "item_count": 1,
+         "show": true,
+         "additional": {
+          "thumbnail": {
+           "cache_key": "2004_"
+          }
+         }
+        },
+        {
+         "id": 311,
+         "name": "",
+         "item_count": 1,
+         "show": true,
+         "additional": {
+          "thumbnail": {
+           "cache_key": "2004_"
+          }
+         }
+        },
+        {
+         "id": 312,
+         "name": "",
+         "item_count": 1,
+         "show": true,
+         "additional": {
+          "thumbnail": {
+           "cache_key": "2004_"
+          }
+         }
+        },
+        {
+         "id": 313,
+         "name": "",
+         "item_count": 1,
+         "show": true,
+         "additional": {
+          "thumbnail": {
+           "cache_key": "2004_"
+          }
+         }
+        }
+       ],
+       "thumbnail": {
+        "m": "ready",
+        "xl": "ready",
+        "preview": "broken",
+        "sm": "ready",
+        "cache_key": "2004_1792202385",
+        "unit_id": 2004
+       }
+      }
+     }
+    ]
+   }
+  }
+ },
+ "item-count-by-person": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "count",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "person_id": "12"
+   }
+  },
+  "response": {
+   "data": {
+    "count": 70
+   },
+   "success": true
+  }
+ },
+ "person-list-face": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Person",
+   "method": "list_face",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "person_id": "12",
+    "item_id": "[2121]"
+   }
+  },
+  "response": {
+   "data": {
+    "list": [
+     {
+      "additional": {
+       "thumbnail": {
+        "cache_key": "2121_1792202606"
+       }
+      },
+      "id": 1810
+     }
+    ]
+   },
+   "success": true
+  }
+ },
+ "person-suggest": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Person",
+   "method": "suggest",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "name_prefix": "\"a\"",
+    "additional": "[\"thumbnail\"]"
+   }
+  },
+  "response": {
+   "data": {
+    "list": [
+     {
+      "additional": {
+       "thumbnail": {
+        "cache_key": "1458_1792201422"
+       }
+      },
+      "cover": 921,
+      "id": 13,
+      "item_count": 14,
+      "name": "Person 16",
+      "show": true
+     },
+     {
+      "additional": {
+       "thumbnail": {
+        "cache_key": "2184_1792202710"
+       }
+      },
+      "cover": 447,
+      "id": 821,
+      "item_count": 10,
+      "name": "Person 17",
+      "show": true
+     },
+     {
+      "additional": {
+       "thumbnail": {
+        "cache_key": "1883_1792202182"
+       }
+      },
+      "cover": 1460,
+      "id": 226,
+      "item_count": 6,
+      "name": "Person 18",
+      "show": true
+     },
+     {
+      "additional": {
+       "thumbnail": {
+        "cache_key": "1442_1792201392"
+       }
+      },
+      "cover": 1004,
+      "id": 999,
+      "item_count": 2,
+      "name": "Person 19",
+      "show": true
+     }
+    ]
+   },
+   "success": true
+  }
+ },
+ "person-migration-status": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Person",
+   "method": "get_migration_status",
+   "version": "1",
+   "http": "POST",
+   "params": {}
+  },
+  "response": {
+   "data": {
+    "completion": 0,
+    "status": "done",
+    "total": 0
+   },
+   "success": true
+  }
+ },
+ "person-set-name": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Person",
+   "method": "set",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "12",
+    "name": "\"mcp-spec-person\""
+   }
+  },
+  "response": {
+   "data": {
+    "cover": 3,
+    "id": 12,
+    "item_count": 70,
+    "name": "mcp-spec-person",
+    "show": true
+   },
+   "success": true
+  }
+ },
+ "person-set-name-restore": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Person",
+   "method": "set",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "12",
+    "name": "\"Person 1\""
+   }
+  },
+  "response": {
+   "data": {
+    "cover": 3,
+    "id": 12,
+    "item_count": 70,
+    "name": "Person 1",
+    "show": true
+   },
+   "success": true
+  }
+ },
+ "person-hide": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Person",
+   "method": "show",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[12]",
+    "show": "false"
+   }
+  },
+  "response": {
+   "success": true
+  }
+ },
+ "person-list-after-hide": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Person",
+   "method": "list",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "offset": "0",
+    "limit": "3",
+    "show_more": "true",
+    "show_hidden": "true"
+   }
+  },
+  "response": {
+   "data": {
+    "list": [
+     {
+      "cover": 3,
+      "id": 12,
+      "item_count": 70,
+      "name": "Person 1",
+      "show": false
+     },
+     {
+      "cover": 2,
+      "id": 11,
+      "item_count": 45,
+      "name": "Person 2",
+      "show": true
+     },
+     {
+      "cover": 11,
+      "id": 19,
+      "item_count": 33,
+      "name": "Person 3",
+      "show": true
+     }
+    ]
+   },
+   "success": true
+  }
+ },
+ "person-unhide": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Person",
+   "method": "show",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[12]",
+    "show": "true"
+   }
+  },
+  "response": {
+   "success": true
+  }
+ },
+ "person-get-after": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Person",
+   "method": "get",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[12]"
+   }
+  },
+  "response": {
+   "data": {
+    "list": [
+     {
+      "cover": 3,
+      "id": 12,
+      "item_count": 70,
+      "name": "Person 1",
+      "show": true
+     }
+    ]
+   },
+   "success": true
+  }
+ },
+ "person-merge-missing": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Person",
+   "method": "merge",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "target_id": "12",
+    "merged_id": "[999999]",
+    "name": "\"Person 1\""
+   }
+  },
+  "response": {
+   "data": {
+    "additional": {
+     "thumbnail": {
+      "cache_key": "26_1792180199"
+     }
+    },
+    "cover": 3,
+    "id": 12,
+    "item_count": 70,
+    "name": "Person 1",
+    "show": true
+   },
+   "success": true
+  }
+ }
+}
