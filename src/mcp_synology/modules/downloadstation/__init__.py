@@ -10,8 +10,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from mcp.types import ToolAnnotations
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
+from mcp_synology.core.local_paths import allowed_local_roots, check_local_path_entries
 from mcp_synology.modules import (
     ApiRequirement,
     ModuleInfo,
@@ -34,12 +35,16 @@ _ANNO_DESTRUCTIVE_IDEMPOTENT = ToolAnnotations(
 
 
 class DownloadStationSettings(BaseModel):
-    """Download Station module settings.
+    """Download Station module settings."""
 
-    Phase 1 has no settings; the schema is declared so server.py module-loading
-    machinery can pass an empty settings dict cleanly. Fields land in the task
-    that needs them.
-    """
+    # Local folders create_download may read torrent files from, added to the top-level
+    # allowed_local_paths (#257). Unset with no top-level list: the Downloads folder.
+    allowed_local_paths: list[str] | None = Field(default=None, min_length=1)
+
+    @field_validator("allowed_local_paths")
+    @classmethod
+    def _absolute_local_paths(cls, value: list[str] | None) -> list[str] | None:
+        return check_local_path_entries("allowed_local_paths", value)
 
 
 MODULE_INFO = ModuleInfo(
@@ -224,6 +229,13 @@ def register(ctx: RegisterContext) -> None:
         list_downloads,
     )
 
+    settings = DownloadStationSettings(**ctx.settings_dict)
+    # Folders create_download may read torrent files from (#257).
+    local_roots = allowed_local_roots(
+        settings.allowed_local_paths,
+        shared_paths=ctx.allowed_local_paths,
+        module="downloadstation",
+    )
     server = ctx.server
     manager = ctx.manager
 
@@ -324,6 +336,7 @@ def register(ctx: RegisterContext) -> None:
                 destination=destination,
                 username=username,
                 password=password,
+                local_roots=local_roots,
             )
 
     if "delete_download" in ctx.allowed_tools:

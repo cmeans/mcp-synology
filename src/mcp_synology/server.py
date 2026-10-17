@@ -490,29 +490,48 @@ def _withheld_tools_notice(config: AppConfig, plan: _ModulePlan) -> str:
 
 
 def _local_paths_notice(config: AppConfig, plan: _ModulePlan) -> str:
-    """Name the local folders upload_file/download_file may use (allowed_local_paths)."""
+    """Name the local folders each module's tools may use (allowed_local_paths, #257)."""
     from mcp_synology.core.local_paths import allowed_local_roots
+    from mcp_synology.modules.downloadstation import DownloadStationSettings
     from mcp_synology.modules.filestation import FileStationSettings
 
+    def folders(roots: list[Path]) -> str:
+        return ", ".join(str(r) for r in roots)
+
+    lines: list[str] = []
     for mod_name, _module, mod_config, allowed in plan:
-        if mod_name != "filestation" or not {"upload_file", "download_file"} & set(allowed):
-            continue
-        settings = FileStationSettings(**mod_config.settings)
-        default_dir = settings.default_download_dir
-        roots = allowed_local_roots(
-            settings.allowed_local_paths,
-            str(Path(default_dir).expanduser()) if default_dir else None,
-            shared_paths=config.allowed_local_paths,
-            module="filestation",
-        )
-        return (
-            "\n\nLOCAL PATHS:\n"
-            "upload_file and download_file only use local paths inside these folders "
-            "(or below them): " + ", ".join(str(r) for r in roots) + ". Anything else is "
-            "refused; the user can add folders with allowed_local_paths in the filestation "
-            "settings."
-        )
-    return ""
+        if mod_name == "filestation" and {"upload_file", "download_file"} & set(allowed):
+            fs = FileStationSettings(**mod_config.settings)
+            default_dir = fs.default_download_dir
+            roots = allowed_local_roots(
+                fs.allowed_local_paths,
+                str(Path(default_dir).expanduser()) if default_dir else None,
+                shared_paths=config.allowed_local_paths,
+                module="filestation",
+            )
+            lines.append(
+                "upload_file and download_file only use local paths inside these folders "
+                f"(or below them): {folders(roots)}."
+            )
+        elif mod_name == "downloadstation" and "create_download" in allowed:
+            ds = DownloadStationSettings(**mod_config.settings)
+            roots = allowed_local_roots(
+                ds.allowed_local_paths,
+                shared_paths=config.allowed_local_paths,
+                module="downloadstation",
+            )
+            lines.append(
+                "create_download's torrent_file_path only reads .torrent and .nzb files "
+                f"inside these folders (or below them): {folders(roots)}."
+            )
+    if not lines:
+        return ""
+    return (
+        "\n\nLOCAL PATHS:\n"
+        + "\n".join(lines)
+        + "\nAnything else is refused; the user can add folders with allowed_local_paths, "
+        "at the top level of the config for every module or in a module's settings."
+    )
 
 
 def create_server(config: AppConfig) -> MCPServer:

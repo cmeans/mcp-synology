@@ -1244,8 +1244,9 @@ class TestInstructionComments:
 # (e.g. #129's parameter descriptions); the review then sees the growth. Set by #163 to the
 # compacted size + 2%. Raised by #245 (file_task and the "Long operations" instructions) to
 # the size scripts/measure_tools.py reports: 15,831 -> 17,327 (the last 141 tell the model
-# not to stop and restart a delete whose count hasn't moved).
-PAYLOAD_BUDGET_CHARS = 17_327
+# not to stop and restart a delete whose count hasn't moved). Raised by #257 to 17,507: the
+# LOCAL PATHS section names create_download's torrent folders and the top-level setting.
+PAYLOAD_BUDGET_CHARS = 17_507
 
 
 class TestPayloadBudget:
@@ -1284,6 +1285,25 @@ class TestLocalPathsNotice:
         section = (create_server(config).instructions or "").split("LOCAL PATHS", 1)[1]
         assert str((tmp_path / "shared").resolve()) in section
         assert "Downloads" not in section
+
+    def test_download_station_torrent_files_are_named(self, tmp_path: Path) -> None:
+        """#257: with both modules, the section names each module's folders."""
+        config = make_test_config(
+            allowed_local_paths=[str(tmp_path / "shared")],
+            modules={
+                "filestation": {"enabled": True, "permission": "write"},
+                "downloadstation": {
+                    "enabled": True,
+                    "permission": "write",
+                    "settings": {"allowed_local_paths": [str(tmp_path / "torrents")]},
+                },
+            },
+        )
+        section = (create_server(config).instructions or "").split("LOCAL PATHS", 1)[1]
+        assert "create_download" in section
+        assert "torrent_file_path" in section
+        assert str((tmp_path / "torrents").resolve()) in section
+        assert "top level" in section
 
     def test_read_only_connection_still_gets_it_for_download_file(self, tmp_path: Path) -> None:
         text = self._instructions({"allowed_local_paths": [str(tmp_path)]}, permission="read")
