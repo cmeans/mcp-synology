@@ -25,7 +25,16 @@ from mcp_synology.modules.filestation.helpers import (
     paths_isdir,
     unanswered_status_response,
 )
-from mcp_synology.modules.filestation.tasks import _stop_background_task, _task_note
+from mcp_synology.modules.filestation.tasks import (
+    Handle,
+    ProgressCallback,
+    TaskRecord,
+    TaskRecords,
+    _stop_background_task,
+    _task_note,
+    handoff_reply,
+    poll_task,
+)
 
 if TYPE_CHECKING:
     from mcp_synology.core.client import DsmClient
@@ -551,11 +560,15 @@ async def _delete_one_path(
     delete_version: int,
     timeout: float,
     done: list[str] | None = None,
-) -> None:
+    on_progress: ProgressCallback | None = None,
+    handoff_status: dict[str, Any] | None = None,
+) -> Handle | None:
     """Delete a single path via DSM async-task pattern.
 
     Raises ToolError (via error_response/synology_error_response) on failure;
-    returns None on success. Always stops the background task on exit.
+    returns None when the delete finished, or the task's Handle when it outlived
+    ``timeout`` and was handed off (the last status is copied into ``handoff_status``).
+    A task that errors out or is cancelled is stopped.
     """
     try:
         start_data = await client.request(
@@ -565,6 +578,7 @@ async def _delete_one_path(
             params={
                 "path": path,
                 "recursive": str(recursive).lower(),
+                "accurate_progress": "true",
             },
         )
     except SynologyError as e:
@@ -572,76 +586,34 @@ async def _delete_one_path(
 
     taskid = start_data.get("taskid", "")
 
-    # Wall-clock deadline: a slow status request counts too (#237).
-    deadline = time.monotonic() + timeout
-    interval = 0.5
-    status: dict[str, Any] = {}
-    poll_error: SynologyError | None = None
-    unanswered: httpx.TransportError | None = None
-    timed_out = False
-    stopped = False
+    result = await poll_task(
+        client,
+        api="SYNO.FileStation.Delete",
+        version=delete_version,
+        taskid=taskid,
+        wait=timeout,
+        label=f"Deleting {path}",
+        on_progress=on_progress,
+    )
+    status = result.status
 
-    try:
-        while time.monotonic() < deadline:
-            try:
-                status = await client.request(
-                    "SYNO.FileStation.Delete",
-                    "status",
-                    version=delete_version,
-                    params={"taskid": taskid},
-                )
-            except SynologyError as e:
-                poll_error = e
-                break
-            except httpx.TransportError as e:
-                unanswered = e
-                break
-
-            logger.debug("Delete status (%s): %s", path, status)
-
-            if status.get("finished", False):
-                break
-
-            await asyncio.sleep(interval)
-        else:
-            timed_out = True
-    finally:
-        # DSM releases a finished Delete task itself: `stop` then always answers 401
-        # (DSM 7.1 and 7.2.2), which logged a cleanup warning on every delete. Stop
-        # only a task that didn't finish (timeout, polling error, cancellation).
-        if not status.get("finished", False):
-            stopped = await _stop_background_task(
-                client,
-                "SYNO.FileStation.Delete",
-                taskid,
-                delete_version,
-                logger,
-            )
-
-    if poll_error:
-        synology_error_response("Delete files", poll_error)
-    if unanswered:
+    if result.outcome == "poll_error":
+        assert isinstance(result.error, SynologyError)
+        synology_error_response("Delete files", result.error)
+    if result.outcome == "unanswered":
+        assert isinstance(result.error, httpx.TransportError)
         unanswered_status_response(
             "Delete files",
             path,
-            unanswered,
-            task_note=_task_note(stopped),
+            result.error,
+            task_note=_task_note(result.stopped),
             already=_already_done_sentence("Delete", done),
         )
-    if timed_out:
-        error_response(
-            ErrorCode.TIMEOUT,
-            f"Delete files failed: timed out after {timeout}s on path: {path}. "
-            + _task_note(stopped)
-            + _already_done_sentence("Delete", done),
-            retryable=True,
-            param="timeout",
-            value=timeout,
-            suggestion=(
-                "List the path to see what's left before retrying; "
-                "delete_timeout in the File Station settings allows longer."
-            ),
-        )
+    if result.outcome == "handoff":
+        # Left running on the NAS, not stopped (#245): the caller gets a handle.
+        if handoff_status is not None:
+            handoff_status.update(status)
+        return Handle("delete", taskid)
 
     if "error" in status:
         err = status["error"]
@@ -698,6 +670,7 @@ async def _delete_one_path(
             value=path,
             suggestion=missing_paths_suggestion([(path, 408)]),
         )
+    return None
 
 
 async def delete_files(
@@ -707,6 +680,8 @@ async def delete_files(
     recursive: bool = True,
     recycle_bin_status: dict[str, bool] | None = None,
     timeout: float = 120.0,
+    records: TaskRecords | None = None,
+    on_progress: ProgressCallback | None = None,
 ) -> str:
     """Delete files or folders.
 
@@ -757,17 +732,49 @@ async def delete_files(
     delete_version = min(2, client.negotiate_version("SYNO.FileStation.Delete", max_version=2))
 
     deleted: list[str] = []
-    for p in normalized:
-        await _delete_one_path(
+    for i, p in enumerate(normalized):
+        handoff_status: dict[str, Any] = {}
+        handle = await _delete_one_path(
             client,
             p,
             recursive=recursive,
             delete_version=delete_version,
             timeout=timeout,
             done=deleted,
+            on_progress=on_progress,
+            handoff_status=handoff_status,
         )
+        if handle is not None:
+            recycle: dict[str, bool] = {}
+            parts = p.split("/")
+            share_name = parts[1] if len(parts) > 1 else ""
+            if recycle_bin_status is not None and not (len(parts) > 2 and parts[2] == "#recycle"):
+                recycle[share_name] = await ensure_recycle_status(
+                    client, share_name, recycle_bin_status
+                )
+            if records is not None:
+                records.add(
+                    TaskRecord(handle=handle, paths=[p], recursive=recursive, recycle=recycle)
+                )
+            return handoff_reply(
+                verb="Still deleting",
+                path=p,
+                handle=handle,
+                status=handoff_status,
+                done=deleted,
+                not_started=normalized[i + 1 :],
+            )
         deleted.append(p)
 
+    return await _delete_summary(client, normalized, recycle_bin_status)
+
+
+async def _delete_summary(
+    client: DsmClient,
+    normalized: list[str],
+    recycle_bin_status: dict[str, bool] | None,
+) -> str:
+    """The result text of a finished delete_files call."""
     # A path inside a share's bin (/<share>/#recycle, or the bin itself) is gone for
     # good whatever the share's setting: DSM keeps no second copy (#220).
     in_bin: dict[str, list[str]] = {}

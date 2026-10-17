@@ -244,3 +244,41 @@ async def poll_task(
             await stop()
         raise
     return PollResult(status, "handoff")
+
+
+_PAST = {
+    "deleting": "deleted",
+    "copying": "copied",
+    "moving": "moved",
+    "restoring": "restored",
+}
+
+
+def handoff_reply(
+    *,
+    verb: str,
+    path: str,
+    handle: Handle,
+    status: dict[str, Any],
+    done: list[str],
+    not_started: list[str],
+) -> str:
+    """The reply for a task handed off after the wait: the handle and what to do next.
+
+    ``verb`` is "Still deleting", "Still copying", "Still moving" or "Still restoring".
+    """
+    past = _PAST.get(verb.split()[-1].lower(), "done")
+    lines = [
+        f"{verb} on the NAS: {path} ({progress_text(status)}). This operation keeps running "
+        "after this reply, so nothing more needs to be done to finish it.",
+        f"Handle: `{handle}`",
+        "To check on it, call file_task with this handle. To stop it, call file_task with "
+        'action="stop" (it may then be partly done).',
+    ]
+    if done:
+        lines.append(f"Already {past}: {', '.join(done)}.")
+    if not_started:
+        lines.append(
+            f"Not started: {', '.join(not_started)}. Run them again once this one finishes."
+        )
+    return "\n".join(lines)

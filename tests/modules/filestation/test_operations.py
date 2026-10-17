@@ -19,6 +19,7 @@ from mcp_synology.modules.filestation.operations import (
     rename,
     restore_from_recycle_bin,
 )
+from mcp_synology.modules.filestation.tasks import Handle, TaskRecords
 from tests.conftest import BASE_URL
 
 if TYPE_CHECKING:
@@ -769,7 +770,7 @@ class TestBackgroundTaskErrors:
 
     @respx.mock
     async def test_delete_timeout(self, mock_client: DsmClient) -> None:
-        """Delete task that never finishes → timeout error."""
+        """Delete task that outlives the wait is handed off, not stopped (#245)."""
 
         def side_effect(request: httpx.Request) -> httpx.Response:
             params = dict(request.url.params)
@@ -784,20 +785,10 @@ class TestBackgroundTaskErrors:
         methods: list[str] = []
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
 
-        with pytest.raises(ToolError) as exc_info:
-            await delete_files(
-                mock_client,
-                paths=["/video/huge_dir"],
-                timeout=1.0,
-            )
-        # An unfinished task must still be stopped (#162 skips stop only when finished).
-        assert "stop" in methods
-        body = json.loads(str(exc_info.value))
-        assert body["error"]["code"] == "timeout"
-        assert body["error"]["retryable"] is True
-        assert "Delete files" in body["error"]["message"]
-        assert body["error"]["param"] == "timeout"
-        assert body["error"]["value"] == 1.0
+        result = await delete_files(mock_client, paths=["/video/huge_dir"], timeout=1.0)
+        assert "stop" not in methods
+        assert "Still deleting on the NAS: /video/huge_dir" in result
+        assert "Handle: `delete:del-1`" in result
 
     @respx.mock
     async def test_delete_poll_error_mid_operation(self, mock_client: DsmClient) -> None:
@@ -1705,9 +1696,9 @@ class TestUnansweredStatus:
 
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
         with pytest.raises(ToolError) as exc_info:
-            await delete_files(mock_client, paths=["/video/x"], timeout=30.0)
+            await copy_files(mock_client, paths=["/video/x"], dest_folder="/x", timeout=30.0)
         assert json.loads(str(exc_info.value))["error"]["message"] == (
-            "Delete files failed: timed out after 30.0s on path: /video/x. mcp-synology "
+            "Copy files failed: timed out after 30.0s on path: /video/x. mcp-synology "
             "couldn't confirm the task stopped; it may still be running on the NAS, and "
             "may be partly done."
         )
@@ -1736,16 +1727,11 @@ class TestUnansweredStatus:
             return httpx.Response(200, json={"success": True, "data": {}})
 
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
-        with pytest.raises(ToolError) as exc_info:
-            await delete_files(mock_client, paths=["/video/slow"], timeout=30.0)
+        result = await delete_files(mock_client, paths=["/video/slow"], timeout=30.0)
         assert methods.count("status") == 3
-        err = json.loads(str(exc_info.value))["error"]
-        assert err["code"] == "timeout"
-        assert err["message"] == (
-            "Delete files failed: timed out after 30.0s on path: /video/slow. "
-            "The task was stopped and may be partly done."
-        )
-        assert "delete_timeout" in err["suggestion"]
+        # Handed off at the deadline, not stopped (#245).
+        assert "stop" not in methods
+        assert "Handle: `delete:slow`" in result
 
     @respx.mock
     async def test_timed_out_copy_names_paths_already_done(
@@ -1782,3 +1768,131 @@ class TestUnansweredStatus:
             "Copy files failed: timed out after 30.0s on path: /video/b. The task was "
             "stopped and may be partly done. Already copied before this failure: /video/a"
         )
+
+
+class TestDeleteHandoff:
+    """#245: a delete that outlives the wait is handed off with a handle."""
+
+    @staticmethod
+    def _dsm(
+        calls: list[dict[str, str]],
+        *,
+        finish: set[str] | None = None,
+        status: dict[str, object] | None = None,
+    ) -> Callable[[httpx.Request], httpx.Response]:
+        finish = finish or set()
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            method = params.get("method", "")
+            calls.append(params)
+            if method == "start":
+                name = params["path"].rsplit("/", 1)[-1]
+                return httpx.Response(
+                    200, json={"success": True, "data": {"taskid": f"FileStation_{name.upper()}"}}
+                )
+            if method == "status":
+                tid = params["taskid"].strip('"')
+                if tid.removeprefix("FileStation_").lower() in finish:
+                    return httpx.Response(200, json={"success": True, "data": {"finished": True}})
+                data = status or {
+                    "finished": False,
+                    "processed_num": 8,
+                    "total": 342,
+                    "progress": 0.02,
+                }
+                return httpx.Response(200, json={"success": True, "data": data})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        return side_effect
+
+    @respx.mock
+    async def test_delete_small_unchanged(self, mock_client: DsmClient) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_async_task_side_effect())
+        result = await delete_files(
+            mock_client, paths=["/video/Downloads/old.mkv"], recycle_bin_status={"video": True}
+        )
+        assert result == (
+            "[+] Deleted 1 item(s):\n  /video/Downloads/old.mkv\n\n"
+            "Recycle bin is enabled on /video \u2014 files can be recovered with "
+            "list_recycle_bin and restore_from_recycle_bin."
+        )
+
+    @respx.mock
+    async def test_delete_hands_off(self, mock_client: DsmClient) -> None:
+        calls: list[dict[str, str]] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm(calls))
+        records = TaskRecords()
+        result = await delete_files(
+            mock_client,
+            paths=["/share/big"],
+            timeout=1,
+            recycle_bin_status={"share": True},
+            records=records,
+        )
+        assert "Still deleting on the NAS: /share/big" in result
+        assert "Handle: `delete:FileStation_BIG`" in result
+        assert "8 of 342 items, 2%" in result
+        assert not [c for c in calls if c.get("method") == "stop"]
+        record = records.get(Handle("delete", "FileStation_BIG"))
+        assert record is not None
+        assert record.paths == ["/share/big"]
+        assert record.recycle == {"share": True}
+
+    @respx.mock
+    async def test_delete_multi_path_handoff_not_started(self, mock_client: DsmClient) -> None:
+        calls: list[dict[str, str]] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm(calls, finish={"a"}))
+        result = await delete_files(
+            mock_client,
+            paths=["/s/a", "/s/b", "/s/c"],
+            timeout=1,
+            recycle_bin_status={"s": True},
+        )
+        assert "Still deleting on the NAS: /s/b" in result
+        assert "Not started: /s/c" in result
+        assert "/s/a" in result.split("Not started")[0].split("Handle")[1]
+        started = [c["path"] for c in calls if c.get("method") == "start"]
+        assert started == ["/s/a", "/s/b"]
+
+    @respx.mock
+    async def test_delete_cancel_stops(self, mock_client: DsmClient) -> None:
+        import asyncio
+
+        calls: list[dict[str, str]] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm(calls))
+        task = asyncio.create_task(
+            delete_files(mock_client, paths=["/s/a"], timeout=30, recycle_bin_status={"s": True})
+        )
+        await asyncio.sleep(0.3)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert len([c for c in calls if c.get("method") == "stop"]) == 1
+
+    @respx.mock
+    async def test_delete_start_sends_accurate_progress(self, mock_client: DsmClient) -> None:
+        calls: list[dict[str, str]] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm(calls, finish={"a"}))
+        await delete_files(mock_client, paths=["/s/a"], recycle_bin_status={"s": True})
+        start = next(c for c in calls if c.get("method") == "start")
+        assert start["accurate_progress"] == "true"
+
+    @respx.mock
+    async def test_delete_progress_callback_called(self, mock_client: DsmClient) -> None:
+        calls: list[dict[str, str]] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm(calls))
+        seen: list[tuple[float, float | None, str]] = []
+
+        async def on_progress(progress: float, total: float | None, message: str) -> None:
+            seen.append((progress, total, message))
+
+        await delete_files(
+            mock_client,
+            paths=["/s/a"],
+            timeout=1,
+            recycle_bin_status={"s": True},
+            on_progress=on_progress,
+        )
+        assert seen
+        assert seen[0][:2] == (8, 342)
