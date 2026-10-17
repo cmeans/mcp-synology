@@ -134,9 +134,9 @@ modules:
       # Default: emoji
       file_type_indicator: emoji
 
-      # Default timeout for async operations (search, move, copy, delete)
-      # in seconds. Individual operations can take longer than this for
-      # very large file sets.
+      # Time limit for search_files and get_dir_size, in seconds.
+      # Delete, copy, move and restore don't use it: they wait delete_timeout /
+      # copy_move_timeout (default 30, capped at 600) and then hand off (#245).
       # Default: 120
       async_timeout: 120
 

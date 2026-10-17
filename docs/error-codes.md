@@ -197,6 +197,10 @@ Common causes:
   gives the same answer for a missing ID, another user's task, and the
   caller's own task that is finished or already paused. Check each task's
   status with `list_downloads`.
+- `file_task` was given something that isn't a task handle (param `handle`).
+  A handle is `delete:`, `copy:`, `move:` or `restore:` followed by DSM's task
+  ID, e.g. `delete:FileStation_179219158016597225`. It's checked before any
+  DSM call, so a malformed handle never reaches the NAS.
 
 Fix:
 
@@ -211,6 +215,10 @@ Fix:
   `upload_file`; for `download_file`, a local folder in
   `allowed_local_paths`), or set the matching default in the `filestation`
   module settings.
+- For `file_task`: pass the handle exactly as the delete, copy, move or
+  restore reply gave it (surrounding backticks or quotes are fine), or call
+  `file_task` without a handle to list the running operations and their
+  handles.
 
 ## filesystem_error
 
@@ -264,11 +272,32 @@ Fix:
 **A long-running DSM background task did not complete within the timeout window,
 an HTTP request to DSM timed out, or the NAS couldn't be reached in time.**
 
-Affects search, copy, move, delete, and `get_dir_size` — these all run as
-asynchronous DSM tasks that mcp-synology polls. `create_download` can also time
-out on the HTTP request itself; DSM may still have created the task, so check
-`list_downloads` before retrying (mcp-synology never retries it automatically,
-to avoid duplicate downloads).
+Affects search and `get_dir_size`, which run as asynchronous DSM tasks that
+mcp-synology polls and stops at their time limit, and a status or stop request
+for a copy, move, delete, restore or `file_task` that DSM doesn't answer.
+`create_download` can also time out on the HTTP request itself; DSM may still
+have created the task, so check `list_downloads` before retrying (mcp-synology
+never retries it automatically, to avoid duplicate downloads).
+
+### Not an error: a handed-off operation
+
+A delete, copy, move or restore that's still running when the call's wait
+runs out (`delete_timeout` or `copy_move_timeout`, default 30 s, capped at
+600 s) is **not** a timeout (#245). The NAS keeps working on it, and the tool
+returns a normal result: "Still deleting on the NAS: … This operation keeps
+running after this reply", with the progress and a handle such as
+`delete:FileStation_179219158016597225`. In a multi-path call, the paths after
+it are listed as "Not started". Follow up with `file_task`: `action="status"`
+shows progress or the final result, `action="stop"` stops it (it may then be
+partly done), and no handle lists the running operations. Only a cancelled
+call (the user, or a client's own timeout) stops the task.
+
+`file_task` answers a handle DSM no longer knows with a normal reply, not an
+error: the final result if this server remembers it, otherwise "No running
+task with this handle. It finished, was stopped, or was started by a
+different DSM user. List the path to see what's left." DSM forgets a finished
+task after its final status has been read once, and never shows one user's
+tasks to another.
 
 Common causes:
 
@@ -288,6 +317,11 @@ Common causes:
   confirmed the stop. Other tools name the DSM call, e.g. "DSM didn't answer
   SYNO.FileStation.List/list_share in time" (an `unavailable` error, "The
   connection to DSM failed during …", if the connection dropped).
+- `file_task` didn't get an answer to its status or stop request for a
+  handle. For the status read, the message says nothing was stopped; for the
+  stop, that it may or may not have taken effect. Stop requests wait up to
+  90 s, longer than other requests: DSM 7.1 sometimes answers a Delete `stop`
+  only after about 60 s, although the stop takes effect at once.
 
 Fix:
 
@@ -306,20 +340,24 @@ Otherwise:
    more specific keyword. (Before 0.6.0, mcp-synology sent search task IDs
    unquoted, so DSM lost most tasks and never cleaned them up, which looked
    like an exhausted search service; see #121.)
-3. For copy, move, and delete: split the operation into smaller batches.
-   mcp-synology asks DSM to stop a task it gives up on, so a timed-out copy,
-   move or delete may be partly done; and when the message says it "couldn't
-   confirm the task stopped", the task may still be running on the NAS. Either
-   way, list the path before retrying. The task's time
-   limit is `async_timeout` (default 120 s, or `copy_move_timeout`,
-   `delete_timeout`, `dir_size_timeout` and `search_timeout` per operation) and
-   counts the whole time, including slow status requests. For a stalling DSM,
-   a larger `connection.timeout` helps; for a one-off huge delete, DSM's own
-   File Station has no client timeout.
-4. To clear suspected orphaned tasks: stop and start the File Station package
+3. For copy, move, delete and restore: a long operation isn't an error, it's
+   handed off (see above). An error means DSM stopped answering status
+   requests during the wait: mcp-synology then asks DSM to stop the task, so
+   it may be partly done, and when the message says it "couldn't confirm the
+   task stopped", it may still be running on the NAS. Call `file_task` (no
+   handle) to see whether it's still running, and list the path before
+   retrying. For a stalling DSM, a larger `connection.timeout` helps. For
+   search and `get_dir_size`, the time limit is `async_timeout` (default
+   120 s, or `search_timeout` and `dir_size_timeout`), counting the whole
+   time, including slow status requests.
+4. For a `file_task` request DSM didn't answer: call `file_task` with the
+   handle again to see whether the task is still running, or list the path.
+5. To clear suspected orphaned tasks: stop and start the File Station package
    from **Package Center**. mcp-synology cleans up its own tasks via
-   `try/finally`, but tasks from earlier crashed runs may persist.
-5. `timeout` is marked `retryable=true`, but only retry after addressing the
+   `try/finally`, but tasks from earlier crashed runs may persist. A handed-off
+   delete, copy, move or restore is left running on purpose; stop it with
+   `file_task` instead.
+6. `timeout` is marked `retryable=true`, but only retry after addressing the
    root cause. Blind retry on an overloaded NAS makes the situation worse.
    The exception is a `create_download` timeout, which is marked
    `retryable=false` because DSM may already have created the task.
