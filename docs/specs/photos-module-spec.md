@@ -1,6 +1,6 @@
 # Photos Module — Tool Specifications
 
-> **Version:** 0.1 (draft for review) | **Updated:** 2026-10-17. Written before the code (#258), from live request and reply captures. Tool count: 4 READ + 16 WRITE = 20.
+> **Version:** 0.1 (draft for review) | **Updated:** 2026-10-17. Written before the code (#258), from live request and reply captures. Tool count: 4 READ + 15 WRITE = 19.
 > **Parent doc:** `docs/specs/architecture.md`
 >
 > **Verified on:** DSM 7.1 with Synology Photos 1.3.4 and DSM 7.2.2 with Photos 1.9.1 (vdsm; non-admin and admin personas), and a real NAS (DS1618+, DSM 7.1.1, Photos 1.3.4; non-admin, personal space with 944 items and 150 face clusters). Every request shape here was sent and its reply recorded. Request shapes were first taken from the Photos web client (`react.js` in 1.3.4, `react_bundle.js` in 1.9.1), since Synology publishes no Photos API guide.
@@ -37,7 +37,7 @@ MODULE_INFO = ModuleInfo(
         ApiRequirement(api_name="SYNO.Foto.UserInfo", min_version=1, optional=True),
         # Shared Space mirrors (SYNO.FotoTeam.*) are resolved per call, not required.
     ],
-    tools=[...],  # 4 READ + 16 WRITE, below
+    tools=[...],  # 4 READ + 15 WRITE, below
     settings_schema=PhotosSettings,
 )
 
@@ -125,7 +125,7 @@ DSM answers **success** for these when an ID doesn't exist (verified on both ver
 
 Checked against both web clients and by calling the methods (103 = no such method):
 
-- **No tag rename or delete method** (`GeneralTag.set`/`delete` answer 103 on both versions; 1.9.1 adds only `suggest`). But **a tag exists only while some item has it** (verified on both versions): `remove_tag` from its last items made it vanish from `list` and `get` at once, with no `item_count: 0` leftover, and a tag that was created but never attached never appears. So `edit_tag` builds rename and delete from `add_tag`/`remove_tag` over every item carrying the tag.
+- **No tag rename or delete method** (`GeneralTag.set`/`delete` answer 103 on both versions; 1.9.1 adds only `suggest`). But **a tag exists only while some item has it** (verified on both versions): `remove_tag` from its last items made it vanish from `list` and `get` at once, with no `item_count: 0` leftover, and a tag that was created but never attached never appears. So renaming or deleting a tag is `tag_photos` over every item that has it (found with `list_photos(tag=…)`).
 - **No location editing:** `Item.set` with `gps` answers 101.
 - **No "albums containing this item" lookup.**
 - **Favorites exist only on 1.9.1:** `Browse.Item set_favorite` v7 (`id: [..]`, `favorite: bool`), read with `additional: ["favorite"]`, listed with `favorite_only: true` or the `favorite: [true]` filter (all v7, see Versions). 1.3.4 has no way to set one (its heart button only changes the page; `set_favorite` answers 103), and its `Favorite list` returns items without a flag to set them by. On 1.9.1 `Favorite list` answers 103.
@@ -348,7 +348,7 @@ Originals or thumbnails to a local folder.
 
 ---
 
-## WRITE Tier Tools (16 tools)
+## WRITE Tier Tools (15 tools)
 
 ### 5. `upload_photos`
 
@@ -553,7 +553,8 @@ Originals or thumbnails to a local folder.
 **Tool description (LLM-facing):**
 > Add or remove tags on Synology Photos items. Tags are given by name; add creates missing tags.
 > Photos writes tags into the original files and re-indexes them, so file dates and sizes change.
-> A tag with no items left disappears; to rename or delete a tag everywhere use edit_tag. space:
+> A tag disappears once no item has it, so to delete a tag remove it from every item that has it
+> (list_photos tag=...); to rename, add the new name to those items, then remove the old one. space:
 > personal (default) or shared.
 
 **Parameters:**
@@ -740,35 +741,6 @@ Originals or thumbnails to a local folder.
 
 ---
 
-### 20. `edit_tag`
-
-**Permission tier:** WRITE (destructive: `delete` removes the tag from every item)
-
-**DSM API:** `Browse.GeneralTag list|create` v1; `Browse.Item list` v2 (`general_tag_id`, all pages) to find the tagged items; `Browse.Item add_tag|remove_tag` v1 in batches of 100
-
-**Tool description (LLM-facing):**
-> Rename or delete a Synology Photos tag everywhere it's used. Photos has no direct way to do this,
-> so the tag is changed on every item that has it, and Photos rewrites each of those original files
-> (twice for a rename): slow for tags on many items. Tell the user how many items the tag is on
-> (list_photo_collections type=tag) before running it. space: personal (default) or shared.
-
-**Parameters:**
-
-| Name | Type | Required | Default | Description |
-|------|------|----------|---------|-------------|
-| `action` | `str` | **Yes** | — | `rename` or `delete`. |
-| `tag` | `str` | **Yes** | — | Current tag name. |
-| `new_name` | `str` | No | — | `rename`. If a tag with that name exists, the two are merged. |
-| `space` | `str` | No | `"personal"` | |
-
-**Design notes:**
-- `delete`: list the items with `general_tag_id` (every page), then `remove_tag` in batches of 100. The tag vanishes once the last item loses it (verified on both versions).
-- `rename`: `GeneralTag.create` the new name (idempotent), `add_tag` it to the items, then `remove_tag` the old one. Tag IDs are re-resolved by name before each batch, since 1.9.1 can renumber a tag after a re-index.
-- Partial failure (an `error_list`, a timeout mid-way) leaves some items with the old tag, some with the new: the reply says how many of each, and running it again finishes the job, since every step is idempotent by name.
-- Long runs report MCP progress per batch, as File Station's long operations do (#251).
-
----
-
 ## Resolved Design Decisions
 
 ### 1. Transport per call ✓
@@ -781,13 +753,13 @@ Forced by 1.9.1 re-numbering tags on re-index. See Edits rewrite the original fi
 DSM reports success for unknown IDs on six write methods.
 
 ### 4. Tool set versus #258 ✓ (this spec)
-- `edit_tag` kept, built from `add_tag`/`remove_tag` (Photos has no tag rename or delete method, but a tag with no items disappears). `delete_photo_collections` became `delete_photo_albums`; deleting a tag is `edit_tag action=delete`.
+- `edit_tag` dropped (maintainer, 2026-10-17: no extra tool). Photos has no tag rename or delete method, but a tag with no items disappears, so both are `tag_photos` over the tag's items, as its description says. `delete_photo_collections` became `delete_photo_albums`.
 - `edit_photo` lost location (no API) and its copy/move half; copy and move are `copy_photos` / `move_photos` (destructive-annotated because of `overwrite`, like File Station's `copy_files` / `move_files`), taking items and folders together, as the API does.
 - `photo_folder` lost copy/move for the same reason.
 - `download_photo` became `download_photos` (several ids per call).
 - `photo_task` kept; handles `photos:<id>`, covering deletes too.
 - Additions from 1.9.1: `favorite` (`list_photos`, `get_photo`, `edit_photo`) and concepts (`list_photos`, `list_photo_collections`).
-- Count 20 (4 READ + 16 WRITE), two more than #258's estimate.
+- Count 19 (4 READ + 15 WRITE), one more than #258's estimate.
 
 ### 5. Titles ✓
 `Tool.title` on the tools whose name alone is ambiguous next to File Station: `photo_folder` ("Photos: Folder"), `copy_photos` ("Photos: Copy"), `move_photos` ("Photos: Move"), `delete_photos` ("Photos: Delete items"), `delete_photo_folders` ("Photos: Delete folders"), `upload_photos` ("Photos: Upload"), `download_photos` ("Photos: Download"). `ToolInfo` gains an optional `title`.

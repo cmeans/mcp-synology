@@ -28,7 +28,7 @@ Modules are domain-split: `listing.py`, `search.py`, `metadata.py`, `operations.
 - `docs/specs/filestation-module-spec.md` — all 15 File Station tools with parameters, response shapes, error codes
 - `docs/specs/system-module-spec.md` — the 2 System tools
 - `docs/specs/downloadstation-module-spec.md` — all 12 Download Station tools, the verified DSM behavior behind them (v1 vs DS2, non-manager semantics, paging and totals, secrets in URLs)
-- `docs/specs/photos-module-spec.md` — the planned Synology Photos module (20 tools, #258), written before the code from live captures on DSM 7.1 (Photos 1.3.4), 7.2.2 (Photos 1.9.1) and a real NAS: personal vs Shared Space, per-call transport choices, edits rewriting originals, writes that report success for unknown IDs, the per-version support matrix
+- `docs/specs/photos-module-spec.md` — the planned Synology Photos module (19 tools, #258), written before the code from live captures on DSM 7.1 (Photos 1.3.4), 7.2.2 (Photos 1.9.1) and a real NAS: personal vs Shared Space, per-call transport choices, edits rewriting originals, writes that report success for unknown IDs, the per-version support matrix
 - `docs/specs/config-schema-spec.md` — YAML config structure, validation rules, env var overrides, state file
 
 ## Build & Development Commands
