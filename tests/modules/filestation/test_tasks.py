@@ -61,7 +61,7 @@ def test_elapsed_text(seconds: float, text: str) -> None:
     assert _elapsed_text(seconds) == text
 
 
-NOW = 1792250000.0
+NOW = 1792250200.0
 
 
 @pytest.mark.parametrize(
@@ -69,8 +69,11 @@ NOW = 1792250000.0
     [
         ("FileStation_179224848373CDB12", 1792248483.0),  # real NAS, 2026-10-17
         ("FileStation_179219158016597225", 1792191580.0),
-        ("FileStation_1792250050", 1792250050.0),  # a clock a little ahead
-        ("FileStation_1792250100", None),  # future
+        ("FileStation_6AD3911EB4E9B2BB", 1792250142.0),  # vdsm 7.1: hex
+        ("FileStation_6ad3911e", 1792250142.0),
+        ("FileStation_17922484", None),  # 8 decimal digits read as hex: 1982
+        ("FileStation_1792250250", 1792250250.0),  # a clock a little ahead
+        ("FileStation_1792250500", None),  # future
         (f"FileStation_{int(NOW) - 31 * 86400}", None),  # over 30 days old
         ("FileStation_D1", None),
         ("FileStation_179224", None),
@@ -1021,7 +1024,8 @@ class TestFileTask:
     async def test_file_task_status_599_with_record_names_the_path(
         self, mock_client: DsmClient
     ) -> None:
-        """A finished Delete no status read caught: DSM has forgotten it, the record hasn't."""
+        """Finished or stopped with no status read to catch it: DSM has forgotten it, the record
+        hasn't."""
         from mcp_synology.modules.filestation.tasks import file_task
 
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_router({"status": _err(599)}))
@@ -1030,8 +1034,8 @@ class TestFileTask:
         records.add(TaskRecord(handle=h, paths=["/Backups/X"]))
         text = await file_task(mock_client, records=records, handle=str(h))
         assert text == (
-            "The delete of /Backups/X is no longer running on the NAS; it most likely finished, "
-            "and DSM no longer has its result. List the path to see what's left."
+            "The delete of /Backups/X is no longer running on the NAS: it finished or was "
+            "stopped, and DSM no longer has its result. List the path to see what's left."
         )
 
     @respx.mock

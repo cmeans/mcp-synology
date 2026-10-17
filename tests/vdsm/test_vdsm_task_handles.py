@@ -59,6 +59,7 @@ WAIT = 2  # seconds before a handoff; every tree here takes far longer
 FINISH_WITHIN = 300  # seconds a handed-off task gets to finish
 _HANDLE = re.compile(r"Handle: `((?:delete|copy|move|restore):FileStation_\w+)`")
 _NO_RUNNING = "No running task with this handle."
+_NOT_RUNNING = "is no longer running on the NAS: it finished or was stopped"
 _ALREADY_FINISHED = "That task had already finished or isn't running."
 _NOT_STOPPED = "That task had already finished, so nothing was stopped."
 
@@ -237,7 +238,7 @@ async def _gone(client: DsmClient, records: TaskRecords, handle: str) -> str:
     """Status until DSM no longer has the task (up to 90 s, for a late-answered stop)."""
     deadline = time.monotonic() + 90
     reply = await file_task(client, records=records, handle=handle)
-    while not reply.startswith(_NO_RUNNING):
+    while not (reply.startswith(_NO_RUNNING) or _NOT_RUNNING in reply):
         assert time.monotonic() < deadline, reply
         await asyncio.sleep(2)
         reply = await file_task(client, records=records, handle=handle)
@@ -317,7 +318,8 @@ async def test_delete_handoff_then_stop(admin_client: Any, admin_session: Any, n
 
             await _gone(other, records, handle)
             again = await file_task(other, records=records, handle=handle, action="stop")
-            assert again.startswith(_NO_RUNNING), again
+            # The record still names the path, so not the bare "no running task".
+            assert again.startswith(f"The delete of {path} {_NOT_RUNNING}"), again
 
 
 async def test_file_task_list_shows_running_delete(admin_client: Any, nas: Nas) -> None:

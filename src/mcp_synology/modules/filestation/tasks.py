@@ -241,24 +241,31 @@ def _no_total_text(status: dict[str, Any]) -> str:
     return "counting items"
 
 
-_TASKID_EPOCH = re.compile(r"FileStation_(\d{10})")
+# A task ID begins with its start time in epoch seconds: in decimal on the real NAS
+# (FileStation_1792248483...), in hex on vdsm 7.1 (FileStation_6AD3911E...).
+_TASKID_EPOCH = (
+    (re.compile(r"FileStation_(\d{10})"), 10),
+    (re.compile(r"FileStation_([0-9A-Fa-f]{8})"), 16),
+)
 _MAX_TASK_AGE = 30 * 86400.0
 
 
 def taskid_started(taskid: str, *, now: float | None = None) -> float | None:
-    """When a task started, from its ID: ``FileStation_1792248483...`` begins with the
-    start time in epoch seconds (DSM 7.1 and 7.2.2). None for any other shape, or a time
-    in the future or over 30 days old.
+    """When a task started, from the epoch seconds its ID begins with (decimal or hex).
 
-    Not ``crtime``: ``BackgroundTask.list`` reported a 1 TB delete's ``crtime`` about 9
-    minutes after its start (real NAS, 2026-10-17).
+    None for any other shape, or a time in the future or over 30 days old, so a
+    decimal ID never passes as hex or the other way round. Not ``crtime``:
+    ``BackgroundTask.list`` reported a 1 TB delete's ``crtime`` about 9 minutes after
+    its start (real NAS, 2026-10-17).
     """
-    match = _TASKID_EPOCH.match(taskid)
-    if match is None:
-        return None
-    started = float(match.group(1))
     now = time.time() if now is None else now
-    return started if now - _MAX_TASK_AGE <= started <= now + 60 else None
+    for pattern, base in _TASKID_EPOCH:
+        match = pattern.match(taskid)
+        if match is not None:
+            started = float(int(match.group(1), base))
+            if now - _MAX_TASK_AGE <= started <= now + 60:
+                return started
+    return None
 
 
 def _elapsed_text(seconds: float) -> str:
@@ -759,8 +766,8 @@ async def file_task(
             # Ours, but DSM has let it go: a finished Delete is forgotten unless a status
             # read caught it finishing, so there's no result left to give.
             return (
-                f"The {parsed.kind} of {', '.join(paths)} is no longer running on the NAS; "
-                f"it most likely finished, and DSM no longer has its result. {_LIST_HINT}"
+                f"The {parsed.kind} of {', '.join(paths)} is no longer running on the NAS: "
+                f"it finished or was stopped, and DSM no longer has its result. {_LIST_HINT}"
             )
         return (
             "No running task with this handle. It finished, was stopped, or was started by "
