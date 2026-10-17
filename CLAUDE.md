@@ -6,14 +6,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 mcp-synology is an MCP server for Synology NAS devices. It exposes Synology DSM API functionality as MCP tools that Claude can use. Modular, secure (2FA-ready), permission-tiered. Python 3.11+, async throughout, Apache 2.0 licensed.
 
-**Current status:** v0.8.x — File Station (14 tools) + System monitoring (2 tools) + Download Station (12 tools, opt-in), CLI, integration and vdsm tests.
+**Current status:** v0.8.x — File Station (15 tools) + System monitoring (2 tools) + Download Station (12 tools, opt-in), CLI, integration and vdsm tests.
 
 ## Architecture
 
 Layered design: core → modules → server/CLI.
 
 - **Core** (`src/mcp_synology/core/`): DSM API client (async httpx), auth manager (session lifecycle, 2FA, keyring), YAML+Pydantic config loader, shared response formatters, typed exception hierarchy
-- **Modules** (`src/mcp_synology/modules/`): Feature-specific tool handlers. Each module declares `MODULE_INFO` with API requirements and tool metadata. File Station (14 tools: 7 READ + 7 WRITE), System (2 tools: get_system_info, get_resource_usage), Download Station (12 tools: 5 READ + 7 WRITE; opt-in)
+- **Modules** (`src/mcp_synology/modules/`): Feature-specific tool handlers. Each module declares `MODULE_INFO` with API requirements and tool metadata. File Station (15 tools: 7 READ + 8 WRITE), System (2 tools: get_system_info, get_resource_usage), Download Station (12 tools: 5 READ + 7 WRITE; opt-in)
 - **Server** (`src/mcp_synology/server.py`): MCP server (`MCPServer` subclass) initialization, module loading, startup
 - **CLI** (`src/mcp_synology/cli/`): click-based package with `serve`, `setup`, `check` subcommands
 
@@ -25,7 +25,7 @@ Modules are domain-split: `listing.py`, `search.py`, `metadata.py`, `operations.
 
 - `docs/specs/architecture.md` — layered architecture, module system, auth strategy chain, session lifecycle, credential storage
 - `docs/specs/project-scaffolding-spec.md` — repo structure, pyproject.toml, CI, testing strategy
-- `docs/specs/filestation-module-spec.md` — all 14 File Station tools with parameters, response shapes, error codes
+- `docs/specs/filestation-module-spec.md` — all 15 File Station tools with parameters, response shapes, error codes
 - `docs/specs/system-module-spec.md` — the 2 System tools
 - `docs/specs/downloadstation-module-spec.md` — all 12 Download Station tools, the verified DSM behavior behind them (v1 vs DS2, non-manager semantics, paging and totals, secrets in URLs)
 - `docs/specs/config-schema-spec.md` — YAML config structure, validation rules, env var overrides, state file
@@ -83,7 +83,7 @@ uv run pytest --cov=mcp_synology           # Tests with coverage
 - Common error codes (100-series) handled in the core client; module-specific codes (400-series for File Station) handled in modules
 - Always include actionable suggestions in error messages
 - Session errors (106/107/119) trigger transparent re-auth with exactly one retry; error 105 (permission denied) is NOT a session issue — never re-auth on 105
-- **Background task cleanup:** All async background tasks (Search, DirSize, CopyMove, Delete) must use `try/finally` to ensure stop/clean is called. Orphaned tasks consume CPU indefinitely on the NAS. Log warnings on cleanup failure — never silently suppress. One exception (#162): a Delete task that reports `finished` is already released by DSM — `stop` then always answers 401 on DSM 7.1 and 7.2.2 — so it's stopped only when it didn't finish (timeout, polling error, cancellation)
+- **Background task cleanup:** All async background tasks (Search, DirSize, CopyMove, Delete) must use `try/finally` to ensure stop/clean is called. Orphaned tasks consume CPU indefinitely on the NAS. Log warnings on cleanup failure — never silently suppress. One exception (#162): a Delete task that reports `finished` is already released by DSM — `stop` then always answers 401 on DSM 7.1 and 7.2.2 — so it's stopped only when it didn't finish (a DSM error while polling, cancellation). A second exception (#245): a Delete or CopyMove task (delete, copy, move, restore) still running when the call's wait runs out (`delete_timeout` / `copy_move_timeout`, default 30 s, capped at 600 s) is intentionally **left running** on the NAS and handed off with a handle (`delete:<taskid>`, …) that `file_task` follows up on or stops. So is one whose status request gets no answer or an unreadable one during the wait (a transport-level error: any httpx timeout, refused or dropped connection; or any other unexpected exception, e.g. a 200 text/html page from a captive portal or proxy login; maintainer decision 2026-10-17), since the task is most likely still running and losing its handle would leave it unreported. The reply names only the exception type, never its text. Only cancellation and a DSM error code (a `SynologyError`, or an error the task itself reports, unless it already finished) still stop it. Search and DirSize have no exception: always stopped and cleaned. CopyMove `stop` answers success for any task ID (finished, unknown or another user's), so `file_task` reads the task's status before stopping. Stop requests get a 90 s read timeout (`tasks.STOP_TIMEOUT`; connect, write and pool keep the client default): DSM 7.1 sometimes answers a Delete `stop` only after ~60 s, though the stop takes effect at once
 
 ### Auth
 - Strategy chain auto-detects 2FA vs non-2FA on login attempt

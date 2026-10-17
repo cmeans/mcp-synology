@@ -175,6 +175,43 @@ class TestRequest:
                 await client.request("SYNO.FileStation.List", "list_share", version=2)
         assert not reauth_called
 
+    @respx.mock
+    async def test_request_read_timeout_overrides_only_read(self) -> None:
+        """A per-request read timeout (#245: task stops) leaves connect/write/pool alone."""
+        route = respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": True, "data": {}}
+        )
+        async with _make_client(_default_cache()) as client:
+            await client.request("SYNO.FileStation.List", "list_share", version=2)
+            await client.request("SYNO.FileStation.List", "list_share", version=2, read_timeout=90)
+        assert route.calls[0].request.extensions["timeout"]["read"] == 30
+        assert route.calls[1].request.extensions["timeout"] == {
+            "connect": 30,
+            "read": 90,
+            "write": 30,
+            "pool": 30,
+        }
+
+    @respx.mock
+    async def test_request_read_timeout_kept_on_reauth_retry(self) -> None:
+        replies = iter(
+            [
+                httpx.Response(200, json={"success": False, "error": {"code": 106}}),
+                httpx.Response(200, json={"success": True, "data": {}}),
+            ]
+        )
+        route = respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=lambda _: next(replies))
+
+        async def mock_reauth() -> None:
+            return None
+
+        async with _make_client(_default_cache()) as client:
+            client.set_re_auth_callback(mock_reauth)
+            await client.request("SYNO.FileStation.List", "list_share", version=2, read_timeout=90)
+        timeouts = [c.request.extensions["timeout"] for c in route.calls]
+        assert [t["read"] for t in timeouts] == [90, 90]
+        assert [t["connect"] for t in timeouts] == [30, 30]
+
 
 class TestEscapePathParam:
     def test_single_path(self) -> None:

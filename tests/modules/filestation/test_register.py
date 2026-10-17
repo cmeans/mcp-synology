@@ -1,6 +1,6 @@
 """Tests for modules/filestation/__init__.py — module registration code paths.
 
-The filestation `register()` function declares 14 tools (7 READ + 7 WRITE)
+The filestation `register()` function declares 15 tools (7 READ + 8 WRITE)
 inside `if "<tool>" in ctx.allowed_tools:` blocks. The previous test_server.py
 tests only verified `server is not None`, which walked the registration
 decorators but not the inner tool closures. These tests:
@@ -12,9 +12,10 @@ decorators but not the inner tool closures. These tests:
    closure walked through `await manager.get_client()` and forwarded the
    result through `manager.with_update_notice()`
 
-The two parameterless WRITE tools (download_file/upload_file) take an extra
-`Context` argument so they're tested separately with a mocked Context that
-captures `report_progress` calls.
+The tools that report progress (download_file, upload_file, and since #245
+copy_files, move_files, delete_files and restore_from_recycle_bin) take an extra
+`Context` argument, passed here as a mocked Context that captures
+`report_progress` calls.
 """
 
 from __future__ import annotations
@@ -23,7 +24,9 @@ import json
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
+import respx
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import ValidationError
@@ -33,6 +36,8 @@ from mcp_synology.modules.filestation import MODULE_INFO, FileStationSettings, r
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from mcp_synology.core.client import DsmClient
 
 
 def _make_ctx(
@@ -57,6 +62,12 @@ def _make_ctx(
         display_name="test-nas",
     )
     return server, manager, ctx
+
+
+def _fake_mcp_ctx() -> MagicMock:
+    fake = MagicMock()
+    fake.report_progress = AsyncMock()
+    return fake
 
 
 class TestFilestationModuleRegister:
@@ -115,6 +126,7 @@ class TestFilestationModuleRegister:
             "delete_files",
             "upload_file",
             "restore_from_recycle_bin",
+            "file_task",
         }
         server, _manager, ctx = _make_ctx(allowed=write_names)
         register(ctx)
@@ -404,7 +416,7 @@ class TestFilestationToolInvocation:
         )
         register(ctx)
         result = await server._tool_manager._tools["copy_files"].fn(
-            paths=["/share/a"], dest_folder="/share/b"
+            ctx=_fake_mcp_ctx(), paths=["/share/a"], dest_folder="/share/b"
         )
         assert "copy_files-result" in result
         mock.assert_awaited_once()
@@ -416,7 +428,7 @@ class TestFilestationToolInvocation:
         )
         register(ctx)
         result = await server._tool_manager._tools["move_files"].fn(
-            paths=["/share/a"], dest_folder="/share/b"
+            ctx=_fake_mcp_ctx(), paths=["/share/a"], dest_folder="/share/b"
         )
         assert "move_files-result" in result
         mock.assert_awaited_once()
@@ -427,7 +439,9 @@ class TestFilestationToolInvocation:
             monkeypatch, "mcp_synology.modules.filestation.operations.delete_files"
         )
         register(ctx)
-        result = await server._tool_manager._tools["delete_files"].fn(paths=["/share/x"])
+        result = await server._tool_manager._tools["delete_files"].fn(
+            ctx=_fake_mcp_ctx(), paths=["/share/x"]
+        )
         assert "delete_files-result" in result
         mock.assert_awaited_once()
 
@@ -497,7 +511,7 @@ class TestFilestationToolInvocation:
         )
         register(ctx)
         result = await server._tool_manager._tools["restore_from_recycle_bin"].fn(
-            share="video", paths=["/share/#recycle/x"]
+            ctx=_fake_mcp_ctx(), share="video", paths=["/share/#recycle/x"]
         )
         assert "restore_from_recycle_bin-result" in result
         mock.assert_awaited_once()
@@ -528,7 +542,14 @@ SHARE_CASES = [
         {"share": "nosuchshare", "paths": ["x"]},
     ),
 ]
-NEEDS_CTX = {"download_file", "upload_file"}
+NEEDS_CTX = {
+    "download_file",
+    "upload_file",
+    "copy_files",
+    "move_files",
+    "delete_files",
+    "restore_from_recycle_bin",
+}
 
 
 class TestFilestationShareValidation:
@@ -581,5 +602,336 @@ class TestFilestationShareValidation:
         monkeypatch.setattr("mcp_synology.modules.filestation.operations.delete_files", domain)
         server, _, ctx = self._ctx_with_shares("writable")
         register(ctx)
-        assert await server._tool_manager._tools["delete_files"].fn(paths=["/writable/a"]) == "ran"
+        fn = server._tool_manager._tools["delete_files"].fn
+        assert await fn(ctx=_fake_mcp_ctx(), paths=["/writable/a"]) == "ran"
         domain.assert_awaited_once()
+
+
+WAIT_TOOLS = {
+    "delete_files": ("operations.delete_files", {"paths": ["/s/x"]}),
+    "copy_files": ("operations.copy_files", {"paths": ["/s/x"], "dest_folder": "/s/d"}),
+    "move_files": ("operations.move_files", {"paths": ["/s/x"], "dest_folder": "/s/d"}),
+    "restore_from_recycle_bin": (
+        "operations.restore_from_recycle_bin",
+        {"share": "s", "paths": ["x"]},
+    ),
+}
+
+
+class TestFileTaskAndHandoff:
+    """#245: file_task registration, the capped handoff wait, progress, and discovery."""
+
+    @pytest.fixture(autouse=True)
+    def _shares_known(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            "mcp_synology.modules.filestation.helpers.ensure_known_shares", AsyncMock()
+        )
+
+    def test_file_task_registered_write_only(self) -> None:
+        server, _manager, ctx = _make_ctx()
+        register(ctx)
+        tool = server._tool_manager._tools["file_task"]
+        info = next(t for t in MODULE_INFO.tools if t.name == "file_task")
+        assert info.permission_tier.name == "WRITE"
+        annos = tool.annotations
+        assert annos is not None
+        assert annos.read_only_hint is False
+        # Worst case (#183): action="stop" can leave a move half done (QA R1 on #251).
+        assert annos.destructive_hint is True
+        assert annos.idempotent_hint is not True
+
+        read_names = {t.name for t in MODULE_INFO.tools if t.permission_tier.name == "READ"}
+        server, _manager, ctx = _make_ctx(allowed=read_names)
+        register(ctx)
+        assert "file_task" not in server._tool_manager._tools
+
+    async def test_file_task_schema_has_parameter_descriptions(self) -> None:
+        server, _manager, ctx = _make_ctx(allowed={"file_task"})
+        register(ctx)
+        (tool,) = await server.list_tools()
+        props = tool.input_schema["properties"]
+        assert set(props) == {"handle", "action"}
+        assert "Omit it to list running operations" in props["handle"]["description"]
+        assert props["action"]["enum"] == ["status", "stop"]
+        assert "stop" in props["action"]["description"]
+
+    async def test_file_task_invocation_shares_records(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from mcp_synology.modules.filestation.tasks import TaskRecords
+
+        mock = AsyncMock(return_value="<<file_task>>")
+        monkeypatch.setattr("mcp_synology.modules.filestation.tasks.file_task", mock)
+        server, _manager, ctx = _make_ctx()
+        register(ctx)
+        fn = server._tool_manager._tools["file_task"].fn
+        assert await fn(handle="delete:X", action="stop") == "<<file_task>>"
+        await fn()
+        first, second = mock.await_args_list
+        assert first.kwargs["handle"] == "delete:X"
+        assert first.kwargs["action"] == "stop"
+        assert second.kwargs["handle"] is None
+        assert second.kwargs["action"] == "status"
+        assert isinstance(first.kwargs["records"], TaskRecords)
+        assert first.kwargs["records"] is second.kwargs["records"]
+
+    async def test_operations_get_the_same_records(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        mocks = {}
+        for name, (target, _) in WAIT_TOOLS.items():
+            mocks[name] = AsyncMock(return_value="ok")
+            monkeypatch.setattr(f"mcp_synology.modules.filestation.{target}", mocks[name])
+        file_task_mock = AsyncMock(return_value="ok")
+        monkeypatch.setattr("mcp_synology.modules.filestation.tasks.file_task", file_task_mock)
+        server, _manager, ctx = _make_ctx()
+        register(ctx)
+        for name, (_, kwargs) in WAIT_TOOLS.items():
+            await server._tool_manager._tools[name].fn(ctx=_fake_mcp_ctx(), **kwargs)
+        await server._tool_manager._tools["file_task"].fn()
+        records = file_task_mock.await_args.kwargs["records"]
+        for name, mock in mocks.items():
+            assert mock.await_args.kwargs["records"] is records, name
+
+    @pytest.mark.parametrize(
+        ("settings", "expected"),
+        [
+            ({}, {name: 30.0 for name in WAIT_TOOLS}),
+            (
+                {"delete_timeout": 3600, "copy_move_timeout": 3600},
+                {name: 600.0 for name in WAIT_TOOLS},
+            ),
+            (
+                {"delete_timeout": 45, "copy_move_timeout": 90},
+                {
+                    "delete_files": 45.0,
+                    "copy_files": 90.0,
+                    "move_files": 90.0,
+                    "restore_from_recycle_bin": 90.0,
+                },
+            ),
+            ({"async_timeout": 300}, {name: 30.0 for name in WAIT_TOOLS}),
+        ],
+        ids=["unset", "capped", "per-operation", "async-timeout-ignored"],
+    )
+    async def test_handoff_wait_capped(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        settings: dict[str, int],
+        expected: dict[str, float],
+    ) -> None:
+        mocks = {}
+        for name, (target, _) in WAIT_TOOLS.items():
+            mocks[name] = AsyncMock(return_value="ok")
+            monkeypatch.setattr(f"mcp_synology.modules.filestation.{target}", mocks[name])
+        search = AsyncMock(return_value="ok")
+        monkeypatch.setattr("mcp_synology.modules.filestation.search.search_files", search)
+        server, _manager, ctx = _make_ctx(settings=settings)
+        register(ctx)
+        for name, (_, kwargs) in WAIT_TOOLS.items():
+            await server._tool_manager._tools[name].fn(ctx=_fake_mcp_ctx(), **kwargs)
+            assert mocks[name].await_args.kwargs["timeout"] == expected[name], name
+        await server._tool_manager._tools["search_files"].fn(folder_path="/s")
+        assert search.await_args.kwargs["timeout"] == float(settings.get("async_timeout", 120))
+
+    @pytest.mark.parametrize("name", sorted(WAIT_TOOLS))
+    async def test_handler_reports_progress(
+        self, monkeypatch: pytest.MonkeyPatch, name: str
+    ) -> None:
+        target, kwargs = WAIT_TOOLS[name]
+        mock = AsyncMock(return_value="ok")
+        monkeypatch.setattr(f"mcp_synology.modules.filestation.{target}", mock)
+        server, _manager, ctx = _make_ctx()
+        register(ctx)
+        fake = _fake_mcp_ctx()
+        await server._tool_manager._tools[name].fn(ctx=fake, **kwargs)
+        on_progress = mock.await_args.kwargs["on_progress"]
+        await on_progress(5.0, 10.0, "Deleting /s/x: 5 of 10 items")
+        await on_progress(0.0, None, "Deleting /s/x: counting items")
+        assert [c.args for c in fake.report_progress.await_args_list] == [
+            (5.0, 10.0, "Deleting /s/x: 5 of 10 items"),
+            (0.0, None, "Deleting /s/x: counting items"),
+        ]
+
+
+RUNNING_DELETE = {
+    "api": "SYNO.FileStation.Delete",
+    "crtime": 1760000000,
+    "finished": False,
+    "params": {"accurate_progress": True, "path": ["/s/big"], "recursive": True},
+    "processed_num": 8,
+    "progress": 0.02,
+    "taskid": "FileStation_D1",
+    "total": 342,
+}
+RUNNING_DELETE_2 = {
+    **RUNNING_DELETE,
+    "params": {"accurate_progress": True, "path": ["/s/two"], "recursive": True},
+    "taskid": "FileStation_D2",
+}
+
+
+class TestDiscoveryAtFirstConnection:
+    """#245: the first File Station reply of a server process tells the model about
+    operations still running on the NAS; discovery never breaks a tool call."""
+
+    @staticmethod
+    def _wire(manager: MagicMock, client: object, monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
+        manager.get_client = AsyncMock(return_value=client)
+        shares = AsyncMock(return_value="SHARES")
+        monkeypatch.setattr("mcp_synology.modules.filestation.listing.list_shares", shares)
+        return shares
+
+    @respx.mock
+    async def test_discovery_note_on_first_reply_only(
+        self, monkeypatch: pytest.MonkeyPatch, mock_client: DsmClient
+    ) -> None:
+        from tests.conftest import BASE_URL
+
+        route = respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            return_value=httpx.Response(
+                200, json={"success": True, "data": {"tasks": [RUNNING_DELETE], "total": 1}}
+            )
+        )
+        server, manager, ctx = _make_ctx()
+        manager.with_update_notice = MagicMock(side_effect=lambda s: s + "\n[update notice]")
+        self._wire(manager, mock_client, monkeypatch)
+        register(ctx)
+        fn = server._tool_manager._tools["list_shares"].fn
+        first = await fn()
+        assert first.startswith("SHARES\n[update notice]")
+        assert first.endswith("Use file_task to check on them or stop them.")
+        assert "deleting /s/big (8 of 342 items, 2%), handle `delete:FileStation_D1`" in first
+        assert await fn() == "SHARES\n[update notice]"
+        assert route.call_count == 1
+        params = dict(route.calls.last.request.url.params)
+        assert (params["api"], params["method"]) == ("SYNO.FileStation.BackgroundTask", "list")
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        ("tasks", "kwargs", "first"),
+        [
+            # Only the task the reply is about: no note, it would repeat that task.
+            ([RUNNING_DELETE], {"handle": "delete:FileStation_D1"}, "STATUS"),
+            # Others too (QA round 3): they're still named, minus the one asked about.
+            (
+                [RUNNING_DELETE, RUNNING_DELETE_2],
+                {"handle": " `delete:FileStation_D1`. "},
+                "STATUS\n\n---\nNote: 1 operation(s) still running on the NAS:\n"
+                "  deleting /s/two (8 of 342 items, 2%), handle `delete:FileStation_D2`\n"
+                "Use file_task to check on them or stop them.",
+            ),
+            # The list: it shows them all already.
+            ([RUNNING_DELETE, RUNNING_DELETE_2], {}, "STATUS"),
+        ],
+        ids=["only-that-task", "other-tasks", "list"],
+    )
+    async def test_file_task_reply_and_the_discovery_note(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        mock_client: DsmClient,
+        tasks: list[dict[str, object]],
+        kwargs: dict[str, str],
+        first: str,
+    ) -> None:
+        """file_task first: the note leaves out the task the reply is about; either way
+        it's used up, so later replies don't carry it."""
+        from tests.conftest import BASE_URL
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            return_value=httpx.Response(
+                200, json={"success": True, "data": {"tasks": tasks, "total": len(tasks)}}
+            )
+        )
+        monkeypatch.setattr(
+            "mcp_synology.modules.filestation.tasks.file_task", AsyncMock(return_value="STATUS")
+        )
+        server, manager, ctx = _make_ctx()
+        manager.with_update_notice = MagicMock(side_effect=lambda s: s)
+        self._wire(manager, mock_client, monkeypatch)
+        register(ctx)
+        assert await server._tool_manager._tools["file_task"].fn(**kwargs) == first
+        assert await server._tool_manager._tools["list_shares"].fn() == "SHARES"
+
+    @respx.mock
+    async def test_discovery_seeds_file_task_records(
+        self, monkeypatch: pytest.MonkeyPatch, mock_client: DsmClient
+    ) -> None:
+        from tests.conftest import BASE_URL
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            return_value=httpx.Response(
+                200, json={"success": True, "data": {"tasks": [RUNNING_DELETE], "total": 1}}
+            )
+        )
+        file_task_mock = AsyncMock(return_value="ok")
+        monkeypatch.setattr("mcp_synology.modules.filestation.tasks.file_task", file_task_mock)
+        server, manager, ctx = _make_ctx()
+        manager.get_client = AsyncMock(return_value=mock_client)
+        register(ctx)
+        await server._tool_manager._tools["file_task"].fn()
+        from mcp_synology.modules.filestation.tasks import Handle
+
+        records = file_task_mock.await_args.kwargs["records"]
+        record = records.get(Handle("delete", "FileStation_D1"))
+        assert record is not None
+        assert record.paths == ["/s/big"]
+
+    @respx.mock
+    async def test_discovery_failure_does_not_break_tool(
+        self, monkeypatch: pytest.MonkeyPatch, mock_client: DsmClient
+    ) -> None:
+        from tests.conftest import BASE_URL
+
+        route = respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            return_value=httpx.Response(500, text="oops")
+        )
+        server, manager, ctx = _make_ctx()
+        self._wire(manager, mock_client, monkeypatch)
+        register(ctx)
+        fn = server._tool_manager._tools["list_shares"].fn
+        assert await fn() == "SHARES"
+        assert await fn() == "SHARES"
+        assert route.call_count == 1
+
+    async def test_discovery_unexpected_error_does_not_break_tool(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        boom = AsyncMock(side_effect=RuntimeError("boom"))
+        monkeypatch.setattr("mcp_synology.modules.filestation.tasks.discover_running_tasks", boom)
+        server, manager, ctx = _make_ctx()
+        self._wire(manager, MagicMock(), monkeypatch)
+        register(ctx)
+        fn = server._tool_manager._tools["list_shares"].fn
+        assert await fn() == "SHARES"
+        assert await fn() == "SHARES"
+        boom.assert_awaited_once()
+
+    async def test_no_discovery_without_file_task(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A read-only connection can't follow up on a task, so it isn't told about one."""
+        discover = AsyncMock(return_value="Note: something")
+        monkeypatch.setattr(
+            "mcp_synology.modules.filestation.tasks.discover_running_tasks", discover
+        )
+        server, manager, ctx = _make_ctx(allowed={"list_shares"})
+        self._wire(manager, MagicMock(), monkeypatch)
+        register(ctx)
+        assert await server._tool_manager._tools["list_shares"].fn() == "SHARES"
+        discover.assert_not_awaited()
+
+    async def test_discovery_waits_for_a_successful_client(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A failed login doesn't use up the one discovery."""
+        discover = AsyncMock(return_value=None)
+        monkeypatch.setattr(
+            "mcp_synology.modules.filestation.tasks.discover_running_tasks", discover
+        )
+        server, manager, ctx = _make_ctx()
+        self._wire(manager, MagicMock(), monkeypatch)
+        manager.get_client = AsyncMock(side_effect=[RuntimeError("login failed"), MagicMock()])
+        register(ctx)
+        fn = server._tool_manager._tools["list_shares"].fn
+        with pytest.raises(RuntimeError):
+            await fn()
+        discover.assert_not_awaited()
+        assert await fn() == "SHARES"
+        discover.assert_awaited_once()

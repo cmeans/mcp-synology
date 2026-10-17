@@ -353,6 +353,7 @@ class DsmClient:
         params: dict[str, Any] | None = None,
         *,
         post_form: bool = False,
+        read_timeout: float | None = None,
         _is_retry: bool = False,
     ) -> dict[str, Any]:
         """Make a DSM API request.
@@ -368,6 +369,11 @@ class DsmClient:
         ``login`` (#235): GET put ``passwd``, ``otp_code`` and ``device_id`` in the
         URL, where DSM's and any reverse proxy's access logs record it. Verified on
         DSM 7.1 and 7.2.2. Everything else stays on GET.
+
+        ``read_timeout`` (seconds) replaces the client's read timeout for this request
+        only; connect, write and pool keep the client's default, so an unreachable NAS
+        still fails fast. File Station task stops use it (#245): DSM 7.1 sometimes
+        answers a Delete ``stop`` only after ~60 s, although the stop takes effect at once.
         """
         http = self._get_http()
 
@@ -416,12 +422,17 @@ class DsmClient:
             log_params,
         )
 
+        req_timeout = (
+            httpx.USE_CLIENT_DEFAULT
+            if read_timeout is None
+            else httpx.Timeout(self._timeout, read=read_timeout)
+        )
         try:
             if post_form:
                 query = {"_sid": req_params.pop("_sid")} if "_sid" in req_params else {}
-                resp = await http.post(url, params=query, data=req_params)
+                resp = await http.post(url, params=query, data=req_params, timeout=req_timeout)
             else:
-                resp = await http.get(url, params=req_params)
+                resp = await http.get(url, params=req_params, timeout=req_timeout)
         except httpx.TransportError as e:
             # Name the call without changing the exception's type: get_client() and
             # `check` rely on httpx.TransportError to report an unreachable NAS (#237).
@@ -458,7 +469,13 @@ class DsmClient:
             except SynologyError:
                 raise error_from_code(code, api) from None
             return await self.request(
-                api, method, version, params, post_form=post_form, _is_retry=True
+                api,
+                method,
+                version,
+                params,
+                post_form=post_form,
+                read_timeout=read_timeout,
+                _is_retry=True,
             )
 
         raise error_from_code(code, api)

@@ -54,10 +54,10 @@ See [CHANGELOG.md](CHANGELOG.md) for full details on breaking changes.
 
 ### File Station
 
-Browse, search, transfer, and manage files on your NAS. 14 tools across two permission tiers:
+Browse, search, transfer, and manage files on your NAS. 15 tools across two permission tiers:
 
 - **READ** — list_shares, list_files, list_recycle_bin, search_files, get_file_info, get_dir_size, download_file
-- **WRITE** — create_folder, rename, copy_files, move_files, delete_files, restore_from_recycle_bin, upload_file
+- **WRITE** — create_folder, rename, copy_files, move_files, delete_files, restore_from_recycle_bin, upload_file, file_task
 
 ### System
 
@@ -114,6 +114,7 @@ Tested against DSM 7.1 (Download Station 3.9-4627) and DSM 7.2.2 (Download Stati
 
 - **Interactive setup** — guided configuration that creates your config, stores credentials, handles 2FA, and emits a Claude Desktop snippet
 - **Permission tiers** — READ or WRITE per module, enforced at tool registration. Tiers control what the server can do on the NAS; `download_file`, which writes on this machine, is annotated as destructive so your client can confirm it. A read-only connection tells the model which tools it withholds and how to enable them, so the model doesn't claim the server can't do it
+- **Long operations keep running** — a large delete, copy, move or recycle-bin restore reports progress while the call waits, and if it's still running when the wait ends (30 s by default) the NAS keeps working on it: the reply gives a handle for `file_task`, which checks on it, lists running operations or stops one. See [File Station settings](#file-station-settings)
 - **Local path confinement** — `upload_file` and `download_file` only use local folders listed in `allowed_local_paths` (File Station settings), by default your Downloads folder. Symlinks and `..` are resolved first, so they can't lead outside. Set it to `["/"]` to allow everything (macOS/Linux)
 - **2FA support** — auto-detected; device token bootstrap with automatic silent re-auth
 - **Secure credentials** — OS keyring integration that works transparently on macOS, Windows, and Linux (including from Claude Desktop). See [docs/credentials.md](docs/credentials.md).
@@ -260,6 +261,49 @@ alias: HomeNAS
 ```
 
 The alias appears in the MCP server name (e.g., `synology-HomeNAS`) so Claude knows which NAS it's talking to.
+
+### File Station settings
+
+File Station settings go under `settings:` in the `filestation` module. All are optional:
+
+```yaml
+modules:
+  filestation:
+    enabled: true
+    permission: write
+    settings:
+      delete_timeout: 120        # wait up to 2 minutes before handing a delete off
+      copy_move_timeout: 300     # copy, move and restore: 5 minutes
+      async_timeout: 180         # search_files and get_dir_size
+      allowed_local_paths:
+        - ~/Downloads
+        - ~/Media
+      default_download_dir: ~/Downloads
+```
+
+Timeouts are in seconds (10–3600 accepted) and count wall-clock time:
+
+| Setting | Default | What it does |
+|---------|---------|--------------|
+| `delete_timeout` | `30` | How long `delete_files` waits before handing off. |
+| `copy_move_timeout` | `30` | How long `copy_files`, `move_files` and `restore_from_recycle_bin` wait before handing off. |
+| `async_timeout` | `120` | Time limit for `search_files` and `get_dir_size`. It doesn't apply to delete, copy, move or restore. |
+| `search_timeout`, `dir_size_timeout` | `async_timeout` | Per-tool time limits for `search_files` and `get_dir_size`. The NAS task is stopped when the limit runs out. |
+| `upload_timeout`, `download_timeout` | `300` | Time limits for `upload_file` and `download_file`. |
+
+For delete, copy, move and restore, the timeout is **how long a call waits before handing off**, not a limit on the operation. An operation that finishes within the wait returns its result as usual. One that's still running is left running on the NAS, and the reply gives a handle, such as `delete:FileStation_…`, to use with `file_task`: check its progress or final result, or stop it. `file_task` with no handle lists the operations still running. The wait is capped at 600 s whatever the setting, because an MCP client that gives up on a call cancels it, and a canceled call stops the operation.
+
+**Client timeouts.** The MCP client has its own time limits. Claude Code aborts a tool call that sends no result and no progress notification for an idle window: 30 minutes by default for a stdio server like this one (5 minutes for HTTP servers). Raise it with the `CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT` environment variable (milliseconds; `0` turns the check off), or for this server only with a `timeout` field (milliseconds) in its MCP config entry, which also sets a hard limit per call. See [Claude Code's MCP docs](https://code.claude.com/docs/en/mcp). Delete, copy, move and restore send progress notifications while they wait, so they don't hit the idle limit. `get_dir_size` and `search_files` don't send progress yet (#252), so one that runs longer than the idle window can be aborted by the client; raise the client's limit, or narrow the path.
+
+Other settings:
+
+- `allowed_local_paths` — local folders `upload_file` and `download_file` may use, including subfolders (default: your Downloads folder). See **Local path confinement** under [Features](#features).
+- `default_download_dir` — local folder `download_file` uses when no `dest_folder` is given. It's always allowed.
+- `default_upload_dir` — NAS folder `upload_file` uses when no `dest_folder` is given.
+- `hide_recycle_in_listings` — hide `#recycle` folders from `list_files` (default: `false`).
+- `file_type_indicator` — `emoji` (default) or `text` markers in listings.
+
+See [docs/specs/config-schema-spec.md](docs/specs/config-schema-spec.md) for the full schema, and [examples/config-power-user.yaml](examples/config-power-user.yaml) for a complete config.
 
 ### Custom Instructions
 

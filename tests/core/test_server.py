@@ -1119,7 +1119,7 @@ class TestServedSchemas:
 
     async def test_client_sees_no_titles_or_null_unions(self) -> None:
         tools, _ = await _served(create_server(make_test_config(modules=ALL_MODULES)))
-        assert len(tools) == 28
+        assert len(tools) == 29
         for tool in tools:
             for node in _walk(tool.input_schema):
                 if isinstance(node, dict):
@@ -1242,8 +1242,10 @@ class TestInstructionComments:
 # Characters a model receives before any conversation (schemas + descriptions + instructions)
 # for ALL_MODULES. Raise this deliberately, in the same PR, when adding text a model needs
 # (e.g. #129's parameter descriptions); the review then sees the growth. Set by #163 to the
-# compacted size + 2%.
-PAYLOAD_BUDGET_CHARS = 16_019
+# compacted size + 2%. Raised by #245 (file_task and the "Long operations" instructions) to
+# the size scripts/measure_tools.py reports: 15,831 -> 17,327 (the last 141 tell the model
+# not to stop and restart a delete whose count hasn't moved).
+PAYLOAD_BUDGET_CHARS = 17_327
 
 
 class TestPayloadBudget:

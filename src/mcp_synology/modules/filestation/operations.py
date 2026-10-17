@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
-import time
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -23,48 +21,24 @@ from mcp_synology.modules.filestation.helpers import (
     missing_paths_suggestion,
     normalize_path,
     paths_isdir,
-    unanswered_status_response,
+)
+from mcp_synology.modules.filestation.tasks import (
+    Handle,
+    HandleKind,
+    Handoff,
+    MonotonicProgress,
+    ProgressCallback,
+    TaskRecord,
+    TaskRecords,
+    handoff_reply,
+    poll_task,
+    running_task,
 )
 
 if TYPE_CHECKING:
     from mcp_synology.core.client import DsmClient
 
 logger = logging.getLogger(__name__)
-
-
-async def _stop_background_task(
-    client: DsmClient,
-    api: str,
-    taskid: str,
-    version: int,
-    task_logger: logging.Logger,
-) -> bool:
-    """Stop a background task (CopyMove, Delete). Logs warnings on failure.
-
-    Returns whether DSM confirmed the stop, so an error message never claims a task
-    was stopped when DSM, stalled, didn't answer the stop either (QA R1 on #239).
-    """
-    try:
-        await client.request(api, "stop", version=version, params={"taskid": taskid})
-    except SynologyError as e:
-        task_logger.warning("%s task cleanup failed for %s: %s", api, taskid, e)
-    except Exception:
-        task_logger.warning("%s task cleanup failed for %s", api, taskid, exc_info=True)
-    else:
-        return True
-    return False
-
-
-def _task_note(stopped: bool) -> str:
-    """What happened to a background task mcp-synology gave up on (#237)."""
-    if stopped:
-        return "The task was stopped and may be partly done."
-    # Not "DSM didn't answer": DSM may also have refused the stop (e.g. 401 for a task
-    # that finished just before it), QA R2 on #239.
-    return (
-        "mcp-synology couldn't confirm the task stopped; it may still be running on the "
-        "NAS, and may be partly done."
-    )
 
 
 async def create_folder(
@@ -161,9 +135,11 @@ async def copy_files(
     dest_folder: str,
     overwrite: bool = False,
     timeout: float = 120.0,
+    records: TaskRecords | None = None,
+    on_progress: ProgressCallback | None = None,
 ) -> str:
     """Copy files or folders to a destination."""
-    return await _copy_move(
+    text, _ = await _copy_move(
         client,
         paths=paths,
         dest_folder=dest_folder,
@@ -171,7 +147,10 @@ async def copy_files(
         remove_src=False,
         operation="Copy",
         timeout=timeout,
+        records=records,
+        on_progress=on_progress,
     )
+    return text
 
 
 async def move_files(
@@ -181,9 +160,11 @@ async def move_files(
     dest_folder: str,
     overwrite: bool = False,
     timeout: float = 120.0,
+    records: TaskRecords | None = None,
+    on_progress: ProgressCallback | None = None,
 ) -> str:
     """Move files or folders to a new location."""
-    return await _copy_move(
+    text, _ = await _copy_move(
         client,
         paths=paths,
         dest_folder=dest_folder,
@@ -191,10 +172,32 @@ async def move_files(
         remove_src=True,
         operation="Move",
         timeout=timeout,
+        records=records,
+        on_progress=on_progress,
     )
+    return text
 
 
 _PAST_TENSE = {"Copy": "copied", "Move": "moved", "Restore": "restored", "Delete": "deleted"}
+_PRESENT = {"Copy": "Copying", "Move": "Moving", "Restore": "Restoring", "Delete": "Deleting"}
+_KIND: dict[str, HandleKind] = {
+    "Copy": "copy",
+    "Move": "move",
+    "Restore": "restore",
+    "Delete": "delete",
+}
+
+
+def _already_running(operation: str, path: str, dest: str | None = None) -> str:
+    """Lead line when a path already had a running task, so none was started (#245).
+
+    ``dest`` names the running task's destination when it isn't the one asked for.
+    """
+    to = f" (to {dest}/)" if dest else ""
+    return (
+        f"A {operation.lower()} of {path}{to} was already running on the NAS, so no second "
+        "one was started."
+    )
 
 
 def _collapse_overlaps(paths: list[str], *, drop_nested: bool = True) -> list[str]:
@@ -213,11 +216,6 @@ def _collapse_overlaps(paths: list[str], *, drop_nested: bool = True) -> list[st
             continue
         out.append(p)
     return out
-
-
-def _already_done_sentence(operation: str, done: list[str] | None) -> str:
-    """``_already_done`` for after a full sentence: no leading period (QA R1 on #239)."""
-    return _already_done(operation, done).removeprefix(".")
 
 
 def _already_done(operation: str, done: list[str] | None) -> str:
@@ -261,14 +259,17 @@ async def _copy_move_one_path(
     copymove_version: int,
     timeout: float,
     done: list[str] | None = None,
-) -> tuple[int, bool]:
+    on_progress: ProgressCallback | None = None,
+) -> tuple[int, bool] | Handoff:
     """Copy or move a single path via DSM async-task pattern.
 
     Returns the `processed_size` byte count from the completed task (and whether DSM
     skipped items that already existed at the destination, #171) so the
-    caller can sum sizes across all per-path tasks. Raises ToolError on
-    failure (via error_response/synology_error_response). Always stops the
-    background task on exit so orphaned tasks can't accumulate on the NAS.
+    caller can sum sizes across all per-path tasks, or a Handoff when the task outlived
+    ``timeout`` or DSM stopped answering its status requests (#245). Raises ToolError on
+    failure (via error_response/synology_error_response). A task that DSM reports an
+    error for, or whose call is canceled, is stopped, so orphaned tasks can't
+    accumulate on the NAS.
     """
     try:
         start_data = await client.request(
@@ -287,73 +288,30 @@ async def _copy_move_one_path(
 
     taskid = start_data.get("taskid", "")
 
-    # Wall-clock deadline: a slow status request counts too (#237).
-    deadline = time.monotonic() + timeout
-    interval = 0.5
-    status: dict[str, Any] = {}
-    poll_error: SynologyError | None = None
-    unanswered: httpx.TransportError | None = None
-    timed_out = False
-    stopped = False
+    result = await poll_task(
+        client,
+        api="SYNO.FileStation.CopyMove",
+        version=copymove_version,
+        taskid=taskid,
+        wait=timeout,
+        label=f"{_PRESENT[operation]} {path}",
+        on_progress=on_progress,
+    )
 
-    try:
-        while time.monotonic() < deadline:
-            try:
-                status = await client.request(
-                    "SYNO.FileStation.CopyMove",
-                    "status",
-                    version=copymove_version,
-                    params={"taskid": taskid},
-                )
-            except SynologyError as e:
-                poll_error = e
-                break
-            except httpx.TransportError as e:
-                unanswered = e
-                break
+    if result.outcome == "poll_error":
+        assert isinstance(result.error, SynologyError)
+        synology_error_response(f"{operation} files", result.error)
+    if result.outcome in ("handoff", "stalled"):
+        # Left running on the NAS, not stopped (#245): the caller gets a handle.
+        stall = result.error if result.outcome == "stalled" else None
+        return Handoff(Handle(_KIND[operation], taskid), result.status, stall)
+    return _copy_move_result(result.status, path, operation, done)
 
-            logger.debug("%s status (%s): %s", operation, path, status)
 
-            if status.get("finished", False):
-                break
-
-            await asyncio.sleep(interval)
-        else:
-            timed_out = True
-    finally:
-        stopped = await _stop_background_task(
-            client,
-            "SYNO.FileStation.CopyMove",
-            taskid,
-            copymove_version,
-            logger,
-        )
-
-    if poll_error:
-        synology_error_response(f"{operation} files", poll_error)
-    if unanswered:
-        unanswered_status_response(
-            f"{operation} files",
-            path,
-            unanswered,
-            task_note=_task_note(stopped),
-            already=_already_done_sentence(operation, done),
-        )
-    if timed_out:
-        error_response(
-            ErrorCode.TIMEOUT,
-            f"{operation} files failed: timed out after {timeout}s on path: {path}. "
-            + _task_note(stopped)
-            + _already_done_sentence(operation, done),
-            retryable=True,
-            param="timeout",
-            value=timeout,
-            suggestion=(
-                "List the destination to see where it got to before retrying; "
-                "copy_move_timeout in the File Station settings allows longer."
-            ),
-        )
-
+def _copy_move_result(
+    status: dict[str, Any], path: str, operation: str, done: list[str] | None = None
+) -> tuple[int, bool]:
+    """``(processed bytes, skipped)`` from a finished CopyMove status; ToolError on failure."""
     if "error" in status:
         err = status["error"]
         err_code = err.get("code", 0) if isinstance(err, dict) else err
@@ -491,7 +449,10 @@ async def _copy_move(
     timeout: float = 120.0,
     check_sources: bool = True,
     already_done: list[str] | None = None,
-) -> str:
+    later: list[str] | None = None,
+    records: TaskRecords | None = None,
+    on_progress: ProgressCallback | None = None,
+) -> tuple[str, bool]:
     """Shared implementation for copy and move operations.
 
     Closes #84 (the `move_files` half — `copy_files` and the multi-path
@@ -506,6 +467,10 @@ async def _copy_move(
 
     `escape_multi_path` is no longer called here — the per-path loop
     sends each path raw, sidestepping the comma-join entirely.
+
+    Returns ``(text, handed_off)``. When a path's task outlives ``timeout`` it is
+    handed off (#245): the text is the handoff reply, and the remaining paths (plus
+    ``later``, the caller's own not-yet-started items) are listed as not started.
     """
     if not paths:
         error_response(
@@ -518,6 +483,8 @@ async def _copy_move(
         )
 
     normalized = _collapse_overlaps([normalize_path(p) for p in paths], drop_nested=remove_src)
+    # One progress token per tool call: keep its values increasing across paths (#245).
+    on_progress = MonotonicProgress.wrap(on_progress)
     dest = normalize_path(dest_folder)
 
     # Pin to version 2 — v3 uses JSON request format with different
@@ -530,23 +497,77 @@ async def _copy_move(
     total_processed = 0
     done = list(already_done or [])
     skipped_paths: list[str] = []
-    for p in normalized:
-        size, skipped = await _copy_move_one_path(
-            client,
-            p,
-            dest=dest,
-            overwrite=overwrite,
-            remove_src=remove_src,
-            operation=operation,
-            copymove_version=copymove_version,
-            timeout=timeout,
-            done=done,
-        )
+    for i, p in enumerate(normalized):
+        # A copy of the same source to another destination is a different operation; a
+        # move (or restore) of a source that is already moving anywhere is not.
+        match: dict[str, Any] = {"remove_src": remove_src}
+        if not remove_src:
+            match["dest_folder_path"] = dest
+        running = await running_task(client, api="SYNO.FileStation.CopyMove", path=p, params=match)
+        outcome: tuple[int, bool] | Handoff
+        task_dest, task_overwrite = dest, overwrite
+        if running is not None:
+            started = running.get("params") or {}
+            if isinstance(started.get("dest_folder_path"), str):
+                task_dest = started["dest_folder_path"]
+            if isinstance(started.get("overwrite"), bool):
+                task_overwrite = started["overwrite"]
+            # Never start a second task on a path that already has one (#245).
+            outcome = Handoff(Handle(_KIND[operation], str(running["taskid"])), running)
+        else:
+            outcome = await _copy_move_one_path(
+                client,
+                p,
+                dest=dest,
+                overwrite=overwrite,
+                remove_src=remove_src,
+                operation=operation,
+                copymove_version=copymove_version,
+                timeout=timeout,
+                done=done,
+                on_progress=on_progress,
+            )
+        if isinstance(outcome, Handoff):
+            if records is not None:
+                records.add(
+                    TaskRecord(
+                        handle=outcome.handle, paths=[p], dest=task_dest, overwrite=task_overwrite
+                    )
+                )
+            reply = handoff_reply(
+                verb=f"Still {_PRESENT[operation].lower()}",
+                path=p,
+                handle=outcome.handle,
+                status=outcome.status,
+                stall=outcome.stall,
+                done=done,
+                not_started=normalized[i + 1 :] + list(later or []),
+            )
+            if running is not None:
+                other = task_dest if task_dest != dest else None
+                reply = _already_running(operation, p, other) + "\n" + reply
+            return reply, True
+        size, skipped = outcome
         total_processed += size
         if skipped:
             skipped_paths.append(p)
         done.append(p)
 
+    text = await _copy_move_summary(
+        client, normalized, dest, remove_src, total_processed, skipped_paths
+    )
+    return text, False
+
+
+async def _copy_move_summary(
+    client: DsmClient,
+    normalized: list[str],
+    dest: str,
+    remove_src: bool,
+    total_processed: int,
+    skipped_paths: list[str],
+) -> str:
+    """The result text of a finished copy or move (a restore rewords it, ``_as_restore``)."""
     verb = "Copied" if not remove_src else "Moved"
     ok = [p for p in normalized if p not in skipped_paths]
 
@@ -585,11 +606,14 @@ async def _delete_one_path(
     delete_version: int,
     timeout: float,
     done: list[str] | None = None,
-) -> None:
+    on_progress: ProgressCallback | None = None,
+) -> Handoff | None:
     """Delete a single path via DSM async-task pattern.
 
     Raises ToolError (via error_response/synology_error_response) on failure;
-    returns None on success. Always stops the background task on exit.
+    returns None when the delete finished, or a Handoff when the task outlived
+    ``timeout`` or DSM stopped answering its status requests (#245). A task that DSM
+    reports an error for, or whose call is canceled, is stopped.
     """
     try:
         start_data = await client.request(
@@ -599,6 +623,7 @@ async def _delete_one_path(
             params={
                 "path": path,
                 "recursive": str(recursive).lower(),
+                "accurate_progress": "true",
             },
         )
     except SynologyError as e:
@@ -606,77 +631,33 @@ async def _delete_one_path(
 
     taskid = start_data.get("taskid", "")
 
-    # Wall-clock deadline: a slow status request counts too (#237).
-    deadline = time.monotonic() + timeout
-    interval = 0.5
-    status: dict[str, Any] = {}
-    poll_error: SynologyError | None = None
-    unanswered: httpx.TransportError | None = None
-    timed_out = False
-    stopped = False
+    result = await poll_task(
+        client,
+        api="SYNO.FileStation.Delete",
+        version=delete_version,
+        taskid=taskid,
+        wait=timeout,
+        label=f"Deleting {path}",
+        on_progress=on_progress,
+    )
+    status = result.status
 
-    try:
-        while time.monotonic() < deadline:
-            try:
-                status = await client.request(
-                    "SYNO.FileStation.Delete",
-                    "status",
-                    version=delete_version,
-                    params={"taskid": taskid},
-                )
-            except SynologyError as e:
-                poll_error = e
-                break
-            except httpx.TransportError as e:
-                unanswered = e
-                break
+    if result.outcome == "poll_error":
+        assert isinstance(result.error, SynologyError)
+        synology_error_response("Delete files", result.error)
+    if result.outcome in ("handoff", "stalled"):
+        # Left running on the NAS, not stopped (#245): the caller gets a handle.
+        stall = result.error if result.outcome == "stalled" else None
+        return Handoff(Handle("delete", taskid), status, stall)
 
-            logger.debug("Delete status (%s): %s", path, status)
+    _delete_result(status, path, recursive=recursive, done=done)
+    return None
 
-            if status.get("finished", False):
-                break
 
-            await asyncio.sleep(interval)
-        else:
-            timed_out = True
-    finally:
-        # DSM releases a finished Delete task itself: `stop` then always answers 401
-        # (DSM 7.1 and 7.2.2), which logged a cleanup warning on every delete. Stop
-        # only a task that didn't finish (timeout, polling error, cancellation).
-        if not status.get("finished", False):
-            stopped = await _stop_background_task(
-                client,
-                "SYNO.FileStation.Delete",
-                taskid,
-                delete_version,
-                logger,
-            )
-
-    if poll_error:
-        synology_error_response("Delete files", poll_error)
-    if unanswered:
-        unanswered_status_response(
-            "Delete files",
-            path,
-            unanswered,
-            task_note=_task_note(stopped),
-            already=_already_done_sentence("Delete", done),
-        )
-    if timed_out:
-        error_response(
-            ErrorCode.TIMEOUT,
-            f"Delete files failed: timed out after {timeout}s on path: {path}. "
-            + _task_note(stopped)
-            + _already_done_sentence("Delete", done),
-            retryable=True,
-            param="timeout",
-            value=timeout,
-            suggestion=(
-                "List the path to see what's left before retrying; "
-                "delete_timeout in the File Station settings allows longer."
-            ),
-        )
-
+def _delete_result(
+    status: dict[str, Any], path: str, *, recursive: bool, done: list[str] | None = None
+) -> None:
+    """Raise ToolError if a finished Delete status reports a failure; else return."""
     if "error" in status:
         err = status["error"]
         err_code = err.get("code", 0) if isinstance(err, dict) else err
@@ -741,6 +722,8 @@ async def delete_files(
     recursive: bool = True,
     recycle_bin_status: dict[str, bool] | None = None,
     timeout: float = 120.0,
+    records: TaskRecords | None = None,
+    on_progress: ProgressCallback | None = None,
 ) -> str:
     """Delete files or folders.
 
@@ -768,6 +751,8 @@ async def delete_files(
         )
 
     normalized = _collapse_overlaps([normalize_path(p) for p in paths])
+    # One progress token per tool call: keep its values increasing across paths (#245).
+    on_progress = MonotonicProgress.wrap(on_progress)
 
     # Refuse the whole call if any path is missing (#162): DSM "deletes" a missing path
     # without an error, and a partial delete of a mistyped list is worse than none.
@@ -791,17 +776,58 @@ async def delete_files(
     delete_version = min(2, client.negotiate_version("SYNO.FileStation.Delete", max_version=2))
 
     deleted: list[str] = []
-    for p in normalized:
-        await _delete_one_path(
-            client,
-            p,
-            recursive=recursive,
-            delete_version=delete_version,
-            timeout=timeout,
-            done=deleted,
-        )
+    for i, p in enumerate(normalized):
+        running = await running_task(client, api="SYNO.FileStation.Delete", path=p)
+        handoff: Handoff | None
+        if running is not None:
+            # Never start a second delete of a path that already has one running (#245).
+            handoff = Handoff(Handle("delete", str(running["taskid"])), running)
+        else:
+            handoff = await _delete_one_path(
+                client,
+                p,
+                recursive=recursive,
+                delete_version=delete_version,
+                timeout=timeout,
+                done=deleted,
+                on_progress=on_progress,
+            )
+        if handoff is not None:
+            handle = handoff.handle
+            # No DSM request between the handoff and the reply: a recycle-bin probe to a
+            # DSM stalled by this very delete would lose the handle (#245). Keep only a
+            # cached answer; the final result probes lazily (_delete_summary).
+            recycle: dict[str, bool] = {}
+            parts = p.split("/")
+            share_name = parts[1] if len(parts) > 1 else ""
+            in_bin = len(parts) > 2 and parts[2] == "#recycle"
+            if recycle_bin_status is not None and not in_bin and share_name in recycle_bin_status:
+                recycle[share_name] = recycle_bin_status[share_name]
+            if records is not None:
+                records.add(
+                    TaskRecord(handle=handle, paths=[p], recursive=recursive, recycle=recycle)
+                )
+            reply = handoff_reply(
+                verb="Still deleting",
+                path=p,
+                handle=handle,
+                status=handoff.status,
+                stall=handoff.stall,
+                done=deleted,
+                not_started=normalized[i + 1 :],
+            )
+            return reply if running is None else _already_running("Delete", p) + "\n" + reply
         deleted.append(p)
 
+    return await _delete_summary(client, normalized, recycle_bin_status)
+
+
+async def _delete_summary(
+    client: DsmClient,
+    normalized: list[str],
+    recycle_bin_status: dict[str, bool] | None,
+) -> str:
+    """The result text of a finished delete_files call."""
     # A path inside a share's bin (/<share>/#recycle, or the bin itself) is gone for
     # good whatever the share's setting: DSM keeps no second copy (#220).
     in_bin: dict[str, list[str]] = {}
@@ -821,6 +847,7 @@ async def delete_files(
     # on session re-auth (see `_register_recycle_status_invalidator` in __init__).
     shares_with_recycle: set[str] = set()
     shares_without_recycle: set[str] = set()
+    shares_unknown: set[str] = set()
     if recycle_bin_status is None:
         # Defensive: caller passed nothing. Skip probing; preserve prior
         # default-true messaging for the touched shares.
@@ -836,13 +863,20 @@ async def delete_files(
             if share_name in seen:
                 continue
             seen.add(share_name)
-            enabled = await ensure_recycle_status(client, share_name, recycle_bin_status)
+            try:
+                enabled = await ensure_recycle_status(client, share_name, recycle_bin_status)
+            except httpx.TransportError as e:
+                # DSM didn't answer (e.g. right after finishing a huge delete): the
+                # delete is done, so report it without the recycle-bin line (#245).
+                logger.debug("Recycle-bin probe on /%s unanswered: %r", share_name, e)
+                shares_unknown.add(share_name)
+                continue
             if enabled:
                 shares_with_recycle.add(share_name)
             else:
                 shares_without_recycle.add(share_name)
 
-    has_recycle = bool(shares_with_recycle)
+    has_recycle = bool(shares_with_recycle or shares_unknown)
     verb = "Deleted" if has_recycle else "Permanently deleted"
 
     lines = [format_status(f"{verb} {len(normalized)} item(s):")]
@@ -872,6 +906,11 @@ async def delete_files(
         f"\n\u26a0 Recycle bin is NOT enabled on /{share} \u2014 these files cannot be recovered."
         for share in sorted(shares_without_recycle)
     )
+    lines.extend(
+        f"\nCouldn't check whether /{share} has its recycle bin enabled (DSM didn't answer); "
+        "list_recycle_bin shows whether these files can be recovered."
+        for share in sorted(shares_unknown)
+    )
 
     return "\n".join(lines)
 
@@ -897,9 +936,17 @@ async def restore_from_recycle_bin(
     dest_folder: str | None = None,
     overwrite: bool = False,
     timeout: float = 120.0,
+    records: TaskRecords | None = None,
+    on_progress: ProgressCallback | None = None,
 ) -> str:
-    """Restore files from a shared folder's recycle bin."""
+    """Restore files from a shared folder's recycle bin.
+
+    A restore that outlives ``timeout`` is handed off (#245); with several
+    destinations, the items after the handed-off one are listed as not started.
+    """
     share_name = share.strip("/").split("/")[0]
+    # One progress token per tool call, shared by every destination's task (#245).
+    on_progress = MonotonicProgress.wrap(on_progress)
 
     # Normalize recycle bin paths
     full_paths: list[str] = []
@@ -931,8 +978,8 @@ async def restore_from_recycle_bin(
         # Multiple different destinations — move each one separately
         results: list[str] = []
         restored: list[str] = []
-        for fp, dest in zip(full_paths, restore_destinations, strict=False):
-            r = await _copy_move(
+        for i, (fp, dest) in enumerate(zip(full_paths, restore_destinations, strict=False)):
+            r, handed_off = await _copy_move(
                 client,
                 paths=[fp],
                 dest_folder=dest,
@@ -942,7 +989,13 @@ async def restore_from_recycle_bin(
                 timeout=timeout,
                 check_sources=False,
                 already_done=restored,
+                later=full_paths[i + 1 :],
+                records=records,
+                on_progress=on_progress,
             )
+            if handed_off:
+                results.append(r)
+                return "\n".join(results)
             results.append(_as_restore(r, share_name))
             restored.append(fp)
         partial = [r for r in results if r.startswith("[!]")]
@@ -958,7 +1011,7 @@ async def restore_from_recycle_bin(
             )
         return "\n".join(results)
 
-    result = await _copy_move(
+    result, handed_off = await _copy_move(
         client,
         paths=full_paths,
         dest_folder=actual_dest,
@@ -967,7 +1020,11 @@ async def restore_from_recycle_bin(
         operation="Restore",
         timeout=timeout,
         check_sources=False,
+        records=records,
+        on_progress=on_progress,
     )
+    if handed_off:
+        return result
 
     # Rephrase from "Moved" to "Restored"
     return _as_restore(result, share_name)

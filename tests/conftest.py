@@ -81,6 +81,9 @@ def make_api_cache() -> dict[str, ApiInfoEntry]:
         "SYNO.FileStation.Rename": ApiInfoEntry(path="entry.cgi", min_version=1, max_version=2),
         "SYNO.FileStation.CopyMove": ApiInfoEntry(path="entry.cgi", min_version=1, max_version=3),
         "SYNO.FileStation.Delete": ApiInfoEntry(path="entry.cgi", min_version=1, max_version=2),
+        "SYNO.FileStation.BackgroundTask": ApiInfoEntry(
+            path="entry.cgi", min_version=1, max_version=3
+        ),
         "SYNO.FileStation.Upload": ApiInfoEntry(path="entry.cgi", min_version=1, max_version=2),
         "SYNO.FileStation.Download": ApiInfoEntry(path="entry.cgi", min_version=1, max_version=2),
         # Download Station entries mirror a real query.cgi capture (vdsm DSM

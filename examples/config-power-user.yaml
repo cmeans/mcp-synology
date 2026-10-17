@@ -29,7 +29,12 @@ modules:
     permission: write
     settings:
       file_type_indicator: text
-      async_timeout: 180
+      async_timeout: 180      # search_files and get_dir_size time limit (default 120)
+      # delete/copy/move/restore: how long a call waits before handing a still-running
+      # task off to the NAS (default 30, capped at 600). The reply gives a handle for
+      # file_task, which checks on the task or stops it.
+      delete_timeout: 120
+      copy_move_timeout: 300
       upload_timeout: 600
       download_timeout: 600
       default_download_dir: ~/Downloads

@@ -1608,14 +1608,19 @@ class TestErrorHandling:
         Before #160, create_folder answered DSM 1100 "Insufficient filesystem permissions"
         and delete_files DSM 900 "Unexpected server error".
         """
+        from unittest.mock import AsyncMock, MagicMock
+
         from mcp_synology.server import create_server
 
         _, _, config, _ = _unpack(nas_client)
         _skip_unless_write(config)
         tools = create_server(config)._tool_manager._tools
+        # delete_files takes the MCP context for progress (#245); the share check fails first.
+        mcp_ctx = MagicMock()
+        mcp_ctx.report_progress = AsyncMock()
         for name, kwargs in (
             ("create_folder", {"paths": ["/zzz_nonexistent_999/new"]}),
-            ("delete_files", {"paths": ["/zzz_nonexistent_999/x"]}),
+            ("delete_files", {"ctx": mcp_ctx, "paths": ["/zzz_nonexistent_999/x"]}),
             ("list_files", {"path": "/zzz_nonexistent_999"}),
         ):
             with pytest.raises(ToolError) as exc_info:
