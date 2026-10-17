@@ -43,6 +43,7 @@ if TYPE_CHECKING:
 def _make_ctx(
     allowed: set[str] | None = None,
     settings: dict | None = None,
+    shared_paths: list[str] | None = None,
 ) -> tuple[MCPServer, MagicMock, RegisterContext]:
     server = MCPServer("test-fs")
     manager = MagicMock()
@@ -60,6 +61,7 @@ def _make_ctx(
         allowed_tools=allowed,
         settings_dict=settings or {},
         display_name="test-nas",
+        allowed_local_paths=shared_paths,
     )
     return server, manager, ctx
 
@@ -372,7 +374,7 @@ class TestFilestationToolInvocation:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         monkeypatch.setattr(
-            "mcp_synology.modules.filestation.local_paths.default_downloads_dir",
+            "mcp_synology.core.local_paths.default_downloads_dir",
             lambda: tmp_path / "Downloads",
         )
         server, _manager, ctx = _make_ctx(allowed={"download_file"})
@@ -385,6 +387,35 @@ class TestFilestationToolInvocation:
             ctx=fake_mcp_ctx, path="/share/f.txt", dest_folder=str(tmp_path)
         )
         assert down.await_args.kwargs["allowed_roots"] == [(tmp_path / "Downloads").resolve()]
+
+    async def test_transfers_use_the_shared_paths(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """#257: the top-level list replaces the Downloads default and adds to the module's."""
+        monkeypatch.setattr(
+            "mcp_synology.core.local_paths.default_downloads_dir",
+            lambda: tmp_path / "Downloads",
+        )
+        for settings, expected in (
+            ({}, [(tmp_path / "shared").resolve()]),
+            (
+                {"allowed_local_paths": [str(tmp_path / "own")]},
+                [(tmp_path / "shared").resolve(), (tmp_path / "own").resolve()],
+            ),
+        ):
+            server, _manager, ctx = _make_ctx(
+                allowed={"download_file"},
+                settings=settings,
+                shared_paths=[str(tmp_path / "shared")],
+            )
+            down = self._capture_call(
+                monkeypatch, "mcp_synology.modules.filestation.transfer.download_file"
+            )
+            register(ctx)
+            await server._tool_manager._tools["download_file"].fn(
+                ctx=MagicMock(), path="/share/f.txt", dest_folder=str(tmp_path)
+            )
+            assert down.await_args.kwargs["allowed_roots"] == expected
 
     def test_empty_allowed_local_paths_is_rejected(self) -> None:
         """An empty list would refuse every transfer; that's a config mistake, not a policy."""

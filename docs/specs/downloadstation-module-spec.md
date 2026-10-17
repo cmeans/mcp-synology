@@ -129,7 +129,7 @@ DS-specific codes (`core/downloadstation_errors.py`) are dispatched when the API
 | 120 (common) | JSON-format API parameter error | Mapped to `invalid_parameter` with a specific message |
 | 544 (per task) | Not found, or not yours | Rendered as above; not in the code map because it only appears per task |
 
-Tool input is validated locally first and fails before any DSM call. A bad value gets `invalid_parameter` naming the parameter, plus `valid` values where there's a fixed set (status filters, sort keys, the `uri`/`torrent_file_path` choice). A missing local `torrent_file_path` gets `not_found`.
+Tool input is validated locally first and fails before any DSM call. A bad value gets `invalid_parameter` naming the parameter, plus `valid` values where there's a fixed set (status filters, sort keys, the `uri`/`torrent_file_path` choice). A `torrent_file_path` that isn't a `.torrent` or `.nzb` file gets `invalid_parameter`; one outside the allowed local folders (the top-level `allowed_local_paths` plus the module's own, #257) gets `permission_denied`, both before the file is read or its existence checked, so a refusal never reveals what exists outside. A missing file inside the folders gets `not_found`.
 
 ---
 
@@ -376,7 +376,7 @@ Create tasks from URIs, or from a local .torrent / .nzb file.
   - **a non-manager with an explicit `destination` but no default:** the task is created, with the note `Download Station won't start your tasks until your default destination is set; they stay waiting.`
   - **the Info API absent, or its config unreadable:** the request goes ahead unchanged.
 - Source URIs are redacted in DEBUG logs. The POST body DSM receives is not.
-- Validation: exactly one of `uri` / `torrent_file_path`; credentials only with `uri`; a non-empty URI list; the file must exist.
+- Validation: exactly one of `uri` / `torrent_file_path`; credentials only with `uri`; a non-empty URI list. For a file, in this order: a `.torrent` or `.nzb` extension (any case), inside the allowed local folders (resolved after `~`, `..` and symlinks; #257), then it must exist.
 
 ---
 

@@ -17,6 +17,7 @@ from mcp_synology.core.formatting import (
     format_timestamp,
     synology_error_response,
 )
+from mcp_synology.core.local_paths import refuse_outside_roots
 from mcp_synology.core.redaction import redact_title, redact_url, redact_urls
 from mcp_synology.modules.downloadstation.helpers import (
     STATUS_GROUPS,
@@ -507,6 +508,10 @@ async def _resolve_destination(
     )
 
 
+# The only files create_download uploads (#257).
+_TORRENT_SUFFIXES = (".torrent", ".nzb")
+
+
 async def create_download(
     client: DsmClient,
     *,
@@ -515,6 +520,7 @@ async def create_download(
     destination: str | None = None,
     username: str | None = None,
     password: str | None = None,
+    local_roots: list[Path] | None = None,
 ) -> str:
     """Create one or more download tasks.
 
@@ -527,6 +533,11 @@ async def create_download(
     ``Task.create`` (also POST) is the fallback when DS2 is unavailable, and
     the path for ``username``/``password`` sources, whose DS2 fields are
     unverified. Files go to DS2 only (v1 file upload is broken on DSM 7.2.2).
+
+    A ``torrent_file_path`` must end in ``.torrent`` or ``.nzb`` and lie inside
+    ``local_roots`` (the allowed local folders, #257); both are checked before the file
+    is read or its existence checked. ``local_roots`` of ``None`` is unconfined (direct
+    callers); the tool always passes them.
     """
     if uri is None and torrent_file_path is None:
         error_response(
@@ -553,7 +564,49 @@ async def create_download(
                 retryable=False,
                 param="username" if username is not None else "password",
             )
-        path = Path(torrent_file_path).expanduser()
+        raw = Path(torrent_file_path)
+        if raw.suffix.lower() not in _TORRENT_SUFFIXES:
+            error_response(
+                ErrorCode.INVALID_PARAMETER,
+                f"Create download refused: {torrent_file_path!r} isn't a .torrent or .nzb file.",
+                retryable=False,
+                param="torrent_file_path",
+                value=torrent_file_path,
+                suggestion="Pass a local .torrent or .nzb file, or a magnet or URL as `uri`.",
+            )
+        # Unexpanded: an unknown ~user is refused like any path outside (#257 review).
+        refuse_outside_roots(
+            "Create download",
+            "torrent_file_path",
+            torrent_file_path,
+            raw,
+            local_roots,
+            module="downloadstation",
+            hide_unknown_users=True,
+        )
+        try:
+            path = raw.expanduser()
+        except RuntimeError as e:  # only reachable unconfined (local_roots=None)
+            error_response(
+                ErrorCode.INVALID_PARAMETER,
+                f"Create download refused: {torrent_file_path!r} can't be expanded: {e}",
+                retryable=False,
+                param="torrent_file_path",
+                value=torrent_file_path,
+                suggestion="Pass an absolute local path, or one starting with ~/.",
+            )
+        # The rule is about the file that's sent: a .torrent link to another file type
+        # inside the folders is refused too (#257 review).
+        if path.resolve().suffix.lower() not in _TORRENT_SUFFIXES:
+            error_response(
+                ErrorCode.INVALID_PARAMETER,
+                f"Create download refused: {torrent_file_path!r} links to a file that isn't "
+                "a .torrent or .nzb file.",
+                retryable=False,
+                param="torrent_file_path",
+                value=torrent_file_path,
+                suggestion="Pass the .torrent or .nzb file itself.",
+            )
         if not path.is_file():
             error_response(
                 ErrorCode.NOT_FOUND,

@@ -16,7 +16,9 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from mcp_synology.core.local_paths import check_local_path_entries
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +86,14 @@ class AppConfig(BaseModel, extra="forbid"):
     auth: AuthConfig = Field(default_factory=AuthConfig)
     modules: dict[str, ModuleConfig]
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    # Local folders every module's tools may use; each module's own allowed_local_paths
+    # adds to it (#257). Unset keeps the per-module rule from before #257.
+    allowed_local_paths: list[str] | None = Field(default=None, min_length=1)
+
+    @field_validator("allowed_local_paths")
+    @classmethod
+    def _absolute_local_paths(cls, value: list[str] | None) -> list[str] | None:
+        return check_local_path_entries("allowed_local_paths", value)
 
     @property
     def display_name(self) -> str:

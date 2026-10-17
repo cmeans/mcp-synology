@@ -86,12 +86,14 @@ Fix:
    Application Privileges → Download Station**. Manager-only operations
    additionally need an admin account.
 
-**Local paths (`upload_file`, `download_file`).** The same code, with no DSM error
-number, means mcp-synology refused a local path outside `allowed_local_paths` before
-contacting the NAS. The message lists the allowed folders. Use a path inside one of
-them, or add the folder to `allowed_local_paths` in the `filestation` module settings
-(`"/"` allows everything on macOS and Linux). The default is your Downloads folder,
-and `default_download_dir` is always allowed. Paths are compared after resolving `~`,
+**Local paths (`upload_file`, `download_file`, `create_download`'s `torrent_file_path`).**
+The same code, with no DSM error number, means mcp-synology refused a local path outside
+the allowed folders before contacting the NAS. The message lists them. Use a path inside
+one of them, or list the folder in `allowed_local_paths`: at the top level of the config
+for every module, or in the module's settings (`"/"` allows everything on macOS and
+Linux). With no top-level list, the default is your Downloads folder, and a module's own
+list replaces it (include `~/Downloads` if you still want it); with a top-level list, a
+module's list adds to it. File Station's `default_download_dir` is always allowed. Paths are compared after resolving `~`,
 `..` and symlinks, so a symlink that points outside is refused too.
 
 ## api_not_found

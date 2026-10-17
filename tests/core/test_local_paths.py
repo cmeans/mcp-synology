@@ -1,4 +1,4 @@
-"""Tests for modules/filestation/local_paths.py — where upload/download may touch this machine."""
+"""Tests for core/local_paths.py — where tools may read and write on this machine."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from mcp_synology.modules.filestation.local_paths import (
+from mcp_synology.core.local_paths import (
     allowed_local_roots,
     default_downloads_dir,
     outside_allowed_roots,
@@ -90,7 +90,7 @@ class TestAllowedLocalRoots:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(
-            "mcp_synology.modules.filestation.local_paths.default_downloads_dir",
+            "mcp_synology.core.local_paths.default_downloads_dir",
             lambda: tmp_path / "Downloads",
         )
         assert allowed_local_roots(None, None) == [(tmp_path / "Downloads").resolve()]
@@ -216,3 +216,32 @@ class TestAllowedLocalPathsSetting:
 
         s = FileStationSettings(allowed_local_paths=["~/Downloads", str(tmp_path)])
         assert s.allowed_local_paths == ["~/Downloads", str(tmp_path)]
+
+
+class TestSharedPaths:
+    """#257: a top-level list shared by every module, plus each module's own."""
+
+    def test_shared_and_module_paths_are_unioned(self, tmp_path: Path) -> None:
+        s, m = tmp_path / "s", tmp_path / "m"
+        roots = allowed_local_roots([str(m)], shared_paths=[str(s)])
+        assert roots == [s.resolve(), m.resolve()]
+
+    def test_shared_set_drops_the_downloads_default(self, tmp_path: Path) -> None:
+        assert allowed_local_roots(None, shared_paths=[str(tmp_path)]) == [tmp_path.resolve()]
+
+    def test_unset_shared_keeps_todays_rule(self, tmp_path: Path) -> None:
+        assert allowed_local_roots(None) == [default_downloads_dir().resolve()]
+        assert allowed_local_roots([str(tmp_path)]) == [tmp_path.resolve()]
+
+    def test_default_download_dir_added_once(self, tmp_path: Path) -> None:
+        s = str(tmp_path)
+        assert allowed_local_roots([s], s, shared_paths=[s]) == [tmp_path.resolve()]
+
+    def test_error_names_the_setting(self) -> None:
+        with pytest.raises(ValueError) as shared:
+            allowed_local_roots(None, shared_paths=["/a\x00b"])
+        assert "allowed_local_paths" in str(shared.value)
+        assert "filestation setting" not in str(shared.value)
+        with pytest.raises(ValueError) as own:
+            allowed_local_roots(["/a\x00b"], module="downloadstation")
+        assert "downloadstation setting allowed_local_paths" in str(own.value)

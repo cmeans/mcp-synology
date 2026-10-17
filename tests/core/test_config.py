@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import pytest
 import yaml
+from pydantic import ValidationError
 
 from mcp_synology.core.config import (
     AppConfig,
@@ -280,3 +281,23 @@ class TestLoadConfig:
         assert config.connection is not None
         assert config.connection.host == "192.168.1.100"
         assert "filestation" in config.modules
+
+
+class TestTopLevelAllowedLocalPaths:
+    """#257: one allowed_local_paths for every module, at the top level."""
+
+    def test_accepts_home_relative_entries(self) -> None:
+        config = AppConfig(**{**_minimal_raw(), "allowed_local_paths": ["~/x", "/srv/in"]})
+        assert config.allowed_local_paths == ["~/x", "/srv/in"]
+
+    def test_unset_by_default(self) -> None:
+        assert AppConfig(**_minimal_raw()).allowed_local_paths is None
+
+    @pytest.mark.parametrize("value", [["relative/dir"], []])
+    def test_rejects_relative_or_empty(self, value: list[str]) -> None:
+        with pytest.raises(ValidationError, match="allowed_local_paths"):
+            AppConfig(**{**_minimal_raw(), "allowed_local_paths": value})
+
+    def test_unknown_top_level_key_still_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            AppConfig(**{**_minimal_raw(), "allowed_local_path": ["/x"]})

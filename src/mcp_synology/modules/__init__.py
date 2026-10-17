@@ -93,6 +93,8 @@ class RegisterContext:
     allowed_tools: set[str]
     settings_dict: dict[str, Any]
     display_name: str
+    # The top-level allowed_local_paths, shared by every module (#257).
+    allowed_local_paths: list[str] | None = None
 
 
 def default_annotations(tier: PermissionTier) -> ToolAnnotations:

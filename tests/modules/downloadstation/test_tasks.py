@@ -917,6 +917,133 @@ class TestCreateDownloadFile:
             "suggestion", ""
         )
 
+    @respx.mock
+    @pytest.mark.parametrize("name", ["id_rsa", "notes.txt", "x.torrent.sh"])
+    async def test_torrent_wrong_extension_refused(
+        self, mock_client: DsmClient, tmp_path: Path, name: str
+    ) -> None:
+        """#257: only .torrent and .nzb files, checked before anything is read or sent."""
+        route = respx.post("http://nas:5000/webapi/entry.cgi")
+        f = tmp_path / name
+        f.write_bytes(b"secret")
+        with pytest.raises(ToolError) as exc:
+            await create_download(mock_client, torrent_file_path=str(f), local_roots=[tmp_path])
+        envelope = _envelope(exc.value)
+        assert envelope["code"] == "invalid_parameter"
+        assert envelope["param"] == "torrent_file_path"
+        assert ".torrent" in envelope["message"]
+        assert ".nzb" in envelope["message"]
+        assert not route.called
+
+    @respx.mock
+    @pytest.mark.parametrize("name", ["UPPER.TORRENT", "news.nzb", "a.Nzb"])
+    async def test_torrent_extension_case_insensitive(
+        self, mock_client: DsmClient, tmp_path: Path, name: str
+    ) -> None:
+        _has_default()
+        respx.post("http://nas:5000/webapi/entry.cgi").respond(json=captured("ds2_task_create_url"))
+        f = tmp_path / name
+        f.write_bytes(b"d4:infod6:lengthi100eee")
+        result = await create_download(
+            mock_client, torrent_file_path=str(f), local_roots=[tmp_path]
+        )
+        assert "dbid_1" in result
+
+    @respx.mock
+    async def test_torrent_outside_roots_refused_before_existence(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """#257: a path outside the folders is refused whether or not it exists, so the
+        reply never says what exists outside."""
+        route = respx.post("http://nas:5000/webapi/entry.cgi")
+        (tmp_path / "ok").mkdir()
+        outside = tmp_path / "out.torrent"
+        outside.write_bytes(b"x")
+        for path in (str(outside), "/nonexistent/x.torrent"):
+            with pytest.raises(ToolError) as exc:
+                await create_download(
+                    mock_client, torrent_file_path=path, local_roots=[tmp_path / "ok"]
+                )
+            envelope = _envelope(exc.value)
+            assert envelope["code"] == "permission_denied", path
+            assert "allowed_local_paths" in envelope["suggestion"]
+            assert "downloadstation" in envelope["suggestion"]
+        assert not route.called
+
+    @respx.mock
+    async def test_torrent_symlink_out_refused(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        route = respx.post("http://nas:5000/webapi/entry.cgi")
+        ok = tmp_path / "ok"
+        ok.mkdir()
+        secret = tmp_path / "id_rsa"
+        secret.write_bytes(b"secret")
+        link = ok / "link.torrent"
+        link.symlink_to(secret)
+        with pytest.raises(ToolError) as exc:
+            await create_download(mock_client, torrent_file_path=str(link), local_roots=[ok])
+        envelope = _envelope(exc.value)
+        assert envelope["code"] == "permission_denied"
+        assert "resolves to" in envelope["message"]
+        assert not route.called
+
+    @respx.mock
+    async def test_torrent_inside_roots_uploads(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        _has_default()
+        route = respx.post("http://nas:5000/webapi/entry.cgi").respond(
+            json=captured("ds2_task_create_url")
+        )
+        torrent = tmp_path / "ubuntu.torrent"
+        torrent.write_bytes(b"d4:infod6:lengthi100eee")
+        result = await create_download(
+            mock_client, torrent_file_path=str(torrent), local_roots=[tmp_path]
+        )
+        assert "dbid_1" in result
+        assert route.called
+
+    @respx.mock
+    async def test_torrent_unknown_home_refused_like_outside(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """Final review #257: an unknown ~user is the same refusal as any path outside, so
+        the reply never reveals which local users exist."""
+        route = respx.post("http://nas:5000/webapi/entry.cgi")
+        envelopes = []
+        for path in ("~nosuchuserxyz257/x.torrent", "~root/x.torrent"):
+            with pytest.raises(ToolError) as exc:
+                await create_download(mock_client, torrent_file_path=path, local_roots=[tmp_path])
+            envelopes.append(_envelope(exc.value))
+        assert [e["code"] for e in envelopes] == ["permission_denied", "permission_denied"]
+        assert not route.called
+
+    @respx.mock
+    async def test_torrent_symlink_to_other_file_type_refused(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """Final review #257: the extension rule applies to the file a link points to."""
+        route = respx.post("http://nas:5000/webapi/entry.cgi")
+        secret = tmp_path / "secret.pdf"
+        secret.write_bytes(b"%PDF")
+        link = tmp_path / "inner.torrent"
+        link.symlink_to(secret)
+        with pytest.raises(ToolError) as exc:
+            await create_download(mock_client, torrent_file_path=str(link), local_roots=[tmp_path])
+        envelope = _envelope(exc.value)
+        assert envelope["code"] == "invalid_parameter"
+        assert envelope["param"] == "torrent_file_path"
+        assert not route.called
+
+    async def test_torrent_unknown_home_unconfined_is_invalid_parameter(
+        self, mock_client: DsmClient
+    ) -> None:
+        """Direct (unconfined) callers get a structured error, not a crash."""
+        with pytest.raises(ToolError) as exc:
+            await create_download(mock_client, torrent_file_path="~nosuchuserxyz257/x.torrent")
+        assert _envelope(exc.value)["code"] == "invalid_parameter"
+
     async def test_missing_file_raises_not_found(self, mock_client: DsmClient) -> None:
         with pytest.raises(ToolError) as exc:
             await create_download(mock_client, torrent_file_path="/nonexistent/file.torrent")

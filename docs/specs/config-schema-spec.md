@@ -145,11 +145,22 @@ modules:
       # and symlinks. "/" allows everything on macOS and Linux; on Windows list
       # each drive ("C:\\", "D:\\"). default_download_dir is always allowed too.
       # Entries must be absolute or start with ~.
-      # Default: the user's Downloads folder (XDG user-dirs on Linux, ~/Downloads
-      # on macOS, %USERPROFILE%\Downloads on Windows)
+      # Added to the top-level allowed_local_paths when that's set (#257).
+      # Default, with no top-level list: the user's Downloads folder (XDG
+      # user-dirs on Linux, ~/Downloads on macOS, %USERPROFILE%\Downloads on
+      # Windows)
       # allowed_local_paths:
       #   - ~/Downloads
       #   - ~/Media
+
+  # downloadstation:
+  #   enabled: true
+  #   permission: write
+  #   settings:
+  #     # Folders create_download may read .torrent/.nzb files from, added to the
+  #     # top-level allowed_local_paths (same default rule as File Station's).
+  #     allowed_local_paths:
+  #       - ~/Torrents
 
   # Example: future module (not yet implemented)
   # docker:
@@ -162,6 +173,14 @@ modules:
   # system_info:
   #   enabled: true
   #   permission: read
+
+# ─── Local folders ───────────────────────────────────────────────
+# Optional. Local folders every module's local-path tools may use (#257):
+# upload_file/download_file, and create_download's torrent files. A module's
+# own allowed_local_paths (in its settings) adds to this list. Unset: each
+# module uses its own list, or the Downloads folder.
+# allowed_local_paths:
+#   - ~/Downloads
 
 # ─── Logging ─────────────────────────────────────────────────────
 # Optional. Controls server-side logging behavior.
@@ -195,6 +214,7 @@ logging:
 | `auth` | `object` | No | `{}` | Credentials that override the keyring (env vars override these). A username here is fine; a password or device_id is stored in plaintext. |
 | `modules` | `object` | **Yes** | — | Module enable/disable and configuration. |
 | `logging` | `object` | No | See defaults | Logging configuration. |
+| `allowed_local_paths` | `list[str]` | No | — | Local folders that every module's local-path tools may use (#257): File Station's `upload_file`/`download_file`, Download Station's `create_download` torrent files. A module's own `allowed_local_paths` adds to this list. While it's unset, each module keeps the rule from before #257: its own list replaces the default, the user's Downloads folder. When it's set, the Downloads default is not added implicitly. Same entry rules and checks as File Station's setting below (absolute or `~`; empty or relative is a config error). |
 
 **Generated PERMISSIONS section.** Unless `instructions_file` replaces them, the server instructions end with a PERMISSIONS section when the connection withholds tools. It lists each enabled module's tools above its `permission` tier (e.g. File Station's 8 WRITE tools at `permission: read`) and each registered module that isn't enabled (absent from `modules:`, or listed with `enabled: false`), with the config change that enables it (`permission: write`, adding the module, or `enabled: true`), and tells the model to say such a tool exists but isn't enabled. Registration is unaffected.
 
@@ -236,7 +256,13 @@ Each key is a module name (e.g., `filestation`, `docker`, `system_info`). The va
 | `search_timeout`, `dir_size_timeout` | `int` | No | `async_timeout` | Per-operation overrides (seconds, 10–3600). The task is stopped when it runs out. |
 | `delete_timeout`, `copy_move_timeout` | `int` | No | `30` | How long `delete_files` (`delete_timeout`) and `copy_files`, `move_files` and `restore_from_recycle_bin` (`copy_move_timeout`) wait before handing a still-running task off (seconds, 10–3600 accepted). The wait is capped at **600 s** whatever the setting, below known client timeouts (a client's timeout arrives as a cancel, which stops the task). A handed-off task keeps running on the NAS and the reply gives a handle for `file_task` (#245). |
 | `upload_timeout`, `download_timeout` | `int` | No | `300` | Transfer timeouts (seconds, 10–3600). |
-| `allowed_local_paths` | `list[str]` | No | the user's Downloads folder | Local folders `upload_file` and `download_file` may use, including subfolders. Compared after resolving `~`, `..` and symlinks; `/` allows everything on macOS/Linux (on Windows, list each drive). `default_download_dir` is always allowed. Entries must be absolute or start with `~` (a relative entry would depend on the server's working directory); an empty list, a relative entry, or one that can't be resolved (a NUL byte, a symlink loop) is a config error. A path outside is refused with `permission_denied` before any NAS request; a path that can't be resolved is `invalid_parameter`. The refusal shows where a path resolves to only when the path itself is inside an allowed folder (a symlink there leading out), so it never reveals what exists outside. |
+| `allowed_local_paths` | `list[str]` | No | the user's Downloads folder (unless the top-level `allowed_local_paths` is set) | Local folders `upload_file` and `download_file` may use, including subfolders, added to the top-level `allowed_local_paths` when that's set (#257). Compared after resolving `~`, `..` and symlinks; `/` allows everything on macOS/Linux (on Windows, list each drive). `default_download_dir` is always allowed. Entries must be absolute or start with `~` (a relative entry would depend on the server's working directory); an empty list, a relative entry, or one that can't be resolved (a NUL byte, a symlink loop) is a config error. A path outside is refused with `permission_denied` before any NAS request; a path that can't be resolved is `invalid_parameter`. The refusal shows where a path resolves to only when the path itself is inside an allowed folder (a symlink there leading out), so it never reveals what exists outside. |
+
+### `modules.downloadstation.settings` Object
+
+| Key | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `allowed_local_paths` | `list[str]` | No | the user's Downloads folder (unless the top-level `allowed_local_paths` is set) | Local folders `create_download` may read a `torrent_file_path` from, added to the top-level list when that's set (#257). Same entry rules and checks as File Station's. Only `.torrent` and `.nzb` files are read. |
 
 ### `logging` Object
 

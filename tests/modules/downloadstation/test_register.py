@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from mcp.server.mcpserver import MCPServer
 
 from mcp_synology.modules import RegisterContext
@@ -18,6 +19,7 @@ from mcp_synology.modules.downloadstation import MODULE_INFO, register
 def _make_ctx(
     allowed: set[str] | None = None,
     settings: dict | None = None,
+    shared_paths: list[str] | None = None,
 ) -> tuple[MCPServer, MagicMock, RegisterContext]:
     server = MCPServer("test-ds")
     manager = MagicMock()
@@ -34,6 +36,7 @@ def _make_ctx(
         allowed_tools=allowed,
         settings_dict=settings or {},
         display_name="test-nas",
+        allowed_local_paths=shared_paths,
     )
     return server, manager, ctx
 
@@ -203,6 +206,30 @@ class TestDownloadstationPhase2ToolInvocation:
         result = await server._tool_manager._tools["create_download"].fn(uri="magnet:?...")
         assert result == f"<<{target}-result>>"
         mock.assert_awaited_once()
+
+    async def test_create_download_passes_the_allowed_folders(self, monkeypatch, tmp_path) -> None:
+        """#257: the shared folders plus the module's own reach create_download."""
+        server, _manager, ctx = _make_ctx(
+            settings={"allowed_local_paths": [str(tmp_path / "own")]},
+            shared_paths=[str(tmp_path / "shared")],
+        )
+        mock = self._capture_call(
+            monkeypatch, "mcp_synology.modules.downloadstation.tasks.create_download"
+        )
+        register(ctx)
+        await server._tool_manager._tools["create_download"].fn(torrent_file_path="x.torrent")
+        assert mock.await_args.kwargs["local_roots"] == [
+            (tmp_path / "shared").resolve(),
+            (tmp_path / "own").resolve(),
+        ]
+
+    def test_relative_allowed_local_paths_rejected(self) -> None:
+        from pydantic import ValidationError
+
+        from mcp_synology.modules.downloadstation import DownloadStationSettings
+
+        with pytest.raises(ValidationError, match="allowed_local_paths"):
+            DownloadStationSettings(allowed_local_paths=["relative"])
 
     async def test_delete_download_invocation(self, monkeypatch) -> None:
         server, _manager, ctx = _make_ctx()

@@ -23,6 +23,10 @@ connection:
   https: true
   verify_ssl: false  # Self-signed cert
 
+# Local folders every module's local-path tools may use; a module's own list adds to it.
+# allowed_local_paths:  # every module
+#   - ~/Downloads
+
 modules:
   filestation:
     enabled: true
@@ -38,7 +42,7 @@ modules:
       upload_timeout: 600
       download_timeout: 600
       default_download_dir: ~/Downloads
-      allowed_local_paths:  # local folders upload/download may use (default: Downloads)
+      allowed_local_paths:  # adds to a top-level list; without one, replaces the Downloads default
         - ~/Downloads
         - ~/Media
       default_upload_dir: /home/uploads
@@ -47,6 +51,10 @@ modules:
   downloadstation:
     enabled: true  # needs the Download Station package on the NAS
     permission: write
+    settings:
+      allowed_local_paths:  # folders create_download may read .torrent/.nzb files from;
+        - ~/Downloads       # adds to a top-level list; without one, replaces the Downloads
+        - ~/Torrents        # default, so ~/Downloads is listed to keep it
 
 logging:
   level: debug
