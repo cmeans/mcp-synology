@@ -1,0 +1,9622 @@
+{
+ "_provenance": "Live capture, DSM 7.2.2 with Synology Photos 1.9.1 on virtual-dsm, 2026-10-17, for #258. Non-admin user mcptest (granted SYNO.Foto.AppInstance) unless the key starts with team_ (admin) or noperm_ (an ungranted user). Requests are form POSTs with JSON-encoded values unless request.http says GET. Built by photos_fixtures.py from the capture harness output.",
+ "api_info": {
+  "SYNO.Foto.BackgroundTask.File": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.Foto.BackgroundTask.Info": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.Foto.Browse.Album": {
+   "maxVersion": 5,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.Foto.Browse.Category": {
+   "maxVersion": 4,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.Foto.Browse.Concept": {
+   "maxVersion": 2,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.Foto.Browse.ConditionAlbum": {
+   "maxVersion": 4,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.Foto.Browse.Diff": {
+   "maxVersion": 7,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.Foto.Browse.Folder": {
+   "maxVersion": 2,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.Foto.Browse.GeneralTag": {
+   "maxVersion": 2,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.Foto.Browse.Geocoding": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.Foto.Browse.Item": {
+   "maxVersion": 7,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.Foto.Browse.NormalAlbum": {
+   "maxVersion": 4,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.Foto.Browse.Person": {
+   "maxVersion": 3,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.Foto.Browse.RecentlyAdded": {
+   "maxVersion": 6,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.Foto.Browse.Similar": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.Foto.Browse.SimilarItem": {
+   "maxVersion": 2,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.Foto.Browse.SimilarTimeline": {
+   "maxVersion": 2,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.Foto.Browse.Timeline": {
+   "maxVersion": 6,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.Foto.Browse.Unit": {
+   "maxVersion": 3,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.Foto.Development.Admin": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.Foto.Download": {
+   "maxVersion": 2,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.Foto.Favorite": {
+   "maxVersion": 2,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.Foto.Index": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.Foto.Migration": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.Foto.Notification": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.Foto.PhotoRequest": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.Foto.PublicSharing": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.Foto.RegeneratePreview": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.Foto.Search.Filter": {
+   "maxVersion": 4,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.Foto.Search.Search": {
+   "maxVersion": 7,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.Foto.Setting.Admin": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.Foto.Setting.Guest": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.Foto.Setting.MobileCompatibility": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.Foto.Setting.TeamSpace": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.Foto.Setting.User": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.Foto.Setting.Wizard": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.Foto.Sharing.Misc": {
+   "maxVersion": 2,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.Foto.Sharing.Passphrase": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.Foto.Streaming": {
+   "maxVersion": 2,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.Foto.Thumbnail": {
+   "maxVersion": 2,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.Foto.Udc": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.Foto.Upload.ConvertedFile": {
+   "maxVersion": 5,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.Foto.Upload.Face": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.Foto.Upload.Item": {
+   "maxVersion": 8,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.Foto.Upload.PhotoRequestItem": {
+   "maxVersion": 3,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.Foto.UserInfo": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.FotoTeam.BackgroundTask.File": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.FotoTeam.Browse.Concept": {
+   "maxVersion": 2,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.FotoTeam.Browse.Diff": {
+   "maxVersion": 7,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.FotoTeam.Browse.Folder": {
+   "maxVersion": 2,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.FotoTeam.Browse.GeneralTag": {
+   "maxVersion": 2,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.FotoTeam.Browse.Geocoding": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.FotoTeam.Browse.Item": {
+   "maxVersion": 7,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.FotoTeam.Browse.Person": {
+   "maxVersion": 3,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.FotoTeam.Browse.RecentlyAdded": {
+   "maxVersion": 6,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.FotoTeam.Browse.Similar": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.FotoTeam.Browse.SimilarItem": {
+   "maxVersion": 2,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.FotoTeam.Browse.SimilarTimeline": {
+   "maxVersion": 2,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.FotoTeam.Browse.Timeline": {
+   "maxVersion": 6,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.FotoTeam.Browse.Unit": {
+   "maxVersion": 3,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.FotoTeam.Download": {
+   "maxVersion": 2,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.FotoTeam.Index": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.FotoTeam.RegeneratePreview": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.FotoTeam.Search.Filter": {
+   "maxVersion": 4,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.FotoTeam.Search.Search": {
+   "maxVersion": 7,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.FotoTeam.Sharing.FolderBatchPermission": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.FotoTeam.Sharing.FolderPermission": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.FotoTeam.Sharing.Passphrase": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.FotoTeam.Streaming": {
+   "maxVersion": 2,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.FotoTeam.Thumbnail": {
+   "maxVersion": 2,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.FotoTeam.Upload.ConvertedFile": {
+   "maxVersion": 5,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.FotoTeam.Upload.Face": {
+   "maxVersion": 1,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  },
+  "SYNO.FotoTeam.Upload.Item": {
+   "maxVersion": 8,
+   "minVersion": 1,
+   "path": "entry.cgi",
+   "requestFormat": "JSON"
+  }
+ },
+ "userinfo-me": {
+  "request": {
+   "api": "SYNO.Foto.UserInfo",
+   "method": "me",
+   "version": "1",
+   "http": "POST",
+   "params": {}
+  },
+  "response": {
+   "data": {
+    "enabled": true,
+    "id": 2,
+    "is_admin": false,
+    "is_migration_finished": true,
+    "name": "mcptest",
+    "profile": {
+     "email": "",
+     "emails": [],
+     "groups": [
+      {
+       "gid": 100,
+       "id": "7d2d6e6f-5a9a-4a7e-ade4-ec61da3b9679"
+      }
+     ],
+     "id": "314fe8c9-7329-4f91-8bc2-f52518b77d01",
+     "nickName": "",
+     "photo": "",
+     "preferredColor": "#499df2",
+     "preferredLanguage": "def",
+     "timezone": "Central",
+     "timezoneUI": "def",
+     "title": "MCP test user",
+     "uid": 1027,
+     "userName": "mcptest"
+    },
+    "uid": 1027
+   },
+   "success": true
+  }
+ },
+ "setting-user": {
+  "request": {
+   "api": "SYNO.Foto.Setting.User",
+   "method": "get",
+   "version": "1",
+   "http": "POST",
+   "params": {}
+  },
+  "response": {
+   "data": {
+    "alias": "",
+    "ame_status": {
+     "has_h264": false,
+     "has_hevc": false,
+     "has_license": false,
+     "has_vc1": false,
+     "is_ame_install": false,
+     "is_ame_v2": false,
+     "is_ame_v4": false,
+     "need_vc1": false
+    },
+    "auto_generate_thumbnail": true,
+    "copy_move_default_action": "skip",
+    "date_format": "yyyy-mm-dd",
+    "enable_concept": false,
+    "enable_home_service": true,
+    "enable_person": false,
+    "enable_regenerate_previews_by_nas": true,
+    "enable_similar": false,
+    "is_ge_dsm71": true,
+    "is_ge_dsm72": true,
+    "item_sort_by": "takentime",
+    "show_item_info_in_lightbox": false,
+    "sort_direction": "asc",
+    "team_space_permission": "none",
+    "theme": "auto",
+    "time_format": "24",
+    "timeline_group_unit": "day",
+    "upload_default_action": "ignore"
+   },
+   "success": true
+  }
+ },
+ "index-get": {
+  "request": {
+   "api": "SYNO.Foto.Index",
+   "method": "get",
+   "version": "1",
+   "http": "POST",
+   "params": {}
+  },
+  "response": {
+   "data": {
+    "basic": 0,
+    "concept_detection": 0,
+    "face_extraction": 0,
+    "geo_coding": 0,
+    "metadata": 0,
+    "metadata_updating": 0,
+    "person_clustering": 0,
+    "thumbnail": 0
+   },
+   "success": true
+  }
+ },
+ "folder-get-root": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Folder",
+   "method": "get",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "id": "0"
+   }
+  },
+  "response": {
+   "data": {
+    "folder": {
+     "id": 3,
+     "name": "/",
+     "owner_user_id": 2,
+     "parent": 3,
+     "passphrase": "",
+     "shared": false,
+     "sort_by": "default",
+     "sort_direction": "default"
+    }
+   },
+   "success": true
+  }
+ },
+ "pre-list": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Folder",
+   "method": "list",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "id": "3",
+    "offset": "0",
+    "limit": "500",
+    "sort_by": "\"filename\"",
+    "sort_direction": "\"asc\""
+   }
+  },
+  "response": {
+   "data": {
+    "list": []
+   },
+   "success": true
+  }
+ },
+ "pre-album-list": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Album",
+   "method": "list",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "offset": "0",
+    "limit": "500",
+    "sort_by": "\"create_time\"",
+    "sort_direction": "\"desc\""
+   }
+  },
+  "response": {
+   "data": {
+    "list": [
+     {
+      "cant_migrate_condition": {},
+      "condition": {},
+      "create_time": 1792274063,
+      "end_time": 0,
+      "freeze_album": false,
+      "id": 7,
+      "item_count": 0,
+      "name": "mcp-spec-album",
+      "owner_user_id": 2,
+      "passphrase": "",
+      "shared": false,
+      "sort_by": "default",
+      "sort_direction": "default",
+      "start_time": 0,
+      "temporary_shared": false,
+      "type": "normal",
+      "version": 187
+     }
+    ]
+   },
+   "success": true
+  }
+ },
+ "pre-album-cleanup": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Album",
+   "method": "delete",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[7]"
+   }
+  },
+  "response": {
+   "success": true
+  }
+ },
+ "folder-create": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Folder",
+   "method": "create",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "target_id": "3",
+    "name": "\"mcp-spec-capture\""
+   }
+  },
+  "response": {
+   "data": {
+    "folder": {
+     "id": 21,
+     "name": "/mcp-spec-capture",
+     "owner_user_id": 2,
+     "parent": 3,
+     "passphrase": "",
+     "shared": false,
+     "sort_by": "default",
+     "sort_direction": "default"
+    }
+   },
+   "success": true
+  }
+ },
+ "folder-create-duplicate-name": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Folder",
+   "method": "create",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "target_id": "21",
+    "name": "\"mcp-spec-capture\""
+   }
+  },
+  "response": {
+   "data": {
+    "folder": {
+     "id": 22,
+     "name": "/mcp-spec-capture/mcp-spec-capture",
+     "owner_user_id": 2,
+     "parent": 21,
+     "passphrase": "",
+     "shared": false,
+     "sort_by": "default",
+     "sort_direction": "default"
+    }
+   },
+   "success": true
+  }
+ },
+ "folder-create-numeric-name": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Folder",
+   "method": "create",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "target_id": "21",
+    "name": "\"2024\""
+   }
+  },
+  "response": {
+   "data": {
+    "folder": {
+     "id": 23,
+     "name": "/mcp-spec-capture/2024",
+     "owner_user_id": 2,
+     "parent": 21,
+     "passphrase": "",
+     "shared": false,
+     "sort_by": "default",
+     "sort_direction": "default"
+    }
+   },
+   "success": true
+  }
+ },
+ "folder-create-sub": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Folder",
+   "method": "create",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "target_id": "21",
+    "name": "\"sub\""
+   }
+  },
+  "response": {
+   "data": {
+    "folder": {
+     "id": 24,
+     "name": "/mcp-spec-capture/sub",
+     "owner_user_id": 2,
+     "parent": 21,
+     "passphrase": "",
+     "shared": false,
+     "sort_by": "default",
+     "sort_direction": "default"
+    }
+   },
+   "success": true
+  }
+ },
+ "folder-create-dest": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Folder",
+   "method": "create",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "target_id": "21",
+    "name": "\"dest\""
+   }
+  },
+  "response": {
+   "data": {
+    "folder": {
+     "id": 25,
+     "name": "/mcp-spec-capture/dest",
+     "owner_user_id": 2,
+     "parent": 21,
+     "passphrase": "",
+     "shared": false,
+     "sort_by": "default",
+     "sort_direction": "default"
+    }
+   },
+   "success": true
+  }
+ },
+ "folder-rename": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Folder",
+   "method": "rename",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "24",
+    "name": "\"sub-renamed\""
+   }
+  },
+  "response": {
+   "data": {
+    "folder": {
+     "id": 24,
+     "name": "/mcp-spec-capture/sub-renamed",
+     "owner_user_id": 2,
+     "parent": 21,
+     "passphrase": "",
+     "shared": false,
+     "sort_by": "default",
+     "sort_direction": "default"
+    }
+   },
+   "success": true
+  }
+ },
+ "folder-rename-GET": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Folder",
+   "method": "rename",
+   "version": "1",
+   "http": "GET",
+   "params": {
+    "id": "24",
+    "name": "\"sub-post\""
+   }
+  },
+  "response": {
+   "data": {
+    "folder": {
+     "id": 24,
+     "name": "/mcp-spec-capture/sub-post",
+     "owner_user_id": 2,
+     "parent": 21,
+     "passphrase": "",
+     "shared": false,
+     "sort_by": "default",
+     "sort_direction": "default"
+    }
+   },
+   "success": true
+  }
+ },
+ "folder-list": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Folder",
+   "method": "list",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "id": "21",
+    "offset": "0",
+    "limit": "50",
+    "sort_by": "\"filename\"",
+    "sort_direction": "\"asc\"",
+    "additional": "[\"thumbnail\", \"access_permission\", \"sharing_info\"]"
+   }
+  },
+  "response": {
+   "data": {
+    "list": [
+     {
+      "additional": {
+       "access_permission": {
+        "download": true,
+        "manage": true,
+        "own": true,
+        "upload": true,
+        "view": true
+       },
+       "sharing_info": {
+        "sharing_link": ""
+       },
+       "thumbnail": []
+      },
+      "id": 23,
+      "name": "/mcp-spec-capture/2024",
+      "owner_user_id": 2,
+      "parent": 21,
+      "passphrase": "",
+      "shared": false,
+      "sort_by": "default",
+      "sort_direction": "default"
+     },
+     {
+      "additional": {
+       "access_permission": {
+        "download": true,
+        "manage": true,
+        "own": true,
+        "upload": true,
+        "view": true
+       },
+       "sharing_info": {
+        "sharing_link": ""
+       },
+       "thumbnail": []
+      },
+      "id": 25,
+      "name": "/mcp-spec-capture/dest",
+      "owner_user_id": 2,
+      "parent": 21,
+      "passphrase": "",
+      "shared": false,
+      "sort_by": "default",
+      "sort_direction": "default"
+     },
+     {
+      "additional": {
+       "access_permission": {
+        "download": true,
+        "manage": true,
+        "own": true,
+        "upload": true,
+        "view": true
+       },
+       "sharing_info": {
+        "sharing_link": ""
+       },
+       "thumbnail": []
+      },
+      "id": 22,
+      "name": "/mcp-spec-capture/mcp-spec-capture",
+      "owner_user_id": 2,
+      "parent": 21,
+      "passphrase": "",
+      "shared": false,
+      "sort_by": "default",
+      "sort_direction": "default"
+     },
+     {
+      "additional": {
+       "access_permission": {
+        "download": true,
+        "manage": true,
+        "own": true,
+        "upload": true,
+        "view": true
+       },
+       "sharing_info": {
+        "sharing_link": ""
+       },
+       "thumbnail": []
+      },
+      "id": 24,
+      "name": "/mcp-spec-capture/sub-post",
+      "owner_user_id": 2,
+      "parent": 21,
+      "passphrase": "",
+      "shared": false,
+      "sort_by": "default",
+      "sort_direction": "default"
+     }
+    ]
+   },
+   "success": true
+  }
+ },
+ "folder-list-v1": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Folder",
+   "method": "list",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "21",
+    "offset": "0",
+    "limit": "50"
+   }
+  },
+  "response": {
+   "data": {
+    "list": [
+     {
+      "id": 23,
+      "name": "/mcp-spec-capture/2024",
+      "owner_user_id": 2,
+      "parent": 21,
+      "passphrase": "",
+      "shared": false,
+      "sort_by": "default",
+      "sort_direction": "default"
+     },
+     {
+      "id": 25,
+      "name": "/mcp-spec-capture/dest",
+      "owner_user_id": 2,
+      "parent": 21,
+      "passphrase": "",
+      "shared": false,
+      "sort_by": "default",
+      "sort_direction": "default"
+     },
+     {
+      "id": 22,
+      "name": "/mcp-spec-capture/mcp-spec-capture",
+      "owner_user_id": 2,
+      "parent": 21,
+      "passphrase": "",
+      "shared": false,
+      "sort_by": "default",
+      "sort_direction": "default"
+     },
+     {
+      "id": 24,
+      "name": "/mcp-spec-capture/sub-post",
+      "owner_user_id": 2,
+      "parent": 21,
+      "passphrase": "",
+      "shared": false,
+      "sort_by": "default",
+      "sort_direction": "default"
+     }
+    ]
+   },
+   "success": true
+  }
+ },
+ "folder-get": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Folder",
+   "method": "get",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "id": "21",
+    "additional": "[\"access_permission\", \"sharing_info\", \"thumbnail\"]"
+   }
+  },
+  "response": {
+   "data": {
+    "folder": {
+     "additional": {
+      "access_permission": {
+       "download": true,
+       "manage": true,
+       "own": true,
+       "upload": true,
+       "view": true
+      },
+      "sharing_info": {
+       "sharing_link": ""
+      },
+      "thumbnail": []
+     },
+     "id": 21,
+     "name": "/mcp-spec-capture",
+     "owner_user_id": 2,
+     "parent": 3,
+     "passphrase": "",
+     "shared": false,
+     "sort_by": "default",
+     "sort_direction": "default"
+    }
+   },
+   "success": true
+  }
+ },
+ "folder-get-by-name": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Folder",
+   "method": "get",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "name": "\"/mcp-spec-capture\""
+   }
+  },
+  "response": {
+   "data": {
+    "folder": {
+     "id": 21,
+     "name": "/mcp-spec-capture",
+     "owner_user_id": 2,
+     "parent": 3,
+     "passphrase": "",
+     "shared": false,
+     "sort_by": "default",
+     "sort_direction": "default"
+    }
+   },
+   "success": true
+  }
+ },
+ "folder-list-parents": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Folder",
+   "method": "list_parents",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "24",
+    "default_sort_direction": "\"asc\""
+   }
+  },
+  "response": {
+   "data": {
+    "list": [
+     {
+      "id": 3,
+      "name": "/",
+      "owner_user_id": 2,
+      "parent": 3,
+      "passphrase": "",
+      "shared": false,
+      "sort_by": "default",
+      "sort_direction": "default"
+     },
+     {
+      "id": 21,
+      "name": "/mcp-spec-capture",
+      "owner_user_id": 2,
+      "parent": 3,
+      "passphrase": "",
+      "shared": false,
+      "sort_by": "default",
+      "sort_direction": "default"
+     },
+     {
+      "id": 23,
+      "name": "/mcp-spec-capture/2024",
+      "owner_user_id": 2,
+      "parent": 21,
+      "passphrase": "",
+      "shared": false,
+      "sort_by": "default",
+      "sort_direction": "default"
+     },
+     {
+      "id": 25,
+      "name": "/mcp-spec-capture/dest",
+      "owner_user_id": 2,
+      "parent": 21,
+      "passphrase": "",
+      "shared": false,
+      "sort_by": "default",
+      "sort_direction": "default"
+     },
+     {
+      "id": 22,
+      "name": "/mcp-spec-capture/mcp-spec-capture",
+      "owner_user_id": 2,
+      "parent": 21,
+      "passphrase": "",
+      "shared": false,
+      "sort_by": "default",
+      "sort_direction": "default"
+     },
+     {
+      "id": 24,
+      "name": "/mcp-spec-capture/sub-post",
+      "owner_user_id": 2,
+      "parent": 21,
+      "passphrase": "",
+      "shared": false,
+      "sort_by": "default",
+      "sort_direction": "default"
+     }
+    ]
+   },
+   "success": true
+  }
+ },
+ "folder-count": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Folder",
+   "method": "count",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "21"
+   }
+  },
+  "response": {
+   "data": {
+    "count": 4
+   },
+   "success": true
+  }
+ },
+ "folder-get-missing": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Folder",
+   "method": "get",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "id": "999999"
+   }
+  },
+  "response": {
+   "error": {
+    "code": 642
+   },
+   "success": false
+  }
+ },
+ "upload-beach-sunset": {
+  "request": {
+   "api": "SYNO.Foto.Upload.Item",
+   "method": "upload_to_folder",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "duplicate": "\"rename\"",
+    "name": "\"beach-sunset.jpg\"",
+    "mtime": "1792273334",
+    "target_folder_id": "21"
+   },
+   "files": [
+    "file"
+   ]
+  },
+  "response": {
+   "data": {
+    "action": "new",
+    "id": 24,
+    "unit_id": 24
+   },
+   "success": true
+  }
+ },
+ "upload-city-night": {
+  "request": {
+   "api": "SYNO.Foto.Upload.Item",
+   "method": "upload_to_folder",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "duplicate": "\"rename\"",
+    "name": "\"city-night.jpg\"",
+    "mtime": "1792273334",
+    "target_folder_id": "21"
+   },
+   "files": [
+    "file"
+   ]
+  },
+  "response": {
+   "data": {
+    "action": "new",
+    "id": 25,
+    "unit_id": 25
+   },
+   "success": true
+  }
+ },
+ "upload-desk-notes": {
+  "request": {
+   "api": "SYNO.Foto.Upload.Item",
+   "method": "upload_to_folder",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "duplicate": "\"rename\"",
+    "name": "\"desk-notes.jpg\"",
+    "mtime": "1792273334",
+    "target_folder_id": "21"
+   },
+   "files": [
+    "file"
+   ]
+  },
+  "response": {
+   "data": {
+    "action": "new",
+    "id": 26,
+    "unit_id": 26
+   },
+   "success": true
+  }
+ },
+ "upload-forest-trail": {
+  "request": {
+   "api": "SYNO.Foto.Upload.Item",
+   "method": "upload_to_folder",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "duplicate": "\"rename\"",
+    "name": "\"forest-trail.jpg\"",
+    "mtime": "1792273334",
+    "target_folder_id": "21"
+   },
+   "files": [
+    "file"
+   ]
+  },
+  "response": {
+   "data": {
+    "action": "new",
+    "id": 27,
+    "unit_id": 27
+   },
+   "success": true
+  }
+ },
+ "upload-garden-rose": {
+  "request": {
+   "api": "SYNO.Foto.Upload.Item",
+   "method": "upload_to_folder",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "duplicate": "\"rename\"",
+    "name": "\"garden-rose.jpg\"",
+    "mtime": "1792273334",
+    "target_folder_id": "21"
+   },
+   "files": [
+    "file"
+   ]
+  },
+  "response": {
+   "data": {
+    "action": "new",
+    "id": 28,
+    "unit_id": 28
+   },
+   "success": true
+  }
+ },
+ "upload-snowy-peak": {
+  "request": {
+   "api": "SYNO.Foto.Upload.Item",
+   "method": "upload_to_folder",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "duplicate": "\"rename\"",
+    "name": "\"snowy-peak.jpg\"",
+    "mtime": "1792273334",
+    "target_folder_id": "21"
+   },
+   "files": [
+    "file"
+   ]
+  },
+  "response": {
+   "data": {
+    "action": "new",
+    "id": 29,
+    "unit_id": 29
+   },
+   "success": true
+  }
+ },
+ "upload-duplicate-ignore": {
+  "request": {
+   "api": "SYNO.Foto.Upload.Item",
+   "method": "upload_to_folder",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "duplicate": "\"ignore\"",
+    "name": "\"beach-sunset.jpg\"",
+    "mtime": "1792273334",
+    "target_folder_id": "21"
+   },
+   "files": [
+    "file"
+   ]
+  },
+  "response": {
+   "data": {
+    "action": "ignore",
+    "id": 24,
+    "unit_id": 24
+   },
+   "success": true
+  }
+ },
+ "upload-duplicate-rename": {
+  "request": {
+   "api": "SYNO.Foto.Upload.Item",
+   "method": "upload_to_folder",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "duplicate": "\"rename\"",
+    "name": "\"beach-sunset.jpg\"",
+    "mtime": "1792273334",
+    "target_folder_id": "21"
+   },
+   "files": [
+    "file"
+   ]
+  },
+  "response": {
+   "data": {
+    "action": "rename",
+    "id": 30,
+    "unit_id": 30
+   },
+   "success": true
+  }
+ },
+ "upload-non-media": {
+  "request": {
+   "api": "SYNO.Foto.Upload.Item",
+   "method": "upload_to_folder",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "duplicate": "\"rename\"",
+    "name": "\"notes.txt\"",
+    "mtime": "1700000000",
+    "target_folder_id": "21"
+   },
+   "files": [
+    "file"
+   ]
+  },
+  "response": {
+   "error": {
+    "code": 620
+   },
+   "success": false
+  }
+ },
+ "upload-missing-folder": {
+  "request": {
+   "api": "SYNO.Foto.Upload.Item",
+   "method": "upload_to_folder",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "duplicate": "\"rename\"",
+    "name": "\"beach-sunset.jpg\"",
+    "mtime": "1700000000",
+    "target_folder_id": "999999"
+   },
+   "files": [
+    "file"
+   ]
+  },
+  "response": {
+   "error": {
+    "code": 621
+   },
+   "success": false
+  }
+ },
+ "probe-upload-check": {
+  "request": {
+   "api": "SYNO.Foto.Upload.Item",
+   "method": "upload_check",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "name": "\"beach-sunset.jpg\"",
+    "target_folder_id": "21"
+   }
+  },
+  "response": {
+   "error": {
+    "code": 103
+   },
+   "success": false
+  }
+ },
+ "item-count-wait": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "count",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "folder_id": "21"
+   }
+  },
+  "response": {
+   "data": {
+    "count": 7
+   },
+   "success": true
+  }
+ },
+ "index-get-after-upload": {
+  "request": {
+   "api": "SYNO.Foto.Index",
+   "method": "get",
+   "version": "1",
+   "http": "POST",
+   "params": {}
+  },
+  "response": {
+   "data": {
+    "basic": 0,
+    "concept_detection": 0,
+    "face_extraction": 0,
+    "geo_coding": 2,
+    "metadata": 1,
+    "metadata_updating": 3,
+    "person_clustering": 0,
+    "thumbnail": 6
+   },
+   "success": true
+  }
+ },
+ "item-list": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "list",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "folder_id": "21",
+    "offset": "0",
+    "limit": "50",
+    "sort_by": "\"takentime\"",
+    "sort_direction": "\"desc\"",
+    "additional": "[\"thumbnail\", \"resolution\", \"orientation\", \"video_convert\", \"video_meta\", \"address\", \"tag\", \"description\", \"exif\", \"gps\", \"person\"]"
+   }
+  },
+  "response": {
+   "success": true,
+   "data": {
+    "list": [
+     {
+      "id": 30,
+      "filename": "beach-sunset_1.jpg",
+      "filesize": 51305,
+      "time": 1792273334,
+      "indexed_time": 1792256688496,
+      "owner_user_id": 2,
+      "folder_id": 21,
+      "type": "photo",
+      "additional": {
+       "description": "",
+       "tag": [],
+       "person": [],
+       "exif": {
+        "aperture": "",
+        "camera": "",
+        "exposure_time": "",
+        "focal_length": "",
+        "iso": "",
+        "lens": ""
+       },
+       "resolution": {
+        "width": 0,
+        "height": 0
+       },
+       "orientation": 1,
+       "orientation_original": 1,
+       "thumbnail": {
+        "m": "converting",
+        "xl": "converting",
+        "preview": "converting",
+        "sm": "converting",
+        "cache_key": "30_1792273334",
+        "unit_id": 30
+       }
+      }
+     },
+     {
+      "id": 27,
+      "filename": "forest-trail.jpg",
+      "filesize": 49546,
+      "time": 1720174500,
+      "indexed_time": 1792256688201,
+      "owner_user_id": 2,
+      "folder_id": 21,
+      "type": "photo",
+      "additional": {
+       "description": "",
+       "tag": [],
+       "person": [],
+       "exif": {
+        "aperture": "",
+        "camera": "SeedCam 1",
+        "exposure_time": "",
+        "focal_length": "",
+        "iso": "",
+        "lens": ""
+       },
+       "resolution": {
+        "width": 1600,
+        "height": 1200
+       },
+       "orientation": 1,
+       "orientation_original": 1,
+       "thumbnail": {
+        "m": "converting",
+        "xl": "converting",
+        "preview": "broken",
+        "sm": "converting",
+        "cache_key": "27_1792273334",
+        "unit_id": 27
+       },
+       "gps": {
+        "latitude": 44.428,
+        "longitude": -110.5885
+       },
+       "address": {
+        "country": "United States",
+        "country_id": "United States",
+        "state": "Wyoming",
+        "state_id": "Wyoming",
+        "county": "Teton County",
+        "county_id": "Teton County",
+        "city": "",
+        "city_id": "",
+        "town": "",
+        "town_id": "",
+        "district": "",
+        "district_id": "",
+        "village": "",
+        "village_id": "",
+        "route": "Grand Loop Road",
+        "route_id": "Grand Loop Road",
+        "landmark": "",
+        "landmark_id": ""
+       }
+      }
+     },
+     {
+      "id": 24,
+      "filename": "beach-sunset.jpg",
+      "filesize": 51305,
+      "time": 1720121400,
+      "indexed_time": 1792256687958,
+      "owner_user_id": 2,
+      "folder_id": 21,
+      "type": "photo",
+      "additional": {
+       "description": "",
+       "tag": [],
+       "person": [],
+       "exif": {
+        "aperture": "",
+        "camera": "SeedCam 1",
+        "exposure_time": "",
+        "focal_length": "",
+        "iso": "",
+        "lens": ""
+       },
+       "resolution": {
+        "width": 1600,
+        "height": 1200
+       },
+       "orientation": 1,
+       "orientation_original": 1,
+       "thumbnail": {
+        "m": "ready",
+        "xl": "ready",
+        "preview": "broken",
+        "sm": "ready",
+        "cache_key": "24_1792274688",
+        "unit_id": 24
+       },
+       "gps": {
+        "latitude": 41.8781,
+        "longitude": -87.6298
+       },
+       "address": {
+        "country": "United States",
+        "country_id": "United States",
+        "state": "Illinois",
+        "state_id": "Illinois",
+        "county": "Cook County",
+        "county_id": "Cook County",
+        "city": "Chicago",
+        "city_id": "Chicago",
+        "town": "",
+        "town_id": "",
+        "district": "",
+        "district_id": "",
+        "village": "",
+        "village_id": "",
+        "route": "South Federal Street",
+        "route_id": "South Federal Street",
+        "landmark": "",
+        "landmark_id": ""
+       }
+      }
+     },
+     {
+      "id": 25,
+      "filename": "city-night.jpg",
+      "filesize": 48215,
+      "time": 1703455200,
+      "indexed_time": 1792256688013,
+      "owner_user_id": 2,
+      "folder_id": 21,
+      "type": "photo",
+      "additional": {
+       "description": "",
+       "tag": [],
+       "person": [],
+       "exif": {
+        "aperture": "",
+        "camera": "SeedCam 1",
+        "exposure_time": "",
+        "focal_length": "",
+        "iso": "",
+        "lens": ""
+       },
+       "resolution": {
+        "width": 1600,
+        "height": 1200
+       },
+       "orientation": 1,
+       "orientation_original": 1,
+       "thumbnail": {
+        "m": "converting",
+        "xl": "converting",
+        "preview": "broken",
+        "sm": "converting",
+        "cache_key": "25_1792273334",
+        "unit_id": 25
+       },
+       "gps": {
+        "latitude": 40.7128,
+        "longitude": -74.006
+       },
+       "address": {
+        "country": "United States",
+        "country_id": "United States",
+        "state": "New York",
+        "state_id": "New York",
+        "county": "New York County",
+        "county_id": "New York County",
+        "city": "New York",
+        "city_id": "City of New York",
+        "town": "",
+        "town_id": "",
+        "district": "Manhattan",
+        "district_id": "Manhattan",
+        "village": "",
+        "village_id": "",
+        "route": "Broadway",
+        "route_id": "Broadway",
+        "landmark": "",
+        "landmark_id": ""
+       }
+      }
+     },
+     {
+      "id": 29,
+      "filename": "snowy-peak.jpg",
+      "filesize": 40075,
+      "time": 1673773200,
+      "indexed_time": 1792256688399,
+      "owner_user_id": 2,
+      "folder_id": 21,
+      "type": "photo",
+      "additional": {
+       "description": "",
+       "tag": [],
+       "person": [],
+       "exif": {
+        "aperture": "",
+        "camera": "SeedCam 1",
+        "exposure_time": "",
+        "focal_length": "",
+        "iso": "",
+        "lens": ""
+       },
+       "resolution": {
+        "width": 1600,
+        "height": 1200
+       },
+       "orientation": 1,
+       "orientation_original": 1,
+       "thumbnail": {
+        "m": "converting",
+        "xl": "converting",
+        "preview": "broken",
+        "sm": "converting",
+        "cache_key": "29_1792273334",
+        "unit_id": 29
+       },
+       "gps": {
+        "latitude": 46.8523,
+        "longitude": -121.7603
+       }
+      }
+     },
+     {
+      "id": 26,
+      "filename": "desk-notes.jpg",
+      "filesize": 44624,
+      "time": 1653120000,
+      "indexed_time": 1792256688099,
+      "owner_user_id": 2,
+      "folder_id": 21,
+      "type": "photo",
+      "additional": {
+       "description": "",
+       "tag": [],
+       "person": [],
+       "exif": {
+        "aperture": "",
+        "camera": "SeedCam 1",
+        "exposure_time": "",
+        "focal_length": "",
+        "iso": "",
+        "lens": ""
+       },
+       "resolution": {
+        "width": 1600,
+        "height": 1200
+       },
+       "orientation": 1,
+       "orientation_original": 1,
+       "thumbnail": {
+        "m": "converting",
+        "xl": "converting",
+        "preview": "broken",
+        "sm": "converting",
+        "cache_key": "26_1792273334",
+        "unit_id": 26
+       }
+      }
+     },
+     {
+      "id": 28,
+      "filename": "garden-rose.jpg",
+      "filesize": 50123,
+      "time": 1653057900,
+      "indexed_time": 1792256688316,
+      "owner_user_id": 2,
+      "folder_id": 21,
+      "type": "photo",
+      "additional": {
+       "description": "",
+       "tag": [],
+       "person": [],
+       "exif": {
+        "aperture": "",
+        "camera": "SeedCam 1",
+        "exposure_time": "",
+        "focal_length": "",
+        "iso": "",
+        "lens": ""
+       },
+       "resolution": {
+        "width": 1600,
+        "height": 1200
+       },
+       "orientation": 1,
+       "orientation_original": 1,
+       "thumbnail": {
+        "m": "converting",
+        "xl": "converting",
+        "preview": "broken",
+        "sm": "converting",
+        "cache_key": "28_1792273334",
+        "unit_id": 28
+       }
+      }
+     }
+    ]
+   }
+  }
+ },
+ "item-list-v7": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "list",
+   "version": "7",
+   "http": "POST",
+   "params": {
+    "folder_id": "21",
+    "offset": "0",
+    "limit": "50",
+    "additional": "[\"thumbnail\", \"resolution\", \"orientation\", \"video_convert\", \"video_meta\", \"address\", \"tag\", \"description\", \"exif\", \"gps\", \"person\"]"
+   }
+  },
+  "response": {
+   "success": true,
+   "data": {
+    "list": [
+     {
+      "id": 30,
+      "filename": "beach-sunset_1.jpg",
+      "filesize": 51305,
+      "time": 1792273334,
+      "indexed_time": 1792256688496,
+      "owner_user_id": 2,
+      "folder_id": 21,
+      "type": "photo",
+      "additional": {
+       "description": "",
+       "tag": [],
+       "person": [],
+       "exif": {
+        "aperture": "",
+        "camera": "",
+        "exposure_time": "",
+        "focal_length": "",
+        "iso": "",
+        "lens": ""
+       },
+       "resolution": {
+        "width": 0,
+        "height": 0
+       },
+       "orientation": 1,
+       "orientation_original": 1,
+       "thumbnail": {
+        "m": "converting",
+        "xl": "converting",
+        "preview": "converting",
+        "sm": "converting",
+        "cache_key": "30_1792273334",
+        "unit_id": 30
+       }
+      }
+     },
+     {
+      "id": 27,
+      "filename": "forest-trail.jpg",
+      "filesize": 49546,
+      "time": 1720174500,
+      "indexed_time": 1792256688201,
+      "owner_user_id": 2,
+      "folder_id": 21,
+      "type": "photo",
+      "additional": {
+       "description": "",
+       "tag": [],
+       "person": [],
+       "exif": {
+        "aperture": "",
+        "camera": "SeedCam 1",
+        "exposure_time": "",
+        "focal_length": "",
+        "iso": "",
+        "lens": ""
+       },
+       "resolution": {
+        "width": 1600,
+        "height": 1200
+       },
+       "orientation": 1,
+       "orientation_original": 1,
+       "thumbnail": {
+        "m": "converting",
+        "xl": "converting",
+        "preview": "broken",
+        "sm": "converting",
+        "cache_key": "27_1792273334",
+        "unit_id": 27
+       },
+       "gps": {
+        "latitude": 44.428,
+        "longitude": -110.5885
+       },
+       "address": {
+        "country": "United States",
+        "country_id": "United States",
+        "state": "Wyoming",
+        "state_id": "Wyoming",
+        "county": "Teton County",
+        "county_id": "Teton County",
+        "city": "",
+        "city_id": "",
+        "town": "",
+        "town_id": "",
+        "district": "",
+        "district_id": "",
+        "village": "",
+        "village_id": "",
+        "route": "Grand Loop Road",
+        "route_id": "Grand Loop Road",
+        "landmark": "",
+        "landmark_id": ""
+       }
+      }
+     },
+     {
+      "id": 24,
+      "filename": "beach-sunset.jpg",
+      "filesize": 51305,
+      "time": 1720121400,
+      "indexed_time": 1792256687958,
+      "owner_user_id": 2,
+      "folder_id": 21,
+      "type": "photo",
+      "additional": {
+       "description": "",
+       "tag": [],
+       "person": [],
+       "exif": {
+        "aperture": "",
+        "camera": "SeedCam 1",
+        "exposure_time": "",
+        "focal_length": "",
+        "iso": "",
+        "lens": ""
+       },
+       "resolution": {
+        "width": 1600,
+        "height": 1200
+       },
+       "orientation": 1,
+       "orientation_original": 1,
+       "thumbnail": {
+        "m": "ready",
+        "xl": "ready",
+        "preview": "broken",
+        "sm": "ready",
+        "cache_key": "24_1792274688",
+        "unit_id": 24
+       },
+       "gps": {
+        "latitude": 41.8781,
+        "longitude": -87.6298
+       },
+       "address": {
+        "country": "United States",
+        "country_id": "United States",
+        "state": "Illinois",
+        "state_id": "Illinois",
+        "county": "Cook County",
+        "county_id": "Cook County",
+        "city": "Chicago",
+        "city_id": "Chicago",
+        "town": "",
+        "town_id": "",
+        "district": "",
+        "district_id": "",
+        "village": "",
+        "village_id": "",
+        "route": "South Federal Street",
+        "route_id": "South Federal Street",
+        "landmark": "",
+        "landmark_id": ""
+       }
+      }
+     },
+     {
+      "id": 25,
+      "filename": "city-night.jpg",
+      "filesize": 48215,
+      "time": 1703455200,
+      "indexed_time": 1792256688013,
+      "owner_user_id": 2,
+      "folder_id": 21,
+      "type": "photo",
+      "additional": {
+       "description": "",
+       "tag": [],
+       "person": [],
+       "exif": {
+        "aperture": "",
+        "camera": "SeedCam 1",
+        "exposure_time": "",
+        "focal_length": "",
+        "iso": "",
+        "lens": ""
+       },
+       "resolution": {
+        "width": 1600,
+        "height": 1200
+       },
+       "orientation": 1,
+       "orientation_original": 1,
+       "thumbnail": {
+        "m": "ready",
+        "xl": "ready",
+        "preview": "broken",
+        "sm": "ready",
+        "cache_key": "25_1792273334",
+        "unit_id": 25
+       },
+       "gps": {
+        "latitude": 40.7128,
+        "longitude": -74.006
+       },
+       "address": {
+        "country": "United States",
+        "country_id": "United States",
+        "state": "New York",
+        "state_id": "New York",
+        "county": "New York County",
+        "county_id": "New York County",
+        "city": "New York",
+        "city_id": "City of New York",
+        "town": "",
+        "town_id": "",
+        "district": "Manhattan",
+        "district_id": "Manhattan",
+        "village": "",
+        "village_id": "",
+        "route": "Broadway",
+        "route_id": "Broadway",
+        "landmark": "",
+        "landmark_id": ""
+       }
+      }
+     },
+     {
+      "id": 29,
+      "filename": "snowy-peak.jpg",
+      "filesize": 40075,
+      "time": 1673773200,
+      "indexed_time": 1792256688399,
+      "owner_user_id": 2,
+      "folder_id": 21,
+      "type": "photo",
+      "additional": {
+       "description": "",
+       "tag": [],
+       "person": [],
+       "exif": {
+        "aperture": "",
+        "camera": "SeedCam 1",
+        "exposure_time": "",
+        "focal_length": "",
+        "iso": "",
+        "lens": ""
+       },
+       "resolution": {
+        "width": 1600,
+        "height": 1200
+       },
+       "orientation": 1,
+       "orientation_original": 1,
+       "thumbnail": {
+        "m": "converting",
+        "xl": "converting",
+        "preview": "broken",
+        "sm": "converting",
+        "cache_key": "29_1792273334",
+        "unit_id": 29
+       },
+       "gps": {
+        "latitude": 46.8523,
+        "longitude": -121.7603
+       }
+      }
+     },
+     {
+      "id": 26,
+      "filename": "desk-notes.jpg",
+      "filesize": 44624,
+      "time": 1653120000,
+      "indexed_time": 1792256688099,
+      "owner_user_id": 2,
+      "folder_id": 21,
+      "type": "photo",
+      "additional": {
+       "description": "",
+       "tag": [],
+       "person": [],
+       "exif": {
+        "aperture": "",
+        "camera": "SeedCam 1",
+        "exposure_time": "",
+        "focal_length": "",
+        "iso": "",
+        "lens": ""
+       },
+       "resolution": {
+        "width": 1600,
+        "height": 1200
+       },
+       "orientation": 1,
+       "orientation_original": 1,
+       "thumbnail": {
+        "m": "converting",
+        "xl": "converting",
+        "preview": "broken",
+        "sm": "converting",
+        "cache_key": "26_1792273334",
+        "unit_id": 26
+       }
+      }
+     },
+     {
+      "id": 28,
+      "filename": "garden-rose.jpg",
+      "filesize": 50123,
+      "time": 1653057900,
+      "indexed_time": 1792256688316,
+      "owner_user_id": 2,
+      "folder_id": 21,
+      "type": "photo",
+      "additional": {
+       "description": "",
+       "tag": [],
+       "person": [],
+       "exif": {
+        "aperture": "",
+        "camera": "SeedCam 1",
+        "exposure_time": "",
+        "focal_length": "",
+        "iso": "",
+        "lens": ""
+       },
+       "resolution": {
+        "width": 1600,
+        "height": 1200
+       },
+       "orientation": 1,
+       "orientation_original": 1,
+       "thumbnail": {
+        "m": "converting",
+        "xl": "converting",
+        "preview": "broken",
+        "sm": "converting",
+        "cache_key": "28_1792273334",
+        "unit_id": 28
+       }
+      }
+     }
+    ]
+   }
+  }
+ },
+ "item-list-page": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "list",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "folder_id": "21",
+    "offset": "0",
+    "limit": "2",
+    "sort_by": "\"filename\"",
+    "sort_direction": "\"asc\""
+   }
+  },
+  "response": {
+   "success": true,
+   "data": {
+    "list": [
+     {
+      "id": 24,
+      "filename": "beach-sunset.jpg",
+      "filesize": 51305,
+      "time": 1720121400,
+      "indexed_time": 1792256687958,
+      "owner_user_id": 2,
+      "folder_id": 21,
+      "type": "photo"
+     },
+     {
+      "id": 30,
+      "filename": "beach-sunset_1.jpg",
+      "filesize": 51305,
+      "time": 1720121400,
+      "indexed_time": 1792256688496,
+      "owner_user_id": 2,
+      "folder_id": 21,
+      "type": "photo"
+     }
+    ]
+   }
+  }
+ },
+ "item-list-all": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "list",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "offset": "0",
+    "limit": "3",
+    "additional": "[\"thumbnail\"]"
+   }
+  },
+  "response": {
+   "success": true,
+   "data": {
+    "list": [
+     {
+      "id": 27,
+      "filename": "forest-trail.jpg",
+      "filesize": 49546,
+      "time": 1720174500,
+      "indexed_time": 1792256688201,
+      "owner_user_id": 2,
+      "folder_id": 21,
+      "type": "photo",
+      "additional": {
+       "thumbnail": {
+        "m": "converting",
+        "xl": "converting",
+        "preview": "broken",
+        "sm": "converting",
+        "cache_key": "27_1792273334",
+        "unit_id": 27
+       }
+      }
+     },
+     {
+      "id": 24,
+      "filename": "beach-sunset.jpg",
+      "filesize": 51305,
+      "time": 1720121400,
+      "indexed_time": 1792256687958,
+      "owner_user_id": 2,
+      "folder_id": 21,
+      "type": "photo",
+      "additional": {
+       "thumbnail": {
+        "m": "ready",
+        "xl": "ready",
+        "preview": "broken",
+        "sm": "ready",
+        "cache_key": "24_1792274688",
+        "unit_id": 24
+       }
+      }
+     },
+     {
+      "id": 30,
+      "filename": "beach-sunset_1.jpg",
+      "filesize": 51305,
+      "time": 1720121400,
+      "indexed_time": 1792256688496,
+      "owner_user_id": 2,
+      "folder_id": 21,
+      "type": "photo",
+      "additional": {
+       "thumbnail": {
+        "m": "converting",
+        "xl": "converting",
+        "preview": "broken",
+        "sm": "converting",
+        "cache_key": "30_1792273334",
+        "unit_id": 30
+       }
+      }
+     }
+    ]
+   }
+  }
+ },
+ "item-list-videos": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "list",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "folder_id": "21",
+    "offset": "0",
+    "limit": "5",
+    "type": "\"video\""
+   }
+  },
+  "response": {
+   "success": true,
+   "data": {
+    "list": []
+   }
+  }
+ },
+ "item-list-time": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "list",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "folder_id": "21",
+    "offset": "0",
+    "limit": "5",
+    "start_time": "1700000000",
+    "end_time": "1730000000"
+   }
+  },
+  "response": {
+   "success": true,
+   "data": {
+    "list": [
+     {
+      "id": 27,
+      "filename": "forest-trail.jpg",
+      "filesize": 49546,
+      "time": 1720174500,
+      "indexed_time": 1792256688201,
+      "owner_user_id": 2,
+      "folder_id": 21,
+      "type": "photo"
+     },
+     {
+      "id": 30,
+      "filename": "beach-sunset_1.jpg",
+      "filesize": 51305,
+      "time": 1720121400,
+      "indexed_time": 1792256688496,
+      "owner_user_id": 2,
+      "folder_id": 21,
+      "type": "photo"
+     },
+     {
+      "id": 24,
+      "filename": "beach-sunset.jpg",
+      "filesize": 51305,
+      "time": 1720121400,
+      "indexed_time": 1792256687958,
+      "owner_user_id": 2,
+      "folder_id": 21,
+      "type": "photo"
+     },
+     {
+      "id": 25,
+      "filename": "city-night.jpg",
+      "filesize": 48215,
+      "time": 1703455200,
+      "indexed_time": 1792256688013,
+      "owner_user_id": 2,
+      "folder_id": 21,
+      "type": "photo"
+     }
+    ]
+   }
+  }
+ },
+ "item-get": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "get",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "id": "[30]",
+    "additional": "[\"description\", \"tag\", \"exif\", \"resolution\", \"orientation\", \"gps\", \"video_meta\", \"video_convert\", \"thumbnail\", \"address\", \"geocoding_id\", \"rating\", \"person\"]"
+   }
+  },
+  "response": {
+   "success": true,
+   "data": {
+    "list": [
+     {
+      "id": 30,
+      "filename": "beach-sunset_1.jpg",
+      "filesize": 51305,
+      "time": 1720121400,
+      "indexed_time": 1792256688496,
+      "owner_user_id": 2,
+      "folder_id": 21,
+      "type": "photo",
+      "additional": {
+       "description": "",
+       "tag": [],
+       "person": [],
+       "exif": {
+        "aperture": "",
+        "camera": "SeedCam 1",
+        "exposure_time": "",
+        "focal_length": "",
+        "iso": "",
+        "lens": ""
+       },
+       "resolution": {
+        "width": 1600,
+        "height": 1200
+       },
+       "orientation": 1,
+       "orientation_original": 1,
+       "thumbnail": {
+        "m": "converting",
+        "xl": "converting",
+        "preview": "broken",
+        "sm": "converting",
+        "cache_key": "30_1792273334",
+        "unit_id": 30
+       },
+       "rating": 0,
+       "gps": {
+        "latitude": 41.8781,
+        "longitude": -87.6298
+       }
+      }
+     }
+    ]
+   }
+  }
+ },
+ "item-get-v7": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "get",
+   "version": "7",
+   "http": "POST",
+   "params": {
+    "id": "[30]",
+    "additional": "[\"description\", \"tag\", \"exif\", \"resolution\", \"orientation\", \"gps\", \"video_meta\", \"video_convert\", \"thumbnail\", \"address\", \"geocoding_id\", \"rating\", \"person\"]"
+   }
+  },
+  "response": {
+   "success": true,
+   "data": {
+    "list": [
+     {
+      "id": 30,
+      "filename": "beach-sunset_1.jpg",
+      "filesize": 51305,
+      "time": 1720121400,
+      "indexed_time": 1792256688496,
+      "owner_user_id": 2,
+      "folder_id": 21,
+      "type": "photo",
+      "additional": {
+       "description": "",
+       "tag": [],
+       "person": [],
+       "exif": {
+        "aperture": "",
+        "camera": "SeedCam 1",
+        "exposure_time": "",
+        "focal_length": "",
+        "iso": "",
+        "lens": ""
+       },
+       "resolution": {
+        "width": 1600,
+        "height": 1200
+       },
+       "orientation": 1,
+       "orientation_original": 1,
+       "thumbnail": {
+        "m": "converting",
+        "xl": "converting",
+        "preview": "broken",
+        "sm": "converting",
+        "cache_key": "30_1792273334",
+        "unit_id": 30
+       },
+       "rating": 0,
+       "gps": {
+        "latitude": 41.8781,
+        "longitude": -87.6298
+       },
+       "address": {
+        "country": "United States",
+        "country_id": "United States",
+        "state": "Illinois",
+        "state_id": "Illinois",
+        "county": "Cook County",
+        "county_id": "Cook County",
+        "city": "Chicago",
+        "city_id": "Chicago",
+        "town": "",
+        "town_id": "",
+        "district": "",
+        "district_id": "",
+        "village": "",
+        "village_id": "",
+        "route": "South Federal Street",
+        "route_id": "South Federal Street",
+        "landmark": "",
+        "landmark_id": ""
+       },
+       "geocoding_id": 13
+      }
+     }
+    ]
+   }
+  }
+ },
+ "item-get-missing": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "get",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "id": "[999999]",
+    "additional": "[]"
+   }
+  },
+  "response": {
+   "success": true,
+   "data": {
+    "list": []
+   }
+  }
+ },
+ "item-get-exif": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "get_exif",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[30]"
+   }
+  },
+  "response": {
+   "data": {
+    "list": [
+     {
+      "exif": [
+       {
+        "key": "Manufacturer",
+        "value": "MCPTest"
+       },
+       {
+        "key": "Model",
+        "value": "SeedCam 1"
+       },
+       {
+        "key": "Date and Time",
+        "value": "2024:07:04 19:30:00"
+       },
+       {
+        "key": "Exif IFD Pointer",
+        "value": "112"
+       },
+       {
+        "key": "Date and Time (original)",
+        "value": "2024:07:04 19:30:00"
+       },
+       {
+        "key": "GPS Info IFD Pointer",
+        "value": "150"
+       },
+       {
+        "key": "GPS Latitude Reference",
+        "value": "North"
+       },
+       {
+        "key": "GPS Latitude",
+        "value": "41deg 52' 41\""
+       },
+       {
+        "key": "GPS Longitude Reference",
+        "value": "West"
+       },
+       {
+        "key": "GPS Longitude",
+        "value": "87deg 37' 47\""
+       }
+      ],
+      "id": 30
+     }
+    ]
+   },
+   "success": true
+  }
+ },
+ "item-count-all": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "count",
+   "version": "1",
+   "http": "POST",
+   "params": {}
+  },
+  "response": {
+   "data": {
+    "count": 7
+   },
+   "success": true
+  }
+ },
+ "search-filter-list": {
+  "request": {
+   "api": "SYNO.Foto.Search.Filter",
+   "method": "list",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "setting": "{\"item_type\": true, \"time\": true, \"person\": true, \"geocoding\": true, \"rating\": true, \"camera\": true, \"lens\": true, \"general_tag\": true, \"iso\": true, \"aperture\": true, \"flash\": true, \"focal_length_group\": true, \"exposure_time_group\": true}",
+    "additional": "[\"thumbnail\"]",
+    "folder": "[21]"
+   }
+  },
+  "response": {
+   "data": {
+    "aperture": [],
+    "camera": [
+     {
+      "id": 1,
+      "name": "SeedCam 1"
+     }
+    ],
+    "exposure_time_group": [],
+    "favorite": [],
+    "flash": [
+     0
+    ],
+    "focal_length_group": [],
+    "folder_filter": [],
+    "general_tag": [],
+    "geocoding": [
+     {
+      "children": [
+       {
+        "children": [],
+        "id": 4,
+        "level": 4,
+        "name": "Chicago"
+       },
+       {
+        "children": [],
+        "id": 15,
+        "level": 3,
+        "name": "Pierce County"
+       },
+       {
+        "children": [],
+        "id": 12,
+        "level": 3,
+        "name": "Teton County"
+       },
+       {
+        "children": [
+         {
+          "children": [],
+          "id": 9,
+          "level": 6,
+          "name": "Manhattan"
+         }
+        ],
+        "id": 8,
+        "level": 4,
+        "name": "New York"
+       }
+      ],
+      "id": 1,
+      "level": 1,
+      "name": "United States"
+     }
+    ],
+    "iso": [],
+    "item_type": [
+     {
+      "id": 0,
+      "name": "photo"
+     }
+    ],
+    "lens": [],
+    "person": [],
+    "rating": [
+     0
+    ],
+    "time": [
+     {
+      "end_time": 1722470399,
+      "month": 7,
+      "start_time": 1719792000,
+      "year": 2024
+     },
+     {
+      "end_time": 1704067199,
+      "month": 12,
+      "start_time": 1701388800,
+      "year": 2023
+     },
+     {
+      "end_time": 1675209599,
+      "month": 1,
+      "start_time": 1672531200,
+      "year": 2023
+     },
+     {
+      "end_time": 1654041599,
+      "month": 5,
+      "start_time": 1651363200,
+      "year": 2022
+     }
+    ]
+   },
+   "success": true
+  }
+ },
+ "item-list-with-filter": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "list_with_filter",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "folder": "[21]",
+    "offset": "0",
+    "limit": "20",
+    "additional": "[\"thumbnail\"]",
+    "time": "[{\"start_time\": 1690000000, \"end_time\": 1730000000}]",
+    "camera": "[1]"
+   }
+  },
+  "response": {
+   "success": true,
+   "data": {
+    "list": [
+     {
+      "id": 27,
+      "filename": "forest-trail.jpg",
+      "filesize": 49546,
+      "time": 1720174500,
+      "indexed_time": 1792256688201,
+      "owner_user_id": 2,
+      "folder_id": 21,
+      "type": "photo",
+      "additional": {
+       "thumbnail": {
+        "m": "converting",
+        "xl": "converting",
+        "preview": "broken",
+        "sm": "converting",
+        "cache_key": "27_1792273334",
+        "unit_id": 27
+       }
+      }
+     },
+     {
+      "id": 30,
+      "filename": "beach-sunset_1.jpg",
+      "filesize": 51305,
+      "time": 1720121400,
+      "indexed_time": 1792256688496,
+      "owner_user_id": 2,
+      "folder_id": 21,
+      "type": "photo",
+      "additional": {
+       "thumbnail": {
+        "m": "converting",
+        "xl": "converting",
+        "preview": "broken",
+        "sm": "converting",
+        "cache_key": "30_1792273334",
+        "unit_id": 30
+       }
+      }
+     },
+     {
+      "id": 24,
+      "filename": "beach-sunset.jpg",
+      "filesize": 51305,
+      "time": 1720121400,
+      "indexed_time": 1792256687958,
+      "owner_user_id": 2,
+      "folder_id": 21,
+      "type": "photo",
+      "additional": {
+       "thumbnail": {
+        "m": "ready",
+        "xl": "ready",
+        "preview": "broken",
+        "sm": "ready",
+        "cache_key": "24_1792274688",
+        "unit_id": 24
+       }
+      }
+     },
+     {
+      "id": 25,
+      "filename": "city-night.jpg",
+      "filesize": 48215,
+      "time": 1703455200,
+      "indexed_time": 1792256688013,
+      "owner_user_id": 2,
+      "folder_id": 21,
+      "type": "photo",
+      "additional": {
+       "thumbnail": {
+        "m": "ready",
+        "xl": "ready",
+        "preview": "broken",
+        "sm": "ready",
+        "cache_key": "25_1792274688",
+        "unit_id": 25
+       }
+      }
+     }
+    ]
+   }
+  }
+ },
+ "item-count-with-filter": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "count_with_filter",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "folder": "[21]",
+    "time": "[{\"start_time\": 1690000000}]"
+   }
+  },
+  "response": {
+   "data": {
+    "count": 4
+   },
+   "success": true
+  }
+ },
+ "item-list-with-filter-itemtype": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "list_with_filter",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "offset": "0",
+    "limit": "5",
+    "item_type": "[0]"
+   }
+  },
+  "response": {
+   "success": true,
+   "data": {
+    "list": [
+     {
+      "id": 27,
+      "filename": "forest-trail.jpg",
+      "filesize": 49546,
+      "time": 1720174500,
+      "indexed_time": 1792256688201,
+      "owner_user_id": 2,
+      "folder_id": 21,
+      "type": "photo"
+     },
+     {
+      "id": 30,
+      "filename": "beach-sunset_1.jpg",
+      "filesize": 51305,
+      "time": 1720121400,
+      "indexed_time": 1792256688496,
+      "owner_user_id": 2,
+      "folder_id": 21,
+      "type": "photo"
+     },
+     {
+      "id": 24,
+      "filename": "beach-sunset.jpg",
+      "filesize": 51305,
+      "time": 1720121400,
+      "indexed_time": 1792256687958,
+      "owner_user_id": 2,
+      "folder_id": 21,
+      "type": "photo"
+     },
+     {
+      "id": 25,
+      "filename": "city-night.jpg",
+      "filesize": 48215,
+      "time": 1703455200,
+      "indexed_time": 1792256688013,
+      "owner_user_id": 2,
+      "folder_id": 21,
+      "type": "photo"
+     },
+     {
+      "id": 29,
+      "filename": "snowy-peak.jpg",
+      "filesize": 40075,
+      "time": 1673773200,
+      "indexed_time": 1792256688399,
+      "owner_user_id": 2,
+      "folder_id": 21,
+      "type": "photo"
+     }
+    ]
+   }
+  }
+ },
+ "search-list-item": {
+  "request": {
+   "api": "SYNO.Foto.Search.Search",
+   "method": "list_item",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "offset": "0",
+    "limit": "20",
+    "keyword": "\"beach\"",
+    "additional": "[\"thumbnail\"]"
+   }
+  },
+  "response": {
+   "data": {
+    "list": [
+     {
+      "additional": {
+       "thumbnail": {
+        "cache_key": "24_1792274688",
+        "m": "ready",
+        "preview": "broken",
+        "sm": "ready",
+        "unit_id": 24,
+        "xl": "ready"
+       }
+      },
+      "filename": "beach-sunset.jpg",
+      "filesize": 51305,
+      "folder_id": 21,
+      "id": 24,
+      "indexed_time": 1792256687958,
+      "owner_user_id": 2,
+      "time": 1720121400,
+      "type": "photo"
+     },
+     {
+      "additional": {
+       "thumbnail": {
+        "cache_key": "30_1792273334",
+        "m": "converting",
+        "preview": "broken",
+        "sm": "converting",
+        "unit_id": 30,
+        "xl": "converting"
+       }
+      },
+      "filename": "beach-sunset_1.jpg",
+      "filesize": 51305,
+      "folder_id": 21,
+      "id": 30,
+      "indexed_time": 1792256688496,
+      "owner_user_id": 2,
+      "time": 1720121400,
+      "type": "photo"
+     }
+    ]
+   },
+   "success": true
+  }
+ },
+ "search-list-item-filename": {
+  "request": {
+   "api": "SYNO.Foto.Search.Search",
+   "method": "list_item",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "offset": "0",
+    "limit": "20",
+    "keyword": "\"beach-sunset\""
+   }
+  },
+  "response": {
+   "data": {
+    "list": [
+     {
+      "filename": "beach-sunset.jpg",
+      "filesize": 51305,
+      "folder_id": 21,
+      "id": 24,
+      "indexed_time": 1792256687958,
+      "owner_user_id": 2,
+      "time": 1720121400,
+      "type": "photo"
+     },
+     {
+      "filename": "beach-sunset_1.jpg",
+      "filesize": 51305,
+      "folder_id": 21,
+      "id": 30,
+      "indexed_time": 1792256688496,
+      "owner_user_id": 2,
+      "time": 1720121400,
+      "type": "photo"
+     }
+    ]
+   },
+   "success": true
+  }
+ },
+ "search-count-item": {
+  "request": {
+   "api": "SYNO.Foto.Search.Search",
+   "method": "count_item",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "keyword": "\"beach\""
+   }
+  },
+  "response": {
+   "data": {
+    "count": 2
+   },
+   "success": true
+  }
+ },
+ "search-suggest": {
+  "request": {
+   "api": "SYNO.Foto.Search.Search",
+   "method": "suggest",
+   "version": "7",
+   "http": "POST",
+   "params": {
+    "keyword": "\"be\""
+   }
+  },
+  "response": {
+   "data": {
+    "list": []
+   },
+   "success": true
+  }
+ },
+ "search-list-album": {
+  "request": {
+   "api": "SYNO.Foto.Search.Search",
+   "method": "list_album",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "offset": "0",
+    "limit": "10",
+    "keyword": "\"mcp\""
+   }
+  },
+  "response": {
+   "error": {
+    "code": 103
+   },
+   "success": false
+  }
+ },
+ "timeline-get": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Timeline",
+   "method": "get",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "timeline_group_unit": "\"month\""
+   }
+  },
+  "response": {
+   "data": {
+    "section": [
+     {
+      "limit": 7,
+      "list": [
+       {
+        "item_count": 3,
+        "month": 7,
+        "year": 2024
+       },
+       {
+        "item_count": 1,
+        "month": 12,
+        "year": 2023
+       },
+       {
+        "item_count": 1,
+        "month": 1,
+        "year": 2023
+       },
+       {
+        "item_count": 2,
+        "month": 5,
+        "year": 2022
+       }
+      ],
+      "offset": 0
+     }
+    ]
+   },
+   "success": true
+  }
+ },
+ "geocoding-list": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Geocoding",
+   "method": "list",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "offset": "0",
+    "limit": "20",
+    "additional": "[\"thumbnail\"]"
+   }
+  },
+  "response": {
+   "data": {
+    "list": [
+     {
+      "additional": {
+       "thumbnail": {
+        "cache_key": "24_1792274688",
+        "m": "ready",
+        "preview": "broken",
+        "sm": "ready",
+        "unit_id": 24,
+        "xl": "ready"
+       }
+      },
+      "country": "United States",
+      "country_id": 1,
+      "first_level": "Chicago",
+      "id": 13,
+      "item_count": 2,
+      "name": "Chicago",
+      "second_level": ""
+     },
+     {
+      "additional": {
+       "thumbnail": {
+        "cache_key": "25_1792274688",
+        "m": "ready",
+        "preview": "broken",
+        "sm": "ready",
+        "unit_id": 25,
+        "xl": "ready"
+       }
+      },
+      "country": "United States",
+      "country_id": 1,
+      "first_level": "New York",
+      "id": 14,
+      "item_count": 1,
+      "name": "Manhattan, New York",
+      "second_level": "Manhattan"
+     },
+     {
+      "additional": {
+       "thumbnail": {
+        "cache_key": "27_1792274689",
+        "m": "ready",
+        "preview": "broken",
+        "sm": "ready",
+        "unit_id": 27,
+        "xl": "ready"
+       }
+      },
+      "country": "United States",
+      "country_id": 1,
+      "first_level": "Teton County",
+      "id": 15,
+      "item_count": 1,
+      "name": "Teton County",
+      "second_level": ""
+     },
+     {
+      "additional": {
+       "thumbnail": {
+        "cache_key": "29_1792273334",
+        "m": "converting",
+        "preview": "broken",
+        "sm": "converting",
+        "unit_id": 29,
+        "xl": "converting"
+       }
+      },
+      "country": "United States",
+      "country_id": 1,
+      "first_level": "Pierce County",
+      "id": 16,
+      "item_count": 1,
+      "name": "Pierce County",
+      "second_level": ""
+     }
+    ]
+   },
+   "success": true
+  }
+ },
+ "geocoding-count": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Geocoding",
+   "method": "count",
+   "version": "1",
+   "http": "POST",
+   "params": {}
+  },
+  "response": {
+   "data": {
+    "count": 4
+   },
+   "success": true
+  }
+ },
+ "person-list": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Person",
+   "method": "list",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "offset": "0",
+    "limit": "5",
+    "additional": "[\"thumbnail\"]",
+    "show_more": "true",
+    "show_hidden": "true"
+   }
+  },
+  "response": {
+   "data": {
+    "list": []
+   },
+   "success": true
+  }
+ },
+ "person-count": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Person",
+   "method": "count",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "show_more": "true",
+    "show_hidden": "true"
+   }
+  },
+  "response": {
+   "data": {
+    "count": 0
+   },
+   "success": true
+  }
+ },
+ "favorite-list": {
+  "request": {
+   "api": "SYNO.Foto.Favorite",
+   "method": "list",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "offset": "0",
+    "limit": "5",
+    "additional": "[\"thumbnail\"]"
+   }
+  },
+  "response": {
+   "error": {
+    "code": 103
+   },
+   "success": false
+  }
+ },
+ "recently-added-list": {
+  "request": {
+   "api": "SYNO.Foto.Browse.RecentlyAdded",
+   "method": "list",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "offset": "0",
+    "limit": "3"
+   }
+  },
+  "response": {
+   "data": {
+    "list": [
+     {
+      "filename": "beach-sunset_1.jpg",
+      "filesize": 51305,
+      "folder_id": 21,
+      "id": 30,
+      "indexed_time": 1792256688496,
+      "owner_user_id": 2,
+      "time": 1720121400,
+      "type": "photo"
+     },
+     {
+      "filename": "snowy-peak.jpg",
+      "filesize": 40075,
+      "folder_id": 21,
+      "id": 29,
+      "indexed_time": 1792256688399,
+      "owner_user_id": 2,
+      "time": 1673773200,
+      "type": "photo"
+     },
+     {
+      "filename": "garden-rose.jpg",
+      "filesize": 50123,
+      "folder_id": 21,
+      "id": 28,
+      "indexed_time": 1792256688316,
+      "owner_user_id": 2,
+      "time": 1653057900,
+      "type": "photo"
+     }
+    ]
+   },
+   "success": true
+  }
+ },
+ "category-get": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Category",
+   "method": "get",
+   "version": "1",
+   "http": "POST",
+   "params": {}
+  },
+  "response": {
+   "data": {
+    "list": [
+     {
+      "id": "recently_added"
+     },
+     {
+      "id": "geocoding"
+     },
+     {
+      "id": "general_tag"
+     },
+     {
+      "id": "video"
+     }
+    ]
+   },
+   "success": true
+  }
+ },
+ "item-get-thumb": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "get",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "id": "[30]",
+    "additional": "[\"thumbnail\"]"
+   }
+  },
+  "response": {
+   "success": true,
+   "data": {
+    "list": [
+     {
+      "id": 30,
+      "filename": "beach-sunset_1.jpg",
+      "filesize": 51305,
+      "time": 1720121400,
+      "indexed_time": 1792256688496,
+      "owner_user_id": 2,
+      "folder_id": 21,
+      "type": "photo",
+      "additional": {
+       "thumbnail": {
+        "m": "converting",
+        "xl": "converting",
+        "preview": "broken",
+        "sm": "converting",
+        "cache_key": "30_1792273334",
+        "unit_id": 30
+       }
+      }
+     }
+    ]
+   }
+  }
+ },
+ "thumbnail-while-converting": {
+  "request": {
+   "api": "SYNO.Foto.Thumbnail",
+   "method": "get",
+   "version": "2",
+   "http": "GET",
+   "params": {
+    "id": "30",
+    "cache_key": "30_1792273334",
+    "type": "unit",
+    "size": "m"
+   }
+  },
+  "http_status": 404,
+  "response_binary": {
+   "content_type": "text/html",
+   "bytes": 11939,
+   "content_disposition": null
+  }
+ },
+ "item-get-thumb-wait": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "get",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "id": "[30]",
+    "additional": "[\"thumbnail\"]"
+   }
+  },
+  "response": {
+   "success": true,
+   "data": {
+    "list": [
+     {
+      "id": 30,
+      "filename": "beach-sunset_1.jpg",
+      "filesize": 51305,
+      "time": 1720121400,
+      "indexed_time": 1792256688496,
+      "owner_user_id": 2,
+      "folder_id": 21,
+      "type": "photo",
+      "additional": {
+       "thumbnail": {
+        "m": "ready",
+        "xl": "ready",
+        "preview": "broken",
+        "sm": "ready",
+        "cache_key": "30_1792274689",
+        "unit_id": 30
+       }
+      }
+     }
+    ]
+   }
+  }
+ },
+ "thumbnail-sm-GET-raw": {
+  "request": {
+   "api": "SYNO.Foto.Thumbnail",
+   "method": "get",
+   "version": "2",
+   "http": "GET",
+   "params": {
+    "id": "30",
+    "cache_key": "30_1792274689",
+    "type": "unit",
+    "size": "sm"
+   }
+  },
+  "http_status": 200,
+  "response_binary": {
+   "content_type": "image/jpeg",
+   "bytes": 3271,
+   "content_disposition": "inline; filename=\"beach-sunset_1.jpg\"; filename*=utf-8''beach-sunset_1.jpg"
+  }
+ },
+ "thumbnail-m-GET-raw": {
+  "request": {
+   "api": "SYNO.Foto.Thumbnail",
+   "method": "get",
+   "version": "2",
+   "http": "GET",
+   "params": {
+    "id": "30",
+    "cache_key": "30_1792274689",
+    "type": "unit",
+    "size": "m"
+   }
+  },
+  "http_status": 200,
+  "response_binary": {
+   "content_type": "image/jpeg",
+   "bytes": 4625,
+   "content_disposition": "inline; filename=\"beach-sunset_1.jpg\"; filename*=utf-8''beach-sunset_1.jpg"
+  }
+ },
+ "thumbnail-xl-GET-raw": {
+  "request": {
+   "api": "SYNO.Foto.Thumbnail",
+   "method": "get",
+   "version": "2",
+   "http": "GET",
+   "params": {
+    "id": "30",
+    "cache_key": "30_1792274689",
+    "type": "unit",
+    "size": "xl"
+   }
+  },
+  "http_status": 200,
+  "response_binary": {
+   "content_type": "image/jpeg",
+   "bytes": 28027,
+   "content_disposition": "inline; filename=\"beach-sunset_1.jpg\"; filename*=utf-8''beach-sunset_1.jpg"
+  }
+ },
+ "thumbnail-m-POST-raw": {
+  "request": {
+   "api": "SYNO.Foto.Thumbnail",
+   "method": "get",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "id": "30",
+    "cache_key": "30_1792274689",
+    "type": "unit",
+    "size": "m"
+   }
+  },
+  "http_status": 200,
+  "response_binary": {
+   "content_type": "image/jpeg",
+   "bytes": 4625,
+   "content_disposition": "inline; filename=\"beach-sunset_1.jpg\"; filename*=utf-8''beach-sunset_1.jpg"
+  }
+ },
+ "thumbnail-m-GET-quoted": {
+  "request": {
+   "api": "SYNO.Foto.Thumbnail",
+   "method": "get",
+   "version": "2",
+   "http": "GET",
+   "params": {
+    "id": "30",
+    "cache_key": "\"30_1792274689\"",
+    "type": "\"unit\"",
+    "size": "\"m\""
+   }
+  },
+  "http_status": 200,
+  "response_binary": {
+   "content_type": "image/jpeg",
+   "bytes": 4625,
+   "content_disposition": "inline; filename=\"beach-sunset_1.jpg\"; filename*=utf-8''beach-sunset_1.jpg"
+  }
+ },
+ "thumbnail-bad-cache-key": {
+  "request": {
+   "api": "SYNO.Foto.Thumbnail",
+   "method": "get",
+   "version": "2",
+   "http": "GET",
+   "params": {
+    "id": "30",
+    "cache_key": "bogus",
+    "type": "unit",
+    "size": "m"
+   }
+  },
+  "http_status": 200,
+  "response_binary": {
+   "content_type": "image/jpeg",
+   "bytes": 4625,
+   "content_disposition": "inline; filename=\"beach-sunset_1.jpg\"; filename*=utf-8''beach-sunset_1.jpg"
+  }
+ },
+ "download-one": {
+  "request": {
+   "api": "SYNO.Foto.Download",
+   "method": "download",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "item_id": "[30]",
+    "force_download": "true"
+   }
+  },
+  "http_status": 200,
+  "response_binary": {
+   "content_type": "application/force-download",
+   "bytes": 51305,
+   "content_disposition": "attachment; filename=\"beach-sunset_1.jpg\"; filename*=utf-8''beach-sunset_1.jpg"
+  }
+ },
+ "download-two": {
+  "request": {
+   "api": "SYNO.Foto.Download",
+   "method": "download",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "item_id": "[30, 27]",
+    "force_download": "true"
+   }
+  },
+  "http_status": 200,
+  "response_binary": {
+   "content_type": "application/zip, application/octet-stream",
+   "bytes": 101229,
+   "content_disposition": "attachment; filename=\"download.zip\"; filename*=utf-8''download.zip"
+  }
+ },
+ "download-folder": {
+  "request": {
+   "api": "SYNO.Foto.Download",
+   "method": "download",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "folder_id": "[24]",
+    "force_download": "true"
+   }
+  },
+  "http_status": 200,
+  "response_binary": {
+   "content_type": "application/zip, application/octet-stream",
+   "bytes": 168,
+   "content_disposition": "attachment; filename=\"sub-post.zip\"; filename*=utf-8''sub-post.zip"
+  }
+ },
+ "download-one-GET": {
+  "request": {
+   "api": "SYNO.Foto.Download",
+   "method": "download",
+   "version": "1",
+   "http": "GET",
+   "params": {
+    "item_id": "[30]",
+    "force_download": "true"
+   }
+  },
+  "http_status": 200,
+  "response_binary": {
+   "content_type": "application/force-download",
+   "bytes": 51305,
+   "content_disposition": "attachment; filename=\"beach-sunset_1.jpg\"; filename*=utf-8''beach-sunset_1.jpg"
+  }
+ },
+ "probe-download-original": {
+  "request": {
+   "api": "SYNO.Foto.Download",
+   "method": "download_original",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "item_id": "[30]"
+   }
+  },
+  "response": {
+   "error": {
+    "code": 103
+   },
+   "success": false
+  }
+ },
+ "tag-create": {
+  "request": {
+   "api": "SYNO.Foto.Browse.GeneralTag",
+   "method": "create",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "name": "\"mcp-spec-tag\""
+   }
+  },
+  "response": {
+   "data": {
+    "tag": {
+     "id": 5,
+     "name": "mcp-spec-tag"
+    }
+   },
+   "success": true
+  }
+ },
+ "tag-create-existing": {
+  "request": {
+   "api": "SYNO.Foto.Browse.GeneralTag",
+   "method": "create",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "name": "\"mcp-spec-tag\""
+   }
+  },
+  "response": {
+   "data": {
+    "tag": {
+     "id": 5,
+     "name": "mcp-spec-tag"
+    }
+   },
+   "success": true
+  }
+ },
+ "tag-create-numeric": {
+  "request": {
+   "api": "SYNO.Foto.Browse.GeneralTag",
+   "method": "create",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "name": "\"2024\""
+   }
+  },
+  "response": {
+   "data": {
+    "tag": {
+     "id": 6,
+     "name": "2024"
+    }
+   },
+   "success": true
+  }
+ },
+ "item-add-tag": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "add_tag",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[30, 27]",
+    "tag": "[5, 6]"
+   }
+  },
+  "response": {
+   "data": {
+    "error_list": []
+   },
+   "success": true
+  }
+ },
+ "item-get-tag": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "get_tag",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[30, 27]"
+   }
+  },
+  "response": {
+   "data": {
+    "intersection": [
+     {
+      "id": 5,
+      "name": "mcp-spec-tag"
+     },
+     {
+      "id": 6,
+      "name": "2024"
+     }
+    ],
+    "union": [
+     {
+      "id": 5,
+      "name": "mcp-spec-tag"
+     },
+     {
+      "id": 6,
+      "name": "2024"
+     }
+    ]
+   },
+   "success": true
+  }
+ },
+ "tag-list": {
+  "request": {
+   "api": "SYNO.Foto.Browse.GeneralTag",
+   "method": "list",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "offset": "0",
+    "limit": "50"
+   }
+  },
+  "response": {
+   "data": {
+    "list": [
+     {
+      "id": 5,
+      "item_count": 2,
+      "name": "mcp-spec-tag"
+     },
+     {
+      "id": 6,
+      "item_count": 2,
+      "name": "2024"
+     }
+    ]
+   },
+   "success": true
+  }
+ },
+ "tag-get": {
+  "request": {
+   "api": "SYNO.Foto.Browse.GeneralTag",
+   "method": "get",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[5]"
+   }
+  },
+  "response": {
+   "data": {
+    "list": [
+     {
+      "id": 5,
+      "item_count": 2,
+      "name": "mcp-spec-tag"
+     }
+    ]
+   },
+   "success": true
+  }
+ },
+ "tag-count": {
+  "request": {
+   "api": "SYNO.Foto.Browse.GeneralTag",
+   "method": "count",
+   "version": "1",
+   "http": "POST",
+   "params": {}
+  },
+  "response": {
+   "data": {
+    "count": 2
+   },
+   "success": true
+  }
+ },
+ "item-list-by-tag": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "list",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "general_tag_id": "5",
+    "offset": "0",
+    "limit": "10"
+   }
+  },
+  "response": {
+   "success": true,
+   "data": {
+    "list": [
+     {
+      "id": 27,
+      "filename": "forest-trail.jpg",
+      "filesize": 52116,
+      "time": 1720174500,
+      "indexed_time": 1792256688201,
+      "owner_user_id": 2,
+      "folder_id": 21,
+      "type": "photo"
+     },
+     {
+      "id": 30,
+      "filename": "beach-sunset_1.jpg",
+      "filesize": 53875,
+      "time": 1720121400,
+      "indexed_time": 1792256688496,
+      "owner_user_id": 2,
+      "folder_id": 21,
+      "type": "photo"
+     }
+    ]
+   }
+  }
+ },
+ "item-get-after-tag": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "get",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "id": "[30]",
+    "additional": "[\"tag\"]"
+   }
+  },
+  "response": {
+   "success": true,
+   "data": {
+    "list": [
+     {
+      "id": 30,
+      "filename": "beach-sunset_1.jpg",
+      "filesize": 53875,
+      "time": 1720121400,
+      "indexed_time": 1792256688496,
+      "owner_user_id": 2,
+      "folder_id": 21,
+      "type": "photo",
+      "additional": {
+       "tag": [
+        {
+         "id": 6,
+         "name": "2024"
+        },
+        {
+         "id": 5,
+         "name": "mcp-spec-tag"
+        }
+       ]
+      }
+     }
+    ]
+   }
+  }
+ },
+ "item-remove-tag": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "remove_tag",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[27]",
+    "tag": "[5]"
+   }
+  },
+  "response": {
+   "data": {
+    "error_list": []
+   },
+   "success": true
+  }
+ },
+ "item-add-tag-missing": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "add_tag",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[999999]",
+    "tag": "[5]"
+   }
+  },
+  "response": {
+   "data": {
+    "error_list": []
+   },
+   "success": true
+  }
+ },
+ "probe-tag-set": {
+  "request": {
+   "api": "SYNO.Foto.Browse.GeneralTag",
+   "method": "set",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "5",
+    "name": "\"mcp-spec-renamed\""
+   }
+  },
+  "response": {
+   "error": {
+    "code": 103
+   },
+   "success": false
+  }
+ },
+ "probe-tag-delete": {
+  "request": {
+   "api": "SYNO.Foto.Browse.GeneralTag",
+   "method": "delete",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[5]"
+   }
+  },
+  "response": {
+   "error": {
+    "code": 103
+   },
+   "success": false
+  }
+ },
+ "item-set-rating": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "set",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "id": "[30]",
+    "rating": "4"
+   }
+  },
+  "response": {
+   "data": {
+    "error_list": []
+   },
+   "success": true
+  }
+ },
+ "item-set-description": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "set",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "id": "[30]",
+    "description": "\"spec capture\""
+   }
+  },
+  "response": {
+   "data": {
+    "error_list": []
+   },
+   "success": true
+  }
+ },
+ "item-set-time": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "set",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "id": "[27]",
+    "time": "1600000000"
+   }
+  },
+  "response": {
+   "data": {
+    "error_list": []
+   },
+   "success": true
+  }
+ },
+ "item-set-shift-time": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "set",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "id": "[27]",
+    "shift_time": "3600"
+   }
+  },
+  "response": {
+   "data": {
+    "error_list": []
+   },
+   "success": true
+  }
+ },
+ "item-set-rotate": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "set",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "id": "[27]",
+    "rotate_action": "\"counter_clockwise\""
+   }
+  },
+  "response": {
+   "data": {
+    "error_list": []
+   },
+   "success": true
+  }
+ },
+ "item-set-rating-invalid": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "set",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "id": "[30]",
+    "rating": "9"
+   }
+  },
+  "response": {
+   "error": {
+    "code": 120,
+    "errors": {
+     "name": "rating",
+     "reason": "condition"
+    }
+   },
+   "success": false
+  }
+ },
+ "item-set-two-fields": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "set",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "id": "[30]",
+    "rating": "2",
+    "description": "\"two fields\""
+   }
+  },
+  "response": {
+   "data": {
+    "error_list": []
+   },
+   "success": true
+  }
+ },
+ "probe-item-set-gps": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "set",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "id": "[30]",
+    "gps": "{\"latitude\": 1.0, \"longitude\": 2.0}"
+   }
+  },
+  "response": {
+   "error": {
+    "code": 101
+   },
+   "success": false
+  }
+ },
+ "item-get-after-edits": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "get",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "id": "[30, 27]",
+    "additional": "[\"description\", \"rating\", \"tag\", \"gps\", \"orientation\"]"
+   }
+  },
+  "response": {
+   "success": true,
+   "data": {
+    "list": [
+     {
+      "id": 30,
+      "filename": "beach-sunset_1.jpg",
+      "filesize": 54295,
+      "time": 1720121400,
+      "indexed_time": 1792256688496,
+      "owner_user_id": 2,
+      "folder_id": 21,
+      "type": "photo",
+      "additional": {
+       "description": "two fields",
+       "tag": [
+        {
+         "id": 6,
+         "name": "2024"
+        },
+        {
+         "id": 7,
+         "name": "mcp-spec-tag"
+        }
+       ],
+       "orientation": 1,
+       "orientation_original": 1,
+       "rating": 2,
+       "gps": {
+        "latitude": 41.8781,
+        "longitude": -87.6298
+       }
+      }
+     },
+     {
+      "id": 27,
+      "filename": "forest-trail.jpg",
+      "filesize": 52154,
+      "time": 1600003600,
+      "indexed_time": 1792256688201,
+      "owner_user_id": 2,
+      "folder_id": 21,
+      "type": "photo",
+      "additional": {
+       "description": "",
+       "tag": [
+        {
+         "id": 6,
+         "name": "2024"
+        }
+       ],
+       "orientation": 8,
+       "orientation_original": 1,
+       "rating": 0,
+       "gps": {
+        "latitude": 44.428,
+        "longitude": -110.5885
+       }
+      }
+     }
+    ]
+   }
+  }
+ },
+ "probe-item-copy": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "copy",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[30]",
+    "target_folder_id": "25"
+   }
+  },
+  "response": {
+   "error": {
+    "code": 120,
+    "errors": {
+     "name": "action",
+     "reason": "required"
+    }
+   },
+   "success": false
+  }
+ },
+ "probe-item-move": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "move",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[30]",
+    "target_folder_id": "25"
+   }
+  },
+  "response": {
+   "error": {
+    "code": 120,
+    "errors": {
+     "name": "action",
+     "reason": "required"
+    }
+   },
+   "success": false
+  }
+ },
+ "bg-copy": {
+  "request": {
+   "api": "SYNO.Foto.BackgroundTask.File",
+   "method": "copy",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "target_folder_id": "25",
+    "item_id": "[30]",
+    "folder_id": "[]",
+    "action": "\"skip\""
+   }
+  },
+  "response": {
+   "data": {
+    "task_info": {
+     "completion": 0,
+     "create_time": 1792274693129,
+     "error": 0,
+     "extra_info": "",
+     "id": 9,
+     "operation": "copy",
+     "overwrite": 0,
+     "skip": 0,
+     "status": "waiting",
+     "target_folder": {
+      "id": 25,
+      "owner_user_id": 2
+     },
+     "total": 1
+    }
+   },
+   "success": true
+  }
+ },
+ "bg-copy-status": {
+  "request": {
+   "api": "SYNO.Foto.BackgroundTask.Info",
+   "method": "get_status",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[9]"
+   }
+  },
+  "response": {
+   "data": {
+    "list": [
+     {
+      "completion": 0,
+      "create_time": 1792274693129,
+      "error": 0,
+      "extra_info": "",
+      "id": 9,
+      "operation": "copy",
+      "overwrite": 0,
+      "skip": 0,
+      "status": "processing",
+      "target_folder": {
+       "id": 25,
+       "owner_user_id": 2
+      },
+      "total": 1
+     }
+    ]
+   },
+   "success": true
+  }
+ },
+ "bg-copy-status_last": {
+  "request": {
+   "api": "SYNO.Foto.BackgroundTask.Info",
+   "method": "get_status",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[9]"
+   }
+  },
+  "response": {
+   "data": {
+    "list": [
+     {
+      "completion": 1,
+      "create_time": 1792274693129,
+      "error": 0,
+      "extra_info": "",
+      "id": 9,
+      "operation": "copy",
+      "overwrite": 0,
+      "skip": 0,
+      "status": "done",
+      "target_folder": {
+       "id": 25,
+       "owner_user_id": 2
+      },
+      "total": 1
+     }
+    ]
+   },
+   "success": true
+  }
+ },
+ "bg-move": {
+  "request": {
+   "api": "SYNO.Foto.BackgroundTask.File",
+   "method": "move",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "target_folder_id": "25",
+    "item_id": "[27]",
+    "folder_id": "[]",
+    "action": "\"skip\""
+   }
+  },
+  "response": {
+   "data": {
+    "task_info": {
+     "completion": 0,
+     "create_time": 1792274697217,
+     "error": 0,
+     "extra_info": "",
+     "id": 10,
+     "operation": "move",
+     "overwrite": 0,
+     "skip": 0,
+     "status": "waiting",
+     "target_folder": {
+      "id": 25,
+      "owner_user_id": 2
+     },
+     "total": 1
+    }
+   },
+   "success": true
+  }
+ },
+ "bg-move-status": {
+  "request": {
+   "api": "SYNO.Foto.BackgroundTask.Info",
+   "method": "get_status",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[10]"
+   }
+  },
+  "response": {
+   "data": {
+    "list": [
+     {
+      "completion": 0,
+      "create_time": 1792274697217,
+      "error": 0,
+      "extra_info": "",
+      "id": 10,
+      "operation": "move",
+      "overwrite": 0,
+      "skip": 0,
+      "status": "processing",
+      "target_folder": {
+       "id": 25,
+       "owner_user_id": 2
+      },
+      "total": 1
+     }
+    ]
+   },
+   "success": true
+  }
+ },
+ "bg-move-status_last": {
+  "request": {
+   "api": "SYNO.Foto.BackgroundTask.Info",
+   "method": "get_status",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[10]"
+   }
+  },
+  "response": {
+   "data": {
+    "list": [
+     {
+      "completion": 1,
+      "create_time": 1792274697217,
+      "error": 0,
+      "extra_info": "",
+      "id": 10,
+      "operation": "move",
+      "overwrite": 0,
+      "skip": 0,
+      "status": "done",
+      "target_folder": {
+       "id": 25,
+       "owner_user_id": 2
+      },
+      "total": 1
+     }
+    ]
+   },
+   "success": true
+  }
+ },
+ "bg-copy-again-skip": {
+  "request": {
+   "api": "SYNO.Foto.BackgroundTask.File",
+   "method": "copy",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "target_folder_id": "25",
+    "item_id": "[30]",
+    "folder_id": "[]",
+    "action": "\"skip\""
+   }
+  },
+  "response": {
+   "data": {
+    "task_info": {
+     "completion": 0,
+     "create_time": 1792274698259,
+     "error": 0,
+     "extra_info": "",
+     "id": 11,
+     "operation": "copy",
+     "overwrite": 0,
+     "skip": 0,
+     "status": "waiting",
+     "target_folder": {
+      "id": 25,
+      "owner_user_id": 2
+     },
+     "total": 1
+    }
+   },
+   "success": true
+  }
+ },
+ "bg-list-user-task": {
+  "request": {
+   "api": "SYNO.Foto.BackgroundTask.Info",
+   "method": "list_user_task",
+   "version": "1",
+   "http": "POST",
+   "params": {}
+  },
+  "response": {
+   "data": {
+    "list": [
+     {
+      "completion": 1,
+      "create_time": 1792274053389,
+      "error": 0,
+      "extra_info": "",
+      "id": 5,
+      "operation": "copy",
+      "overwrite": 0,
+      "skip": 0,
+      "status": "done",
+      "target_folder": {
+       "id": 19,
+       "owner_user_id": 2
+      },
+      "total": 1
+     },
+     {
+      "completion": 1,
+      "create_time": 1792274056456,
+      "error": 0,
+      "extra_info": "",
+      "id": 6,
+      "operation": "move",
+      "overwrite": 0,
+      "skip": 0,
+      "status": "done",
+      "target_folder": {
+       "id": 19,
+       "owner_user_id": 2
+      },
+      "total": 1
+     },
+     {
+      "completion": 1,
+      "create_time": 1792274057495,
+      "error": 0,
+      "extra_info": "",
+      "id": 7,
+      "operation": "copy",
+      "overwrite": 0,
+      "skip": 1,
+      "status": "done",
+      "target_folder": {
+       "id": 19,
+       "owner_user_id": 2
+      },
+      "total": 1
+     },
+     {
+      "completion": 1,
+      "create_time": 1792274060537,
+      "error": 0,
+      "extra_info": "",
+      "id": 8,
+      "operation": "copy",
+      "overwrite": 0,
+      "skip": 0,
+      "status": "done",
+      "target_folder": {
+       "id": 19,
+       "owner_user_id": 2
+      },
+      "total": 1
+     },
+     {
+      "completion": 1,
+      "create_time": 1792274693129,
+      "error": 0,
+      "extra_info": "",
+      "id": 9,
+      "operation": "copy",
+      "overwrite": 0,
+      "skip": 0,
+      "status": "done",
+      "target_folder": {
+       "id": 25,
+       "owner_user_id": 2
+      },
+      "total": 1
+     },
+     {
+      "completion": 1,
+      "create_time": 1792274697217,
+      "error": 0,
+      "extra_info": "",
+      "id": 10,
+      "operation": "move",
+      "overwrite": 0,
+      "skip": 0,
+      "status": "done",
+      "target_folder": {
+       "id": 25,
+       "owner_user_id": 2
+      },
+      "total": 1
+     },
+     {
+      "completion": 1,
+      "create_time": 1792274698259,
+      "error": 0,
+      "extra_info": "",
+      "id": 11,
+      "operation": "copy",
+      "overwrite": 0,
+      "skip": 1,
+      "status": "done",
+      "target_folder": {
+       "id": 25,
+       "owner_user_id": 2
+      },
+      "total": 1
+     }
+    ]
+   },
+   "success": true
+  }
+ },
+ "bg-copy-again-status": {
+  "request": {
+   "api": "SYNO.Foto.BackgroundTask.Info",
+   "method": "get_status",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[11]"
+   }
+  },
+  "response": {
+   "data": {
+    "list": [
+     {
+      "completion": 1,
+      "create_time": 1792274698259,
+      "error": 0,
+      "extra_info": "",
+      "id": 11,
+      "operation": "copy",
+      "overwrite": 0,
+      "skip": 1,
+      "status": "done",
+      "target_folder": {
+       "id": 25,
+       "owner_user_id": 2
+      },
+      "total": 1
+     }
+    ]
+   },
+   "success": true
+  }
+ },
+ "bg-error-detail": {
+  "request": {
+   "api": "SYNO.Foto.BackgroundTask.Info",
+   "method": "get_error_detail",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "11"
+   }
+  },
+  "response": {
+   "data": {
+    "list": []
+   },
+   "success": true
+  }
+ },
+ "bg-copy-folder": {
+  "request": {
+   "api": "SYNO.Foto.BackgroundTask.File",
+   "method": "copy",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "target_folder_id": "25",
+    "item_id": "[]",
+    "folder_id": "[24]",
+    "action": "\"overwrite\""
+   }
+  },
+  "response": {
+   "data": {
+    "task_info": {
+     "completion": 0,
+     "create_time": 1792274701320,
+     "error": 0,
+     "extra_info": "",
+     "id": 12,
+     "operation": "copy",
+     "overwrite": 0,
+     "skip": 0,
+     "status": "waiting",
+     "target_folder": {
+      "id": 25,
+      "owner_user_id": 2
+     },
+     "total": 1
+    }
+   },
+   "success": true
+  }
+ },
+ "bg-clear-completed": {
+  "request": {
+   "api": "SYNO.Foto.BackgroundTask.Info",
+   "method": "clear_completed_task",
+   "version": "1",
+   "http": "POST",
+   "params": {}
+  },
+  "response": {
+   "success": true
+  }
+ },
+ "bg-status-missing": {
+  "request": {
+   "api": "SYNO.Foto.BackgroundTask.Info",
+   "method": "get_status",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[999999]"
+   }
+  },
+  "response": {
+   "data": {
+    "list": []
+   },
+   "success": true
+  }
+ },
+ "bg-abort-missing": {
+  "request": {
+   "api": "SYNO.Foto.BackgroundTask.Info",
+   "method": "abort_task",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[999999]"
+   }
+  },
+  "response": {
+   "error": {
+    "code": 117
+   },
+   "success": false
+  }
+ },
+ "probe-folder-move": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Folder",
+   "method": "move",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[24]",
+    "target_id": "25"
+   }
+  },
+  "response": {
+   "error": {
+    "code": 120,
+    "errors": {
+     "name": "id",
+     "reason": "type"
+    }
+   },
+   "success": false
+  }
+ },
+ "album-create": {
+  "request": {
+   "api": "SYNO.Foto.Browse.NormalAlbum",
+   "method": "create",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "name": "\"mcp-spec-album\"",
+    "item": "[30]"
+   }
+  },
+  "response": {
+   "data": {
+    "album": {
+     "cant_migrate_condition": {},
+     "condition": {},
+     "create_time": 1792274704,
+     "end_time": 1720121400,
+     "freeze_album": false,
+     "id": 9,
+     "item_count": 1,
+     "name": "mcp-spec-album",
+     "owner_user_id": 2,
+     "passphrase": "",
+     "shared": false,
+     "sort_by": "default",
+     "sort_direction": "default",
+     "start_time": 1720121400,
+     "temporary_shared": false,
+     "type": "normal",
+     "version": 279
+    },
+    "error_list": []
+   },
+   "success": true
+  }
+ },
+ "album-create-duplicate-name": {
+  "request": {
+   "api": "SYNO.Foto.Browse.NormalAlbum",
+   "method": "create",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "name": "\"mcp-spec-album\""
+   }
+  },
+  "response": {
+   "data": {
+    "album": {
+     "cant_migrate_condition": {},
+     "condition": {},
+     "create_time": 1792274704,
+     "end_time": 0,
+     "freeze_album": false,
+     "id": 10,
+     "item_count": 0,
+     "name": "mcp-spec-album",
+     "owner_user_id": 2,
+     "passphrase": "",
+     "shared": false,
+     "sort_by": "default",
+     "sort_direction": "default",
+     "start_time": 0,
+     "temporary_shared": false,
+     "type": "normal",
+     "version": 280
+    },
+    "error_list": []
+   },
+   "success": true
+  }
+ },
+ "album-add-item": {
+  "request": {
+   "api": "SYNO.Foto.Browse.NormalAlbum",
+   "method": "add_item",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "9",
+    "item": "[27, 999999]"
+   }
+  },
+  "response": {
+   "data": {
+    "error_list": []
+   },
+   "success": true
+  }
+ },
+ "album-list": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Album",
+   "method": "list",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "offset": "0",
+    "limit": "50",
+    "sort_by": "\"create_time\"",
+    "sort_direction": "\"desc\"",
+    "additional": "[\"sharing_info\", \"thumbnail\"]"
+   }
+  },
+  "response": {
+   "data": {
+    "list": [
+     {
+      "additional": {
+       "sharing_info": {
+        "enable_password": false,
+        "expiration": 0,
+        "is_expired": false,
+        "mtime": 0,
+        "owner": {
+         "id": -1,
+         "name": ""
+        },
+        "passphrase": "",
+        "permission": [],
+        "privacy_type": "private",
+        "sharing_link": "",
+        "type": "album"
+       },
+       "thumbnail": {
+        "cache_key": "30_1792274692",
+        "m": "ready",
+        "preview": "broken",
+        "sm": "ready",
+        "unit_id": 30,
+        "xl": "ready"
+       }
+      },
+      "cant_migrate_condition": {},
+      "condition": {},
+      "create_time": 1792274704,
+      "end_time": 1720121400,
+      "freeze_album": false,
+      "id": 9,
+      "item_count": 2,
+      "name": "mcp-spec-album",
+      "owner_user_id": 2,
+      "passphrase": "",
+      "shared": false,
+      "sort_by": "default",
+      "sort_direction": "default",
+      "start_time": 1600003600,
+      "temporary_shared": false,
+      "type": "normal",
+      "version": 281
+     },
+     {
+      "additional": {
+       "sharing_info": {
+        "enable_password": false,
+        "expiration": 0,
+        "is_expired": false,
+        "mtime": 0,
+        "owner": {
+         "id": -1,
+         "name": ""
+        },
+        "passphrase": "",
+        "permission": [],
+        "privacy_type": "private",
+        "sharing_link": "",
+        "type": "album"
+       },
+       "thumbnail": {}
+      },
+      "cant_migrate_condition": {},
+      "condition": {},
+      "create_time": 1792274704,
+      "end_time": 0,
+      "freeze_album": false,
+      "id": 10,
+      "item_count": 0,
+      "name": "mcp-spec-album",
+      "owner_user_id": 2,
+      "passphrase": "",
+      "shared": false,
+      "sort_by": "default",
+      "sort_direction": "default",
+      "start_time": 0,
+      "temporary_shared": false,
+      "type": "normal",
+      "version": 280
+     }
+    ]
+   },
+   "success": true
+  }
+ },
+ "album-list-v5": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Album",
+   "method": "list",
+   "version": "5",
+   "http": "POST",
+   "params": {
+    "offset": "0",
+    "limit": "50",
+    "sort_by": "\"create_time\"",
+    "sort_direction": "\"desc\"",
+    "additional": "[\"sharing_info\", \"thumbnail\"]"
+   }
+  },
+  "response": {
+   "data": {
+    "list": [
+     {
+      "additional": {
+       "sharing_info": {
+        "enable_password": false,
+        "expiration": 0,
+        "is_expired": false,
+        "mtime": 0,
+        "owner": {
+         "id": -1,
+         "name": ""
+        },
+        "passphrase": "",
+        "permission": [],
+        "privacy_type": "private",
+        "sharing_link": "",
+        "type": "album"
+       },
+       "thumbnail": {
+        "cache_key": "30_1792274692",
+        "m": "ready",
+        "preview": "broken",
+        "sm": "ready",
+        "unit_id": 30,
+        "xl": "ready"
+       }
+      },
+      "cant_migrate_condition": {},
+      "condition": {},
+      "create_time": 1792274704,
+      "end_time": 1720121400,
+      "freeze_album": false,
+      "id": 9,
+      "item_count": 2,
+      "name": "mcp-spec-album",
+      "owner_user_id": 2,
+      "passphrase": "",
+      "shared": false,
+      "sort_by": "default",
+      "sort_direction": "default",
+      "start_time": 1600003600,
+      "temporary_shared": false,
+      "type": "normal",
+      "version": 281
+     },
+     {
+      "additional": {
+       "sharing_info": {
+        "enable_password": false,
+        "expiration": 0,
+        "is_expired": false,
+        "mtime": 0,
+        "owner": {
+         "id": -1,
+         "name": ""
+        },
+        "passphrase": "",
+        "permission": [],
+        "privacy_type": "private",
+        "sharing_link": "",
+        "type": "album"
+       },
+       "thumbnail": {}
+      },
+      "cant_migrate_condition": {},
+      "condition": {},
+      "create_time": 1792274704,
+      "end_time": 0,
+      "freeze_album": false,
+      "id": 10,
+      "item_count": 0,
+      "name": "mcp-spec-album",
+      "owner_user_id": 2,
+      "passphrase": "",
+      "shared": false,
+      "sort_by": "default",
+      "sort_direction": "default",
+      "start_time": 0,
+      "temporary_shared": false,
+      "type": "normal",
+      "version": 280
+     }
+    ]
+   },
+   "success": true
+  }
+ },
+ "album-get": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Album",
+   "method": "get",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[9]",
+    "additional": "[\"sharing_info\", \"thumbnail\", \"condition_object\"]"
+   }
+  },
+  "response": {
+   "data": {
+    "list": [
+     {
+      "additional": {
+       "condition_object": {},
+       "sharing_info": {
+        "enable_password": false,
+        "expiration": 0,
+        "is_expired": false,
+        "mtime": 0,
+        "owner": {
+         "id": -1,
+         "name": ""
+        },
+        "passphrase": "",
+        "permission": [],
+        "privacy_type": "private",
+        "sharing_link": "",
+        "type": "album"
+       },
+       "thumbnail": {
+        "cache_key": "30_1792274692",
+        "m": "ready",
+        "preview": "broken",
+        "sm": "ready",
+        "unit_id": 30,
+        "xl": "ready"
+       }
+      },
+      "cant_migrate_condition": {},
+      "condition": {},
+      "create_time": 1792274704,
+      "end_time": 1720121400,
+      "freeze_album": false,
+      "id": 9,
+      "item_count": 2,
+      "name": "mcp-spec-album",
+      "owner_user_id": 2,
+      "passphrase": "",
+      "shared": false,
+      "sort_by": "default",
+      "sort_direction": "default",
+      "start_time": 1600003600,
+      "temporary_shared": false,
+      "type": "normal",
+      "version": 281
+     }
+    ]
+   },
+   "success": true
+  }
+ },
+ "album-count": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Album",
+   "method": "count",
+   "version": "1",
+   "http": "POST",
+   "params": {}
+  },
+  "response": {
+   "data": {
+    "count": 2
+   },
+   "success": true
+  }
+ },
+ "item-list-album": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "list",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "album_id": "9",
+    "offset": "0",
+    "limit": "10"
+   }
+  },
+  "response": {
+   "success": true,
+   "data": {
+    "list": [
+     {
+      "id": 30,
+      "filename": "beach-sunset_1.jpg",
+      "filesize": 54295,
+      "time": 1720121400,
+      "indexed_time": 1792256688496,
+      "owner_user_id": 2,
+      "folder_id": 21,
+      "type": "photo"
+     },
+     {
+      "id": 27,
+      "filename": "forest-trail.jpg",
+      "filesize": 52154,
+      "time": 1600003600,
+      "indexed_time": 1792256688201,
+      "owner_user_id": 2,
+      "folder_id": 25,
+      "type": "photo"
+     }
+    ]
+   }
+  }
+ },
+ "album-set-name": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Album",
+   "method": "set_name",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "9",
+    "name": "\"mcp-spec-album-renamed\""
+   }
+  },
+  "response": {
+   "success": true
+  }
+ },
+ "album-set-cover": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Album",
+   "method": "set_cover",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "9",
+    "id_item": "27"
+   }
+  },
+  "response": {
+   "success": true
+  }
+ },
+ "album-delete-item": {
+  "request": {
+   "api": "SYNO.Foto.Browse.NormalAlbum",
+   "method": "delete_item",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "9",
+    "item": "[27]"
+   }
+  },
+  "response": {
+   "success": true
+  }
+ },
+ "album-copy": {
+  "request": {
+   "api": "SYNO.Foto.Browse.NormalAlbum",
+   "method": "copy",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "name": "\"mcp-spec-album-copy\"",
+    "source_album_id": "9"
+   }
+  },
+  "response": {
+   "data": {
+    "album": {
+     "cant_migrate_condition": {},
+     "condition": {},
+     "create_time": 1792274704,
+     "end_time": 1720121400,
+     "freeze_album": false,
+     "id": 11,
+     "item_count": 1,
+     "name": "mcp-spec-album-copy",
+     "owner_user_id": 2,
+     "passphrase": "",
+     "shared": false,
+     "sort_by": "default",
+     "sort_direction": "default",
+     "start_time": 1720121400,
+     "temporary_shared": false,
+     "type": "normal",
+     "version": 287
+    }
+   },
+   "success": true
+  }
+ },
+ "condalbum-peek": {
+  "request": {
+   "api": "SYNO.Foto.Browse.ConditionAlbum",
+   "method": "peek_item_count",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "condition": "{\"user_id\": 2, \"item_type\": [], \"folder_filter\": [21], \"time\": [{\"start_time\": 1690000000}]}"
+   }
+  },
+  "response": {
+   "data": {
+    "count": 4
+   },
+   "success": true
+  }
+ },
+ "condalbum-create": {
+  "request": {
+   "api": "SYNO.Foto.Browse.ConditionAlbum",
+   "method": "create",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "name": "\"mcp-spec-smart\"",
+    "condition": "{\"user_id\": 2, \"item_type\": [], \"folder_filter\": [21], \"time\": [{\"start_time\": 1690000000}]}"
+   }
+  },
+  "response": {
+   "data": {
+    "album": {
+     "condition": {
+      "folder_filter": [
+       21
+      ],
+      "time": [
+       {
+        "start_time": 1690000000
+       }
+      ],
+      "user_id": 2
+     },
+     "create_time": 1792274704,
+     "end_time": 1720121400,
+     "id": 12,
+     "item_count": 4,
+     "name": "mcp-spec-smart",
+     "owner_user_id": 2,
+     "passphrase": "",
+     "shared": false,
+     "sort_by": "default",
+     "sort_direction": "default",
+     "start_time": 1703455200,
+     "type": "condition",
+     "version": 290
+    }
+   },
+   "success": true
+  }
+ },
+ "condalbum-set-condition": {
+  "request": {
+   "api": "SYNO.Foto.Browse.ConditionAlbum",
+   "method": "set_condition",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "id": "12",
+    "condition": "{\"user_id\": 2, \"item_type\": [], \"folder_filter\": [21], \"time\": [{\"start_time\": 1690000000}], \"general_tag\": [5], \"general_tag_policy\": \"or\"}"
+   }
+  },
+  "response": {
+   "error": {
+    "code": 950
+   },
+   "success": false
+  }
+ },
+ "condalbum-get": {
+  "request": {
+   "api": "SYNO.Foto.Browse.ConditionAlbum",
+   "method": "get",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[12]",
+    "additional": "[\"condition_object\"]"
+   }
+  },
+  "response": {
+   "data": {
+    "list": [
+     {
+      "additional": {
+       "condition_object": {
+        "folder_filter": [
+         {
+          "id": 21,
+          "name": "/mcp-spec-capture",
+          "owner_user_id": 2,
+          "parent": 3,
+          "passphrase": "",
+          "shared": false,
+          "sort_by": "default",
+          "sort_direction": "default"
+         }
+        ],
+        "time": [
+         {
+          "start_time": 1690000000
+         }
+        ],
+        "user_id": 2
+       }
+      },
+      "condition": {
+       "folder_filter": [
+        21
+       ],
+       "is_valid": true,
+       "time": [
+        {
+         "start_time": 1690000000
+        }
+       ],
+       "user_id": 2
+      },
+      "create_time": 1792274704,
+      "end_time": 1720121400,
+      "id": 12,
+      "item_count": 4,
+      "name": "mcp-spec-smart",
+      "owner_user_id": 2,
+      "passphrase": "",
+      "shared": false,
+      "sort_by": "default",
+      "sort_direction": "default",
+      "start_time": 1703455200,
+      "type": "condition",
+      "version": 290
+     }
+    ]
+   },
+   "success": true
+  }
+ },
+ "condalbum-create-invalid": {
+  "request": {
+   "api": "SYNO.Foto.Browse.ConditionAlbum",
+   "method": "create",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "name": "\"mcp-spec-bad\"",
+    "condition": "{\"user_id\": 2}"
+   }
+  },
+  "response": {
+   "data": {
+    "album": {
+     "condition": {
+      "user_id": 2
+     },
+     "create_time": 1792274704,
+     "end_time": 1720121400,
+     "id": 13,
+     "item_count": 8,
+     "name": "mcp-spec-bad",
+     "owner_user_id": 2,
+     "passphrase": "",
+     "shared": false,
+     "sort_by": "default",
+     "sort_direction": "default",
+     "start_time": 1600003600,
+     "type": "condition",
+     "version": 293
+    }
+   },
+   "success": true
+  }
+ },
+ "condalbum-suggest": {
+  "request": {
+   "api": "SYNO.Foto.Browse.ConditionAlbum",
+   "method": "suggest",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "keyword": "\"mcp\"",
+    "user_id": "2",
+    "condition": "[\"general_tag\", \"camera\"]",
+    "additional": "[\"thumbnail\"]"
+   }
+  },
+  "response": {
+   "data": {
+    "camera": [],
+    "general_tag": [
+     {
+      "id": 7,
+      "name": "mcp-spec-tag"
+     }
+    ]
+   },
+   "success": true
+  }
+ },
+ "item-list-condalbum": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "list",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "album_id": "12",
+    "offset": "0",
+    "limit": "10"
+   }
+  },
+  "response": {
+   "success": true,
+   "data": {
+    "list": [
+     {
+      "id": 30,
+      "filename": "beach-sunset_1.jpg",
+      "filesize": 54295,
+      "time": 1720121400,
+      "indexed_time": 1792256688496,
+      "owner_user_id": 2,
+      "folder_id": 21,
+      "type": "photo"
+     },
+     {
+      "id": 31,
+      "filename": "beach-sunset_1.jpg",
+      "filesize": 54295,
+      "time": 1720121400,
+      "indexed_time": 1792256696153,
+      "owner_user_id": 2,
+      "folder_id": 25,
+      "type": "photo"
+     },
+     {
+      "id": 24,
+      "filename": "beach-sunset.jpg",
+      "filesize": 51305,
+      "time": 1720121400,
+      "indexed_time": 1792256687958,
+      "owner_user_id": 2,
+      "folder_id": 21,
+      "type": "photo"
+     },
+     {
+      "id": 25,
+      "filename": "city-night.jpg",
+      "filesize": 48215,
+      "time": 1703455200,
+      "indexed_time": 1792256688013,
+      "owner_user_id": 2,
+      "folder_id": 21,
+      "type": "photo"
+     }
+    ]
+   }
+  }
+ },
+ "share-set-shared": {
+  "request": {
+   "api": "SYNO.Foto.Sharing.Passphrase",
+   "method": "set_shared",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "policy": "\"album\"",
+    "album_id": "9",
+    "enabled": "true"
+   }
+  },
+  "response": {
+   "data": {
+    "passphrase": "6kJOJFJVq",
+    "sharing_link": "http://nas.example:5000/mo/sharing/6kJOJFJVq"
+   },
+   "success": true
+  }
+ },
+ "share-get-permission": {
+  "request": {
+   "api": "SYNO.Foto.Sharing.Passphrase",
+   "method": "get_permission",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "passphrase": "\"6kJOJFJVq\"",
+    "exclude_public": "true"
+   }
+  },
+  "response": {
+   "data": {
+    "permission": {
+     "download": true,
+     "manage": true,
+     "own": true,
+     "upload": true,
+     "view": true
+    },
+    "user_id": 2,
+    "username": "mcptest"
+   },
+   "success": true
+  }
+ },
+ "share-update": {
+  "request": {
+   "api": "SYNO.Foto.Sharing.Passphrase",
+   "method": "update",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "passphrase": "\"6kJOJFJVq\"",
+    "password": "\"Spec#Pass1\"",
+    "expiration": "1900000000",
+    "permission": "[{\"action\": \"update\", \"role\": \"view\", \"member\": {\"type\": \"public\"}}]"
+   }
+  },
+  "response": {
+   "success": true
+  }
+ },
+ "album-get-shared": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Album",
+   "method": "get",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[9]",
+    "additional": "[\"sharing_info\"]"
+   }
+  },
+  "response": {
+   "data": {
+    "list": [
+     {
+      "additional": {
+       "sharing_info": {
+        "enable_password": true,
+        "expiration": 1900000000,
+        "is_expired": false,
+        "mtime": 1792274704,
+        "owner": {
+         "id": 2,
+         "name": "mcptest"
+        },
+        "passphrase": "6kJOJFJVq",
+        "permission": [],
+        "privacy_type": "public-view",
+        "sharing_link": "http://nas.example:5000/mo/sharing/6kJOJFJVq",
+        "type": "album"
+       }
+      },
+      "cant_migrate_condition": {},
+      "condition": {},
+      "create_time": 1792274704,
+      "end_time": 1720121400,
+      "freeze_album": false,
+      "id": 9,
+      "item_count": 1,
+      "name": "mcp-spec-album-renamed",
+      "owner_user_id": 2,
+      "passphrase": "6kJOJFJVq",
+      "shared": true,
+      "sort_by": "default",
+      "sort_direction": "default",
+      "start_time": 1720121400,
+      "temporary_shared": false,
+      "type": "normal",
+      "version": 298
+     }
+    ]
+   },
+   "success": true
+  }
+ },
+ "probe-share-get": {
+  "request": {
+   "api": "SYNO.Foto.Sharing.Passphrase",
+   "method": "get",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "passphrase": "\"6kJOJFJVq\""
+   }
+  },
+  "response": {
+   "data": {
+    "list": []
+   },
+   "success": true
+  }
+ },
+ "share-update-clear-password": {
+  "request": {
+   "api": "SYNO.Foto.Sharing.Passphrase",
+   "method": "update",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "passphrase": "\"6kJOJFJVq\"",
+    "password": "\"\""
+   }
+  },
+  "response": {
+   "success": true
+  }
+ },
+ "share-stop": {
+  "request": {
+   "api": "SYNO.Foto.Sharing.Passphrase",
+   "method": "set_shared",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "policy": "\"album\"",
+    "album_id": "9",
+    "enabled": "false"
+   }
+  },
+  "response": {
+   "data": {
+    "passphrase": "6kJOJFJVq",
+    "sharing_link": "http://nas.example:5000/mo/sharing/6kJOJFJVq"
+   },
+   "success": true
+  }
+ },
+ "share-with-me": {
+  "request": {
+   "api": "SYNO.Foto.Sharing.Misc",
+   "method": "list_shared_with_me_album",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "offset": "0",
+    "limit": "10",
+    "sort_by": "\"share_modify_time\"",
+    "sort_direction": "\"desc\"",
+    "additional": "[\"sharing_info\"]"
+   }
+  },
+  "response": {
+   "data": {
+    "list": []
+   },
+   "success": true
+  }
+ },
+ "share-list-user-group": {
+  "request": {
+   "api": "SYNO.Foto.Sharing.Misc",
+   "method": "list_user_group",
+   "version": "1",
+   "http": "POST",
+   "params": {}
+  },
+  "response": {
+   "data": {
+    "list": [
+     {
+      "id": 1026,
+      "name": "mcpadmin",
+      "type": "user"
+     },
+     {
+      "id": 1027,
+      "name": "mcptest",
+      "type": "user"
+     },
+     {
+      "id": 101,
+      "name": "administrators",
+      "type": "group"
+     }
+    ]
+   },
+   "success": true
+  }
+ },
+ "request-create": {
+  "request": {
+   "api": "SYNO.Foto.PhotoRequest",
+   "method": "create",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "passphrase": "\"\"",
+    "subject": "\"mcp spec\"",
+    "description": "\"capture\"",
+    "library": "\"personal_space\"",
+    "folder_home_path": "\"/mcp-spec-capture\"",
+    "filesize_limit": "0",
+    "expiration": "0"
+   }
+  },
+  "response": {
+   "data": {
+    "description": "capture",
+    "expiration": 0,
+    "filesize_limit": 0,
+    "folder_home_path": "/mcp-spec-capture",
+    "folder_id": 21,
+    "is_folder_valid": true,
+    "library": "personal_space",
+    "passphrase": "IQwpTmKug",
+    "sharing_link": "http://nas.example:5000/mo/request/IQwpTmKug",
+    "subject": "mcp spec"
+   },
+   "success": true
+  }
+ },
+ "request-list": {
+  "request": {
+   "api": "SYNO.Foto.PhotoRequest",
+   "method": "list",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "offset": "0",
+    "limit": "50"
+   }
+  },
+  "response": {
+   "data": {
+    "list": [
+     {
+      "description": "capture",
+      "expiration": 0,
+      "filesize_limit": 0,
+      "folder_home_path": "/mcp-spec-capture",
+      "folder_id": 21,
+      "is_folder_valid": true,
+      "library": "personal_space",
+      "passphrase": "IQwpTmKug",
+      "sharing_link": "http://nas.example:5000/mo/request/IQwpTmKug",
+      "subject": "mcp spec"
+     }
+    ]
+   },
+   "success": true
+  }
+ },
+ "request-update": {
+  "request": {
+   "api": "SYNO.Foto.PhotoRequest",
+   "method": "update",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "passphrase": "\"IQwpTmKug\"",
+    "subject": "\"mcp spec 2\"",
+    "filesize_limit": "10485760"
+   }
+  },
+  "response": {
+   "success": true
+  }
+ },
+ "probe-request-get": {
+  "request": {
+   "api": "SYNO.Foto.PhotoRequest",
+   "method": "get",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "passphrase": "\"IQwpTmKug\""
+   }
+  },
+  "response": {
+   "data": {
+    "description": "capture",
+    "expiration": 0,
+    "filesize_limit": 10485760,
+    "folder_home_path": "/mcp-spec-capture",
+    "folder_id": 21,
+    "is_folder_valid": true,
+    "library": "personal_space",
+    "passphrase": "IQwpTmKug",
+    "sharing_link": "http://nas.example:5000/mo/request/IQwpTmKug",
+    "subject": "mcp spec 2"
+   },
+   "success": true
+  }
+ },
+ "request-info": {
+  "request": {
+   "api": "SYNO.Foto.Sharing.Passphrase",
+   "method": "get_photo_request_info",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "passphrase": "\"IQwpTmKug\""
+   }
+  },
+  "response": {
+   "data": {
+    "description": "capture",
+    "filesize_limit": 10485760,
+    "subject": "mcp spec 2"
+   },
+   "success": true
+  }
+ },
+ "request-delete": {
+  "request": {
+   "api": "SYNO.Foto.PhotoRequest",
+   "method": "delete",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "passphrase": "[\"IQwpTmKug\"]"
+   }
+  },
+  "response": {
+   "success": true
+  }
+ },
+ "err-item-list-no-paging": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "list",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "folder_id": "21"
+   }
+  },
+  "response": {
+   "error": {
+    "code": 120,
+    "errors": {
+     "name": "offset",
+     "reason": "required"
+    }
+   },
+   "success": false
+  }
+ },
+ "err-item-list-bad-type": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "list",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "folder_id": "\"abc\"",
+    "offset": "0",
+    "limit": "5"
+   }
+  },
+  "response": {
+   "error": {
+    "code": 120,
+    "errors": {
+     "name": "folder_id",
+     "reason": "type"
+    }
+   },
+   "success": false
+  }
+ },
+ "err-unquoted": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "list",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "folder_id": 21,
+    "offset": 0,
+    "limit": 5
+   }
+  },
+  "response": {
+   "success": true,
+   "data": {
+    "list": [
+     {
+      "id": 30,
+      "filename": "beach-sunset_1.jpg",
+      "filesize": 54295,
+      "time": 1720121400,
+      "indexed_time": 1792256688496,
+      "owner_user_id": 2,
+      "folder_id": 21,
+      "type": "photo"
+     },
+     {
+      "id": 24,
+      "filename": "beach-sunset.jpg",
+      "filesize": 51305,
+      "time": 1720121400,
+      "indexed_time": 1792256687958,
+      "owner_user_id": 2,
+      "folder_id": 21,
+      "type": "photo"
+     },
+     {
+      "id": 25,
+      "filename": "city-night.jpg",
+      "filesize": 48215,
+      "time": 1703455200,
+      "indexed_time": 1792256688013,
+      "owner_user_id": 2,
+      "folder_id": 21,
+      "type": "photo"
+     },
+     {
+      "id": 29,
+      "filename": "snowy-peak.jpg",
+      "filesize": 40075,
+      "time": 1673773200,
+      "indexed_time": 1792256688399,
+      "owner_user_id": 2,
+      "folder_id": 21,
+      "type": "photo"
+     },
+     {
+      "id": 26,
+      "filename": "desk-notes.jpg",
+      "filesize": 44624,
+      "time": 1653120000,
+      "indexed_time": 1792256688099,
+      "owner_user_id": 2,
+      "folder_id": 21,
+      "type": "photo"
+     }
+    ]
+   }
+  }
+ },
+ "err-rename-unquoted": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Folder",
+   "method": "rename",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": 21,
+    "name": "x"
+   }
+  },
+  "response": {
+   "data": {
+    "folder": {
+     "id": 21,
+     "name": "/x",
+     "owner_user_id": 2,
+     "parent": 3,
+     "passphrase": "",
+     "shared": false,
+     "sort_by": "default",
+     "sort_direction": "default"
+    }
+   },
+   "success": true
+  }
+ },
+ "album-delete": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Album",
+   "method": "delete",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[9, 11, 12]"
+   }
+  },
+  "response": {
+   "success": true
+  }
+ },
+ "album-delete-missing": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Album",
+   "method": "delete",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[999999]"
+   }
+  },
+  "response": {
+   "success": true
+  }
+ },
+ "item-delete": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "delete",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[28]"
+   }
+  },
+  "response": {
+   "success": true
+  }
+ },
+ "item-delete-missing": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "delete",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[999999]"
+   }
+  },
+  "response": {
+   "success": true
+  }
+ },
+ "folder-delete-missing": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Folder",
+   "method": "delete",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[999999]"
+   }
+  },
+  "response": {
+   "error": {
+    "code": 117
+   },
+   "success": false
+  }
+ },
+ "folder-delete": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Folder",
+   "method": "delete",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[21]"
+   }
+  },
+  "response": {
+   "data": {
+    "error_list": []
+   },
+   "success": true
+  }
+ },
+ "folder-get-after-delete": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Folder",
+   "method": "get",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "id": "21"
+   }
+  },
+  "response": {
+   "error": {
+    "code": 642
+   },
+   "success": false
+  }
+ },
+ "tag-list-after-delete": {
+  "request": {
+   "api": "SYNO.Foto.Browse.GeneralTag",
+   "method": "list",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "offset": "0",
+    "limit": "100"
+   }
+  },
+  "response": {
+   "data": {
+    "list": []
+   },
+   "success": true
+  }
+ },
+ "team_team-root": {
+  "request": {
+   "api": "SYNO.FotoTeam.Browse.Folder",
+   "method": "get",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "id": "0"
+   }
+  },
+  "response": {
+   "data": {
+    "folder": {
+     "id": 1,
+     "name": "/",
+     "owner_user_id": 0,
+     "parent": 1,
+     "passphrase": "",
+     "shared": false,
+     "sort_by": "default",
+     "sort_direction": "default"
+    }
+   },
+   "success": true
+  }
+ },
+ "team_team-folder-list-root": {
+  "request": {
+   "api": "SYNO.FotoTeam.Browse.Folder",
+   "method": "list",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "id": "1",
+    "offset": "0",
+    "limit": "100",
+    "sort_by": "\"filename\"",
+    "sort_direction": "\"asc\""
+   }
+  },
+  "response": {
+   "data": {
+    "list": []
+   },
+   "success": true
+  }
+ },
+ "team_team-folder-create": {
+  "request": {
+   "api": "SYNO.FotoTeam.Browse.Folder",
+   "method": "create",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "target_id": "1",
+    "name": "\"mcp-spec-team\""
+   }
+  },
+  "response": {
+   "data": {
+    "folder": {
+     "id": 27,
+     "name": "/mcp-spec-team",
+     "owner_user_id": 0,
+     "parent": 1,
+     "passphrase": "",
+     "shared": false,
+     "sort_by": "default",
+     "sort_direction": "default"
+    }
+   },
+   "success": true
+  }
+ },
+ "team_team-folder-create-dest": {
+  "request": {
+   "api": "SYNO.FotoTeam.Browse.Folder",
+   "method": "create",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "target_id": "27",
+    "name": "\"dest\""
+   }
+  },
+  "response": {
+   "data": {
+    "folder": {
+     "id": 28,
+     "name": "/mcp-spec-team/dest",
+     "owner_user_id": 0,
+     "parent": 27,
+     "passphrase": "",
+     "shared": false,
+     "sort_by": "default",
+     "sort_direction": "default"
+    }
+   },
+   "success": true
+  }
+ },
+ "team_team-upload-beach-sunset": {
+  "request": {
+   "api": "SYNO.FotoTeam.Upload.Item",
+   "method": "upload_to_folder",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "duplicate": "\"rename\"",
+    "name": "\"beach-sunset.jpg\"",
+    "mtime": "1792273334",
+    "target_folder_id": "27"
+   },
+   "files": [
+    "file"
+   ]
+  },
+  "response": {
+   "data": {
+    "action": "new",
+    "id": 32,
+    "unit_id": 32
+   },
+   "success": true
+  }
+ },
+ "team_team-upload-city-night": {
+  "request": {
+   "api": "SYNO.FotoTeam.Upload.Item",
+   "method": "upload_to_folder",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "duplicate": "\"rename\"",
+    "name": "\"city-night.jpg\"",
+    "mtime": "1792273334",
+    "target_folder_id": "27"
+   },
+   "files": [
+    "file"
+   ]
+  },
+  "response": {
+   "data": {
+    "action": "new",
+    "id": 33,
+    "unit_id": 33
+   },
+   "success": true
+  }
+ },
+ "team_team-upload-desk-notes": {
+  "request": {
+   "api": "SYNO.FotoTeam.Upload.Item",
+   "method": "upload_to_folder",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "duplicate": "\"rename\"",
+    "name": "\"desk-notes.jpg\"",
+    "mtime": "1792273334",
+    "target_folder_id": "27"
+   },
+   "files": [
+    "file"
+   ]
+  },
+  "response": {
+   "data": {
+    "action": "new",
+    "id": 34,
+    "unit_id": 34
+   },
+   "success": true
+  }
+ },
+ "team_team-count-wait": {
+  "request": {
+   "api": "SYNO.FotoTeam.Browse.Item",
+   "method": "count",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "folder_id": "27"
+   }
+  },
+  "response": {
+   "data": {
+    "count": 3
+   },
+   "success": true
+  }
+ },
+ "team_team-item-list": {
+  "request": {
+   "api": "SYNO.FotoTeam.Browse.Item",
+   "method": "list",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "folder_id": "27",
+    "offset": "0",
+    "limit": "10",
+    "additional": "[\"thumbnail\", \"tag\", \"resolution\"]"
+   }
+  },
+  "response": {
+   "success": true,
+   "data": {
+    "list": [
+     {
+      "id": 34,
+      "filename": "desk-notes.jpg",
+      "filesize": 44624,
+      "time": 1792273334,
+      "indexed_time": 1792256757734,
+      "owner_user_id": 0,
+      "folder_id": 27,
+      "type": "photo",
+      "additional": {
+       "tag": [],
+       "resolution": {
+        "width": 0,
+        "height": 0
+       },
+       "thumbnail": {
+        "m": "converting",
+        "xl": "converting",
+        "preview": "converting",
+        "sm": "converting",
+        "cache_key": "34_1792273334",
+        "unit_id": 34
+       }
+      }
+     },
+     {
+      "id": 33,
+      "filename": "city-night.jpg",
+      "filesize": 48215,
+      "time": 1792273334,
+      "indexed_time": 1792256757640,
+      "owner_user_id": 0,
+      "folder_id": 27,
+      "type": "photo",
+      "additional": {
+       "tag": [],
+       "resolution": {
+        "width": 0,
+        "height": 0
+       },
+       "thumbnail": {
+        "m": "converting",
+        "xl": "converting",
+        "preview": "converting",
+        "sm": "converting",
+        "cache_key": "33_1792273334",
+        "unit_id": 33
+       }
+      }
+     },
+     {
+      "id": 32,
+      "filename": "beach-sunset.jpg",
+      "filesize": 51305,
+      "time": 1720121400,
+      "indexed_time": 1792256757596,
+      "owner_user_id": 0,
+      "folder_id": 27,
+      "type": "photo",
+      "additional": {
+       "tag": [],
+       "resolution": {
+        "width": 1600,
+        "height": 1200
+       },
+       "thumbnail": {
+        "m": "converting",
+        "xl": "converting",
+        "preview": "broken",
+        "sm": "converting",
+        "cache_key": "32_1792273334",
+        "unit_id": 32
+       },
+       "orientation": 1,
+       "orientation_original": 1
+      }
+     }
+    ]
+   }
+  }
+ },
+ "team_team-item-get": {
+  "request": {
+   "api": "SYNO.FotoTeam.Browse.Item",
+   "method": "get",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "id": "[34]",
+    "additional": "[\"description\", \"tag\", \"exif\", \"gps\", \"address\", \"rating\", \"thumbnail\"]"
+   }
+  },
+  "response": {
+   "success": true,
+   "data": {
+    "list": [
+     {
+      "id": 34,
+      "filename": "desk-notes.jpg",
+      "filesize": 44624,
+      "time": 1792273334,
+      "indexed_time": 1792256757734,
+      "owner_user_id": 0,
+      "folder_id": 27,
+      "type": "photo",
+      "additional": {
+       "description": "",
+       "tag": [],
+       "exif": {
+        "aperture": "",
+        "camera": "",
+        "exposure_time": "",
+        "focal_length": "",
+        "iso": "",
+        "lens": ""
+       },
+       "thumbnail": {
+        "m": "converting",
+        "xl": "converting",
+        "preview": "converting",
+        "sm": "converting",
+        "cache_key": "34_1792273334",
+        "unit_id": 34
+       },
+       "rating": 0
+      }
+     }
+    ]
+   }
+  }
+ },
+ "team_team-tag-create": {
+  "request": {
+   "api": "SYNO.FotoTeam.Browse.GeneralTag",
+   "method": "create",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "name": "\"mcp-team-tag\""
+   }
+  },
+  "response": {
+   "data": {
+    "tag": {
+     "id": 8,
+     "name": "mcp-team-tag"
+    }
+   },
+   "success": true
+  }
+ },
+ "team_team-add-tag": {
+  "request": {
+   "api": "SYNO.FotoTeam.Browse.Item",
+   "method": "add_tag",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[34]",
+    "tag": "[8]"
+   }
+  },
+  "response": {
+   "data": {
+    "error_list": [
+     34
+    ]
+   },
+   "success": true
+  }
+ },
+ "team_team-item-set-rating": {
+  "request": {
+   "api": "SYNO.FotoTeam.Browse.Item",
+   "method": "set",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "id": "[34]",
+    "rating": "3"
+   }
+  },
+  "response": {
+   "data": {
+    "error_list": []
+   },
+   "success": true
+  }
+ },
+ "team_team-search": {
+  "request": {
+   "api": "SYNO.FotoTeam.Search.Search",
+   "method": "list_item",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "offset": "0",
+    "limit": "10",
+    "keyword": "\"beach\""
+   }
+  },
+  "response": {
+   "data": {
+    "list": [
+     {
+      "filename": "beach-sunset.jpg",
+      "filesize": 51305,
+      "folder_id": 27,
+      "id": 32,
+      "indexed_time": 1792256757596,
+      "owner_user_id": 0,
+      "time": 1720121400,
+      "type": "photo"
+     }
+    ]
+   },
+   "success": true
+  }
+ },
+ "team_team-timeline": {
+  "request": {
+   "api": "SYNO.FotoTeam.Browse.Timeline",
+   "method": "get",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "timeline_group_unit": "\"month\""
+   }
+  },
+  "response": {
+   "data": {
+    "section": [
+     {
+      "limit": 3,
+      "list": [
+       {
+        "item_count": 1,
+        "month": 7,
+        "year": 2024
+       },
+       {
+        "item_count": 1,
+        "month": 12,
+        "year": 2023
+       },
+       {
+        "item_count": 1,
+        "month": 5,
+        "year": 2022
+       }
+      ],
+      "offset": 0
+     }
+    ]
+   },
+   "success": true
+  }
+ },
+ "team_team-person-list": {
+  "request": {
+   "api": "SYNO.FotoTeam.Browse.Person",
+   "method": "list",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "offset": "0",
+    "limit": "5",
+    "show_more": "true",
+    "show_hidden": "true"
+   }
+  },
+  "response": {
+   "data": {
+    "list": []
+   },
+   "success": true
+  }
+ },
+ "team_team-bg-copy": {
+  "request": {
+   "api": "SYNO.FotoTeam.BackgroundTask.File",
+   "method": "copy",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "target_folder_id": "28",
+    "item_id": "[34]",
+    "folder_id": "[]",
+    "action": "\"skip\""
+   }
+  },
+  "response": {
+   "data": {
+    "task_info": {
+     "completion": 0,
+     "create_time": 1792274759035,
+     "error": 0,
+     "extra_info": "",
+     "id": 13,
+     "operation": "copy",
+     "overwrite": 0,
+     "skip": 0,
+     "status": "waiting",
+     "target_folder": {
+      "id": 28,
+      "owner_user_id": 0
+     },
+     "total": 1
+    }
+   },
+   "success": true
+  }
+ },
+ "team_team-bg-status": {
+  "request": {
+   "api": "SYNO.Foto.BackgroundTask.Info",
+   "method": "get_status",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[13]"
+   }
+  },
+  "response": {
+   "data": {
+    "list": [
+     {
+      "completion": 0,
+      "create_time": 1792274759035,
+      "error": 0,
+      "extra_info": "",
+      "id": 13,
+      "operation": "copy",
+      "overwrite": 0,
+      "skip": 0,
+      "status": "processing",
+      "target_folder": {
+       "id": 28,
+       "owner_user_id": 0
+      },
+      "total": 1
+     }
+    ]
+   },
+   "success": true
+  }
+ },
+ "team_team-bg-status_last": {
+  "request": {
+   "api": "SYNO.Foto.BackgroundTask.Info",
+   "method": "get_status",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[13]"
+   }
+  },
+  "response": {
+   "data": {
+    "list": [
+     {
+      "completion": 1,
+      "create_time": 1792274759035,
+      "error": 0,
+      "extra_info": "",
+      "id": 13,
+      "operation": "copy",
+      "overwrite": 0,
+      "skip": 0,
+      "status": "done",
+      "target_folder": {
+       "id": 28,
+       "owner_user_id": 0
+      },
+      "total": 1
+     }
+    ]
+   },
+   "success": true
+  }
+ },
+ "team_team-download": {
+  "request": {
+   "api": "SYNO.FotoTeam.Download",
+   "method": "download",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "item_id": "[34]",
+    "force_download": "true"
+   }
+  },
+  "http_status": 200,
+  "response_binary": {
+   "content_type": "application/force-download",
+   "bytes": 47156,
+   "content_disposition": "attachment; filename=\"desk-notes.jpg\"; filename*=utf-8''desk-notes.jpg"
+  }
+ },
+ "team_team-item-via-personal-api": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "get",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "id": "[34]"
+   }
+  },
+  "response": {
+   "success": true,
+   "data": {
+    "list": []
+   }
+  }
+ },
+ "team_team-item-delete": {
+  "request": {
+   "api": "SYNO.FotoTeam.Browse.Item",
+   "method": "delete",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[32]"
+   }
+  },
+  "response": {
+   "success": true
+  }
+ },
+ "team_team-folder-delete": {
+  "request": {
+   "api": "SYNO.FotoTeam.Browse.Folder",
+   "method": "delete",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[27]"
+   }
+  },
+  "response": {
+   "data": {
+    "error_list": []
+   },
+   "success": true
+  }
+ },
+ "team_user_team-root-nonadmin": {
+  "request": {
+   "api": "SYNO.FotoTeam.Browse.Folder",
+   "method": "get",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "id": "0"
+   }
+  },
+  "response": {
+   "error": {
+    "code": 801
+   },
+   "success": false
+  }
+ },
+ "team_user_team-list-nonadmin": {
+  "request": {
+   "api": "SYNO.FotoTeam.Browse.Folder",
+   "method": "list",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "id": "1",
+    "offset": "0",
+    "limit": "10",
+    "sort_by": "\"filename\"",
+    "sort_direction": "\"asc\""
+   }
+  },
+  "response": {
+   "error": {
+    "code": 801
+   },
+   "success": false
+  }
+ },
+ "team_user_team-items-nonadmin": {
+  "request": {
+   "api": "SYNO.FotoTeam.Browse.Item",
+   "method": "list",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "offset": "0",
+    "limit": "5"
+   }
+  },
+  "response": {
+   "error": {
+    "code": 801
+   },
+   "success": false
+  }
+ },
+ "team_user_team-create-nonadmin": {
+  "request": {
+   "api": "SYNO.FotoTeam.Browse.Folder",
+   "method": "create",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "target_id": "1",
+    "name": "\"mcp-nonadmin\""
+   }
+  },
+  "response": {
+   "error": {
+    "code": 801
+   },
+   "success": false
+  }
+ },
+ "video_vfolder": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Folder",
+   "method": "create",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "target_id": "3",
+    "name": "\"mcp-spec-video\""
+   }
+  },
+  "response": {
+   "data": {
+    "folder": {
+     "id": 29,
+     "name": "/mcp-spec-video",
+     "owner_user_id": 2,
+     "parent": 3,
+     "passphrase": "",
+     "shared": false,
+     "sort_by": "default",
+     "sort_direction": "default"
+    }
+   },
+   "success": true
+  }
+ },
+ "video_vupload-clip-test": {
+  "request": {
+   "api": "SYNO.Foto.Upload.Item",
+   "method": "upload_to_folder",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "duplicate": "\"rename\"",
+    "name": "\"clip-test.mp4\"",
+    "mtime": "1792275519",
+    "target_folder_id": "29"
+   },
+   "files": [
+    "file"
+   ]
+  },
+  "response": {
+   "data": {
+    "action": "new",
+    "id": 36,
+    "unit_id": 36
+   },
+   "success": true
+  }
+ },
+ "video_vupload-garden-rose": {
+  "request": {
+   "api": "SYNO.Foto.Upload.Item",
+   "method": "upload_to_folder",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "duplicate": "\"rename\"",
+    "name": "\"garden-rose.jpg\"",
+    "mtime": "1792273334",
+    "target_folder_id": "29"
+   },
+   "files": [
+    "file"
+   ]
+  },
+  "response": {
+   "data": {
+    "action": "new",
+    "id": 37,
+    "unit_id": 37
+   },
+   "success": true
+  }
+ },
+ "video_vcount": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "count",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "folder_id": "29"
+   }
+  },
+  "response": {
+   "data": {
+    "count": 2
+   },
+   "success": true
+  }
+ },
+ "video_vlist": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "list",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "folder_id": "29",
+    "offset": "0",
+    "limit": "5",
+    "additional": "[\"thumbnail\", \"video_meta\", \"video_convert\", \"resolution\"]"
+   }
+  },
+  "response": {
+   "success": true,
+   "data": {
+    "list": [
+     {
+      "id": 36,
+      "filename": "clip-test.mp4",
+      "filesize": 22765,
+      "time": 1720249200,
+      "indexed_time": 1792257520144,
+      "owner_user_id": 2,
+      "folder_id": 29,
+      "type": "video",
+      "additional": {
+       "resolution": {
+        "width": 640,
+        "height": 360
+       },
+       "thumbnail": {
+        "m": "ame_defect",
+        "xl": "ame_defect",
+        "preview": "broken",
+        "sm": "ame_defect",
+        "cache_key": "36_1792275520",
+        "unit_id": 36
+       },
+       "orientation": 1,
+       "orientation_original": 1,
+       "video_meta": {
+        "duration": 3000,
+        "orientation": 1,
+        "frame_bitrate": 60706,
+        "video_bitrate": 55970,
+        "audio_bitrate": 0,
+        "framerate": 25.0,
+        "resolution_x": 640,
+        "resolution_y": 360,
+        "video_codec": "h264",
+        "audio_codec": "",
+        "container_type": "mp4",
+        "video_profile": 0,
+        "video_level": -99,
+        "audio_frequency": 0,
+        "audio_channel": 0
+       },
+       "video_convert": [],
+       "video_convert_status": "ame_defect"
+      }
+     },
+     {
+      "id": 37,
+      "filename": "garden-rose.jpg",
+      "filesize": 50123,
+      "time": 1653057900,
+      "indexed_time": 1792257520182,
+      "owner_user_id": 2,
+      "folder_id": 29,
+      "type": "photo",
+      "additional": {
+       "resolution": {
+        "width": 1600,
+        "height": 1200
+       },
+       "thumbnail": {
+        "m": "ready",
+        "xl": "ready",
+        "preview": "broken",
+        "sm": "ready",
+        "cache_key": "37_1792275520",
+        "unit_id": 37
+       },
+       "orientation": 1,
+       "orientation_original": 1
+      }
+     }
+    ]
+   }
+  }
+ },
+ "video_vfilter": {
+  "request": {
+   "api": "SYNO.Foto.Search.Filter",
+   "method": "list",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "setting": "{\"item_type\": true}",
+    "additional": "[]",
+    "folder": "[29]"
+   }
+  },
+  "response": {
+   "data": {
+    "aperture": [],
+    "camera": [],
+    "exposure_time_group": [],
+    "favorite": [],
+    "flash": [],
+    "focal_length_group": [],
+    "folder_filter": [],
+    "general_tag": [],
+    "geocoding": [],
+    "iso": [],
+    "item_type": [
+     {
+      "id": 0,
+      "name": "photo"
+     },
+     {
+      "id": 1,
+      "name": "video"
+     }
+    ],
+    "lens": [],
+    "person": [],
+    "rating": [],
+    "time": []
+   },
+   "success": true
+  }
+ },
+ "video_vlwf-[1]": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "list_with_filter",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "folder": "[29]",
+    "offset": "0",
+    "limit": "5",
+    "item_type": "[1]"
+   }
+  },
+  "response": {
+   "success": true,
+   "data": {
+    "list": [
+     {
+      "id": 36,
+      "filename": "clip-test.mp4",
+      "filesize": 22765,
+      "time": 1720249200,
+      "indexed_time": 1792257520144,
+      "owner_user_id": 2,
+      "folder_id": 29,
+      "type": "video"
+     }
+    ]
+   }
+  }
+ },
+ "video_vlwf-[1, 5]": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "list_with_filter",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "folder": "[29]",
+    "offset": "0",
+    "limit": "5",
+    "item_type": "[1, 5]"
+   }
+  },
+  "response": {
+   "success": true,
+   "data": {
+    "list": [
+     {
+      "id": 36,
+      "filename": "clip-test.mp4",
+      "filesize": 22765,
+      "time": 1720249200,
+      "indexed_time": 1792257520144,
+      "owner_user_id": 2,
+      "folder_id": 29,
+      "type": "video"
+     }
+    ]
+   }
+  }
+ },
+ "video_vlwf-[0]": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "list_with_filter",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "folder": "[29]",
+    "offset": "0",
+    "limit": "5",
+    "item_type": "[0]"
+   }
+  },
+  "response": {
+   "success": true,
+   "data": {
+    "list": [
+     {
+      "id": 37,
+      "filename": "garden-rose.jpg",
+      "filesize": 50123,
+      "time": 1653057900,
+      "indexed_time": 1792257520182,
+      "owner_user_id": 2,
+      "folder_id": 29,
+      "type": "photo"
+     }
+    ]
+   }
+  }
+ },
+ "video_vlwf-[-2]": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "list_with_filter",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "folder": "[29]",
+    "offset": "0",
+    "limit": "5",
+    "item_type": "[-2]"
+   }
+  },
+  "response": {
+   "success": true,
+   "data": {
+    "list": [
+     {
+      "id": 36,
+      "filename": "clip-test.mp4",
+      "filesize": 22765,
+      "time": 1720249200,
+      "indexed_time": 1792257520144,
+      "owner_user_id": 2,
+      "folder_id": 29,
+      "type": "video"
+     }
+    ]
+   }
+  }
+ },
+ "video_vlwf-[-1]": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "list_with_filter",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "folder": "[29]",
+    "offset": "0",
+    "limit": "5",
+    "item_type": "[-1]"
+   }
+  },
+  "response": {
+   "success": true,
+   "data": {
+    "list": [
+     {
+      "id": 37,
+      "filename": "garden-rose.jpg",
+      "filesize": 50123,
+      "time": 1653057900,
+      "indexed_time": 1792257520182,
+      "owner_user_id": 2,
+      "folder_id": 29,
+      "type": "photo"
+     }
+    ]
+   }
+  }
+ },
+ "video_vlist-type-video": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "list",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "folder_id": "29",
+    "offset": "0",
+    "limit": "5",
+    "type": "\"video\""
+   }
+  },
+  "response": {
+   "success": true,
+   "data": {
+    "list": [
+     {
+      "id": 36,
+      "filename": "clip-test.mp4",
+      "filesize": 22765,
+      "time": 1720249200,
+      "indexed_time": 1792257520144,
+      "owner_user_id": 2,
+      "folder_id": 29,
+      "type": "video"
+     }
+    ]
+   }
+  }
+ },
+ "video_vlist-type-video-all": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "list",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "offset": "0",
+    "limit": "5",
+    "type": "\"video\""
+   }
+  },
+  "response": {
+   "success": true,
+   "data": {
+    "list": [
+     {
+      "id": 36,
+      "filename": "clip-test.mp4",
+      "filesize": 22765,
+      "time": 1720249200,
+      "indexed_time": 1792257520144,
+      "owner_user_id": 2,
+      "folder_id": 29,
+      "type": "video"
+     }
+    ]
+   }
+  }
+ },
+ "video_vcleanup": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Folder",
+   "method": "delete",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[29]"
+   }
+  },
+  "response": {
+   "data": {
+    "error_list": []
+   },
+   "success": true
+  }
+ },
+ "noperm_SYNO.Foto.UserInfo.me": {
+  "request": {
+   "api": "SYNO.Foto.UserInfo",
+   "method": "me",
+   "version": "1",
+   "http": "POST",
+   "params": {}
+  },
+  "response": {
+   "error": {
+    "code": 160
+   },
+   "success": false
+  }
+ },
+ "noperm_SYNO.Foto.Browse.Item.count": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "count",
+   "version": "1",
+   "http": "POST",
+   "params": {}
+  },
+  "response": {
+   "error": {
+    "code": 160
+   },
+   "success": false
+  }
+ },
+ "noperm_SYNO.Foto.Browse.GeneralTag.list": {
+  "request": {
+   "api": "SYNO.Foto.Browse.GeneralTag",
+   "method": "list",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "offset": "0",
+    "limit": "5"
+   }
+  },
+  "response": {
+   "error": {
+    "code": 160
+   },
+   "success": false
+  }
+ },
+ "fav191_folder": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Folder",
+   "method": "create",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "target_id": "3",
+    "name": "\"mcp-spec-191\""
+   }
+  },
+  "response": {
+   "data": {
+    "folder": {
+     "id": 30,
+     "name": "/mcp-spec-191",
+     "owner_user_id": 2,
+     "parent": 3,
+     "passphrase": "",
+     "shared": false,
+     "sort_by": "default",
+     "sort_direction": "default"
+    }
+   },
+   "success": true
+  }
+ },
+ "fav191_upload": {
+  "request": {
+   "api": "SYNO.Foto.Upload.Item",
+   "method": "upload_to_folder",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "duplicate": "\"rename\"",
+    "name": "\"beach-sunset.jpg\"",
+    "mtime": "1792273334",
+    "target_folder_id": "30"
+   },
+   "files": [
+    "file"
+   ]
+  },
+  "response": {
+   "data": {
+    "action": "new",
+    "id": 38,
+    "unit_id": 38
+   },
+   "success": true
+  }
+ },
+ "fav191_upload_last": {
+  "request": {
+   "api": "SYNO.Foto.Upload.Item",
+   "method": "upload_to_folder",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "duplicate": "\"rename\"",
+    "name": "\"desk-notes.jpg\"",
+    "mtime": "1792273334",
+    "target_folder_id": "30"
+   },
+   "files": [
+    "file"
+   ]
+  },
+  "response": {
+   "data": {
+    "action": "new",
+    "id": 40,
+    "unit_id": 40
+   },
+   "success": true
+  }
+ },
+ "fav191_set-favorite": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "set_favorite",
+   "version": "7",
+   "http": "POST",
+   "params": {
+    "id": "[38, 39]",
+    "favorite": "true"
+   }
+  },
+  "response": {
+   "success": true
+  }
+ },
+ "fav191_get-additional-favorite-v2": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "get",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "id": "[38, 39, 40]",
+    "additional": "[\"favorite\"]"
+   }
+  },
+  "response": {
+   "error": {
+    "code": 120,
+    "errors": {
+     "name": "additional",
+     "reason": "condition"
+    }
+   },
+   "success": false
+  }
+ },
+ "fav191_get-additional-favorite-v7": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "get",
+   "version": "7",
+   "http": "POST",
+   "params": {
+    "id": "[38, 39, 40]",
+    "additional": "[\"favorite\"]"
+   }
+  },
+  "response": {
+   "success": true,
+   "data": {
+    "list": [
+     {
+      "id": 38,
+      "filename": "beach-sunset.jpg",
+      "filesize": 51305,
+      "time": 1720121400,
+      "indexed_time": 1792258125726,
+      "owner_user_id": 2,
+      "folder_id": 30,
+      "type": "photo",
+      "additional": {
+       "favorite": true
+      }
+     },
+     {
+      "id": 39,
+      "filename": "city-night.jpg",
+      "filesize": 48215,
+      "time": 1703455200,
+      "indexed_time": 1792258125757,
+      "owner_user_id": 2,
+      "folder_id": 30,
+      "type": "photo",
+      "additional": {
+       "favorite": true
+      }
+     },
+     {
+      "id": 40,
+      "filename": "desk-notes.jpg",
+      "filesize": 44624,
+      "time": 1653120000,
+      "indexed_time": 1792258125856,
+      "owner_user_id": 2,
+      "folder_id": 30,
+      "type": "photo",
+      "additional": {}
+     }
+    ]
+   }
+  }
+ },
+ "fav191_list-favorite-only-v1": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "list",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "offset": "0",
+    "limit": "10",
+    "favorite_only": "true"
+   }
+  },
+  "response": {
+   "error": {
+    "code": 120,
+    "errors": {
+     "reason": "favorite_only is not supported"
+    }
+   },
+   "success": false
+  }
+ },
+ "fav191_list-favorite-only-v7": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "list",
+   "version": "7",
+   "http": "POST",
+   "params": {
+    "offset": "0",
+    "limit": "10",
+    "favorite_only": "true"
+   }
+  },
+  "response": {
+   "success": true,
+   "data": {
+    "list": [
+     {
+      "id": 38,
+      "filename": "beach-sunset.jpg",
+      "filesize": 51305,
+      "time": 1720121400,
+      "indexed_time": 1792258125726,
+      "owner_user_id": 2,
+      "folder_id": 30,
+      "type": "photo"
+     },
+     {
+      "id": 39,
+      "filename": "city-night.jpg",
+      "filesize": 48215,
+      "time": 1703455200,
+      "indexed_time": 1792258125757,
+      "owner_user_id": 2,
+      "folder_id": 30,
+      "type": "photo"
+     }
+    ]
+   }
+  }
+ },
+ "fav191_lwf-favorite-v2": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "list_with_filter",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "offset": "0",
+    "limit": "10",
+    "favorite": "[true]"
+   }
+  },
+  "response": {
+   "error": {
+    "code": 120,
+    "errors": {
+     "reason": "favorite is not supported"
+    }
+   },
+   "success": false
+  }
+ },
+ "fav191_cwf-favorite-v2": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "count_with_filter",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "favorite": "[true]"
+   }
+  },
+  "response": {
+   "error": {
+    "code": 120,
+    "errors": {
+     "reason": "favorite is not supported"
+    }
+   },
+   "success": false
+  }
+ },
+ "fav191_unset-favorite": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "set_favorite",
+   "version": "7",
+   "http": "POST",
+   "params": {
+    "id": "[38]",
+    "favorite": "false"
+   }
+  },
+  "response": {
+   "success": true
+  }
+ },
+ "fav191_lwf-favorite-after-unset": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "list_with_filter",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "offset": "0",
+    "limit": "10",
+    "favorite": "[true]"
+   }
+  },
+  "response": {
+   "error": {
+    "code": 120,
+    "errors": {
+     "reason": "favorite is not supported"
+    }
+   },
+   "success": false
+  }
+ },
+ "fav191_download-type-source": {
+  "request": {
+   "api": "SYNO.Foto.Download",
+   "method": "download",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "item_id": "[38]",
+    "force_download": "true",
+    "download_type": "\"source\""
+   }
+  },
+  "http_status": 200,
+  "response_binary": {
+   "content_type": "application/force-download",
+   "bytes": 51305,
+   "content_disposition": "attachment; filename=\"beach-sunset.jpg\"; filename*=utf-8''beach-sunset.jpg"
+  }
+ },
+ "fav191_bg-delete": {
+  "request": {
+   "api": "SYNO.Foto.BackgroundTask.File",
+   "method": "delete",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "item_id": "[40]",
+    "folder_id": "[]"
+   }
+  },
+  "response": {
+   "data": {
+    "task_info": {
+     "completion": 0,
+     "create_time": 1792276133969,
+     "error": 0,
+     "extra_info": "",
+     "id": 14,
+     "operation": "delete",
+     "overwrite": 0,
+     "skip": 0,
+     "status": "waiting",
+     "total": 1
+    }
+   },
+   "success": true
+  }
+ },
+ "fav191_bg-delete-status": {
+  "request": {
+   "api": "SYNO.Foto.BackgroundTask.Info",
+   "method": "get_status",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[14]"
+   }
+  },
+  "response": {
+   "data": {
+    "list": [
+     {
+      "completion": 1,
+      "create_time": 1792276133969,
+      "error": 0,
+      "extra_info": "",
+      "id": 14,
+      "operation": "delete",
+      "overwrite": 0,
+      "skip": 0,
+      "status": "processing",
+      "total": 1
+     }
+    ]
+   },
+   "success": true
+  }
+ },
+ "fav191_bg-delete-status_last": {
+  "request": {
+   "api": "SYNO.Foto.BackgroundTask.Info",
+   "method": "get_status",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[14]"
+   }
+  },
+  "response": {
+   "data": {
+    "list": [
+     {
+      "completion": 1,
+      "create_time": 1792276133969,
+      "error": 0,
+      "extra_info": "",
+      "id": 14,
+      "operation": "delete",
+      "overwrite": 0,
+      "skip": 0,
+      "status": "done",
+      "total": 1
+     }
+    ]
+   },
+   "success": true
+  }
+ },
+ "fav191_cleanup": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Folder",
+   "method": "delete",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[30]"
+   }
+  },
+  "response": {
+   "data": {
+    "error_list": []
+   },
+   "success": true
+  }
+ },
+ "tagorphan_folder": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Folder",
+   "method": "create",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "target_id": "3",
+    "name": "\"mcp-spec-tags\""
+   }
+  },
+  "response": {
+   "data": {
+    "folder": {
+     "id": 32,
+     "name": "/mcp-spec-tags",
+     "owner_user_id": 2,
+     "parent": 3,
+     "passphrase": "",
+     "shared": false,
+     "sort_by": "default",
+     "sort_direction": "default"
+    }
+   },
+   "success": true
+  }
+ },
+ "tagorphan_upload": {
+  "request": {
+   "api": "SYNO.Foto.Upload.Item",
+   "method": "upload_to_folder",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "duplicate": "\"rename\"",
+    "name": "\"beach-sunset.jpg\"",
+    "mtime": "1792273334",
+    "target_folder_id": "32"
+   },
+   "files": [
+    "file"
+   ]
+  },
+  "response": {
+   "data": {
+    "action": "new",
+    "id": 43,
+    "unit_id": 43
+   },
+   "success": true
+  }
+ },
+ "tagorphan_upload_last": {
+  "request": {
+   "api": "SYNO.Foto.Upload.Item",
+   "method": "upload_to_folder",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "duplicate": "\"rename\"",
+    "name": "\"city-night.jpg\"",
+    "mtime": "1792273334",
+    "target_folder_id": "32"
+   },
+   "files": [
+    "file"
+   ]
+  },
+  "response": {
+   "data": {
+    "action": "new",
+    "id": 44,
+    "unit_id": 44
+   },
+   "success": true
+  }
+ },
+ "tagorphan_tag-create": {
+  "request": {
+   "api": "SYNO.Foto.Browse.GeneralTag",
+   "method": "create",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "name": "\"mcp-orphan\""
+   }
+  },
+  "response": {
+   "data": {
+    "tag": {
+     "id": 9,
+     "name": "mcp-orphan"
+    }
+   },
+   "success": true
+  }
+ },
+ "tagorphan_tag-create-unused": {
+  "request": {
+   "api": "SYNO.Foto.Browse.GeneralTag",
+   "method": "create",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "name": "\"mcp-never-used\""
+   }
+  },
+  "response": {
+   "data": {
+    "tag": {
+     "id": 10,
+     "name": "mcp-never-used"
+    }
+   },
+   "success": true
+  }
+ },
+ "tagorphan_tags-after-create": {
+  "request": {
+   "api": "SYNO.Foto.Browse.GeneralTag",
+   "method": "list",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "offset": "0",
+    "limit": "100"
+   }
+  },
+  "response": {
+   "data": {
+    "list": []
+   },
+   "success": true
+  }
+ },
+ "tagorphan_add": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "add_tag",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[43, 44]",
+    "tag": "[9]"
+   }
+  },
+  "response": {
+   "data": {
+    "error_list": []
+   },
+   "success": true
+  }
+ },
+ "tagorphan_tags-after-add": {
+  "request": {
+   "api": "SYNO.Foto.Browse.GeneralTag",
+   "method": "list",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "offset": "0",
+    "limit": "100"
+   }
+  },
+  "response": {
+   "data": {
+    "list": [
+     {
+      "id": 9,
+      "item_count": 2,
+      "name": "mcp-orphan"
+     }
+    ]
+   },
+   "success": true
+  }
+ },
+ "tagorphan_resolve": {
+  "request": {
+   "api": "SYNO.Foto.Browse.GeneralTag",
+   "method": "list",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "offset": "0",
+    "limit": "100"
+   }
+  },
+  "response": {
+   "data": {
+    "list": [
+     {
+      "id": 9,
+      "item_count": 2,
+      "name": "mcp-orphan"
+     }
+    ]
+   },
+   "success": true
+  }
+ },
+ "tagorphan_remove-all": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "remove_tag",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[43, 44]",
+    "tag": "[9]"
+   }
+  },
+  "response": {
+   "data": {
+    "error_list": []
+   },
+   "success": true
+  }
+ },
+ "tagorphan_tags-after-remove-0": {
+  "request": {
+   "api": "SYNO.Foto.Browse.GeneralTag",
+   "method": "list",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "offset": "0",
+    "limit": "100"
+   }
+  },
+  "response": {
+   "data": {
+    "list": []
+   },
+   "success": true
+  }
+ },
+ "tagorphan_tags-after-remove-1": {
+  "request": {
+   "api": "SYNO.Foto.Browse.GeneralTag",
+   "method": "list",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "offset": "0",
+    "limit": "100"
+   }
+  },
+  "response": {
+   "data": {
+    "list": []
+   },
+   "success": true
+  }
+ },
+ "tagorphan_tags-after-remove-2": {
+  "request": {
+   "api": "SYNO.Foto.Browse.GeneralTag",
+   "method": "list",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "offset": "0",
+    "limit": "100"
+   }
+  },
+  "response": {
+   "data": {
+    "list": []
+   },
+   "success": true
+  }
+ },
+ "tagorphan_tags-after-remove-3": {
+  "request": {
+   "api": "SYNO.Foto.Browse.GeneralTag",
+   "method": "list",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "offset": "0",
+    "limit": "100"
+   }
+  },
+  "response": {
+   "data": {
+    "list": []
+   },
+   "success": true
+  }
+ },
+ "tagorphan_tag-get-orphan": {
+  "request": {
+   "api": "SYNO.Foto.Browse.GeneralTag",
+   "method": "get",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[9]"
+   }
+  },
+  "response": {
+   "data": {
+    "list": []
+   },
+   "success": true
+  }
+ },
+ "tagorphan_cleanup": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Folder",
+   "method": "delete",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[32]"
+   }
+  },
+  "response": {
+   "data": {
+    "error_list": []
+   },
+   "success": true
+  }
+ },
+ "tagorphan_tags-after-cleanup": {
+  "request": {
+   "api": "SYNO.Foto.Browse.GeneralTag",
+   "method": "list",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "offset": "0",
+    "limit": "100"
+   }
+  },
+  "response": {
+   "data": {
+    "list": []
+   },
+   "success": true
+  }
+ },
+ "qa1_me": {
+  "request": {
+   "api": "SYNO.Foto.UserInfo",
+   "method": "me",
+   "version": "1",
+   "http": "POST",
+   "params": {}
+  },
+  "response": {
+   "data": {
+    "enabled": true,
+    "id": 2,
+    "is_admin": false,
+    "is_migration_finished": true,
+    "name": "mcptest",
+    "profile": {
+     "email": "",
+     "emails": [],
+     "groups": [
+      {
+       "gid": 100,
+       "id": "7d2d6e6f-5a9a-4a7e-ade4-ec61da3b9679"
+      }
+     ],
+     "id": "314fe8c9-7329-4f91-8bc2-f52518b77d01",
+     "nickName": "",
+     "photo": "",
+     "preferredColor": "#499df2",
+     "preferredLanguage": "def",
+     "timezone": "Central",
+     "timezoneUI": "def",
+     "title": "MCP test user",
+     "uid": 1027,
+     "userName": "mcptest"
+    },
+    "uid": 1027
+   },
+   "success": true
+  }
+ },
+ "qa1_folder": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Folder",
+   "method": "create",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "target_id": "3",
+    "name": "\"mcp-qa1\""
+   }
+  },
+  "response": {
+   "data": {
+    "folder": {
+     "id": 33,
+     "name": "/mcp-qa1",
+     "owner_user_id": 2,
+     "parent": 3,
+     "passphrase": "",
+     "shared": false,
+     "sort_by": "default",
+     "sort_direction": "default"
+    }
+   },
+   "success": true
+  }
+ },
+ "qa1_upload": {
+  "request": {
+   "api": "SYNO.Foto.Upload.Item",
+   "method": "upload_to_folder",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "duplicate": "\"rename\"",
+    "name": "\"beach-sunset.jpg\"",
+    "mtime": "1792273334",
+    "target_folder_id": "33"
+   },
+   "files": [
+    "file"
+   ]
+  },
+  "response": {
+   "data": {
+    "action": "new",
+    "id": 45,
+    "unit_id": 45
+   },
+   "success": true
+  }
+ },
+ "qa1_upload_last": {
+  "request": {
+   "api": "SYNO.Foto.Upload.Item",
+   "method": "upload_to_folder",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "duplicate": "\"rename\"",
+    "name": "\"city-night.jpg\"",
+    "mtime": "1792273334",
+    "target_folder_id": "33"
+   },
+   "files": [
+    "file"
+   ]
+  },
+  "response": {
+   "data": {
+    "action": "new",
+    "id": 46,
+    "unit_id": 46
+   },
+   "success": true
+  }
+ },
+ "qa1_folder-set-cover": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Folder",
+   "method": "set_cover",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "id": "33",
+    "id_item": "[46]"
+   }
+  },
+  "response": {
+   "success": true
+  }
+ },
+ "qa1_folder-get-after-cover": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Folder",
+   "method": "get",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "id": "33",
+    "additional": "[\"thumbnail\"]"
+   }
+  },
+  "response": {
+   "data": {
+    "folder": {
+     "additional": {
+      "thumbnail": [
+       {
+        "cache_key": "1792279156",
+        "folder_cover_seq": 0
+       }
+      ]
+     },
+     "id": 33,
+     "name": "/mcp-qa1",
+     "owner_user_id": 2,
+     "parent": 3,
+     "passphrase": "",
+     "shared": false,
+     "sort_by": "default",
+     "sort_direction": "default"
+    }
+   },
+   "success": true
+  }
+ },
+ "qa1_condalbum-create-null-user": {
+  "request": {
+   "api": "SYNO.Foto.Browse.ConditionAlbum",
+   "method": "create",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "name": "\"mcp-qa1-null\"",
+    "condition": "{\"user_id\": null, \"folder_filter\": [33]}"
+   }
+  },
+  "response": {
+   "error": {
+    "code": 953
+   },
+   "success": false
+  }
+ },
+ "qa1_condalbum-peek-no-user": {
+  "request": {
+   "api": "SYNO.Foto.Browse.ConditionAlbum",
+   "method": "peek_item_count",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "condition": "{\"folder_filter\": [33]}"
+   }
+  },
+  "response": {
+   "error": {
+    "code": 120,
+    "errors": {
+     "name": "condition",
+     "reason": "type"
+    }
+   },
+   "success": false
+  }
+ },
+ "qa1_item-list-rating-v1": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "list",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "folder_id": "33",
+    "offset": "0",
+    "limit": "2",
+    "additional": "[\"rating\"]"
+   }
+  },
+  "response": {
+   "error": {
+    "code": 120,
+    "errors": {
+     "name": "additional",
+     "reason": "condition"
+    }
+   },
+   "success": false
+  }
+ },
+ "qa1_item-list-rating-v2": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "list",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "folder_id": "33",
+    "offset": "0",
+    "limit": "2",
+    "additional": "[\"rating\"]"
+   }
+  },
+  "response": {
+   "success": true,
+   "data": {
+    "list": [
+     {
+      "id": 45,
+      "filename": "beach-sunset.jpg",
+      "filesize": 51305,
+      "time": 1720121400,
+      "indexed_time": 1792261148499,
+      "owner_user_id": 2,
+      "folder_id": 33,
+      "type": "photo",
+      "additional": {
+       "rating": 0
+      }
+     },
+     {
+      "id": 46,
+      "filename": "city-night.jpg",
+      "filesize": 48215,
+      "time": 1703455200,
+      "indexed_time": 1792261148549,
+      "owner_user_id": 2,
+      "folder_id": 33,
+      "type": "photo",
+      "additional": {
+       "rating": 0
+      }
+     }
+    ]
+   }
+  }
+ },
+ "qa1_setting-admin-get": {
+  "request": {
+   "api": "SYNO.Foto.Setting.Admin",
+   "method": "get",
+   "version": "1",
+   "http": "POST",
+   "params": {}
+  },
+  "response": {
+   "data": {
+    "default_thumbnail_size": "sm",
+    "display_photo_info_to_guest": true,
+    "enable_concept": true,
+    "enable_converted_original_jpeg": false,
+    "enable_person": true,
+    "enable_personal_dsm_recycle_bin": true,
+    "enable_shared_dsm_recycle_bin": false,
+    "enable_similar": true,
+    "enable_user_sharing": true,
+    "exclude_extension": [],
+    "need_hevc": false,
+    "package_version": "1.9.1-10928"
+   },
+   "success": true
+  }
+ },
+ "qa1_setting-teamspace-get": {
+  "request": {
+   "api": "SYNO.Foto.Setting.TeamSpace",
+   "method": "get",
+   "version": "1",
+   "http": "POST",
+   "params": {}
+  },
+  "response": {
+   "data": {
+    "allow_root_folder_public": false,
+    "enable_concept": false,
+    "enable_person": false,
+    "enable_similar": false,
+    "enabled": true,
+    "team_space_disabled_by_share_folder_disabled": false
+   },
+   "success": true
+  }
+ },
+ "qa1_post-empty-body-query-only": {
+  "request": {
+   "api": "SYNO.Foto.UserInfo",
+   "method": "me",
+   "version": "1",
+   "http": "POST",
+   "params": {},
+   "note": "api/method/version in the query string, empty body"
+  },
+  "response": {
+   "error": {
+    "code": 101
+   },
+   "success": false
+  }
+ },
+ "qa1_cleanup": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Folder",
+   "method": "delete",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[33]"
+   }
+  },
+  "response": {
+   "data": {
+    "error_list": []
+   },
+   "success": true
+  }
+ },
+ "qa1_albums": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Album",
+   "method": "list",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "offset": "0",
+    "limit": "100",
+    "sort_by": "\"create_time\"",
+    "sort_direction": "\"desc\""
+   }
+  },
+  "response": {
+   "data": {
+    "list": [
+     {
+      "condition": {
+       "user_id": 2
+      },
+      "create_time": 1792274704,
+      "end_time": 0,
+      "id": 13,
+      "item_count": 8,
+      "name": "mcp-spec-bad",
+      "owner_user_id": 2,
+      "passphrase": "",
+      "shared": false,
+      "sort_by": "default",
+      "sort_direction": "default",
+      "start_time": 0,
+      "type": "condition",
+      "version": 322
+     },
+     {
+      "cant_migrate_condition": {},
+      "condition": {},
+      "create_time": 1792274704,
+      "end_time": 0,
+      "freeze_album": false,
+      "id": 10,
+      "item_count": 0,
+      "name": "mcp-spec-album",
+      "owner_user_id": 2,
+      "passphrase": "",
+      "shared": false,
+      "sort_by": "default",
+      "sort_direction": "default",
+      "start_time": 0,
+      "temporary_shared": false,
+      "type": "normal",
+      "version": 280
+     }
+    ]
+   },
+   "success": true
+  }
+ },
+ "qa1_team_admin_users": {
+  "request": {
+   "api": "SYNO.Foto.Sharing.Misc",
+   "method": "list_user_group",
+   "version": "1",
+   "http": "POST",
+   "params": {}
+  },
+  "response": {
+   "data": {
+    "list": [
+     {
+      "id": 1026,
+      "name": "mcpadmin",
+      "type": "user"
+     },
+     {
+      "id": 1027,
+      "name": "mcptest",
+      "type": "user"
+     },
+     {
+      "id": 101,
+      "name": "administrators",
+      "type": "group"
+     }
+    ]
+   },
+   "success": true
+  }
+ },
+ "qa1_team_admin_perm-grant-entry": {
+  "request": {
+   "api": "SYNO.Foto.Setting.TeamSpace",
+   "method": "update_permission",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "list": "[{\"action\": \"update\", \"type\": \"user\", \"id\": 1027, \"permission\": \"entry\", \"auto_backup\": false}]"
+   }
+  },
+  "response": {
+   "success": true
+  }
+ },
+ "qa1_team_admin_perm-list": {
+  "request": {
+   "api": "SYNO.Foto.Setting.TeamSpace",
+   "method": "list_permission",
+   "version": "1",
+   "http": "POST",
+   "params": {}
+  },
+  "response": {
+   "data": [
+    {
+     "auto_backup": false,
+     "id": 1027,
+     "name": "mcptest",
+     "permission": "entry",
+     "type": "user"
+    },
+    {
+     "auto_backup": true,
+     "id": 101,
+     "name": "administrators",
+     "permission": "management",
+     "type": "group"
+    }
+   ],
+   "success": true
+  }
+ },
+ "qa1_team_admin_folder": {
+  "request": {
+   "api": "SYNO.FotoTeam.Browse.Folder",
+   "method": "create",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "target_id": "1",
+    "name": "\"mcp-qa1-team\""
+   }
+  },
+  "response": {
+   "data": {
+    "folder": {
+     "id": 36,
+     "name": "/mcp-qa1-team",
+     "owner_user_id": 0,
+     "parent": 1,
+     "passphrase": "",
+     "shared": false,
+     "sort_by": "default",
+     "sort_direction": "default"
+    }
+   },
+   "success": true
+  }
+ },
+ "qa1_team_admin_upload": {
+  "request": {
+   "api": "SYNO.FotoTeam.Upload.Item",
+   "method": "upload_to_folder",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "duplicate": "\"rename\"",
+    "name": "\"beach-sunset.jpg\"",
+    "mtime": "1792273334",
+    "target_folder_id": "36"
+   },
+   "files": [
+    "file"
+   ]
+  },
+  "response": {
+   "data": {
+    "action": "new",
+    "id": 51,
+    "unit_id": 51
+   },
+   "success": true
+  }
+ },
+ "qa1_team_admin_upload_last": {
+  "request": {
+   "api": "SYNO.FotoTeam.Upload.Item",
+   "method": "upload_to_folder",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "duplicate": "\"rename\"",
+    "name": "\"city-night.jpg\"",
+    "mtime": "1792273334",
+    "target_folder_id": "36"
+   },
+   "files": [
+    "file"
+   ]
+  },
+  "response": {
+   "data": {
+    "action": "new",
+    "id": 52,
+    "unit_id": 52
+   },
+   "success": true
+  }
+ },
+ "qa1_team_admin_team-set-favorite": {
+  "request": {
+   "api": "SYNO.FotoTeam.Browse.Item",
+   "method": "set_favorite",
+   "version": "7",
+   "http": "POST",
+   "params": {
+    "id": "[51]",
+    "favorite": "true"
+   }
+  },
+  "response": {
+   "success": true
+  }
+ },
+ "qa1_team_admin_team-get-favorite": {
+  "request": {
+   "api": "SYNO.FotoTeam.Browse.Item",
+   "method": "get",
+   "version": "7",
+   "http": "POST",
+   "params": {
+    "id": "[51]",
+    "additional": "[\"favorite\"]"
+   }
+  },
+  "response": {
+   "success": true,
+   "data": {
+    "list": [
+     {
+      "id": 51,
+      "filename": "beach-sunset.jpg",
+      "filesize": 51305,
+      "time": 1720121400,
+      "indexed_time": 1792261275438,
+      "owner_user_id": 0,
+      "folder_id": 36,
+      "type": "photo",
+      "additional": {
+       "favorite": true
+      }
+     }
+    ]
+   }
+  }
+ },
+ "qa1_team_entry_user_viewer-list": {
+  "request": {
+   "api": "SYNO.FotoTeam.Browse.Item",
+   "method": "list",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "folder_id": "36",
+    "offset": "0",
+    "limit": "5"
+   }
+  },
+  "response": {
+   "error": {
+    "code": 803
+   },
+   "success": false
+  }
+ },
+ "qa1_team_entry_user_viewer-set-rating": {
+  "request": {
+   "api": "SYNO.FotoTeam.Browse.Item",
+   "method": "set",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "id": "[51]",
+    "rating": "3"
+   }
+  },
+  "response": {
+   "data": {
+    "error_list": []
+   },
+   "success": true
+  }
+ },
+ "qa1_team_entry_user_viewer-tag-create": {
+  "request": {
+   "api": "SYNO.FotoTeam.Browse.GeneralTag",
+   "method": "create",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "name": "\"mcp-viewer\""
+   }
+  },
+  "response": {
+   "data": {
+    "tag": {
+     "id": 11,
+     "name": "mcp-viewer"
+    }
+   },
+   "success": true
+  }
+ },
+ "qa1_team_entry_user_viewer-folder-create": {
+  "request": {
+   "api": "SYNO.FotoTeam.Browse.Folder",
+   "method": "create",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "target_id": "36",
+    "name": "\"viewer\""
+   }
+  },
+  "response": {
+   "error": {
+    "code": 803
+   },
+   "success": false
+  }
+ },
+ "qa1_team_entry_user_viewer-item-delete": {
+  "request": {
+   "api": "SYNO.FotoTeam.Browse.Item",
+   "method": "delete",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[52]"
+   }
+  },
+  "response": {
+   "success": true
+  }
+ },
+ "qa1_team_entry_user_viewer-bg-delete": {
+  "request": {
+   "api": "SYNO.FotoTeam.BackgroundTask.File",
+   "method": "delete",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "item_id": "[52]",
+    "folder_id": "[]"
+   }
+  },
+  "response": {
+   "error": {
+    "code": 803
+   },
+   "success": false
+  }
+ },
+ "qa1_team_entry_user_viewer-list-after": {
+  "request": {
+   "api": "SYNO.FotoTeam.Browse.Item",
+   "method": "list",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "folder_id": "36",
+    "offset": "0",
+    "limit": "5"
+   }
+  },
+  "response": {
+   "error": {
+    "code": 803
+   },
+   "success": false
+  }
+ },
+ "qa1_team_cleanup_admin-readback": {
+  "request": {
+   "api": "SYNO.FotoTeam.Browse.Item",
+   "method": "get",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "id": "[51, 52]",
+    "additional": "[\"rating\"]"
+   }
+  },
+  "response": {
+   "success": true,
+   "data": {
+    "list": [
+     {
+      "id": 51,
+      "filename": "beach-sunset.jpg",
+      "filesize": 51305,
+      "time": 1720121400,
+      "indexed_time": 1792261275438,
+      "owner_user_id": 0,
+      "folder_id": 36,
+      "type": "photo",
+      "additional": {
+       "rating": 0
+      }
+     },
+     {
+      "id": 52,
+      "filename": "city-night.jpg",
+      "filesize": 48215,
+      "time": 1703455200,
+      "indexed_time": 1792261275475,
+      "owner_user_id": 0,
+      "folder_id": 36,
+      "type": "photo",
+      "additional": {
+       "rating": 0
+      }
+     }
+    ]
+   }
+  }
+ },
+ "qa1_team_cleanup_perm-delete": {
+  "request": {
+   "api": "SYNO.Foto.Setting.TeamSpace",
+   "method": "update_permission",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "list": "[{\"action\": \"delete\", \"type\": \"user\", \"id\": 1027, \"permission\": \"entry\", \"auto_backup\": false}]"
+   }
+  },
+  "response": {
+   "success": true
+  }
+ },
+ "qa1_team_cleanup_perm-list-after": {
+  "request": {
+   "api": "SYNO.Foto.Setting.TeamSpace",
+   "method": "list_permission",
+   "version": "1",
+   "http": "POST",
+   "params": {}
+  },
+  "response": {
+   "data": [
+    {
+     "auto_backup": true,
+     "id": 101,
+     "name": "administrators",
+     "permission": "management",
+     "type": "group"
+    }
+   ],
+   "success": true
+  }
+ },
+ "qa1_team_cleanup_cleanup": {
+  "request": {
+   "api": "SYNO.FotoTeam.Browse.Folder",
+   "method": "delete",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[36]"
+   }
+  },
+  "response": {
+   "data": {
+    "error_list": []
+   },
+   "success": true
+  }
+ },
+ "fav_folder": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Folder",
+   "method": "create",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "target_id": "3",
+    "name": "\"mcp-spec-fav\""
+   }
+  },
+  "response": {
+   "data": {
+    "folder": {
+     "id": 31,
+     "name": "/mcp-spec-fav",
+     "owner_user_id": 2,
+     "parent": 3,
+     "passphrase": "",
+     "shared": false,
+     "sort_by": "default",
+     "sort_direction": "default"
+    }
+   },
+   "success": true
+  }
+ },
+ "fav_upload": {
+  "request": {
+   "api": "SYNO.Foto.Upload.Item",
+   "method": "upload_to_folder",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "duplicate": "\"rename\"",
+    "name": "\"beach-sunset.jpg\"",
+    "mtime": "1792273334",
+    "target_folder_id": "31"
+   },
+   "files": [
+    "file"
+   ]
+  },
+  "response": {
+   "data": {
+    "action": "new",
+    "id": 41,
+    "unit_id": 41
+   },
+   "success": true
+  }
+ },
+ "fav_upload_last": {
+  "request": {
+   "api": "SYNO.Foto.Upload.Item",
+   "method": "upload_to_folder",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "duplicate": "\"rename\"",
+    "name": "\"city-night.jpg\"",
+    "mtime": "1792273334",
+    "target_folder_id": "31"
+   },
+   "files": [
+    "file"
+   ]
+  },
+  "response": {
+   "data": {
+    "action": "new",
+    "id": 42,
+    "unit_id": 42
+   },
+   "success": true
+  }
+ },
+ "fav_set-favorite": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "set_favorite",
+   "version": "7",
+   "http": "POST",
+   "params": {
+    "id": "[41]",
+    "favorite": "true"
+   }
+  },
+  "response": {
+   "success": true
+  }
+ },
+ "fav_lwf-favorite-v3": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "list_with_filter",
+   "version": "3",
+   "http": "POST",
+   "params": {
+    "folder": "[31]",
+    "offset": "0",
+    "limit": "10",
+    "favorite": "[true]"
+   }
+  },
+  "response": {
+   "error": {
+    "code": 120,
+    "errors": {
+     "reason": "favorite is not supported"
+    }
+   },
+   "success": false
+  }
+ },
+ "fav_lwf-favorite-v4": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "list_with_filter",
+   "version": "4",
+   "http": "POST",
+   "params": {
+    "folder": "[31]",
+    "offset": "0",
+    "limit": "10",
+    "favorite": "[true]"
+   }
+  },
+  "response": {
+   "error": {
+    "code": 120,
+    "errors": {
+     "reason": "favorite is not supported"
+    }
+   },
+   "success": false
+  }
+ },
+ "fav_lwf-favorite-v5": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "list_with_filter",
+   "version": "5",
+   "http": "POST",
+   "params": {
+    "folder": "[31]",
+    "offset": "0",
+    "limit": "10",
+    "favorite": "[true]"
+   }
+  },
+  "response": {
+   "error": {
+    "code": 120,
+    "errors": {
+     "reason": "favorite is not supported"
+    }
+   },
+   "success": false
+  }
+ },
+ "fav_lwf-favorite-v6": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "list_with_filter",
+   "version": "6",
+   "http": "POST",
+   "params": {
+    "folder": "[31]",
+    "offset": "0",
+    "limit": "10",
+    "favorite": "[true]"
+   }
+  },
+  "response": {
+   "error": {
+    "code": 120,
+    "errors": {
+     "reason": "favorite is not supported"
+    }
+   },
+   "success": false
+  }
+ },
+ "fav_lwf-favorite-v7": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "list_with_filter",
+   "version": "7",
+   "http": "POST",
+   "params": {
+    "folder": "[31]",
+    "offset": "0",
+    "limit": "10",
+    "favorite": "[true]"
+   }
+  },
+  "response": {
+   "success": true,
+   "data": {
+    "list": [
+     {
+      "id": 41,
+      "filename": "beach-sunset.jpg",
+      "filesize": 51305,
+      "time": 1720121400,
+      "indexed_time": 1792258152367,
+      "owner_user_id": 2,
+      "folder_id": 31,
+      "type": "photo"
+     }
+    ]
+   }
+  }
+ },
+ "fav_cwf-favorite-v7": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "count_with_filter",
+   "version": "7",
+   "http": "POST",
+   "params": {
+    "folder": "[31]",
+    "favorite": "[true]"
+   }
+  },
+  "response": {
+   "data": {
+    "count": 1
+   },
+   "success": true
+  }
+ },
+ "fav_list-folder-favorite-only-v7": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "list",
+   "version": "7",
+   "http": "POST",
+   "params": {
+    "folder_id": "31",
+    "offset": "0",
+    "limit": "10",
+    "favorite_only": "true"
+   }
+  },
+  "response": {
+   "success": true,
+   "data": {
+    "list": [
+     {
+      "id": 41,
+      "filename": "beach-sunset.jpg",
+      "filesize": 51305,
+      "time": 1720121400,
+      "indexed_time": 1792258152367,
+      "owner_user_id": 2,
+      "folder_id": 31,
+      "type": "photo"
+     },
+     {
+      "id": 42,
+      "filename": "city-night.jpg",
+      "filesize": 48215,
+      "time": 1703455200,
+      "indexed_time": 1792258152402,
+      "owner_user_id": 2,
+      "folder_id": 31,
+      "type": "photo"
+     }
+    ]
+   }
+  }
+ },
+ "fav_list-rating-v1": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "list",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "folder_id": "31",
+    "offset": "0",
+    "limit": "10",
+    "additional": "[\"thumbnail\", \"rating\"]"
+   }
+  },
+  "response": {
+   "error": {
+    "code": 120,
+    "errors": {
+     "name": "additional",
+     "reason": "condition"
+    }
+   },
+   "success": false
+  }
+ },
+ "fav_list-rating-v2": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "list",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "folder_id": "31",
+    "offset": "0",
+    "limit": "10",
+    "additional": "[\"thumbnail\", \"rating\"]"
+   }
+  },
+  "response": {
+   "success": true,
+   "data": {
+    "list": [
+     {
+      "id": 41,
+      "filename": "beach-sunset.jpg",
+      "filesize": 51305,
+      "time": 1720121400,
+      "indexed_time": 1792258152367,
+      "owner_user_id": 2,
+      "folder_id": 31,
+      "type": "photo",
+      "additional": {
+       "thumbnail": {
+        "m": "ready",
+        "xl": "ready",
+        "preview": "broken",
+        "sm": "ready",
+        "cache_key": "41_1792276152",
+        "unit_id": 41
+       },
+       "rating": 0
+      }
+     },
+     {
+      "id": 42,
+      "filename": "city-night.jpg",
+      "filesize": 48215,
+      "time": 1703455200,
+      "indexed_time": 1792258152402,
+      "owner_user_id": 2,
+      "folder_id": 31,
+      "type": "photo",
+      "additional": {
+       "thumbnail": {
+        "m": "ready",
+        "xl": "ready",
+        "preview": "broken",
+        "sm": "ready",
+        "cache_key": "42_1792276152",
+        "unit_id": 42
+       },
+       "rating": 0
+      }
+     }
+    ]
+   }
+  }
+ },
+ "fav_list-rating-v7": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "list",
+   "version": "7",
+   "http": "POST",
+   "params": {
+    "folder_id": "31",
+    "offset": "0",
+    "limit": "10",
+    "additional": "[\"thumbnail\", \"rating\"]"
+   }
+  },
+  "response": {
+   "success": true,
+   "data": {
+    "list": [
+     {
+      "id": 41,
+      "filename": "beach-sunset.jpg",
+      "filesize": 51305,
+      "time": 1720121400,
+      "indexed_time": 1792258152367,
+      "owner_user_id": 2,
+      "folder_id": 31,
+      "type": "photo",
+      "additional": {
+       "thumbnail": {
+        "m": "ready",
+        "xl": "ready",
+        "preview": "broken",
+        "sm": "ready",
+        "cache_key": "41_1792276152",
+        "unit_id": 41
+       },
+       "rating": 0
+      }
+     },
+     {
+      "id": 42,
+      "filename": "city-night.jpg",
+      "filesize": 48215,
+      "time": 1703455200,
+      "indexed_time": 1792258152402,
+      "owner_user_id": 2,
+      "folder_id": 31,
+      "type": "photo",
+      "additional": {
+       "thumbnail": {
+        "m": "ready",
+        "xl": "ready",
+        "preview": "broken",
+        "sm": "ready",
+        "cache_key": "42_1792276152",
+        "unit_id": 42
+       },
+       "rating": 0
+      }
+     }
+    ]
+   }
+  }
+ },
+ "fav_cleanup": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Folder",
+   "method": "delete",
+   "version": "1",
+   "http": "POST",
+   "params": {
+    "id": "[31]"
+   }
+  },
+  "response": {
+   "data": {
+    "error_list": []
+   },
+   "success": true
+  }
+ },
+ "concept_concept-list": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Concept",
+   "method": "list",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "offset": "0",
+    "limit": "10",
+    "additional": "[\"thumbnail\"]",
+    "show_hidden": "false"
+   }
+  },
+  "response": {
+   "data": {
+    "list": []
+   },
+   "success": true
+  }
+ },
+ "concept_concept-count": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Concept",
+   "method": "count",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "show_hidden": "true"
+   }
+  },
+  "response": {
+   "data": {
+    "count": 0
+   },
+   "success": true
+  }
+ },
+ "concept_item-list-concept": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Item",
+   "method": "list",
+   "version": "7",
+   "http": "POST",
+   "params": {
+    "offset": "0",
+    "limit": "5",
+    "concept_id": "1"
+   }
+  },
+  "response": {
+   "success": true,
+   "data": {
+    "list": []
+   }
+  }
+ },
+ "concept_similar-status": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Similar",
+   "method": "get_status",
+   "version": "1",
+   "http": "POST",
+   "params": {}
+  },
+  "response": {
+   "data": {
+    "is_similar_hash_migration_done": true,
+    "similar_clustering_stage": "waiting",
+    "waiting_count": 0
+   },
+   "success": true
+  }
+ },
+ "concept_tag-suggest": {
+  "request": {
+   "api": "SYNO.Foto.Browse.GeneralTag",
+   "method": "suggest",
+   "version": "2",
+   "http": "POST",
+   "params": {
+    "keyword": "\"mcp\"",
+    "limit": "10"
+   }
+  },
+  "response": {
+   "data": {
+    "list": []
+   },
+   "success": true
+  }
+ },
+ "nohome_folder_list": {
+  "request": {
+   "api": "SYNO.Foto.Browse.Folder",
+   "method": "list",
+   "version": "1",
+   "http": "GET",
+   "params": {
+    "offset": "0",
+    "limit": "10"
+   }
+  },
+  "response": {
+   "error": {
+    "code": 602
+   },
+   "success": false
+  }
+ }
+}
