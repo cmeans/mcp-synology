@@ -83,7 +83,6 @@ class TaskRecord:
     recursive: bool | None = None
     recycle: dict[str, bool] = field(default_factory=dict)
     final_status: dict[str, Any] | None = None
-    started: float | None = None  # epoch seconds, for "running for 14 min"
 
 
 class TaskRecords:
@@ -216,7 +215,6 @@ class Handoff:
     handle: Handle
     status: dict[str, Any]
     stall: Exception | None = None
-    started: float | None = None  # epoch seconds: our start request, or DSM's crtime
 
 
 def _progress_numbers(status: dict[str, Any]) -> tuple[int, int, str] | None:
@@ -243,10 +241,24 @@ def _no_total_text(status: dict[str, Any]) -> str:
     return "counting items"
 
 
-def task_started(task: dict[str, Any]) -> float | None:
-    """A ``BackgroundTask.list`` task's start time (``crtime``, epoch seconds), if given."""
-    crtime = task.get("crtime")
-    return float(crtime) if isinstance(crtime, int | float) and crtime > 0 else None
+_TASKID_EPOCH = re.compile(r"FileStation_(\d{10})")
+_MAX_TASK_AGE = 30 * 86400.0
+
+
+def taskid_started(taskid: str, *, now: float | None = None) -> float | None:
+    """When a task started, from its ID: ``FileStation_1792248483...`` begins with the
+    start time in epoch seconds (DSM 7.1 and 7.2.2). None for any other shape, or a time
+    in the future or over 30 days old.
+
+    Not ``crtime``: ``BackgroundTask.list`` reported a 1 TB delete's ``crtime`` about 9
+    minutes after its start (real NAS, 2026-10-17).
+    """
+    match = _TASKID_EPOCH.match(taskid)
+    if match is None:
+        return None
+    started = float(match.group(1))
+    now = time.time() if now is None else now
+    return started if now - _MAX_TASK_AGE <= started <= now + 60 else None
 
 
 def _elapsed_text(seconds: float) -> str:
@@ -438,7 +450,6 @@ class RunningTask:
             dest=self.dest,
             overwrite=overwrite if isinstance(overwrite, bool) else None,
             recursive=recursive if isinstance(recursive, bool) else None,
-            started=task_started(self.task),
         )
 
 
@@ -580,8 +591,8 @@ async def _list_reply(client: DsmClient) -> str:
         return "No File Station delete, copy or move tasks are running for this user."
     rows = []
     for task in tasks:
-        crtime = task.task.get("crtime")
-        started = format_timestamp(crtime) if isinstance(crtime, int | float) else "unknown"
+        start = taskid_started(task.handle.taskid)
+        started = format_timestamp(start) if start is not None else "unknown"
         to = f" -> {task.dest}/" if task.dest and task.handle.kind != "delete" else ""
         rows.append(
             [
@@ -808,7 +819,7 @@ async def file_task(
     where = _describe(parsed.kind, paths, dest).partition(" ")[2] if paths else ""
     what = f"{_GERUND[parsed.kind]} on the NAS" + (f": {where}" if where else "")
     progress = progress_text(status)
-    started = record.started if record is not None else None
+    started = taskid_started(parsed.taskid)
     if started is not None:
         progress += f"; running for {_elapsed_text(time.time() - started)}"
     slow = (

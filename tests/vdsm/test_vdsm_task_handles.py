@@ -39,6 +39,7 @@ from mcp_synology.modules.filestation.tasks import (
     TaskRecords,
     discover_running_tasks,
     file_task,
+    taskid_started,
 )
 from tests.vdsm.conftest import _ssh
 from tests.vdsm.golden_image import load_golden_meta
@@ -60,6 +61,14 @@ _HANDLE = re.compile(r"Handle: `((?:delete|copy|move|restore):FileStation_\w+)`"
 _NO_RUNNING = "No running task with this handle."
 _ALREADY_FINISHED = "That task had already finished or isn't running."
 _NOT_STOPPED = "That task had already finished, so nothing was stopped."
+
+
+def _assert_started_near(handle: str, before: float) -> None:
+    """The handle's task ID carries the start time (``taskid_started``), give or take
+    the VM's clock."""
+    started = taskid_started(handle.partition(":")[2])
+    assert started is not None, handle
+    assert abs(started - before) < 300, (handle, started, before)
 
 
 def _handle(reply: str) -> str:
@@ -251,6 +260,7 @@ async def test_delete_handoff_then_status_until_finished(
     records = TaskRecords()
 
     async with _stopped_at_exit(client, records) as handles:
+        before = time.time()
         reply = await delete_files(
             client, paths=[path], recycle_bin_status={}, timeout=WAIT, records=records
         )
@@ -258,6 +268,7 @@ async def test_delete_handoff_then_status_until_finished(
         handle = _handle(reply)
         handles.append(handle)
         assert handle.startswith("delete:")
+        _assert_started_near(handle, before)
 
         async with admin_session() as other:
             first = await file_task(other, records=records, handle=handle)
@@ -415,6 +426,7 @@ async def test_copy_handoff_then_status_until_finished(
     records = TaskRecords()
 
     async with _stopped_at_exit(client, records) as handles:
+        before = time.time()
         reply = await copy_files(
             client, paths=[src], dest_folder=dest, timeout=WAIT, records=records
         )
@@ -422,6 +434,7 @@ async def test_copy_handoff_then_status_until_finished(
         handle = _handle(reply)
         handles.append(handle)
         assert handle.startswith("copy:")
+        _assert_started_near(handle, before)
 
         async with admin_session() as other:
             listing = await file_task(other, records=records)

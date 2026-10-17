@@ -61,19 +61,33 @@ def test_elapsed_text(seconds: float, text: str) -> None:
     assert _elapsed_text(seconds) == text
 
 
+NOW = 1792250000.0
+
+
 @pytest.mark.parametrize(
-    ("task", "started"),
+    ("taskid", "started"),
     [
-        ({"crtime": 1792197001}, 1792197001.0),
-        ({}, None),
-        ({"crtime": 0}, None),
-        ({"crtime": "x"}, None),
+        ("FileStation_179224848373CDB12", 1792248483.0),  # real NAS, 2026-10-17
+        ("FileStation_179219158016597225", 1792191580.0),
+        ("FileStation_1792250050", 1792250050.0),  # a clock a little ahead
+        ("FileStation_1792250100", None),  # future
+        (f"FileStation_{int(NOW) - 31 * 86400}", None),  # over 30 days old
+        ("FileStation_D1", None),
+        ("FileStation_179224", None),
+        ("Other_1792248483", None),
     ],
 )
-def test_task_started(task: dict[str, Any], started: float | None) -> None:
-    from mcp_synology.modules.filestation.tasks import task_started
+def test_taskid_started(taskid: str, started: float | None) -> None:
+    from mcp_synology.modules.filestation.tasks import taskid_started
 
-    assert task_started(task) == started
+    assert taskid_started(taskid, now=NOW) == started
+
+
+def test_taskid_started_defaults_to_the_clock() -> None:
+    from mcp_synology.modules.filestation.tasks import taskid_started
+
+    started = int(time.time()) - 60
+    assert taskid_started(f"FileStation_{started}ABC") == started
 
 
 def _rec(n: int) -> TaskRecord:
@@ -650,7 +664,8 @@ class TestRunningTaskFor:
         assert await running_task_for(mock_client, api=api, path="/s/a") is None
 
 
-# Shapes from the vdsm probe (BackgroundTask.list v2, DSM 7.1 and 7.2.2).
+# Shapes from the vdsm probe (BackgroundTask.list v2, DSM 7.1 and 7.2.2). crtime isn't
+# the start time (taskid_started), so nothing uses it.
 CRTIME = 1792197001
 LIST_DELETE = {
     "api": "SYNO.FileStation.Delete",
@@ -748,7 +763,6 @@ class TestDiscover:
         assert delete is not None
         assert delete.paths == ["/s/a"]
         assert delete.recursive is True
-        assert delete.started == CRTIME
         move = records.get(Handle("move", "FileStation_M1"))
         assert move is not None
         assert move.paths == ["/s/b"]
@@ -854,7 +868,8 @@ class TestFileTask:
         assert "FileStation_OLD" not in text
         assert "/s/a" in text
         assert "/s/b" in text
-        assert format_timestamp(CRTIME) in text
+        assert format_timestamp(CRTIME) not in text
+        assert "unknown" in text  # FileStation_D1 carries no start time
         assert "8 of 342 items, 2%" in text
 
     @respx.mock
@@ -903,11 +918,23 @@ class TestFileTask:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
             side_effect=_router({"status": _ok(RUNNING)})
         )
-        records = TaskRecords()
-        h = Handle("delete", "FileStation_D1")
-        records.add(TaskRecord(handle=h, paths=["/s/a"], started=time.time() - 14 * 60))
-        text = await file_task(mock_client, records=records, handle=str(h))
+        h = Handle("delete", f"FileStation_{int(time.time()) - 14 * 60}ABC")
+        text = await file_task(mock_client, records=TaskRecords(), handle=str(h))
         assert "(8 of 342 items, 2%; running for 14 min)" in text
+
+    @respx.mock
+    async def test_file_task_list_started_from_taskid(self, mock_client: DsmClient) -> None:
+        from mcp_synology.core.formatting import format_timestamp
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        started = int(time.time()) - 600
+        task = {**LIST_DELETE, "taskid": f"FileStation_{started}ABC"}
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=_router({"list": _list_reply(task)})
+        )
+        text = await file_task(mock_client, records=TaskRecords())
+        assert format_timestamp(started) in text
+        assert format_timestamp(CRTIME) not in text
 
     @respx.mock
     async def test_file_task_status_running_copy_wording(self, mock_client: DsmClient) -> None:
