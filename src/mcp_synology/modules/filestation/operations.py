@@ -819,13 +819,15 @@ async def delete_files(
                 handoff_status=handoff_status,
             )
         if handle is not None:
+            # No DSM request between the handoff and the reply: a recycle-bin probe to a
+            # DSM stalled by this very delete would lose the handle (#245). Keep only a
+            # cached answer; the final result probes lazily (_delete_summary).
             recycle: dict[str, bool] = {}
             parts = p.split("/")
             share_name = parts[1] if len(parts) > 1 else ""
-            if recycle_bin_status is not None and not (len(parts) > 2 and parts[2] == "#recycle"):
-                recycle[share_name] = await ensure_recycle_status(
-                    client, share_name, recycle_bin_status
-                )
+            in_bin = len(parts) > 2 and parts[2] == "#recycle"
+            if recycle_bin_status is not None and not in_bin and share_name in recycle_bin_status:
+                recycle[share_name] = recycle_bin_status[share_name]
             if records is not None:
                 records.add(
                     TaskRecord(handle=handle, paths=[p], recursive=recursive, recycle=recycle)

@@ -1891,6 +1891,35 @@ class TestDeleteHandoff:
         assert seen
         assert seen[0][:2] == (8, 342)
 
+    @respx.mock
+    async def test_delete_handoff_keeps_handle_when_recycle_probe_would_stall(
+        self, mock_client: DsmClient
+    ) -> None:
+        """No recycle-bin probe at handoff: a stalled DSM must not lose the handle."""
+        calls: list[dict[str, str]] = []
+        dsm = self._dsm(calls)
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            if params.get("method") == "list" and "#recycle" in params.get("folder_path", ""):
+                raise httpx.ReadTimeout("DSM busy deleting")
+            return dsm(request)
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        records = TaskRecords()
+        result = await delete_files(
+            mock_client,
+            paths=["/share/big"],
+            timeout=1,
+            recycle_bin_status={},
+            records=records,
+        )
+        assert "Handle: `delete:FileStation_BIG`" in result
+        assert "Still deleting on the NAS: /share/big" in result
+        record = records.get(Handle("delete", "FileStation_BIG"))
+        assert record is not None
+        assert record.recycle == {}
+
 
 class TestCopyMoveHandoff:
     """#245: a copy, move or restore that outlives the wait is handed off with a handle."""
