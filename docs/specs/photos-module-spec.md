@@ -95,14 +95,14 @@ Chosen **per call on its merits** (maintainer, 2026-10-17: no transport is force
 
 | Calls | Transport | Why |
 |---|---|---|
-| Every JSON-returning call (browse, search, edits, albums, sharing, requests, tasks, deletes) | **Form POST**, values JSON-encoded, `api`/`method`/`version` in the body, `_sid` in the query string | Values include free text and secrets (share passwords, descriptions, names, search terms) that GET would put in DSM's and any proxy's access logs, the problem #235 fixed for login. Bodies have no URL-length limit, and calls carry up to 100 IDs per batch and nested condition objects (the 414 seen with Download Station's GET, #123). It's what both web clients send, so it's the path Synology tests. |
+| Every JSON-returning call (browse, search, edits, albums, sharing, requests, tasks, deletes) | **Form POST**, values JSON-encoded, `api`/`method`/`version` in the body, the session as the `id` cookie (#176) | Values include free text and secrets (share passwords, descriptions, names, search terms) that GET would put in DSM's and any proxy's access logs, the problem #235 fixed for login. Bodies have no URL-length limit, and calls carry up to 100 IDs per batch and nested condition objects (the 414 seen with Download Station's GET, #123). It's what both web clients send, so it's the path Synology tests. |
 | `Upload.Item upload_to_folder` | **Multipart POST** (file part `file`, other fields JSON-encoded) | The only option for a file body. |
 | `Thumbnail get`, `Download download` (binary replies) | **GET**, streamed through `DsmClient.download_binary()` | Their values are only IDs, a cache key and a size, with nothing sensitive; the existing streamed-download path (temp file, rename, size checks) is GET, as File Station's `download_file`; and a GET can be retried without side effects. Form POST also works for both (verified). |
 
 - **`api`/`method`/`version` must be in a POST body.** A POST that has them only in the query string and an empty body (a method with no parameters) fails with **101** (verified on both versions).
 - **Every value is JSON-encoded**, strings included (`name="My album"`), as File Station's JSON-format APIs require (#121): an unquoted value that is valid JSON is read as that type (a folder renamed to `2024` would get the number). `Thumbnail get` accepts its values quoted or unquoted (verified).
 - The 1.9.1 web client fetches thumbnails from a new path (`synofoto/api/v2/p|t/Thumbnail/get`); the `entry.cgi` form used here still works on 1.9.1 (verified).
-- **Implementation:** `DsmClient.request(..., post_form=True)` already sends `api`/`method`/`version` in the body with only `_sid` in the query string, and keeps the re-auth retry (#235). Only its documented scope changes: the `CLAUDE.md` #235 bullet and the comment in `request()`.
+- **Implementation:** `DsmClient.request(..., post_form=True)` already sends `api`/`method`/`version` in the body with the session as the `id` cookie (#176; it was `_sid` in the query string until then), and keeps the re-auth retry (#235). Only its documented scope changes: the `CLAUDE.md` #235 bullet and the comment in `request()`.
 - **Empty-body 101, verified:** a POST of `UserInfo me` with `api`/`method`/`version` only in the query string and an empty body answered 101 on both versions (`qa1_post-empty-body-query-only`).
 
 ### Versions
