@@ -53,6 +53,26 @@ async def _send(
     return resp.status_code, body, transport
 
 
+@pytest.fixture
+async def sid_client(nas_client: Any) -> Any:
+    """``nas_client``, with a session ID DSM reads correctly as ``_sid`` (#176).
+
+    These tests send the session as ``_sid`` themselves. DSM misreads some session IDs
+    there (about 1 login in 75 on 7.2.2), and such a session gets 119 in every mode
+    but the cookie, so a test drawing one would fail for that reason alone. Log in
+    again until the ID works.
+    """
+    client, auth, _config, _paths = nas_client
+    for _ in range(20):
+        _, body, _ = await _send(client, "get", "SYNO.FileStation.Info", "get", 2)
+        if body and body.get("success"):
+            return nas_client
+        assert body and (body.get("error") or {}).get("code") == 119, body
+        await auth.logout()
+        await auth.login()
+    pytest.fail("20 logins in a row drew a session ID DSM misreads as _sid")
+
+
 def _shape(body: dict[str, Any] | None) -> Any:
     """What must match across modes: success, the error code, and the data's keys."""
     if body is None:
@@ -77,9 +97,9 @@ _READS: list[tuple[str, str, int, dict[str, str]]] = [
 
 
 @pytest.mark.parametrize("mode", [m for m in MODES if m != "get"])
-async def test_reads_match_get(nas_client: Any, mode: str) -> None:
+async def test_reads_match_get(sid_client: Any, mode: str) -> None:
     """Every mode gives GET's reply for the same read, and really is rewritten."""
-    client, _auth, _config, _paths = nas_client
+    client, _auth, _config, _paths = sid_client
     assert not client._get_http().cookies, "login set a cookie, so cookie modes prove nothing"
     for api, method, version, params in _READS:
         if api not in client.api_cache:
@@ -96,9 +116,9 @@ async def test_reads_match_get(nas_client: Any, mode: str) -> None:
 
 
 @pytest.mark.parametrize("mode", [m for m in MODES if m != "get"])
-async def test_write_takes_effect(nas_client: Any, mode: str) -> None:
+async def test_write_takes_effect(sid_client: Any, mode: str) -> None:
     """A CreateFolder, Rename and Delete sent in ``mode`` change the NAS (read back by GET)."""
-    client, _auth, _config, paths = nas_client
+    client, _auth, _config, paths = sid_client
     parent = paths.get("writable_folder", "/writable")
     name = f"t263-{mode}-{uuid.uuid4().hex[:6]}"
 
@@ -137,9 +157,9 @@ async def test_write_takes_effect(nas_client: Any, mode: str) -> None:
     assert seen["data"]["files"][0].get("code") == 408, f"delete via {mode} had no effect"
 
 
-async def test_unquoted_values_fail_the_same_over_post(nas_client: Any) -> None:
+async def test_unquoted_values_fail_the_same_over_post(sid_client: Any) -> None:
     """An unquoted JSON-looking value fails alike over GET and POST (#121's cause)."""
-    client, _auth, _config, paths = nas_client
+    client, _auth, _config, paths = sid_client
     parent = paths.get("writable_folder", "/writable")
     params = {"folder_path": parent, "name": "2024"}  # 2024 unquoted: DSM reads a number
     results = {}
@@ -156,12 +176,12 @@ async def test_unquoted_values_fail_the_same_over_post(nas_client: Any) -> None:
         )  # fmt: skip
 
 
-async def test_post_needs_api_method_version_in_body(nas_client: Any) -> None:
+async def test_post_needs_api_method_version_in_body(sid_client: Any) -> None:
     """A form POST with api/method/version only in the query string, empty body: 101.
 
     The rewrite puts them in the body; this pins why (also seen on Photos, #258).
     """
-    client, _auth, _config, _paths = nas_client
+    client, _auth, _config, _paths = sid_client
     info = client.api_cache["SYNO.FileStation.Info"]
     query = {"api": "SYNO.FileStation.Info", "method": "get", "version": "2", "_sid": client.sid}
     async with httpx.AsyncClient(timeout=30) as http:
@@ -174,7 +194,7 @@ async def test_post_needs_api_method_version_in_body(nas_client: Any) -> None:
     ("mode", "ok"), [("post", False), ("post_sid_body", True), ("cookie_post", True)]
 )
 async def test_download_station_v1_post_needs_sid_out_of_the_query(
-    nas_client: Any,
+    sid_client: Any,
     dsm_version: str,
     request: pytest.FixtureRequest,
     live_clients: set[DsmClient],
@@ -188,7 +208,7 @@ async def test_download_station_v1_post_needs_sid_out_of_the_query(
     or as the ``id`` cookie, the same POST succeeds. This is the real failure behind
     the old "POST fails on DSM 7.1" note.
     """
-    client, _auth, _config, _paths = nas_client
+    client, _auth, _config, _paths = sid_client
     # As test_vdsm_downloadstation's _ds_available fixture: skip without DS, wait for it.
     reason = download_station_skip_reason(
         load_golden_meta(dsm_version), await client.query_api_info()
