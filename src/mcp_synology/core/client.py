@@ -193,6 +193,26 @@ class DsmClient:
     def sid(self, value: str | None) -> None:
         self._sid = value
 
+    def _session_headers(self) -> dict[str, str]:
+        """The session as DSM's ``id`` cookie, never as ``_sid`` (#176).
+
+        JSON-format APIs parse every parameter value as JSON first (#121), and that
+        includes ``_sid``: a session ID that begins like a number (``-4Ms…``,
+        ``4e70…``, ``8-aZ…``, about 1 in 70) then matches no session, and every call
+        with it gets 119, re-auth included, until a new login happens to draw another
+        shape. Quoting ``_sid`` fixes those APIs but breaks Download Station's v1 CGIs
+        (105) and ``logout`` (answers success, session stays). The cookie works for
+        every API on DSM 7.1 and 7.2.2, and keeps the session out of URLs and logs.
+        Sent as a header, so the httpx cookie jar never holds or resends it. An
+        explicit ``Cookie`` header replaces the jar's, so any cookie the jar holds
+        (a reverse proxy's own login, say) is sent along with it.
+        """
+        if not self._sid:
+            return {}
+        jar = list(self._http.cookies.jar) if self._http else []
+        cookies = [f"{c.name}={c.value}" for c in jar if c.name != "id"]
+        return {"Cookie": "; ".join([f"id={self._sid}", *cookies])}
+
     def set_re_auth_callback(self, callback: ReAuthCallback) -> None:
         """Set callback for transparent re-authentication on session errors."""
         self._re_auth_callback = callback
@@ -364,8 +384,9 @@ class DsmClient:
 
         On session errors (106/107/119), triggers re-auth and retries once.
 
+        The session goes as the ``id`` cookie (``_session_headers()``, #176).
         ``post_form`` sends the parameters as a form-encoded POST body instead of
-        the query string, with ``_sid`` (if any) still in the query string. The
+        the query string. The
         transport is chosen per call (each module spec records its choice):
         ``SYNO.API.Auth`` ``login`` uses it so ``passwd``, ``otp_code`` and
         ``device_id`` never reach a URL, where DSM's and any reverse proxy's access
@@ -403,10 +424,6 @@ class DsmClient:
         if params:
             req_params.update(params)
 
-        # Inject session ID
-        if self._sid:
-            req_params["_sid"] = self._sid
-
         # Log request (mask password)
         log_params = _log_safe(req_params)
         retry_tag = " (retry)" if _is_retry else ""
@@ -430,11 +447,11 @@ class DsmClient:
             else httpx.Timeout(self._timeout, read=read_timeout)
         )
         try:
+            headers = self._session_headers()
             if post_form:
-                query = {"_sid": req_params.pop("_sid")} if "_sid" in req_params else {}
-                resp = await http.post(url, params=query, data=req_params, timeout=req_timeout)
+                resp = await http.post(url, data=req_params, headers=headers, timeout=req_timeout)
             else:
-                resp = await http.get(url, params=req_params, timeout=req_timeout)
+                resp = await http.get(url, params=req_params, headers=headers, timeout=req_timeout)
         except httpx.TransportError as e:
             # Name the call without changing the exception's type: get_client() and
             # `check` rely on httpx.TransportError to report an unreachable NAS (#237).
@@ -508,8 +525,8 @@ class DsmClient:
         FileStation APIs.
 
         Same envelope handling, typed errors, and one-shot re-auth on session
-        errors as ``request()``. ``_sid`` goes in the query string (as for the
-        Upload API); everything else goes in the body. Non-2xx HTTP statuses
+        errors as ``request()``. The session goes as the ``id`` cookie (#176);
+        everything else goes in the body. Non-2xx HTTP statuses
         and timeouts raise typed ``SynologyError``s rather than httpx errors.
         """
         http = self._get_http()
@@ -526,16 +543,14 @@ class DsmClient:
         form_data: dict[str, str] = {"api": api, "version": str(version), "method": method}
         if params:
             form_data.update(params)
-        query_params: dict[str, str] = {}
-        if self._sid:
-            query_params["_sid"] = self._sid
 
         log_data = _log_safe(form_data)
         retry_tag = " (retry)" if _is_retry else ""
         logger.debug("DSM POST%s: %s/%s v%d — %s", retry_tag, api, method, version, log_data)
 
         resp = await _guarded_post(
-            f"{api}/{method}", lambda: http.post(url, params=query_params, data=form_data)
+            f"{api}/{method}",
+            lambda: http.post(url, data=form_data, headers=self._session_headers()),
         )
         body = resp.json()
 
@@ -642,11 +657,8 @@ class DsmClient:
         url = f"{self._base_url}/webapi/{self._api_cache[api].path}"
         form_data: dict[str, str] = {"api": api, "version": str(version), "method": method}
         form_data.update(fields)
-        # SID must be a query parameter, not a form field — the Upload API
-        # does not read _sid from multipart form data.
-        query_params: dict[str, str] = {}
-        if self._sid:
-            query_params["_sid"] = self._sid
+        # The session goes as the id cookie (#176); the Upload API doesn't read
+        # _sid from multipart form data.
 
         log_data = _log_safe(form_data)
         retry_tag = " (retry)" if _is_retry else ""
@@ -667,7 +679,7 @@ class DsmClient:
         try:
             resp = await http.post(
                 url,
-                params=query_params,
+                headers=self._session_headers(),
                 data=form_data,
                 files={file_field: (filename, fh, content_type)},
                 timeout=httpx.Timeout(timeout),
@@ -734,8 +746,8 @@ class DsmClient:
         7.2.2 in every layout and version tried (#123), so there is no v1
         fallback. DS2 is a JSON-format API: string fields are JSON-encoded,
         the file part is named ``torrent`` (referenced by ``file=["torrent"]``)
-        and goes last. Same re-auth-on-session-error retry and ``_sid``
-        masking as ``upload()``. Returns the ``data`` dict
+        and goes last. Same re-auth-on-session-error retry and session
+        cookie as ``upload()``. Returns the ``data`` dict
         (``{"task_id": [...], "list_id": [...]}``).
         """
         api = "SYNO.DownloadStation2.Task"
@@ -757,11 +769,7 @@ class DsmClient:
         if destination is not None:
             form_data["destination"] = json.dumps(destination)
 
-        # SID must be a query parameter, not a form field — same pattern as
-        # the FileStation Upload API.
-        query_params: dict[str, str] = {}
-        if self._sid:
-            query_params["_sid"] = self._sid
+        # The session goes as the id cookie (#176), as for the File Station Upload API.
 
         log_data = _log_safe(form_data)
         retry_tag = " (retry)" if _is_retry else ""
@@ -783,7 +791,7 @@ class DsmClient:
                 f"{api}/create",
                 lambda: http.post(
                     url,
-                    params=query_params,
+                    headers=self._session_headers(),
                     data=form_data,
                     files={"torrent": (filename, fh, "application/x-bittorrent")},
                     timeout=httpx.Timeout(timeout),
@@ -900,8 +908,6 @@ class DsmClient:
         url = f"{self._base_url}/webapi/{self._api_cache[api].path}"
         req_params: dict[str, str] = {"api": api, "version": str(version), "method": method}
         req_params.update(params)
-        if self._sid:
-            req_params["_sid"] = self._sid
 
         log_params = _log_safe(req_params)
         retry_tag = " (retry)" if _is_retry else ""
@@ -915,7 +921,11 @@ class DsmClient:
         )
 
         async with http.stream(
-            "GET", url, params=req_params, timeout=httpx.Timeout(timeout)
+            "GET",
+            url,
+            params=req_params,
+            headers=self._session_headers(),
+            timeout=httpx.Timeout(timeout),
         ) as resp:
             # Check for HTTP-level errors (502, 404, etc.) before reading body.
             # Some DSM errors come back as HTTP errors rather than JSON envelopes.
