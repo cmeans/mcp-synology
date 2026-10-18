@@ -304,9 +304,13 @@ def _ds_diagnostics(container: VirtualDsmContainer, password: str) -> str:
 _PHOTOS_READY_WAIT = 300
 
 
-def _photos_problem(base_url: str) -> str | None:
-    """Why Photos isn't ready to answer yet, or None. Asks SYNO.API.Info, which needs
-    no session, whether Photos' APIs are registered."""
+def _photos_problem(base_url: str, user: str, password: str) -> str | None:
+    """Why Photos isn't ready to answer yet, or None.
+
+    Registered APIs aren't enough: right after they appear, Photos itself may not
+    serve requests yet. So this also logs in as the test user and reads the personal
+    space's root folder, the way the Photos tests start.
+    """
     try:
         resp = httpx.get(
             f"{base_url}/webapi/query.cgi",
@@ -314,10 +318,52 @@ def _photos_problem(base_url: str) -> str | None:
             timeout=15,
         )
         apis = resp.json().get("data", {})
-    except (httpx.HTTPError, ValueError) as e:
-        return f"SYNO.API.Info: {type(e).__name__}"
-    missing = [a for a in ("SYNO.Foto.Browse.Item", "SYNO.FotoTeam.Browse.Item") if a not in apis]
-    return f"not registered yet: {', '.join(missing)}" if missing else None
+        missing = [
+            a for a in ("SYNO.Foto.Browse.Item", "SYNO.FotoTeam.Browse.Item") if a not in apis
+        ]
+        if missing:
+            return f"not registered yet: {', '.join(missing)}"
+        url = f"{base_url}/webapi/entry.cgi"
+        login = httpx.post(
+            url,
+            data={
+                "api": "SYNO.API.Auth",
+                "version": "6",
+                "method": "login",
+                "account": user,
+                "passwd": password,
+                "session": "FileStation",
+                "format": "sid",
+            },
+            timeout=30,
+        ).json()
+        if not login.get("success"):
+            return f"test user login: {login.get('error')}"
+        sid = login["data"]["sid"]
+        try:
+            root = httpx.post(
+                url,
+                params={"_sid": sid},
+                data={"api": "SYNO.Foto.Browse.Folder", "version": "2", "method": "get", "id": "0"},
+                timeout=30,
+            ).json()
+        finally:
+            httpx.get(
+                url,
+                params={
+                    "api": "SYNO.API.Auth",
+                    "version": "6",
+                    "method": "logout",
+                    "session": "FileStation",
+                    "_sid": sid,
+                },
+                timeout=15,
+            )
+        if not root.get("success"):
+            return f"SYNO.Foto.Browse.Folder get: {root.get('error')}"
+    except (httpx.HTTPError, ValueError, KeyError) as e:
+        return f"{type(e).__name__}"
+    return None
 
 
 @pytest.fixture(scope="session")
@@ -329,9 +375,13 @@ def photos_ready(vdsm_container: VirtualDsmContainer, dsm_version: str) -> None:
     doesn't wait (its tests skip); one that lists it and never registers the APIs
     fails here, once, for the whole session.
     """
-    if photos_skip_reason(load_golden_meta(dsm_version), ()) is not None:
+    meta = load_golden_meta(dsm_version)
+    if photos_skip_reason(meta, ()) is not None:
         return
-    problem = _poll(lambda: _photos_problem(vdsm_container.base_url), _PHOTOS_READY_WAIT)
+    user, password = str(meta.get("test_user", "")), str(meta.get("test_password", ""))
+    problem = _poll(
+        lambda: _photos_problem(vdsm_container.base_url, user, password), _PHOTOS_READY_WAIT
+    )
     if problem is not None:
         pytest.fail(
             f"Synology Photos didn't come up within {_PHOTOS_READY_WAIT}s of DSM boot done "
