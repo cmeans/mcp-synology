@@ -21,6 +21,8 @@ from mcp_synology.core.errors import ErrorCode, SynologyError
 from mcp_synology.core.formatting import error_response, format_timestamp
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from mcp_synology.core.client import DsmClient
 
 logger = logging.getLogger(__name__)
@@ -412,8 +414,10 @@ def batches(ids: list[int], size: int = BATCH_SIZE) -> list[list[int]]:
     return [ids[i : i + size] for i in range(0, len(ids), size)]
 
 
-def check_ids(operation: str, ids: list[int], *, param: str = "ids", limit: int = 1000) -> None:
-    """At least one ID, and not more than ``limit``."""
+def check_ids(
+    operation: str, ids: Sequence[object], *, param: str = "ids", limit: int = 1000
+) -> None:
+    """At least one ID (or folder), and not more than ``limit``."""
     if not ids:
         invalid(operation, f"pass at least one id in {param}.", param=param, value=ids)
     if len(ids) > limit:

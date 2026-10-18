@@ -172,6 +172,8 @@ async def copy_or_move(
         )
     if ids:
         check_ids(op, ids)
+    if folders:
+        check_ids(op, folders, param="folders")  # one lookup each
     try:
         source = Photos(client, src, op)
         found, missing = await source.items(ids or [])
@@ -297,6 +299,7 @@ async def delete_photo_folders(
     sp = check_space(op, space)
     if not folders:
         invalid(op, "pass at least one folder.", param="folders", value=folders)
+    check_ids(op, folders, param="folders")  # one lookup each
     try:
         ph = Photos(client, sp, op)
         resolved: dict[int, str] = {}

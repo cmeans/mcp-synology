@@ -190,12 +190,19 @@ class TestCopyMove:
             ({"ids": None, "folders": None}, "ids"),
             ({"ids": [1], "folders": None, "on_conflict": "replace"}, "on_conflict"),
             ({"ids": [1], "folders": None, "dest_space": "team"}, "space"),
+            ({"ids": None, "folders": [f"/f{i}" for i in range(1001)]}, "folders"),
         ],
     )
     async def test_refusals(self, kwargs: dict[str, Any], param: str) -> None:
         with pytest.raises(ToolError) as exc:
             await copy_or_move(make_client(), operation="copy", destination="/", **kwargs)
         assert _error(exc)["param"] == param
+
+    async def test_delete_folders_capped(self) -> None:
+        """Each folder costs a lookup, so the list is capped like ID lists (#272's QA)."""
+        with pytest.raises(ToolError) as exc:
+            await delete_photo_folders(make_client(), folders=[f"/f{i}" for i in range(1001)])
+        assert _error(exc)["param"] == "folders"
 
 
 class TestDeletes:
