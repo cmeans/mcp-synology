@@ -71,6 +71,9 @@ class ToolInfo:
     description: str
     permission_tier: PermissionTier = PermissionTier.READ
     annotations: ToolAnnotations | None = None
+    # A display name for clients, where the name alone is ambiguous next to another
+    # module's tool (Photos' photo_folder beside File Station's create_folder).
+    title: str | None = None
 
 
 @dataclass
