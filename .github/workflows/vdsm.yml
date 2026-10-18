@@ -68,6 +68,11 @@ jobs:
           if [ "$EVENT" = pull_request ] && git diff --name-only HEAD^1 HEAD | grep -qxE \
               'scripts/vdsm_setup\.py|tests/vdsm/(setup_dsm|config|golden_image|container)\.py'; then
             changed=true
+            # The key only changes with BAKE_VERSION: without a bump, main keeps
+            # restoring the old image after this merges.
+            if ! git diff HEAD^1 HEAD -- tests/vdsm/config.py | grep -qE '^[-+]BAKE_VERSION'; then
+              echo "::warning::bake files changed without a BAKE_VERSION bump; fine only if the image is unchanged (e.g. #271)"
+            fi
           fi
           echo "key=vdsm-golden-${DSM_VERSION}-bake${bake}" >> "$GITHUB_OUTPUT"
           echo "bake_files_changed=$changed" >> "$GITHUB_OUTPUT"
@@ -83,29 +88,14 @@ jobs:
             .vdsm/golden/dsm-${{ env.DSM_VERSION }}.meta.json
           key: ${{ steps.golden.outputs.key }}
 
-      # GitHub-hosted Ubuntu runners ship ~14 GB free of ~75 GB. The vdsm
-      # workflow needs significantly more: a ~1.1 GB compressed golden image
-      # tarball (bake v5, with Synology Photos) + ~27 GB extracted storage
-      # (the 16 GB data and 11 GB system disk images; tarfile writes them out
-      # in full, not sparse) + testcontainers spawning a vdsm
-      # container with its own /storage bind-mount + Python venv + Playwright
-      # Chromium download. CI on 550f445 hit
-      # `System.IO.IOException: No space left on device` after the bake
-      # succeeded but during the test step. Free the runner-pre-installed
-      # software we don't need (dotnet, Android SDK, Haskell, swap). The
-      # action's apt purge of large packages took most of its ~2 minutes and
-      # is off (#132); the next step checks there's still enough room.
-      - name: Free disk space
-        uses: jlumbroso/free-disk-space@ceedf095f4ec1a097402bc6bd80831f2e1a6fde6 # v2.0.0
-        with:
-          tool-cache: false  # keep Python toolchain; uv depends on it
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: false  # the slow part (#132)
-          docker-images: false  # keep — testcontainers re-pulls otherwise
-          swap-storage: true
-
+      # The extracted golden image takes about 27 GB (the 16 GB data and 11 GB
+      # system disk images; tarfile writes them out in full, not sparse), plus the
+      # ~1.1 GB tarball, the bake's own storage on a cache miss, the venv and the
+      # vdsm container. Runners used to ship ~14 GB free, and CI on 550f445 ran out
+      # of space, so this job freed ~30 GB first. They now have a 145 GB root with
+      # about 87 GB free (measured on #275, 2026-10-18), so it no longer frees
+      # anything (#132; the cleanup took 84-109 s). The check below fails with a
+      # clear message if a runner ever comes with less.
       - name: Check free disk space
         run: |
           set -euo pipefail
