@@ -67,6 +67,10 @@ Common causes:
   and the weekly plan and limited-speed rates in `get_schedule` / `set_schedule`).
   For `set_download_config` mcp-synology refuses on its own, because DSM answers
   "success" to non-managers while ignoring the change.
+- Synology Photos (DSM codes 160, 801, 803): **160** means the account has no Synology
+  Photos application privilege; **801** that Shared Space is off or the account has no
+  access to it (DSM uses one code for both); **803** that the account has Shared Space
+  access but no permission on that folder.
 
 Fix:
 
@@ -85,6 +89,10 @@ Fix:
 5. For Download Station: grant the application privilege via **Control Panel →
    Application Privileges → Download Station**. Manager-only operations
    additionally need an admin account.
+6. For Synology Photos: 160 is fixed in **Control Panel → Application Privileges →
+   Synology Photos**; 801 in **Synology Photos → Settings → Shared Space** (enable it,
+   then grant the account access); 803 by a Shared Space manager, who grants folder
+   permissions in Synology Photos.
 
 **Local paths (`upload_file`, `download_file`, `create_download`'s `torrent_file_path`).**
 The same code, with no DSM error number, means mcp-synology refused a local path outside
@@ -115,6 +123,23 @@ Fix:
    by `SYNO.API.Info`, which shows exactly which APIs the NAS reports.
 4. If the API should exist but is not listed, restart the relevant package via
    **Package Center → [package] → Action → Stop / Run**, or reboot the NAS.
+
+## not_supported
+
+**The NAS's version of the package doesn't have the action asked for.**
+
+DSM answers code 103 ("method does not exist") when an API lacks a method, and some
+features exist only in newer package versions. mcp-synology reports both as
+`not_supported`, naming the version where it can, instead of a bare DSM code. For
+features DSM silently ignores on older versions (Synology Photos 1.3.4 returns every
+item for a favorites filter), mcp-synology refuses before calling DSM.
+
+Examples: favorites and concepts need Synology Photos 1.9.1 or later (DSM 7.2).
+
+Fix:
+
+1. Update the package (and DSM if the newer package needs it) in **Package Center**.
+2. Otherwise, do it another way: the message says what this version lacks.
 
 ---
 
@@ -407,6 +432,11 @@ never included, since it carries the password or session ID. A 5xx on any
 other call is `retryable=true`, and a 4xx is `retryable=false`. As with
 `timeout`, a `create_download` that fails this way may still have been applied,
 so it is marked `retryable=false`; check `list_downloads` before retrying.
+
+Synology Photos also reports two setup problems this way: DSM code **602** (the
+account has no personal space because the user home service is off; an administrator
+enables it in **Control Panel → User & Group → Advanced → User Home**) and **901**
+(People, face recognition, is turned off in Synology Photos' settings).
 
 The empty-payload case affects `get_system_info`, `get_resource_usage`, and
 similar metric tools. The API responded `success=true` but the data block was missing or empty.

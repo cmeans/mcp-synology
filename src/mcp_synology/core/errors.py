@@ -34,6 +34,7 @@ class ErrorCode(StrEnum):
     SESSION_EXPIRED = "session_expired"
     PERMISSION_DENIED = "permission_denied"
     API_NOT_FOUND = "api_not_found"
+    NOT_SUPPORTED = "not_supported"
 
     # Paths and files
     NOT_FOUND = "not_found"
@@ -321,13 +322,55 @@ FILESTATION_ERROR_CODES: dict[int, tuple[str, str]] = {
 }
 
 
-def error_from_code(code: int, api_name: str = "") -> SynologyError:
+def error_detail(errors: object) -> str:
+    """``": rating (condition)"``: what a JSON-format API said about the parameter, or ``""``.
+
+    Photos and Download Station 2 add ``errors: {"name": "rating", "reason":
+    "condition"}`` (or a list of those) to a 120; some give only a reason, such as
+    ``{"reason": "favorite is not supported"}``. Only ``name`` and ``reason`` are used,
+    so nothing else DSM puts there reaches a message or a log.
+    """
+    items = errors if isinstance(errors, list) else [errors]
+    parts = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name, reason = item.get("name"), item.get("reason")
+        if name and reason:
+            parts.append(f"{name} ({reason})")
+        elif name or reason:
+            parts.append(str(name or reason))
+    return f": {', '.join(parts)}" if parts else ""
+
+
+def _with_detail(message: str, errors: object) -> str:
+    return message + error_detail(errors)
+
+
+def error_from_code(code: int, api_name: str = "", errors: object = None) -> SynologyError:
     """Create a typed exception from a DSM error code.
 
     Error codes are context-specific: the same code means different things
     for Auth vs FileStation APIs. This function checks API-specific codes
-    first, then falls back to common codes.
+    first, then falls back to common codes. ``errors`` is the envelope's
+    ``error.errors`` detail, when DSM sent one; the parameter it names is added
+    to the message.
     """
+    if api_name.startswith("SYNO.Foto"):
+        from mcp_synology.core.photos_errors import (  # noqa: PLC0415
+            PHOTOS_ERROR_CODES,
+            PhotosError,
+        )
+
+        if code in PHOTOS_ERROR_CODES:
+            error_code, message, suggestion = PHOTOS_ERROR_CODES[code]
+            return PhotosError(
+                _with_detail(message, errors),
+                code=code,
+                suggestion=suggestion,
+                error_code=error_code,
+            )
+
     # Download Station codes (400-series for SYNO.DownloadStation.*)
     # Deferred import to avoid a circular dependency: downloadstation_errors
     # imports from this module (errors.py), so we cannot import it at module top.
@@ -371,7 +414,9 @@ def error_from_code(code: int, api_name: str = "") -> SynologyError:
         if code == 102:
             return ApiNotFoundError(message, code=code, suggestion=suggestion)
         if code == 120:
-            return InvalidParameterError(message, code=code, suggestion=suggestion)
+            return InvalidParameterError(
+                _with_detail(message, errors), code=code, suggestion=suggestion
+            )
         return SynologyError(message, code=code, suggestion=suggestion)
 
     return SynologyError(f"Unknown error (code {code})", code=code)

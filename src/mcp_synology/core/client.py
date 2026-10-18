@@ -27,6 +27,7 @@ from mcp_synology.core.errors import (
     DsmUnavailableError,
     RequestTooLongError,
     SynologyError,
+    error_detail,
     error_from_code,
 )
 from mcp_synology.core.redaction import redact_urls
@@ -364,11 +365,14 @@ class DsmClient:
         On session errors (106/107/119), triggers re-auth and retries once.
 
         ``post_form`` sends the parameters as a form-encoded POST body instead of
-        the query string, with ``_sid`` (if any) still in the query string. It is a
-        scoped exception to the GET-only rule, used ONLY for ``SYNO.API.Auth``
-        ``login`` (#235): GET put ``passwd``, ``otp_code`` and ``device_id`` in the
-        URL, where DSM's and any reverse proxy's access logs record it. Verified on
-        DSM 7.1 and 7.2.2. Everything else stays on GET.
+        the query string, with ``_sid`` (if any) still in the query string. The
+        transport is chosen per call (each module spec records its choice):
+        ``SYNO.API.Auth`` ``login`` uses it so ``passwd``, ``otp_code`` and
+        ``device_id`` never reach a URL, where DSM's and any reverse proxy's access
+        logs record it (#235), and the Photos module sends its JSON calls this way
+        (``docs/specs/photos-module-spec.md``, Transport). ``api``/``method``/
+        ``version`` go in the body too: a POST with them only in the query string and
+        an empty body fails with 101. File Station and Download Station stay on GET.
 
         ``read_timeout`` (seconds) replaces the client's read timeout for this request
         only; connect, write and pool keep the client's default, so an unreachable NAS
@@ -407,11 +411,9 @@ class DsmClient:
         log_params = _log_safe(req_params)
         retry_tag = " (retry)" if _is_retry else ""
 
-        # GET with query params, except post_form (login only, #235). DSM v2 APIs
-        # work with GET, and we pin all APIs to v2 to avoid v3 JSON request
-        # format issues. The requestFormat field in the API info is metadata
-        # about what the API supports, not a mandate to POST — on DSM 7.1,
-        # every FileStation API reports requestFormat=JSON even at v2.
+        # GET with query params unless the caller chose post_form (see the docstring).
+        # The requestFormat field in the API info is metadata about how DSM parses
+        # values (as JSON, #121), not a mandate to POST.
         logger.debug(
             "DSM %s%s: %s/%s v%d — %s",
             "POST" if post_form else "GET",
@@ -458,8 +460,15 @@ class DsmClient:
                 )
             return data
 
-        code = body.get("error", {}).get("code", 0)
-        logger.debug("DSM response: %s/%s — error code %d", api, method, code)
+        error = body.get("error", {})
+        code = error.get("code", 0)
+        logger.debug(
+            "DSM response: %s/%s — error code %d%s",
+            api,
+            method,
+            code,
+            error_detail(error.get("errors")),
+        )
 
         # Transparent re-auth on session errors (one retry)
         if code in _SESSION_ERROR_CODES and not _is_retry and self._re_auth_callback:
@@ -478,7 +487,7 @@ class DsmClient:
                 _is_retry=True,
             )
 
-        raise error_from_code(code, api)
+        raise error_from_code(code, api, error.get("errors"))
 
     async def request_form_post(
         self,
@@ -558,19 +567,68 @@ class DsmClient:
         create_parents: bool = True,
         version: int | None = None,
         timeout: float = 300.0,
-        _is_retry: bool = False,
     ) -> dict[str, Any]:
         """Upload a file to the NAS via SYNO.FileStation.Upload (POST multipart).
 
-        This is the ONE case where POST is mandatory — the Upload API requires
-        multipart form data. All other DSM APIs use GET.
+        Returns the parsed data dict from the JSON response envelope.
+        """
+        api = "SYNO.FileStation.Upload"
+        if api not in self._api_cache:
+            from mcp_synology.core.errors import ApiNotFoundError
+
+            raise ApiNotFoundError(
+                f"API '{api}' not found. Call query_api_info() first.",
+                code=102,
+            )
+        # Pin to v2 — v3 uses JSON request format that is incompatible with
+        # our multipart POST. Same issue as CopyMove/Delete.
+        resolved_version = (
+            version if version is not None else min(self._api_cache[api].max_version, 2)
+        )
+        fields: dict[str, str] = {
+            "path": dest_folder,
+            "create_parents": str(create_parents).lower(),
+        }
+        # Only send overwrite=true. DSM reads overwrite=false as "skip": it answers success
+        # with data.blSkip=true and leaves the existing file alone. With the parameter
+        # omitted it fails with 414 (file exists) instead (#195, DSM 7.1 and 7.2.2).
+        if overwrite:
+            fields["overwrite"] = "true"
+        return await self.upload_multipart(
+            api,
+            "upload",
+            resolved_version,
+            fields,
+            file_path=file_path,
+            filename=filename,
+            timeout=timeout,
+        )
+
+    async def upload_multipart(
+        self,
+        api: str,
+        method: str,
+        version: int,
+        fields: dict[str, str],
+        *,
+        file_path: Path,
+        filename: str,
+        file_field: str = "file",
+        content_type: str = "application/octet-stream",
+        timeout: float = 300.0,
+        _is_retry: bool = False,
+    ) -> dict[str, Any]:
+        """Upload a file as a multipart POST: File Station's Upload, Photos' Upload.Item.
+
+        ``fields`` are sent as form fields, already encoded as the API expects them
+        (JSON-format APIs need JSON-encoded strings); ``api``/``method``/``version`` go
+        with them. The file part comes last, named ``file_field``.
 
         The file is opened (or re-opened on retry) within this method so the
         stream is always fresh.
 
         Returns the parsed data dict from the JSON response envelope.
         """
-        api = "SYNO.FileStation.Upload"
         http = self._get_http()
 
         if api not in self._api_cache:
@@ -581,38 +639,23 @@ class DsmClient:
                 code=102,
             )
 
-        info = self._api_cache[api]
-        # Pin to v2 — v3 uses JSON request format that is incompatible with
-        # our multipart POST. Same issue as CopyMove/Delete.
-        resolved_version = version if version is not None else min(info.max_version, 2)
-        url = f"{self._base_url}/webapi/{info.path}"
-
-        form_data: dict[str, str] = {
-            "api": api,
-            "version": str(resolved_version),
-            "method": "upload",
-            "path": dest_folder,
-            "create_parents": str(create_parents).lower(),
-        }
-        # Only send overwrite=true. DSM reads overwrite=false as "skip": it answers success
-        # with data.blSkip=true and leaves the existing file alone. With the parameter
-        # omitted it fails with 414 (file exists) instead (#195, DSM 7.1 and 7.2.2).
-        if overwrite:
-            form_data["overwrite"] = "true"
+        url = f"{self._base_url}/webapi/{self._api_cache[api].path}"
+        form_data: dict[str, str] = {"api": api, "version": str(version), "method": method}
+        form_data.update(fields)
         # SID must be a query parameter, not a form field — the Upload API
         # does not read _sid from multipart form data.
         query_params: dict[str, str] = {}
         if self._sid:
             query_params["_sid"] = self._sid
 
-        _sensitive = frozenset({"_sid"})
-        log_data = _log_safe(form_data, _sensitive)
+        log_data = _log_safe(form_data)
         retry_tag = " (retry)" if _is_retry else ""
         logger.debug(
-            "DSM POST%s: %s/upload v%d — %s, file=%s",
+            "DSM POST%s: %s/%s v%d — %s, file=%s",
             retry_tag,
             api,
-            resolved_version,
+            method,
+            version,
             log_data,
             filename,
         )
@@ -626,45 +669,54 @@ class DsmClient:
                 url,
                 params=query_params,
                 data=form_data,
-                files={"file": (filename, fh, "application/octet-stream")},
+                files={file_field: (filename, fh, content_type)},
                 timeout=httpx.Timeout(timeout),
             )
         except httpx.TransportError as e:
-            setattr(e, _DSM_CALL_ATTR, f"{api}/upload")
+            setattr(e, _DSM_CALL_ATTR, f"{api}/{method}")
             raise
         finally:
             fh.close()
 
-        _check_status(resp, f"{api}/upload")
+        _check_status(resp, f"{api}/{method}")
         body = resp.json()
 
         if body.get("success"):
-            logger.debug("DSM response: %s/upload — success", api)
+            logger.debug("DSM response: %s/%s — success", api, method)
             data: dict[str, Any] = body.get("data", {})
             return data
 
-        code = body.get("error", {}).get("code", 0)
-        logger.debug("DSM response: %s/upload — error code %d", api, code)
+        error = body.get("error", {})
+        code = error.get("code", 0)
+        logger.debug(
+            "DSM response: %s/%s — error code %d%s",
+            api,
+            method,
+            code,
+            error_detail(error.get("errors")),
+        )
 
         # Re-auth on session errors (file must be re-opened on retry)
         if code in _SESSION_ERROR_CODES and not _is_retry and self._re_auth_callback:
-            logger.info("Session error %d on %s/upload, attempting re-auth.", code, api)
+            logger.info("Session error %d on %s/%s, attempting re-auth.", code, api, method)
             try:
                 await self._re_auth_callback()
             except SynologyError:
                 raise error_from_code(code, api) from None
-            return await self.upload(
-                dest_folder,
-                file_path,
-                filename,
-                overwrite=overwrite,
-                create_parents=create_parents,
-                version=version,
+            return await self.upload_multipart(
+                api,
+                method,
+                version,
+                fields,
+                file_path=file_path,
+                filename=filename,
+                file_field=file_field,
+                content_type=content_type,
                 timeout=timeout,
                 _is_retry=True,
             )
 
-        raise error_from_code(code, api)
+        raise error_from_code(code, api, error.get("errors"))
 
     async def create_download_task_with_file(
         self,
@@ -777,9 +829,48 @@ class DsmClient:
         chunk_size: int = 65536,
         progress_callback: ProgressCallback | None = None,
         overwrite: bool = True,
-        _is_retry: bool = False,
     ) -> int:
         """Download a file from the NAS via SYNO.FileStation.Download (GET, binary).
+
+        See ``download_binary()``. Returns total bytes written.
+        """
+        api = "SYNO.FileStation.Download"
+        if api not in self._api_cache:
+            from mcp_synology.core.errors import ApiNotFoundError
+
+            raise ApiNotFoundError(
+                f"API '{api}' not found. Call query_api_info() first.",
+                code=102,
+            )
+        resolved_version = version if version is not None else self._api_cache[api].max_version
+        return await self.download_binary(
+            api,
+            "download",
+            resolved_version,
+            {"path": path, "mode": "download"},
+            dest_file,
+            timeout=timeout,
+            chunk_size=chunk_size,
+            progress_callback=progress_callback,
+            overwrite=overwrite,
+        )
+
+    async def download_binary(
+        self,
+        api: str,
+        method: str,
+        version: int,
+        params: dict[str, str],
+        dest_file: Path,
+        *,
+        timeout: float = 300.0,
+        chunk_size: int = 65536,
+        progress_callback: ProgressCallback | None = None,
+        overwrite: bool = True,
+        _is_retry: bool = False,
+    ) -> int:
+        """Stream a binary DSM reply (GET) to ``dest_file``: File Station's Download,
+        Photos' Download and Thumbnail.
 
         Streams the response to a temp file (``.mcp-synology-*.part``) next to ``dest_file`` and
         renames it onto ``dest_file`` only after the whole body is written, so
@@ -791,9 +882,11 @@ class DsmClient:
 
         Checks Content-Length against local disk free space before writing.
         If the NAS returns a JSON error envelope (Content-Type: application/json)
-        instead of binary data, parses and raises the appropriate exception.
+        instead of binary data, parses and raises the appropriate exception. An HTTP
+        error status without one raises ``FileStationError`` for File Station (as
+        before) and ``DsmHttpError`` for any other API (Photos answers a thumbnail
+        that isn't generated yet with a 404 HTML page).
         """
-        api = "SYNO.FileStation.Download"
         http = self._get_http()
 
         if api not in self._api_cache:
@@ -804,32 +897,26 @@ class DsmClient:
                 code=102,
             )
 
-        info = self._api_cache[api]
-        resolved_version = version if version is not None else info.max_version
-        url = f"{self._base_url}/webapi/{info.path}"
-
-        params: dict[str, str] = {
-            "api": api,
-            "version": str(resolved_version),
-            "method": "download",
-            "path": path,
-            "mode": "download",
-        }
+        url = f"{self._base_url}/webapi/{self._api_cache[api].path}"
+        req_params: dict[str, str] = {"api": api, "version": str(version), "method": method}
+        req_params.update(params)
         if self._sid:
-            params["_sid"] = self._sid
+            req_params["_sid"] = self._sid
 
-        _sensitive = frozenset({"_sid"})
-        log_params = _log_safe(params, _sensitive)
+        log_params = _log_safe(req_params)
         retry_tag = " (retry)" if _is_retry else ""
         logger.debug(
-            "DSM GET%s: %s/download v%d — %s",
+            "DSM GET%s: %s/%s v%d — %s",
             retry_tag,
             api,
-            resolved_version,
+            method,
+            version,
             log_params,
         )
 
-        async with http.stream("GET", url, params=params, timeout=httpx.Timeout(timeout)) as resp:
+        async with http.stream(
+            "GET", url, params=req_params, timeout=httpx.Timeout(timeout)
+        ) as resp:
             # Check for HTTP-level errors (502, 404, etc.) before reading body.
             # Some DSM errors come back as HTTP errors rather than JSON envelopes.
             if resp.status_code >= 400:
@@ -837,9 +924,11 @@ class DsmClient:
                 body_bytes = await resp.aread()
                 try:
                     body = json.loads(body_bytes)
-                    code = body.get("error", {}).get("code", 0)
-                    raise error_from_code(code, api)
+                    error = body.get("error", {})
+                    raise error_from_code(error.get("code", 0), api, error.get("errors"))
                 except (json.JSONDecodeError, KeyError):
+                    if "FileStation" not in api:
+                        _check_status(resp, f"{api}/{method}")
                     from mcp_synology.core.errors import FileStationError
 
                     raise FileStationError(
@@ -854,19 +943,22 @@ class DsmClient:
             if "application/json" in content_type:
                 body_bytes = await resp.aread()
                 body = json.loads(body_bytes)
-                code = body.get("error", {}).get("code", 0)
-                logger.debug("DSM response: %s/download — error code %d", api, code)
+                error = body.get("error", {})
+                code = error.get("code", 0)
+                logger.debug("DSM response: %s/%s — error code %d", api, method, code)
 
                 if code in _SESSION_ERROR_CODES and not _is_retry and self._re_auth_callback:
-                    logger.info("Session error %d on %s/download, attempting re-auth.", code, api)
+                    logger.info("Session error %d on %s/%s, attempting re-auth.", code, api, method)
                     try:
                         await self._re_auth_callback()
                     except SynologyError:
                         raise error_from_code(code, api) from None
-                    return await self.download(
-                        path,
+                    return await self.download_binary(
+                        api,
+                        method,
+                        version,
+                        params,
                         dest_file,
-                        version=version,
                         timeout=timeout,
                         chunk_size=chunk_size,
                         progress_callback=progress_callback,
@@ -874,7 +966,7 @@ class DsmClient:
                         _is_retry=True,
                     )
 
-                raise error_from_code(code, api)
+                raise error_from_code(code, api, error.get("errors"))
 
             # Check disk space before writing
             content_length = resp.headers.get("content-length")
@@ -921,7 +1013,7 @@ class DsmClient:
                 raise
 
             logger.debug(
-                "DSM response: %s/download — success (%d bytes written)", api, bytes_written
+                "DSM response: %s/%s — success (%d bytes written)", api, method, bytes_written
             )
             return bytes_written
 
