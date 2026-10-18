@@ -38,7 +38,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 POLL_INTERVAL = 1.0
-_HANDLE = re.compile(r"^photos:(\d{1,12})$")
+_HANDLE = re.compile(r"^photos:([0-9]{1,12})$")  # \d would take "５" as 5
 _DECORATION = " \t\r\n`'\"*.,;:()[]<>"
 _CONFLICT = {"skip": "skip", "overwrite": "overwrite"}
 _LIBRARY = {"personal": "personal_space", "shared": "shared_space"}

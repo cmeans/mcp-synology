@@ -290,6 +290,13 @@ class TestPhotoTask:
         with pytest.raises(ToolError):
             parse_handle("Op", "delete:FileStation_1")
 
+    @pytest.mark.parametrize("handle", ["photos:\uff15", "photos:\u0665", "photos:\u00b2"])
+    def test_parse_handle_takes_ascii_digits_only(self, handle: str) -> None:
+        """A fullwidth or Arabic-Indic digit isn't task 5 (as #272's album IDs)."""
+        with pytest.raises(ToolError) as exc:
+            parse_handle("Op", handle)
+        assert _error(exc)["param"] == "handle"
+
     @respx.mock
     async def test_status(self) -> None:
         fake = FakePhotos().on(INFO, "get_status", 1, captured("bg-copy-status"))
