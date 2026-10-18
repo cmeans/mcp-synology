@@ -154,11 +154,13 @@ Two required sections:
        requires branches to be up to date, so the PR can't merge until
        you update it. Rebase onto `main`, or use GitHub's "Update
        branch" button.
-     - **`Rebuilds vdsm image`** (informational): the PR changes the vdsm
-       bake files, so its vdsm runs rebuild the test image, about 10 extra
-       minutes per DSM version.
      - **`Merge conflict`:** your branch no longer merges cleanly.
        Rebase onto `main` and resolve the conflicts.
+   - **`Rebuilds vdsm image`** is informational and doesn't block the
+     merge. It's set automatically when the PR changes the vdsm bake
+     files, so its vdsm runs rebuild the test image (about 10 extra
+     minutes per DSM version). It's removed if a later push drops those
+     changes.
 4. **Final maintainer review and merge.** Once QA is clean, the
    maintainer does a final review and merges the PR. All PRs are
    squash-merged. Your branch is auto-deleted after merge.
