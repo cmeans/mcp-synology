@@ -235,6 +235,8 @@ class TestEditPhoto:
             ({"rating": 6}, "rating"),
             ({"taken_time": "2020-01-01", "shift_hours": 1}, "shift_hours"),
             ({"rotate": "flip"}, "rotate"),
+            ({"shift_hours": float("inf")}, "shift_hours"),
+            ({"shift_hours": float("nan")}, "shift_hours"),
             ({"taken_time": "yesterday"}, "taken_time"),
             ({}, "ids"),
         ],

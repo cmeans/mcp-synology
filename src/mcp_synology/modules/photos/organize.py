@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import datetime
 import logging
+import math
 from typing import TYPE_CHECKING, Any
 
 from mcp_synology.core.errors import SynologyError
@@ -203,6 +204,10 @@ async def edit_photo(
         invalid(op, "rating must be 0–5 (0 clears it).", param="rating", value=rating)
     if taken_time is not None and shift_hours is not None:
         invalid(op, "pass taken_time or shift_hours, not both.", param="shift_hours")
+    if shift_hours is not None and not math.isfinite(shift_hours):
+        invalid(
+            op, "shift_hours must be a finite number.", param="shift_hours", value=str(shift_hours)
+        )
     if rotate is not None and rotate not in _ROTATE:
         invalid(
             op, f"unknown rotate {rotate!r}.", param="rotate", value=rotate, valid=list(_ROTATE)

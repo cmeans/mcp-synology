@@ -29,8 +29,9 @@ _ANNO_LOCAL_WRITE = ToolAnnotations(read_only_hint=False, destructive_hint=True)
 # Clients may auto-approve tools that don't claim destructiveHint. Every Photos write
 # can lose something: a replaced name, rating, description, cover or share setting, a
 # removed tag or album member, merged people, a deleted request or album. Annotations
-# can't depend on action (#183). The setters are idempotent: repeating one changes
-# nothing more.
+# can't depend on action (#183). The setters that only set absolute values are
+# idempotent: repeating one changes nothing more. edit_photo isn't: shift_hours and
+# rotate are relative, so a client's retry would shift or rotate again.
 _ANNO_DESTRUCTIVE = ToolAnnotations(read_only_hint=False, destructive_hint=True)
 _ANNO_DESTRUCTIVE_IDEMPOTENT = ToolAnnotations(
     read_only_hint=False, destructive_hint=True, idempotent_hint=True
@@ -189,7 +190,7 @@ MODULE_INFO = ModuleInfo(
                 "space: personal (default) or shared."
             ),
             permission_tier=PermissionTier.WRITE,
-            annotations=_ANNO_DESTRUCTIVE_IDEMPOTENT,
+            annotations=_ANNO_DESTRUCTIVE,
         ),
         ToolInfo(
             name="edit_person",

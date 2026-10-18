@@ -111,7 +111,17 @@ class TestCreate:
 
     @pytest.mark.parametrize(
         "condition",
-        [{}, {"type": "all"}, {"tags_match": "all"}, {"color": "red"}, {"type": "raw", "tags": []}],
+        [
+            {},
+            {"type": "all"},
+            {"tags_match": "all"},
+            {"color": "red"},
+            {"type": "raw", "tags": []},
+            {"type": ["photo"]},
+            {"places": ["Chicago"]},
+            {"places": [1.5]},
+            {"places": ["\uff15"]},
+        ],
     )
     @respx.mock
     async def test_bad_conditions_refused(self, condition: dict[str, Any]) -> None:
@@ -211,6 +221,7 @@ class TestChange:
             ({"action": "add", "album": "1"}, "ids"),
             ({"action": "set_cover", "album": "1", "ids": [1, 2]}, "ids"),
             ({"action": "create_smart", "name": "x"}, "condition"),
+            ({"action": "create", "name": "x", "ids": list(range(1001))}, "ids"),
         ],
     )
     async def test_refusals(self, kwargs: dict[str, Any], param: str) -> None:
@@ -304,6 +315,8 @@ class TestShareLink:
             ({"action": "share", "expires": "soon"}, "expires"),
             ({"action": "share", "members": [{"type": "user"}]}, "members"),
             ({"action": "share", "members": [{"name": "a", "role": "own"}]}, "members"),
+            ({"action": "update"}, "action"),
+            ({"action": "update", "members": []}, "action"),
         ],
     )
     async def test_refusals(self, kwargs: dict[str, Any], param: str) -> None:
@@ -348,3 +361,16 @@ class TestDeleteAlbums:
     async def test_empty(self) -> None:
         with pytest.raises(ToolError):
             await delete_photo_albums(make_client(), albums=[])
+
+    @pytest.mark.parametrize("value", ["\u00b2", "\uff15"])
+    @respx.mock
+    async def test_non_ascii_digits_are_names(self, value: str) -> None:
+        """A superscript or fullwidth digit is a name, not album id 5 (or a crash)."""
+        albums = {"list": [{"id": 5, "name": "Five"}]}
+        fake = FakePhotos().on(ALBUM, "list", 2, albums)
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await delete_photo_albums(client, albums=[value])
+        assert out.startswith("No albums deleted.")
+        assert not fake.of(ALBUM, "delete")

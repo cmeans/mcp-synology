@@ -113,7 +113,7 @@ async def photo_album(
         invalid(op, f"action={action} needs album.", param="album")
     if action in ("create", "create_smart", "rename", "copy") and not (name or "").strip():
         invalid(op, f"action={action} needs name.", param="name", value=name)
-    if action in ("add", "remove", "set_cover"):
+    if action in ("add", "remove", "set_cover") or (action == "create" and ids):
         check_ids(op, ids or [])
     if action == "set_cover" and len(ids or []) != 1:
         invalid(op, "set_cover takes exactly one id.", param="ids", value=ids)
@@ -325,6 +325,12 @@ async def _condition(ph: Photos, given: dict[str, Any]) -> dict[str, Any]:
         cond["general_tag"] = [i for i in ids.values() if i is not None]
         cond["general_tag_policy"] = policy("tags")
     if places := as_list("places"):
+        if not all(
+            (isinstance(p, int) and not isinstance(p, bool))
+            or (isinstance(p, str) and p.isascii() and p.isdigit())
+            for p in places
+        ):
+            invalid(op, "condition places are place ids.", param="condition", value=places)
         cond["geocoding"] = [await ph.place_node(int(p), param="condition") for p in places]
     start, end = given.get("start_date"), given.get("end_date")
     if start or end:
@@ -335,7 +341,7 @@ async def _condition(ph: Photos, given: dict[str, Any]) -> dict[str, Any]:
             span["end_time"] = parse_date(op, "condition.end_date", str(end), end=True)
         cond["time"] = [span]
     kind = given.get("type", "all")
-    if kind not in _TYPE:
+    if not isinstance(kind, str) or kind not in _TYPE:
         invalid(op, "condition type must be all, photo or video.", param="condition", value=kind)
     cond["item_type"] = _TYPE[kind]
     if ratings := as_list("ratings"):
@@ -381,6 +387,13 @@ async def photo_share_link(
         )
     if action == "stop" and any(v is not None for v in (public, password, expires, members)):
         invalid(op, "action=stop takes no settings.", param="action", value=action)
+    if action == "update" and all(v is None for v in (public, password, expires)) and not members:
+        invalid(
+            op,
+            "nothing to change: pass public, password, expires or members.",
+            param="action",
+            value=action,
+        )
     expiration = None
     if expires is not None:
         expiration = 0 if expires == "never" else parse_date(op, "expires", expires, end=True)
@@ -533,7 +546,7 @@ async def delete_photo_albums(client: DsmClient, *, albums: list[str]) -> str:
             text = str(value).strip()
             matches = (
                 [by_id[int(text)]]
-                if text.isdigit() and int(text) in by_id
+                if text.isascii() and text.isdigit() and int(text) in by_id
                 else [a for a in existing if str(a.get("name", "")).casefold() == text.casefold()]
             )
             if not matches:

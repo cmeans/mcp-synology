@@ -138,7 +138,7 @@ DSM answers **success** for these when an ID doesn't exist (verified on both ver
 
 So the ID check below catches this case too, before anything is sent: an item the user can't see comes back missing from `get`, and is reported as "not found, or no permission for its Shared Space folder". Deletes also use the background task, which answers 803 on its own (see Deletes).
 
-So every tool that takes IDs **checks them first** (one `get` or `list` call) and reports unknown IDs as `not_found` without sending the write. `error_list` in a reply lists IDs DSM did reject (seen for `add_tag` on an item still being indexed); those are reported per item.
+So every tool that takes IDs **checks them first** (one `get` or `list` call) and sends the write only for the IDs that exist. The reply lists the others on a "Not found" line; when none exist, nothing is sent. The two `set_cover` actions refuse an unknown ID outright with `not_found`. `error_list` in a reply lists IDs DSM did reject (seen for `add_tag` on an item still being indexed); those are reported per item.
 
 ### Missing features (by API, not by choice)
 
@@ -736,7 +736,7 @@ Photos rewrites tagged files, so their dates and sizes change.
 | `rotate` | `str` | No | — | `left` (`counter_clockwise`, verified) or `right` (`clockwise`, verified on both). |
 | `favorite` | `bool` | No | — | 1.9.1+ (verified set and unset). On 1.3.4, `not_supported`. |
 
-**Annotations:** `destructiveHint=true`, `idempotentHint=true`: each field replaces the previous value (a description or taken time is lost), and repeating the call changes nothing more.
+**Annotations:** `destructiveHint=true`: each field replaces the previous value (a description or taken time is lost). Not `idempotentHint`: `shift_hours` and `rotate` are relative, so repeating the call (a client's retry after a timeout, say) shifts the time or rotates again.
 
 **Response shape:**
 

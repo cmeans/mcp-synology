@@ -55,7 +55,7 @@ def test_every_write_is_destructive() -> None:
     for name in _WRITE:
         assert tools[name].annotations.destructive_hint is True, name
     idempotent = {n for n in _WRITE if tools[n].annotations.idempotent_hint}
-    assert idempotent == {"photo_folder", "edit_photo", "edit_person"}
+    assert idempotent == {"photo_folder", "edit_person"}
     assert tools["photo_folder"].title == "Photos: Folder"
 
 
