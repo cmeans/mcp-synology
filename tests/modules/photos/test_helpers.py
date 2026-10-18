@@ -173,10 +173,41 @@ class TestFolders:
 
     @respx.mock
     async def test_folder_path_unreadable(self) -> None:
-        install(FakePhotos().error("SYNO.Foto.Browse.Folder", "get", 2, 642))
+        fake = FakePhotos().error("SYNO.Foto.Browse.Folder", "get", 2, 642)
+        install(fake)
         client = make_client()
         async with client:
-            assert await Photos(client, "personal", "Op").folder_path(77) == "folder 77"
+            ph = Photos(client, "personal", "Op")
+            assert await ph.folder_path(77) == "folder 77"
+            assert await ph.folder_path(77) == "folder 77"
+        assert len(fake.calls) == 1  # no such folder: kept for the call
+
+    @respx.mock
+    async def test_folder_path_other_error_logged_and_retried(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        fake = FakePhotos().error("SYNO.Foto.Browse.Folder", "get", 2, 117)
+        install(fake)
+        client = make_client()
+        caplog.set_level("DEBUG", logger="mcp_synology.modules.photos.helpers")
+        async with client:
+            ph = Photos(client, "personal", "Op")
+            assert await ph.folder_path(77) == "folder 77"
+            assert await ph.folder_path(77) == "folder 77"
+        assert len(fake.calls) == 2  # may pass next time, so not kept
+        assert "Folder 77 path lookup failed" in caplog.text
+
+    @respx.mock
+    async def test_non_ascii_digits_are_a_name(self) -> None:
+        """'²'.isdigit() is True but int('²') raises: it's looked up as a path."""
+        fake = FakePhotos().error("SYNO.Foto.Browse.Folder", "get", 2, 642)
+        install(fake)
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await Photos(client, "personal", "Op").folder("²")
+        assert _error(exc)["code"] == "not_found"
+        assert fake.one("SYNO.Foto.Browse.Folder", "get").params == {"name": "/²"}
 
 
 class TestNames:
@@ -265,3 +296,16 @@ class TestNames:
         async with client:
             ids = await Photos(client, "personal", "Op").tag_ids(["beach", "2024", "X", "x2"])
         assert ids == {"beach": 3, "2024": 4, "X": 6, "x2": None}
+
+    @respx.mock
+    async def test_tag_ids_ambiguous_casefold_refused_with_candidates(self) -> None:
+        tags = {"list": [{"id": 3, "name": "Beach"}, {"id": 7, "name": "beach"}]}
+        install(FakePhotos().on("SYNO.Foto.Browse.GeneralTag", "list", 1, tags))
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await Photos(client, "personal", "Op").tag_ids(["BEACH"])
+        err = _error(exc)
+        assert err["code"] == "invalid_parameter"
+        assert err["param"] == "tag"
+        assert "3 (Beach)" in str(err["message"]) and "7 (beach)" in str(err["message"])

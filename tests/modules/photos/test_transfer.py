@@ -136,6 +136,54 @@ class TestOriginals:
             )
         assert "Shared Space" in out
 
+    @pytest.mark.parametrize("overwrite", [False, True])
+    @respx.mock
+    async def test_same_filename_twice_keeps_both(self, tmp_path: Path, overwrite: bool) -> None:
+        """Items in different folders can share a filename; the second gets its ID
+        added instead of replacing (or being refused by) the first's file."""
+        items = _items("ready", "ready")
+        for item in items["list"]:
+            item["filename"] = "IMG_0001.jpg"
+        fake = FakePhotos().on(ITEM, "get", 2, items)
+        fake.on("SYNO.Foto.Download", "download", 1, binary(b"one"), binary(b"two!"))
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await download_photos(
+                client,
+                ids=[12, 15],
+                dest_folder=str(tmp_path),
+                overwrite=overwrite,
+                allowed_roots=[tmp_path],
+            )
+        assert (tmp_path / "IMG_0001.jpg").read_bytes() == b"one"
+        assert (tmp_path / "IMG_0001_15.jpg").read_bytes() == b"two!"
+        assert "Downloaded 2 of 2" in out
+        assert "15  IMG_0001_15.jpg  " in out
+
+    @respx.mock
+    async def test_dsm_not_answering_stops_and_names_the_rest(self, tmp_path: Path) -> None:
+        items = _items("ready", "ready")
+        third = json.loads(json.dumps(items["list"][1]))
+        third.update(id=16, filename="third.jpg")
+        items["list"].append(third)
+
+        def timeout(_params: dict[str, Any]) -> httpx.Response:
+            raise httpx.ReadTimeout("timed out")
+
+        fake = FakePhotos().on(ITEM, "get", 2, items)
+        fake.on("SYNO.Foto.Download", "download", 1, binary(b"one"), timeout)
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await download_photos(
+                client, ids=[12, 15, 16], dest_folder=str(tmp_path), allowed_roots=[tmp_path]
+            )
+        assert out.startswith("Downloaded 1 of 3")
+        assert "15  beach-sunset_1.jpg: not downloaded: couldn't reach DSM (ReadTimeout)" in out
+        assert "not tried: 16" in out
+        assert len(fake.of("SYNO.Foto.Download")) == 2
+
 
 class TestPreviews:
     @respx.mock
@@ -153,6 +201,23 @@ class TestPreviews:
         assert thumb.params == {"id": 12, "cache_key": "12_1792274689", "type": "unit", "size": "m"}
         assert (tmp_path / "forest-trail_m.jpg").read_bytes() == b"jpeg"
         assert "isn't generated yet (converting); try again shortly" in out
+
+    @respx.mock
+    async def test_previews_sharing_a_stem_keep_both(self, tmp_path: Path) -> None:
+        """a.jpg and a.png both preview as a_m.jpg."""
+        items = _items("ready", "ready")
+        items["list"][0]["filename"] = "a.jpg"
+        items["list"][1]["filename"] = "a.png"
+        fake = FakePhotos().on(ITEM, "get", 2, items)
+        fake.on("SYNO.Foto.Thumbnail", "get", 2, binary(b"jpg"), binary(b"png"))
+        install(fake)
+        client = make_client()
+        async with client:
+            await download_photos(
+                client, ids=[12, 15], size="m", dest_folder=str(tmp_path), allowed_roots=[tmp_path]
+            )
+        assert (tmp_path / "a_m.jpg").read_bytes() == b"jpg"
+        assert (tmp_path / "a_m_15.jpg").read_bytes() == b"png"
 
     @respx.mock
     async def test_broken_preview(self, tmp_path: Path) -> None:

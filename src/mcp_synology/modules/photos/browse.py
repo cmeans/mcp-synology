@@ -241,7 +241,9 @@ async def _list(
         items = (await ph.call("Browse.Item", "list", params, version=V7)).get("list", [])
         info = await ph.call("Browse.Concept", "get", {"id": [concept]}, version=2)
         listed = info.get("list", [])
-        total = int(listed[0].get("item_count", 0)) if listed else len(items)
+        # Concept.get's reply shape isn't captured yet (spec open item 1): without it,
+        # no total rather than the page length posing as one.
+        total = int(listed[0].get("item_count", 0)) if listed else None
         name = listed[0].get("name", "") if listed else ""
         return await _render(
             ph, f"concept {name or concept}".strip(), [], _order(*sort), items, total, offset
@@ -491,7 +493,7 @@ async def _collections(
             [
                 str(e["id"]),
                 str(e.get("name", "")),
-                _privacy((e.get("additional") or {}).get("sharing_info")),
+                _folder_shared(e),
             ]
             for e in entries
         ]
@@ -519,6 +521,16 @@ def _privacy(info: dict[str, Any] | None) -> str:
     kind = str(info.get("privacy_type") or "private")
     shared = kind != "private" or bool(info.get("permission"))
     return kind if shared else "no"
+
+
+def _folder_shared(entry: dict[str, Any]) -> str:
+    """A folder's sharing state. 1.3.4 puts ``privacy_type`` in ``sharing_info``; on
+    1.9.1 ``sharing_info`` has only ``sharing_link`` and the state is the top-level
+    ``shared`` flag (both captured)."""
+    info = (entry.get("additional") or {}).get("sharing_info") or {}
+    if "privacy_type" in info:
+        return _privacy(info)
+    return "yes" if entry.get("shared") else "no"
 
 
 def _span(entry: dict[str, Any]) -> str:

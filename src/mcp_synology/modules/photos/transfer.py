@@ -9,6 +9,8 @@ import os
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import TYPE_CHECKING, Any
 
+import httpx
+
 from mcp_synology.core.errors import ErrorCode, SynologyError
 from mcp_synology.core.formatting import error_response, format_size, synology_error_response
 from mcp_synology.core.local_paths import refuse_outside_roots
@@ -37,12 +39,22 @@ def _safe_name(name: str, fallback: str) -> str:
     return name if plain else fallback
 
 
-def _dest_name(item: dict[str, Any], size: str) -> str:
+def _dest_name(item: dict[str, Any], size: str, used: set[str]) -> str:
+    """The local file name, unique within this call.
+
+    Items in different folders can share a filename (``IMG_0001.jpg``), and previews
+    of ``a.jpg`` and ``a.png`` are both ``a_m.jpg``; a repeat gets the item ID added
+    (``IMG_0001_41.jpg``), so one item never replaces another's file.
+    """
     item_id = item.get("id")
     name = _safe_name(str(item.get("filename") or ""), f"item-{item_id}")
-    if size == "original":
-        return name
-    return f"{PurePosixPath(name).stem or f'item-{item_id}'}_{size}.jpg"
+    if size != "original":
+        name = f"{PurePosixPath(name).stem or f'item-{item_id}'}_{size}.jpg"
+    if name.casefold() in used:
+        path = PurePosixPath(name)
+        name = f"{path.stem}_{item_id}{path.suffix}"
+    used.add(name.casefold())
+    return name
 
 
 async def download_photos(
@@ -107,7 +119,8 @@ async def download_photos(
     found = {int(i["id"]): i for i in data.get("list", [])}
     lines: list[str] = []
     done = 0
-    for item_id in unique:
+    used: set[str] = set()
+    for n, item_id in enumerate(unique):
         item = found.get(item_id)
         if item is None:
             why = "not found"
@@ -115,8 +128,19 @@ async def download_photos(
                 why += ", or no permission for its Shared Space folder"
             lines.append(f"  {item_id}  not downloaded: {why}")
             continue
-        name = _dest_name(item, size)
-        result = await _download_one(ph, item, size, local_dir / name, overwrite=overwrite)
+        name = _dest_name(item, size, used)
+        try:
+            result = await _download_one(ph, item, size, local_dir / name, overwrite=overwrite)
+        except httpx.TransportError as e:
+            # DSM didn't answer (a dropped connection or a timeout): the rest would most
+            # likely wait out the same timeout, so stop and say which weren't tried.
+            lines.append(
+                f"  {item_id}  {name}: not downloaded: couldn't reach DSM ({type(e).__name__})"
+            )
+            rest = unique[n + 1 :]
+            if rest:
+                lines.append(f"  not tried: {', '.join(str(i) for i in rest)}")
+            break
         if result.startswith("not downloaded"):
             lines.append(f"  {item_id}  {name}: {result}")
         else:

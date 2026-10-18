@@ -189,7 +189,7 @@ class Photos:
         """A folder by ID or by path inside the space (``/`` is the root)."""
         text = value.strip()
         try:
-            if text.isdigit():
+            if text.isascii() and text.isdigit():
                 params: dict[str, Any] = {"id": int(text)}
             elif text in ("", "/"):
                 params = {"id": 0}
@@ -218,9 +218,15 @@ class Photos:
         if folder_id not in self._folder_paths:
             try:
                 data = await self.call("Browse.Folder", "get", {"id": folder_id}, version=2)
-                self._folder_paths[folder_id] = str(data["folder"].get("name", ""))
-            except SynologyError:
+            except SynologyError as e:
+                # Only a label: the row still shows, as "folder N". 642 (no such
+                # folder) is kept for the call; anything else may pass, so it's retried.
+                logger.debug("Folder %d path lookup failed: %s (code %s)", folder_id, e, e.code)
+                if e.code != 642:
+                    return f"folder {folder_id}"
                 self._folder_paths[folder_id] = f"folder {folder_id}"
+            else:
+                self._folder_paths[folder_id] = str(data["folder"].get("name", ""))
         return self._folder_paths[folder_id]
 
     # -- names --------------------------------------------------------------
@@ -238,7 +244,7 @@ class Photos:
     ) -> dict[str, Any]:
         """Resolve an ID (digits; tried first) or a unique case-insensitive name."""
         text = value.strip()
-        if text.isdigit():
+        if text.isascii() and text.isdigit():
             suffix, version, extra = get
             try:
                 data = await self.call(
@@ -294,23 +300,35 @@ class Photos:
             hint="list_photo_collections type=person include_hidden=true lists people.",
         )
 
-    async def tag_ids(self, names: list[str]) -> dict[str, int | None]:
+    async def tag_ids(self, names: list[str], *, param: str = "tag") -> dict[str, int | None]:
         """Each tag name's current ID (``None`` if no item has it), looked up now.
 
-        Never cached: tag IDs can change when Photos 1.9.1 re-indexes a file.
+        An exact name wins; otherwise a case-insensitive match must be unique, and
+        several (``Beach`` and ``beach``, asked as ``BEACH``) are refused with the
+        candidates, as for folders, albums and people. Never cached: tag IDs can
+        change when Photos 1.9.1 re-indexes a file.
         """
         tags = await self.walk("Browse.GeneralTag")
         exact = {str(t.get("name", "")): int(t["id"]) for t in tags}
-        folded: dict[str, list[int]] = {}
+        folded: dict[str, list[dict[str, Any]]] = {}
         for t in tags:
-            folded.setdefault(str(t.get("name", "")).casefold(), []).append(int(t["id"]))
+            folded.setdefault(str(t.get("name", "")).casefold(), []).append(t)
         out: dict[str, int | None] = {}
         for name in names:
             if name in exact:
                 out[name] = exact[name]
-            else:
-                ids = folded.get(name.casefold(), [])
-                out[name] = ids[0] if len(ids) == 1 else None
+                continue
+            matches = folded.get(name.casefold(), [])
+            if len(matches) > 1:
+                listed = ", ".join(f"{m['id']} ({m.get('name', '')})" for m in matches[:10])
+                invalid(
+                    self.operation,
+                    f"{len(matches)} tags match {name!r} ignoring case: {listed}.",
+                    param=param,
+                    value=name,
+                    suggestion="Pass the tag's exact name.",
+                )
+            out[name] = int(matches[0]["id"]) if matches else None
         return out
 
 

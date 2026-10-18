@@ -182,6 +182,20 @@ class TestListPhotosRouting:
         assert "concept dog" in out
 
     @respx.mock
+    async def test_concept_without_get_result_gives_no_total(self) -> None:
+        """Concept.get's shape isn't captured: without it, no total, never the page length."""
+        rows = captured("fav_list-folder-favorite-only-v7", CAPTURE_191)
+        fake = FakePhotos().on(ITEM, "list", 7, rows)
+        fake.on("SYNO.Foto.Browse.Concept", "get", 2, {"list": []})
+        fake.on(FOLDER, "get", 2, {"folder": {"id": 31, "name": "/trips"}})
+        install(fake)
+        client = make_client(CAPTURE_191)
+        async with client:
+            out = await list_photos(client, concept=1, offset=50)
+        assert "total" not in out
+        assert "Showing 51–52. Pass offset=52 for the next page." in out
+
+    @respx.mock
     async def test_indexing_row_marked(self) -> None:
         rows = captured("item-list-v2")
         rows["list"][0]["additional"]["resolution"] = {"width": 0, "height": 0}
@@ -306,6 +320,29 @@ class TestCollections:
             out = await list_photo_collections(client, type="folder", parent="/mcp-spec-capture")
         assert fake.one(FOLDER, "list").params["id"] == 10
         assert "/mcp-spec-capture/2024" in out
+
+    @respx.mock
+    async def test_folders_shared_flag_on_191(self) -> None:
+        """1.9.1's sharing_info has only sharing_link; the state is the top-level flag."""
+        listed = captured("folder-list", CAPTURE_191)
+        listed["list"][0]["shared"] = True
+        fake = (
+            FakePhotos()
+            .on(FOLDER, "get", 2, {"folder": {"id": 21, "name": "/mcp-spec-capture"}})
+            .on(FOLDER, "list", 2, listed)
+        )
+        install(fake)
+        client = make_client(CAPTURE_191)
+        async with client:
+            out = await list_photo_collections(client, type="folder", parent="21")
+        rows = {
+            line.split()[1]: line.split()[-1]
+            for line in out.splitlines()
+            if len(line.split()) == 3 and line.split()[0].isdigit()
+        }
+        first = str(listed["list"][0]["name"])
+        assert rows.pop(first) == "yes"
+        assert set(rows.values()) == {"no"}
 
     @respx.mock
     async def test_shared_with_me_empty(self) -> None:

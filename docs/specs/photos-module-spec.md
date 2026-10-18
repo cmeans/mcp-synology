@@ -282,7 +282,7 @@ The heading names the source (folder path, album, person, tag, place, concept or
   - **Everything else** (no source; `person`; `tag`; a folder with filters; any filter): `list_with_filter`, total from `count_with_filter` with the same keys. Filter keys are lists of IDs: `folder: [id]`, `person`, `general_tag`, `time: [{start_time, end_time}]`, `item_type` (`[-1]` photos, `[-2]` videos), `rating` (`[min..5]`), and on 1.9.1 `favorite: [true]` (v7). With no keys it lists the whole space. `Item.list` outside a folder view (no source, `general_tag_id`) **ignores `sort_by`**, and `list_with_filter` honors it, which is why the tool avoids `Item.list` there. With `person` or `general_tag`, `count_with_filter` answers **120 unless `person_policy`/`general_tag_policy` is sent** (`"or"`, as the web client does).
   - **`place`:** `Item.list` with `geocoding_id`, total from `Item.count` `geocoding_id` (both verified). It can't be combined: `list_with_filter`'s `geocoding` key takes the address-tree node IDs from `Search.Filter list` (Chicago was node 4 there and place 5 in `Geocoding.list`), so a place ID matched nothing there. It's refused locally with `invalid_parameter`.
   - **`album`:** `Item.list` with `album_id` (normal and smart albums alike, verified), total from the album's `item_count`; `list_with_filter` has no album key, so combining is refused locally.
-  - **`concept`** (1.9.1): `Item.list` v7 with `concept_id`, total from `Browse.Concept get`'s `item_count`; combining is refused locally (no concept filter key).
+  - **`concept`** (1.9.1): `Item.list` v7 with `concept_id`, total from `Browse.Concept get`'s `item_count`; combining is refused locally (no concept filter key). **Unverified:** no capture has a concept (vdsm forms none without a GPU), so `Concept get`'s reply shape and `list_photo_collections`' `visibility` values come from the web client. Without a `get` result the footer gives no total, never the page length.
 - `keyword` uses `Search.Search list_item` and `count_item`, in DSM's order (`sort_by` is ignored there). It matches filename substrings and tag names (verified on 7.1: `beach` found `beach-sunset.jpg`, and a tag's name found its three items). New uploads appear in search only after Photos indexes them. Description matching comes from the web client.
 - `Item.list` runs at v2 because v1 rejects `rating` in `additional` (120, `reason: condition`, verified on both); v7 on 1.9.1 when `favorite` or `concept` is involved.
 - Rows show `taken` from `time`; an item still being indexed shows its upload time (see Indexing lag).
@@ -402,14 +402,15 @@ Originals or thumbnails to a local folder.
 **Response shape:**
 
 ```
-Downloaded 2 of 3 item(s) to /home/user/Downloads (original)
-  41  beach-sunset.jpg   50.1 KiB
-  36  clip-test.mp4      22.2 KiB
-  12  not downloaded: the m preview isn't generated yet (converting); try again shortly
+Downloaded 2 of 3 item(s) to /home/user/Downloads (original, personal space)
+  41  beach-sunset.jpg  50.1 KiB
+  36  clip-test.mp4  22.2 KiB
+  12  IMG_0001.jpg: not downloaded: the file exists (overwrite=true replaces it)
 ```
 
 **Design notes:**
-- **One request per item**, written under its filename (`<stem>_<size>.jpg` for previews). Two or more `item_id`s in one request make DSM return a zip (verified, `application/zip`), which the tool avoids so names and errors stay per item.
+- **One request per item**, written under its filename (`<stem>_<size>.jpg` for previews). Names are unique within a call: items in different folders can share a filename, and previews of `a.jpg` and `a.png` are both `a_m.jpg`, so a repeat gets the item ID added (`IMG_0001_41.jpg`) and one item never replaces another's file.
+- **DSM not answering** (a dropped connection or a timeout) stops the call: that item's line names the error type, and the items after it are listed as not tried. A DSM error code or a local write error stays on its item's line, and the rest go on. Two or more `item_id`s in one request make DSM return a zip (verified, `application/zip`), which the tool avoids so names and errors stay per item.
 - A preview needs the item's thumbnail status `ready` for that size (from `get` with `additional: ["thumbnail"]`). `converting` gets 404/HTML from DSM (verified), reported as not generated yet; `broken` (e.g. `preview` for photos) as unavailable.
 - `cache_key` isn't checked by DSM (a bogus key still returned the image on both versions), but the tool sends the real one, as the client does.
 - Uses `DsmClient.download_binary()` (streamed, written to a temp file then renamed), with the local-path confinement File Station's `download_file` uses.
@@ -961,8 +962,8 @@ Maintainer, 2026-10-17 (the first group), with the 1.9.1-only additions found af
 
 ## Remaining Open Items
 
-1. **From the web client only, checked at the implementation PR's vdsm gate:** keyword search over descriptions (tags verified); `rotate=right`; a same-name folder in one parent; cross-space copy and move (`extra_info`); `BackgroundTask.File delete` with an unknown ID; re-sharing after `stop`; the recycle-bin flags turning off when a share's recycle bin is off; whether a Shared Space favorite is per user; error 901 (People disabled); People and concepts on vdsm (clusters may not form without a GPU; then they're fixture- and real-NAS-tested only); a Shared Space user **with** folder view rights trying to edit or delete (needs `FolderPermission`, out of scope; the entry-only case is verified).
-2. **A 119 right after login** was seen once on 7.2.2 (the first call of a fresh session; the retry was clean). It looks like #176's flake; the client's normal re-auth covers it.
+1. **From the web client only, checked at the implementation PR's vdsm gate:** keyword search over descriptions (tags verified); `rotate=right`; a same-name folder in one parent; cross-space copy and move (`extra_info`); `BackgroundTask.File delete` with an unknown ID; re-sharing after `stop`; the recycle-bin flags turning off when a share's recycle bin is off; whether a Shared Space favorite is per user; error 901 (People disabled); People and concepts on vdsm (clusters may not form without a GPU; then they're fixture- and real-NAS-tested only); `Browse.Concept get`'s reply shape and concept `visibility` values (no capture has a concept, so the tool's handling of both is unverified until a real-NAS check); a Shared Space user **with** folder view rights trying to edit or delete (needs `FolderPermission`, out of scope; the entry-only case is verified).
+2. **A 119 right after login** was seen once on 7.2.2 (the first call of a fresh session; the retry was clean). The cause was #176: DSM misreads some session IDs as `_sid`; #271 sends the session as the `id` cookie.
 3. **Out of scope:** see Resolved Design Decision 6.
 4. **Payload:** measured in the implementation PR, with `PAYLOAD_BUDGET_CHARS` raised and the growth stated.
 5. **JPEG conversion on download (1.9.1):** `Download download` v2 takes `download_type` (`source`, `optimized_jpeg`, `original_size_jpeg`), which would let `download_photos` hand HEIC originals over as JPEG. Not verified; proposed as a `download_photos` option for 1.9.1 if wanted.
