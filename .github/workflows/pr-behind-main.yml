@@ -1,0 +1,91 @@
+name: PR Behind Main
+
+# Labels open PRs whose branch is behind main (`Behind main`, informational) or
+# that can no longer merge cleanly (`Merge conflict`, rebase needed) (#273).
+# Separate from the QA label workflows, whose labels it never touches. Labels it
+# applies with GITHUB_TOKEN don't trigger other workflows, so pr-labels.yml never
+# sees them (and its on-label acts only on the QA labels anyway).
+#
+# pull_request_target runs in the base repo with a write token, so fork PRs get
+# labels too. That's safe only because nothing here checks out or runs PR code:
+# the job only calls the GitHub API with the PR number and head SHA.
+#
+# LIMITATION: push and pull_request_target both run this file from main, so a
+# change to it can't be tested on its own PR; run it with workflow_dispatch after
+# merging.
+on:
+  push:
+    branches: [main]
+  pull_request_target:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: read # the compare API
+  pull-requests: write # the labels
+
+concurrency:
+  # A newer push to main supersedes an older sweep; each PR's own runs queue.
+  group: pr-behind-main-${{ github.event.pull_request.number || 'all' }}
+  cancel-in-progress: ${{ github.event_name != 'pull_request_target' }}
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Label PRs behind main or with a merge conflict
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          ONE_PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+
+          # Every open PR on main, or just the one that was pushed.
+          if [ -n "$ONE_PR" ]; then
+            PRS="$ONE_PR"
+          else
+            PRS=$(gh pr list --repo "$REPO" --base main --state open --limit 200 \
+              --json number --jq '.[].number')
+          fi
+
+          set_label() {  # pr label want(true|false) labels-now
+            local pr=$1 label=$2 want=$3 now=$4
+            local has=false
+            if printf '%s\n' "$now" | grep -qxF "$label"; then has=true; fi
+            if [ "$want" = true ] && [ "$has" = false ]; then
+              gh pr edit "$pr" --repo "$REPO" --add-label "$label" >/dev/null
+              echo "  + $label"
+            elif [ "$want" = false ] && [ "$has" = true ]; then
+              gh pr edit "$pr" --repo "$REPO" --remove-label "$label" >/dev/null
+              echo "  - $label"
+            fi
+          }
+
+          for PR in $PRS; do
+            # mergeable is computed in the background, so it's null for a while
+            # after a push to main: retry, then leave the label as it is.
+            MERGEABLE=null
+            for _ in 1 2 3 4 5 6; do
+              INFO=$(gh api "repos/$REPO/pulls/$PR")
+              MERGEABLE=$(jq -r '.mergeable' <<<"$INFO")
+              [ "$MERGEABLE" != null ] && break
+              sleep 5
+            done
+            HEAD=$(jq -r '.head.sha' <<<"$INFO")
+            LABELS=$(jq -r '.labels[].name' <<<"$INFO")
+            BEHIND=$(gh api "repos/$REPO/compare/main...$HEAD" --jq '.behind_by')
+            echo "#$PR: behind_by=$BEHIND mergeable=$MERGEABLE"
+
+            if [ "$BEHIND" -gt 0 ]; then
+              set_label "$PR" "Behind main" true "$LABELS"
+            else
+              set_label "$PR" "Behind main" false "$LABELS"
+            fi
+            case "$MERGEABLE" in
+              false) set_label "$PR" "Merge conflict" true "$LABELS" ;;
+              true) set_label "$PR" "Merge conflict" false "$LABELS" ;;
+              *) echo "  mergeable still unknown; Merge conflict left as it is" ;;
+            esac
+          done
