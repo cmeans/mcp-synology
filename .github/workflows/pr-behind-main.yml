@@ -1,7 +1,9 @@
 name: PR Behind Main
 
-# Labels open PRs whose branch is behind main (`Behind main`, informational) or
-# that can no longer merge cleanly (`Merge conflict`, rebase needed) (#273).
+# Labels open PRs whose branch is behind main (`Behind main`) or that can no
+# longer merge cleanly (`Merge conflict`, rebase needed) (#273). Both block the
+# merge: main's ruleset requires branches to be up to date, so a PR behind main
+# has to be updated first.
 # Separate from the QA label workflows, whose labels it never touches. Labels it
 # applies with GITHUB_TOKEN don't trigger other workflows, so pr-labels.yml never
 # sees them (and its on-label acts only on the QA labels anyway).
@@ -63,7 +65,8 @@ jobs:
             fi
           }
 
-          for PR in $PRS; do
+          check_pr() {  # pr
+            local PR=$1 INFO MERGEABLE HEAD LABELS BEHIND
             # mergeable is computed in the background, so it's null for a while
             # after a push to main: retry, then leave the label as it is.
             MERGEABLE=null
@@ -88,4 +91,24 @@ jobs:
               true) set_label "$PR" "Merge conflict" false "$LABELS" ;;
               *) echo "  mergeable still unknown; Merge conflict left as it is" ;;
             esac
+          }
+
+          # One PR's failed API call (closed mid-sweep, a 5xx, a fork whose head is
+          # gone) mustn't leave the PRs after it with stale labels. Each runs in a
+          # subshell that turns set -e back on (it inherits the set +e), outside any
+          # if/||, where bash would ignore it; the job fails at the end if any PR did.
+          FAILED=""
+          for PR in $PRS; do
+            set +e
+            (set -e; check_pr "$PR")
+            rc=$?
+            set -e
+            if [ "$rc" -ne 0 ]; then
+              echo "::warning::#$PR: labeling failed (exit $rc)"
+              FAILED="$FAILED #$PR"
+            fi
           done
+          if [ -n "$FAILED" ]; then
+            echo "::error::labeling failed for:$FAILED"
+            exit 1
+          fi
