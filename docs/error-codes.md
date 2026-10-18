@@ -337,12 +337,15 @@ partly done), and no handle lists the running operations. Only a canceled
 call (the user, or a client's own timeout) or a DSM error stops the task.
 
 The same goes for a NAS that stops answering status requests during the wait
-(a network timeout or dropped connection), or whose answer can't be read (for
-example a login page from a captive portal or reverse proxy): the task isn't
-stopped, and the reply starts "The NAS stopped answering while deleting …" or
-"The NAS's status reply couldn't be read while deleting … (JSONDecodeError)",
-then "It's probably still running there; don't start it again.", with the
-handle.
+(a network timeout or dropped connection), that answers one with an HTTP error
+status (a reverse proxy's `502` or `504`, #282), or whose answer can't be read
+(for example a login page from a captive portal or reverse proxy): the task
+isn't stopped, and the reply starts "The NAS stopped answering while deleting
+…", "The NAS, or a proxy in front of it, answered a status request with an
+error while deleting … (HTTP 504 …)" or "The NAS's status reply couldn't be
+read while deleting … (not a DSM reply; a proxy or captive portal may be
+answering)", then "It's probably still running there; don't start it again.",
+with the handle.
 Check on it with `file_task` rather than starting it again.
 
 `file_task` answers a handle DSM no longer knows with a normal reply, not an
@@ -418,7 +421,7 @@ Otherwise:
 
 **mcp-synology couldn't connect to the NAS, or it called DSM successfully but
 DSM returned an empty payload where data was expected, or DSM answered with an
-HTTP error status.**
+HTTP error status, or the answer wasn't a DSM reply at all.**
 
 The connection case (the message starts "Can't reach the NAS at …") means no
 DSM answer arrived at all: the connection was refused or the host couldn't be
@@ -432,6 +435,18 @@ never included, since it carries the password or session ID. A 5xx on any
 other call is `retryable=true`, and a 4xx is `retryable=false`. As with
 `timeout`, a `create_download` that fails this way may still have been applied,
 so it is marked `retryable=false`; check `list_downloads` before retrying.
+
+The not-a-DSM-reply case (#282): the answer wasn't a JSON object, typically a
+reverse proxy's or captive portal's login page in front of the NAS. The message
+names the API and method and the Content-Type (for example
+`SYNO.FileStation.List/list_share: the answer wasn't a DSM reply (Content-Type
+text/html).`), never the page itself. It's `retryable=true`, except for a
+`create_download`, which may still have been applied. Check what's in front of
+the NAS; `mcp-synology check` reports it as "didn't return a DSM API response".
+`file_task` reports either case as "Check task failed for `<handle>`: …", or for
+a stop "Stop task failed for `<handle>`: … Nothing was stopped." (the status
+read failed) or "… The stop may or may not have taken effect." (the stop
+request itself failed).
 
 Synology Photos also reports two setup problems this way: DSM code **602** (the
 account has no personal space because the user home service is off; an administrator

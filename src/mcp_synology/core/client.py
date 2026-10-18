@@ -23,6 +23,7 @@ import httpx
 
 from mcp_synology.core.errors import (
     DsmHttpError,
+    DsmReplyError,
     DsmTimeoutError,
     DsmUnavailableError,
     RequestTooLongError,
@@ -58,6 +59,33 @@ ProgressCallback = Callable[[int, int | None], Coroutine[Any, Any, None]]
 
 
 _MAY_HAVE_APPLIED = "DSM may still have applied the request; check before retrying."
+
+_NOT_A_REPLY = (
+    "A reverse proxy or captive portal in front of the NAS may be answering instead of "
+    "DSM (a login page, say). Try again shortly; if it keeps happening, check what's in "
+    "front of the NAS, and run 'mcp-synology check'."
+)
+
+
+def _read_json(resp: httpx.Response, label: str, *, may_have_applied: bool = False) -> Any:
+    """The DSM reply envelope, or ``DsmReplyError`` if the answer isn't a JSON object (#282).
+
+    ``resp.json()`` raised a bare ``JSONDecodeError`` for an HTML page, which reached the
+    model as "Expecting value: line 1 column 1 (char 0)". The error names ``label`` and
+    the Content-Type, never the body.
+    """
+    try:
+        body = resp.json()
+    except ValueError:
+        body = None
+    if isinstance(body, dict):
+        return body
+    ctype = resp.headers.get("content-type", "").split(";")[0].strip() or "none"
+    raise DsmReplyError(
+        f"{label}: the answer wasn't a DSM reply (Content-Type {ctype}).",
+        retryable=not may_have_applied,
+        suggestion=f"{_MAY_HAVE_APPLIED} {_NOT_A_REPLY}" if may_have_applied else _NOT_A_REPLY,
+    )
 
 
 async def _guarded_post(
@@ -260,7 +288,7 @@ class DsmClient:
         logger.debug("Querying API info: GET %s", url)
         resp = await http.get(url, params=params)
         _check_status(resp, "SYNO.API.Info/query")
-        body = resp.json()
+        body = _read_json(resp, "SYNO.API.Info/query")
 
         if not body.get("success"):
             code = body.get("error", {}).get("code", 0)
@@ -464,7 +492,7 @@ class DsmClient:
                 suggestion="Reduce the size of the request (e.g. fewer URIs per call).",
             )
         _check_status(resp, f"{api}/{method}")
-        body = resp.json()
+        body = _read_json(resp, f"{api}/{method}")
 
         if body.get("success"):
             data: dict[str, Any] = body.get("data", {})
@@ -553,7 +581,7 @@ class DsmClient:
             f"{api}/{method}",
             lambda: http.post(url, data=form_data, headers=self._session_headers()),
         )
-        body = resp.json()
+        body = _read_json(resp, f"{api}/{method}", may_have_applied=True)
 
         if body.get("success"):
             data: dict[str, Any] = body.get("data", {})
@@ -692,7 +720,7 @@ class DsmClient:
             fh.close()
 
         _check_status(resp, f"{api}/{method}")
-        body = resp.json()
+        body = _read_json(resp, f"{api}/{method}")
 
         if body.get("success"):
             logger.debug("DSM response: %s/%s — success", api, method)
@@ -801,7 +829,7 @@ class DsmClient:
         finally:
             fh.close()
 
-        body = resp.json()
+        body = _read_json(resp, f"{api}/create", may_have_applied=True)
 
         if body.get("success"):
             logger.debug("DSM response: %s/create — success", api)

@@ -13,6 +13,7 @@ import pytest
 import respx
 from mcp.server.mcpserver.exceptions import ToolError
 
+from mcp_synology.core.errors import DsmHttpError, DsmReplyError
 from mcp_synology.modules.filestation.tasks import (
     DiscoveryNote,
     Handle,
@@ -272,9 +273,32 @@ class TestPollTask:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
         result = await poll_task(mock_client, api=API, version=2, taskid="t1", wait=30, label="x")
         assert result.outcome == "stalled"
-        assert isinstance(result.error, ValueError)
+        assert isinstance(result.error, DsmReplyError)
         assert result.stopped is False
         assert calls == ["status"]
+
+    @pytest.mark.parametrize("status_code", [502, 504])
+    @respx.mock
+    async def test_poll_proxy_http_error_is_a_handoff_without_stop(
+        self, mock_client: DsmClient, clock: list[float], status_code: int
+    ) -> None:
+        """#282: a reverse proxy's 502/504 is how a DSM stalled by a huge delete shows up
+        behind a proxy. It used to stop the task (DsmHttpError is a SynologyError)."""
+        calls: list[str] = []
+        replies = iter([_ok(RUNNING), httpx.Response(status_code, text="<html>Bad Gateway</html>")])
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            calls.append(_method(request))
+            return next(replies)
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        result = await poll_task(mock_client, api=API, version=2, taskid="t1", wait=30, label="x")
+        assert result.outcome == "stalled"
+        assert isinstance(result.error, DsmHttpError)
+        assert result.error.status == status_code
+        assert result.stopped is False
+        assert result.status == RUNNING
+        assert calls == ["status", "status"]
 
     @respx.mock
     async def test_poll_status_data_not_an_object_is_a_handoff(
@@ -1072,6 +1096,68 @@ class TestFileTask:
         assert [c.request.extensions["timeout"]["connect"] for c in route.calls] == [30, 30]
         assert text == (
             "Stopped move of /s/b; it may be partly done. List the path to see what's left."
+        )
+
+    @pytest.mark.parametrize("action", ["status", "stop"])
+    @pytest.mark.parametrize(
+        ("reply", "shown"),
+        [
+            (httpx.Response(200, text="<html>login</html>", headers={"content-type": "text/html"}),
+             "the answer wasn't a DSM reply (Content-Type text/html)"),
+            (httpx.Response(502, text="<html>Bad Gateway</html>"), "DSM answered HTTP 502"),
+        ],
+    )  # fmt: skip
+    @respx.mock
+    async def test_file_task_unreadable_status_is_structured(
+        self, mock_client: DsmClient, action: str, reply: httpx.Response, shown: str
+    ) -> None:
+        """#282: a proxy page or 502 on the status read was a raw JSONDecodeError crash (or,
+        for a 502 on stop, didn't say nothing was stopped)."""
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        calls: list[tuple[str, str]] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=_router({"status": reply, "stop": _ok({})}, calls)
+        )
+        with pytest.raises(ToolError) as exc:
+            await file_task(
+                mock_client,
+                records=TaskRecords(),
+                handle="delete:FileStation_D1",
+                action=action,  # type: ignore[arg-type]
+            )
+        err = json.loads(str(exc.value))["error"]
+        assert err["code"] == "unavailable"
+        assert err["retryable"] is True
+        assert err["param"] == "handle"
+        op = "Stop task" if action == "stop" else "Check task"
+        assert err["message"].startswith(f"{op} failed for `delete:FileStation_D1`: ")
+        assert shown in err["message"]
+        assert err["message"].endswith("Nothing was stopped.") is (action == "stop")
+        assert "login" not in err["message"] and "Bad Gateway" not in err["message"]
+        assert "file_task with this handle" in err["suggestion"]
+        assert ("SYNO.FileStation.Delete", "stop") not in calls
+
+    @respx.mock
+    async def test_file_task_stop_request_proxy_error_may_have_taken_effect(
+        self, mock_client: DsmClient
+    ) -> None:
+        """#282: a 502 on the stop request itself: the stop may or may not have reached DSM."""
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=_router(
+                {"status": _ok(RUNNING), "stop": httpx.Response(502, text="Bad Gateway")}
+            )
+        )
+        with pytest.raises(ToolError) as exc:
+            await file_task(
+                mock_client, records=TaskRecords(), handle="delete:FileStation_D1", action="stop"
+            )
+        err = json.loads(str(exc.value))["error"]
+        assert err["code"] == "unavailable"
+        assert err["message"].endswith(
+            "DSM answered HTTP 502. The stop may or may not have taken effect."
         )
 
     @respx.mock

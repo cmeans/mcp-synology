@@ -89,11 +89,9 @@ def not_dsm_message(base_url: str, status: int | None) -> str:
 def exit_on_connection_failure(base_url: str, host: str) -> Iterator[None]:
     """Turn a NAS that can't be reached, or a server that isn't DSM, into a red error
     line and exit 1 instead of a traceback (check and setup, #191)."""
-    import json
-
     import httpx
 
-    from mcp_synology.core.errors import DsmHttpError
+    from mcp_synology.core.errors import DsmHttpError, DsmReplyError
 
     try:
         yield
@@ -101,7 +99,7 @@ def exit_on_connection_failure(base_url: str, host: str) -> Iterator[None]:
         message = connection_failure_message(base_url, host, e)
     except DsmHttpError as e:
         message = not_dsm_message(base_url, e.status)
-    except json.JSONDecodeError:
+    except DsmReplyError:
         message = not_dsm_message(base_url, None)
     else:
         return
@@ -129,11 +127,11 @@ async def _check_login(config: object) -> None:
             verify_ssl=config.connection.verify_ssl,
             timeout=config.connection.timeout,
         ) as client:
-            from mcp_synology.core.errors import DsmHttpError, SynologyError
+            from mcp_synology.core.errors import DsmHttpError, DsmReplyError, SynologyError
 
             try:
                 await client.query_api_info()
-            except DsmHttpError:
+            except (DsmHttpError, DsmReplyError):
                 raise  # not DSM's API: exit_on_connection_failure says so
             except SynologyError as e:
                 click.echo(click.style(f"Error: DSM API query failed: {e}", fg="red"), err=True)
@@ -144,7 +142,7 @@ async def _check_login(config: object) -> None:
                 await auth.login()
                 click.echo(click.style("Authentication successful!", fg="green"))
                 await auth.logout()
-            except DsmHttpError as e:
+            except (DsmHttpError, DsmReplyError) as e:
                 # Its own suggestion says to run check; this is check (QA round 1, #233).
                 next_step = "Check the NAS, or the proxy in front of it, and try again."
                 message = f"Authentication failed: {e} {next_step}"
