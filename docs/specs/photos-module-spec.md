@@ -929,7 +929,7 @@ Maintainer, 2026-10-17: whatever is best for each call, not one forced rule. See
 ### 2. Tags by name, never by cached ID ✓
 Forced by 1.9.1 re-numbering tags on re-index. See Edits rewrite the original files.
 
-### 3. Validate IDs before writes, read edits back ✓
+### 3. Validate IDs before writes ✓
 DSM reports success for unknown IDs on six write methods, and for `Item.set`/`add_tag`/`delete` by a Shared Space user without folder permission while doing nothing. That user's `get` returns those items as missing, so one check covers both.
 
 ### 4. Tool set versus #258 ✓ (this spec)
