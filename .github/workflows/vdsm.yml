@@ -41,6 +41,47 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # On a PR the checkout is GitHub's merge commit, whose first parent is
+          # main: depth 2 lets the next step diff the PR against it.
+          fetch-depth: 2
+
+      # The golden-image cache (#132). Its key is BAKE_VERSION, which is bumped on
+      # every change to what the bake produces, so a change to the bake scripts
+      # that leaves the image alone (#271) doesn't rebake everything. A PR that
+      # changes the bake files bakes fresh instead of restoring, so its own run
+      # tests the new bake. Only main saves: a PR's cache is readable by that PR
+      # alone, and PR copies (about 1 GB per DSM version) filled the repo's 10 GB
+      # cache and pushed main's out.
+      - name: Golden image cache key
+        id: golden
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          bake=$(sed -n 's/^BAKE_VERSION: int = \([0-9][0-9]*\)$/\1/p' tests/vdsm/config.py)
+          if [ -z "$bake" ]; then
+            echo "::error::BAKE_VERSION not found in tests/vdsm/config.py"
+            exit 1
+          fi
+          changed=false
+          if [ "$EVENT" = pull_request ] && git diff --name-only HEAD^1 HEAD | grep -qxE \
+              'scripts/vdsm_setup\.py|tests/vdsm/(setup_dsm|config|golden_image|container)\.py'; then
+            changed=true
+          fi
+          echo "key=vdsm-golden-${DSM_VERSION}-bake${bake}" >> "$GITHUB_OUTPUT"
+          echo "bake_files_changed=$changed" >> "$GITHUB_OUTPUT"
+          echo "key vdsm-golden-${DSM_VERSION}-bake${bake}; bake files changed: $changed"
+
+      - name: Restore golden image cache
+        id: cache-golden
+        if: steps.golden.outputs.bake_files_changed != 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .vdsm/golden/dsm-${{ env.DSM_VERSION }}.tar.gz
+            .vdsm/golden/dsm-${{ env.DSM_VERSION }}.meta.json
+          key: ${{ steps.golden.outputs.key }}
 
       # GitHub-hosted Ubuntu runners ship ~14 GB free of ~75 GB. The vdsm
       # workflow needs significantly more: a ~1.1 GB compressed golden image
@@ -50,19 +91,31 @@ jobs:
       # container with its own /storage bind-mount + Python venv + Playwright
       # Chromium download. CI on 550f445 hit
       # `System.IO.IOException: No space left on device` after the bake
-      # succeeded but during the test step. Free the runner-pre-installed
-      # software we don't need (dotnet, Android SDK, Haskell, large
-      # *-large packages) to recover ~30 GB before the heavy work.
+      # succeeded but during the test step. Removing preinstalled software we
+      # don't use with rm takes seconds; jlumbroso/free-disk-space's apt purge
+      # of large packages took about 2 minutes (#132, #181). Docker images stay:
+      # testcontainers would pull them again. /opt/hostedtoolcache stays apart
+      # from CodeQL: uv's Python comes from it.
       - name: Free disk space
-        uses: jlumbroso/free-disk-space@ceedf095f4ec1a097402bc6bd80831f2e1a6fde6 # v2.0.0
-        with:
-          tool-cache: false  # keep Python toolchain; uv depends on it
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: false  # keep — testcontainers re-pulls otherwise
-          swap-storage: true
+        run: |
+          set -euo pipefail
+          df -h /
+          sudo swapoff -a && sudo rm -f /mnt/swapfile /swapfile
+          for d in /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup \
+              /opt/hostedtoolcache/CodeQL /usr/local/share/boost /usr/share/swift \
+              /usr/local/share/powershell /usr/local/share/chromium /opt/microsoft \
+              /opt/google /opt/az /usr/lib/jvm /usr/lib/google-cloud-sdk \
+              /usr/local/julia*; do
+            sudo rm -rf "$d" &
+          done
+          wait
+          df -h /
+          free_gb=$(df --output=avail -BG / | tail -1 | tr -dc 0-9)
+          # Extracted image + tarball + bake, with room to spare.
+          if [ "$free_gb" -lt 35 ]; then
+            echo "::error::only ${free_gb} GB free after cleanup; the vdsm job needs about 35 GB"
+            exit 1
+          fi
 
       - name: Verify /dev/kvm is available
         run: |
@@ -77,24 +130,10 @@ jobs:
       - name: Install project with vdsm extras
         run: uv sync --extra dev --extra vdsm
 
+      # Only the bake drives a browser.
       - name: Install Playwright Chromium
+        if: steps.cache-golden.outputs.cache-hit != 'true'
         run: uv run playwright install --with-deps chromium
-
-      # Cache key deliberately hashes only the DSM version and the Python
-      # files that drive image construction. `pyproject.toml` and `uv.lock`
-      # are NOT in the key because the image content is DSM-determined — a
-      # testcontainers or playwright dependency upgrade doesn't change the
-      # bits inside the saved tarball. If that assumption ever changes
-      # (e.g., a dep upgrade affects bind-mount format or timing), bump the
-      # cache key manually or add the manifest to hashFiles.
-      - name: Restore golden image cache
-        id: cache-golden
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            .vdsm/golden/dsm-${{ env.DSM_VERSION }}.tar.gz
-            .vdsm/golden/dsm-${{ env.DSM_VERSION }}.meta.json
-          key: vdsm-golden-${{ env.DSM_VERSION }}-${{ hashFiles('scripts/vdsm_setup.py', 'tests/vdsm/setup_dsm.py', 'tests/vdsm/config.py', 'tests/vdsm/golden_image.py', 'tests/vdsm/container.py') }}
 
       - name: Build golden image (cache miss)
         if: steps.cache-golden.outputs.cache-hit != 'true'
@@ -104,6 +143,20 @@ jobs:
             --admin-user "${VDSM_ADMIN_USER}" \
             --admin-password "${VDSM_ADMIN_PASSWORD}" \
             --yes
+
+      # Saved right after the bake, so PRs can restore it while main's tests
+      # still run. A key that exists already (another run saved it first) only
+      # warns.
+      - name: Save golden image cache (main only)
+        if: >-
+          github.event_name == 'push' && github.ref == 'refs/heads/main'
+          && steps.cache-golden.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .vdsm/golden/dsm-${{ env.DSM_VERSION }}.tar.gz
+            .vdsm/golden/dsm-${{ env.DSM_VERSION }}.meta.json
+          key: ${{ steps.golden.outputs.key }}
 
       - name: Run vdsm integration tests
         # Step budget below the job's, so a hung suite still leaves time to
