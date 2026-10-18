@@ -4,9 +4,13 @@ name: PR Behind Main
 # longer merge cleanly (`Merge conflict`, rebase needed) (#273). Both block the
 # merge: main's ruleset requires branches to be up to date, so a PR behind main
 # has to be updated first.
-# Separate from the QA label workflows, whose labels it never touches. Labels it
-# applies with GITHUB_TOKEN don't trigger other workflows, so pr-labels.yml never
-# sees them (and its on-label acts only on the QA labels anyway).
+# `Behind main` doesn't hold up QA: a review stays valid across a clean merge of
+# main, so Dev updates the branch before merging. `Merge conflict` does: resolving
+# it changes the diff, so this removes `Ready for QA` when it adds the label (and
+# pr-labels-ci.yml / pr-labels.yml don't promote while it's there). Fixing the
+# conflict takes a push, which restarts Awaiting CI -> Ready for QA. That is the
+# only QA label it touches. Labels it changes with GITHUB_TOKEN don't trigger
+# other workflows, so pr-labels.yml never sees them.
 #
 # pull_request_target runs in the base repo with a write token, so fork PRs get
 # labels too. That's safe only because nothing here checks out or runs PR code:
@@ -87,7 +91,11 @@ jobs:
               set_label "$PR" "Behind main" false "$LABELS"
             fi
             case "$MERGEABLE" in
-              false) set_label "$PR" "Merge conflict" true "$LABELS" ;;
+              false)
+                set_label "$PR" "Merge conflict" true "$LABELS"
+                # A conflicted diff isn't ready for review (see the header).
+                set_label "$PR" "Ready for QA" false "$LABELS"
+                ;;
               true) set_label "$PR" "Merge conflict" false "$LABELS" ;;
               *) echo "  mergeable still unknown; Merge conflict left as it is" ;;
             esac

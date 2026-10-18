@@ -152,10 +152,12 @@ Two required sections:
      and both are removed automatically once fixed:
      - **`Behind main`:** `main` has commits your branch doesn't. `main`
        requires branches to be up to date, so the PR can't merge until
-       you update it. Rebase onto `main`, or use GitHub's "Update
-       branch" button.
+       it's updated. Review goes ahead meanwhile: the branch is updated
+       (by you, or by the maintainer's dev agent) just before merging.
      - **`Merge conflict`:** your branch no longer merges cleanly.
-       Rebase onto `main` and resolve the conflicts.
+       Rebase onto `main` and resolve the conflicts. Review waits for
+       this one, since resolving it changes the diff: the PR loses
+       `Ready for QA` until the fix is pushed and CI passes again.
 4. **Final maintainer review and merge.** Once QA is clean, the
    maintainer does a final review and merges the PR. All PRs are
    squash-merged. Your branch is auto-deleted after merge.

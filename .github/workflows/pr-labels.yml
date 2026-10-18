@@ -113,7 +113,12 @@ jobs:
               if [ -n "$REMOVE" ]; then
                 gh pr edit "$PR" --repo "$REPO" --remove-label "$REMOVE"
               fi
-              gh pr edit "$PR" --repo "$REPO" --add-label "Ready for QA"
+              # Not while the branch has a merge conflict (as pr-labels-ci.yml).
+              if has "Merge conflict"; then
+                echo "Merge conflict present: checks passed, Ready for QA withheld"
+              else
+                gh pr edit "$PR" --repo "$REPO" --add-label "Ready for QA"
+              fi
               ;;
             fail)
               if has "Awaiting CI"; then

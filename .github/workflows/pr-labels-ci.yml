@@ -107,7 +107,14 @@ jobs:
               has "CI Failed" && REMOVE="${REMOVE:+$REMOVE,}CI Failed"
               if [ -n "$REMOVE" ]; then
                 gh pr edit "$PR" --repo "$REPO" --remove-label "$REMOVE"
-                gh pr edit "$PR" --repo "$REPO" --add-label "Ready for QA"
+                # Not while the branch has a merge conflict: resolving it changes
+                # the diff (pr-behind-main.yml). The fix is a push, which restarts
+                # Awaiting CI. Behind main alone doesn't hold QA up.
+                if has "Merge conflict"; then
+                  echo "Merge conflict present: checks passed, Ready for QA withheld"
+                else
+                  gh pr edit "$PR" --repo "$REPO" --add-label "Ready for QA"
+                fi
               fi
               ;;
             fail)
