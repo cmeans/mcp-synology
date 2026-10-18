@@ -12,7 +12,7 @@
 
 ### Changed
 
-- **A merge conflict holds back `Ready for QA`; `Behind main` doesn't** (#TBD, follow-up to #273). `pr-behind-main.yml` removes `Ready for QA` when it labels a PR `Merge conflict`, and the CI label automation doesn't promote a PR with that label, since resolving the conflict changes what QA would review. The fix is a push, which restarts `Awaiting CI` → `Ready for QA`. `Behind main` stays a merge-time requirement only: QA reviews a PR that's behind, and the branch is updated just before merging. `CONTRIBUTING.md` says so
+- **A merge conflict holds back `Ready for QA`; `Behind main` doesn't** (#276, follow-up to #273). `pr-behind-main.yml` removes `Ready for QA` when it labels a PR `Merge conflict`, and the CI label automation doesn't promote a PR with that label, since resolving the conflict changes what QA would review. The fix is a push, which restarts `Awaiting CI` → `Ready for QA`. `Behind main` stays a merge-time requirement only: QA reviews a PR that's behind, and the branch is updated just before merging. `CONTRIBUTING.md` says so
 
 ### Fixed
 
