@@ -84,6 +84,18 @@ class TestFolder:
         assert not fake.of(FOLDER, "rename")
 
     @respx.mock
+    async def test_set_cover_unknown_item(self) -> None:
+        fake = FakePhotos().on(FOLDER, "get", 2, captured("folder-get-by-name"))
+        fake.on(ITEM, "get", 2, {"list": []})
+        install(fake)
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await photo_folder(client, action="set_cover", folder="10", item_id=99)
+        assert _error(exc)["code"] == "not_found"
+        assert not fake.of(FOLDER, "set_cover")
+
+    @respx.mock
     async def test_set_cover_list_id(self) -> None:
         fake = FakePhotos().on(FOLDER, "get", 2, captured("folder-get-by-name"))
         fake.on(ITEM, "get", 2, _items(29)).on(FOLDER, "set_cover", 2, {})
@@ -175,6 +187,25 @@ class TestTags:
 
 
 class TestEditPhoto:
+    @respx.mock
+    async def test_rejected_by_dsm(self) -> None:
+        fake = FakePhotos().on(ITEM, "get", 2, _items(15)).on(ITEM, "set", 2, {"error_list": [15]})
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await edit_photo(client, ids=[15], rating=3)
+        assert "  Rejected by DSM: 15 (error_list)" in out
+
+    @respx.mock
+    async def test_none_of_the_ids_exist(self) -> None:
+        fake = FakePhotos().on(ITEM, "get", 2, {"list": []})
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await edit_photo(client, ids=[99], rating=3)
+        assert out.startswith("No items changed: none of the ids exist.")
+        assert not fake.of(ITEM, "set")
+
     @respx.mock
     async def test_one_set_per_field(self) -> None:
         fake = FakePhotos().on(ITEM, "get", 2, _items(15)).on(ITEM, "set", 2, {"error_list": []})
@@ -392,6 +423,37 @@ class TestRequests:
         assert "its link stops working" in gone
 
     @respx.mock
+    async def test_update_expiry_and_missing_folder_warning(self) -> None:
+        listed = captured("request-list")
+        listed["list"][0]["is_folder_valid"] = False
+        updated = json.loads(json.dumps(listed))
+        updated["list"][0]["expiration"] = 1900022399
+        fake = FakePhotos().on(REQ, "list", 1, listed, updated).on(REQ, "update", 1, {})
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await photo_request(
+                client, action="update", request="ZxOc9Ep8q", expires="2030-03-17"
+            )
+        assert fake.one(REQ, "update").params == {
+            "passphrase": "ZxOc9Ep8q",
+            "expiration": 1900022399,  # 2030-03-17 23:59:59 UTC
+        }
+        assert "expires 2030-03-17 23:59:59" in out
+        assert "Warning:   its folder no longer exists, so uploads fail." in out
+
+    @respx.mock
+    async def test_update_nothing_to_change(self) -> None:
+        fake = FakePhotos().on(REQ, "list", 1, captured("request-list"))
+        install(fake)
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await photo_request(client, action="update", request="ZxOc9Ep8q")
+        assert _error(exc)["param"] == "action"
+        assert not fake.of(REQ, "update")
+
+    @respx.mock
     async def test_unknown_request(self) -> None:
         install(FakePhotos().on(REQ, "list", 1, {"list": []}))
         client = make_client()
@@ -415,3 +477,27 @@ class TestRequests:
         with pytest.raises(ToolError) as exc:
             await photo_request(make_client(), **kwargs)
         assert _error(exc)["param"] == param
+
+
+class TestDsmErrors:
+    """A DSM error (here 160, no Photos privilege) is a structured error, not a crash."""
+
+    @pytest.mark.parametrize(
+        ("route", "call"),
+        [
+            ((FOLDER, "get", 2), lambda c: photo_folder(c, action="rename", folder="/a", name="b")),
+            ((ITEM, "get", 2), lambda c: edit_photo(c, ids=[1], rating=3)),
+            ((ITEM, "get", 2), lambda c: tag_photos(c, action="add", ids=[1], tags=["x"])),
+            ((PERSON, "get", 1), lambda c: edit_person(c, action="hide", person="5")),
+            ((PERSON, "get", 1), lambda c: merge_people(c, target="5", merge=["6"])),
+            ((REQ, "list", 1), lambda c: photo_request(c, action="list")),
+        ],
+    )
+    @respx.mock
+    async def test_dsm_error(self, route: tuple[str, str, int], call: Any) -> None:
+        install(FakePhotos().error(*route, 160))
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await call(client)
+        assert "160" in _error(exc)["message"]

@@ -121,6 +121,8 @@ class TestCreate:
             {"places": ["Chicago"]},
             {"places": [1.5]},
             {"places": ["\uff15"]},
+            {"keywords": ["sun"], "keywords_match": "most"},
+            {"ratings": [9]},
         ],
     )
     @respx.mock
@@ -162,6 +164,92 @@ class TestChange:
             out = await photo_album(client, action="add", album="4", ids=[15, 999999])
         assert fake.one(NORMAL, "add_item").params == {"id": 4, "item": [15]}
         assert "Rejected by DSM: 15" in out and "Not found: 999999" in out
+
+    @respx.mock
+    async def test_remove(self) -> None:
+        fake = self._fake().on(ITEM, "get", 2, _items(15))
+        fake.on(NORMAL, "delete_item", 1, {})
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await photo_album(client, action="remove", album="4", ids=[15])
+        assert fake.one(NORMAL, "delete_item").params == {"id": 4, "item": [15]}
+        assert "Removed 1 item(s) from album 4." in out
+        assert "The photos themselves stay in their folders." in out
+
+    @respx.mock
+    async def test_set_cover_unknown_item(self) -> None:
+        fake = self._fake().on(ITEM, "get", 2, {"list": []})
+        install(fake)
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await photo_album(client, action="set_cover", album="4", ids=[99])
+        assert _error(exc)["code"] == "not_found"
+        assert not fake.of(ALBUM, "set_cover")
+
+    @respx.mock
+    async def test_album_line_without_dates_and_public(self) -> None:
+        """An album with no dates, shared by a public link."""
+        fake = self._fake(
+            start_time=0,
+            end_time=0,
+            additional={"sharing_info": {"privacy_type": "public-view", "permission": []}},
+        )
+        fake.on(ALBUM, "set_name", 1, {})
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await photo_album(client, action="rename", album="4", name="Trip")
+        assert "· no dates · shared (public-view)" in out
+
+    @respx.mock
+    async def test_set_condition(self) -> None:
+        fake = self._fake(type="condition")
+        fake.on("SYNO.Foto.UserInfo", "me", 1, captured("userinfo-me"))
+        fake.on("SYNO.Foto.Browse.Person", "list", 1, {"list": [{"id": 7, "name": "Alice"}]})
+        fake.on(COND, "peek_item_count", 2, {"count": 3})
+        fake.on(COND, "set_condition", 2, {})
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await photo_album(
+                client,
+                action="set_condition",
+                album="4",
+                condition={
+                    "people": ["alice"],
+                    "people_match": "all",
+                    "end_date": "2024-01-31",
+                    "ratings": [5],
+                },
+            )
+        cond = {
+            "user_id": 2,
+            "person": [7],
+            "person_policy": "and",
+            "time": [{"end_time": 1706745599}],  # 2024-01-31 23:59:59 UTC
+            "item_type": [],
+            "rating": [5],
+        }
+        assert fake.one(COND, "set_condition").params == {"id": 4, "condition": cond}
+        assert fake.one(COND, "peek_item_count").params["condition"] == cond
+        assert "Album 4's condition is replaced.\nMatches 3 item(s) now." in out
+
+    @respx.mock
+    async def test_unknown_tag_in_condition(self) -> None:
+        fake = self._fake(type="condition")
+        fake.on("SYNO.Foto.UserInfo", "me", 1, captured("userinfo-me"))
+        fake.on("SYNO.Foto.Browse.GeneralTag", "list", 1, captured("tag-list"))
+        install(fake)
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await photo_album(
+                    client, action="set_condition", album="4", condition={"tags": ["no-such"]}
+                )
+        assert _error(exc)["code"] == "not_found"
+        assert not fake.of(COND)
 
     @respx.mock
     async def test_remove_none_found(self) -> None:
@@ -273,6 +361,31 @@ class TestShareLink:
         assert "plain HTTP" in out  # the test client's base URL is http://
 
     @respx.mock
+    async def test_update_public_off_and_members_shown(self) -> None:
+        """public=none removes the public entry; the reply lists members and expiry."""
+        shared = captured("album-get-shared")
+        info = shared["list"][0]["additional"]["sharing_info"]
+        info.update(
+            is_expired=True,
+            privacy_type="private",
+            permission=[
+                {"member": {"type": "user", "id": 1026, "name": "eve"}, "role": "download"},
+                {"member": {"type": "group", "id": 101}, "role": "view"},
+            ],
+        )
+        fake = FakePhotos().on(ALBUM, "get", 1, shared)
+        fake.on(SHARE, "update", 1, {})
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await photo_share_link(client, action="update", album="4", public="none")
+        assert fake.one(SHARE, "update").params["permission"] == [
+            {"action": "delete", "member": {"type": "public"}}
+        ]
+        assert "(expired)" in out
+        assert "eve (download)" in out and "group 101 (view)" in out
+
+    @respx.mock
     async def test_update_needs_a_shared_album(self) -> None:
         install(FakePhotos().on(ALBUM, "get", 1, _album()))
         client = make_client()
@@ -315,6 +428,7 @@ class TestShareLink:
             ({"action": "share", "expires": "soon"}, "expires"),
             ({"action": "share", "members": [{"type": "user"}]}, "members"),
             ({"action": "share", "members": [{"name": "a", "role": "own"}]}, "members"),
+            ({"action": "share", "members": [{"name": "a", "type": "robot"}]}, "members"),
             ({"action": "update"}, "action"),
             ({"action": "update", "members": []}, "action"),
         ],
@@ -374,3 +488,24 @@ class TestDeleteAlbums:
             out = await delete_photo_albums(client, albums=[value])
         assert out.startswith("No albums deleted.")
         assert not fake.of(ALBUM, "delete")
+
+
+class TestDsmErrors:
+    """A DSM error (here 160, no Photos privilege) is a structured error, not a crash."""
+
+    @pytest.mark.parametrize(
+        ("route", "call"),
+        [
+            ((ALBUM, "get", 1), lambda c: photo_album(c, action="rename", album="4", name="x")),
+            ((ALBUM, "get", 1), lambda c: photo_share_link(c, action="share", album="4")),
+            ((ALBUM, "list", 2), lambda c: delete_photo_albums(c, albums=["4"])),
+        ],
+    )
+    @respx.mock
+    async def test_dsm_error(self, route: tuple[str, str, int], call: Any) -> None:
+        install(FakePhotos().error(*route, 160))
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await call(client)
+        assert "160" in _error(exc)["message"]
