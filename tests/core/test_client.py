@@ -106,7 +106,33 @@ class TestRequest:
         async with _make_client(_default_cache()) as client:
             client.sid = "test-session-id"
             await client.request("SYNO.FileStation.List", "list_share", version=2)
-        assert route.calls[0].request.url.params["_sid"] == "test-session-id"
+        request = route.calls[0].request
+        # The session goes as the id cookie, never as _sid (#176).
+        assert "_sid" not in request.url.params
+        assert request.headers["cookie"] == "id=test-session-id"
+
+    @respx.mock
+    async def test_request_keeps_other_cookies_beside_the_session(self) -> None:
+        """An explicit Cookie header replaces httpx's jar, so a reverse proxy's own
+        cookie must be sent along with the session (#176)."""
+        route = respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": True, "data": {}}
+        )
+        async with _make_client(_default_cache()) as client:
+            client._get_http().cookies.set("proxy_auth", "abc")
+            client._get_http().cookies.set("id", "stale")  # never sent beside the session
+            client.sid = "-4Ms56tk"  # a shape DSM misreads as _sid (begins like a number)
+            await client.request("SYNO.FileStation.List", "list_share", version=2)
+        assert route.calls[0].request.headers["cookie"] == "id=-4Ms56tk; proxy_auth=abc"
+
+    @respx.mock
+    async def test_request_without_session_sends_no_session_cookie(self) -> None:
+        route = respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": True, "data": {}}
+        )
+        async with _make_client(_default_cache()) as client:
+            await client.request("SYNO.FileStation.List", "list_share", version=2)
+        assert "cookie" not in route.calls[0].request.headers
 
     @respx.mock
     async def test_request_error_maps_to_exception(self) -> None:
@@ -328,7 +354,7 @@ class TestHttpErrorStatus:
 
 class TestRequestPostForm:
     """request(post_form=True): the login-only POST (#235). The parameters go in the
-    form body, _sid stays in the query string, and the rest of request() applies."""
+    form body, the session goes as the id cookie (#176), and the rest of request() applies."""
 
     @respx.mock
     async def test_body_and_query(self) -> None:
@@ -349,7 +375,8 @@ class TestRequestPostForm:
             )
         assert data == {"sid": "new"}
         request = route.calls.last.request
-        assert dict(request.url.params) == {"_sid": "the-sid"}
+        assert not request.url.params
+        assert request.headers["cookie"] == "id=the-sid"
         assert "S3cret" not in str(request.url)
         assert dict(parse_qsl(request.content.decode())) == {
             "api": "SYNO.API.Auth",
@@ -404,7 +431,8 @@ class TestRequestPostForm:
             data = await client.request("SYNO.API.Auth", "login", version=6, post_form=True)
         assert data == {"ok": 1}
         assert route.call_count == 2
-        assert dict(route.calls.last.request.url.params) == {"_sid": "new"}
+        assert not route.calls.last.request.url.params
+        assert route.calls.last.request.headers["cookie"] == "id=new"
 
 
 class TestTransportErrorNamesTheCall:
@@ -446,7 +474,7 @@ class TestRequestFormPost:
     rule, used only for DS URI Task.create (#123 item 9a)."""
 
     @respx.mock
-    async def test_params_in_body_sid_in_query(self) -> None:
+    async def test_params_in_body_sid_as_cookie(self) -> None:
         client = make_client(make_api_cache())
         client.sid = "the-sid"
         route = respx.post(f"{BASE_URL}/webapi/DownloadStation/task.cgi").respond(
@@ -461,7 +489,8 @@ class TestRequestFormPost:
             )
         assert data == {}
         request = route.calls.last.request
-        assert dict(request.url.params) == {"_sid": "the-sid"}
+        assert not request.url.params
+        assert request.headers["cookie"] == "id=the-sid"
         body = request.content.decode()
         assert "api=SYNO.DownloadStation.Task" in body
         assert "method=create" in body
@@ -547,7 +576,8 @@ class TestRequestFormPost:
             data = await client.request_form_post("SYNO.DownloadStation2.Task", "create", version=2)
         assert data == {"task_id": ["dbid_1"]}
         assert reauths == 1
-        assert dict(route.calls.last.request.url.params) == {"_sid": "new-sid"}
+        assert not route.calls.last.request.url.params
+        assert route.calls.last.request.headers["cookie"] == "id=new-sid"
 
     @respx.mock
     async def test_permission_denied_never_reauths(self) -> None:
@@ -695,7 +725,8 @@ class TestCreateDownloadTaskWithFile:
             )
         assert data == {"list_id": [], "task_id": ["dbid_1"]}
         request = route.calls.last.request
-        assert dict(request.url.params) == {"_sid": "the-sid"}
+        assert not request.url.params
+        assert request.headers["cookie"] == "id=the-sid"
         body = request.content
         for name, value in [
             ("api", b"SYNO.DownloadStation2.Task"),
@@ -799,8 +830,9 @@ class TestUpload:
             data = await client.upload("/video/in", local, "report.txt")
         assert data == {"blSkip": False, "file": "report.txt"}
         request = route.calls.last.request
-        # The Upload API reads _sid from the query string only, never the form.
-        assert dict(request.url.params) == {"_sid": "the-sid"}
+        # The session goes as the id cookie (#176), never in the form.
+        assert not request.url.params
+        assert request.headers["cookie"] == "id=the-sid"
         body = request.content
         assert b'name="_sid"' not in body
         for name, value in [
@@ -861,8 +893,8 @@ class TestUpload:
         assert data == {"blSkip": False}
         assert reauths == 1
         first, second = (c.request for c in route.calls)
-        assert first.url.params["_sid"] == "old_sid"
-        assert second.url.params["_sid"] == "new_sid"
+        assert first.headers["cookie"] == "id=old_sid"
+        assert second.headers["cookie"] == "id=new_sid"
         for request in (first, second):
             assert b"\r\n\r\npayload\r\n" in request.content
             assert (b'name="overwrite"' in request.content) is overwrite
@@ -962,7 +994,8 @@ class TestGeneralTransfers:
             )
         assert data == {"id": 41, "action": "new"}
         request = route.calls.last.request
-        assert dict(request.url.params) == {"_sid": "the-sid"}
+        assert not request.url.params
+        assert request.headers["cookie"] == "id=the-sid"
         body = request.content
         for name, value in [
             ("api", "SYNO.Foto.Upload.Item"),
@@ -1048,8 +1081,8 @@ class TestGeneralTransfers:
             "cache_key": '"41_1"',
             "type": '"unit"',
             "size": '"m"',
-            "_sid": "the-sid",
         }
+        assert route.calls.last.request.headers["cookie"] == "id=the-sid"
 
     @respx.mock
     async def test_download_binary_http_error_page_is_dsm_http_error(self, tmp_path: Path) -> None:
