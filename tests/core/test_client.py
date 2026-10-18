@@ -1094,3 +1094,35 @@ class TestGeneralTransfers:
                     "SYNO.Foto.Browse.Item", "set", 2, {"rating": "9"}, post_form=True
                 )
         assert str(info.value).endswith("rating (condition)")
+
+
+class TestErrorDetail:
+    """QA round 1 on #266: the 120 detail reaches binary downloads too, and the debug
+    log names only the code, ``name`` and ``reason``, never DSM's whole error object."""
+
+    @respx.mock
+    async def test_download_binary_passes_the_detail(self, tmp_path: Path) -> None:
+        client = make_client(TestGeneralTransfers._cache())
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 120, "errors": {"name": "size"}}}
+        )
+        async with client:
+            with pytest.raises(SynologyError) as info:
+                await client.download_binary("SYNO.Foto.Thumbnail", "get", 2, {}, tmp_path / "x")
+        assert str(info.value).endswith(": size")
+
+    @respx.mock
+    async def test_debug_log_omits_the_raw_error(self, caplog: pytest.LogCaptureFixture) -> None:
+        client = make_client(TestGeneralTransfers._cache())
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={
+                "success": False,
+                "error": {"code": 120, "errors": {"name": "rating", "token": "s3cr3t"}},
+            }
+        )
+        caplog.set_level("DEBUG", logger="mcp_synology.core.client")
+        async with client:
+            with pytest.raises(SynologyError):
+                await client.request("SYNO.Foto.Browse.Item", "set", 2, {}, post_form=True)
+        assert "s3cr3t" not in caplog.text
+        assert "error code 120: rating" in caplog.text

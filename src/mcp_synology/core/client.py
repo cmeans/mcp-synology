@@ -27,6 +27,7 @@ from mcp_synology.core.errors import (
     DsmUnavailableError,
     RequestTooLongError,
     SynologyError,
+    error_detail,
     error_from_code,
 )
 from mcp_synology.core.redaction import redact_urls
@@ -461,7 +462,13 @@ class DsmClient:
 
         error = body.get("error", {})
         code = error.get("code", 0)
-        logger.debug("DSM response: %s/%s — error %s", api, method, error)
+        logger.debug(
+            "DSM response: %s/%s — error code %d%s",
+            api,
+            method,
+            code,
+            error_detail(error.get("errors")),
+        )
 
         # Transparent re-auth on session errors (one retry)
         if code in _SESSION_ERROR_CODES and not _is_retry and self._re_auth_callback:
@@ -681,7 +688,13 @@ class DsmClient:
 
         error = body.get("error", {})
         code = error.get("code", 0)
-        logger.debug("DSM response: %s/%s — error %s", api, method, error)
+        logger.debug(
+            "DSM response: %s/%s — error code %d%s",
+            api,
+            method,
+            code,
+            error_detail(error.get("errors")),
+        )
 
         # Re-auth on session errors (file must be re-opened on retry)
         if code in _SESSION_ERROR_CODES and not _is_retry and self._re_auth_callback:
@@ -911,8 +924,8 @@ class DsmClient:
                 body_bytes = await resp.aread()
                 try:
                     body = json.loads(body_bytes)
-                    code = body.get("error", {}).get("code", 0)
-                    raise error_from_code(code, api)
+                    error = body.get("error", {})
+                    raise error_from_code(error.get("code", 0), api, error.get("errors"))
                 except (json.JSONDecodeError, KeyError):
                     if "FileStation" not in api:
                         _check_status(resp, f"{api}/{method}")
@@ -930,7 +943,8 @@ class DsmClient:
             if "application/json" in content_type:
                 body_bytes = await resp.aread()
                 body = json.loads(body_bytes)
-                code = body.get("error", {}).get("code", 0)
+                error = body.get("error", {})
+                code = error.get("code", 0)
                 logger.debug("DSM response: %s/%s — error code %d", api, method, code)
 
                 if code in _SESSION_ERROR_CODES and not _is_retry and self._re_auth_callback:
@@ -952,7 +966,7 @@ class DsmClient:
                         _is_retry=True,
                     )
 
-                raise error_from_code(code, api)
+                raise error_from_code(code, api, error.get("errors"))
 
             # Check disk space before writing
             content_length = resp.headers.get("content-length")

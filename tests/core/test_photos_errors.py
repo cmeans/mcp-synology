@@ -82,3 +82,24 @@ def test_101_from_photos_names_the_parameter_when_given() -> None:
     exc = error_from_code(101, "SYNO.Foto.Browse.Item", {"name": "gps"})
     assert exc.error_code is ErrorCode.INVALID_PARAMETER
     assert str(exc).endswith(": gps")
+
+
+def test_reason_only_detail_from_a_capture() -> None:
+    """A 1.9.1 favorite filter below v7 answers ``{"reason": "favorite is not supported"}``
+    with no name (fav191_lwf-favorite-v2 in the capture fixtures)."""
+    import json
+    from pathlib import Path
+
+    capture = json.loads(
+        (
+            Path(__file__).parents[1] / "modules/photos/fixtures/dsm-7.2.2-photos-1.9.1.json"
+        ).read_text()
+    )
+    error = capture["fav191_lwf-favorite-v2"]["response"]["error"]
+    exc = error_from_code(error["code"], "SYNO.Foto.Browse.Item", error.get("errors"))
+    assert str(exc).endswith(": favorite is not supported")
+
+
+def test_detail_uses_only_name_and_reason() -> None:
+    exc = error_from_code(120, "SYNO.X", {"name": "a", "reason": "type", "token": "secret"})
+    assert "secret" not in str(exc)

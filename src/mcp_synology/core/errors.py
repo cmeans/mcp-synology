@@ -322,19 +322,29 @@ FILESTATION_ERROR_CODES: dict[int, tuple[str, str]] = {
 }
 
 
-def _with_detail(message: str, errors: object) -> str:
-    """``message`` plus what a JSON-format API said about the parameter, if anything.
+def error_detail(errors: object) -> str:
+    """``": rating (condition)"``: what a JSON-format API said about the parameter, or ``""``.
 
     Photos and Download Station 2 add ``errors: {"name": "rating", "reason":
-    "condition"}`` (or a list of those) to a 120; the name is what the caller needs.
+    "condition"}`` (or a list of those) to a 120; some give only a reason, such as
+    ``{"reason": "favorite is not supported"}``. Only ``name`` and ``reason`` are used,
+    so nothing else DSM puts there reaches a message or a log.
     """
     items = errors if isinstance(errors, list) else [errors]
     parts = []
     for item in items:
-        if isinstance(item, dict) and item.get("name"):
-            reason = f" ({item['reason']})" if item.get("reason") else ""
-            parts.append(f"{item['name']}{reason}")
-    return f"{message}: {', '.join(parts)}" if parts else message
+        if not isinstance(item, dict):
+            continue
+        name, reason = item.get("name"), item.get("reason")
+        if name and reason:
+            parts.append(f"{name} ({reason})")
+        elif name or reason:
+            parts.append(str(name or reason))
+    return f": {', '.join(parts)}" if parts else ""
+
+
+def _with_detail(message: str, errors: object) -> str:
+    return message + error_detail(errors)
 
 
 def error_from_code(code: int, api_name: str = "", errors: object = None) -> SynologyError:
