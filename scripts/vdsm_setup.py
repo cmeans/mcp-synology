@@ -143,6 +143,7 @@ def setup(dsm_version: str, admin_user: str, admin_password: str, assume_yes: bo
             admin_user=admin_user,
             ssh_host=container.host,
             ssh_port=container.ssh_port,
+            dsm_version=dsm_version,
         )
 
         # 9. Shut DSM down cleanly. A force-remove would save a
