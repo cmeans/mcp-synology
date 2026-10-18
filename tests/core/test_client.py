@@ -120,6 +120,7 @@ class TestRequest:
         )
         async with _make_client(_default_cache()) as client:
             client._get_http().cookies.set("proxy_auth", "abc")
+            client._get_http().cookies.set("id", "stale")  # never sent beside the session
             client.sid = "-4Ms56tk"  # a shape DSM misreads as _sid (begins like a number)
             await client.request("SYNO.FileStation.List", "list_share", version=2)
         assert route.calls[0].request.headers["cookie"] == "id=-4Ms56tk; proxy_auth=abc"

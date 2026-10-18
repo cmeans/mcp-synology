@@ -198,14 +198,15 @@ class DsmClient:
 
         JSON-format APIs parse every parameter value as JSON first (#121), and that
         includes ``_sid``: a session ID that begins like a number (``-4Ms…``,
-        ``4e70…``, ``8-aZ…``, about 1 in 70) then matches no session, and every call
-        with it gets 119, re-auth included, until a new login happens to draw another
-        shape. Quoting ``_sid`` fixes those APIs but breaks Download Station's v1 CGIs
-        (105) and ``logout`` (answers success, session stays). The cookie works for
-        every API on DSM 7.1 and 7.2.2, and keeps the session out of URLs and logs.
-        Sent as a header, so the httpx cookie jar never holds or resends it. An
-        explicit ``Cookie`` header replaces the jar's, so any cookie the jar holds
-        (a reverse proxy's own login, say) is sent along with it.
+        ``4e70…``, ``8-aZ…``; on vdsm about 1 in 75 on DSM 7.2.2 and 1 in 170 on
+        7.1) then matches no session, and every call with it gets 119, re-auth
+        included, until a new login happens to draw another shape. Quoting ``_sid``
+        fixes those APIs but breaks Download Station's v1 CGIs (105) and ``logout``
+        (answers success, session stays). The cookie works for every API on DSM 7.1
+        and 7.2.2, and keeps the session out of URLs and logs. Sent as a header, so
+        the httpx cookie jar never holds or resends it. An explicit ``Cookie`` header
+        replaces the jar's, so any cookie the jar holds (a reverse proxy's own login,
+        say) is sent along with it; an ``id`` in the jar never goes beside the session.
         """
         if not self._sid:
             return {}

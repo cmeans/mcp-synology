@@ -1,10 +1,11 @@
 """The session reaches DSM as the ``id`` cookie, so every session ID works (#176).
 
-DSM parses JSON-format parameter values as JSON first (#121), ``_sid`` included. About
-1 in 70 session IDs begin with a shape that parser misreads (``-8bV…``, ``6E5h…``,
-``02-P…``); sent as ``_sid`` in the query string, such a session matches nothing and
-every call gets 119, on DSM 7.1 and 7.2.2 alike. That was #176's "flaky 119 on the
-first call after login". The client sends the session as the ``id`` cookie instead.
+DSM parses JSON-format parameter values as JSON first (#121), ``_sid`` included. Some
+session IDs (about 1 in 75 on DSM 7.2.2 and 1 in 170 on 7.1, measured on vdsm) begin with
+a shape that parser misreads (``-8bV…``, ``6E5h…``, ``02-P…``); sent as ``_sid`` in the
+query string, such a session matches nothing and every call gets 119, on both versions.
+That was #176's "flaky 119 on the first call after login". The client sends the session
+as the ``id`` cookie instead.
 
 Run: ``uv run pytest tests/vdsm -m vdsm --dsm-version 7.2.2 -k session``
 """
@@ -20,9 +21,9 @@ from tests.personas import reauth_spy_on
 
 pytestmark = pytest.mark.vdsm
 
-# Enough logins that a misread session ID turns up (about 1 in 70 were): the chance
-# of none in 1000 is about 1e-6.
-_MAX_LOGINS = 1000
+# Enough logins that a misread session ID turns up. At 7.1's rate (6 in 1,000) the
+# chance of none in 3,000 is about 1e-8 (0.994 ** 3000); a run usually needs a few hundred.
+_MAX_LOGINS = 3000
 
 
 async def _sid_in_query_works(client: Any, sid: str) -> bool:
