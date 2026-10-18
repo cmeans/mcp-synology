@@ -14,10 +14,12 @@ if TYPE_CHECKING:
 from mcp_synology.core.client import DsmClient
 from mcp_synology.core.errors import (
     ApiNotFoundError,
+    DsmHttpError,
     PathNotFoundError,
     SessionExpiredError,
     SynologyError,
 )
+from mcp_synology.core.state import ApiInfoEntry
 from tests.conftest import BASE_URL, make_api_cache, make_client, make_minimal_api_cache
 
 # Local aliases so the existing test bodies don't need a wholesale rename.
@@ -927,3 +929,168 @@ class TestUpload:
         async with client:
             with pytest.raises(ApiNotFoundError):
                 await client.upload("/video", local, "a.txt")
+
+
+class TestGeneralTransfers:
+    """``upload_multipart()`` and ``download_binary()``: the File Station transfers
+    generalized for Synology Photos (#258), with File Station's own wrappers above."""
+
+    @staticmethod
+    def _cache() -> dict[str, ApiInfoEntry]:
+        cache = make_api_cache()
+        for api in ("SYNO.Foto.Upload.Item", "SYNO.Foto.Thumbnail", "SYNO.Foto.Browse.Item"):
+            cache[api] = ApiInfoEntry(path="entry.cgi", min_version=1, max_version=2)
+        return cache
+
+    @respx.mock
+    async def test_upload_multipart_sends_fields_as_given(self, tmp_path: Path) -> None:
+        client = make_client(self._cache())
+        client.sid = "the-sid"
+        local = tmp_path / "2024.jpg"
+        local.write_bytes(b"jpeg")
+        route = respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": True, "data": {"id": 41, "action": "new"}}
+        )
+        async with client:
+            data = await client.upload_multipart(
+                "SYNO.Foto.Upload.Item",
+                "upload_to_folder",
+                1,
+                {"name": '"2024.jpg"', "target_folder_id": "7"},
+                file_path=local,
+                filename="2024.jpg",
+            )
+        assert data == {"id": 41, "action": "new"}
+        request = route.calls.last.request
+        assert dict(request.url.params) == {"_sid": "the-sid"}
+        body = request.content
+        for name, value in [
+            ("api", "SYNO.Foto.Upload.Item"),
+            ("method", "upload_to_folder"),
+            ("version", "1"),
+            ("name", '"2024.jpg"'),
+            ("target_folder_id", "7"),
+        ]:
+            assert TestUpload._field(body, name, value), name
+        assert b'name="file"; filename="2024.jpg"' in body
+
+    @respx.mock
+    async def test_upload_multipart_reauths_once(self, tmp_path: Path) -> None:
+        client = make_client(self._cache())
+        local = tmp_path / "a.jpg"
+        local.write_bytes(b"a")
+        route = respx.post(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=[
+                httpx.Response(200, json={"success": False, "error": {"code": 119}}),
+                httpx.Response(200, json={"success": True, "data": {"id": 1}}),
+            ]
+        )
+        reauths: list[int] = []
+
+        async def _reauth() -> None:
+            reauths.append(1)
+
+        client.set_re_auth_callback(_reauth)
+        async with client:
+            data = await client.upload_multipart(
+                "SYNO.Foto.Upload.Item", "upload_to_folder", 1, {}, file_path=local, filename="a"
+            )
+        assert data == {"id": 1}
+        assert reauths == [1]
+        assert route.call_count == 2
+        assert b"\r\n\r\na\r\n" in route.calls.last.request.content
+
+    @respx.mock
+    async def test_upload_multipart_error_names_the_parameter(self, tmp_path: Path) -> None:
+        client = make_client(self._cache())
+        local = tmp_path / "notes.txt"
+        local.write_bytes(b"x")
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 620}}
+        )
+        async with client:
+            with pytest.raises(SynologyError) as info:
+                await client.upload_multipart(
+                    "SYNO.Foto.Upload.Item",
+                    "upload_to_folder",
+                    1,
+                    {},
+                    file_path=local,
+                    filename="n",
+                )
+        assert info.value.code == 620
+        assert "file type" in str(info.value)
+
+    @respx.mock
+    async def test_download_binary_streams_any_api(self, tmp_path: Path) -> None:
+        client = make_client(self._cache())
+        client.sid = "the-sid"
+        route = respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            content=b"\xff\xd8thumb", headers={"content-type": "image/jpeg"}
+        )
+        dest = tmp_path / "beach_m.jpg"
+        async with client:
+            written = await client.download_binary(
+                "SYNO.Foto.Thumbnail",
+                "get",
+                2,
+                {"id": "41", "cache_key": '"41_1"', "type": '"unit"', "size": '"m"'},
+                dest,
+            )
+        assert written == 7
+        assert dest.read_bytes() == b"\xff\xd8thumb"
+        params = dict(route.calls.last.request.url.params)
+        assert params == {
+            "api": "SYNO.Foto.Thumbnail",
+            "version": "2",
+            "method": "get",
+            "id": "41",
+            "cache_key": '"41_1"',
+            "type": '"unit"',
+            "size": '"m"',
+            "_sid": "the-sid",
+        }
+
+    @respx.mock
+    async def test_download_binary_http_error_page_is_dsm_http_error(self, tmp_path: Path) -> None:
+        """A thumbnail still converting gets 404 with an HTML page (verified, #258)."""
+        client = make_client(self._cache())
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            404, text="<html>Not Found</html>", headers={"content-type": "text/html"}
+        )
+        dest = tmp_path / "x.jpg"
+        async with client:
+            with pytest.raises(DsmHttpError) as info:
+                await client.download_binary("SYNO.Foto.Thumbnail", "get", 2, {"id": "1"}, dest)
+        assert info.value.status == 404
+        assert "SYNO.Foto.Thumbnail/get" in str(info.value)
+        assert not dest.exists()
+
+    @respx.mock
+    async def test_download_binary_json_error_envelope(self, tmp_path: Path) -> None:
+        client = make_client(self._cache())
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 803}}
+        )
+        async with client:
+            with pytest.raises(SynologyError) as info:
+                await client.download_binary(
+                    "SYNO.Foto.Thumbnail", "get", 2, {"id": "1"}, tmp_path / "x"
+                )
+        assert info.value.code == 803
+
+    @respx.mock
+    async def test_request_error_names_the_parameter(self) -> None:
+        client = make_client(self._cache())
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={
+                "success": False,
+                "error": {"code": 120, "errors": {"name": "rating", "reason": "condition"}},
+            }
+        )
+        async with client:
+            with pytest.raises(SynologyError) as info:
+                await client.request(
+                    "SYNO.Foto.Browse.Item", "set", 2, {"rating": "9"}, post_form=True
+                )
+        assert str(info.value).endswith("rating (condition)")
