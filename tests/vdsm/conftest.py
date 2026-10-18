@@ -119,8 +119,8 @@ def _login_problem(base_url: str, user: str, password: str) -> str | None:
                 "version": "1",
                 "method": "logout",
                 "session": "MCPReadiness",
-                "_sid": resp["data"]["sid"],
             },
+            headers={"Cookie": f"id={resp['data']['sid']}"},  # never _sid (#176)
             timeout=15,
         )
     except (httpx.HTTPError, ValueError) as e:
@@ -260,8 +260,8 @@ class _DsProbe:
                     "api": "SYNO.DownloadStation.Task",
                     "version": "1",
                     "method": "list",
-                    "_sid": self.sid or "",
                 },
+                headers={"Cookie": f"id={self.sid or ''}"},  # never _sid (#176)
                 timeout=15,
             )
             if resp.status_code >= 400:
@@ -343,7 +343,7 @@ def _photos_problem(base_url: str, user: str, password: str) -> str | None:
         try:
             root = httpx.post(
                 url,
-                params={"_sid": sid},
+                headers={"Cookie": f"id={sid}"},  # never _sid (#176)
                 data={"api": "SYNO.Foto.Browse.Folder", "version": "2", "method": "get", "id": "0"},
                 timeout=30,
             ).json()
@@ -355,8 +355,8 @@ def _photos_problem(base_url: str, user: str, password: str) -> str | None:
                     "version": "6",
                     "method": "logout",
                     "session": "FileStation",
-                    "_sid": sid,
                 },
+                headers={"Cookie": f"id={sid}"},
                 timeout=15,
             )
         if not root.get("success"):
