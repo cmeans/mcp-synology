@@ -11,7 +11,7 @@
 
 ### Fixed
 
-- **About 1 in 70 sessions failed every call with "Invalid session" (DSM error 119)** (closes #176). DSM reads the `_sid` parameter as JSON, and a session ID that begins like a number (`-8bV…`, `6E5h…`, `02-P…`) then matched no session. A call with it failed, and so did the automatic re-login's retry when the new session drew the same kind of ID. The client now sends the session as DSM's `id` cookie on every call, which works for every API on DSM 7.1 and 7.2.2 and also keeps the session ID out of URLs and access logs. This was the intermittent 119 seen in the vdsm suite on DSM 7.2.2; `tests/vdsm/test_vdsm_session.py` logs in until DSM hands out such an ID and checks the client's calls with it
+- **About 1 in 70 sessions failed every call with "Invalid session" (DSM error 119)** (#271, closes #176). DSM reads the `_sid` parameter as JSON, and a session ID that begins like a number (`-8bV…`, `6E5h…`, `02-P…`) then matched no session. A call with it failed, and so did the automatic re-login's retry when the new session drew the same kind of ID. The client now sends the session as DSM's `id` cookie on every call, which works for every API on DSM 7.1 and 7.2.2 and also keeps the session ID out of URLs and access logs. This was the intermittent 119 seen in the vdsm suite on DSM 7.2.2; `tests/vdsm/test_vdsm_session.py` logs in until DSM hands out such an ID and checks the client's calls with it
 
 ## 0.9.0 (2026-10-17)
 
