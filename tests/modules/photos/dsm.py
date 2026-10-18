@@ -88,10 +88,11 @@ class FakePhotos:
             ctype = request.headers.get("content-type", "")
             assert ctype.startswith("application/x-www-form-urlencoded"), ctype
             raw = dict(parse_qsl(request.content.decode(), keep_blank_values=True))
-            assert set(request.url.params) <= {"_sid"}, "only _sid goes in the query string"
+            assert not request.url.params, "a form POST has no query string"
         else:
             raw = dict(request.url.params)
-            raw.pop("_sid", None)
+        # The session goes as the id cookie, never as _sid (#176).
+        assert "_sid" not in raw, "the session went as _sid"
         api, method, version = raw.pop("api"), raw.pop("method"), int(raw.pop("version"))
         params = {k: json.loads(v) for k, v in raw.items()}
         self.calls.append(Call(api, method, version, params, request.method))
