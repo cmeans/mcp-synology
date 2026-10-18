@@ -91,29 +91,29 @@ jobs:
       # container with its own /storage bind-mount + Python venv + Playwright
       # Chromium download. CI on 550f445 hit
       # `System.IO.IOException: No space left on device` after the bake
-      # succeeded but during the test step. Removing preinstalled software we
-      # don't use with rm takes seconds; jlumbroso/free-disk-space's apt purge
-      # of large packages took about 2 minutes (#132, #181). Docker images stay:
-      # testcontainers would pull them again. /opt/hostedtoolcache stays apart
-      # from CodeQL: uv's Python comes from it.
+      # succeeded but during the test step. Free the runner-pre-installed
+      # software we don't need (dotnet, Android SDK, Haskell, swap). The
+      # action's apt purge of large packages took most of its ~2 minutes and
+      # is off (#132); the next step checks there's still enough room.
       - name: Free disk space
+        uses: jlumbroso/free-disk-space@ceedf095f4ec1a097402bc6bd80831f2e1a6fde6 # v2.0.0
+        with:
+          tool-cache: false  # keep Python toolchain; uv depends on it
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false  # the slow part (#132)
+          docker-images: false  # keep — testcontainers re-pulls otherwise
+          swap-storage: true
+
+      - name: Check free disk space
         run: |
           set -euo pipefail
-          df -h /
-          sudo swapoff -a && sudo rm -f /mnt/swapfile /swapfile
-          for d in /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup \
-              /opt/hostedtoolcache/CodeQL /usr/local/share/boost /usr/share/swift \
-              /usr/local/share/powershell /usr/local/share/chromium /opt/microsoft \
-              /opt/google /opt/az /usr/lib/jvm /usr/lib/google-cloud-sdk \
-              /usr/local/julia*; do
-            sudo rm -rf "$d" &
-          done
-          wait
           df -h /
           free_gb=$(df --output=avail -BG / | tail -1 | tr -dc 0-9)
           # Extracted image + tarball + bake, with room to spare.
           if [ "$free_gb" -lt 35 ]; then
-            echo "::error::only ${free_gb} GB free after cleanup; the vdsm job needs about 35 GB"
+            echo "::error::only ${free_gb} GB free; the vdsm job needs about 35 GB"
             exit 1
           fi
 

@@ -11,7 +11,7 @@
 
 ### Changed
 
-- **vdsm CI restores the golden image far more often** (#275, for #132). The cache was full (9.2 of GitHub's 10 GB), because every PR that missed saved its own copy, about 1 GB per DSM version, that only that PR could read. Those copies pushed main's out, so most PR runs rebuilt the image, about 10 minutes per version. Now only `main` saves the cache, and its key is `BAKE_VERSION` instead of a hash of the bake scripts, so a script change that doesn't change the image (#271) no longer rebakes everything. A PR that changes the bake files bakes fresh, so its own run tests the new bake. Disk cleanup is a plain `rm` of unused preinstalled software instead of `jlumbroso/free-disk-space`'s apt purge (about 2 minutes), and it fails early if under 35 GB is free. Playwright, which only the bake uses, is installed only on a cache miss
+- **vdsm CI restores the golden image far more often** (#275, for #132). The cache was full (9.2 of GitHub's 10 GB), because every PR that missed saved its own copy, about 1 GB per DSM version, that only that PR could read. Those copies pushed main's out, so most PR runs rebuilt the image, about 10 minutes per version. Now only `main` saves the cache, and its key is `BAKE_VERSION` instead of a hash of the bake scripts, so a script change that doesn't change the image (#271) no longer rebakes everything. A PR that changes the bake files bakes fresh, so its own run tests the new bake. Disk cleanup skips `jlumbroso/free-disk-space`'s apt purge of large packages, which took most of its 2 minutes, and a new step fails early if under 35 GB is free. Playwright, which only the bake uses, is installed only on a cache miss
 
 ### Fixed
 
