@@ -119,7 +119,7 @@ async def tag_photos(
         lines: list[str] = []
         if found:
             # Resolved now, never cached: 1.9.1 renumbers tags on re-index (spec).
-            resolved = await ph.tag_ids(names)
+            resolved = await ph.tag_ids(names, param="tags")
             if action == "add":
                 for tag, tag_id in resolved.items():
                     if tag_id is None:

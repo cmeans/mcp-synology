@@ -312,7 +312,7 @@ async def _condition(ph: Photos, given: dict[str, Any]) -> dict[str, Any]:
         cond["person"] = [int((await ph.person(str(p), param="condition"))["id"]) for p in people]
         cond["person_policy"] = policy("people")
     if tags := as_list("tags"):
-        ids = await ph.tag_ids([str(t) for t in tags])
+        ids = await ph.tag_ids([str(t) for t in tags], param="condition")
         unknown_tags = [t for t, i in ids.items() if i is None]
         if unknown_tags:
             not_found(
