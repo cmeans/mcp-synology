@@ -231,12 +231,13 @@ Browse or search items.
 **DSM API:** one of `Browse.Item list` v2 (a single folder, album, person, tag or place), `Browse.Item list_with_filter` v2 (date range, type, rating, favorite, or combinations), `Search.Search list_item` v1 (keyword); the total from the matching `count` / `count_with_filter` / `count_item`
 
 **Tool description (LLM-facing):**
-> List photos and videos in Synology Photos, newest first by default. Narrow by one of folder, album,
-> person or place, plus tag, date range (start_date/end_date, YYYY-MM-DD), type (photo/video),
-> min_rating, favorite or concept (Photos 1.9.1+); or search by keyword (filename, description and tags). Returns id,
-> filename, taken time, type, size and folder; paged with offset/limit (default 50) with the total.
-> space: personal (default) or shared. Use the ids with get_photo, download_photos, tag_photos and
-> the other photo tools. For files outside Photos, use list_files.
+> List photos and videos in Synology Photos, newest first by default. Narrow by folder, person and
+> tag, plus date range (start_date/end_date, YYYY-MM-DD), type (photo/video), min_rating or favorite
+> (Photos 1.9.1+); or list one album, place or concept (1.9.1+) on its own; or search by keyword
+> (filename and tags). Returns id, filename, taken time, type, size and folder; paged with
+> offset/limit (default 50) with the total. space: personal (default) or shared. Use the ids with
+> get_photo, download_photos, tag_photos and the other photo tools. For files outside Photos, use
+> list_files.
 
 **Parameters:**
 
@@ -246,7 +247,7 @@ Browse or search items.
 | `folder` | `str` | No | — | Folder ID or path in the space. **One level** (Photos has no recursive folder listing). |
 | `album` | `str` | No | — | Album ID or unique name (personal only). Can't be combined with other filters. |
 | `person` | `str` | No | — | Person ID or unique name. |
-| `place` | `int` | No | — | Place ID from `list_photo_collections(type="place")`. |
+| `place` | `int` | No | — | Place ID from `list_photo_collections(type="place")`. Can't be combined with other filters. |
 | `tag` | `str` | No | — | Tag name. |
 | `keyword` | `str` | No | — | Search text. Can't be combined with other filters. |
 | `start_date` | `str` | No | — | `YYYY-MM-DD` (UTC), inclusive. |
@@ -254,7 +255,7 @@ Browse or search items.
 | `type` | `str` | No | `"all"` | `all`, `photo` or `video`. |
 | `min_rating` | `int` | No | — | 1–5. |
 | `favorite` | `bool` | No | — | Only favorites. Photos 1.9.1+; on 1.3.4, `not_supported`. |
-| `concept` | `int` | No | — | Concept ID from `list_photo_collections(type="concept")`. Photos 1.9.1+. |
+| `concept` | `int` | No | — | Concept ID from `list_photo_collections(type="concept")`. Photos 1.9.1+. Can't be combined with other filters. |
 | `sort_by` | `str` | No | `"taken"` | `taken`, `filename`, `size` or `type` (DSM `takentime`, `filename`, `filesize`, `item_type`). |
 | `sort_direction` | `str` | No | `"desc"` | `asc` or `desc`. |
 | `offset` | `int` | No | `0` | |
@@ -276,10 +277,13 @@ Photos in /Trips/2024 (personal space; newest first)
 The heading names the source (folder path, album, person, tag, place, concept or `search "<keyword>"`) and the filters. A full page ends with `Pass offset=N for the next page.`; an offset past the end shows `No items to display.` and the total. A row still being indexed has `(indexing)` after its taken time.
 
 **Design notes:**
-- **One source, filters on top.** A single `folder`/`person`/`tag`/`place` with no other filter uses `Item.list` (`folder_id`, `person_id`, `general_tag_id`, `geocoding_id`; all but `geocoding_id` verified, that one from the web client). Anything else uses `list_with_filter`, whose filter keys are lists of IDs: `folder: [id]`, `person`, `general_tag`, `geocoding`, `time: [{start_time, end_time}]`, `item_type` (`[-1]` photos, `[-2]` videos; verified on both versions), `rating` (`[min..5]`), and on 1.9.1 `favorite: [true]` (v7). With `person` and `general_tag` the web client adds `person_policy`/`general_tag_policy: "or"`.
-- `album` uses `Item.list` with `album_id` (normal and smart albums alike, verified); `list_with_filter` has no album key, so combining is refused locally with `invalid_parameter`.
-- `keyword` uses `Search.Search list_item`. It matches filename substrings (verified: `beach` found `beach-sunset.jpg`). Description and tag matching come from the web client and are checked at the vdsm gate.
-- **`list` replies carry no total.** The footer total comes from the matching count call: `Item.count` takes `folder_id` or `person_id` (verified) or `geocoding_id` (web client), so tag totals use `count_with_filter` and album totals `Album.get`'s `item_count`.
+- **Which call.** Verified on both versions (#258 implementation):
+  - **One folder, no filters:** `Item.list` with `folder_id`, total from `Item.count` `folder_id`, as the web client's folder view. Its `sort_by` works there.
+  - **Everything else** (no source; `person`; `tag`; a folder with filters; any filter): `list_with_filter`, total from `count_with_filter` with the same keys. Filter keys are lists of IDs: `folder: [id]`, `person`, `general_tag`, `time: [{start_time, end_time}]`, `item_type` (`[-1]` photos, `[-2]` videos), `rating` (`[min..5]`), and on 1.9.1 `favorite: [true]` (v7). With no keys it lists the whole space. `Item.list` outside a folder view (no source, `general_tag_id`) **ignores `sort_by`**, and `list_with_filter` honors it, which is why the tool avoids `Item.list` there. With `person` or `general_tag`, `count_with_filter` answers **120 unless `person_policy`/`general_tag_policy` is sent** (`"or"`, as the web client does).
+  - **`place`:** `Item.list` with `geocoding_id`, total from `Item.count` `geocoding_id` (both verified). It can't be combined: `list_with_filter`'s `geocoding` key takes the address-tree node IDs from `Search.Filter list` (Chicago was node 4 there and place 5 in `Geocoding.list`), so a place ID matched nothing there. It's refused locally with `invalid_parameter`.
+  - **`album`:** `Item.list` with `album_id` (normal and smart albums alike, verified), total from the album's `item_count`; `list_with_filter` has no album key, so combining is refused locally.
+  - **`concept`** (1.9.1): `Item.list` v7 with `concept_id`, total from `Browse.Concept get`'s `item_count`; combining is refused locally (no concept filter key).
+- `keyword` uses `Search.Search list_item` and `count_item`, in DSM's order (`sort_by` is ignored there). It matches filename substrings and tag names (verified on 7.1: `beach` found `beach-sunset.jpg`, and a tag's name found its three items). New uploads appear in search only after Photos indexes them. Description matching comes from the web client.
 - `Item.list` runs at v2 because v1 rejects `rating` in `additional` (120, `reason: condition`, verified on both); v7 on 1.9.1 when `favorite` or `concept` is involved.
 - Rows show `taken` from `time`; an item still being indexed shows its upload time (see Indexing lag).
 
@@ -388,7 +392,7 @@ Originals or thumbnails to a local folder.
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
 | `ids` | `list[int]` | **Yes** | — | |
-| `dest_folder` | `str` | No | — | Local folder; default as `download_file`. Must be inside the allowed local folders (#257). |
+| `dest_folder` | `str` | No | — | Local folder, inside the allowed local folders (#257). Default: the allowed folder, when there's exactly one (Photos has no `default_download_dir`). |
 | `size` | `str` | No | `"original"` | `original`, `xl`, `m` or `sm`. |
 | `space` | `str` | No | `"personal"` | |
 | `overwrite` | `bool` | No | `false` | |
@@ -957,7 +961,7 @@ Maintainer, 2026-10-17 (the first group), with the 1.9.1-only additions found af
 
 ## Remaining Open Items
 
-1. **From the web client only, checked at the implementation PR's vdsm gate:** keyword search over descriptions and tags; `Item.list` by `geocoding_id` and `Item.count` by `geocoding_id`; `rotate=right`; a same-name folder in one parent; cross-space copy and move (`extra_info`); `BackgroundTask.File delete` with an unknown ID; re-sharing after `stop`; the recycle-bin flags turning off when a share's recycle bin is off; whether a Shared Space favorite is per user; error 901 (People disabled); People and concepts on vdsm (clusters may not form without a GPU; then they're fixture- and real-NAS-tested only); a Shared Space user **with** folder view rights trying to edit or delete (needs `FolderPermission`, out of scope; the entry-only case is verified).
+1. **From the web client only, checked at the implementation PR's vdsm gate:** keyword search over descriptions (tags verified); `rotate=right`; a same-name folder in one parent; cross-space copy and move (`extra_info`); `BackgroundTask.File delete` with an unknown ID; re-sharing after `stop`; the recycle-bin flags turning off when a share's recycle bin is off; whether a Shared Space favorite is per user; error 901 (People disabled); People and concepts on vdsm (clusters may not form without a GPU; then they're fixture- and real-NAS-tested only); a Shared Space user **with** folder view rights trying to edit or delete (needs `FolderPermission`, out of scope; the entry-only case is verified).
 2. **A 119 right after login** was seen once on 7.2.2 (the first call of a fresh session; the retry was clean). It looks like #176's flake; the client's normal re-auth covers it.
 3. **Out of scope:** see Resolved Design Decision 6.
 4. **Payload:** measured in the implementation PR, with `PAYLOAD_BUDGET_CHARS` raised and the growth stated.
