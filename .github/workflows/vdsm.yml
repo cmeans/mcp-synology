@@ -50,7 +50,8 @@ jobs:
       # every change to what the bake produces, so a change to the bake scripts
       # that leaves the image alone (#271) doesn't rebake everything. A PR that
       # changes the bake files bakes fresh instead of restoring, so its own run
-      # tests the new bake. Only main saves: a PR's cache is readable by that PR
+      # tests the new bake (.github/labeler.yml labels such a PR "Rebuilds vdsm
+      # image"; keep its file list in sync with the one below). Only main saves: a PR's cache is readable by that PR
       # alone, and PR copies (about 1 GB per DSM version) filled the repo's 10 GB
       # cache and pushed main's out.
       - name: Golden image cache key

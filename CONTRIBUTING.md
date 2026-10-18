@@ -154,6 +154,9 @@ Two required sections:
        requires branches to be up to date, so the PR can't merge until
        you update it. Rebase onto `main`, or use GitHub's "Update
        branch" button.
+     - **`Rebuilds vdsm image`** (informational): the PR changes the vdsm
+       bake files, so its vdsm runs rebuild the test image, about 10 extra
+       minutes per DSM version.
      - **`Merge conflict`:** your branch no longer merges cleanly.
        Rebase onto `main` and resolve the conflicts.
 4. **Final maintainer review and merge.** Once QA is clean, the
