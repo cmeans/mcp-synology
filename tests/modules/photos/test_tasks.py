@@ -353,3 +353,143 @@ class TestPhotoTask:
         with pytest.raises(ToolError) as exc:
             await photo_task(make_client(), action="stop")
         assert _error(exc)["param"] == "handle"
+
+
+def _done_with_error() -> dict[str, Any]:
+    done: dict[str, Any] = captured("bg-copy-status_last")
+    done["list"][0]["error"] = 1
+    return done
+
+
+class TestCoverage:
+    """Branches the capture-based tests above don't reach (Codecov, as #272)."""
+
+    @respx.mock
+    async def test_task_gone_from_the_list_counts_as_done(self) -> None:
+        fake = FakePhotos().on(ITEM, "get", 2, _items(12)).on(FOLDER, "get", 2, _DEST)
+        fake.on(FILE, "copy", 1, captured("bg-copy")).on(INFO, "get_status", 1, {"list": []})
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await copy_or_move(
+                client, operation="copy", ids=[12], folders=None, destination="14"
+            )
+        assert out.startswith("Copied 1 item(s) to /mcp-spec-capture/dest")
+
+    @respx.mock
+    async def test_error_detail_unreadable(self) -> None:
+        fake = FakePhotos().on(ITEM, "get", 2, _items(12)).on(FOLDER, "get", 2, _DEST)
+        fake.on(FILE, "copy", 1, captured("bg-copy")).on(INFO, "get_status", 1, _done_with_error())
+        fake.error(INFO, "get_error_detail", 1, 117)
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await copy_or_move(
+                client, operation="copy", ids=[12], folders=None, destination="14"
+            )
+        assert "(couldn't read the failed items:" in out
+
+    @respx.mock
+    async def test_copy_folders(self) -> None:
+        fake = FakePhotos().on(FOLDER, "get", 2, _DEST)
+        fake.on(FILE, "copy", 1, captured("bg-copy"))
+        fake.on(INFO, "get_status", 1, captured("bg-copy-status_last"))
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await copy_or_move(
+                client,
+                operation="copy",
+                ids=None,
+                folders=["/mcp-spec-capture/dest"],
+                destination="14",
+            )
+        assert fake.one(FILE, "copy").params["folder_id"] == [14]
+        assert out.startswith("Copied 1 folder(s) to ")
+
+    @respx.mock
+    async def test_nothing_to_do(self) -> None:
+        fake = FakePhotos().on(ITEM, "get", 2, {"list": []}).on(FOLDER, "get", 2, _DEST)
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await copy_or_move(
+                client, operation="move", ids=[99], folders=None, destination="14"
+            )
+        assert out.startswith("Nothing to do: none of the ids exist.")
+        assert not fake.of(FILE)
+
+    @respx.mock
+    async def test_delete_handoff_and_unknown_recycle_setting(self) -> None:
+        fake = FakePhotos().on(ITEM, "get", 2, _items(25))
+        fake.on(FILE, "delete", 1, captured("fav191_bg-delete"))
+        install(fake)
+        client = make_client(CAPTURE_191)
+        async with client:
+            out = await delete_photos(client, ids=[25], timeout=0)
+        assert out.startswith("Delete of 1 item(s): Still deleting on the NAS")
+
+    @respx.mock
+    async def test_delete_with_errors_and_no_recycle_setting(self) -> None:
+        status = captured("fav191_bg-delete-status")
+        status["list"][0]["error"] = 1
+        fake = FakePhotos().on(ITEM, "get", 2, _items(25))
+        fake.on(FILE, "delete", 1, captured("fav191_bg-delete")).on(INFO, "get_status", 1, status)
+        fake.on(INFO, "get_error_detail", 1, {"list": [{"id": 25, "reason": "busy"}]})
+        fake.error("SYNO.Foto.Setting.Admin", "get", 1, 105)
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await delete_photos(client, ids=[25])
+        lines = out.splitlines()
+        assert lines[0].startswith("Delete of 1 item(s) finished with errors:")
+        assert "busy" in out
+
+    @pytest.mark.parametrize(
+        ("route", "call"),
+        [
+            ((ITEM, "get", 2), lambda c: copy_or_move(
+                c, operation="copy", ids=[1], folders=None, destination="14")),
+            ((FOLDER, "get", 2), lambda c: delete_photo_folders(c, folders=["/x"])),
+            ((INFO, "abort_task", 1), lambda c: photo_task(c, handle="photos:5", action="stop")),
+        ],
+    )  # fmt: skip
+    @respx.mock
+    async def test_dsm_error(self, route: tuple[str, str, int], call: Any) -> None:
+        install(FakePhotos().error(*route, 160))
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await call(client)
+        assert "160" in _error(exc)["message"]
+
+    @respx.mock
+    async def test_status_of_unknown_task(self) -> None:
+        install(FakePhotos().on(INFO, "get_status", 1, {"list": []}))
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await photo_task(client, handle="photos:5")
+        assert _error(exc)["code"] == "not_found"
+
+    @respx.mock
+    async def test_status_done_with_errors(self) -> None:
+        fake = FakePhotos().on(INFO, "get_status", 1, _done_with_error())
+        fake.on(FOLDER, "get", 2, _DEST)
+        fake.on(INFO, "get_error_detail", 1, {"list": [{"id": 12, "reason": "not_existed"}]})
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await photo_task(client, handle="photos:5")
+        assert "not_existed" in out
+
+    @respx.mock
+    async def test_status_without_target_or_start_time(self) -> None:
+        running = {"id": 5, "operation": "delete", "status": "processing", "total": 2,
+                   "completion": 1}  # fmt: skip
+        install(FakePhotos().on(INFO, "get_status", 1, {"list": [running]}))
+        client = make_client()
+        async with client:
+            out = await photo_task(client, handle="photos:5")
+        assert out.startswith("photos:5 delete: processing, 1 of 2 done")
+        assert "running" not in out

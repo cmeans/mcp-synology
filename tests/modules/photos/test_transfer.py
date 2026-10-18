@@ -368,6 +368,56 @@ class TestUpload:
         assert fake.one("SYNO.Foto.Browse.NormalAlbum", "add_item").params == {"id": 4, "item": [9]}
         assert 'Added 1 item(s) to album "mcp-spec-album".' in out
 
+    @respx.mock
+    async def test_folder_lookup_error(self, tmp_path: Path) -> None:
+        (tmp_path / "a.jpg").write_bytes(b"x")
+        install(FakePhotos().error("SYNO.Foto.Browse.Folder", "get", 2, 160))
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await upload_photos(
+                    client, local_paths=[str(tmp_path / "a.jpg")], allowed_roots=[tmp_path]
+                )
+        assert "160" in _error(exc)["message"]
+
+    @respx.mock
+    async def test_unreadable_file_rename_lookup_and_album_failures(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A file that can't be read is one failed row; a failed rename lookup or album
+        add leaves the upload's own result standing."""
+        from mcp_synology.modules.photos import transfer
+
+        for name in ("a.jpg", "b.jpg"):
+            (tmp_path / name).write_bytes(b"x")
+        real = transfer._upload_one
+
+        async def flaky(client: Any, api: Any, fields: dict[str, Any], path: Path) -> Any:
+            if path.name == "a.jpg":
+                raise PermissionError(13, "Permission denied")
+            return await real(client, api, fields, path)
+
+        monkeypatch.setattr(transfer, "_upload_one", flaky)
+        fake = FakePhotos().on("SYNO.Foto.Browse.Folder", "get", 2, captured("folder-get-root"))
+        fake.on("SYNO.Foto.Browse.Album", "get", 1, captured("album-get"))
+        fake.error(ITEM, "get", 2, 117)
+        fake.error("SYNO.Foto.Browse.NormalAlbum", "add_item", 1, 117)
+        fake.multipart = lambda _r: httpx.Response(
+            200, json={"success": True, "data": {"action": "rename", "id": 9}}
+        )
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await upload_photos(
+                client,
+                local_paths=[str(tmp_path / "a.jpg"), str(tmp_path / "b.jpg")],
+                album="4",
+                allowed_roots=[tmp_path],
+            )
+        assert "a.jpg  failed   couldn't read the file (Permission denied)" in out
+        assert "renamed  id 9" in out and "(as " not in out
+        assert 'Couldn\'t add them to album "mcp-spec-album":' in out
+
     async def test_outside_roots_refused_first(self, tmp_path: Path) -> None:
         inside = tmp_path / "in"
         inside.mkdir()
