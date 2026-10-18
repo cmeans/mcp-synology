@@ -107,14 +107,31 @@ _MODULE_REGISTRY: dict[str, ModuleType] = {
 
 
 def _unreachable_error(base_url: str, timeout: float, exc: httpx.TransportError) -> NoReturn:
-    """Raise a structured error for a NAS that can't be reached (#138).
+    """Raise a structured error for a first connection (API info + login) that failed (#138).
 
     httpx's connect errors often stringify to ``''``, which used to reach the
     model as "Error executing tool list_shares: " with nothing to act on.
+    A read, write or pool timeout isn't "can't reach": the NAS is there but slow,
+    e.g. busy with a large delete (#254), so it gets its own wording.
     """
     timed_out = isinstance(exc, httpx.TimeoutException)
-    what = f"timed out after {timeout:g} s" if timed_out else "could not connect"
     detail = f" ({type(exc).__name__}: {exc})" if str(exc) else f" ({type(exc).__name__})"
+    if timed_out and not isinstance(exc, httpx.ConnectTimeout):
+        connected = isinstance(exc, (httpx.ReadTimeout, httpx.WriteTimeout))
+        error_response(
+            ErrorCode.TIMEOUT,
+            f"The NAS at {base_url} "
+            f"{'accepted the connection but ' if connected else ''}"
+            f"didn't answer within {timeout:g} s{detail}. It may be busy (heavy load, "
+            "or a large delete or copy).",
+            retryable=True,
+            suggestion=(
+                "Try again shortly. If the NAS is often this slow, raise connection.timeout "
+                f"in the config (now {timeout:g} s). "
+                "`mcp-synology check --config <file>` tests the connection and login."
+            ),
+        )
+    what = f"timed out after {timeout:g} s" if timed_out else "could not connect"
     error_response(
         ErrorCode.TIMEOUT if timed_out else ErrorCode.UNAVAILABLE,
         f"Can't reach the NAS at {base_url}: {what}{detail}.",

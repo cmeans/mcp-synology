@@ -606,7 +606,6 @@ class TestSharedClientManagerUnreachableNas:
         ("raised", "code"),
         [
             (httpx.ConnectTimeout, "timeout"),
-            (httpx.ReadTimeout, "timeout"),
             (httpx.ConnectError, "unavailable"),
         ],
     )
@@ -622,9 +621,41 @@ class TestSharedClientManagerUnreachableNas:
             await manager.get_client()
         err = self._envelope(exc.value)
         assert err["code"] == code
-        assert "nas:5000" in err["message"]
+        assert err["message"].startswith("Can't reach the NAS at http://nas:5000")
         assert err["retryable"] is True
+        assert "powered on" in err["suggestion"]
         assert "mcp-synology check" in err["suggestion"]
+
+    @pytest.mark.parametrize(
+        ("raised", "connected"),
+        [
+            (httpx.ReadTimeout, True),
+            (httpx.WriteTimeout, True),
+            (httpx.PoolTimeout, False),
+        ],
+    )
+    @respx.mock
+    async def test_slow_nas_is_not_unreachable(
+        self, raised: type[Exception], connected: bool
+    ) -> None:
+        """#254: a busy NAS that doesn't answer the login in time was told "can't reach",
+        and the model then blamed the network. It's a timeout on a reachable NAS."""
+        from mcp.server.mcpserver.exceptions import ToolError
+
+        manager = SharedClientManager(make_test_config())
+        respx.get(f"{BASE_URL}/webapi/query.cgi").mock(side_effect=raised)
+        with pytest.raises(ToolError) as exc:
+            await manager.get_client()
+        err = self._envelope(exc.value)
+        assert err["code"] == "timeout"
+        assert err["retryable"] is True
+        assert err["message"].startswith("The NAS at http://nas:5000 ")
+        assert ("accepted the connection" in err["message"]) is connected
+        assert f"({raised.__name__}" in err["message"]
+        assert "may be busy" in err["message"]
+        assert "Can't reach" not in err["message"]
+        assert "connection.timeout" in err["suggestion"]
+        assert "powered on" not in err["suggestion"]
 
     @respx.mock
     async def test_half_open_client_is_closed_and_next_call_retries(self) -> None:

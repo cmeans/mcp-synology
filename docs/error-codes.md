@@ -362,6 +362,10 @@ Common causes:
 - The NAS can't be reached at all: it's off or asleep, the network or VPN is
   down, or the configured host or port is wrong. The message starts "Can't
   reach the NAS at …" and names the URL and the timeout.
+- The NAS is reachable but too busy to answer the first connection (the API
+  list and the login) in time. The message starts "The NAS at … accepted the
+  connection but didn't answer within …" (#254). Retry shortly; if it's often
+  this slow, raise `connection.timeout`.
 - DSM stopped answering partway through. While it deletes or copies very large
   files (multi-TB Time Machine bundles, VM images), DSM can stall for longer
   than the connection timeout (`connection.timeout`, default 30 s).
@@ -381,7 +385,8 @@ Fix:
 
 **Can't reach the NAS?** If the message starts "Can't reach the NAS at …",
 mcp-synology never got an answer from DSM, so the NAS-side checks below
-can't help. Check that the NAS is powered on and reachable from this
+can't help. (If it starts "The NAS at … didn't answer within …" instead, the
+NAS is reachable but busy: retry shortly, or raise `connection.timeout`.) Check that the NAS is powered on and reachable from this
 machine (LAN or VPN), and that `connection` `host`, `port` and `https` in
 the config are right, then run `mcp-synology check -v --config <file>`,
 which tests the connection and login step by step.
@@ -453,7 +458,8 @@ Fix:
 
 **Can't reach the NAS?** If the message starts "Can't reach the NAS at …",
 mcp-synology never got an answer from DSM, so the NAS-side checks below
-can't help. Check that the NAS is powered on and reachable from this
+can't help. (If it starts "The NAS at … didn't answer within …" instead, the
+NAS is reachable but busy: retry shortly, or raise `connection.timeout`.) Check that the NAS is powered on and reachable from this
 machine (LAN or VPN), and that `connection` `host`, `port` and `https` in
 the config are right, then run `mcp-synology check -v --config <file>`,
 which tests the connection and login step by step.
