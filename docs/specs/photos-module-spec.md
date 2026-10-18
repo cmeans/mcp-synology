@@ -130,6 +130,7 @@ Photos writes ratings, descriptions, tags, taken-time changes and rotations **in
 - tools take tag **names** and resolve them to IDs immediately before each call (`GeneralTag.list`), never from a cache;
 - `GeneralTag.create` is idempotent by name (it returns the existing tag's ID, verified), so "create if missing" is just `create`;
 - `add_tag` for one item sends all its tags in a single call. Several `add_tag` calls in quick succession on one item overwrite each other (seen on the real NAS while bulk tagging, #248).
+- A **taken-time** change within seconds of an earlier edit to the same file can be undone: Photos' re-index of the earlier rewrite reads the file's old date back (seen on 7.2.2; ratings and descriptions weren't affected). `edit_photo` sends its fields in one `set` for that reason.
 
 ### Writes that report success for nothing
 
@@ -209,6 +210,7 @@ Photos-specific codes, dispatched when the API name starts with `SYNO.Foto`. Cod
 | 602 | No personal space (user home service off) | `unavailable` (see Prerequisites) |
 | 620 | Upload of a file Photos doesn't support (`.txt`) | `invalid_parameter` |
 | 621 | Upload into a folder that doesn't exist | `not_found` |
+| 641 | A folder with that name already exists in the parent (`Folder.create`, `Folder.rename`; verified on both, #258 implementation) | `already_exists` |
 | 642 | Folder doesn't exist (`Folder.get`) | `not_found` |
 | 801 | Shared Space disabled or not granted | `permission_denied` (see Prerequisites) |
 | 803 | No permission on that Shared Space folder | `permission_denied` (see Prerequisites) |
@@ -498,7 +500,8 @@ Album 9: Trip 2024 · normal · 2 item(s) · 2024-07-04 – 2024-07-06 · not sh
 **Design notes:**
 - Album names needn't be unique: DSM created a second album with the same name (verified). `create` warns when the name already exists; name lookup then needs the ID.
 - `set_cover` takes `id_item` as a **scalar** (unlike `Folder.set_cover`).
-- **Smart album condition** (tool input → DSM): `folders` → `folder_filter: [ids]`, `people` → `person: [ids]` + `person_policy` (`any`/`all` → `or`/`and`), `tags` → `general_tag` + `general_tag_policy`, `places` → `geocoding`, `start_date`/`end_date` → `time: [{start_time, end_time}]`, `type` → `item_type` (`[]`, `[-1]` photos, `[-2]` videos), `ratings` → `rating: [..]`, `keywords` → `keyword` + `keyword_policy`; `user_id` is filled in (the caller's id from `UserInfo me`, or `0` for a Shared Space source). The tool previews the match count with `peek_item_count` and returns it.
+- **Smart album condition** (tool input → DSM): `folders` → `folder_filter: [ids]`, `people` → `person: [ids]` + `person_policy` (`any`/`all` → `or`/`and`), `tags` → `general_tag` + `general_tag_policy`, `places` → `geocoding` (see below), `start_date`/`end_date` → `time: [{start_time, end_time}]`, `type` → `item_type` (`[]`, `[-1]` photos, `[-2]` videos), `ratings` → `rating: [..]`, `keywords` → `keyword` + `keyword_policy`; `user_id` is filled in (the caller's id from `UserInfo me`, or `0` for a Shared Space source). The tool previews the match count with `peek_item_count` and returns it.
+- **Places in a condition** use the address-tree node IDs of `Search.Filter list`'s `geocoding` tree, not `Geocoding.list`'s place IDs: a place ID there answered **950** (verified on 7.1). The tool takes place IDs from `list_photo_collections(type="place")` and maps each to its node (the place's `country_id` is the tree's root; `first_level`, then `second_level`, name the node), which worked on both versions.
 - A condition DSM can't use fails with 953 (e.g. `user_id` missing or null) or 950 (a referenced tag/person/folder no longer exists; see tag IDs above). A condition with only `user_id` is accepted and matches everything (verified), so the tool requires at least one other key.
 
 ---
@@ -540,7 +543,7 @@ Album 9 "Trip 2024" is shared.
 `stop` says `Album 9 is no longer shared; the link stops working (DSM keeps it, so sharing again may restore it).` On an HTTP connection, a line says the password crossed the network unencrypted.
 
 **Design notes:**
-- `share` sends `set_shared` `enabled: true`, then `update` for any settings; the reply has `passphrase` and `sharing_link` (`http(s)://<host>/mo/sharing/<passphrase>`). `stop` sends `enabled: false`; its reply still carries the passphrase and link (verified), so re-sharing probably restores the same link (checked at the vdsm gate).
+- `share` sends `set_shared` `enabled: true`, then `update` for any settings; the reply has `passphrase` and `sharing_link` (`http(s)://<host>/mo/sharing/<passphrase>`). `stop` sends `enabled: false`; its reply still carries the passphrase and link (verified). Sharing again restores **the same link with its settings reset**: public access none, no password, no expiry, no members (verified on both).
 - `update`'s `permission` entries: public `{action: "update", role: "view"|"download", member: {type: "public"}}` or `{action: "delete", member: {type: "public"}}`; members `{action, role, member: {type, id}}`.
 - Over plain HTTP the web client RSA/AES-wraps `password` (`encryption: ["password"]`); over HTTPS it's sent as is. The tool sends it as is in the POST body and, on an HTTP connection, says the password crossed the network unencrypted (#193).
 - `Album.get` with `additional: ["sharing_info"]` reads the current state (`privacy_type`, `enable_password`, `expiration`, `is_expired`, `sharing_link`).
@@ -571,11 +574,11 @@ Album 9 "Trip 2024" is shared.
 | `item_id` | `int` | No | — | `set_cover`. |
 | `space` | `str` | No | `"personal"` | |
 
-**Annotations:** `destructiveHint=true`, `idempotentHint=true`: `rename` and `set_cover` replace the previous name or cover (as `edit_person`). File Station's `rename` is non-destructive only because DSM refuses an existing name there; whether Photos does is open item 1.
+**Annotations:** `destructiveHint=true`, `idempotentHint=true`: `rename` and `set_cover` replace the previous name or cover (as `edit_person`). Photos also refuses a name taken in the parent (641, `already_exists`; verified on both), but a rename still replaces the folder's old name.
 
 **Response shape:** `Created /Trips/2024/Day 1 (id 33, personal space).` · `Renamed folder 33 to /Trips/2024/Day One.` · `Folder 33's cover is now item 41.`
 
-**Design notes:** reply `folder` has `id`, full-path `name`, `parent`. Creating a folder whose name exists in the parent: checked at the vdsm gate (the capture created same-named folders only under different parents).
+**Design notes:** reply `folder` has `id`, full-path `name`, `parent`. Creating or renaming a folder to a name its parent already has fails with 641 (verified on both). The space's root folder can't be renamed (refused locally).
 
 ---
 
@@ -730,7 +733,7 @@ Photos rewrites tagged files, so their dates and sizes change.
 | `description` | `str` | No | — | `""` clears. |
 | `taken_time` | `str` | No | — | ISO 8601 date-time (UTC if no offset) → `time` (Unix seconds). |
 | `shift_hours` | `float` | No | — | → `shift_time` (seconds). |
-| `rotate` | `str` | No | — | `left` (`counter_clockwise`, verified) or `right` (`clockwise`, in the client's enum, checked at the vdsm gate). |
+| `rotate` | `str` | No | — | `left` (`counter_clockwise`, verified) or `right` (`clockwise`, verified on both). |
 | `favorite` | `bool` | No | — | 1.9.1+ (verified set and unset). On 1.3.4, `not_supported`. |
 
 **Annotations:** `destructiveHint=true`, `idempotentHint=true`: each field replaces the previous value (a description or taken time is lost), and repeating the call changes nothing more.
@@ -744,7 +747,7 @@ Edited 2 item(s) (personal space): rating 4, description.
 Photos rewrites edited files, so their dates and sizes change.
 ```
 
-**Design notes:** DSM accepted two fields in one `set` (verified), but the tool sends one `set` per field, as the web client does, so a failure names the field. Batches of 100 IDs (a **new** module constant, as the web client's `BATCH_UPDATE_SIZE`). `taken_time` and `shift_hours` are mutually exclusive. IDs are checked with `get` first, which also catches items in a Shared Space folder the user has no permission for: `set` would answer success and do nothing (see Writes that report success).
+**Design notes:** all fields go in **one** `set` (rating, description, time and rotation together verified on both versions), so each file is rewritten once. The web client sends one `set` per field, but on 7.2.2 a taken-time change made within seconds of an earlier edit to the same file was undone by Photos' re-index of that earlier rewrite (the rating sent with it stuck). The reply to a taken-time edit says to wait before changing it again; a 120 still names the rejected field (`errors.name`). Batches of 100 IDs (a **new** module constant, as the web client's `BATCH_UPDATE_SIZE`). `taken_time` and `shift_hours` are mutually exclusive. IDs are checked with `get` first, which also catches items in a Shared Space folder the user has no permission for: `set` would answer success and do nothing (see Writes that report success).
 
 ---
 
@@ -962,7 +965,7 @@ Maintainer, 2026-10-17 (the first group), with the 1.9.1-only additions found af
 
 ## Remaining Open Items
 
-1. **From the web client only, checked at the implementation PR's vdsm gate:** keyword search over descriptions (tags verified); `rotate=right`; a same-name folder in one parent; cross-space copy and move (`extra_info`); `BackgroundTask.File delete` with an unknown ID; re-sharing after `stop`; the recycle-bin flags turning off when a share's recycle bin is off; whether a Shared Space favorite is per user; error 901 (People disabled); People and concepts on vdsm (clusters may not form without a GPU; then they're fixture- and real-NAS-tested only); `Browse.Concept get`'s reply shape and concept `visibility` values (no capture has a concept, so the tool's handling of both is unverified until a real-NAS check); a Shared Space user **with** folder view rights trying to edit or delete (needs `FolderPermission`, out of scope; the entry-only case is verified).
+1. **From the web client only, checked at the implementation PR's vdsm gate:** keyword search over descriptions (tags verified); cross-space copy and move (`extra_info`); `BackgroundTask.File delete` with an unknown ID; the recycle-bin flags turning off when a share's recycle bin is off; whether a Shared Space favorite is per user; error 901 (People disabled); People and concepts on vdsm (clusters may not form without a GPU; then they're fixture- and real-NAS-tested only); `Browse.Concept get`'s reply shape and concept `visibility` values (no capture has a concept, so the tool's handling of both is unverified until a real-NAS check); a Shared Space user **with** folder view rights trying to edit or delete (needs `FolderPermission`, out of scope; the entry-only case is verified).
 2. **A 119 right after login** was seen once on 7.2.2 (the first call of a fresh session; the retry was clean). The cause was #176: DSM misreads some session IDs as `_sid`; #271 sends the session as the `id` cookie.
 3. **Out of scope:** see Resolved Design Decision 6.
 4. **Payload:** measured in the implementation PR, with `PAYLOAD_BUDGET_CHARS` raised and the growth stated.
