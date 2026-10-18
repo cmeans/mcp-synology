@@ -41,9 +41,14 @@ _ANNO_DESTRUCTIVE_IDEMPOTENT = ToolAnnotations(
 class PhotosSettings(BaseModel):
     """Photos module settings."""
 
-    # Local folders download_photos may write to (and upload_photos read from), added to
+    # Local folders download_photos may write to and upload_photos read from, added to
     # the top-level allowed_local_paths (#257). Unset with no top-level list: Downloads.
     allowed_local_paths: list[str] | None = Field(default=None, min_length=1)
+
+    # Seconds copy_photos, move_photos and the deletes wait before handing a task off
+    # with a photos:<id> handle (default 30, cap 600), as File Station's
+    # copy_move_timeout (#245).
+    task_timeout: int = Field(default=30, ge=1, le=600)
 
     @field_validator("allowed_local_paths")
     @classmethod
@@ -231,6 +236,79 @@ MODULE_INFO = ModuleInfo(
             ),
             permission_tier=PermissionTier.WRITE,
             annotations=_ANNO_DESTRUCTIVE,
+        ),
+        ToolInfo(
+            name="upload_photos",
+            description=(
+                "Upload local photos or videos into a Synology Photos folder (default the space"
+                " root). on_duplicate: rename (default, keeps both) or skip. Optionally add "
+                "them to an album. Only reads files inside the allowed local folders. Photos "
+                "indexes new items over the next seconds to minutes. space: personal (default) "
+                "or shared."
+            ),
+            permission_tier=PermissionTier.WRITE,
+            title="Photos: Upload",
+        ),
+        ToolInfo(
+            name="copy_photos",
+            description=(
+                "Copy Synology Photos items and/or folders into another folder of the same or "
+                "the other space. on_conflict: skip (default) or overwrite. Waits up to "
+                "task_timeout seconds; a longer copy keeps running on the NAS and the reply "
+                "gives a handle for photo_task. Overwrite replaces files at the destination."
+            ),
+            permission_tier=PermissionTier.WRITE,
+            annotations=_ANNO_DESTRUCTIVE,
+            title="Photos: Copy",
+        ),
+        ToolInfo(
+            name="move_photos",
+            description=(
+                "Move Synology Photos items and/or folders into another folder of the same or "
+                "the other space. on_conflict: skip (default) or overwrite. Waits up to "
+                "task_timeout seconds; a longer move keeps running on the NAS and the reply "
+                "gives a handle for photo_task. Overwrite replaces files at the destination."
+            ),
+            permission_tier=PermissionTier.WRITE,
+            annotations=_ANNO_DESTRUCTIVE,
+            title="Photos: Move",
+        ),
+        ToolInfo(
+            name="photo_task",
+            description=(
+                "Follow up on a Synology Photos copy, move or delete that is still running. "
+                "With a handle (photos:<id>): action=status shows progress; action=stop stops "
+                "it (it may then be partly done). Without a handle: lists this user's copy, "
+                "move and delete tasks. action=clear removes finished tasks from that list."
+            ),
+            permission_tier=PermissionTier.WRITE,
+            annotations=_ANNO_DESTRUCTIVE,
+        ),
+        ToolInfo(
+            name="delete_photos",
+            description=(
+                "Delete Synology Photos items (the files themselves) by id. They go to the "
+                "recycle bin of the share that holds the space if it has one, otherwise they're"
+                " gone. A large delete keeps running on the NAS and the reply gives a handle "
+                "for photo_task. Confirm with the user first. space: personal (default) or "
+                "shared. To only take items out of an album, use photo_album remove."
+            ),
+            permission_tier=PermissionTier.WRITE,
+            annotations=_ANNO_DESTRUCTIVE,
+            title="Photos: Delete items",
+        ),
+        ToolInfo(
+            name="delete_photo_folders",
+            description=(
+                "Delete folders in Synology Photos with everything in them (files and "
+                "subfolders). They go to the recycle bin of the share that holds the space if "
+                "it has one, otherwise they're gone. A large delete keeps running on the NAS "
+                "and the reply gives a handle for photo_task. Confirm with the user first. "
+                "space: personal (default) or shared."
+            ),
+            permission_tier=PermissionTier.WRITE,
+            annotations=_ANNO_DESTRUCTIVE,
+            title="Photos: Delete folders",
         ),
     ],
     settings_schema=PhotosSettings,
@@ -527,3 +605,88 @@ def register(ctx: RegisterContext) -> None:
 
             client = await manager.get_client()
             return await delete_photo_albums(client, albums=albums)
+
+    if "upload_photos" in ctx.allowed_tools:
+
+        @server.tool(**_tool("upload_photos"))  # type: ignore[arg-type]
+        async def tool_upload_photos(
+            local_paths: list[str],
+            folder: str = "/",
+            space: str = "personal",
+            on_duplicate: str = "rename",
+            album: str | None = None,
+        ) -> str:
+            from mcp_synology.modules.photos.transfer import upload_photos
+
+            client = await manager.get_client()
+            return await upload_photos(
+                client,
+                local_paths=local_paths,
+                folder=folder,
+                space=space,
+                on_duplicate=on_duplicate,
+                album=album,
+                allowed_roots=local_roots,
+            )
+
+    for operation in ("copy", "move"):
+        name = f"{operation}_photos"
+        if name not in ctx.allowed_tools:
+            continue
+
+        def _make(operation: str) -> Any:
+            async def tool_copy_or_move(
+                destination: str,
+                ids: list[int] | None = None,
+                folders: list[str] | None = None,
+                space: str = "personal",
+                dest_space: str | None = None,
+                on_conflict: str = "skip",
+            ) -> str:
+                from mcp_synology.modules.photos.tasks import copy_or_move
+
+                client = await manager.get_client()
+                return await copy_or_move(
+                    client,
+                    operation=operation,
+                    ids=ids,
+                    folders=folders,
+                    destination=destination,
+                    space=space,
+                    dest_space=dest_space,
+                    on_conflict=on_conflict,
+                    timeout=settings.task_timeout,
+                )
+
+            return tool_copy_or_move
+
+        server.tool(**_tool(name))(_make(operation))  # type: ignore[arg-type]
+
+    if "photo_task" in ctx.allowed_tools:
+
+        @server.tool(**_tool("photo_task"))  # type: ignore[arg-type]
+        async def tool_photo_task(handle: str | None = None, action: str = "status") -> str:
+            from mcp_synology.modules.photos.tasks import photo_task
+
+            client = await manager.get_client()
+            return await photo_task(client, handle=handle, action=action)
+
+    if "delete_photos" in ctx.allowed_tools:
+
+        @server.tool(**_tool("delete_photos"))  # type: ignore[arg-type]
+        async def tool_delete_photos(ids: list[int], space: str = "personal") -> str:
+            from mcp_synology.modules.photos.tasks import delete_photos
+
+            client = await manager.get_client()
+            return await delete_photos(client, ids=ids, space=space, timeout=settings.task_timeout)
+
+    if "delete_photo_folders" in ctx.allowed_tools:
+
+        @server.tool(**_tool("delete_photo_folders"))  # type: ignore[arg-type]
+        async def tool_delete_photo_folders(folders: list[str], space: str = "personal") -> str:
+            from mcp_synology.modules.photos.tasks import delete_photo_folders
+
+            client = await manager.get_client()
+            return await delete_photo_folders(
+                client, folders=folders, space=space, timeout=settings.task_timeout
+            )

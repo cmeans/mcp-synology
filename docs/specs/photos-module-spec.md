@@ -1,13 +1,13 @@
 # Photos Module — Tool Specifications
 
-> **Version:** 0.1 (draft for review) | **Updated:** 2026-10-17. Written before the code (#258), from live request and reply captures. Tool count: 4 READ + 15 WRITE = 19.
+> **Version:** 1.0 | **Updated:** 2026-10-17. Written before the code (#258) from live request and reply captures, then corrected by the implementation's live runs on vdsm (DSM 7.1 and 7.2.2). Tool count: 4 READ + 15 WRITE = 19.
 > **Parent doc:** `docs/specs/architecture.md`
 >
 > **Verified on:** DSM 7.1 with Synology Photos 1.3.4 and DSM 7.2.2 with Photos 1.9.1 (vdsm; non-admin and admin personas), and a real NAS (DS1618+, DSM 7.1.1, Photos 1.3.4; non-admin, personal space with 944 items and 150 face clusters). Request shapes were first taken from the Photos web client (`react.js` in 1.3.4, `react_bundle.js` in 1.9.1), since Synology publishes no Photos API guide, then sent and their replies recorded. A claim marked **verified** has a capture in the fixtures; one marked **web client** comes only from the client's code and is checked at the implementation PR's vdsm gate (open item 1).
 >
 > **Fixtures:** `tests/modules/photos/fixtures/dsm-7.1-photos-1.3.4.json`, `dsm-7.2.2-photos-1.9.1.json` (vdsm, synthetic library) and `dsm-7.1.1-photos-1.3.4-people.json` (the real NAS, People only, names and filenames anonymized). Keys are capture labels; each value holds the request as sent and DSM's reply.
 >
-> Once the module ships, `tests/test_module_specs.py` keeps this spec and the code in sync (tool headings, tiers, parameter names, LLM-facing descriptions).
+> `tests/test_module_specs.py` keeps this spec and the code in sync (tool headings, tiers, parameter names, LLM-facing descriptions).
 
 ## Module Metadata
 
@@ -460,6 +460,7 @@ Photos indexes new items over the next seconds to minutes; taken dates and previ
 **Design notes:**
 - `mtime` is the local file's modification time in seconds; Photos uses it as the taken time until EXIF is indexed.
 - Unsupported file types fail with **620**, a missing folder with **621** (verified).
+- **Retry:** an upload that fails with any other code is retried once after 2 s, as the web client does (its retry count is 1; it doesn't retry 604, 605, 620 or 622). vdsm answered **623** to some uploads right after boot, and the retry went through. 621 and the setup and permission codes (105, 160, 602, 801, 803) aren't retried either.
 - A file name that's valid JSON (`2024`) is still sent JSON-quoted.
 
 ---
@@ -615,7 +616,7 @@ Copied 3 item(s) and 1 folder to /Albums/Best (personal space): 4 done, 1 skippe
 
 Still running at `task_timeout`: `Still copying on the NAS (2 of 9 done). Handle: photos:14 — check with photo_task.` Failed items from `get_error_detail` follow as `  item 41: <reason>` lines.
 
-**Design notes:** the task's `skip` and `overwrite` counters are reported (verified: a repeat copy with `skip` finished with `skip: 1`). `get_error_detail` (scalar `id`) lists failed items. Cross-space: the call goes to the **destination's** API and `extra_info` carries `{"version": 2, "source_library": "personal_space"|"shared_space"}` as a JSON **string**, JSON-encoded again (web client; cross-space verified at the vdsm gate). `Browse.Item copy/move` also exist (they require `action`) but the web client doesn't use them; neither does this module.
+**Design notes:** the task's `skip` and `overwrite` counters are reported (verified: a repeat copy with `skip` finished with `skip: 1`). `get_error_detail` (scalar `id`) lists failed items. **Cross-space** (verified on 7.1 and 7.2.2): the call goes to the **source space's** API with a `target_folder_id` in the other space; sent through the destination's API, the task finished with the item failing as `not_existed`. `extra_info` carries `{"version": 2, "source_library": …}` as a JSON **string**, JSON-encoded again, as the web client sends it (the copy worked with or without it). Personal → Shared Space copies and moves work, and a Shared Space → personal copy works, but **a move out of Shared Space into a personal space answers 640**, so `move_photos` refuses it locally and suggests a copy followed by a delete. `Browse.Item copy/move` also exist (they require `action`) but the web client doesn't use them; neither does this module.
 
 ---
 
@@ -874,7 +875,7 @@ Photo request "mcp spec" → /Trips/2024 (personal space)
 
 **Response shape:** `Deleted 3 item(s) (personal space); they're in the recycle bin of the share.` (or `deleted permanently: that share has no recycle bin`, or `in the share's recycle bin if it has one` when the setting can't be read; see Deletes). Not-found IDs and DSM-rejected items follow per line; a long delete hands off like `copy_photos`.
 
-**Design notes:** IDs are checked with `get` first; unknown ones are reported, not sent (the synchronous delete reports success for them; the task's behavior with an unknown ID is checked at the vdsm gate). The server instructions carry the same confirm-first guidance as `delete_files`.
+**Design notes:** IDs are checked with `get` first; unknown ones are reported, not sent (the synchronous delete reports success for them), so the task never gets an unknown ID. The server instructions carry the same confirm-first guidance as `delete_files`.
 
 ---
 
@@ -965,8 +966,8 @@ Maintainer, 2026-10-17 (the first group), with the 1.9.1-only additions found af
 
 ## Remaining Open Items
 
-1. **From the web client only, checked at the implementation PR's vdsm gate:** keyword search over descriptions (tags verified); cross-space copy and move (`extra_info`); `BackgroundTask.File delete` with an unknown ID; the recycle-bin flags turning off when a share's recycle bin is off; whether a Shared Space favorite is per user; error 901 (People disabled); People and concepts on vdsm (clusters may not form without a GPU; then they're fixture- and real-NAS-tested only); `Browse.Concept get`'s reply shape and concept `visibility` values (no capture has a concept, so the tool's handling of both is unverified until a real-NAS check); a Shared Space user **with** folder view rights trying to edit or delete (needs `FolderPermission`, out of scope; the entry-only case is verified).
+1. **Not verified yet** (from the web client only, or needing a setup vdsm doesn't have): keyword search over descriptions (filenames and tags verified); the recycle-bin flags turning off when a share's recycle bin is off; whether a Shared Space favorite is per user; error 901 (People disabled); People and concepts on vdsm (clusters may not form without a GPU; then they're fixture- and real-NAS-tested only); `Browse.Concept get`'s reply shape and concept `visibility` values (no capture has a concept, so the tool's handling of both is unverified until a real-NAS check); a Shared Space user **with** folder view rights trying to edit or delete (needs `FolderPermission`, out of scope; the entry-only case is verified).
 2. **A 119 right after login** was seen once on 7.2.2 (the first call of a fresh session; the retry was clean). The cause was #176: DSM misreads some session IDs as `_sid`; #271 sends the session as the `id` cookie.
 3. **Out of scope:** see Resolved Design Decision 6.
-4. **Payload:** measured in the implementation PR, with `PAYLOAD_BUDGET_CHARS` raised and the growth stated.
+4. **Payload:** measured in the implementation: enabling Photos adds 12,160 characters (schemas, descriptions and its instructions section; `PAYLOAD_BUDGET_CHARS` 17,582 → 29,742 with every module on). A connection without Photos carries none of it.
 5. **JPEG conversion on download (1.9.1):** `Download download` v2 takes `download_type` (`source`, `optimized_jpeg`, `original_size_jpeg`), which would let `download_photos` hand HEIC originals over as JPEG. Not verified; proposed as a `download_photos` option for 1.9.1 if wanted.

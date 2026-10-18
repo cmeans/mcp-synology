@@ -10,7 +10,7 @@ import pytest
 import respx
 from mcp.server.mcpserver.exceptions import ToolError
 
-from mcp_synology.modules.photos.transfer import download_photos
+from mcp_synology.modules.photos.transfer import download_photos, upload_photos
 from tests.modules.photos.dsm import FakePhotos, binary, captured, install, make_client
 
 if TYPE_CHECKING:
@@ -296,3 +296,156 @@ class TestRefusals:
                 make_client(), dest_folder=str(tmp_path), allowed_roots=[tmp_path], **kwargs
             )
         assert _error(exc)["param"] == param
+
+
+class TestUpload:
+    @staticmethod
+    def _files(tmp_path: Path) -> list[str]:
+        paths = []
+        for name in ("beach.jpg", "2024", "notes.txt"):
+            (tmp_path / name).write_bytes(b"x")
+            paths.append(str(tmp_path / name))
+        return paths
+
+    @respx.mock
+    async def test_per_file_results(self, tmp_path: Path) -> None:
+        upload = "SYNO.Foto.Upload.Item"
+        sent: list[bytes] = []
+        fake = FakePhotos().on("SYNO.Foto.Browse.Folder", "get", 2, captured("folder-get-by-name"))
+        fake.on(ITEM, "get", 2, {"list": [{"id": 47, "filename": "2024_1"}]})
+        answers = iter(
+            [
+                {"success": True, "data": {"action": "new", "id": 41, "unit_id": 41}},
+                {"success": True, "data": {"action": "rename", "id": 47, "unit_id": 47}},
+                {"success": False, "error": {"code": 620}},
+            ]
+        )
+
+        def multipart(request: httpx.Request) -> httpx.Response:
+            sent.append(request.content)
+            return httpx.Response(200, json=next(answers))
+
+        fake.multipart = multipart
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await upload_photos(
+                client,
+                local_paths=self._files(tmp_path),
+                folder="/mcp-spec-capture",
+                allowed_roots=[tmp_path],
+            )
+        assert len(sent) == 3
+        assert b'name="name"\r\n\r\n"2024"\r\n' in sent[1]  # JSON-quoted even when numeric
+        assert b'name="target_folder_id"\r\n\r\n10\r\n' in sent[0]
+        assert b'name="duplicate"\r\n\r\n"rename"\r\n' in sent[0]
+        assert f'name="api"\r\n\r\n{upload}'.encode() in sent[0]
+        assert "Uploaded 2 of 3 file(s) to /mcp-spec-capture (personal space)" in out
+        assert "renamed  id 47 (as 2024_1)" in out
+        assert "notes.txt  failed   Synology Photos doesn't support this file type (620)" in out
+        assert "Photos indexes new items" in out
+
+    @respx.mock
+    async def test_skip_and_album(self, tmp_path: Path) -> None:
+        (tmp_path / "a.jpg").write_bytes(b"x")
+        fake = FakePhotos().on("SYNO.Foto.Browse.Folder", "get", 2, captured("folder-get-root"))
+        fake.on("SYNO.Foto.Browse.Album", "get", 1, captured("album-get"))
+        fake.on("SYNO.Foto.Browse.NormalAlbum", "add_item", 1, {"error_list": []})
+        fake.multipart = lambda _r: httpx.Response(
+            200, json={"success": True, "data": {"action": "ignore", "id": 9}}
+        )
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await upload_photos(
+                client,
+                local_paths=[str(tmp_path / "a.jpg")],
+                on_duplicate="skip",
+                album="4",
+                allowed_roots=[tmp_path],
+            )
+        assert "skipped  id 9 (already there)" in out
+        assert fake.one("SYNO.Foto.Browse.NormalAlbum", "add_item").params == {"id": 4, "item": [9]}
+        assert 'Added 1 item(s) to album "mcp-spec-album".' in out
+
+    async def test_outside_roots_refused_first(self, tmp_path: Path) -> None:
+        inside = tmp_path / "in"
+        inside.mkdir()
+        with pytest.raises(ToolError) as exc:
+            await upload_photos(
+                make_client(), local_paths=["/etc/hostname"], allowed_roots=[inside]
+            )
+        assert _error(exc)["code"] == "permission_denied"
+
+    async def test_folder_path_not_a_file(self, tmp_path: Path) -> None:
+        with pytest.raises(ToolError) as exc:
+            await upload_photos(
+                make_client(), local_paths=[str(tmp_path)], allowed_roots=[tmp_path]
+            )
+        assert _error(exc)["code"] == "not_found"
+
+    @pytest.mark.parametrize(
+        ("kwargs", "param"),
+        [
+            ({"local_paths": []}, "local_paths"),
+            ({"local_paths": ["a"] * 51}, "local_paths"),
+            ({"local_paths": ["a"], "on_duplicate": "overwrite"}, "on_duplicate"),
+            ({"local_paths": ["a"], "album": "1", "space": "shared"}, "album"),
+        ],
+    )
+    async def test_refusals(self, kwargs: dict[str, Any], param: str) -> None:
+        with pytest.raises(ToolError) as exc:
+            await upload_photos(make_client(), **kwargs)
+        assert _error(exc)["param"] == param
+
+
+class TestUploadRetry:
+    @pytest.fixture(autouse=True)
+    def _no_delay(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from mcp_synology.modules.photos import transfer
+
+        monkeypatch.setattr(transfer, "UPLOAD_RETRY_DELAY", 0)
+
+    async def _upload(self, tmp_path: Path, *answers: dict[str, Any]) -> tuple[str, int]:
+        (tmp_path / "a.jpg").write_bytes(b"x")
+        replies = iter(answers)
+        sent: list[int] = []
+
+        def multipart(_r: httpx.Request) -> httpx.Response:
+            sent.append(1)
+            return httpx.Response(200, json=next(replies))
+
+        fake = FakePhotos().on("SYNO.Foto.Browse.Folder", "get", 2, captured("folder-get-root"))
+        fake.multipart = multipart
+        with respx.mock:
+            install(fake)
+            client = make_client()
+            async with client:
+                out = await upload_photos(
+                    client, local_paths=[str(tmp_path / "a.jpg")], allowed_roots=[tmp_path]
+                )
+        return out, len(sent)
+
+    async def test_transient_error_retried_once(self, tmp_path: Path) -> None:
+        """vdsm answered 623 to uploads right after boot; the web client retries once."""
+        out, sent = await self._upload(
+            tmp_path,
+            {"success": False, "error": {"code": 623}},
+            {"success": True, "data": {"action": "new", "id": 5}},
+        )
+        assert sent == 2
+        assert "new      id 5" in out
+
+    async def test_unsupported_type_not_retried(self, tmp_path: Path) -> None:
+        out, sent = await self._upload(tmp_path, {"success": False, "error": {"code": 620}})
+        assert sent == 1
+        assert "(620)" in out
+
+    async def test_second_failure_reported(self, tmp_path: Path) -> None:
+        out, sent = await self._upload(
+            tmp_path,
+            {"success": False, "error": {"code": 623}},
+            {"success": False, "error": {"code": 623}},
+        )
+        assert sent == 2
+        assert "failed" in out and "(623)" in out
