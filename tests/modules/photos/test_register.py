@@ -28,10 +28,35 @@ def _registered(allowed: set[str] | None = None, settings: dict | None = None) -
     return server._tool_manager._tools  # type: ignore[no-any-return]
 
 
-def test_read_tools_registered_with_tiers() -> None:
+_READ = {"list_photos", "list_photo_collections", "get_photo", "download_photos"}
+_WRITE = {
+    "photo_album",
+    "photo_share_link",
+    "photo_folder",
+    "tag_photos",
+    "edit_photo",
+    "edit_person",
+    "photo_request",
+    "merge_people",
+    "delete_photo_albums",
+}
+
+
+def test_tools_registered_with_tiers() -> None:
+    assert set(_registered()) == _READ | _WRITE
+    tiers = {t.name: t.permission_tier for t in MODULE_INFO.tools}
+    assert {n for n, t in tiers.items() if t is PermissionTier.READ} == _READ
+    assert {n for n, t in tiers.items() if t is PermissionTier.WRITE} == _WRITE
+
+
+def test_every_write_is_destructive() -> None:
+    """Each write can lose a value, a membership, a share setting or a person (#183)."""
     tools = _registered()
-    assert set(tools) == {"list_photos", "list_photo_collections", "get_photo", "download_photos"}
-    assert all(t.permission_tier is PermissionTier.READ for t in MODULE_INFO.tools)
+    for name in _WRITE:
+        assert tools[name].annotations.destructive_hint is True, name
+    idempotent = {n for n in _WRITE if tools[n].annotations.idempotent_hint}
+    assert idempotent == {"photo_folder", "edit_person"}
+    assert tools["photo_folder"].title == "Photos: Folder"
 
 
 def test_annotations_and_titles() -> None:
@@ -69,6 +94,15 @@ async def test_handlers_reach_the_client(tmp_path) -> None:  # type: ignore[no-u
         ("list_photo_collections", {"type": "bogus"}),
         ("get_photo", {"ids": []}),
         ("download_photos", {"ids": [], "dest_folder": str(tmp_path)}),
+        ("photo_album", {"action": "bogus"}),
+        ("photo_share_link", {"action": "bogus", "album": "1"}),
+        ("photo_folder", {"action": "bogus"}),
+        ("tag_photos", {"action": "bogus", "ids": [1], "tags": ["x"]}),
+        ("edit_photo", {"ids": []}),
+        ("edit_person", {"action": "bogus", "person": "1"}),
+        ("photo_request", {"action": "bogus"}),
+        ("merge_people", {"target": "1", "merge": []}),
+        ("delete_photo_albums", {"albums": []}),
     ]:
         with pytest.raises(ToolError):
             await tools[name].fn(**args)

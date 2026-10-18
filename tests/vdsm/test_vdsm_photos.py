@@ -24,8 +24,15 @@ import pytest
 from mcp.server.mcpserver.exceptions import ToolError
 
 from mcp_synology.core.errors import SynologyError
+from mcp_synology.modules.photos.albums import delete_photo_albums, photo_album, photo_share_link
 from mcp_synology.modules.photos.browse import get_photo, list_photo_collections, list_photos
 from mcp_synology.modules.photos.helpers import Photos, Space, encode
+from mcp_synology.modules.photos.organize import (
+    edit_photo,
+    photo_folder,
+    photo_request,
+    tag_photos,
+)
 from mcp_synology.modules.photos.transfer import download_photos
 from tests.vdsm.golden_image import load_golden_meta, photos_skip_reason
 
@@ -286,3 +293,122 @@ async def test_shared_space(photos: DsmClient) -> None:
         assert "(Shared Space)" in await get_photo(photos, ids=list(ids.values()), space="shared")
         # IDs belong to a space: the personal API doesn't know a Shared Space item.
         assert "Not found" in await get_photo(photos, ids=list(ids.values()))
+
+
+# -- organizing tools ---------------------------------------------------------------
+
+
+async def test_folders(photos: DsmClient) -> None:
+    async with seeded(photos, JPEGS[:1]) as (path, ids):
+        assert "Created" in await photo_folder(photos, action="create", parent=path, name="2024")
+        with pytest.raises(ToolError) as exc:
+            await photo_folder(photos, action="create", parent=path, name="2024")
+        assert _error(exc)["code"] == "already_exists"
+        out = await photo_folder(photos, action="rename", folder=f"{path}/2024", name="Day One")
+        assert out.endswith(f"{path}/Day One.")
+        out = await photo_folder(
+            photos, action="set_cover", folder=path, item_id=ids["beach-sunset.jpg"]
+        )
+        assert "cover is now item" in out
+
+
+async def test_tags_and_edits(photos: DsmClient) -> None:
+    async with seeded(photos, JPEGS[:2]) as (_path, ids):
+        item = ids["city-night.jpg"]
+        tag = f"t258tag{uuid.uuid4().hex[:6]}"
+        await tag_photos(photos, action="add", ids=[item, 999999], tags=[tag, "t258-shared"])
+        assert tag in await get_photo(photos, ids=[item])
+        out = await tag_photos(photos, action="remove", ids=[item], tags=[tag])
+        assert "Removed tags" in out
+        # A tag exists only while some item has it.
+        assert tag not in await list_photo_collections(photos, type="tag")
+
+        out = await edit_photo(
+            photos, ids=[item], rating=4, description="t258", taken_time="2021-02-03T04:05:06Z"
+        )
+        assert "rating 4, description, taken time" in out
+
+        # Photos re-indexes the rewritten file; the new taken time shows up then.
+        async def retimed() -> str | None:
+            details = await get_photo(photos, ids=[item])
+            return details if "2021-02-03 04:05:06 UTC" in details else None
+
+        details = await _wait_for(retimed, "the edited taken time")
+        assert "Rating:       4" in details and "t258" in details
+
+        # A shift on an item with no earlier edits: a time change right after another
+        # edit to the same file can be undone by the pending re-index (seen on 7.2.2).
+        other = ids["beach-sunset.jpg"]
+        out = await edit_photo(photos, ids=[other], shift_hours=1.5, rotate="right")
+        assert "taken time shifted +1.5 h, rotated right" in out
+
+        async def shifted() -> str | None:
+            details = await get_photo(photos, ids=[other])
+            return details if "2024-07-04 21:00:00 UTC" in details else None
+
+        await _wait_for(shifted, "the shifted taken time")
+
+        if _is_191(photos):
+            assert "favorite" in await edit_photo(photos, ids=[other], favorite=True)
+            assert "favorite: yes" in await get_photo(photos, ids=[other])
+        else:
+            with pytest.raises(ToolError) as exc:
+                await edit_photo(photos, ids=[other], favorite=True)
+            assert _error(exc)["code"] == "not_supported"
+
+
+async def test_albums_and_share_links(photos: DsmClient) -> None:
+    async with seeded(photos, JPEGS) as (path, ids):
+        name = f"t258-album-{uuid.uuid4().hex[:6]}"
+        made: list[str] = []
+        try:
+            out = await photo_album(photos, action="create", name=name, ids=list(ids.values()))
+            made.append(name)
+            assert "with 3 item(s)" in out
+            out = await photo_album(
+                photos, action="remove", album=name, ids=[ids["city-night.jpg"]]
+            )
+            assert "2 item(s)" in out
+            out = await list_photos(photos, album=name)
+            assert "2 item(s) total" in out
+
+            smart = f"{name}-smart"
+            out = await photo_album(
+                photos,
+                action="create_smart",
+                name=smart,
+                condition={"folders": [path], "type": "photo"},
+            )
+            made.append(smart)
+            assert "Matches 3 item(s) now." in out
+
+            out = await photo_share_link(
+                photos,
+                action="share",
+                album=name,
+                public="view",
+                password="t258-Pw",
+                expires="2035-01-01",
+            )
+            assert "/mo/sharing/" in out and "password: yes" in out
+            link = re.search(r"Link:\s+(\S+)", out).group(1)  # type: ignore[union-attr]
+            await photo_share_link(photos, action="stop", album=name)
+            again = await photo_share_link(photos, action="share", album=name)
+            # Same link, settings reset (verified while implementing #258).
+            assert link in again and "Public:    none" in again
+        finally:
+            out = await delete_photo_albums(photos, albums=made)
+            assert f"Deleted {len(made)} album(s)" in out
+
+
+async def test_photo_requests(photos: DsmClient) -> None:
+    async with seeded(photos, JPEGS[:1]) as (path, _ids):
+        out = await photo_request(
+            photos, action="create", subject="t258", folder=path, max_file_mib=5
+        )
+        assert "/mo/request/" in out and "5 MiB per file" in out
+        listed = await photo_request(photos, action="list")
+        request = re.search(r"^  (\S+)\s+t258\s", listed, re.M).group(1)  # type: ignore[union-attr]
+        out = await photo_request(photos, action="update", request=request, expires="never")
+        assert "expires never" in out
+        assert "Deleted" in await photo_request(photos, action="delete", request=request)

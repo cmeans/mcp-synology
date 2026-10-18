@@ -183,6 +183,31 @@ class Photos:
             if len(page) < WALK_PAGE:
                 return out
 
+    async def items(self, ids: list[int]) -> tuple[dict[int, dict[str, Any]], list[int]]:
+        """The items that exist (by ID) and the IDs that don't, checked before a write.
+
+        DSM answers success for unknown IDs on several writes, and for items in a Shared
+        Space folder the user has no permission for, while doing nothing; ``get`` leaves
+        both out (spec: Writes that report success for nothing).
+        """
+        found: dict[int, dict[str, Any]] = {}
+        unique = list(dict.fromkeys(ids))
+        for start in range(0, len(unique), BATCH_SIZE):
+            batch = unique[start : start + BATCH_SIZE]
+            data = await self.call("Browse.Item", "get", {"id": batch, "additional": []}, version=2)
+            for item in data.get("list", []):
+                found[int(item["id"])] = item
+        return found, [i for i in unique if i not in found]
+
+    def missing_note(self, missing: list[int] | list[str]) -> str:
+        """The line naming IDs that weren't found (and why that may be, in Shared Space)."""
+        if not missing:
+            return ""
+        why = "Not found"
+        if self.space == "shared":
+            why += ", or no permission for its Shared Space folder"
+        return f"  {why}: {', '.join(str(m) for m in missing)}"
+
     # -- folders ------------------------------------------------------------
 
     async def folder(self, value: str, *, param: str = "folder") -> dict[str, Any]:
@@ -300,6 +325,53 @@ class Photos:
             hint="list_photo_collections type=person include_hidden=true lists people.",
         )
 
+    async def place_node(self, place_id: int, *, param: str) -> int:
+        """The address-tree node a smart album condition needs for a place.
+
+        ``list_photo_collections`` gives ``Geocoding.list`` place IDs; conditions (and
+        ``list_with_filter``) take the node IDs of ``Search.Filter list``'s geocoding tree
+        instead (Chicago was place 5 and node 4; a place ID there answers 950, verified).
+        The place's ``country_id`` is the tree's root, and its ``first_level`` and
+        ``second_level`` names lead to the node.
+        """
+        places = {int(p["id"]): p for p in await self.walk("Browse.Geocoding")}
+        place = places.get(place_id)
+        if place is None:
+            not_found(
+                self.operation,
+                f"no place {place_id}.",
+                param=param,
+                value=place_id,
+                suggestion="list_photo_collections type=place lists places.",
+            )
+        data = await self.call(
+            "Search.Filter", "list", {"setting": {"geocoding": True}, "additional": []}, version=2
+        )
+        tree = data.get("geocoding", [])
+        roots = [n for n in tree if n.get("id") == place.get("country_id")]
+
+        def find(nodes: list[dict[str, Any]], name: str) -> dict[str, Any] | None:
+            for node in nodes:
+                if str(node.get("name", "")) == name:
+                    return node
+                hit = find(node.get("children") or [], name)
+                if hit is not None:
+                    return hit
+            return None
+
+        node = find(roots, str(place.get("first_level", "")))
+        if node is not None and place.get("second_level"):
+            node = find(node.get("children") or [], str(place["second_level"]))
+        if node is None:
+            invalid(
+                self.operation,
+                f"place {place_id} ({place.get('name', '')}) can't be "
+                "used in a smart album condition here.",
+                param=param,
+                value=place_id,
+            )
+        return int(node["id"])
+
     async def tag_ids(self, names: list[str], *, param: str = "tag") -> dict[str, int | None]:
         """Each tag name's current ID (``None`` if no item has it), looked up now.
 
@@ -333,6 +405,19 @@ class Photos:
 
 
 # -- formatting ---------------------------------------------------------------
+
+
+def batches(ids: list[int], size: int = BATCH_SIZE) -> list[list[int]]:
+    """``ids`` in chunks of ``size`` (the web client's BATCH_UPDATE_SIZE)."""
+    return [ids[i : i + size] for i in range(0, len(ids), size)]
+
+
+def check_ids(operation: str, ids: list[int], *, param: str = "ids", limit: int = 1000) -> None:
+    """At least one ID, and not more than ``limit``."""
+    if not ids:
+        invalid(operation, f"pass at least one id in {param}.", param=param, value=ids)
+    if len(ids) > limit:
+        invalid(operation, f"at most {limit} ids per call.", param=param, value=len(ids))
 
 
 def taken(item: dict[str, Any]) -> str:

@@ -39,7 +39,8 @@ logger = logging.getLogger(__name__)
 _SESSION_ERROR_CODES = frozenset({106, 107, 119})
 
 # Request params masked as *** in debug logs.
-_SENSITIVE_PARAMS = frozenset({"passwd", "password", "_sid", "device_id", "otp_code"})
+# passphrase: a Photos share link's secret (its URL is /mo/sharing/<passphrase>).
+_SENSITIVE_PARAMS = frozenset({"passwd", "password", "_sid", "device_id", "otp_code", "passphrase"})
 
 
 def _log_safe(
