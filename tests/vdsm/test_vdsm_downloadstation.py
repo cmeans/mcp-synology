@@ -156,7 +156,9 @@ def _local_url(client: DsmClient) -> str:
             "method": "download",
             "mode": "download",
             "path": f"{_SOURCE_DIR}/{_SOURCE_NAME}",
-            "_sid": client.sid or "",
+            # DS fetches this URL itself, so the session can't go as the cookie.
+            # JSON-quoted, since DSM misreads some session IDs as a bare _sid (#176).
+            "_sid": json.dumps(client.sid or ""),
         }
     )
     return f"http://127.0.0.1:5000/webapi/entry.cgi?{query}"

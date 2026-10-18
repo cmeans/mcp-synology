@@ -223,9 +223,10 @@ def _enable_ssh(base_url: str, admin_user: str, admin_password: str) -> None:
             "method": "set",
             "enable_ssh": "true",
             "ssh_port": "22",
-            "_sid": data["sid"],
         },
-        headers={"X-SYNO-TOKEN": data.get("synotoken", "")},
+        # The session as the id cookie, never _sid: DSM misreads some session IDs as
+        # _sid (#176).
+        headers={"X-SYNO-TOKEN": data.get("synotoken", ""), "Cookie": f"id={data['sid']}"},
         timeout=30,
         verify=False,  # noqa: S501
     )
@@ -415,11 +416,11 @@ def _verify_setup_via_api(base_url: str, username: str, password: str) -> bool:
             "api": "SYNO.FileStation.List",
             "version": "2",
             "method": "list_share",
-            "_sid": sid,
         }
         resp2 = httpx.get(
             f"{base_url}/webapi/entry.cgi",
             params=list_params,
+            headers={"Cookie": f"id={sid}"},  # not _sid (#176)
             timeout=30,
             verify=False,  # noqa: S501
         )
@@ -614,6 +615,7 @@ def _configure_download_station_via_api(
             msg = f"Admin login failed: {login_data.get('error')}"
             raise RuntimeError(msg)
         sid = login_data["data"]["sid"]
+        client.headers["Cookie"] = f"id={sid}"  # never _sid (#176)
 
         try:
             # 1. Set DS default destination
@@ -633,7 +635,6 @@ def _configure_download_station_via_api(
                     "version": "1",
                     "method": "setserverconfig",
                     "default_destination": default_destination,
-                    "_sid": sid,
                 },
             )
             setconfig_data = setconfig_resp.json()
@@ -665,7 +666,6 @@ def _configure_download_station_via_api(
                     "version": "1",
                     "method": "set",
                     "rules": json.dumps(rules),
-                    "_sid": sid,
                 },
             ).json()
             if not set_data.get("success"):
@@ -680,7 +680,6 @@ def _configure_download_station_via_api(
                     "version": "1",
                     "method": "list",
                     "app_id": json.dumps(_DS_APP_ID),
-                    "_sid": sid,
                 },
             ).json()
             if not list_data.get("success"):
@@ -707,7 +706,6 @@ def _configure_download_station_via_api(
                     "version": "1",
                     "method": "logout",
                     "session": "DownloadStation",
-                    "_sid": sid,
                 },
             )
 
@@ -738,6 +736,9 @@ def _user_session(
             msg = f"{username} login failed: {login_data.get('error')}"
             raise RuntimeError(msg)
         sid = login_data["data"]["sid"]
+        # Every call of this client carries the session as the id cookie, never as
+        # _sid: DSM misreads some session IDs as _sid and answers 119 (#176).
+        client.headers["Cookie"] = f"id={sid}"
         try:
             yield client, sid
         finally:
@@ -748,7 +749,6 @@ def _user_session(
                     "version": "1",
                     "method": "logout",
                     "session": "DownloadStation",
-                    "_sid": sid,
                 },
             )
 
@@ -761,7 +761,6 @@ def _ds_info(client: httpx.Client, sid: str, method: str, **params: str) -> dict
             "api": "SYNO.DownloadStation.Info",
             "version": "1",
             "method": method,
-            "_sid": sid,
             **params,
         },
     ).json()
@@ -783,7 +782,6 @@ def _verify_ds_access_as_user(base_url: str, username: str, password: str) -> No
                 "api": "SYNO.DownloadStation.Task",
                 "version": "1",
                 "method": "list",
-                "_sid": sid,
             },
         ).json()
     if not list_data.get("success"):
@@ -924,7 +922,7 @@ def _photos_call(
     """
     body = {"api": api, "method": method, "version": str(version)}
     body.update({k: json.dumps(v) for k, v in params.items()})
-    data = client.post("/webapi/entry.cgi", params={"_sid": sid}, data=body).json()
+    data = client.post("/webapi/entry.cgi", data=body).json()
     if not data.get("success"):
         msg = f"{api}.{method} failed: {data.get('error')}"
         raise RuntimeError(msg)
@@ -938,7 +936,7 @@ def _core_call(
     """Call a ``SYNO.Core.*`` API by GET (as the rest of the bake); raise unless it succeeds."""
     data = client.get(
         "/webapi/entry.cgi",
-        params={"api": api, "method": method, "version": str(version), "_sid": sid, **params},
+        params={"api": api, "method": method, "version": str(version), **params},
     ).json()
     if not data.get("success"):
         msg = f"{api}.{method} failed: {data.get('error')}"
