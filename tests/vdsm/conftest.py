@@ -33,6 +33,7 @@ from tests.vdsm.container import VirtualDsmContainer
 from tests.vdsm.golden_image import (
     has_golden_image,
     load_golden_meta,
+    photos_skip_reason,
     restore_golden_image,
     stale_golden_image_reason,
 )
@@ -297,6 +298,54 @@ def _ds_diagnostics(container: VirtualDsmContainer, password: str) -> str:
             text = "\n".join(sorted(set(procs))[:15])
         out.append(f"$ {cmd} (rc={rc})\n{text.strip()[-1500:]}")
     return "\n".join(out)
+
+
+# Synology Photos registers its APIs a while after DSM's boot is done.
+_PHOTOS_READY_WAIT = 300
+
+
+def _photos_problem(base_url: str) -> str | None:
+    """Why Photos isn't ready to answer yet, or None. Asks SYNO.API.Info, which needs
+    no session, whether Photos' APIs are registered."""
+    try:
+        resp = httpx.get(
+            f"{base_url}/webapi/query.cgi",
+            params={"api": "SYNO.API.Info", "version": "1", "method": "query", "query": "ALL"},
+            timeout=15,
+        )
+        apis = resp.json().get("data", {})
+    except (httpx.HTTPError, ValueError) as e:
+        return f"SYNO.API.Info: {type(e).__name__}"
+    missing = [a for a in ("SYNO.Foto.Browse.Item", "SYNO.FotoTeam.Browse.Item") if a not in apis]
+    return f"not registered yet: {', '.join(missing)}" if missing else None
+
+
+@pytest.fixture(scope="session")
+def photos_ready(vdsm_container: VirtualDsmContainer, dsm_version: str) -> None:
+    """Wait once per session for Synology Photos' APIs after the golden image boots.
+
+    Without it, a Photos test that runs early in a session (or on its own) sees no
+    SYNO.Foto.* APIs and fails with api_not_found. An image that doesn't list Photos
+    doesn't wait (its tests skip); one that lists it and never registers the APIs
+    fails here, once, for the whole session.
+    """
+    if photos_skip_reason(load_golden_meta(dsm_version), ()) is not None:
+        return
+    problem = _poll(lambda: _photos_problem(vdsm_container.base_url), _PHOTOS_READY_WAIT)
+    if problem is not None:
+        pytest.fail(
+            f"Synology Photos didn't come up within {_PHOTOS_READY_WAIT}s of DSM boot done "
+            f"({problem}), though the golden image lists it.",
+            pytrace=False,
+        )
+
+
+@pytest.fixture
+async def photos_apis(photos_ready: None, live_clients: set[DsmClient]) -> None:
+    """``photos_ready``, then refresh the API cache of clients that logged in before
+    Photos registered its APIs (each fixture client queries SYNO.API.Info at login)."""
+    for client in list(live_clients):
+        await client.query_api_info()
 
 
 @pytest.fixture(scope="session")

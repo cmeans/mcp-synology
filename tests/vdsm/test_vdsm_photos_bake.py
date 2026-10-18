@@ -40,7 +40,7 @@ async def _photos(
 
 
 @pytest.fixture
-async def photos_client(nas_client: Any, dsm_version: str) -> DsmClient:
+async def photos_client(nas_client: Any, dsm_version: str, photos_apis: None) -> DsmClient:
     client: DsmClient = nas_client[0]
     reason = photos_skip_reason(load_golden_meta(dsm_version), client.api_cache)
     if reason is not None:
@@ -71,7 +71,9 @@ async def test_shared_space_root_lists(photos_client: DsmClient) -> None:
     assert isinstance(listed["list"], list), listed
 
 
-async def test_fresh_user_has_no_photos_privilege(fresh_client: Any, dsm_version: str) -> None:
+async def test_fresh_user_has_no_photos_privilege(
+    fresh_client: Any, dsm_version: str, photos_apis: None
+) -> None:
     client: DsmClient = fresh_client[0]
     if photos_skip_reason(load_golden_meta(dsm_version), client.api_cache):
         pytest.skip("Synology Photos isn't in this golden image")
