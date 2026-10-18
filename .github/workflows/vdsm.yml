@@ -12,6 +12,14 @@ on:
 permissions:
   contents: read
 
+# A new push to a PR cancels that PR's older, superseded run (#284). Pushes to main
+# never cancel each other: each main run tests its commit, and vdsm's saves the
+# golden-image cache. The label automation finds a run's PR by its head commit, and a
+# superseded run's commit is no longer any PR's head, so a cancelled run sets no label.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   # Pins JavaScript-action Node runtime to Node 24 across all JS-based
   # GitHub Actions in this workflow. Matches the pattern used by the
@@ -46,6 +54,31 @@ jobs:
           # main: depth 2 lets the next step diff the PR against it.
           fetch-depth: 2
 
+      # A PR that changes no code (#284): only Markdown at the repository root
+      # (README, CHANGELOG, CLAUDE.md, ...), docs/, issue templates or LICENSE. Not
+      # Markdown elsewhere: src/mcp_synology/instructions/server.md is the server's
+      # instructions. The job still runs and passes with every later step skipped, so both
+      # checks keep their names (a job skipped by `if:` loses its matrix name, which
+      # #25 would make required) and the label automation finds a passed run for the
+      # commit. Pushes to main always run. --no-renames lists a moved file under both
+      # paths, so moving code into docs/ still counts as a code change.
+      - name: Does this change need vdsm?
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          code=true
+          if [ "$EVENT" = pull_request ]; then
+            files=$(git diff --no-renames --name-only HEAD^1 HEAD)
+            if [ -n "$files" ] \
+                && ! grep -qvE '(^[^/]+\.md$|^docs/|^\.github/ISSUE_TEMPLATE/|^LICENSE$)' <<< "$files"; then
+              code=false
+              echo "::notice::No code changed (only root Markdown, docs/, issue templates or LICENSE): vdsm skipped"
+            fi
+          fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
       # The golden-image cache (#132). Its key is BAKE_VERSION, which is bumped on
       # every change to what the bake produces, so a change to the bake scripts
       # that leaves the image alone (#271) doesn't rebake everything. A PR that
@@ -55,6 +88,7 @@ jobs:
       # cache and pushed main's out.
       - name: Golden image cache key
         id: golden
+        if: steps.scope.outputs.code == 'true'
         env:
           EVENT: ${{ github.event_name }}
         run: |
@@ -65,7 +99,7 @@ jobs:
             exit 1
           fi
           changed=false
-          if [ "$EVENT" = pull_request ] && git diff --name-only HEAD^1 HEAD | grep -qxE \
+          if [ "$EVENT" = pull_request ] && git diff --no-renames --name-only HEAD^1 HEAD | grep -qxE \
               'scripts/vdsm_setup\.py|tests/vdsm/(setup_dsm|config|golden_image|container)\.py'; then
             changed=true
             # The key only changes with BAKE_VERSION: without a bump, main keeps
@@ -80,7 +114,7 @@ jobs:
 
       - name: Restore golden image cache
         id: cache-golden
-        if: steps.golden.outputs.bake_files_changed != 'true'
+        if: steps.scope.outputs.code == 'true' && steps.golden.outputs.bake_files_changed != 'true'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -97,6 +131,7 @@ jobs:
       # anything (#132; the cleanup took 84-109 s). The check below fails with a
       # clear message if a runner ever comes with less.
       - name: Check free disk space
+        if: steps.scope.outputs.code == 'true'
         run: |
           set -euo pipefail
           df -h /
@@ -108,25 +143,28 @@ jobs:
           fi
 
       - name: Verify /dev/kvm is available
+        if: steps.scope.outputs.code == 'true'
         run: |
           ls -la /dev/kvm
           sudo chmod 666 /dev/kvm
           echo "KVM available"
 
       - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        if: steps.scope.outputs.code == 'true'
         with:
           python-version: "3.12"
 
       - name: Install project with vdsm extras
+        if: steps.scope.outputs.code == 'true'
         run: uv sync --extra dev --extra vdsm
 
       # Only the bake drives a browser.
       - name: Install Playwright Chromium
-        if: steps.cache-golden.outputs.cache-hit != 'true'
+        if: steps.scope.outputs.code == 'true' && steps.cache-golden.outputs.cache-hit != 'true'
         run: uv run playwright install --with-deps chromium
 
       - name: Build golden image (cache miss)
-        if: steps.cache-golden.outputs.cache-hit != 'true'
+        if: steps.scope.outputs.code == 'true' && steps.cache-golden.outputs.cache-hit != 'true'
         run: |
           uv run python scripts/vdsm_setup.py \
             --version "${DSM_VERSION}" \
@@ -139,7 +177,8 @@ jobs:
       # warns.
       - name: Save golden image cache (main only)
         if: >-
-          github.event_name == 'push' && github.ref == 'refs/heads/main'
+          steps.scope.outputs.code == 'true'
+          && github.event_name == 'push' && github.ref == 'refs/heads/main'
           && steps.cache-golden.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -149,6 +188,7 @@ jobs:
           key: ${{ steps.golden.outputs.key }}
 
       - name: Run vdsm integration tests
+        if: steps.scope.outputs.code == 'true'
         # Step budget below the job's, so a hung suite still leaves time to
         # print pytest's summary path and upload logs (#107 was cancelled
         # at the job timeout with neither).
