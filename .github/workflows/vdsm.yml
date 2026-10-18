@@ -60,7 +60,8 @@ jobs:
       # instructions. The job still runs and passes with every later step skipped, so both
       # checks keep their names (a job skipped by `if:` loses its matrix name, which
       # #25 would make required) and the label automation finds a passed run for the
-      # commit. Pushes to main always run.
+      # commit. Pushes to main always run. --no-renames lists a moved file under both
+      # paths, so moving code into docs/ still counts as a code change.
       - name: Does this change need vdsm?
         id: scope
         env:
@@ -69,7 +70,7 @@ jobs:
           set -euo pipefail
           code=true
           if [ "$EVENT" = pull_request ]; then
-            files=$(git diff --name-only HEAD^1 HEAD)
+            files=$(git diff --no-renames --name-only HEAD^1 HEAD)
             if [ -n "$files" ] \
                 && ! grep -qvE '(^[^/]+\.md$|^docs/|^\.github/ISSUE_TEMPLATE/|^LICENSE$)' <<< "$files"; then
               code=false
@@ -98,7 +99,7 @@ jobs:
             exit 1
           fi
           changed=false
-          if [ "$EVENT" = pull_request ] && git diff --name-only HEAD^1 HEAD | grep -qxE \
+          if [ "$EVENT" = pull_request ] && git diff --no-renames --name-only HEAD^1 HEAD | grep -qxE \
               'scripts/vdsm_setup\.py|tests/vdsm/(setup_dsm|config|golden_image|container)\.py'; then
             changed=true
             # The key only changes with BAKE_VERSION: without a bump, main keeps
