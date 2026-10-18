@@ -504,8 +504,10 @@ class DsmClient:
         for Download Station URI ``Task.create``: a magnet with many trackers,
         or a list of URIs, pushes a GET URL past DSM's ~8 KB limit (HTTP 414),
         and GET would also put source-URL credentials in access logs (#123).
-        Everything else stays on GET — POST caused silent failures on DSM 7.1
-        FileStation APIs.
+        Everything else stays on GET for now (#264). File Station accepts form POSTs
+        on DSM 7.1 and 7.2.2, but Download Station's v1 CGIs ignore ``_sid`` in the
+        query string of a POST and answer 105 (#263), which affects this method's v1
+        fallback when DS2 is missing.
 
         Same envelope handling, typed errors, and one-shot re-auth on session
         errors as ``request()``. ``_sid`` goes in the query string (as for the
