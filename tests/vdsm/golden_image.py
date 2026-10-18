@@ -139,6 +139,20 @@ def download_station_skip_reason(meta: dict[str, object], apis: Container[str]) 
     return "Download Station is not installed on this NAS (and the golden image doesn't list it)"
 
 
+def photos_skip_reason(meta: dict[str, object], apis: Container[str]) -> str | None:
+    """Return why the Photos tests should skip, or None if they must run.
+
+    As for Download Station: only an image that doesn't list Synology Photos skips,
+    so a Photos package that didn't come up on an image that lists it fails instead.
+    """
+    packages = meta.get("dsm_packages")
+    if isinstance(packages, list) and "SynologyPhotos" in packages:
+        return None
+    if "SYNO.Foto.Browse.Item" in apis:
+        return None
+    return "Synology Photos is not installed on this NAS (and the golden image doesn't list it)"
+
+
 def stale_golden_image_reason(meta: dict[str, object], version: str) -> str | None:
     """Return why a golden image is too old for this checkout, or None if current."""
     baked = meta.get("bake_version")

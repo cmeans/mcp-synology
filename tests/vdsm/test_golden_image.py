@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 from tests.vdsm.config import BAKE_VERSION, ds_start_fallback_allowed
-from tests.vdsm.golden_image import download_station_skip_reason, stale_golden_image_reason
+from tests.vdsm.golden_image import (
+    download_station_skip_reason,
+    photos_skip_reason,
+    stale_golden_image_reason,
+)
 
 
 def test_current_bake_is_not_stale() -> None:
@@ -55,3 +59,18 @@ def test_ds_not_listed_in_image_skips() -> None:
     assert reason is not None
     assert "not installed" in reason
     assert download_station_skip_reason({}, {"SYNO.API.Info"}) is not None
+
+
+def test_photos_listed_in_image_but_missing_from_api_is_not_a_skip() -> None:
+    meta = {"dsm_packages": ["DownloadStation", "SynologyPhotos"]}
+    assert photos_skip_reason(meta, {"SYNO.API.Info"}) is None
+
+
+def test_photos_registered_on_unlisted_nas_is_not_a_skip() -> None:
+    assert photos_skip_reason({}, {"SYNO.Foto.Browse.Item"}) is None
+
+
+def test_photos_not_listed_in_image_skips() -> None:
+    reason = photos_skip_reason({"dsm_packages": ["DownloadStation"]}, {"SYNO.API.Info"})
+    assert reason is not None
+    assert "not installed" in reason

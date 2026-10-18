@@ -74,7 +74,11 @@ DEFAULT_DSM_VERSION: str = "7.2.2"
 #   v4: the test user sets its own DS default destination (DS never starts a
 #       non-manager's tasks until it is set, #124), and a second, unconfigured
 #       DS user (DEFAULT_FRESH_USER) pins that case.
-BAKE_VERSION: int = 4
+#   v5: Synology Photos (#258): the package and its dependencies, the user home
+#       service (each user's personal space), the test user's Photos privilege,
+#       and Shared Space with the test user as a manager. DEFAULT_FRESH_USER has
+#       no Photos privilege.
+BAKE_VERSION: int = 5
 
 # Project root / .vdsm directory for all virtual-dsm artifacts
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent

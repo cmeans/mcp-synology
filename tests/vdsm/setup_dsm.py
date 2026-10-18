@@ -42,6 +42,16 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _DS_APP_ID = "SYNO.SDS.DownloadStation.Application"
+_PHOTOS_APP_ID = "SYNO.Foto.AppInstance"
+_SYNO_PATH = "PATH=/usr/syno/bin:/usr/syno/sbin:/usr/bin:/bin:/usr/sbin:/sbin"
+
+# Synology Photos and the packages it depends on, installed in this order (#258).
+# install_from_server doesn't pull in dependencies, and DSM 7.1 and 7.2.2 want
+# different Node.js versions.
+PHOTOS_PACKAGES: dict[str, tuple[str, ...]] = {
+    "7.1": ("Node.js_v18", "SynologyApplicationService", "SynologyPhotos"),
+    "7.2.2": ("Node.js_v20", "Node.js_v22", "SynologyApplicationService", "SynologyPhotos"),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -810,6 +820,256 @@ def _verify_no_ds_default_destination(base_url: str, username: str, password: st
 
 
 # ---------------------------------------------------------------------------
+# Synology Photos (#258)
+# ---------------------------------------------------------------------------
+
+# The Photos APIs the bake and the Photos tests need registered before going on.
+_PHOTOS_APIS = (
+    "SYNO.Foto.UserInfo",
+    "SYNO.Foto.Browse.Item",
+    "SYNO.Foto.Browse.Folder",
+    "SYNO.Foto.Setting.TeamSpace",
+    "SYNO.FotoTeam.Browse.Folder",
+)
+
+
+def _missing_apis(base_url: str, apis: tuple[str, ...]) -> list[str]:
+    """Return the subset of ``apis`` not yet in DSM's API cache."""
+    try:
+        resp = httpx.get(
+            f"{base_url}/webapi/query.cgi",
+            params={
+                "api": "SYNO.API.Info",
+                "version": "1",
+                "method": "query",
+                "query": ",".join(apis),
+            },
+            timeout=10,
+            verify=False,  # noqa: S501
+        )
+        data = resp.json().get("data", {})
+        return [api for api in apis if not data.get(api)]
+    except (httpx.HTTPError, ValueError):
+        return list(apis)
+
+
+def _install_photos_via_ssh(
+    host: str,
+    ssh_port: int,
+    admin_password: str,
+    base_url: str,
+    packages: tuple[str, ...],
+    *,
+    register_timeout_sec: int = 300,
+) -> None:
+    """Install Synology Photos and its dependencies with synopkg over SSH.
+
+    As for Download Station, the gate is the API cache, not ``synopkg status``.
+    Idempotent: returns at once if the Photos APIs are already registered.
+    """
+
+    def ssh(cmd: str, *, sudo: bool = True, timeout: int = 30) -> tuple[int, str]:
+        return _ssh_exec(host, ssh_port, admin_password, cmd, sudo=sudo, timeout=timeout)
+
+    if not _missing_apis(base_url, _PHOTOS_APIS):
+        print("    Synology Photos already running (all Photos APIs in cache)")
+        return
+    for pkg in packages:
+        start = time.monotonic()
+        # SynologyApplicationService's installer fails (rc 1, no output) under sudo's
+        # reset PATH, and Photos takes minutes. The leading echo keeps synopkg's
+        # first output line: ssh_exec drops the line sudo's prompt is printed on.
+        rc, out = ssh(
+            f"sh -c 'echo; env {_SYNO_PATH} /usr/syno/bin/synopkg install_from_server {pkg}'",
+            timeout=900,
+        )
+        elapsed = int(time.monotonic() - start)
+        if rc != 0:
+            msg = f"synopkg install_from_server {pkg} failed after {elapsed}s (rc={rc}): {out}"
+            raise RuntimeError(msg)
+        print(f"    Installed {pkg} in {elapsed}s")
+    rc, out = ssh("/usr/syno/bin/synopkg list --name", sudo=False)
+    absent = [pkg for pkg in packages if pkg not in out.split()]
+    if absent:
+        msg = f"Not in the package list after install: {absent} (list: {out.strip()[:300]})"
+        raise RuntimeError(msg)
+    deadline = time.monotonic() + register_timeout_sec
+    missing = list(_PHOTOS_APIS)
+    while time.monotonic() < deadline:
+        missing = _missing_apis(base_url, _PHOTOS_APIS)
+        if not missing:
+            break
+        time.sleep(3)
+    else:
+        msg = (
+            f"Photos APIs still missing from the cache after {register_timeout_sec}s: "
+            f"{missing}. Check /var/log/synopkg.log on the NAS."
+        )
+        raise RuntimeError(msg)
+    print("    Synology Photos installed and API-verified.")
+
+
+def _photos_call(
+    client: httpx.Client,
+    sid: str,
+    api: str,
+    method: str,
+    version: int = 1,
+    **params: Any,
+) -> dict[str, Any]:
+    """Call a Photos API as a form POST with JSON-encoded values; raise unless it succeeds.
+
+    ``api``/``method``/``version`` go in the body: with them only in the query string
+    and an empty body, DSM answers 101 (#258).
+    """
+    body = {"api": api, "method": method, "version": str(version)}
+    body.update({k: json.dumps(v) for k, v in params.items()})
+    data = client.post("/webapi/entry.cgi", params={"_sid": sid}, data=body).json()
+    if not data.get("success"):
+        msg = f"{api}.{method} failed: {data.get('error')}"
+        raise RuntimeError(msg)
+    result: Any = data.get("data", {})
+    return result if isinstance(result, dict) else {"list": result}
+
+
+def _core_call(
+    client: httpx.Client, sid: str, api: str, method: str, version: int = 1, **params: str
+) -> dict[str, Any]:
+    """Call a ``SYNO.Core.*`` API by GET (as the rest of the bake); raise unless it succeeds."""
+    data = client.get(
+        "/webapi/entry.cgi",
+        params={"api": api, "method": method, "version": str(version), "_sid": sid, **params},
+    ).json()
+    if not data.get("success"):
+        msg = f"{api}.{method} failed: {data.get('error')}"
+        raise RuntimeError(msg)
+    result: dict[str, Any] = data.get("data", {})
+    return result
+
+
+def _wait_for(check: Any, what: str, *, timeout_sec: int = 60) -> None:
+    """Poll ``check()`` until it's true; fail the bake after ``timeout_sec``."""
+    deadline = time.monotonic() + timeout_sec
+    while time.monotonic() < deadline:
+        if check():
+            return
+        time.sleep(3)
+    msg = f"Timed out after {timeout_sec}s waiting for {what}"
+    raise RuntimeError(msg)
+
+
+def _configure_photos_via_api(
+    base_url: str, admin_user: str, admin_password: str, photos_user: str
+) -> None:
+    """Make Synology Photos usable by ``photos_user``, with both its spaces.
+
+    1. Turn on the user home service (with its recycle bin): Photos keeps each
+       user's personal space in ``homes/<user>/Photos`` and answers 602 without it.
+    2. Grant ``photos_user`` the Photos application privilege (otherwise 160).
+    3. Enable Shared Space and give ``photos_user`` the ``management`` role there
+       (otherwise 801), so the Photos tests can write to it.
+
+    Every other user keeps the defaults: ``mcpfresh`` has no Photos privilege.
+    """
+    print("    Configuring Synology Photos (admin session)...")
+    with _user_session(base_url, admin_user, admin_password) as (client, sid):
+        _core_call(
+            client,
+            sid,
+            "SYNO.Core.User.Home",
+            "set",
+            enable="true",
+            location=json.dumps("/volume1"),
+            enable_recycle_bin="true",
+        )
+        _wait_for(
+            lambda: _core_call(client, sid, "SYNO.Core.User.Home", "get").get("enable"),
+            "the user home service",
+        )
+        print("    User home service enabled (with recycle bin)")
+
+        rules = [
+            {
+                "entity_type": "user",
+                "entity_name": photos_user,
+                "app_id": _PHOTOS_APP_ID,
+                "allow_ip": ["0.0.0.0"],
+                "deny_ip": [],
+            }
+        ]
+        _core_call(client, sid, "SYNO.Core.AppPriv.Rule", "set", rules=json.dumps(rules))
+        listed = _core_call(
+            client, sid, "SYNO.Core.AppPriv.Rule", "list", app_id=json.dumps(_PHOTOS_APP_ID)
+        )
+        entities = {(r.get("entity_type"), r.get("entity_name")) for r in listed.get("rules", [])}
+        for expected in (("group", "administrators"), ("user", photos_user)):
+            if expected not in entities:
+                msg = f"Photos app privilege rules lack {expected}: {sorted(entities)}"
+                raise RuntimeError(msg)
+        print(f"    Granted {photos_user} the Synology Photos app privilege")
+
+        # set_enable takes "enabled" (with "enable" it answers 120, reason required).
+        _photos_call(client, sid, "SYNO.Foto.Setting.TeamSpace", "set_enable", enabled=True)
+        _wait_for(
+            lambda: _photos_call(client, sid, "SYNO.Foto.Setting.TeamSpace", "get").get("enabled"),
+            "Shared Space to turn on",
+        )
+        users = _photos_call(client, sid, "SYNO.Foto.Sharing.Misc", "list_user_group")
+        uid = next(
+            (
+                u["id"]
+                for u in users.get("list", [])
+                if u.get("name") == photos_user and u.get("type", "user") == "user"
+            ),
+            None,
+        )
+        if uid is None:
+            msg = f"{photos_user} not in Photos' user list: {users}"
+            raise RuntimeError(msg)
+        grant = {
+            "action": "update",
+            "type": "user",
+            "id": uid,
+            "permission": "management",
+            "auto_backup": False,
+        }
+        _photos_call(client, sid, "SYNO.Foto.Setting.TeamSpace", "update_permission", list=[grant])
+        perms = _photos_call(client, sid, "SYNO.Foto.Setting.TeamSpace", "list_permission")
+        if not any(
+            p.get("type") == "user" and p.get("id") == uid and p.get("permission") == "management"
+            for p in perms.get("list", [])
+        ):
+            msg = f"{photos_user} lacks the Shared Space management role: {perms}"
+            raise RuntimeError(msg)
+        print(f"    Shared Space enabled; {photos_user} has the management role")
+
+
+def _verify_photos_access(
+    base_url: str, photos_user: str, photos_password: str, fresh_user: str, fresh_password: str
+) -> None:
+    """Fail the bake unless ``photos_user`` reaches both spaces and ``fresh_user`` gets 160."""
+    print(f"    Verifying {photos_user} can use Synology Photos...")
+    with _user_session(base_url, photos_user, photos_password) as (client, sid):
+        _photos_call(client, sid, "SYNO.Foto.UserInfo", "me")
+        root = _photos_call(client, sid, "SYNO.Foto.Browse.Folder", "get", 2, id=0)
+        team = _photos_call(client, sid, "SYNO.FotoTeam.Browse.Folder", "get", 2, id=1)
+    print(
+        f"    Personal root folder id {root['folder']['id']}, "
+        f"Shared Space root folder id {team['folder']['id']}"
+    )
+    with _user_session(base_url, fresh_user, fresh_password) as (client, sid):
+        try:
+            _photos_call(client, sid, "SYNO.Foto.UserInfo", "me")
+        except RuntimeError as e:
+            if "160" not in str(e):
+                raise
+        else:
+            msg = f"{fresh_user} can use Photos, but should have no Photos privilege"
+            raise RuntimeError(msg)
+    print(f"    {fresh_user} has no Photos privilege (160), as intended")
+
+
+# ---------------------------------------------------------------------------
 # Main setup entry point
 # ---------------------------------------------------------------------------
 
@@ -821,12 +1081,14 @@ def setup_dsm_for_testing(
     admin_user: str = DEFAULT_ADMIN_USER,
     ssh_host: str = "localhost",
     ssh_port: int = 0,
+    dsm_version: str,
 ) -> dict[str, Any]:
     """Run the full post-wizard setup.
 
     Enables SSH via the DSM API, then SSHes into the DSM guest VM (via QEMU)
-    to create the test user (synouser), install Download Station (synopkg),
-    and create shared folders, test data, and permissions (synoshare).
+    to create the test user (synouser), install Download Station and Synology
+    Photos (synopkg), and create shared folders, test data, and permissions
+    (synoshare).
 
     Returns metadata dict for the golden image sidecar.
     """
@@ -844,22 +1106,29 @@ def setup_dsm_for_testing(
         # image stamped bake_version/grants that has none of them.
         msg = "No SSH port for the DSM guest; cannot bake a golden image."
         raise RuntimeError(msg)
+    photos_packages = PHOTOS_PACKAGES.get(dsm_version)
+    if photos_packages is None:
+        msg = f"No Synology Photos package list for DSM {dsm_version} (PHOTOS_PACKAGES)."
+        raise RuntimeError(msg)
 
-    print("\n  [1/5] Enabling SSH...")
+    print("\n  [1/7] Enabling SSH...")
     _enable_ssh(base_url, admin_user, admin_password)
 
     test_users = (
         (DEFAULT_TEST_USER, DEFAULT_TEST_PASSWORD),
         (DEFAULT_FRESH_USER, DEFAULT_FRESH_PASSWORD),
     )
-    print("\n  [2/5] Creating test users via synouser (SSH)...")
+    print("\n  [2/7] Creating test users via synouser (SSH)...")
     for user, password in test_users:
         _create_user_via_ssh(ssh_host, ssh_port, admin_password, user, password)
 
-    print("\n  [3/5] Installing Download Station via synopkg (SSH)...")
+    print("\n  [3/7] Installing Download Station via synopkg (SSH)...")
     _install_download_station_via_ssh(ssh_host, ssh_port, admin_password, base_url)
 
-    print("\n  [4/5] Creating shared folders and test data via SSH...")
+    print("\n  [4/7] Installing Synology Photos via synopkg (SSH)...")
+    _install_photos_via_ssh(ssh_host, ssh_port, admin_password, base_url, photos_packages)
+
+    print("\n  [5/7] Creating shared folders and test data via SSH...")
     _create_shared_folders_via_ssh(
         ssh_host,
         ssh_port,
@@ -867,7 +1136,7 @@ def setup_dsm_for_testing(
         tuple(user for user, _ in test_users),
     )
 
-    print("\n  [5/5] Configuring Download Station...")
+    print("\n  [6/7] Configuring Download Station...")
     _configure_download_station_via_api(
         base_url=base_url,
         admin_user=admin_user,
@@ -877,6 +1146,16 @@ def setup_dsm_for_testing(
     )
     _set_own_ds_default_destination(base_url, DEFAULT_TEST_USER, DEFAULT_TEST_PASSWORD, "writable")
     _verify_no_ds_default_destination(base_url, DEFAULT_FRESH_USER, DEFAULT_FRESH_PASSWORD)
+
+    print("\n  [7/7] Configuring Synology Photos...")
+    _configure_photos_via_api(base_url, admin_user, admin_password, DEFAULT_TEST_USER)
+    _verify_photos_access(
+        base_url,
+        DEFAULT_TEST_USER,
+        DEFAULT_TEST_PASSWORD,
+        DEFAULT_FRESH_USER,
+        DEFAULT_FRESH_PASSWORD,
+    )
 
     # Verify — check both admin and test user can see shares
     print("\n  Verifying setup...")
@@ -892,11 +1171,16 @@ def setup_dsm_for_testing(
         "admin_password": admin_password,
         "test_user": DEFAULT_TEST_USER,
         "test_password": DEFAULT_TEST_PASSWORD,
-        "dsm_packages": ["DownloadStation"],
+        "dsm_packages": ["DownloadStation", *photos_packages],
         "bake_version": BAKE_VERSION,
         "fresh_user": DEFAULT_FRESH_USER,
         "fresh_password": DEFAULT_FRESH_PASSWORD,
-        "grants": [f"ds:{DEFAULT_TEST_USER}", f"ds:{DEFAULT_FRESH_USER}"],
+        "grants": [
+            f"ds:{DEFAULT_TEST_USER}",
+            f"ds:{DEFAULT_FRESH_USER}",
+            f"photos:{DEFAULT_TEST_USER}",
+            f"photos-shared-space:{DEFAULT_TEST_USER}:management",
+        ],
         "ds_default_destination": {DEFAULT_TEST_USER: "writable"},
         "test_paths": {
             "existing_share": "/testshare",
