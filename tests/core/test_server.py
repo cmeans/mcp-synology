@@ -1251,7 +1251,9 @@ class TestInstructionComments:
 # says a module's list replaces the Downloads default when there's no top-level list.
 # Raised by #258 to 29,742 (+12,160): the opt-in Photos module's 19 tools and its
 # instructions section. A connection without Photos enabled doesn't carry them.
-PAYLOAD_BUDGET_CHARS = 29_742
+# Raised by #296 to 29,834 (+92): create_download's description says the destination must
+# be an existing folder and to create a new one with create_folder first.
+PAYLOAD_BUDGET_CHARS = 29_834
 
 
 class TestPayloadBudget:

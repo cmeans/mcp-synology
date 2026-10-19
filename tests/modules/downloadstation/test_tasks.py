@@ -1224,12 +1224,11 @@ class TestEditDownload:
             await edit_download(mock_client, task_ids=["dbid_1"], destination="/volume1/testshare")
         envelope = _envelope(exc.value)
         assert "DSM error 100" in envelope["message"]
-        assert "share-relative" in envelope["suggestion"]
-        assert "/volume1" in envelope["suggestion"]
-        assert "list_files" in envelope["suggestion"]
-        assert envelope["suggestion"].endswith(
-            "Download Station doesn't create missing folders: create it first with "
-            "create_folder, then retry."
+        assert envelope["suggestion"] == (
+            "Pass a share-relative path such as 'video/Torrents' (not "
+            "'/volume1/video/Torrents') and check the folder exists with list_files. "
+            "If the folder is new: Download Station doesn't create missing folders, so "
+            "create it first with create_folder, then retry."
         )
 
     @respx.mock
@@ -1240,10 +1239,14 @@ class TestEditDownload:
             await create_download(
                 mock_client, uri="magnet:?xt=urn:btih:abc", destination="/volume1/video"
             )
-        suggestion = _envelope(exc.value)["suggestion"]
-        assert "/volume1" in suggestion
-        # Download Station doesn't create missing folders; name the fix (#296).
-        assert "doesn't create missing folders: create it first with create_folder" in suggestion
+        # Share-relative first (this is the /volume1 case); then the fix for a new folder,
+        # since Download Station doesn't create missing folders (#296).
+        assert _envelope(exc.value)["suggestion"] == (
+            "Pass the destination share-relative ('video/Torrents', not "
+            "'/volume1/video/Torrents'). If the folder is new: Download Station doesn't create "
+            "missing folders, so create it first with create_folder (File Station's form, "
+            "'/video/TV/New show'; needs File Station write permission), then retry."
+        )
 
     async def test_nas_with_task_v1_only_gets_clear_error(self, mock_client: DsmClient) -> None:
         mock_client.api_cache[TASK] = mock_client.api_cache[TASK].model_copy(
