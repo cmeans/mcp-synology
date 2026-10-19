@@ -69,7 +69,7 @@ Download Station takes share-relative paths (`video/Torrents`), while File Stati
 
 ### Managers and non-managers
 
-`ds_is_manager()` reads `is_manager` from `SYNO.DownloadStation.Info` / `getinfo`. It returns `None` when that can't be determined, and callers then keep their default behavior instead of failing. A non-manager is an account with the Download Station app privilege that isn't a DS manager (typically a non-admin).
+`ds_is_manager()` reads `is_manager` from `SYNO.DownloadStation.Info` / `getinfo`. It returns `None` when that can't be determined, and callers then keep their default behavior instead of failing. A non-manager is an account with the Download Station app privilege that isn't in DSM's `administrators` group: adding an account to that group makes `is_manager` true. Verified on DSM 7.1 (Download Station 3.9) and 7.2.2 (4.1) on vdsm, 2026-10-19: the non-admin `mcptest` read `is_manager: false` and didn't see the admin's task; after `synogroup --memberadd administrators mcptest` and a new login it read `true` and saw the admin's task. Removing an account from the group again wasn't tested, nor were DSM 7.2's delegated admin roles. We found no separate manager setting; Synology's API guide defines `is_manager` only as "If the logged in user is manager".
 
 - **Sees only their own tasks,** in v1 `Task.list` and in DS2's total alike (verified on both versions). List output says "your tasks only".
 - **Gets a sanitized, per-user view from `Info.getconfig`:** a null default destination, zeroed rates. `get_download_config` labels it as such.

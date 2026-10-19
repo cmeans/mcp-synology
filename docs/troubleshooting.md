@@ -111,11 +111,14 @@ longer, until it finds peers.
 **What to do:** nothing; check again after a few seconds. A task still in `waiting` after
 minutes can have another cause, such as the one below.
 
-### A non-manager's tasks stay `waiting` forever
+### A non-admin's tasks stay `waiting` forever
 
-**Why:** Download Station never starts a non-manager's tasks until that user has set their own
+**Why:** Download Station never starts a non-admin's tasks until that user has set their own
 default destination, which DSM keeps per user (#124, #133). `create_download` says so in its
 reply: "Download Station won't start your tasks until your default destination is set".
+Download Station's API (`is_manager: false`) and mcp-synology's replies call such an account a
+non-manager. Adding an account to DSM's `administrators` group made it a manager, and we found
+no separate manager setting (Download Station spec).
 
 **What to do:** set it as that user with `set_download_config(default_destination=...)`, or in
 Download Station's own settings, signed in as that user.
@@ -130,17 +133,18 @@ Download Station's own settings, signed in as that user.
   7.2.2, #296).
 
 **What to do:** pass the destination share-relative. For a new folder, create it first with
-`create_folder` (File Station's form, `/video/TV/New show`; needs File Station write
-permission), then retry. `edit_download` reports the same problem as DSM error 100. See
-[dsm_error](error-codes.md#dsm_error).
+File Station's `create_folder` (its path form, `/video/TV/New show`; needs File Station write
+permission) or, without that, in DSM's own File Station, then retry. `edit_download` reports
+the same problem as DSM error 100. See [dsm_error](error-codes.md#dsm_error).
 
 ### A task ID shows "not found (no such task, or not yours)"
 
-**Why:** a non-manager sees only their own tasks, and DSM answers another user's task exactly as
+**Why:** a non-admin (a non-manager, see above) sees only their own tasks, and DSM answers
+another user's task exactly as
 it answers a missing one (DSM 7.1 and 7.2.2, #136).
 
-**What to do:** check the ID with `list_downloads`, signed in as the task's owner, or use a
-Download Station manager account.
+**What to do:** check the ID with `list_downloads`, signed in as the task's owner, or use an
+administrator account.
 
 ### `pause_download` fails for the whole call with `invalid_parameter`
 
