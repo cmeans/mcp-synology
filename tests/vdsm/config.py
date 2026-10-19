@@ -65,10 +65,11 @@ DSM_VERSIONS: dict[str, DsmVersionInfo] = {
 DEFAULT_DSM_VERSION: str = "7.2.2"
 
 # Bumped on every change to what the bake puts into a golden image. The bake
-# records it in meta.json, and the vdsm conftest refuses older images: CI's
-# cache key hashes the bake files, but a local .vdsm/golden/ image is reused
-# indefinitely and would otherwise silently lack newer setup (e.g. the
-# test user's Download Station grant, added in v2).
+# records it in meta.json, and the vdsm conftest refuses older images: a local
+# .vdsm/golden/ image is reused indefinitely and would otherwise silently lack
+# newer setup (e.g. the test user's Download Station grant, added in v2). CI's
+# golden-image cache is keyed on it too (#132): a bake change without a bump
+# is baked fresh on its own PR, but main would keep restoring the old image.
 #   v3: the bake shuts DSM down cleanly before saving; v2 images were saved
 #       from a SIGKILLed VM (on CI, DS's pkg-synodl-apid unit came up masked).
 #   v4: the test user sets its own DS default destination (DS never starts a

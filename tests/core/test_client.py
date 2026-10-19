@@ -485,6 +485,13 @@ class TestRequestPostForm:
         assert "DSM POST: SYNO.API.Auth/login v6" in caplog.text
         assert "S3cretPW" not in caplog.text
 
+    def test_log_safe_masks_share_passphrase(self) -> None:
+        """A Photos share link's passphrase is its secret, as a password is."""
+        from mcp_synology.core.client import _log_safe
+
+        safe = _log_safe({"passphrase": "AbCd1234", "password": "pw", "album_id": 4})
+        assert safe == {"passphrase": "***", "password": "***", "album_id": 4}
+
     @respx.mock
     async def test_session_retry_stays_post(self) -> None:
         client = make_client(make_api_cache())
