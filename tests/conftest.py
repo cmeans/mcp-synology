@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -13,6 +14,22 @@ from mcp_synology.core.client import DsmClient
 from mcp_synology.core.config import AppConfig
 from mcp_synology.core.state import ApiInfoEntry
 from tests.personas import ReauthSpy, reauth_spy_on
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_setup(item: pytest.Item) -> None:
+    """vdsm and real-NAS integration tests can't run under pytest-xdist.
+
+    Each worker would boot its own vdsm VM on the same storage directory, and the
+    integration tests run in a fixed order (create, copy, ... delete) on fixed paths of a
+    real NAS. So under xdist they fail here, before any fixture touches a VM or the NAS.
+    Unit tests are fine in parallel (`-n auto`).
+    """
+    if os.environ.get("PYTEST_XDIST_WORKER") and {"vdsm", "integration"} & {
+        m.name for m in item.iter_markers()
+    }:
+        pytest.fail("vdsm and integration tests can't run under pytest-xdist; drop -n.")
+
 
 BASE_URL = "http://nas:5000"
 

@@ -39,7 +39,7 @@ uv run ruff check src/ tests/              # Lint
 uv run ruff format --check src/ tests/     # Format check
 uv run ruff format src/ tests/             # Auto-format
 uv run mypy src/                           # Type check (strict mode)
-uv run pytest                              # Run unit + module tests
+uv run pytest -n auto                      # Run unit + module tests, one worker per CPU (pytest-xdist)
 uv run pytest tests/modules/filestation/test_listing.py  # Single test file
 uv run pytest -k "test_list_shares"        # Single test by name
 uv run pytest -m integration               # Integration tests (requires real NAS)
@@ -125,6 +125,7 @@ uv run pytest --cov=mcp_synology           # Tests with coverage
 
 ## Testing
 
+- **Unit tests run in parallel** with pytest-xdist (`-n auto`, also in CI): about 20 s instead of about 60 s on 16 CPU threads. vdsm and real-NAS integration tests don't: each worker would boot its own vdsm VM on the same storage directory, and the integration tests run in order on fixed NAS paths. So `tests/conftest.py` fails them at setup under xdist; run them without `-n`
 - **Mock boundary is HTTP:** `respx` intercepts httpx calls, returns canned DSM responses — not function-level mocks
 - **Test files mirror source files:** `listing.py` → `test_listing.py`
 - **Integration tests** marked `@pytest.mark.integration`, excluded from CI by default
