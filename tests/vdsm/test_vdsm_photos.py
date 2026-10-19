@@ -33,7 +33,13 @@ from mcp_synology.modules.photos.organize import (
     photo_request,
     tag_photos,
 )
-from mcp_synology.modules.photos.transfer import download_photos
+from mcp_synology.modules.photos.tasks import (
+    copy_or_move,
+    delete_photo_folders,
+    delete_photos,
+    photo_task,
+)
+from mcp_synology.modules.photos.transfer import download_photos, upload_photos
 from tests.vdsm.golden_image import load_golden_meta, photos_skip_reason
 
 if TYPE_CHECKING:
@@ -414,3 +420,111 @@ async def test_photo_requests(photos: DsmClient) -> None:
         out = await photo_request(photos, action="update", request=request, expires="never")
         assert "expires never" in out
         assert "Deleted" in await photo_request(photos, action="delete", request=request)
+
+
+# -- uploads and background tasks ----------------------------------------------------
+
+
+async def test_upload_duplicates_and_unsupported(photos: DsmClient, tmp_path: Path) -> None:
+    async with seeded(photos, JPEGS[:1]) as (path, _ids):
+        notes = tmp_path / "notes.txt"
+        notes.write_text("not a photo")
+        out = await upload_photos(
+            photos,
+            local_paths=[str(SEED / "beach-sunset.jpg"), str(notes)],
+            folder=path,
+            allowed_roots=[SEED, tmp_path],
+        )
+        assert "renamed" in out and "(as beach-sunset_1.jpg)" in out
+        assert "notes.txt" in out and "(620)" in out
+        out = await upload_photos(
+            photos,
+            local_paths=[str(SEED / "beach-sunset.jpg")],
+            folder=path,
+            on_duplicate="skip",
+            allowed_roots=[SEED],
+        )
+        assert "skipped" in out and "(already there)" in out
+
+
+async def test_copy_move_delete(photos: DsmClient) -> None:
+    async with seeded(photos, JPEGS) as (src, ids), seeded(photos, []) as (dst, _):
+        out = await copy_or_move(
+            photos,
+            operation="copy",
+            ids=[ids["beach-sunset.jpg"], 999999],
+            folders=None,
+            destination=dst,
+        )
+        assert out.startswith(f"Copied 1 item(s) to {dst}") and "Not found: 999999" in out
+        out = await copy_or_move(
+            photos, operation="copy", ids=[ids["beach-sunset.jpg"]], folders=None, destination=dst
+        )
+        assert "1 skipped (already there)" in out
+        out = await copy_or_move(
+            photos, operation="move", ids=[ids["city-night.jpg"]], folders=None, destination=dst
+        )
+        assert out.startswith("Moved 1 item(s)")
+        assert "2 item(s) total" in await list_photos(photos, folder=dst)
+
+        out = await copy_or_move(
+            photos,
+            operation="copy",
+            ids=None,
+            folders=[src],
+            destination=dst,
+            on_conflict="overwrite",
+            timeout=0,
+        )
+        handle = re.search(r"photos:\d+", out).group(0)  # type: ignore[union-attr]
+
+        async def finished() -> str | None:
+            text = await photo_task(photos, handle=handle)
+            return text if ": done," in text else None
+
+        await _wait_for(finished, "the handed-off copy")
+        assert handle in await photo_task(photos)
+
+        out = await delete_photos(photos, ids=[ids["forest-trail.jpg"], 999999])
+        assert "Deleted 1 item(s) in the personal space" in out and "Not found: 999999" in out
+        with pytest.raises(ToolError):
+            await photo_task(photos, handle="photos:999999", action="stop")
+        assert "finished task(s)" in await photo_task(photos, action="clear")
+
+
+async def test_delete_folders(photos: DsmClient) -> None:
+    async with seeded(photos, JPEGS[:1]) as (path, _ids):
+        out = await delete_photo_folders(photos, folders=[path])
+        assert out.startswith(f"Deleted {path} (1 item(s) directly in it) in the personal space")
+        assert "recycle bin" in out
+        with pytest.raises(ToolError) as exc:
+            await list_photos(photos, folder=path)
+        assert _error(exc)["code"] == "not_found"
+
+
+async def test_cross_space(photos: DsmClient) -> None:
+    async with (
+        seeded(photos, JPEGS[:1]) as (_src, ids),
+        seeded(photos, [], space="shared") as (team, _),
+    ):
+        out = await copy_or_move(
+            photos,
+            operation="copy",
+            ids=[ids["beach-sunset.jpg"]],
+            folders=None,
+            destination=team,
+            dest_space="shared",
+        )
+        assert out.startswith(f"Copied 1 item(s) to {team} (Shared Space)") and "failed" not in out
+        assert "beach-sunset.jpg" in await list_photos(photos, folder=team, space="shared")
+        with pytest.raises(ToolError) as exc:
+            await copy_or_move(
+                photos,
+                operation="move",
+                ids=[1],
+                folders=None,
+                destination="/",
+                space="shared",
+                dest_space="personal",
+            )
+        assert "copy_photos" in _error(exc)["suggestion"]

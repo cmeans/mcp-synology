@@ -303,7 +303,7 @@ an HTTP request to DSM timed out, or the NAS couldn't be reached in time.**
 
 Affects search and `get_dir_size`, which run as asynchronous DSM tasks that
 mcp-synology polls and stops at their time limit, and a status or stop request
-for a `file_task` that DSM doesn't answer.
+for a `file_task` or `photo_task` that DSM doesn't answer.
 `create_download` can also time out on the HTTP request itself; DSM may still
 have created the task, so check `list_downloads` before retrying (mcp-synology
 never retries it automatically, to avoid duplicate downloads).
@@ -379,6 +379,12 @@ Common causes:
   stop, that it may or may not have taken effect. Stop requests wait up to
   90 s, longer than other requests: DSM 7.1 sometimes answers a Delete `stop`
   only after about 60 s, although the stop takes effect at once.
+- `photo_task` didn't get an answer to its status or stop request: "Photo task
+  failed for `photos:<id>`: DSM didn't answer the status request (ReadTimeout)."
+  After a stop that went through, the message ends "The stop was requested; its
+  status couldn't be read."; for the stop request itself, "The stop may or may
+  not have taken effect.", or "Nothing was stopped." when the connection
+  couldn't be opened ("DSM couldn't be reached for the stop request").
 
 Fix:
 
@@ -405,8 +411,8 @@ Otherwise:
    search and `get_dir_size`, the time limit is `async_timeout` (default
    120 s, or `search_timeout` and `dir_size_timeout`), counting the whole
    time, including slow status requests.
-4. For a `file_task` request DSM didn't answer: call `file_task` with the
-   handle again to see whether the task is still running, or list the path.
+4. For a `file_task` or `photo_task` request DSM didn't answer: call it with
+   the handle again to see whether the task is still running, or list the path.
 5. To clear suspected orphaned tasks: stop and start the File Station package
    from **Package Center**. mcp-synology cleans up its own tasks via
    `try/finally`, but tasks from earlier crashed runs may persist. A handed-off
@@ -450,6 +456,11 @@ nothing is written; neither is JSON that isn't DSM's error envelope (#292).
 a stop "Stop task failed for `<handle>`: … Nothing was stopped." (the status
 read failed) or "… The stop may or may not have taken effect." (the stop
 request itself failed), with `retryable` set as above: a 4xx isn't retryable.
+`photo_task` reports either case as "Photo task failed for `photos:<id>`: …",
+ending "The stop was requested; its status couldn't be read." after a stop that
+went through, or "The stop may or may not have taken effect." when the stop
+request itself failed. A Photos copy, move or delete that's waiting hands the
+task off instead, saying what the NAS answered.
 
 Synology Photos also reports two setup problems this way: DSM code **602** (the
 account has no personal space because the user home service is off; an administrator
