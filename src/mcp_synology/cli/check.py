@@ -9,9 +9,11 @@ import sys
 from typing import TYPE_CHECKING
 
 import click
+import httpx
 import yaml
 
 from mcp_synology.cli.logging_ import _configure_logging, _init_early_logging
+from mcp_synology.core.redaction import redact_urls
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -52,7 +54,8 @@ def connection_failure_message(base_url: str, host: str, exc: BaseException) -> 
     exception type is named. A TLS verification failure sits in the exception chain as
     ``ssl.SSLCertVerificationError`` and gets its own advice.
     """
-    reason = f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
+    text = redact_urls(str(exc))
+    reason = f"{type(exc).__name__}: {text}" if text else type(exc).__name__
     cause: BaseException | None = exc
     seen: set[int] = set()
     while cause is not None and id(cause) not in seen:  # chains can loop
@@ -64,6 +67,18 @@ def connection_failure_message(base_url: str, host: str, exc: BaseException) -> 
                 "or install a trusted certificate."
             )
         cause = cause.__cause__ or cause.__context__
+    # Connected, then no answer in time or the connection dropped: the NAS is there but
+    # busy, so the host, port and https settings aren't the problem (#254).
+    if isinstance(exc, httpx.ReadTimeout | httpx.WriteTimeout):
+        return (
+            f"{base_url} accepted the connection but didn't answer in time ({reason}). The NAS "
+            "may be busy: try again shortly, or raise connection.timeout."
+        )
+    if isinstance(exc, httpx.ReadError | httpx.WriteError | httpx.RemoteProtocolError):
+        return (
+            f"{base_url} accepted the connection but dropped it ({reason}). The NAS may be "
+            "busy or restarting: try again shortly."
+        )
     return f"Can't connect to {base_url}: {reason}. Check the host, port and https settings."
 
 

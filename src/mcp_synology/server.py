@@ -109,14 +109,47 @@ _MODULE_REGISTRY: dict[str, ModuleType] = {
 
 
 def _unreachable_error(base_url: str, timeout: float, exc: httpx.TransportError) -> NoReturn:
-    """Raise a structured error for a NAS that can't be reached (#138).
+    """Raise a structured error for a first connection (API info + login) that failed (#138).
 
     httpx's connect errors often stringify to ``''``, which used to reach the
     model as "Error executing tool list_shares: " with nothing to act on.
+    Only a failure to connect is "can't reach" (#254): a NAS that accepted the connection
+    and then didn't answer in time, or dropped it, is there but busy (e.g. a large
+    delete), and a pool timeout never sent anything. Any URL in the text is redacted.
     """
+    text = redact_urls(str(exc))
+    detail = f" ({type(exc).__name__}: {text})" if text else f" ({type(exc).__name__})"
+    busy = (
+        "Try again shortly. If the NAS is often this slow, raise connection.timeout "
+        f"in the config (now {timeout:g} s). "
+        "`mcp-synology check --config <file>` tests the connection and login."
+    )
+    if isinstance(exc, httpx.ReadTimeout | httpx.WriteTimeout):
+        error_response(
+            ErrorCode.TIMEOUT,
+            f"The NAS at {base_url} accepted the connection but didn't answer within "
+            f"{timeout:g} s{detail}. It may be busy (heavy load, or a large delete or copy).",
+            retryable=True,
+            suggestion=busy,
+        )
+    if isinstance(exc, httpx.ReadError | httpx.WriteError | httpx.RemoteProtocolError):
+        error_response(
+            ErrorCode.UNAVAILABLE,
+            f"The NAS at {base_url} accepted the connection but dropped it{detail}. It may "
+            "be busy or restarting.",
+            retryable=True,
+            suggestion=busy,
+        )
+    if isinstance(exc, httpx.PoolTimeout):
+        error_response(
+            ErrorCode.TIMEOUT,
+            f"No connection to the NAS at {base_url} was free within {timeout:g} s{detail}, "
+            "so the request wasn't sent.",
+            retryable=True,
+            suggestion="Try again shortly.",
+        )
     timed_out = isinstance(exc, httpx.TimeoutException)
     what = f"timed out after {timeout:g} s" if timed_out else "could not connect"
-    detail = f" ({type(exc).__name__}: {exc})" if str(exc) else f" ({type(exc).__name__})"
     error_response(
         ErrorCode.TIMEOUT if timed_out else ErrorCode.UNAVAILABLE,
         f"Can't reach the NAS at {base_url}: {what}{detail}.",

@@ -365,6 +365,15 @@ Common causes:
 - The NAS can't be reached at all: it's off or asleep, the network or VPN is
   down, or the configured host or port is wrong. The message starts "Can't
   reach the NAS at …" and names the URL and the timeout.
+- The NAS is reachable but too busy to answer the first connection (the API
+  list and the login) in time. The message starts "The NAS at … accepted the
+  connection but didn't answer within …" (#254). Retry shortly; if it's often
+  this slow, raise `connection.timeout`. `mcp-synology check` says the same
+  ("… accepted the connection but didn't answer in time").
+- No connection was free in time for the API list or the login: "No
+  connection to the NAS at … was free within N s (PoolTimeout…), so the
+  request wasn't sent." Nothing reached the NAS, so it's safe to retry, and a
+  retry usually clears it.
 - DSM stopped answering partway through. While it deletes or copies very large
   files (multi-TB Time Machine bundles, VM images), DSM can stall for longer
   than the connection timeout (`connection.timeout`, default 30 s).
@@ -390,9 +399,11 @@ Fix:
 
 **Can't reach the NAS?** If the message starts "Can't reach the NAS at …",
 mcp-synology never got an answer from DSM, so the NAS-side checks below
-can't help. Check that the NAS is powered on and reachable from this
-machine (LAN or VPN), and that `connection` `host`, `port` and `https` in
-the config are right, then run `mcp-synology check -v --config <file>`,
+can't help. (If it starts "The NAS at … accepted the connection but …"
+instead, the NAS is reachable but busy: retry shortly, or raise
+`connection.timeout`.) Check that the NAS is powered on and reachable from
+this machine (LAN or VPN), and that `connection` `host`, `port` and `https`
+in the config are right, then run `mcp-synology check -v --config <file>`,
 which tests the connection and login step by step.
 
 Otherwise:
@@ -431,7 +442,10 @@ HTTP error status, or the answer wasn't a DSM reply at all.**
 
 The connection case (the message starts "Can't reach the NAS at …") means no
 DSM answer arrived at all: the connection was refused or the host couldn't be
-resolved or routed to. See **Can't reach the NAS?** under Fix.
+resolved or routed to. See **Can't reach the NAS?** under Fix. If the
+message starts "The NAS at … accepted the connection but dropped it" instead,
+the NAS answered and then closed the connection: it's reachable but busy or
+restarting, so retry shortly (#254).
 
 The HTTP-status case (e.g. `502 Bad Gateway` from DSM's web server while a
 package such as Download Station is still starting) is reported with the
@@ -482,9 +496,11 @@ Fix:
 
 **Can't reach the NAS?** If the message starts "Can't reach the NAS at …",
 mcp-synology never got an answer from DSM, so the NAS-side checks below
-can't help. Check that the NAS is powered on and reachable from this
-machine (LAN or VPN), and that `connection` `host`, `port` and `https` in
-the config are right, then run `mcp-synology check -v --config <file>`,
+can't help. (If it starts "The NAS at … accepted the connection but …"
+instead, the NAS is reachable but busy: retry shortly, or raise
+`connection.timeout`.) Check that the NAS is powered on and reachable from
+this machine (LAN or VPN), and that `connection` `host`, `port` and `https`
+in the config are right, then run `mcp-synology check -v --config <file>`,
 which tests the connection and login step by step.
 
 Otherwise:
