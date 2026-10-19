@@ -163,13 +163,15 @@ class TestCopyMove:
         assert fake.one(INFO, "abort_task").params == {"id": [5]}
         err = _error(exc)
         assert err["code"] == "permission_denied"
+        head = "Copy photos failed (DSM error 105): Permission denied. "
         if abort_ok:
-            assert err["message"].endswith(
-                "The task was stopped on the NAS; what was already done stays done."
+            assert err["message"] == (
+                head + "The task was stopped on the NAS; what was already done stays done."
             )
         else:
-            assert err["message"].endswith(
-                "Stopping it failed, so it may still be running: photos:5 (check with photo_task)."
+            assert err["message"] == (
+                head + "Stopping it failed, so it may still be running: photos:5 "
+                "(check with photo_task)."
             )
 
     @respx.mock

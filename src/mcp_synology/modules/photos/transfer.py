@@ -323,6 +323,16 @@ async def upload_photos(
             action = str(data.get("action", "new"))
             item_id = int(data["id"])
         except (DsmHttpError, DsmReplyError, httpx.TransportError) as e:
+            if isinstance(e, DsmHttpError) and 400 <= e.status < 500:
+                # A 4xx is the proxy (or DSM) refusing this request: not stored. A smaller
+                # file may still go through after a 413 (nginx's body-size limit), but
+                # after a 429 (rate limited) the rest would only meet the same limit.
+                hint = " The file may be over the proxy's upload size limit." * (e.status == 413)
+                rows.append((path.name, "failed", f"{e}{hint}"))
+                if e.status == 429:
+                    rows += [(rest.name, "not tried", "") for rest in files[n + 1 :]]
+                    break
+                continue
             # No answer, or a proxy's 502/504 or login page (#282): the same stall, which
             # the rest would most likely meet too, so stop and say which weren't tried (as
             # download_photos). Unless the request never left, the upload may have landed,

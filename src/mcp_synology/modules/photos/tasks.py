@@ -148,7 +148,8 @@ async def _poll(
                 else f" Stopping it failed, so it may still be running: {handle_of(task_id)}"
                 " (check with photo_task)."
             )
-            e.args = (f"{e}{note}",)
+            text = str(e).rstrip()
+            e.args = (f"{text}{'' if text.endswith(('.', '!', '?')) else '.'}{note}",)
             raise
         except Exception as e:
             # Any other unexpected answer: the task may well still be running, so hand it

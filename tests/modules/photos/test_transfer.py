@@ -461,6 +461,60 @@ class TestUpload:
         assert "Gateway" not in out
 
     @respx.mock
+    async def test_proxy_4xx_fails_that_file_and_goes_on(self, tmp_path: Path) -> None:
+        """QA R2: a proxy's 413 (nginx's body-size limit) refused the file; it wasn't
+        stored, and a smaller file after it may go through."""
+        for name in ("big.mp4", "small.jpg"):
+            (tmp_path / name).write_bytes(b"x")
+        fake = FakePhotos().on("SYNO.Foto.Browse.Folder", "get", 2, captured("folder-get-root"))
+        answers = iter(
+            [
+                httpx.Response(413, text="<html>Request Entity Too Large</html>"),
+                httpx.Response(200, json={"success": True, "data": {"action": "new", "id": 42}}),
+            ]
+        )
+        fake.multipart = lambda _r: next(answers)
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await upload_photos(
+                client,
+                local_paths=[str(tmp_path / "big.mp4"), str(tmp_path / "small.jpg")],
+                allowed_roots=[tmp_path],
+            )
+        lines = out.splitlines()
+        assert lines[0] == "Uploaded 1 of 2 file(s) to / (personal space)"
+        assert lines[1] == (
+            "  big.mp4    failed   SYNO.Foto.Upload.Item/upload_to_folder: DSM answered HTTP 413. "
+            "The file may be over the proxy's upload size limit."
+        )
+        assert lines[2].split() == ["small.jpg", "new", "id", "42"]
+        assert "Too Large" not in out
+
+    @respx.mock
+    @pytest.mark.parametrize(("status", "rest"), [(429, "not tried"), (302, "not tried")])
+    async def test_rate_limit_or_redirect_stops_the_batch(
+        self, tmp_path: Path, status: int, rest: str
+    ) -> None:
+        """After a 429 the rest would meet the same limit; a 302 is a proxy's login page."""
+        for name in ("a.jpg", "b.jpg"):
+            (tmp_path / name).write_bytes(b"x")
+        fake = FakePhotos().on("SYNO.Foto.Browse.Folder", "get", 2, captured("folder-get-root"))
+        fake.multipart = lambda _r: httpx.Response(status, headers={"location": "/login"})
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await upload_photos(
+                client,
+                local_paths=[str(tmp_path / "a.jpg"), str(tmp_path / "b.jpg")],
+                allowed_roots=[tmp_path],
+            )
+        lines = out.splitlines()
+        state = "failed" if status == 429 else "unknown"
+        assert lines[1].split()[:2] == ["a.jpg", state]
+        assert lines[2].rstrip() == f"  b.jpg  {rest}"
+
+    @respx.mock
     async def test_reply_without_id_is_its_own_row(self, tmp_path: Path) -> None:
         for name in ("a.jpg", "b.jpg"):
             (tmp_path / name).write_bytes(b"x")
