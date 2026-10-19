@@ -12,6 +12,14 @@ on:
 permissions:
   contents: read
 
+# A new push to a PR cancels that PR's older, superseded run (#284). Pushes to main
+# never cancel each other: each main run tests its commit, and vdsm's saves the
+# golden-image cache. The label automation finds a run's PR by its head commit, and a
+# superseded run's commit is no longer any PR's head, so a cancelled run sets no label.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   # Pins JavaScript-action Node runtime to Node 24 across all JS-based
   # GitHub Actions in this workflow. Matches the pattern used by the
@@ -41,63 +49,124 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      # GitHub-hosted Ubuntu runners ship ~14 GB free of ~75 GB. The vdsm
-      # workflow needs significantly more: a ~1.1 GB compressed golden image
-      # tarball (bake v5, with Synology Photos) + ~27 GB extracted storage
-      # (the 16 GB data and 11 GB system disk images; tarfile writes them out
-      # in full, not sparse) + testcontainers spawning a vdsm
-      # container with its own /storage bind-mount + Python venv + Playwright
-      # Chromium download. CI on 550f445 hit
-      # `System.IO.IOException: No space left on device` after the bake
-      # succeeded but during the test step. Free the runner-pre-installed
-      # software we don't need (dotnet, Android SDK, Haskell, large
-      # *-large packages) to recover ~30 GB before the heavy work.
-      - name: Free disk space
-        uses: jlumbroso/free-disk-space@ceedf095f4ec1a097402bc6bd80831f2e1a6fde6 # v2.0.0
         with:
-          tool-cache: false  # keep Python toolchain; uv depends on it
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: false  # keep — testcontainers re-pulls otherwise
-          swap-storage: true
+          # On a PR the checkout is GitHub's merge commit, whose first parent is
+          # main: depth 2 lets the next step diff the PR against it.
+          fetch-depth: 2
+
+      # A PR that changes no code (#284): only Markdown at the repository root
+      # (README, CHANGELOG, CLAUDE.md, ...), docs/, issue templates or LICENSE. Not
+      # Markdown elsewhere: src/mcp_synology/instructions/server.md is the server's
+      # instructions. The job still runs and passes with every later step skipped, so both
+      # checks keep their names (a job skipped by `if:` loses its matrix name, which
+      # #25 would make required) and the label automation finds a passed run for the
+      # commit. Pushes to main always run. --no-renames lists a moved file under both
+      # paths, so moving code into docs/ still counts as a code change.
+      - name: Does this change need vdsm?
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          code=true
+          if [ "$EVENT" = pull_request ]; then
+            files=$(git diff --no-renames --name-only HEAD^1 HEAD)
+            if [ -n "$files" ] \
+                && ! grep -qvE '(^[^/]+\.md$|^docs/|^\.github/ISSUE_TEMPLATE/|^LICENSE$)' <<< "$files"; then
+              code=false
+              echo "::notice::No code changed (only root Markdown, docs/, issue templates or LICENSE): vdsm skipped"
+            fi
+          fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
+      # The golden-image cache (#132). Its key is BAKE_VERSION, which is bumped on
+      # every change to what the bake produces, so a change to the bake scripts
+      # that leaves the image alone (#271) doesn't rebake everything. A PR that
+      # changes the bake files bakes fresh instead of restoring, so its own run
+      # tests the new bake (.github/labeler.yml labels such a PR "Rebuilds vdsm
+      # image"; keep its file list in sync with the one below). Only main
+      # saves: a PR's cache is readable by that PR alone, and PR copies (about
+      # 1 GB per DSM version) filled the repo's 10 GB cache and pushed main's
+      # out.
+      - name: Golden image cache key
+        id: golden
+        if: steps.scope.outputs.code == 'true'
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          bake=$(sed -n 's/^BAKE_VERSION: int = \([0-9][0-9]*\)$/\1/p' tests/vdsm/config.py)
+          if [ -z "$bake" ]; then
+            echo "::error::BAKE_VERSION not found in tests/vdsm/config.py"
+            exit 1
+          fi
+          changed=false
+          if [ "$EVENT" = pull_request ] && git diff --no-renames --name-only HEAD^1 HEAD | grep -qxE \
+              'scripts/vdsm_setup\.py|tests/vdsm/(setup_dsm|config|golden_image|container)\.py'; then
+            changed=true
+            # The key only changes with BAKE_VERSION: without a bump, main keeps
+            # restoring the old image after this merges.
+            if ! git diff HEAD^1 HEAD -- tests/vdsm/config.py | grep -qE '^[-+]BAKE_VERSION'; then
+              echo "::warning::bake files changed without a BAKE_VERSION bump; fine only if the image is unchanged (e.g. #271)"
+            fi
+          fi
+          echo "key=vdsm-golden-${DSM_VERSION}-bake${bake}" >> "$GITHUB_OUTPUT"
+          echo "bake_files_changed=$changed" >> "$GITHUB_OUTPUT"
+          echo "key vdsm-golden-${DSM_VERSION}-bake${bake}; bake files changed: $changed"
+
+      - name: Restore golden image cache
+        id: cache-golden
+        if: steps.scope.outputs.code == 'true' && steps.golden.outputs.bake_files_changed != 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .vdsm/golden/dsm-${{ env.DSM_VERSION }}.tar.gz
+            .vdsm/golden/dsm-${{ env.DSM_VERSION }}.meta.json
+          key: ${{ steps.golden.outputs.key }}
+
+      # The extracted golden image takes about 27 GB (the 16 GB data and 11 GB
+      # system disk images; tarfile writes them out in full, not sparse), plus the
+      # ~1.1 GB tarball, the bake's own storage on a cache miss, the venv and the
+      # vdsm container. Runners used to ship ~14 GB free, and CI on 550f445 ran out
+      # of space, so this job freed ~30 GB first. They now have a 145 GB root with
+      # about 87 GB free (measured on #275, 2026-10-18), so it no longer frees
+      # anything (#132; the cleanup took 84-109 s). The check below fails with a
+      # clear message if a runner ever comes with less.
+      - name: Check free disk space
+        if: steps.scope.outputs.code == 'true'
+        run: |
+          set -euo pipefail
+          df -h /
+          free_gb=$(df --output=avail -BG / | tail -1 | tr -dc 0-9)
+          # Extracted image + tarball + bake, with room to spare.
+          if [ "$free_gb" -lt 35 ]; then
+            echo "::error::only ${free_gb} GB free; the vdsm job needs about 35 GB"
+            exit 1
+          fi
 
       - name: Verify /dev/kvm is available
+        if: steps.scope.outputs.code == 'true'
         run: |
           ls -la /dev/kvm
           sudo chmod 666 /dev/kvm
           echo "KVM available"
 
       - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        if: steps.scope.outputs.code == 'true'
         with:
           python-version: "3.12"
 
       - name: Install project with vdsm extras
+        if: steps.scope.outputs.code == 'true'
         run: uv sync --extra dev --extra vdsm
 
+      # Only the bake drives a browser.
       - name: Install Playwright Chromium
+        if: steps.scope.outputs.code == 'true' && steps.cache-golden.outputs.cache-hit != 'true'
         run: uv run playwright install --with-deps chromium
 
-      # Cache key deliberately hashes only the DSM version and the Python
-      # files that drive image construction. `pyproject.toml` and `uv.lock`
-      # are NOT in the key because the image content is DSM-determined — a
-      # testcontainers or playwright dependency upgrade doesn't change the
-      # bits inside the saved tarball. If that assumption ever changes
-      # (e.g., a dep upgrade affects bind-mount format or timing), bump the
-      # cache key manually or add the manifest to hashFiles.
-      - name: Restore golden image cache
-        id: cache-golden
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            .vdsm/golden/dsm-${{ env.DSM_VERSION }}.tar.gz
-            .vdsm/golden/dsm-${{ env.DSM_VERSION }}.meta.json
-          key: vdsm-golden-${{ env.DSM_VERSION }}-${{ hashFiles('scripts/vdsm_setup.py', 'tests/vdsm/setup_dsm.py', 'tests/vdsm/config.py', 'tests/vdsm/golden_image.py', 'tests/vdsm/container.py') }}
-
       - name: Build golden image (cache miss)
-        if: steps.cache-golden.outputs.cache-hit != 'true'
+        if: steps.scope.outputs.code == 'true' && steps.cache-golden.outputs.cache-hit != 'true'
         run: |
           uv run python scripts/vdsm_setup.py \
             --version "${DSM_VERSION}" \
@@ -105,7 +174,23 @@ jobs:
             --admin-password "${VDSM_ADMIN_PASSWORD}" \
             --yes
 
+      # Saved right after the bake, so PRs can restore it while main's tests
+      # still run. A key that exists already (another run saved it first) only
+      # warns.
+      - name: Save golden image cache (main only)
+        if: >-
+          steps.scope.outputs.code == 'true'
+          && github.event_name == 'push' && github.ref == 'refs/heads/main'
+          && steps.cache-golden.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .vdsm/golden/dsm-${{ env.DSM_VERSION }}.tar.gz
+            .vdsm/golden/dsm-${{ env.DSM_VERSION }}.meta.json
+          key: ${{ steps.golden.outputs.key }}
+
       - name: Run vdsm integration tests
+        if: steps.scope.outputs.code == 'true'
         # Step budget below the job's, so a hung suite still leaves time to
         # print pytest's summary path and upload logs (#107 was cancelled
         # at the job timeout with neither).

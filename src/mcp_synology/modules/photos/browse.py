@@ -515,12 +515,13 @@ async def _collections(
     return f"{format_table(headers, shown, title=title)}\n\n{footer}"
 
 
-def _privacy(info: dict[str, Any] | None) -> str:
-    if not info:
-        return "no"
-    kind = str(info.get("privacy_type") or "private")
-    shared = kind != "private" or bool(info.get("permission"))
-    return kind if shared else "no"
+def _privacy(info: dict[str, Any] | None, shared: bool = False) -> str:
+    """The Shared column: the link's privacy, ``private link`` for a shared album that
+    only invited members can open, or ``no``."""
+    kind = str((info or {}).get("privacy_type") or "private")
+    if kind != "private" or (info or {}).get("permission"):
+        return kind
+    return "private link" if shared else "no"
 
 
 def _folder_shared(entry: dict[str, Any]) -> str:
@@ -551,7 +552,7 @@ def _album_row(e: dict[str, Any]) -> list[str]:
         str(e.get("name", "")),
         str(e.get("type", "")),
         str(e.get("item_count", 0)),
-        _privacy(info),
+        _privacy(info, bool(e.get("shared"))),
         _span(e),
     ]
 
