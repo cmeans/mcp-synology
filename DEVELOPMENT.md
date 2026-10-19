@@ -159,6 +159,9 @@ Note: `--no-cov` is recommended for vdsm runs since the coverage floor (95%) app
 | 7.2.1   | 69057 | VirtualDSM_69057.pat |
 | 7.2.2   | 72806 | VirtualDSM_72806.pat (default) |
 | 7.3.2   | 86009 | VirtualDSM_86009.pat |
+| 7.4.1   | 90080 | VirtualDSM_90080.pat |
+
+CI runs 7.1, 7.2.2, 7.3.2 and 7.4.1 (#307); 7.0.1 and 7.2.1 are defined but not baked or tested.
 
 ### How It Works
 

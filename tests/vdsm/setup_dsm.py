@@ -47,10 +47,15 @@ _SYNO_PATH = "PATH=/usr/syno/bin:/usr/syno/sbin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 # Synology Photos and the packages it depends on, installed in this order (#258).
 # install_from_server doesn't pull in dependencies, and DSM 7.1 and 7.2.2 want
-# different Node.js versions.
+# different Node.js versions. On 7.3.2 and 7.4.1 Package Center's server list
+# (SYNO.Core.Package.Server list, 2026-10-19) gives Photos 1.9.1-10928 needing
+# Node.js_v20 and SynologyApplicationService 1.9.0, which needs Node.js_v22 (#307).
+_PHOTOS_NODE_20_22 = ("Node.js_v20", "Node.js_v22", "SynologyApplicationService", "SynologyPhotos")
 PHOTOS_PACKAGES: dict[str, tuple[str, ...]] = {
     "7.1": ("Node.js_v18", "SynologyApplicationService", "SynologyPhotos"),
-    "7.2.2": ("Node.js_v20", "Node.js_v22", "SynologyApplicationService", "SynologyPhotos"),
+    "7.2.2": _PHOTOS_NODE_20_22,
+    "7.3.2": _PHOTOS_NODE_20_22,
+    "7.4.1": _PHOTOS_NODE_20_22,
 }
 
 

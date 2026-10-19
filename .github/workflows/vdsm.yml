@@ -35,12 +35,13 @@ jobs:
   vdsm:
     name: vdsm integration tests (${{ matrix.dsm }})
     runs-on: ubuntu-24.04
-    # Both DSM versions the tests support: 7.1 is what real NASes such as the
-    # maintainer's DS1618+ run, and its behavior differs from 7.2.2 (#195, #162).
+    # Every DSM version the tests support. 7.1 is what real NASes such as the
+    # maintainer's DS1618+ run, and its behavior differs from 7.2.2 (#195, #162);
+    # 7.3.2 and 7.4.1 are the newest releases (#307).
     strategy:
       fail-fast: false
       matrix:
-        dsm: ["7.2.2", "7.1"]
+        dsm: ["7.2.2", "7.1", "7.3.2", "7.4.1"]
     env:
       DSM_VERSION: ${{ matrix.dsm }}
     # Non-blocking while the job stabilizes. Promote to required check
@@ -57,7 +58,7 @@ jobs:
       # A PR that changes no code (#284): only Markdown at the repository root
       # (README, CHANGELOG, CLAUDE.md, ...), docs/, issue templates or LICENSE. Not
       # Markdown elsewhere: src/mcp_synology/instructions/server.md is the server's
-      # instructions. The job still runs and passes with every later step skipped, so both
+      # instructions. The job still runs and passes with every later step skipped, so the
       # checks keep their names (a job skipped by `if:` loses its matrix name, which
       # #25 would make required) and the label automation finds a passed run for the
       # commit. Pushes to main always run. --no-renames lists a moved file under both
@@ -197,7 +198,7 @@ jobs:
         timeout-minutes: 30
         # tests/vdsm must be on the command line: --dsm-version is defined in
         # tests/vdsm/conftest.py, which pytest only loads early enough to register
-        # options when the directory is given. It collects the same 108 tests as
+        # options when the directory is given. It collects the same tests as
         # `pytest -m vdsm` from the root.
         run: uv run pytest tests/vdsm -m vdsm -v --no-cov --log-cli-level=INFO --dsm-version "${DSM_VERSION}"
 
