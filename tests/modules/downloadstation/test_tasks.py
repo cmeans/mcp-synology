@@ -1227,6 +1227,10 @@ class TestEditDownload:
         assert "share-relative" in envelope["suggestion"]
         assert "/volume1" in envelope["suggestion"]
         assert "list_files" in envelope["suggestion"]
+        assert envelope["suggestion"].endswith(
+            "Download Station doesn't create missing folders: create it first with "
+            "create_folder, then retry."
+        )
 
     @respx.mock
     async def test_create_403_mentions_the_volume_form(self, mock_client: DsmClient) -> None:
@@ -1236,7 +1240,10 @@ class TestEditDownload:
             await create_download(
                 mock_client, uri="magnet:?xt=urn:btih:abc", destination="/volume1/video"
             )
-        assert "/volume1" in _envelope(exc.value)["suggestion"]
+        suggestion = _envelope(exc.value)["suggestion"]
+        assert "/volume1" in suggestion
+        # Download Station doesn't create missing folders; name the fix (#296).
+        assert "doesn't create missing folders: create it first with create_folder" in suggestion
 
     async def test_nas_with_task_v1_only_gets_clear_error(self, mock_client: DsmClient) -> None:
         mock_client.api_cache[TASK] = mock_client.api_cache[TASK].model_copy(

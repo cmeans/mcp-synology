@@ -126,8 +126,10 @@ MODULE_INFO = ModuleInfo(
             description=(
                 "Create one or more download tasks. Pass a comma-separated list of "
                 "URIs (HTTP, FTP, magnet, etc.) via `uri` OR pass a local path to "
-                "a .torrent / .nzb file via `torrent_file_path`. `destination` is a "
-                "share-relative path (omit to use your default destination; a "
+                "a .torrent / .nzb file via `torrent_file_path`. `destination` is an "
+                "existing folder as a share-relative path (DS doesn't create folders: "
+                "create a new one with create_folder first; omit to use your default "
+                "destination; a "
                 "non-manager who has none must set it first with `set_download_config`, "
                 "because DS won't start their tasks until then). "
                 "`username` / `password` may be supplied for protected URLs (not for "
