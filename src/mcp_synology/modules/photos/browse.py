@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import TYPE_CHECKING, Any
 
 from mcp_synology.core.errors import SynologyError
@@ -673,12 +674,24 @@ def _location(add: dict[str, Any]) -> str:
     return " · ".join(parts) or "—"
 
 
+# A number or fraction with no unit ("1.5", "1/30"); anything else is shown as DSM sent it.
+_BARE_NUMBER = re.compile(r"[0-9]+(?:[./][0-9]+)?")
+
+
 def _camera(exif: dict[str, Any]) -> str:
     camera = str(exif.get("camera") or "")
+    # Photos 1.3.4 (DSM 7.1.1) sends these formatted ("F1.5", "1/30 s"); add the unit
+    # only when it's missing, so a bare number still reads right.
+    aperture = str(exif.get("aperture") or "")
+    if _BARE_NUMBER.fullmatch(aperture):
+        aperture = f"f/{aperture}"
+    exposure = str(exif.get("exposure_time") or "")
+    if _BARE_NUMBER.fullmatch(exposure):
+        exposure = f"{exposure} s"
     details = [
         f"lens {exif.get('lens') or '—'}",
-        f"f/{exif.get('aperture') or '—'}",
-        f"{exif.get('exposure_time') or '—'} s",
+        aperture or "aperture —",
+        exposure or "exposure —",
         f"ISO {exif.get('iso') or '—'}",
     ]
     if not camera and not any(exif.get(k) for k in ("lens", "aperture", "exposure_time", "iso")):
@@ -690,5 +703,24 @@ async def _exif_table(ph: Photos, item_id: int) -> str:
     data = await ph.call("Browse.Item", "get_exif", {"id": [item_id]})
     listed = data.get("list", [])
     entries = listed[0].get("exif", []) if listed else []
-    rows = [[str(e.get("key", "")), str(e.get("value", ""))] for e in entries]
+    rows = [[str(e.get("key", "")), _exif_value(str(e.get("value", "")))] for e in entries]
     return format_table(["Key", "Value"], rows, title="EXIF")
+
+
+# Longer values are cut: a Maker Note's byte dump ran to 3,029 characters on a real phone
+# photo, and every row of the table is padded to the widest value.
+_EXIF_VALUE_MAX = 80
+
+
+def _exif_value(value: str) -> str:
+    """A value fit for the table: binary data is described, an overlong value is cut."""
+    # Line breaks and tabs in text (an Image Description, a User Comment) become spaces;
+    # other control characters, C1 included, or bytes that weren't UTF-8 mean binary.
+    # (Only \r, \n and \t: str.splitlines() also splits on \x1c-\x1e and \x85, which
+    # are binary here.)
+    value = value.replace("\r\n", " ").translate({ord("\r"): " ", ord("\n"): " ", ord("\t"): " "})
+    if any(c == "\ufffd" or c < " " or "\x7f" <= c <= "\x9f" for c in value):
+        return f"(binary data, {len(value)} characters; not shown)"
+    if len(value) > _EXIF_VALUE_MAX:
+        return f"{value[:_EXIF_VALUE_MAX]}… ({len(value):,} characters)"
+    return value

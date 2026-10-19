@@ -361,12 +361,16 @@ Item 41: beach-sunset.jpg
   Tags:         beach, 2024
   People:       Person 1, (unnamed)
   Location:     41.8781, -87.6298 · Chicago, Cook County, Illinois, United States
-  Camera:       MCPTest SeedCam 1 · lens — · f/— · — s · ISO —
+  Camera:       MCPTest SeedCam 1 · lens — · aperture — · exposure — · ISO —
 
 Not found: 999999
 ```
 
-With `exif=true`, a `EXIF` table (key, value) from `get_exif` follows each block.
+With `exif=true`, a `EXIF` table (key, value) from `get_exif` follows each block. Line breaks and tabs in a value become spaces. A value longer than 80 characters is then cut, with its length (a phone photo's Maker Note byte dump ran to 3,029 characters, and every row is padded to the widest value). A value with other control characters (C1 included), or bytes that weren't UTF-8, is shown as `(binary data, N characters; not shown)`.
+
+The camera line uses DSM's own formatting where it gives it (`F1.5`, `1/30 s` on Photos 1.3.4, DSM 7.1.1), and adds `f/` or ` s` only to a bare number or fraction (`1.5`, `1/30`); any other value is shown as sent.
+
+**DSM sends raw bytes in `get_exif`** (seen on DSM 7.1.1, Photos 1.3.4): a binary field such as "Picture Info" is copied into the JSON reply as bytes that aren't UTF-8 (`0xec`), so the reply can't be decoded as sent. `DsmClient` reads such a reply again with those bytes replaced (U+FFFD), for every JSON reply (download error envelopes too), and logs that at DEBUG; before that, `get_photo exif=true` failed on that photo with "the answer wasn't a DSM reply".
 
 **Design notes:**
 - An unknown ID is simply missing from `list` (no error); the tool reports it as not found.
@@ -430,9 +434,9 @@ Downloaded 2 of 3 item(s) to /home/user/Downloads (original, personal space)
 
 **Tool description (LLM-facing):**
 > Upload local photos or videos into a Synology Photos folder (default the space root). on_duplicate:
-> rename (default, keeps both) or skip. Optionally add them to an album. Only reads files inside the
-> allowed local folders. Photos indexes new items over the next seconds to minutes. space: personal
-> (default) or shared.
+> rename (default, keeps both) or skip. Optionally add them to an existing album (create it first
+> with photo_album). Only reads files inside the allowed local folders. Photos indexes new items over
+> the next seconds to minutes. space: personal (default) or shared.
 
 **Parameters:**
 
@@ -442,19 +446,19 @@ Downloaded 2 of 3 item(s) to /home/user/Downloads (original, personal space)
 | `folder` | `str` | No | `"/"` | Folder ID or path in the space; must exist. |
 | `space` | `str` | No | `"personal"` | |
 | `on_duplicate` | `str` | No | `"rename"` | `rename` or `skip` (DSM `duplicate`: `rename` / `ignore`). |
-| `album` | `str` | No | — | Album ID or unique name to add the uploads to (personal only). |
+| `album` | `str` | No | — | Album ID or unique name to add the uploads to (personal only). It must already exist; a missing one is `not_found` before any file is uploaded. |
 
-DSM's `action` per file: `new`, `rename` (kept both, as `name_1.jpg`) or `ignore` (skipped; the reply's `id` is the **existing** item's).
+DSM's `action` per file: `new`, `rename` (kept both, as `name_1.jpg`) or `ignore` (skipped; the reply's `id` is the **existing** item's). The count in the first line is files stored (new or renamed); skipped ones are counted apart, and an album gets both, since a skipped file's item is already there. The indexing note appears only when something was stored.
 
 **Response shape:**
 
 ```
-Uploaded 3 of 4 file(s) to /Trips/2024 (personal space)
+Uploaded 2 of 4 file(s) (1 skipped, already there) to /Trips/2024 (personal space)
   beach-sunset.jpg    new      id 41
   beach-sunset.jpg    renamed  id 47 (as beach-sunset_1.jpg)
   forest-trail.jpg    skipped  id 12 (already there)
   notes.txt           failed   Synology Photos doesn't support this file type (620)
-Added 2 item(s) to album "Trip 2024".
+Added 3 item(s) to album "Trip 2024".
 Photos indexes new items over the next seconds to minutes; taken dates and previews appear then.
 ```
 
@@ -971,5 +975,5 @@ Maintainer, 2026-10-17 (the first group), with the 1.9.1-only additions found af
 1. **Not verified yet** (from the web client only, or needing a setup vdsm doesn't have): keyword search over descriptions (filenames and tags verified); the recycle-bin flags turning off when a share's recycle bin is off; whether a Shared Space favorite is per user; error 901 (People disabled); People and concepts on vdsm (clusters may not form without a GPU; then they're fixture- and real-NAS-tested only); `Browse.Concept get`'s reply shape and concept `visibility` values (no capture has a concept, so the tool's handling of both is unverified until a real-NAS check); a Shared Space user **with** folder view rights trying to edit or delete (needs `FolderPermission`, out of scope; the entry-only case is verified).
 2. **A 119 right after login** was seen once on 7.2.2 (the first call of a fresh session; the retry was clean). The cause was #176: DSM misreads some session IDs as `_sid`; #271 sends the session as the `id` cookie.
 3. **Out of scope:** see Resolved Design Decision 6.
-4. **Payload:** measured in the implementation: enabling Photos adds 12,160 characters (schemas, descriptions and its instructions section; `PAYLOAD_BUDGET_CHARS` 17,582 → 29,742 with every module on). A connection without Photos carries none of it.
+4. **Payload:** measured in the implementation: enabling Photos adds 12,204 characters (schemas, descriptions and its instructions section; with every module on, `PAYLOAD_BUDGET_CHARS` is 29,930). A connection without Photos carries none of it.
 5. **JPEG conversion on download (1.9.1):** `Download download` v2 takes `download_type` (`source`, `optimized_jpeg`, `original_size_jpeg`), which would let `download_photos` hand HEIC originals over as JPEG. Not verified; proposed as a `download_photos` option for 1.9.1 if wanted.
