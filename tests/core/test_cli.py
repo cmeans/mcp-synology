@@ -1114,6 +1114,39 @@ class TestCheckLogin:
         )
         assert "mcp-synology check" not in err
 
+    async def test_check_login_not_a_dsm_reply_is_reported_as_not_dsm(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A login answered by a proxy's page reads as before: not a DSM API response,
+        never "run check" inside check (#282)."""
+        import pytest
+
+        from mcp_synology.cli.check import _check_login
+        from mcp_synology.core.errors import DsmReplyError
+        from tests.conftest import make_test_config
+
+        config = make_test_config()
+        fake_client = self._make_fake_client()
+        fake_auth = MagicMock()
+        fake_auth.login = AsyncMock(
+            side_effect=DsmReplyError(
+                "SYNO.API.Auth/login: the answer wasn't a DSM reply (Content-Type text/html).",
+                suggestion="... run 'mcp-synology check'.",
+            )
+        )
+
+        with (
+            patch("mcp_synology.core.client.DsmClient", return_value=fake_client),
+            patch("mcp_synology.core.auth.AuthManager", return_value=fake_auth),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            await _check_login(config)
+
+        assert exc_info.value.code == 1
+        err = capsys.readouterr().err
+        assert "didn't return a DSM API response (not JSON)" in err
+        assert "Authentication failed" not in err and "mcp-synology check" not in err
+
     async def test_check_api_query_failure_exits_cleanly(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
