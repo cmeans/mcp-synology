@@ -64,7 +64,7 @@ jobs:
   # failed, set CI Failed; if either is still running, Awaiting CI stays and
   # pr-labels-ci.yml promotes when they complete. (A completed run whose jobs
   # have no result recorded yet also leaves Awaiting CI; only a later event
-  # re-checks it.)
+  # re-checks it.) Nothing changes if Dev Active was added back during the wait.
   on-unlabel:
     if: >-
       github.event.action == 'unlabeled'
@@ -139,7 +139,15 @@ jobs:
             exit 0
           fi
 
+          # The event's labels can be up to 80 s old by now, so read them again: if Dev
+          # Active came back meanwhile, dev isn't done, and pr-labels-ci.yml or the next
+          # removal decides.
+          PR_LABELS=$(gh pr view "$PR" --repo "$REPO" --json labels --jq '[.labels[].name]')
           has() { echo "$PR_LABELS" | grep -q "\"$1\""; }
+          if has "Dev Active"; then
+            echo "Dev Active is back — leaving the labels"
+            exit 0
+          fi
           case "$STATE" in
             pass)
               REMOVE=""
