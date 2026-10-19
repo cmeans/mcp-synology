@@ -95,7 +95,8 @@ MODULE_INFO = ModuleInfo(
                 "tags). Returns id, filename, taken time, type, size and folder; paged with "
                 "offset/limit (default 50) with the total. space: personal (default) or shared."
                 " Use the ids with get_photo, download_photos, tag_photos and the other photo "
-                "tools. For files outside Photos, use list_files."
+                "tools. For files outside Photos, use File Station's list_files when that "
+                "module is enabled."
             ),
             permission_tier=PermissionTier.READ,
         ),
@@ -129,7 +130,8 @@ MODULE_INFO = ModuleInfo(
                 "or a JPEG preview (size xl ~1280px, m ~320px, sm ~240px). Only writes "
                 "inside the allowed local folders, and never overwrites unless "
                 "overwrite=true. Up to 50 ids. space: personal (default) or shared. For "
-                "files outside Photos, use download_file."
+                "files outside Photos, use File Station's download_file when that module is "
+                "enabled."
             ),
             permission_tier=PermissionTier.READ,
             annotations=_ANNO_LOCAL_WRITE,
@@ -166,7 +168,8 @@ MODULE_INFO = ModuleInfo(
                 "create (name inside parent, default the space root), rename or set_cover. "
                 "space: personal (default) or shared. To copy or move folders use copy_photos /"
                 " move_photos; to delete, delete_photo_folders. For folders outside Photos, use"
-                " create_folder and rename."
+                " File Station's create_folder and rename when File Station write is enabled,"
+                " or ask the user to do it in DSM."
             ),
             permission_tier=PermissionTier.WRITE,
             annotations=_ANNO_DESTRUCTIVE_IDEMPOTENT,

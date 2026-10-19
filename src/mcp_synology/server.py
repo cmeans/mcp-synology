@@ -587,10 +587,11 @@ _PHOTOS_NOTICE = """
 SYNOLOGY PHOTOS:
 Photos keeps its own library: the personal space (space=personal, the default) and Shared
 Space (space=shared). Photos tools take the ids that list_photos and
-list_photo_collections return; File Station paths are for files outside Photos.
+list_photo_collections return; for files outside Photos, File Station's tools take paths,
+when that module is enabled.
 delete_photos, delete_photo_folders, delete_photo_albums and merge_people can't be undone
 from Photos: name what will go and confirm with the user first. A long copy, move or delete
-hands off with a photos:<id> handle; follow up with photo_task, as with file_task."""
+hands off with a photos:<id> handle; follow up with photo_task."""
 
 
 def _photos_notice(plan: _ModulePlan) -> str:
