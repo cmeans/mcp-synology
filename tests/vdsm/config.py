@@ -60,6 +60,14 @@ DSM_VERSIONS: dict[str, DsmVersionInfo] = {
             "/7.3.2/86009/DSM_VirtualDSM_86009.pat"
         ),
     ),
+    "7.4.1": DsmVersionInfo(
+        version="7.4.1",
+        build="90080",
+        pat_url=(
+            "https://global.synologydownload.com/download/DSM/release"
+            "/7.4.1/90080/DSM_VirtualDSM_90080.pat"
+        ),
+    ),
 }
 
 DEFAULT_DSM_VERSION: str = "7.2.2"
@@ -79,7 +87,9 @@ DEFAULT_DSM_VERSION: str = "7.2.2"
 #       service (each user's personal space), the test user's Photos privilege,
 #       and Shared Space with the test user as a manager. DEFAULT_FRESH_USER has
 #       no Photos privilege.
-BAKE_VERSION: int = 5
+#   v6: DSM 7.3.2 and 7.4.1 (#307): their Synology Photos package lists. The
+#       7.1 and 7.2.2 bakes are unchanged.
+BAKE_VERSION: int = 6
 
 # Project root / .vdsm directory for all virtual-dsm artifacts
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
