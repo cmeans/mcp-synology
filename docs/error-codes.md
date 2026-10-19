@@ -562,3 +562,11 @@ Fix:
    New codes are added to `core/errors.py` as we encounter them.
 4. For background task failures (copy, move, delete): the task may have
    partially completed. List the destination to confirm state before retrying.
+5. For Download Station's **403 "Destination doesn't exist"** on
+   `create_download` (or error 100 on `edit_download`'s destination): Download
+   Station doesn't create missing folders. Create the folder first with
+   File Station's `create_folder` (its path form, `/video/TV/New show`; it needs
+   the `filestation` module enabled with `permission: write`) or, without that,
+   in DSM's own File Station, then retry with the destination share-relative
+   (`video/TV/New show`) (#296). A `/volume1/...` real path gets the same 403:
+   pass the path share-relative instead.
