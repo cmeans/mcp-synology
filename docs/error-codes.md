@@ -443,10 +443,11 @@ names the API and method and the Content-Type (for example
 text/html).`), never the page itself. It's `retryable=true`, except for a
 `create_download`, which may still have been applied. Check what's in front of
 the NAS; `mcp-synology check` reports it as "didn't return a DSM API response".
+Downloads (`download_file`, `download_photos`) don't check for this yet (#292).
 `file_task` reports either case as "Check task failed for `<handle>`: …", or for
 a stop "Stop task failed for `<handle>`: … Nothing was stopped." (the status
 read failed) or "… The stop may or may not have taken effect." (the stop
-request itself failed).
+request itself failed), with `retryable` set as above: a 4xx isn't retryable.
 
 Synology Photos also reports two setup problems this way: DSM code **602** (the
 account has no personal space because the user home service is off; an administrator

@@ -1100,16 +1100,23 @@ class TestFileTask:
 
     @pytest.mark.parametrize("action", ["status", "stop"])
     @pytest.mark.parametrize(
-        ("reply", "shown"),
+        ("reply", "shown", "retryable"),
         [
             (httpx.Response(200, text="<html>login</html>", headers={"content-type": "text/html"}),
-             "the answer wasn't a DSM reply (Content-Type text/html)"),
-            (httpx.Response(502, text="<html>Bad Gateway</html>"), "DSM answered HTTP 502"),
+             "the answer wasn't a DSM reply (Content-Type text/html)", True),
+            (httpx.Response(502, text="<html>Bad Gateway</html>"), "DSM answered HTTP 502", True),
+            # A 4xx isn't retryable, as on every other call (DsmHttpError.retryable).
+            (httpx.Response(403, text="<html>Forbidden</html>"), "DSM answered HTTP 403", False),
         ],
     )  # fmt: skip
     @respx.mock
     async def test_file_task_unreadable_status_is_structured(
-        self, mock_client: DsmClient, action: str, reply: httpx.Response, shown: str
+        self,
+        mock_client: DsmClient,
+        action: str,
+        reply: httpx.Response,
+        shown: str,
+        retryable: bool,
     ) -> None:
         """#282: a proxy page or 502 on the status read was a raw JSONDecodeError crash (or,
         for a 502 on stop, didn't say nothing was stopped)."""
@@ -1128,13 +1135,13 @@ class TestFileTask:
             )
         err = json.loads(str(exc.value))["error"]
         assert err["code"] == "unavailable"
-        assert err["retryable"] is True
+        assert err["retryable"] is retryable
         assert err["param"] == "handle"
         op = "Stop task" if action == "stop" else "Check task"
         assert err["message"].startswith(f"{op} failed for `delete:FileStation_D1`: ")
         assert shown in err["message"]
         assert err["message"].endswith("Nothing was stopped.") is (action == "stop")
-        assert "login" not in err["message"] and "Bad Gateway" not in err["message"]
+        assert not any(w in err["message"] for w in ("login", "Bad Gateway", "Forbidden"))
         assert "file_task with this handle" in err["suggestion"]
         assert ("SYNO.FileStation.Delete", "stop") not in calls
 

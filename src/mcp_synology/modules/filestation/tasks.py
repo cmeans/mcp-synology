@@ -751,7 +751,7 @@ def _unreadable(
     error_response(
         ErrorCode.UNAVAILABLE,
         f"{operation} failed for `{handle}`: {exc}{note}",
-        retryable=True,
+        retryable=exc.retryable,
         param="handle",
         value=str(handle),
         suggestion=f"{exc.suggestion} {follow_up}" if exc.suggestion else follow_up,
