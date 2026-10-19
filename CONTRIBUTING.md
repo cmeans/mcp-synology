@@ -60,7 +60,7 @@ For anything bigger than a one-line fix:
 
 ```bash
 uv sync --extra dev                                      # install runtime + dev dependencies
-uv run pytest                                            # run unit + module tests
+uv run pytest -n auto                                    # run unit + module tests, one worker per CPU
 uv run pytest tests/modules/filestation/test_listing.py  # single test file
 uv run pytest -k "test_list_shares"                      # single test by name
 uv run ruff check src/ tests/ scripts/                   # lint
@@ -102,7 +102,7 @@ Every PR must:
   issue: `- ... (#NN) — closes #MM`.
 - **Link the issue** with `Closes #N` in the PR body so merging
   auto-closes it.
-- **Pass CI locally first** — run `uv run pytest`, `uv run ruff
+- **Pass CI locally first** — run `uv run pytest -n auto`, `uv run ruff
   check src/ tests/ scripts/`, and `uv run mypy src/ scripts/`
   and confirm green before pushing.
 - **Write a clear commit message.** PRs are squash-merged, so your

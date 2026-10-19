@@ -15,8 +15,8 @@ uv run ruff check src/ tests/              # Lint
 uv run ruff format --check src/ tests/     # Format check
 uv run ruff format src/ tests/             # Auto-format
 uv run mypy src/                           # Type check (strict mode)
-uv run pytest                              # Run unit tests (no NAS needed)
-uv run pytest --cov=mcp_synology           # Tests with coverage
+uv run pytest -n auto                      # Run unit tests in parallel (no NAS needed)
+uv run pytest -n auto --cov=mcp_synology   # Tests with coverage
 ```
 
 ### Measuring the tool payload
