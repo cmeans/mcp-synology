@@ -19,6 +19,7 @@
 
 ### Fixed
 
+- **`upload_file` and `download_file` no longer reveal which local users exist** (#279) — closes #260. With the allowed folders in force (always, for the tools), a `~user` path for a user that doesn't exist got `invalid_parameter` ("can't be expanded"), while an existing user's home got `permission_denied`, so the replies told a model which usernames exist on the machine running the server. An unknown `~user` now gets the same `permission_denied` refusal as any path outside the allowed folders, as Download Station's `torrent_file_path` (#257) and Photos already do. Only unconfined direct callers of the functions still get `invalid_parameter` for it
 - **Some sessions failed every call with "Invalid session" (DSM error 119)** (#271, closes #176): on vdsm, about 1 in 75 on DSM 7.2.2 and 1 in 170 on 7.1. DSM reads the `_sid` parameter as JSON, and a session ID that begins like a number (`-8bV…`, `6E5h…`, `02-P…`) then matched no session. A call with it failed, and so did the automatic re-login's retry when the new session drew the same kind of ID. The client now sends the session as DSM's `id` cookie on every call, which works for every API on DSM 7.1 and 7.2.2 and also keeps the session ID out of URLs and access logs. A real NAS would be affected the same way (inferred from vdsm; no real-NAS report yet). This was the intermittent 119 seen in the vdsm suite on DSM 7.2.2; `tests/vdsm/test_vdsm_session.py` logs in until DSM hands out such an ID and checks the client's calls with it
 
 ## 0.9.0 (2026-10-17)
