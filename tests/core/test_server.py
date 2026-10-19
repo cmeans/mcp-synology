@@ -1330,11 +1330,17 @@ class TestInstructionComments:
 # mtime_to exclusive.
 # Raised by #313 to 30,182 (+189): Photos' descriptions and instructions name File
 # Station's tools as such, and what to do without them (#304).
-PAYLOAD_BUDGET_CHARS = 30_182
+# Set by #311 to 30,174 (-8): measured with a fixed home directory, /home/user. The
+# budgets above were measured with CI's /home/runner, which the instructions name 4 times.
+PAYLOAD_BUDGET_CHARS = 30_174
 
 
 class TestPayloadBudget:
-    async def test_payload_within_budget(self) -> None:
+    async def test_payload_within_budget(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # The LOCAL PATHS instructions name folders under the home directory, so measure
+        # with a fixed one: the result is then the same on every machine (#311).
+        monkeypatch.setenv("HOME", "/home/user")
+        monkeypatch.setenv("USERPROFILE", "/home/user")
         tools, instructions = await _served(create_server(make_test_config(modules=ALL_MODULES)))
         size = sum(len(json.dumps(t.input_schema)) + len(t.description or "") for t in tools)
         size += len(instructions)

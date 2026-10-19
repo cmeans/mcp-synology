@@ -31,6 +31,25 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
         pytest.fail("vdsm and integration tests can't run under pytest-xdist; drop -n.")
 
 
+@pytest.fixture(autouse=True)
+def _fake_home(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory) -> None:
+    """Point the home directory at an empty per-test folder (#311).
+
+    Without this, tests write the developer's real ~/.local/state/mcp-synology (the
+    update-check state), and anything derived from the home path (the LOCAL PATHS
+    instructions, the default Downloads folder) depends on where the suite runs.
+    `XDG_CONFIG_HOME` is cleared so the Downloads folder isn't read from the real
+    user-dirs.dirs. vdsm and integration tests keep the real home: podman and SSH need it.
+    """
+    if {"vdsm", "integration"} & {m.name for m in request.node.iter_markers()}:
+        return
+    home = tmp_path_factory.mktemp("home")
+    mp = request.getfixturevalue("monkeypatch")
+    mp.setenv("HOME", str(home))
+    mp.setenv("USERPROFILE", str(home))  # Path.home() on Windows
+    mp.delenv("XDG_CONFIG_HOME", raising=False)
+
+
 BASE_URL = "http://nas:5000"
 
 
