@@ -234,6 +234,77 @@ class TestSearchFiles:
         assert captured.get("mtime_from") == "1775001600"  # 2026-04-01 00:00 UTC
         assert captured.get("mtime_to") == "1775044800"  # 2026-04-01 12:00 UTC
 
+    @staticmethod
+    def _capture_start(captured: dict[str, str]) -> None:
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            if params.get("method") == "start":
+                captured.update(params)
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "search-6"}})
+            if params.get("method") == "list":
+                return httpx.Response(
+                    200, json={"success": True, "data": {"files": [], "finished": True, "total": 0}}
+                )
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        ("kwargs", "pattern"),
+        [
+            # #306: with filetype=all and nothing to match on, DSM answers "Search folder
+            # access denied" (DSM 7.2.2 and 7.3.2), so "*" is sent.
+            ({}, json.dumps("*")),
+            # filetype=file or dir alone works on DSM, so nothing is added.
+            ({"filetype": "file"}, None),
+            ({"filetype": "dir"}, None),
+            # Any filter is enough for DSM.
+            ({"mtime_from": "2026-04-01"}, None),
+            ({"mtime_to": "2026-04-01"}, None),
+            ({"size_from": "0"}, None),
+            ({"size_to": "1GiB"}, None),
+            # An empty pattern is no filter: DSM refuses pattern="" too.
+            ({"pattern": ""}, json.dumps("*")),
+            ({"extension": "mkv"}, None),
+            ({"pattern": "*.mkv"}, None),  # becomes the extension filter
+            ({"pattern": "Bambu"}, json.dumps("*Bambu*")),
+            # exclude_pattern is applied here, not by DSM, so it doesn't count.
+            ({"exclude_pattern": "*.torrent"}, json.dumps("*")),
+        ],
+    )
+    async def test_pattern_star_only_when_nothing_narrows_an_all_search(
+        self, mock_client: DsmClient, kwargs: dict[str, str], pattern: str | None
+    ) -> None:
+        captured: dict[str, str] = {}
+        self._capture_start(captured)
+        await search_files(mock_client, folder_path="/video", **kwargs)  # type: ignore[arg-type]
+        assert captured.get("pattern") == pattern
+
+    @respx.mock
+    async def test_heading_names_only_the_callers_filters(self, mock_client: DsmClient) -> None:
+        # exclude_pattern alone used to be refused by DSM (600); with "*" sent it works, and
+        # the heading shows what the caller asked for, not the "*".
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            if params.get("method") == "start":
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "s-7"}})
+            if params.get("method") == "list":
+                files = [
+                    {"name": "a.mkv", "path": "/video/a.mkv", "isdir": False},
+                    {"name": "a.torrent", "path": "/video/a.torrent", "isdir": False},
+                ]
+                return httpx.Response(
+                    200,
+                    json={"success": True, "data": {"files": files, "finished": True, "total": 2}},
+                )
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        result = await search_files(mock_client, folder_path="/video", exclude_pattern="*.torrent")
+        assert result.splitlines()[0] == "Search results in /video (excluding: *.torrent)"
+        assert "a.mkv" in result and "a.torrent" not in result
+
     @respx.mock
     async def test_search_size_dash_when_not_requested(self, mock_client: DsmClient) -> None:
         """QA on #146: a file DSM sends without "size" must not show as "0 B"."""

@@ -1326,7 +1326,9 @@ class TestInstructionComments:
 # ask the user to create it in DSM.
 # Raised by #308 to 29,930 (+44): upload_photos' description says the album must already
 # exist and to create it first with photo_album.
-PAYLOAD_BUDGET_CHARS = 29_930
+# Raised by #309 to 29,993 (+63): search_files' description says mtime_from is inclusive and
+# mtime_to exclusive.
+PAYLOAD_BUDGET_CHARS = 29_993
 
 
 class TestPayloadBudget:

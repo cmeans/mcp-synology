@@ -212,7 +212,6 @@ Common causes:
 - The `new_name` argument to `rename` contains `/` (path separators are not
   allowed in rename — use copy/move to relocate a file).
 - A path is empty, all whitespace, or has no share component.
-- A search keyword normalizes to empty after wildcard processing.
 - `upload_file` or `download_file` was called without `dest_folder`, and no
   default is configured (`default_upload_dir` or `default_download_dir` in the
   `filestation` module settings). The error's `param` is `dest_folder`.
@@ -242,7 +241,6 @@ Fix:
 - For `rename`: pass only the new base name, not a path. To move a file across
   directories, use the copy or move tool.
 - For paths: ensure the first component is a real share name from `list_shares`.
-- For search: provide a keyword with at least one non-wildcard character.
 - For a missing destination: pass `dest_folder` (a NAS folder for
   `upload_file`; for `download_file`, a local folder in
   `allowed_local_paths`), or set the matching default in the `filestation`
@@ -544,7 +542,12 @@ Fix:
 4. **Code 900 ("Unexpected server error"):** check **Log Center** in DSM for
    matching events. This usually indicates an internal DSM fault and may
    require a package restart or reboot.
-5. If you see a specific code repeatedly, [open an issue](https://github.com/cmeans/mcp-synology/issues/new)
+5. **Code 600 ("Search folder access denied") from `search_files`:** before
+   0.10.0, a search with no pattern, extension, size or date got this from
+   DSM (with the default `filetype=all`), whatever the folder's permissions.
+   It now sends `pattern="*"` in that case and lists everything (#306). If it
+   still appears, check that the account can read the folder.
+6. If you see a specific code repeatedly, [open an issue](https://github.com/cmeans/mcp-synology/issues/new)
    with the code and operation so we can add it to `core/errors.py`.
 
 ## dsm_error
