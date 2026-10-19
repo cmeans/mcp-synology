@@ -626,18 +626,9 @@ class TestSharedClientManagerUnreachableNas:
         assert "powered on" in err["suggestion"]
         assert "mcp-synology check" in err["suggestion"]
 
-    @pytest.mark.parametrize(
-        ("raised", "connected"),
-        [
-            (httpx.ReadTimeout, True),
-            (httpx.WriteTimeout, True),
-            (httpx.PoolTimeout, False),
-        ],
-    )
+    @pytest.mark.parametrize("raised", [httpx.ReadTimeout, httpx.WriteTimeout])
     @respx.mock
-    async def test_slow_nas_is_not_unreachable(
-        self, raised: type[Exception], connected: bool
-    ) -> None:
+    async def test_slow_nas_is_not_unreachable(self, raised: type[Exception]) -> None:
         """#254: a busy NAS that doesn't answer the login in time was told "can't reach",
         and the model then blamed the network. It's a timeout on a reachable NAS."""
         from mcp.server.mcpserver.exceptions import ToolError
@@ -649,13 +640,61 @@ class TestSharedClientManagerUnreachableNas:
         err = self._envelope(exc.value)
         assert err["code"] == "timeout"
         assert err["retryable"] is True
-        assert err["message"].startswith("The NAS at http://nas:5000 ")
-        assert ("accepted the connection" in err["message"]) is connected
-        assert f"({raised.__name__}" in err["message"]
-        assert "may be busy" in err["message"]
-        assert "Can't reach" not in err["message"]
+        assert err["message"] == (
+            "The NAS at http://nas:5000 accepted the connection but didn't answer within "
+            f"30 s ({raised.__name__}: Mock Error). It may be busy (heavy load, or a large "
+            "delete or copy)."
+        )
         assert "connection.timeout" in err["suggestion"]
         assert "powered on" not in err["suggestion"]
+
+    @pytest.mark.parametrize("raised", [httpx.ReadError, httpx.RemoteProtocolError])
+    @respx.mock
+    async def test_dropped_connection_is_not_unreachable(self, raised: type[Exception]) -> None:
+        """Connected, then dropped: "could not connect" blamed the network too (#254)."""
+        from mcp.server.mcpserver.exceptions import ToolError
+
+        manager = SharedClientManager(make_test_config())
+        respx.get(f"{BASE_URL}/webapi/query.cgi").mock(side_effect=raised("gone"))
+        with pytest.raises(ToolError) as exc:
+            await manager.get_client()
+        err = self._envelope(exc.value)
+        assert (err["code"], err["retryable"]) == ("unavailable", True)
+        assert err["message"] == (
+            f"The NAS at http://nas:5000 accepted the connection but dropped it "
+            f"({raised.__name__}: gone). It may be busy or restarting."
+        )
+        assert "powered on" not in err["suggestion"]
+
+    @respx.mock
+    async def test_pool_timeout_never_sent_anything(self) -> None:
+        from mcp.server.mcpserver.exceptions import ToolError
+
+        manager = SharedClientManager(make_test_config())
+        respx.get(f"{BASE_URL}/webapi/query.cgi").mock(side_effect=httpx.PoolTimeout(""))
+        with pytest.raises(ToolError) as exc:
+            await manager.get_client()
+        err = self._envelope(exc.value)
+        assert err["code"] == "timeout"
+        assert err["message"] == (
+            "No connection to the NAS at http://nas:5000 was free within 30 s (PoolTimeout), "
+            "so the request wasn't sent."
+        )
+
+    @respx.mock
+    async def test_url_in_the_error_text_is_redacted(self) -> None:
+        """As every other transport error (#232): DSM URLs carry passwd or _sid."""
+        from mcp.server.mcpserver.exceptions import ToolError
+
+        manager = SharedClientManager(make_test_config())
+        respx.get(f"{BASE_URL}/webapi/query.cgi").mock(
+            side_effect=httpx.ReadTimeout(
+                "timed out at http://nas:5000/webapi/entry.cgi?passwd=SECRET"
+            )
+        )
+        with pytest.raises(ToolError) as exc:
+            await manager.get_client()
+        assert "SECRET" not in str(exc.value)
 
     @respx.mock
     async def test_half_open_client_is_closed_and_next_call_retries(self) -> None:

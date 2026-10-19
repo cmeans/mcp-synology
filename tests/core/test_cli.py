@@ -668,8 +668,23 @@ class TestCheckConnectionFailures:
         assert result.exit_code == 1, result.output
         assert "Can't connect to http://127.0.0.1:5000: ConnectTimeout." in result.output
 
+    @pytest.mark.parametrize(
+        ("raised", "line"),
+        [
+            (httpx.ReadError("connection reset"),
+             "http://127.0.0.1:5000 accepted the connection but dropped it (ReadError: connection "
+             "reset). The NAS may be busy or restarting: try again shortly."),
+            (httpx.ReadTimeout(""),
+             "http://127.0.0.1:5000 accepted the connection but didn't answer in time "
+             "(ReadTimeout). The NAS may be busy: try again shortly, or raise connection.timeout."),
+        ],
+    )  # fmt: skip
     @respx.mock
-    def test_failure_during_login_is_reported_the_same_way(self, tmp_path: Path) -> None:
+    def test_failure_during_login_is_reported_the_same_way(
+        self, tmp_path: Path, raised: Exception, line: str
+    ) -> None:
+        """A busy NAS that connected isn't "can't connect": the setting advice was wrong
+        (#254), the same split as the server's first-connection error."""
         respx.get("http://127.0.0.1:5000/webapi/query.cgi").mock(
             return_value=httpx.Response(
                 200,
@@ -681,15 +696,11 @@ class TestCheckConnectionFailures:
                 },
             )
         )
-        respx.post("http://127.0.0.1:5000/webapi/entry.cgi").mock(
-            side_effect=httpx.ReadError("connection reset")
-        )
+        respx.post("http://127.0.0.1:5000/webapi/entry.cgi").mock(side_effect=raised)
         result = CliRunner().invoke(main, ["check", "-c", str(_check_config(tmp_path, 5000))])
         assert result.exit_code == 1, result.output
-        assert "Can't connect to http://127.0.0.1:5000: ReadError: connection reset" in (
-            result.output
-        )
-        assert "Traceback" not in result.output
+        assert f"Error: {line}" in " ".join(result.output.split())
+        assert "Can't connect" not in result.output and "Traceback" not in result.output
 
     @pytest.mark.parametrize("status", [404, 500])
     @respx.mock
