@@ -28,7 +28,7 @@ from mcp_synology.core.formatting import (
     format_timestamp,
     synology_error_response,
 )
-from mcp_synology.core.redaction import redact_urls
+from mcp_synology.modules.filestation.helpers import describe_transport_error
 from mcp_synology.modules.photos.helpers import (
     Photos,
     Space,
@@ -349,17 +349,27 @@ async def delete_photo_folders(
 _NO_ANSWER = (httpx.TransportError, DsmHttpError, DsmReplyError)
 
 
-async def _target(client: DsmClient, op: str, status: dict[str, Any]) -> str:
+async def _target(
+    client: DsmClient, op: str, status: dict[str, Any], *, lookup: bool = True
+) -> tuple[str, bool]:
+    """`` to <folder path>`` for a task's target, and whether DSM answered the lookup.
+
+    If the lookup gets no answer (or ``lookup`` is off, after an earlier one didn't), the
+    folder's ID stands in: the task's status is already in hand.
+    """
     folder = status.get("target_folder") or {}
     if "id" not in folder:
-        return ""
+        return "", True
     space: Space = "shared" if folder.get("owner_user_id") == 0 else "personal"
-    try:
-        path = await Photos(client, space, op).folder_path(int(folder["id"]))
-    except _NO_ANSWER:
-        # Only the folder's name is missing; the task's status is already in hand.
-        return f" to folder {folder['id']}"
-    return f" to {path}" + (" (Shared Space)" if space == "shared" else "")
+    suffix = " (Shared Space)" if space == "shared" else ""
+    if lookup:
+        try:
+            path = await Photos(client, space, op).folder_path(int(folder["id"]))
+        except _NO_ANSWER:
+            pass
+        else:
+            return f" to {path}{suffix}", True
+    return f" to folder {folder['id']}{suffix}", False
 
 
 def _running_for(status: dict[str, Any]) -> str:
@@ -371,10 +381,10 @@ def _running_for(status: dict[str, Any]) -> str:
     return f", running {minutes} min {sec} s" if minutes else f", running {sec} s"
 
 
-def _transport_text(exc: httpx.TransportError) -> str:
-    """``ReadTimeout``, or ``ConnectError: [Errno 111] ...``; never empty, URLs redacted."""
-    text = redact_urls(str(exc))
-    return f"{type(exc).__name__}: {text}" if text else type(exc).__name__
+def _transport_what(exc: httpx.TransportError) -> str:
+    if _never_sent(exc):
+        return "couldn't be reached"
+    return "didn't answer" if isinstance(exc, httpx.TimeoutException) else "lost the connection"
 
 
 def _never_sent(exc: Exception) -> bool:
@@ -392,8 +402,11 @@ def _request_failed(op: str, task_id: int, exc: Exception, *, request: str, note
     if isinstance(exc, httpx.TransportError):
         timed_out = isinstance(exc, httpx.TimeoutException)
         code = ErrorCode.TIMEOUT if timed_out else ErrorCode.UNAVAILABLE
-        what = "didn't answer" if timed_out else "lost the connection during"
-        detail = f"DSM {what} the {request} request ({_transport_text(exc)})."
+        if _never_sent(exc):
+            what = "couldn't be reached for"
+        else:
+            what = "didn't answer" if timed_out else "lost the connection during"
+        detail = f"DSM {what} the {request} request ({describe_transport_error(exc)})."
         retryable = True
     else:
         code, detail = ErrorCode.UNAVAILABLE, str(exc)
@@ -438,17 +451,22 @@ async def photo_task(
             tasks = (await ph.call("BackgroundTask.Info", "list_user_task", personal=True)).get(
                 "list", []
             )
-            rows = [
-                [
-                    handle_of(int(t["id"])),
-                    str(t.get("operation", "")),
-                    (await _target(client, op, t)).removeprefix(" to ") or "—",
-                    str(t.get("status", "")),
-                    f"{t.get('completion', 0)}/{t.get('total', 0)}",
-                    format_timestamp(int(t["create_time"]) / 1000) if t.get("create_time") else "—",
-                ]
-                for t in tasks
-            ]
+            rows = []
+            lookup = True  # after one folder lookup gets no answer, don't wait on the rest
+            for t in tasks:
+                target, lookup = await _target(client, op, t, lookup=lookup)
+                rows.append(
+                    [
+                        handle_of(int(t["id"])),
+                        str(t.get("operation", "")),
+                        target.removeprefix(" to ") or "—",
+                        str(t.get("status", "")),
+                        f"{t.get('completion', 0)}/{t.get('total', 0)}",
+                        format_timestamp(int(t["create_time"]) / 1000)
+                        if t.get("create_time")
+                        else "—",
+                    ]
+                )
             return format_table(
                 ["Handle", "Operation", "Target folder", "Status", "Done", "Started"],
                 rows,
@@ -484,7 +502,7 @@ async def photo_task(
             )
         line = (
             f"{handle_of(task_id)} {status.get('operation', 'task')}"
-            f"{await _target(client, op, status)}: {status.get('status')}, {_counts(status)}"
+            f"{(await _target(client, op, status))[0]}: {status.get('status')}, {_counts(status)}"
         )
         if status.get("status") != "done":
             line += _running_for(status)
@@ -497,7 +515,7 @@ async def photo_task(
         timed_out = isinstance(e, httpx.TimeoutException)
         error_response(
             ErrorCode.TIMEOUT if timed_out else ErrorCode.UNAVAILABLE,
-            f"{op} failed: DSM didn't answer ({type(e).__name__}).",
+            f"{op} failed: DSM {_transport_what(e)} ({describe_transport_error(e)}).",
             retryable=True,
             suggestion="Try again shortly; a busy NAS can be slow to answer.",
         )

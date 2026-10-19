@@ -384,7 +384,7 @@ Common causes:
   After a stop that went through, the message ends "The stop was requested; its
   status couldn't be read."; for the stop request itself, "The stop may or may
   not have taken effect.", or "Nothing was stopped." when the connection
-  couldn't be opened.
+  couldn't be opened ("DSM couldn't be reached for the stop request").
 
 Fix:
 

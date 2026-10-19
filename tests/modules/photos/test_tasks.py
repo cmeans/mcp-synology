@@ -431,7 +431,7 @@ class TestPhotoTask:
             (httpx.ReadTimeout("slow"), "DSM didn't answer the stop request (ReadTimeout: slow).",
              "The stop may or may not have taken effect."),
             (httpx.ConnectError("refused"),
-             "DSM lost the connection during the stop request (ConnectError: refused).",
+             "DSM couldn't be reached for the stop request (ConnectError: refused).",
              "Nothing was stopped."),
         ],
     )  # fmt: skip
@@ -468,6 +468,25 @@ class TestPhotoTask:
         assert out.startswith("photos:5 copy to folder 14: processing, 0 of 1 done")
 
     @respx.mock
+    async def test_list_stops_folder_lookups_after_no_answer(self) -> None:
+        """On a stalled NAS, listing N tasks waited out N folder lookups in turn."""
+        listed = captured("bg-list-user-task")
+        first = listed["list"][0]
+        listed["list"] = [first, {**first, "id": int(first["id"]) + 1}]
+
+        def boom(_p: dict[str, Any]) -> httpx.Response:
+            raise httpx.ReadTimeout("slow")
+
+        fake = FakePhotos().on(INFO, "list_user_task", 1, listed).on(FOLDER, "get", 2, boom)
+        install(fake)
+        client = make_client()
+        async with client:
+            table = await photo_task(client)
+        assert len(fake.of(FOLDER, "get")) == 1
+        folder_id = first["target_folder"]["id"]
+        assert table.count(f"folder {folder_id}") == 2
+
+    @respx.mock
     async def test_failed_items_unreadable(self) -> None:
         def boom(_p: dict[str, Any]) -> httpx.Response:
             raise httpx.ReadTimeout("slow")
@@ -492,7 +511,7 @@ class TestPhotoTask:
                 await photo_task(client, action="clear")
         err = _error(exc)
         assert (err["code"], err["retryable"]) == ("timeout", True)
-        assert err["message"] == "Photo task failed: DSM didn't answer (ReadTimeout)."
+        assert err["message"] == "Photo task failed: DSM didn't answer (ReadTimeout: slow)."
 
     @respx.mock
     async def test_stop_request_fails_may_have_taken_effect(self) -> None:
@@ -520,7 +539,9 @@ class TestPhotoTask:
                 await photo_task(client)
         err = _error(exc)
         assert (err["code"], err["retryable"]) == ("unavailable", True)
-        assert err["message"] == "Photo task failed: DSM didn't answer (ConnectError)."
+        assert (
+            err["message"] == "Photo task failed: DSM couldn't be reached (ConnectError: refused)."
+        )
 
     async def test_stop_needs_handle(self) -> None:
         with pytest.raises(ToolError) as exc:
