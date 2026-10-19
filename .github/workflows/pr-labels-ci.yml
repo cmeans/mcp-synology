@@ -29,7 +29,8 @@ permissions: {}
 jobs:
   # When CI or vdsm finishes on a PR: Ready for QA once both have passed on the
   # head commit, CI Failed as soon as either has a failed job, nothing while one
-  # is still running (its own completion re-runs this). Skips if Dev Active is
+  # is still running (its own completion re-runs this) or has jobs with no result
+  # recorded yet (only a later event re-checks that). Skips if Dev Active is
   # present (dev isn't done yet; on-unlabel in pr-labels.yml takes over).
   on-checks-complete:
     if: github.event.workflow_run.event == 'pull_request'
@@ -70,18 +71,43 @@ jobs:
           STATE=pass
           for WF in ci.yml vdsm.yml; do
             RUN=$(gh api "repos/$REPO/actions/workflows/$WF/runs?head_sha=$HEAD_SHA&event=pull_request&per_page=1" \
-              --jq '.workflow_runs[0] // empty | "\(.id) \(.status)"')
+              --jq '.workflow_runs[0] // empty | "\(.id) \(.status) \(.conclusion)"')
             if [ -z "$RUN" ]; then
               echo "$WF: no run yet for $HEAD_SHA"
               STATE=pending; continue
             fi
-            read -r RUN_ID RUN_STATUS <<< "$RUN"
+            read -r RUN_ID RUN_STATUS RUN_CONCLUSION <<< "$RUN"
             if [ "$RUN_STATUS" != completed ]; then
               echo "$WF: run $RUN_ID is $RUN_STATUS"
               STATE=pending; continue
             fi
-            BAD=$(gh api --paginate "repos/$REPO/actions/runs/$RUN_ID/jobs" \
-              --jq '.jobs[] | select(.name != "tool-quality" and .conclusion != "success" and .conclusion != "skipped") | "\(.name): \(.conclusion)"')
+            # A run can read "completed" before its jobs' results are recorded (a
+            # job with no conclusion, or no jobs listed yet; seen twice on #298
+            # during a GitHub Actions incident). That's pending, not failed. Read
+            # the jobs up to 3 times, 20 s apart, since this run's completion may
+            # be the last event that re-checks the commit.
+            for TRY in 1 2 3; do
+              JOBS=$(gh api --paginate "repos/$REPO/actions/runs/$RUN_ID/jobs" \
+                --jq '.jobs[] | select(.name != "tool-quality") | [(.status // "none"), (.conclusion // "none"), .name] | @tsv')
+              OPEN=$(printf '%s\n' "$JOBS" | awk -F'\t' 'NF && ($1 != "completed" || $2 == "none") { print $3 ": " $1 "/" $2 }')
+              if [ -z "$JOBS" ]; then
+                # No jobs at all: a run that failed before starting any (e.g.
+                # startup_failure) has failed; otherwise wait for them.
+                case "$RUN_CONCLUSION" in
+                  success|skipped|null|"") OPEN="no jobs listed" ;;
+                  *) OPEN="" ;;
+                esac
+              fi
+              if [ -z "$OPEN" ] || [ "$TRY" = 3 ]; then break; fi
+              echo "$WF: run $RUN_ID: results not recorded yet (try $TRY), rechecking in 20 s"
+              sleep 20
+            done
+            if [ -n "$OPEN" ]; then
+              echo "$WF: run $RUN_ID is completed, but these jobs have no result yet:"; echo "$OPEN"
+              STATE=pending; continue
+            fi
+            BAD=$(printf '%s\n' "$JOBS" | awk -F'\t' 'NF && $2 != "success" && $2 != "skipped" { print $3 ": " $2 }')
+            if [ -z "$JOBS" ]; then BAD="(no jobs) run conclusion: $RUN_CONCLUSION"; fi
             if [ -n "$BAD" ]; then
               echo "$WF: run $RUN_ID has failed jobs:"; echo "$BAD"
               STATE=fail; break
@@ -89,6 +115,14 @@ jobs:
             echo "$WF: run $RUN_ID passed"
           done
           echo "Checks on $HEAD_SHA: $STATE"
+
+          # The state took up to 80 s to read (rechecks above): if a newer commit was
+          # pushed meanwhile, its own runs decide the labels.
+          CUR=$(gh pr view "$PR" --repo "$REPO" --json headRefOid --jq .headRefOid)
+          if [ "$CUR" != "$HEAD_SHA" ]; then
+            echo "PR #$PR moved to $CUR — leaving the labels to its runs"
+            exit 0
+          fi
 
           LABELS=$(gh pr view "$PR" --repo "$REPO" --json labels --jq '.labels[].name')
           has() { echo "$LABELS" | grep -qx "$1"; }
@@ -121,6 +155,6 @@ jobs:
               fi
               ;;
             pending)
-              echo "Waiting for the other workflow to finish"
+              echo "Not every run has a result yet; leaving the labels"
               ;;
           esac
