@@ -371,6 +371,108 @@ class TestUpload:
         assert "Photos indexes new items" in out
 
     @respx.mock
+    async def test_no_answer_stops_the_batch_and_keeps_the_rows(self, tmp_path: Path) -> None:
+        """QA R1: one network error lost the whole batch: a.jpg's row (and new ID) went
+        with it, c.jpg was never tried and the album add never ran."""
+        for name in ("a.jpg", "b.jpg", "c.jpg"):
+            (tmp_path / name).write_bytes(b"x")
+        fake = FakePhotos().on("SYNO.Foto.Browse.Folder", "get", 2, captured("folder-get-root"))
+        fake.on("SYNO.Foto.Browse.Album", "get", 1, captured("album-get"))
+        fake.on("SYNO.Foto.Browse.NormalAlbum", "add_item", 1, {"error_list": []})
+        answers = iter(
+            [
+                httpx.Response(200, json={"success": True, "data": {"action": "new", "id": 41}}),
+                httpx.ReadTimeout("slow"),
+            ]
+        )
+
+        def multipart(_r: httpx.Request) -> httpx.Response:
+            answer = next(answers)
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+        fake.multipart = multipart
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await upload_photos(
+                client,
+                local_paths=[str(tmp_path / n) for n in ("a.jpg", "b.jpg", "c.jpg")],
+                album="4",
+                allowed_roots=[tmp_path],
+            )
+        lines = out.splitlines()
+        assert lines[0] == "Uploaded 1 of 3 file(s) to / (personal space)"
+        assert lines[1].split() == ["a.jpg", "new", "id", "41"]
+        assert lines[2] == (
+            "  b.jpg  unknown  DSM didn't answer (ReadTimeout); it may or may not have been stored"
+        )
+        assert lines[3].rstrip() == "  c.jpg  not tried"
+        assert fake.one("SYNO.Foto.Browse.NormalAlbum", "add_item").params == {
+            "id": 4,
+            "item": [41],
+        }
+
+    @respx.mock
+    async def test_file_gone_before_upload_is_its_own_row(self, tmp_path: Path) -> None:
+        """A file removed after the checks failed the batch at stat(), outside the try."""
+        for name in ("a.jpg", "b.jpg"):
+            (tmp_path / name).write_bytes(b"x")
+        fake = FakePhotos().on("SYNO.Foto.Browse.Folder", "get", 2, captured("folder-get-root"))
+
+        def multipart(_r: httpx.Request) -> httpx.Response:
+            (tmp_path / "b.jpg").unlink()  # gone by the time its upload starts
+            return httpx.Response(200, json={"success": True, "data": {"action": "new", "id": 42}})
+
+        fake.multipart = multipart
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await upload_photos(
+                client,
+                local_paths=[str(tmp_path / "a.jpg"), str(tmp_path / "b.jpg")],
+                allowed_roots=[tmp_path],
+            )
+        assert out.splitlines()[0] == "Uploaded 1 of 2 file(s) to / (personal space)"
+        assert "b.jpg  failed   couldn't read the file (No such file or directory)" in out
+
+    @respx.mock
+    async def test_album_and_names_unanswered(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The uploads are done: a lookup or album add with no answer is a note, not a
+        lost batch, and the missing "(as …)" names are logged (QA R1 nit)."""
+        (tmp_path / "a.jpg").write_bytes(b"x")
+
+        def boom(_p: dict[str, Any]) -> httpx.Response:
+            raise httpx.ReadTimeout("slow")
+
+        fake = FakePhotos().on("SYNO.Foto.Browse.Folder", "get", 2, captured("folder-get-root"))
+        fake.on("SYNO.Foto.Browse.Album", "get", 1, captured("album-get"))
+        fake.on("SYNO.Foto.Browse.NormalAlbum", "add_item", 1, boom)
+        fake.on("SYNO.Foto.Browse.Item", "get", 2, boom)
+        fake.multipart = lambda _r: httpx.Response(
+            200, json={"success": True, "data": {"action": "rename", "id": 9}}
+        )
+        install(fake)
+        client = make_client()
+        with caplog.at_level("DEBUG", logger="mcp_synology.modules.photos.transfer"):
+            async with client:
+                out = await upload_photos(
+                    client,
+                    local_paths=[str(tmp_path / "a.jpg")],
+                    album="4",
+                    allowed_roots=[tmp_path],
+                )
+        assert "renamed  id 9" in out and "(as " not in out
+        assert (
+            "Couldn't add them to album \"mcp-spec-album\": DSM didn't answer (ReadTimeout). "
+            "Check the album with list_photos before adding again."
+        ) in out
+        assert "Couldn't read the renamed items' names: ReadTimeout" in caplog.text
+
+    @respx.mock
     async def test_skip_and_album(self, tmp_path: Path) -> None:
         (tmp_path / "a.jpg").write_bytes(b"x")
         fake = FakePhotos().on("SYNO.Foto.Browse.Folder", "get", 2, captured("folder-get-root"))

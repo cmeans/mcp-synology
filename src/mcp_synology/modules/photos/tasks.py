@@ -19,6 +19,7 @@ import re
 import time
 from typing import TYPE_CHECKING, Any, NoReturn
 
+import anyio
 import httpx
 
 from mcp_synology.core.errors import DsmHttpError, DsmReplyError, ErrorCode, SynologyError
@@ -82,32 +83,76 @@ async def _wait(
 
     Returns the last status, and ``None`` when it's done, or why it's handed off:
     ``"timeout"``, or what went wrong with a status request: no answer (a transport
-    error), or a proxy's HTTP error or page (#282), which is how a proxy reports the same
-    stall. The task is most likely still running, so it isn't lost.
+    error), a proxy's HTTP error or page (#282), which is how a proxy reports the same
+    stall, or any other unexpected answer. The task is most likely still running, so it
+    isn't lost. As File Station's ``poll_task`` (CLAUDE.md, background task cleanup): a
+    DSM error code on a status request stops the task, and the error (re-raised) says
+    whether it was stopped; so does cancellation, which then propagates.
     """
+    task_id = int(task["id"])
     deadline = time.monotonic() + timeout
     status = task
+    try:
+        return await _poll(ph, task_id, status, deadline)
+    except asyncio.CancelledError:
+        # anyio cancel scopes (the MCP SDK's) are level-triggered: shield the stop or
+        # it is canceled again at once and the NAS task is orphaned.
+        with anyio.CancelScope(shield=True):
+            await _abort(ph, task_id)
+        raise
+
+
+async def _abort(ph: Photos, task_id: int) -> bool:
+    """Stop a task; whether DSM confirmed it. Failures are logged, never raised."""
+    try:
+        await ph.call("BackgroundTask.Info", "abort_task", {"id": [task_id]}, personal=True)
+    except (SynologyError, httpx.TransportError) as e:
+        logger.warning("Couldn't stop Photos task %s: %s", task_id, type(e).__name__)
+        return False
+    return True
+
+
+async def _poll(
+    ph: Photos, task_id: int, status: dict[str, Any], deadline: float
+) -> tuple[dict[str, Any], str | None]:
     while status.get("status") != "done":
         if time.monotonic() >= deadline:
             return status, "timeout"
         await asyncio.sleep(POLL_INTERVAL)
         try:
-            now = await _status(ph, int(task["id"]))
+            now = await _status(ph, task_id)
         except httpx.TransportError as e:
-            logger.warning("Photos task %s status got no answer: %s", task["id"], type(e).__name__)
+            logger.warning("Photos task %s status got no answer: %s", task_id, type(e).__name__)
             return status, f"The NAS didn't answer a status check ({type(e).__name__})"
         except DsmHttpError as e:
-            logger.warning("Photos task %s status got HTTP %s", task["id"], e.status)
+            logger.warning("Photos task %s status got HTTP %s", task_id, e.status)
             return status, (
                 "The NAS, or a proxy in front of it, answered a status check with an error "
                 f"(HTTP {e.status})"
             )
         except DsmReplyError:
-            logger.warning("Photos task %s status reply wasn't a DSM reply", task["id"])
+            logger.warning("Photos task %s status reply wasn't a DSM reply", task_id)
             return status, (
                 "The NAS's status reply couldn't be read (not a DSM reply; a proxy or captive "
                 "portal may be answering)"
             )
+        except SynologyError as e:
+            # DSM's own verdict on the status request: stop the task rather than leave it
+            # running unreported, and say which happened.
+            stopped = await _abort(ph, task_id)
+            note = (
+                " The task was stopped on the NAS; what was already done stays done."
+                if stopped
+                else f" Stopping it failed, so it may still be running: {handle_of(task_id)}"
+                " (check with photo_task)."
+            )
+            e.args = (f"{e}{note}",)
+            raise
+        except Exception as e:
+            # Any other unexpected answer: the task may well still be running, so hand it
+            # off rather than lose it (as File Station, QA R1 on #251).
+            logger.warning("Photos task %s status unreadable: %s", task_id, type(e).__name__)
+            return status, f"The NAS's status reply couldn't be read ({type(e).__name__})"
         if now is None:
             # Gone from the list: cleared, which only happens once it's finished.
             return {**status, "status": "done"}, None
@@ -267,7 +312,9 @@ async def _recycle_note(ph: Photos) -> str:
     key = f"enable_{'shared' if ph.space == 'shared' else 'personal'}_dsm_recycle_bin"
     try:
         setting = await ph.call("Setting.Admin", "get", personal=True)
-    except SynologyError:
+    except (SynologyError, httpx.TransportError) as e:
+        # The delete itself is done: an unreadable setting only makes the note vaguer.
+        logger.debug("Couldn't read the recycle-bin setting: %s", type(e).__name__)
         setting = {}
     if key not in setting:
         return "they're in the recycle bin of the share that holds the space, if it has one"

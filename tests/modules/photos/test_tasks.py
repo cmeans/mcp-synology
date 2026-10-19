@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -142,6 +143,73 @@ class TestCopyMove:
         )
 
     @respx.mock
+    @pytest.mark.parametrize("abort_ok", [True, False])
+    async def test_dsm_error_on_status_stops_the_task(self, abort_ok: bool) -> None:
+        """QA R1: a DSM error code on a status read lost the handle and left the task
+        running. It stops the task, as File Station's poll_task, and says so."""
+        fake = FakePhotos().on(ITEM, "get", 2, _items(12)).on(FOLDER, "get", 2, _DEST)
+        fake.on(FILE, "copy", 1, captured("bg-copy")).error(INFO, "get_status", 1, 105)
+        if abort_ok:
+            fake.on(INFO, "abort_task", 1, {})
+        else:
+            fake.error(INFO, "abort_task", 1, 117)
+        install(fake)
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await copy_or_move(
+                    client, operation="copy", ids=[12], folders=None, destination="14"
+                )
+        assert fake.one(INFO, "abort_task").params == {"id": [5]}
+        err = _error(exc)
+        assert err["code"] == "permission_denied"
+        if abort_ok:
+            assert err["message"].endswith(
+                "The task was stopped on the NAS; what was already done stays done."
+            )
+        else:
+            assert err["message"].endswith(
+                "Stopping it failed, so it may still be running: photos:5 (check with photo_task)."
+            )
+
+    @respx.mock
+    async def test_cancel_stops_the_task(self) -> None:
+        """QA R1: a canceled call (a client's own timeout) left the task running."""
+        fake = FakePhotos().on(ITEM, "get", 2, _items(12)).on(FOLDER, "get", 2, _DEST)
+        fake.on(FILE, "copy", 1, captured("bg-copy"))
+        fake.on(INFO, "get_status", 1, captured("bg-copy-status")).on(INFO, "abort_task", 1, {})
+        install(fake)
+        client = make_client()
+        async with client:
+            call = asyncio.ensure_future(
+                copy_or_move(client, operation="copy", ids=[12], folders=None, destination="14")
+            )
+            while not fake.of(INFO, "get_status"):
+                await asyncio.sleep(0)
+            call.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await call
+        assert fake.one(INFO, "abort_task").params == {"id": [5]}
+
+    @respx.mock
+    async def test_unexpected_status_reply_hands_off(self) -> None:
+        """Any other unexpected answer hands the task off rather than losing it."""
+        fake = FakePhotos().on(ITEM, "get", 2, _items(12)).on(FOLDER, "get", 2, _DEST)
+        fake.on(FILE, "copy", 1, captured("bg-copy")).on(INFO, "get_status", 1, {"list": [7]})
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await copy_or_move(
+                client, operation="copy", ids=[12], folders=None, destination="14"
+            )
+        assert out == (
+            "Copy of 1 item(s) to /mcp-spec-capture/dest (personal space): The NAS's status "
+            "reply couldn't be read (TypeError); the task is most likely still copying. "
+            "Handle: photos:5 — check with photo_task."
+        )
+        assert not fake.of(INFO, "abort_task")
+
+    @respx.mock
     async def test_failed_items_listed(self) -> None:
         done = captured("bg-copy-status_last")
         done["list"][0]["error"] = 1
@@ -251,6 +319,26 @@ class TestDeletes:
             "that holds the space."
         )
         assert "Not found: 26" in out
+
+    @respx.mock
+    async def test_recycle_setting_unanswered_keeps_the_result(self) -> None:
+        """QA R1: a finished delete became an error when the setting read timed out."""
+
+        def boom(_p: dict[str, Any]) -> httpx.Response:
+            raise httpx.ReadTimeout("slow")
+
+        fake = FakePhotos().on(ITEM, "get", 2, _items(25))
+        fake.on(FILE, "delete", 1, captured("fav191_bg-delete"))
+        fake.on(INFO, "get_status", 1, captured("fav191_bg-delete-status"))
+        fake.on("SYNO.Foto.Setting.Admin", "get", 1, boom)
+        install(fake)
+        client = make_client(CAPTURE_191)
+        async with client:
+            out = await delete_photos(client, ids=[25])
+        assert out.splitlines()[0] == (
+            "Deleted 1 item(s) in the personal space; they're in the recycle bin of the share "
+            "that holds the space, if it has one."
+        )
 
     @respx.mock
     async def test_shared_space_without_recycle_bin(self) -> None:

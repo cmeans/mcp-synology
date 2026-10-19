@@ -310,15 +310,15 @@ async def upload_photos(
     rows: list[tuple[str, str, str]] = []
     uploaded: list[int] = []
     renamed: list[int] = []
-    for path in files:
-        fields = {
-            "duplicate": _DUPLICATE[on_duplicate],
-            "name": path.name,
-            # Photos shows this as the taken time until it indexes the file's EXIF.
-            "mtime": int(path.stat().st_mtime),
-            "target_folder_id": int(target["id"]),
-        }
+    for n, path in enumerate(files):
         try:
+            fields = {
+                "duplicate": _DUPLICATE[on_duplicate],
+                "name": path.name,
+                # Photos shows this as the taken time until it indexes the file's EXIF.
+                "mtime": int(path.stat().st_mtime),
+                "target_folder_id": int(target["id"]),
+            }
             data = await _upload_one(client, ph.api("Upload.Item"), fields, path)
         except SynologyError as e:
             code = f" ({e.code})" if e.code else ""
@@ -327,6 +327,19 @@ async def upload_photos(
         except OSError as e:
             rows.append((path.name, "failed", f"couldn't read the file ({e.strerror or e})"))
             continue
+        except httpx.TransportError as e:
+            # DSM didn't answer: the rest would most likely wait out the same timeout, so
+            # stop and say which weren't tried (as download_photos). The upload may have
+            # landed, so it isn't reported as failed outright.
+            rows.append(
+                (
+                    path.name,
+                    "unknown",
+                    f"DSM didn't answer ({type(e).__name__}); it may or may not have been stored",
+                )
+            )
+            rows += [(rest.name, "not tried", "") for rest in files[n + 1 :]]
+            break
         action = str(data.get("action", "new"))
         item_id = int(data["id"])
         uploaded.append(item_id)
@@ -346,8 +359,9 @@ async def upload_photos(
                 else (name, state, note)
                 for name, state, note in rows
             ]
-        except SynologyError:
-            pass
+        except (SynologyError, httpx.TransportError) as e:
+            # The uploads are done; only the "(as …)" names are missing.
+            logger.debug("Couldn't read the renamed items' names: %s", type(e).__name__)
     width = max(len(r[0]) for r in rows)
     lines = [
         f"Uploaded {len(uploaded)} of {len(files)} file(s) to {target.get('name')} "
@@ -365,6 +379,11 @@ async def upload_photos(
             lines.append(f'Added {len(uploaded)} item(s) to album "{target_album.get("name")}".')
         except SynologyError as e:
             lines.append(f'Couldn\'t add them to album "{target_album.get("name")}": {e}')
+        except httpx.TransportError as e:
+            lines.append(
+                f"Couldn't add them to album \"{target_album.get('name')}\": DSM didn't answer "
+                f"({type(e).__name__}). Check the album with list_photos before adding again."
+            )
     if uploaded:
         lines.append(
             "Photos indexes new items over the next seconds to minutes; taken dates and "
