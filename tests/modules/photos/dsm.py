@@ -66,6 +66,8 @@ class FakePhotos:
 
     routes: dict[tuple[str, str, int], list[Reply]] = field(default_factory=dict)
     calls: list[Call] = field(default_factory=list)
+    # Answers multipart uploads (Upload.Item); their bodies aren't decoded here.
+    multipart: Callable[[httpx.Request], httpx.Response] | None = None
 
     def on(self, api: str, method: str, version: int, *replies: Reply) -> FakePhotos:
         """Answer with ``replies`` in turn (the last one repeats). A dict is the ``data``."""
@@ -84,8 +86,11 @@ class FakePhotos:
         return found[0]
 
     def handle(self, request: httpx.Request) -> httpx.Response:
+        ctype = request.headers.get("content-type", "")
+        if ctype.startswith("multipart/"):
+            assert self.multipart is not None, "unexpected multipart upload"
+            return self.multipart(request)
         if request.method == "POST":
-            ctype = request.headers.get("content-type", "")
             assert ctype.startswith("application/x-www-form-urlencoded"), ctype
             raw = dict(parse_qsl(request.content.decode(), keep_blank_values=True))
             assert not request.url.params, "a form POST has no query string"

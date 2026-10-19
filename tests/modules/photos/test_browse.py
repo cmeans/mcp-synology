@@ -433,3 +433,11 @@ class TestGetPhoto:
         with pytest.raises(ToolError) as exc:
             await get_photo(make_client(), ids=ids)
         assert _error(exc)["param"] == "ids"
+
+
+def test_privacy_column() -> None:
+    from mcp_synology.modules.photos.browse import _privacy
+
+    assert _privacy({"privacy_type": "public-view"}) == "public-view"
+    assert _privacy({"privacy_type": "private"}, shared=True) == "private link"
+    assert _privacy(None) == "no"

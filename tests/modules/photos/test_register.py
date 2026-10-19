@@ -28,10 +28,50 @@ def _registered(allowed: set[str] | None = None, settings: dict | None = None) -
     return server._tool_manager._tools  # type: ignore[no-any-return]
 
 
-def test_read_tools_registered_with_tiers() -> None:
+_READ = {"list_photos", "list_photo_collections", "get_photo", "download_photos"}
+_WRITE = {
+    "photo_album",
+    "photo_share_link",
+    "photo_folder",
+    "tag_photos",
+    "edit_photo",
+    "edit_person",
+    "photo_request",
+    "merge_people",
+    "delete_photo_albums",
+    "upload_photos",
+    "copy_photos",
+    "move_photos",
+    "photo_task",
+    "delete_photos",
+    "delete_photo_folders",
+}
+
+
+def test_tools_registered_with_tiers() -> None:
+    assert set(_registered()) == _READ | _WRITE
+    tiers = {t.name: t.permission_tier for t in MODULE_INFO.tools}
+    assert {n for n, t in tiers.items() if t is PermissionTier.READ} == _READ
+    assert {n for n, t in tiers.items() if t is PermissionTier.WRITE} == _WRITE
+
+
+def test_every_write_is_destructive() -> None:
+    """Each write can lose a value, a membership, a share setting or a person (#183)."""
     tools = _registered()
-    assert set(tools) == {"list_photos", "list_photo_collections", "get_photo", "download_photos"}
-    assert all(t.permission_tier is PermissionTier.READ for t in MODULE_INFO.tools)
+    for name in _WRITE - {"upload_photos"}:
+        assert tools[name].annotations.destructive_hint is True, name
+    # Uploads never replace anything: a duplicate is renamed or skipped.
+    assert tools["upload_photos"].annotations.destructive_hint is False
+    idempotent = {n for n in _WRITE if tools[n].annotations.idempotent_hint}
+    assert idempotent == {"photo_folder", "edit_person"}
+    assert {n: tools[n].title for n in _WRITE if tools[n].title} == {
+        "photo_folder": "Photos: Folder",
+        "upload_photos": "Photos: Upload",
+        "copy_photos": "Photos: Copy",
+        "move_photos": "Photos: Move",
+        "delete_photos": "Photos: Delete items",
+        "delete_photo_folders": "Photos: Delete folders",
+    }
 
 
 def test_annotations_and_titles() -> None:
@@ -53,6 +93,12 @@ def test_only_browse_item_and_folder_required() -> None:
     assert required == {"SYNO.Foto.Browse.Item", "SYNO.Foto.Browse.Folder"}
 
 
+def test_task_timeout_bounds() -> None:
+    assert PhotosSettings().task_timeout == 30
+    with pytest.raises(ValidationError):
+        PhotosSettings(task_timeout=601)
+
+
 def test_settings_reject_relative_local_paths() -> None:
     with pytest.raises(ValidationError):
         PhotosSettings(allowed_local_paths=["photos"])
@@ -69,42 +115,21 @@ async def test_handlers_reach_the_client(tmp_path) -> None:  # type: ignore[no-u
         ("list_photo_collections", {"type": "bogus"}),
         ("get_photo", {"ids": []}),
         ("download_photos", {"ids": [], "dest_folder": str(tmp_path)}),
+        ("photo_album", {"action": "bogus"}),
+        ("photo_share_link", {"action": "bogus", "album": "1"}),
+        ("photo_folder", {"action": "bogus"}),
+        ("tag_photos", {"action": "bogus", "ids": [1], "tags": ["x"]}),
+        ("edit_photo", {"ids": []}),
+        ("edit_person", {"action": "bogus", "person": "1"}),
+        ("photo_request", {"action": "bogus"}),
+        ("merge_people", {"target": "1", "merge": []}),
+        ("delete_photo_albums", {"albums": []}),
+        ("upload_photos", {"local_paths": []}),
+        ("copy_photos", {"destination": "/"}),
+        ("move_photos", {"destination": "/"}),
+        ("photo_task", {"action": "bogus"}),
+        ("delete_photos", {"ids": []}),
+        ("delete_photo_folders", {"folders": []}),
     ]:
         with pytest.raises(ToolError):
             await tools[name].fn(**args)
-
-
-def test_shipped_tools_match_the_spec() -> None:
-    """The spec check of tests/test_module_specs.py for the tools shipped so far.
-
-    That test needs every spec tool in code, so it applies once the module is in the
-    server's registry (the last #258 part); until then this checks each shipped tool.
-    """
-    import inspect
-    import re
-    from pathlib import Path
-
-    from mcp_synology.modules import photos
-    from tests.test_module_specs import (
-        _DESCRIPTION,
-        _TIER,
-        SPEC_DIR,
-        _normalize,
-        _registered,
-        _sections,
-        _spec_params,
-    )
-
-    sections = _sections((Path(SPEC_DIR) / "photos-module-spec.md").read_text())
-    registered = _registered(photos)
-    for info in MODULE_INFO.tools:
-        section = sections[info.name]
-        tier = _TIER.search(section)
-        assert tier is not None and tier.group(1).upper() == info.permission_tier.name
-        desc = _DESCRIPTION.search(section)
-        assert desc is not None
-        assert _normalize(re.sub(r"^>\s?", "", desc.group(1), flags=re.M)) == _normalize(
-            info.description
-        ), info.name
-        params = set(inspect.signature(registered[info.name].fn).parameters)
-        assert params == _spec_params(section), info.name

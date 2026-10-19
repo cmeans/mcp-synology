@@ -59,6 +59,23 @@ class TestListShares:
         assert "2 shared folders found" in result
 
     @respx.mock
+    async def test_list_shares_behind_a_proxy_login_page(self, mock_client: DsmClient) -> None:
+        """#282: a proxy's login page was "Expecting value: line 1 column 1 (char 0)"."""
+        import json
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            200, text="<html>Sign in to proxy</html>", headers={"content-type": "text/html"}
+        )
+        with pytest.raises(ToolError) as exc:
+            await list_shares(mock_client, hostname="TestNAS")
+        err = json.loads(str(exc.value))["error"]
+        assert err["code"] == "unavailable"
+        assert err["retryable"] is True
+        assert "the answer wasn't a DSM reply (Content-Type text/html)" in err["message"]
+        assert "Sign in" not in err["message"]
+        assert "reverse proxy" in err["suggestion"]
+
+    @respx.mock
     async def test_list_shares_with_recycle_status(self, mock_client: DsmClient) -> None:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
             json={

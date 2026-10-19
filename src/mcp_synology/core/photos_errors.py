@@ -70,6 +70,11 @@ PHOTOS_ERROR_CODES: dict[int, tuple[ErrorCode, str, str]] = {
         "The destination folder doesn't exist in Photos",
         "List folders with list_photo_collections type=folder, or create it first.",
     ),
+    641: (
+        ErrorCode.ALREADY_EXISTS,
+        "A folder with that name already exists there",
+        "Pick another name, or use the existing folder.",
+    ),
     642: (
         ErrorCode.NOT_FOUND,
         "No such folder in Photos",

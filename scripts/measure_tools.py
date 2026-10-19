@@ -47,6 +47,7 @@ modules:
   filestation: {enabled: true, permission: write}
   system: {enabled: true}
   downloadstation: {enabled: true, permission: write}
+  photos: {enabled: true, permission: write}
 """
 
 

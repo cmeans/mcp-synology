@@ -55,6 +55,14 @@ modules:
       allowed_local_paths:  # folders create_download may read .torrent/.nzb files from;
         - ~/Downloads       # adds to a top-level list; without one, replaces the Downloads
         - ~/Torrents        # default, so ~/Downloads is listed to keep it
+  photos:
+    enabled: true  # needs the Synology Photos package on the NAS
+    permission: write
+    settings:
+      allowed_local_paths:  # folders upload_photos reads from and download_photos writes to
+        - ~/Downloads
+        - ~/Pictures
+      task_timeout: 60      # seconds a copy, move or delete waits before handing off
 
 logging:
   level: debug

@@ -34,6 +34,8 @@ modules:
   filestation:
     enabled: true
     permission: write  # 'write' needed to test copy/move/delete
+  photos:
+    enabled: false  # default off; needs Synology Photos on the NAS
   system:
     enabled: true
 

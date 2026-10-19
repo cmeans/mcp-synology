@@ -27,6 +27,7 @@ from mcp_synology.core.state import ServerState
 from mcp_synology.modules import PermissionTier, RegisterContext, filter_tools_by_permission
 from mcp_synology.modules import downloadstation as _downloadstation_mod
 from mcp_synology.modules import filestation as _filestation_mod
+from mcp_synology.modules import photos as _photos_mod
 from mcp_synology.modules import system as _system_mod
 
 if TYPE_CHECKING:
@@ -102,6 +103,7 @@ def _platform_label() -> str:
 _MODULE_REGISTRY: dict[str, ModuleType] = {
     "downloadstation": _downloadstation_mod,
     "filestation": _filestation_mod,
+    "photos": _photos_mod,
     "system": _system_mod,
 }
 
@@ -511,6 +513,7 @@ def _local_paths_notice(config: AppConfig, plan: _ModulePlan) -> str:
     from mcp_synology.core.local_paths import allowed_local_roots
     from mcp_synology.modules.downloadstation import DownloadStationSettings
     from mcp_synology.modules.filestation import FileStationSettings
+    from mcp_synology.modules.photos import PhotosSettings
 
     def folders(roots: list[Path]) -> str:
         return ", ".join(str(r) for r in roots)
@@ -541,6 +544,17 @@ def _local_paths_notice(config: AppConfig, plan: _ModulePlan) -> str:
                 "create_download's torrent_file_path only reads .torrent and .nzb files "
                 f"inside these folders (or below them): {folders(roots)}."
             )
+        elif mod_name == "photos" and {"upload_photos", "download_photos"} & set(allowed):
+            ph = PhotosSettings(**mod_config.settings)
+            roots = allowed_local_roots(
+                ph.allowed_local_paths,
+                shared_paths=config.allowed_local_paths,
+                module="photos",
+            )
+            lines.append(
+                "upload_photos and download_photos only use local paths inside these folders "
+                f"(or below them): {folders(roots)}."
+            )
     if not lines:
         return ""
     return (
@@ -550,6 +564,22 @@ def _local_paths_notice(config: AppConfig, plan: _ModulePlan) -> str:
         "at the top level of the config for every module or in a module's settings "
         "(without a top-level list, a module's list replaces the Downloads default)."
     )
+
+
+_PHOTOS_NOTICE = """
+
+SYNOLOGY PHOTOS:
+Photos keeps its own library: the personal space (space=personal, the default) and Shared
+Space (space=shared). Photos tools take the ids that list_photos and
+list_photo_collections return; File Station paths are for files outside Photos.
+delete_photos, delete_photo_folders, delete_photo_albums and merge_people can't be undone
+from Photos: name what will go and confirm with the user first. A long copy, move or delete
+hands off with a photos:<id> handle; follow up with photo_task, as with file_task."""
+
+
+def _photos_notice(plan: _ModulePlan) -> str:
+    """How to use the Photos tools, when the module is enabled (#258)."""
+    return _PHOTOS_NOTICE if any(name == "photos" for name, _, _, _ in plan) else ""
 
 
 def create_server(config: AppConfig) -> MCPServer:
@@ -619,6 +649,7 @@ def create_server(config: AppConfig) -> MCPServer:
 
     if not config.instructions_file:
         # A full replacement file is the user's own; everything else gets the notice.
+        instructions += _photos_notice(plan)
         instructions += _withheld_tools_notice(config, plan)
         instructions += _local_paths_notice(config, plan)
 

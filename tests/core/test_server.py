@@ -732,6 +732,7 @@ class TestWithheldToolsNotice:
                 "filestation": {"enabled": True, "permission": "write"},
                 "system": {"enabled": True, "permission": "write"},
                 "downloadstation": {"enabled": True, "permission": "write"},
+                "photos": {"enabled": True, "permission": "write"},
             }
         )
         assert "PERMISSIONS" not in text
@@ -873,6 +874,7 @@ ALL_MODULES: dict[str, Any] = {
     "filestation": {"enabled": True, "permission": "write"},
     "system": {"enabled": True},
     "downloadstation": {"enabled": True, "permission": "write"},
+    "photos": {"enabled": True, "permission": "write"},
 }
 
 
@@ -1150,7 +1152,7 @@ class TestServedSchemas:
 
     async def test_client_sees_no_titles_or_null_unions(self) -> None:
         tools, _ = await _served(create_server(make_test_config(modules=ALL_MODULES)))
-        assert len(tools) == 29
+        assert len(tools) == 48
         for tool in tools:
             for node in _walk(tool.input_schema):
                 if isinstance(node, dict):
@@ -1278,7 +1280,9 @@ class TestInstructionComments:
 # not to stop and restart a delete whose count hasn't moved). Raised by #257 to 17,582: the
 # LOCAL PATHS section names create_download's torrent folders and the top-level setting, and
 # says a module's list replaces the Downloads default when there's no top-level list.
-PAYLOAD_BUDGET_CHARS = 17_582
+# Raised by #258 to 29,742 (+12,160): the opt-in Photos module's 19 tools and its
+# instructions section. A connection without Photos enabled doesn't carry them.
+PAYLOAD_BUDGET_CHARS = 29_742
 
 
 class TestPayloadBudget:
@@ -1339,6 +1343,21 @@ class TestLocalPathsNotice:
         assert str((tmp_path / "torrents").resolve()) in section
         assert "top level" in section
 
+    def test_photos_folders_are_named(self, tmp_path: Path) -> None:
+        """#258: upload_photos reads from and download_photos writes to Photos' folders."""
+        config = make_test_config(
+            modules={
+                "photos": {
+                    "enabled": True,
+                    "permission": "read",
+                    "settings": {"allowed_local_paths": [str(tmp_path / "pics")]},
+                }
+            }
+        )
+        section = (create_server(config).instructions or "").split("LOCAL PATHS", 1)[1]
+        assert "upload_photos and download_photos" in section
+        assert str((tmp_path / "pics").resolve()) in section
+
     def test_read_only_connection_still_gets_it_for_download_file(self, tmp_path: Path) -> None:
         text = self._instructions({"allowed_local_paths": [str(tmp_path)]}, permission="read")
         assert "LOCAL PATHS" in text
@@ -1352,3 +1371,19 @@ class TestLocalPathsNotice:
         f.write_text("MINE", encoding="utf-8")
         config = make_test_config(instructions_file=str(f))
         assert "LOCAL PATHS" not in (create_server(config).instructions or "")
+
+
+class TestPhotosNotice:
+    """#258: the Photos section comes with the module, so connections without it don't
+    carry its text."""
+
+    def test_present_when_enabled(self) -> None:
+        config = make_test_config(modules={"photos": {"enabled": True, "permission": "write"}})
+        text = create_server(config).instructions or ""
+        section = text.split("SYNOLOGY PHOTOS:", 1)[1]
+        assert "space=shared" in section
+        assert "confirm with the user first" in section
+        assert "photo_task" in section
+
+    def test_absent_otherwise(self) -> None:
+        assert "SYNOLOGY PHOTOS" not in (create_server(make_test_config()).instructions or "")
