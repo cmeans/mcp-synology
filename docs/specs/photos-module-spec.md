@@ -239,7 +239,7 @@ Browse or search items.
 > (filename and tags). Returns id, filename, taken time, type, size and folder; paged with
 > offset/limit (default 50) with the total. space: personal (default) or shared. Use the ids with
 > get_photo, download_photos, tag_photos and the other photo tools. For files outside Photos, use
-> list_files.
+> File Station's list_files when that module is enabled.
 
 **Parameters:**
 
@@ -391,7 +391,7 @@ Originals or thumbnails to a local folder.
 > Download Synology Photos items to a local folder by id: the original file, or a JPEG preview
 > (size xl ~1280px, m ~320px, sm ~240px). Only writes inside the allowed local folders, and never
 > overwrites unless overwrite=true. Up to 50 ids. space: personal (default) or shared. For files
-> outside Photos, use download_file.
+> outside Photos, use File Station's download_file when that module is enabled.
 
 **Parameters:**
 
@@ -568,7 +568,8 @@ Album 9 "Trip 2024" is shared.
 > Create or rename a folder in Synology Photos, or set its cover photo. action: create (name inside
 > parent, default the space root), rename or set_cover. space: personal (default) or shared. To copy
 > or move folders use copy_photos / move_photos; to delete, delete_photo_folders. For folders
-> outside Photos, use create_folder and rename.
+> outside Photos, use File Station's create_folder and rename when File Station write is enabled,
+> or ask the user to do it in DSM.
 
 **Parameters:**
 
@@ -975,5 +976,5 @@ Maintainer, 2026-10-17 (the first group), with the 1.9.1-only additions found af
 1. **Not verified yet** (from the web client only, or needing a setup vdsm doesn't have): keyword search over descriptions (filenames and tags verified); the recycle-bin flags turning off when a share's recycle bin is off; whether a Shared Space favorite is per user; error 901 (People disabled); People and concepts on vdsm (clusters may not form without a GPU; then they're fixture- and real-NAS-tested only); `Browse.Concept get`'s reply shape and concept `visibility` values (no capture has a concept, so the tool's handling of both is unverified until a real-NAS check); a Shared Space user **with** folder view rights trying to edit or delete (needs `FolderPermission`, out of scope; the entry-only case is verified).
 2. **A 119 right after login** was seen once on 7.2.2 (the first call of a fresh session; the retry was clean). The cause was #176: DSM misreads some session IDs as `_sid`; #271 sends the session as the `id` cookie.
 3. **Out of scope:** see Resolved Design Decision 6.
-4. **Payload:** measured in the implementation: enabling Photos adds 12,204 characters (schemas, descriptions and its instructions section; with every module on, `PAYLOAD_BUDGET_CHARS` is 29,930). A connection without Photos carries none of it.
+4. **Payload:** measured in the implementation: enabling Photos adds about 12,085 characters (schemas, descriptions and its instructions section), measured as the payload with every module on minus the payload without Photos. A connection without Photos carries none of it.
 5. **JPEG conversion on download (1.9.1):** `Download download` v2 takes `download_type` (`source`, `optimized_jpeg`, `original_size_jpeg`), which would let `download_photos` hand HEIC originals over as JPEG. Not verified; proposed as a `download_photos` option for 1.9.1 if wanted.
