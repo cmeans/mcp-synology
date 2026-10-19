@@ -112,6 +112,35 @@ class TestCopyMove:
         assert "didn't answer a status check (ReadTimeout)" in out
         assert "photos:5" in out
 
+    _HTML = {"content-type": "text/html"}  # noqa: RUF012
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        ("reply", "shown"),
+        [
+            (httpx.Response(504, text="<html>Gateway Timeout</html>"),
+             "The NAS, or a proxy in front of it, answered a status check with an error "
+             "(HTTP 504); the task is most likely still copying."),
+            (httpx.Response(200, text="<html>Sign in</html>", headers=_HTML),
+             "The NAS's status reply couldn't be read (not a DSM reply; a proxy or captive "
+             "portal may be answering); the task is most likely still copying."),
+        ],
+    )  # fmt: skip
+    async def test_proxy_error_hands_off(self, reply: httpx.Response, shown: str) -> None:
+        """#282: a proxy's 502/504 or login page on a status read is how a proxy reports a
+        stall; the task is handed off, not lost or reported as failed."""
+        fake = FakePhotos().on(ITEM, "get", 2, _items(12)).on(FOLDER, "get", 2, _DEST)
+        fake.on(FILE, "copy", 1, captured("bg-copy")).on(INFO, "get_status", 1, lambda _p: reply)
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await copy_or_move(
+                client, operation="copy", ids=[12], folders=None, destination="14"
+            )
+        assert shown in out
+        assert "photos:5" in out
+        assert "Gateway" not in out and "Sign in" not in out
+
     @respx.mock
     async def test_failed_items_listed(self) -> None:
         done = captured("bg-copy-status_last")

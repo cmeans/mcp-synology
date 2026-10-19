@@ -186,7 +186,7 @@ Photos has no trash of its own. Deletes go to the **DSM recycle bin of the share
 
 ### Background tasks (copy, move, delete)
 
-`BackgroundTask.File copy|move|delete` returns a `task_info` (`id`, `status` `waiting|processing|aborting|done`, `total`, `completion`, `skip`, `overwrite`, `error`). `copy_photos`, `move_photos`, `delete_photos` and `delete_photo_folders` poll `BackgroundTask.Info get_status` (1 s, as the web client) until `done` or `task_timeout`, then hand off with a handle `photos:<id>` that `photo_task` follows up on (a delete task with a small batch finished within 2 s on vdsm), the same pattern as File Station's `file_task` (#245). A finished task stays listed until `clear_completed_task`; an unknown ID returns an empty list (status) or **117** (abort).
+`BackgroundTask.File copy|move|delete` returns a `task_info` (`id`, `status` `waiting|processing|aborting|done`, `total`, `completion`, `skip`, `overwrite`, `error`). `copy_photos`, `move_photos`, `delete_photos` and `delete_photo_folders` poll `BackgroundTask.Info get_status` (1 s, as the web client) until `done` or `task_timeout`, then hand off with a handle `photos:<id>` that `photo_task` follows up on. A status request that gets no answer (a transport error), an HTTP error status or a reply that isn't DSM's (a reverse proxy's 502/504 or login page, #282) hands off too, saying why, since the task is most likely still running (a delete task with a small batch finished within 2 s on vdsm), the same pattern as File Station's `file_task` (#245). A finished task stays listed until `clear_completed_task`; an unknown ID returns an empty list (status) or **117** (abort).
 
 ### Identifiers and names
 

@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from mcp_synology.core.errors import SynologyError
+from mcp_synology.core.errors import DsmHttpError, DsmReplyError, SynologyError
 from mcp_synology.core.formatting import format_table, format_timestamp, synology_error_response
 from mcp_synology.modules.photos.helpers import (
     Photos,
@@ -74,7 +74,9 @@ async def _wait(
     """Poll until done or ``timeout``.
 
     Returns the last status, and ``None`` when it's done, or why it's handed off:
-    ``"timeout"``, or the name of the transport error a status request got.
+    ``"timeout"``, or what went wrong with a status request: no answer (a transport
+    error), or a proxy's HTTP error or page (#282), which is how a proxy reports the same
+    stall. The task is most likely still running, so it isn't lost.
     """
     deadline = time.monotonic() + timeout
     status = task
@@ -86,7 +88,19 @@ async def _wait(
             now = await _status(ph, int(task["id"]))
         except httpx.TransportError as e:
             logger.warning("Photos task %s status got no answer: %s", task["id"], type(e).__name__)
-            return status, type(e).__name__
+            return status, f"The NAS didn't answer a status check ({type(e).__name__})"
+        except DsmHttpError as e:
+            logger.warning("Photos task %s status got HTTP %s", task["id"], e.status)
+            return status, (
+                "The NAS, or a proxy in front of it, answered a status check with an error "
+                f"(HTTP {e.status})"
+            )
+        except DsmReplyError:
+            logger.warning("Photos task %s status reply wasn't a DSM reply", task["id"])
+            return status, (
+                "The NAS's status reply couldn't be read (not a DSM reply; a proxy or captive "
+                "portal may be answering)"
+            )
         if now is None:
             # Gone from the list: cleared, which only happens once it's finished.
             return {**status, "status": "done"}, None
@@ -126,7 +140,7 @@ def _handoff(verb: str, status: dict[str, Any], why: str) -> str:
     lead = (
         f"Still {verb} on the NAS ({_progress(status)})."
         if why == "timeout"
-        else f"The NAS didn't answer a status check ({why}); the task is most likely still {verb}."
+        else f"{why}; the task is most likely still {verb}."
     )
     return f"{lead} Handle: {handle_of(int(status['id']))} — check with photo_task."
 
