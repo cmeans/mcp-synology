@@ -164,6 +164,20 @@ class DsmHttpError(SynologyError):
         self.retryable = status >= 500
 
 
+class DsmReplyError(SynologyError):
+    """DSM's answer wasn't a JSON object, e.g. a reverse proxy's or captive portal's page (#282).
+
+    The message names the API/method and the Content-Type, never the body. Retryable,
+    except after a non-idempotent POST, which DSM may already have applied.
+    """
+
+    error_code = ErrorCode.UNAVAILABLE
+
+    def __init__(self, message: str, *, retryable: bool = True, suggestion: str | None = None):
+        super().__init__(message, suggestion=suggestion)
+        self.retryable = retryable
+
+
 class DsmTimeoutError(SynologyError):
     """The HTTP request to DSM timed out.
 

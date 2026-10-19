@@ -54,7 +54,11 @@ def _local_name_problem(name: str) -> str | None:
 
 
 def _expand_home(operation: str, param: str, value: str) -> Path:
-    """``~`` and ``~user`` expanded; an unknown user is ``invalid_parameter``, not a crash."""
+    """``~`` and ``~user`` expanded; an unknown user is ``invalid_parameter``, not a crash.
+
+    Reached with an unknown user only by unconfined (direct) callers: with allowed
+    folders, ``refuse_outside_roots`` refuses it first like any path outside (#260).
+    """
     try:
         return Path(value).expanduser()
     except RuntimeError as e:
@@ -82,7 +86,13 @@ async def upload_file(
 ) -> str:
     """Upload a local file to a NAS folder."""
     refuse_outside_roots(
-        "Upload", "local_path", local_path, Path(local_path), allowed_roots, module="filestation"
+        "Upload",
+        "local_path",
+        local_path,
+        Path(local_path),
+        allowed_roots,
+        module="filestation",
+        hide_unknown_users=True,
     )
     local = _expand_home("Upload", "local_path", local_path)
     if not local.is_file():
@@ -177,6 +187,7 @@ async def download_file(
         Path(dest_folder),
         allowed_roots,
         module="filestation",
+        hide_unknown_users=True,
     )
     local_dir = _expand_home("Download", "dest_folder", dest_folder)
     if not local_dir.is_dir():
