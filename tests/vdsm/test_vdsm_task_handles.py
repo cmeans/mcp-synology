@@ -8,7 +8,7 @@ first connection (``discover_running_tasks``).
 
 The trees are 300,000 empty files (600 dirs x 500), built over SSH; on vdsm
 they delete in about 14 s and copy in about 45 s, so a 2 s wait always hands
-off. Run on DSM 7.2.2 and 7.1 (``--dsm-version 7.1``).
+off. Run on every DSM version CI runs (``--dsm-version``; see CLAUDE.md).
 
 Run with: uv run pytest -m vdsm -v tests/vdsm/test_vdsm_task_handles.py
 """

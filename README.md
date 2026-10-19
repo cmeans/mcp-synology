@@ -124,7 +124,7 @@ See **Local path confinement** under [Features](#features). Magnet links and URL
 - BT search and RSS feeds are not supported yet.
 - `delete_download(force_complete=true)` doesn't reliably keep partial data: DSM discarded unfinished HTTP downloads anyway. DSM also refuses it for finished tasks, and the tool reports those as not removed.
 
-Tested against DSM 7.1 (Download Station 3.9-4627) and DSM 7.2.2 (Download Station 4.1-5012).
+Tested against DSM 7.1 (Download Station 3.9-4627) and DSM 7.2.2, 7.3.2 and 7.4.1 (Download Station 4.1-5012).
 
 ### Synology Photos
 
@@ -153,7 +153,7 @@ modules:
 - **Local files.** `upload_photos` reads and `download_photos` writes only inside the allowed local folders (by default your Downloads folder); see the Download Station torrent-file notes above for `allowed_local_paths`. `task_timeout` (seconds, default 30, up to 600) sets how long a copy, move or delete waits before handing off.
 - **Not covered yet:** Shared Space folder sharing, face-level People edits, guest uploads to photo requests, and changing Photos' own settings.
 
-Tested against DSM 7.1 (Synology Photos 1.3.4) and DSM 7.2.2 (Synology Photos 1.9.1). See [`docs/specs/photos-module-spec.md`](docs/specs/photos-module-spec.md) for what each tool sends and the DSM behavior behind it.
+Tested against DSM 7.1 (Synology Photos 1.3.4), DSM 7.2.2, 7.3.2 and 7.4.1 (Synology Photos 1.9.1). See [`docs/specs/photos-module-spec.md`](docs/specs/photos-module-spec.md) for what each tool sends and the DSM behavior behind it.
 
 ## Features
 
