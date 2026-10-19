@@ -313,7 +313,7 @@ async def test_folders(photos: DsmClient) -> None:
 
 
 async def test_tags_and_edits(photos: DsmClient) -> None:
-    async with seeded(photos, JPEGS[:2]) as (_path, ids):
+    async with seeded(photos, JPEGS) as (_path, ids):
         item = ids["city-night.jpg"]
         tag = f"t258tag{uuid.uuid4().hex[:6]}"
         await tag_photos(photos, action="add", ids=[item, 999999], tags=[tag, "t258-shared"])
@@ -323,21 +323,23 @@ async def test_tags_and_edits(photos: DsmClient) -> None:
         # A tag exists only while some item has it.
         assert tag not in await list_photo_collections(photos, type="tag")
 
+        # The edits go to items with no earlier edits: the tag changes above rewrote
+        # city-night.jpg, and a time change right after another edit to the same file
+        # can be undone by the pending re-index, which reads the old date back (#289).
+        edited = ids["forest-trail.jpg"]
         out = await edit_photo(
-            photos, ids=[item], rating=4, description="t258", taken_time="2021-02-03T04:05:06Z"
+            photos, ids=[edited], rating=4, description="t258", taken_time="2021-02-03T04:05:06Z"
         )
         assert "rating 4, description, taken time" in out
 
         # Photos re-indexes the rewritten file; the new taken time shows up then.
         async def retimed() -> str | None:
-            details = await get_photo(photos, ids=[item])
+            details = await get_photo(photos, ids=[edited])
             return details if "2021-02-03 04:05:06 UTC" in details else None
 
         details = await _wait_for(retimed, "the edited taken time")
         assert "Rating:       4" in details and "t258" in details
 
-        # A shift on an item with no earlier edits: a time change right after another
-        # edit to the same file can be undone by the pending re-index (seen on 7.2.2).
         other = ids["beach-sunset.jpg"]
         out = await edit_photo(photos, ids=[other], shift_hours=1.5, rotate="right")
         assert "taken time shifted +1.5 h, rotated right" in out
