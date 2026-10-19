@@ -43,7 +43,7 @@ uv run pytest -n auto                      # Run unit + module tests, one worker
 uv run pytest tests/modules/filestation/test_listing.py  # Single test file
 uv run pytest -k "test_list_shares"        # Single test by name
 uv run pytest -m integration               # Integration tests (requires real NAS)
-uv run pytest --cov=mcp_synology           # Tests with coverage
+uv run pytest -n auto --cov=mcp_synology   # Tests with coverage
 ```
 
 ## Key Conventions
