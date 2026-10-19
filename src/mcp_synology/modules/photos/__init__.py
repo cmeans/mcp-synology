@@ -242,7 +242,8 @@ MODULE_INFO = ModuleInfo(
             description=(
                 "Upload local photos or videos into a Synology Photos folder (default the space"
                 " root). on_duplicate: rename (default, keeps both) or skip. Optionally add "
-                "them to an album. Only reads files inside the allowed local folders. Photos "
+                "them to an existing album (create it first with photo_album). Only reads "
+                "files inside the allowed local folders. Photos "
                 "indexes new items over the next seconds to minutes. space: personal (default) "
                 "or shared."
             ),

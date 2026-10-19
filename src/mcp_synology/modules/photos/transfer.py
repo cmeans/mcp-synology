@@ -308,8 +308,9 @@ async def upload_photos(
     except SynologyError as e:
         synology_error_response(op, e)
     rows: list[tuple[str, str, str]] = []
-    uploaded: list[int] = []
+    uploaded: list[int] = []  # stored or already there: what an album gets
     renamed: list[int] = []
+    skipped = 0
     for n, path in enumerate(files):
         try:
             fields = {
@@ -361,6 +362,7 @@ async def upload_photos(
         note = f"id {item_id}"
         if action == "ignore":
             note += " (already there)"
+            skipped += 1
         elif action == "rename":
             renamed.append(item_id)
         rows.append((path.name, _ACTIONS.get(action, action), note))
@@ -378,10 +380,11 @@ async def upload_photos(
             # The uploads are done; only the "(as …)" names are missing.
             logger.debug("Couldn't read the renamed items' names: %s", type(e).__name__)
     width = max(len(r[0]) for r in rows)
-    lines = [
-        f"Uploaded {len(uploaded)} of {len(files)} file(s) to {target.get('name')} "
-        f"({space_label(sp)})"
-    ]
+    # A skipped duplicate is already there, not uploaded: count it apart.
+    head = f"Uploaded {len(uploaded) - skipped} of {len(files)} file(s)"
+    if skipped:
+        head += f" ({skipped} skipped, already there)"
+    lines = [f"{head} to {target.get('name')} ({space_label(sp)})"]
     lines += [f"  {name:<{width}}  {state:<8} {note}" for name, state, note in rows]
     if target_album is not None and uploaded:
         try:
@@ -399,7 +402,7 @@ async def upload_photos(
                 f"Couldn't add them to album \"{target_album.get('name')}\": DSM didn't answer "
                 f"({type(e).__name__}). Check the album with list_photos before adding again."
             )
-    if uploaded:
+    if len(uploaded) > skipped:
         lines.append(
             "Photos indexes new items over the next seconds to minutes; taken dates and "
             "previews appear then."
