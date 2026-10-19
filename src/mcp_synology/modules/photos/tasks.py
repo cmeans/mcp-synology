@@ -28,6 +28,7 @@ from mcp_synology.core.formatting import (
     format_timestamp,
     synology_error_response,
 )
+from mcp_synology.core.redaction import redact_urls
 from mcp_synology.modules.photos.helpers import (
     Photos,
     Space,
@@ -134,6 +135,8 @@ async def _errors(ph: Photos, task_id: int) -> list[str]:
         )
     except SynologyError as e:
         return [f"  (couldn't read the failed items: {e})"]
+    except httpx.TransportError as e:
+        return [f"  (couldn't read the failed items: DSM didn't answer, {type(e).__name__})"]
     lines = []
     for entry in data.get("list", [])[:20]:
         what = entry.get("item_id") or entry.get("id") or entry.get("name") or "?"
@@ -343,12 +346,19 @@ async def delete_photo_folders(
 # -- photo_task ---------------------------------------------------------------------
 
 
+_NO_ANSWER = (httpx.TransportError, DsmHttpError, DsmReplyError)
+
+
 async def _target(client: DsmClient, op: str, status: dict[str, Any]) -> str:
     folder = status.get("target_folder") or {}
     if "id" not in folder:
         return ""
     space: Space = "shared" if folder.get("owner_user_id") == 0 else "personal"
-    path = await Photos(client, space, op).folder_path(int(folder["id"]))
+    try:
+        path = await Photos(client, space, op).folder_path(int(folder["id"]))
+    except _NO_ANSWER:
+        # Only the folder's name is missing; the task's status is already in hand.
+        return f" to folder {folder['id']}"
     return f" to {path}" + (" (Shared Space)" if space == "shared" else "")
 
 
@@ -361,28 +371,42 @@ def _running_for(status: dict[str, Any]) -> str:
     return f", running {minutes} min {sec} s" if minutes else f", running {sec} s"
 
 
-_NO_ANSWER = (httpx.TransportError, DsmHttpError, DsmReplyError)
+def _transport_text(exc: httpx.TransportError) -> str:
+    """``ReadTimeout``, or ``ConnectError: [Errno 111] ...``; never empty, URLs redacted."""
+    text = redact_urls(str(exc))
+    return f"{type(exc).__name__}: {text}" if text else type(exc).__name__
 
 
-def _request_failed(op: str, task_id: int, exc: Exception, note: str) -> NoReturn:
+def _never_sent(exc: Exception) -> bool:
+    """The request never reached DSM: the connection couldn't be opened."""
+    return isinstance(exc, httpx.ConnectError | httpx.ConnectTimeout)
+
+
+def _request_failed(op: str, task_id: int, exc: Exception, *, request: str, note: str) -> NoReturn:
     """The structured error for a status or stop request that got no answer, an HTTP error
-    status or a reply that isn't DSM's (#282): it names the handle, never the page."""
+    status or a reply that isn't DSM's (#282): it names the handle, never the page. The
+    wording follows File Station's file_task (#237)."""
     handle = handle_of(task_id)
+    follow_up = "Call photo_task with this handle to see whether the task is still running."
+    suggestion = follow_up
     if isinstance(exc, httpx.TransportError):
         timed_out = isinstance(exc, httpx.TimeoutException)
         code = ErrorCode.TIMEOUT if timed_out else ErrorCode.UNAVAILABLE
-        detail = f"DSM didn't answer ({type(exc).__name__})"
+        what = "didn't answer" if timed_out else "lost the connection during"
+        detail = f"DSM {what} the {request} request ({_transport_text(exc)})."
         retryable = True
     else:
         code, detail = ErrorCode.UNAVAILABLE, str(exc)
         retryable = bool(getattr(exc, "retryable", True))
+        hint = getattr(exc, "suggestion", None)
+        suggestion = f"{hint} {follow_up}" if hint else follow_up
     error_response(
         code,
         f"{op} failed for `{handle}`: {detail}{note}",
         retryable=retryable,
         param="handle",
         value=handle,
-        suggestion="Call photo_task with this handle to see whether the task is still running.",
+        suggestion=suggestion,
     )
 
 
@@ -434,7 +458,12 @@ async def photo_task(
             try:
                 await ph.call("BackgroundTask.Info", "abort_task", {"id": [task_id]}, personal=True)
             except _NO_ANSWER as e:
-                _request_failed(op, task_id, e, " The stop may or may not have taken effect.")
+                note = (
+                    " Nothing was stopped."
+                    if _never_sent(e)
+                    else " The stop may or may not have taken effect."
+                )
+                _request_failed(op, task_id, e, request="stop", note=note)
             except SynologyError as e:
                 if e.code == 117:
                     not_found(op, f"no task {handle_of(task_id)}.", param="handle", value=handle)
@@ -445,7 +474,7 @@ async def photo_task(
             note = (
                 " The stop was requested; its status couldn't be read." if action == "stop" else ""
             )
-            _request_failed(op, task_id, e, note)
+            _request_failed(op, task_id, e, request="status", note=note)
         if status is None:
             not_found(
                 op,

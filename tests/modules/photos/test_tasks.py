@@ -382,7 +382,8 @@ class TestPhotoTask:
     @pytest.mark.parametrize(
         ("reply", "code", "detail", "retryable"),
         [
-            (httpx.ReadTimeout("slow"), "timeout", "DSM didn't answer (ReadTimeout)", True),
+            (httpx.ReadTimeout("slow"), "timeout",
+             "DSM didn't answer the status request (ReadTimeout: slow).", True),
             (httpx.Response(502, text="<html>Bad Gateway</html>"), "unavailable",
              f"{INFO}/get_status: DSM answered HTTP 502.", True),
             (httpx.Response(403, text="<html>Forbidden</html>"), "unavailable",
@@ -416,8 +417,82 @@ class TestPhotoTask:
         assert err["message"] == f"Photo task failed for `photos:5`: {detail}{note}"
         assert err["retryable"] is retryable
         assert (err["param"], err["value"]) == ("handle", "photos:5")
-        assert "photo_task with this handle" in err["suggestion"]
+        assert err["suggestion"].endswith(
+            "Call photo_task with this handle to see whether the task is still running."
+        )
+        if "DSM reply" in detail:  # the error's own hint comes first, as in file_task
+            assert "reverse proxy" in err["suggestion"]
         assert len(fake.of(INFO, "abort_task")) == (action == "stop")
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        ("failure", "detail", "note"),
+        [
+            (httpx.ReadTimeout("slow"), "DSM didn't answer the stop request (ReadTimeout: slow).",
+             "The stop may or may not have taken effect."),
+            (httpx.ConnectError("refused"),
+             "DSM lost the connection during the stop request (ConnectError: refused).",
+             "Nothing was stopped."),
+        ],
+    )  # fmt: skip
+    async def test_stop_request_without_answer(
+        self, failure: Exception, detail: str, note: str
+    ) -> None:
+        """A refused connection never sent the stop; a timeout may have."""
+
+        def boom(_p: dict[str, Any]) -> httpx.Response:
+            raise failure
+
+        fake = FakePhotos().on(INFO, "abort_task", 1, boom)
+        install(fake)
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await photo_task(client, handle="photos:5", action="stop")
+        assert _error(exc)["message"] == f"Photo task failed for `photos:5`: {detail} {note}"
+        assert not fake.of(INFO, "get_status")
+
+    @respx.mock
+    async def test_folder_name_unreadable_keeps_the_status(self) -> None:
+        """The status is in hand; only the target folder's name lookup failed."""
+
+        def boom(_p: dict[str, Any]) -> httpx.Response:
+            raise httpx.ReadTimeout("slow")
+
+        fake = FakePhotos().on(INFO, "get_status", 1, captured("bg-copy-status"))
+        fake.on(FOLDER, "get", 2, boom)
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await photo_task(client, handle="photos:5")
+        assert out.startswith("photos:5 copy to folder 14: processing, 0 of 1 done")
+
+    @respx.mock
+    async def test_failed_items_unreadable(self) -> None:
+        def boom(_p: dict[str, Any]) -> httpx.Response:
+            raise httpx.ReadTimeout("slow")
+
+        fake = FakePhotos().on(INFO, "get_status", 1, _done_with_error())
+        fake.on(FOLDER, "get", 2, _DEST).on(INFO, "get_error_detail", 1, boom)
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await photo_task(client, handle="photos:5")
+        assert out.endswith("  (couldn't read the failed items: DSM didn't answer, ReadTimeout)")
+
+    @respx.mock
+    async def test_clear_without_answer_is_structured(self) -> None:
+        def boom(_p: dict[str, Any]) -> httpx.Response:
+            raise httpx.ReadTimeout("slow")
+
+        install(FakePhotos().on(INFO, "list_user_task", 1, boom))
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await photo_task(client, action="clear")
+        err = _error(exc)
+        assert (err["code"], err["retryable"]) == ("timeout", True)
+        assert err["message"] == "Photo task failed: DSM didn't answer (ReadTimeout)."
 
     @respx.mock
     async def test_stop_request_fails_may_have_taken_effect(self) -> None:
