@@ -463,6 +463,7 @@ class TestNotADsmReply:
              "application/json"),
             (httpx.Response(200, json={"success": False}), "application/json"),
             (httpx.Response(200, json={"error": "boom"}), "application/json"),
+            (httpx.Response(200, json={"error": {"code": {"a": 1}}}), "application/json"),
             (httpx.Response(200, text="<html/>", headers={"content-type": "TEXT/HTML; charset=x"}),
              "text/html"),
             (httpx.Response(200, text="<html/>", headers={"content-type": "application/xhtml+xml"}),

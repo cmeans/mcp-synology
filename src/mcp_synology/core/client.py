@@ -81,7 +81,7 @@ def _read_json(resp: httpx.Response, label: str, *, may_have_applied: bool = Fal
         body = None
     if isinstance(body, dict):
         return body
-    ctype = resp.headers.get("content-type", "").split(";")[0].strip() or "none"
+    ctype = resp.headers.get("content-type", "").split(";")[0].strip().lower() or "none"
     raise DsmReplyError(
         f"{label}: the answer wasn't a DSM reply (Content-Type {ctype}).",
         retryable=not may_have_applied,
@@ -97,6 +97,9 @@ def _error_envelope(body: bytes) -> dict[str, Any] | None:
         return None
     if not isinstance(parsed, dict) or not isinstance(parsed.get("error"), dict):
         return None
+    code = parsed["error"].get("code", 0)
+    if isinstance(code, bool) or not isinstance(code, int | float):
+        return None  # DSM's codes are numbers; a dict or list here would crash the lookup
     return parsed["error"]  # type: ignore[no-any-return]
 
 
