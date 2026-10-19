@@ -443,7 +443,9 @@ names the API and method and the Content-Type (for example
 text/html).`), never the page itself. It's `retryable=true`, except for a
 `create_download`, which may still have been applied. Check what's in front of
 the NAS; `mcp-synology check` reports it as "didn't return a DSM API response".
-Downloads (`download_file`, `download_photos`) don't check for this yet (#292).
+Downloads (`download_file`, `download_photos`) check too: DSM never sends a
+file as `text/html` or `application/xhtml+xml`, so such a page isn't saved, and
+nothing is written; neither is JSON that isn't DSM's error envelope (#292).
 `file_task` reports either case as "Check task failed for `<handle>`: …", or for
 a stop "Stop task failed for `<handle>`: … Nothing was stopped." (the status
 read failed) or "… The stop may or may not have taken effect." (the stop

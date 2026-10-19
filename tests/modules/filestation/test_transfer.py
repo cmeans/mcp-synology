@@ -318,6 +318,31 @@ class TestDownloadFile:
         assert not (tmp_path / "nonexistent.mkv").exists()
 
     @respx.mock
+    async def test_download_proxy_page_is_not_saved(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """A reverse proxy's or captive portal's login page was saved as the file and
+        reported as downloaded (#292). DSM sends application/octet-stream for every
+        download, even a real .html file, so text/html is never the file."""
+        existing = tmp_path / "movie.mkv"
+        existing.write_bytes(b"local data")
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            200, text="<html>Sign in to proxy</html>", headers={"content-type": "text/html"}
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await download_file(
+                mock_client, path="/video/movie.mkv", dest_folder=str(tmp_path), overwrite=True
+            )
+        err = json.loads(str(exc_info.value))["error"]
+        assert err["code"] == "unavailable"
+        assert err["retryable"] is True
+        assert "the answer wasn't a DSM reply (Content-Type text/html)" in err["message"]
+        assert "Sign in" not in err["message"]
+        assert existing.read_bytes() == b"local data"
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["movie.mkv"]
+
+    @respx.mock
     async def test_download_dsm_error_keeps_existing_file_on_overwrite(
         self, mock_client: DsmClient, tmp_path: Path
     ) -> None:

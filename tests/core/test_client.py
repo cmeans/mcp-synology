@@ -437,6 +437,126 @@ class TestNotADsmReply:
         self._check(exc.value, "SYNO.DownloadStation2.Task/create", "text/html", retryable=False)
         assert (exc.value.suggestion or "").startswith("DSM may still have applied the request")
 
+    # Downloads (#292). DSM sends application/octet-stream for every File Station
+    # download (mode=download), including real .html and .json files, and
+    # application/force-download or image/jpeg for Photos, on DSM 7.1 and 7.2.2; so a
+    # text/html 200 is never the file.
+    _DOWNLOADS = [
+        ("SYNO.FileStation.Download", "download"),
+        ("SYNO.Foto.Thumbnail", "get"),
+    ]
+
+    @staticmethod
+    async def _download(client: DsmClient, api: str, dest: Path) -> int:
+        if api == "SYNO.FileStation.Download":
+            return await client.download("/video/movie.mkv", dest)
+        return await client.download_binary(api, "get", 2, {"id": "1"}, dest)
+
+    @respx.mock
+    @pytest.mark.parametrize(("api", "method"), _DOWNLOADS)
+    @pytest.mark.parametrize(
+        ("reply", "ctype"),
+        [
+            (_PAGE, "text/html"),
+            (httpx.Response(200, json=["x"]), "application/json"),
+            (httpx.Response(200, content=b"", headers={"content-type": "application/json"}),
+             "application/json"),
+            (httpx.Response(200, json={"success": False}), "application/json"),
+            (httpx.Response(200, json={"error": "boom"}), "application/json"),
+            (httpx.Response(200, json={"error": {"code": {"a": 1}}}), "application/json"),
+            (httpx.Response(200, text="<html/>", headers={"content-type": "TEXT/HTML; charset=x"}),
+             "text/html"),
+            (httpx.Response(200, text="<html/>", headers={"content-type": "application/xhtml+xml"}),
+             "application/xhtml+xml"),
+        ],
+    )  # fmt: skip
+    async def test_download_writes_nothing(
+        self, tmp_path: Path, api: str, method: str, reply: httpx.Response, ctype: str
+    ) -> None:
+        """A proxy's page used to be saved as the file and reported as downloaded; a JSON
+        body that isn't an object crashed with AttributeError. Neither touches the
+        existing file, and no temp file is left."""
+        cache = make_api_cache()
+        cache["SYNO.Foto.Thumbnail"] = ApiInfoEntry(path="entry.cgi", min_version=1, max_version=2)
+        client = make_client(cache)
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(return_value=reply)
+        dest = tmp_path / "movie.mkv"
+        dest.write_bytes(b"the user's file")
+        async with client:
+            with pytest.raises(SynologyError) as exc:
+                await self._download(client, api, dest)
+        self._check(exc.value, f"{api}/{method}", ctype)
+        assert dest.read_bytes() == b"the user's file"
+        assert [p.name for p in tmp_path.iterdir()] == ["movie.mkv"]
+
+    @respx.mock
+    @pytest.mark.parametrize(("api", "method"), _DOWNLOADS)
+    async def test_download_http_error_with_a_json_list(
+        self, tmp_path: Path, api: str, method: str
+    ) -> None:
+        """A 502 whose body is a JSON list crashed with AttributeError; it's the same
+        HTTP error as any other body that isn't a DSM envelope."""
+        from mcp_synology.core.errors import FileStationError
+
+        cache = make_api_cache()
+        cache["SYNO.Foto.Thumbnail"] = ApiInfoEntry(path="entry.cgi", min_version=1, max_version=2)
+        client = make_client(cache)
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(502, json=["x"])
+        async with client:
+            with pytest.raises(SynologyError) as exc:
+                await self._download(client, api, tmp_path / "x")
+        if api == "SYNO.FileStation.Download":
+            assert isinstance(exc.value, FileStationError)
+            assert str(exc.value) == "HTTP 502 from download API"
+        else:
+            assert isinstance(exc.value, DsmHttpError)
+            assert exc.value.status == 502
+        assert not (tmp_path / "x").exists()
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        "ctype", ["application/json", 'application/json; charset="UTF-8"', "text/html"]
+    )
+    async def test_download_session_error_reauths_and_retries(
+        self, tmp_path: Path, ctype: str
+    ) -> None:
+        """DSM's session-error envelope on a download re-authenticates and retries, also
+        when it comes as text/html, which used to be saved as the file."""
+        envelope = httpx.Response(
+            200,
+            content=b'{"success": false, "error": {"code": 119}}',
+            headers={"content-type": ctype},
+        )
+        data = httpx.Response(
+            200, content=b"DATA", headers={"content-type": "application/octet-stream"}
+        )
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=[envelope, data])
+        reauths: list[bool] = []
+
+        async def reauth() -> None:
+            reauths.append(True)
+
+        client = make_client(make_api_cache())
+        async with client:
+            client.set_re_auth_callback(reauth)
+            written = await client.download("/video/movie.mkv", tmp_path / "movie.mkv")
+        assert reauths == [True]
+        assert written == 4
+        assert (tmp_path / "movie.mkv").read_bytes() == b"DATA"
+
+    @respx.mock
+    async def test_download_http_error_with_a_dsm_envelope(self, tmp_path: Path) -> None:
+        """An HTTP error that carries DSM's envelope is that DSM error."""
+        client = make_client(make_api_cache())
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            404, json={"success": False, "error": {"code": 408}}
+        )
+        async with client:
+            with pytest.raises(SynologyError) as exc:
+                await client.download("/video/missing.mkv", tmp_path / "x")
+        assert exc.value.code == 408
+        assert not (tmp_path / "x").exists()
+
 
 class TestRequestPostForm:
     """request(post_form=True): the login-only POST (#235). The parameters go in the
