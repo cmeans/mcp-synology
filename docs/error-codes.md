@@ -9,6 +9,9 @@ If you arrived here from an error envelope, scroll to the section matching the
 error's `code` field. If you're browsing, the sections below are grouped by
 category.
 
+For behavior that looks wrong but returns no error, see
+[troubleshooting.md](troubleshooting.md), organized by module.
+
 > **Convention:** all section headings use the literal error code (e.g.
 > `auth_failed`). The unit test in `tests/core/test_help_urls.py` enforces a
 > 1:1 mapping between codes registered in `core/errors.HELP_URLS` and headings

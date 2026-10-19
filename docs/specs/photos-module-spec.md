@@ -51,7 +51,7 @@ class PhotosSettings(BaseModel):
     # Station's lists (#257, core/local_paths.allowed_local_roots): with no top-level
     # list, this list, or else the Downloads folder.
     allowed_local_paths: list[str] | None = None
-    # Seconds copy_photos / move_photos wait before handing the task off (default 30,
+    # Seconds copy_photos, move_photos and the deletes wait before handing the task off (default 30,
     # cap 600), as File Station's copy_move_timeout (#245).
     task_timeout: int = 30
 ```
