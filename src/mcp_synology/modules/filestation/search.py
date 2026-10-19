@@ -100,6 +100,14 @@ async def search_files(
         start_params["mtime_from"] = str(parse_mtime(mtime_from))
     if mtime_to:
         start_params["mtime_to"] = str(parse_mtime(mtime_to))
+    # With filetype=all and nothing to match on, DSM refuses the search as "Search folder
+    # access denied" (DSM 7.2.2 and 7.3.2; filetype=file or dir alone works). "*" asks
+    # for everything, which is what such a call means (#306).
+    if filetype == "all" and not any(
+        k in start_params
+        for k in ("pattern", "extension", "size_from", "size_to", "mtime_from", "mtime_to")
+    ):
+        start_params["pattern"] = dsm_str("*")
 
     try:
         start_data = await client.request(
@@ -176,27 +184,21 @@ async def search_files(
         ]
         excluded_count = original_count - len(all_files)
 
+    # The heading names the caller's own filters, never the "*" sent for none (#306).
+    filters = [f"pattern: {pattern}"] if pattern else []
+    if exclude_pattern:
+        filters.append(f"excluding: {exclude_pattern}")
+    title = f"Search results in {normalized}"
+    if filters:
+        title += f" ({', '.join(filters)})"
+
     if not all_files:
-        title_parts = [f"Search results in {normalized}"]
-        if pattern:
-            title_parts.append(f"(pattern: {pattern})")
-        title = " ".join(title_parts)
         msg = f"{title}\n\n0 results found."
         if not finished:
             msg += " (search timed out — try narrowing the scope)"
         else:
-            msg += " Try broadening the pattern or checking the folder path."
+            msg += " Try broadening the filters or checking the folder path."
         return msg
-
-    # Build results table
-    title_parts = [f"Search results in {normalized}"]
-    if pattern:
-        title_parts.append(f"(pattern: {pattern}")
-        if exclude_pattern:
-            title_parts[-1] += f", excluding: {exclude_pattern}"
-        title_parts[-1] += ")"
-
-    title = " ".join(title_parts)
 
     headers = ["Type", "Name", "Path", "Size", "Modified"]
     rows: list[list[str]] = []

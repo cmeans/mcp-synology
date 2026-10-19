@@ -259,8 +259,8 @@ Search for files by name, type, size, or modification date within a given scope.
 > parameter is a keyword/substring match on filenames (not glob). Use extension for file type
 > filtering (e.g., extension="mkv"). Accepts human-readable sizes like "500MiB". mtime_from / mtime_to
 > accept ISO 8601 ("2026-04-01T12:00:00+00:00"), a calendar date ("YYYY-MM-DD"), or Unix epoch
-> seconds; naive dates are treated as UTC. For directory contents or sizes, use list_files or
-> get_dir_size instead.
+> seconds; naive dates are treated as UTC. mtime_from is inclusive and mtime_to exclusive, to the
+> second. For directory contents or sizes, use list_files or get_dir_size instead.
 
 **Parameters:**
 
@@ -272,8 +272,8 @@ Search for files by name, type, size, or modification date within a given scope.
 | `filetype` | `str` | No | `"all"` | Filter: `all`, `file`, `dir`. |
 | `size_from` | `str \| int` | No | `None` | Minimum file size. Accepts bytes (int) or human-readable (`"500MiB"`, `"2GiB"`; `"500MB"` means the same). |
 | `size_to` | `str \| int` | No | `None` | Maximum file size. Same format as `size_from`. |
-| `mtime_from` | `str` | No | `None` | Modified after this date (ISO 8601 or `YYYY-MM-DD`). |
-| `mtime_to` | `str` | No | `None` | Modified before this date. |
+| `mtime_from` | `str` | No | `None` | Modified at or after this time (ISO 8601, `YYYY-MM-DD` or epoch seconds). Inclusive, in whole seconds: a file modified at exactly this time matches, and one at T+0.9 s counts as T, so it doesn't match `mtime_from=T+1` (DSM 7.2.2 and 7.3.2, #306). |
+| `mtime_to` | `str` | No | `None` | Modified before this time. **Exclusive**: a file modified at exactly this time doesn't match (DSM 7.2.2 and 7.3.2, #306). |
 | `exclude_pattern` | `str` | No | `None` | Glob pattern to exclude from results (e.g., `*.torrent`). Applied client-side after DSM returns results. |
 | `recursive` | `bool` | No | `true` | Search subdirectories. |
 | `limit` | `int` | No | `500` | Max results to return. |
@@ -293,6 +293,8 @@ Search results in /video (pattern: *Severance*, excluding: *.torrent)
 
 **Design notes:**
 - Async search fully abstracted internally. The task ID, `pattern` and `extension` are sent JSON-quoted, because DSM parses File Station values as JSON first (#121). A `list` reply without `total`/`files` (a bare `{"finished": true}`) is DSM's answer for a task it doesn't know, so it's reported as a lost, retryable task, never as 0 results. A full, finished reply is trusted on the first poll.
+- **Nothing to match on:** with `filetype=all` and no pattern, extension, size or date, DSM refuses the search with error 600, "Search folder access denied" (DSM 7.2.2 and 7.3.2; it came back as `filestation_error`). On 7.2.2, `filetype=file` or `dir` alone works, and so does an empty-looking filter such as `size_from=0`, while an empty `pattern` or no `filetype` at all is refused too. So the tool sends `pattern="*"` when `filetype=all` and nothing else is sent, which returns everything under the folder (#306). The heading shows only the caller's own filters.
+- **How often DSM loses a task** (DSM 7.2.2 and 7.3.2, #306): 0 of 20 back-to-back searches with the task ID quoted, against 15 and 13 of 20 with it unquoted. That's the #121 cause, and why the tool quotes it.
 - `exclude_pattern` is applied **client-side** because the Synology Search API doesn't support exclusion natively. The response notes how many items were filtered out for transparency.
 - If 0 results, suggest broadening the pattern or checking the folder path.
 - Timeout: 60 seconds. If hit, return partial results with a note.
