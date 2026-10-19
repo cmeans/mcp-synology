@@ -995,12 +995,17 @@ class DsmClient:
             # a real .html file, and application/force-download or image/* for Photos,
             # on 7.1 and 7.2.2): it's a reverse proxy's or captive portal's page, so
             # raise before anything is written (#292).
-            if media_type in ("application/json", "text/html"):
-                await resp.aread()
-                body = _read_json(resp, f"{api}/{method}")
-                error = body.get("error") if isinstance(body.get("error"), dict) else {}
+            if media_type in ("application/json", "text/html", "application/xhtml+xml"):
+                body_bytes = await resp.aread()
+                error = _error_envelope(body_bytes)
+                if error is None:  # a page, or JSON that isn't DSM's error envelope
+                    raise DsmReplyError(
+                        f"{api}/{method}: the answer wasn't a DSM reply (Content-Type "
+                        f"{media_type}).",
+                        suggestion=_NOT_A_REPLY,
+                    )
                 code = error.get("code", 0)
-                logger.debug("DSM response: %s/%s — error code %d", api, method, code)
+                logger.debug("DSM response: %s/%s — error code %s", api, method, code)
 
                 if code in _SESSION_ERROR_CODES and not _is_retry and self._re_auth_callback:
                     logger.info("Session error %d on %s/%s, attempting re-auth.", code, api, method)

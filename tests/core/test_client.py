@@ -461,6 +461,12 @@ class TestNotADsmReply:
             (httpx.Response(200, json=["x"]), "application/json"),
             (httpx.Response(200, content=b"", headers={"content-type": "application/json"}),
              "application/json"),
+            (httpx.Response(200, json={"success": False}), "application/json"),
+            (httpx.Response(200, json={"error": "boom"}), "application/json"),
+            (httpx.Response(200, text="<html/>", headers={"content-type": "TEXT/HTML; charset=x"}),
+             "text/html"),
+            (httpx.Response(200, text="<html/>", headers={"content-type": "application/xhtml+xml"}),
+             "application/xhtml+xml"),
         ],
     )  # fmt: skip
     async def test_download_writes_nothing(
@@ -505,6 +511,37 @@ class TestNotADsmReply:
             assert isinstance(exc.value, DsmHttpError)
             assert exc.value.status == 502
         assert not (tmp_path / "x").exists()
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        "ctype", ["application/json", 'application/json; charset="UTF-8"', "text/html"]
+    )
+    async def test_download_session_error_reauths_and_retries(
+        self, tmp_path: Path, ctype: str
+    ) -> None:
+        """DSM's session-error envelope on a download re-authenticates and retries, also
+        when it comes as text/html, which used to be saved as the file."""
+        envelope = httpx.Response(
+            200,
+            content=b'{"success": false, "error": {"code": 119}}',
+            headers={"content-type": ctype},
+        )
+        data = httpx.Response(
+            200, content=b"DATA", headers={"content-type": "application/octet-stream"}
+        )
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=[envelope, data])
+        reauths: list[bool] = []
+
+        async def reauth() -> None:
+            reauths.append(True)
+
+        client = make_client(make_api_cache())
+        async with client:
+            client.set_re_auth_callback(reauth)
+            written = await client.download("/video/movie.mkv", tmp_path / "movie.mkv")
+        assert reauths == [True]
+        assert written == 4
+        assert (tmp_path / "movie.mkv").read_bytes() == b"DATA"
 
     @respx.mock
     async def test_download_http_error_with_a_dsm_envelope(self, tmp_path: Path) -> None:
