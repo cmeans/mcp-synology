@@ -1,0 +1,13 @@
+# Labels set by .github/workflows/pr-labeler.yml from the files a PR changes.
+
+# The vdsm bake files: a PR that changes any of them skips the golden-image cache and
+# rebuilds the image on its own vdsm runs (about 10 min per DSM version). Keep this
+# list in sync with the "Golden image cache key" step in .github/workflows/vdsm.yml.
+Rebuilds vdsm image:
+  - changed-files:
+      - any-glob-to-any-file:
+          - scripts/vdsm_setup.py
+          - tests/vdsm/setup_dsm.py
+          - tests/vdsm/config.py
+          - tests/vdsm/golden_image.py
+          - tests/vdsm/container.py
