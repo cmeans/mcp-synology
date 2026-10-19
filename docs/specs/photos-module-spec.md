@@ -182,7 +182,7 @@ An upload returns an item ID at once, but Photos indexes it afterwards (seconds 
 
 Item and folder deletes use **`BackgroundTask.File delete`** (`item_id: [..]`, `folder_id: [..]`), a background task like copy and move: it exists on both versions (verified), the 1.9.1 web client uses it, and a large delete then reports progress and hands off instead of blocking. `Browse.Item delete` and `Browse.Folder delete` also work synchronously on both versions (verified) but are not used.
 
-Photos has no trash of its own. Deletes go to the **DSM recycle bin of the share that holds the space**, when that share has one. Verified on the real NAS: a deleted personal-space folder appeared under `/home/#recycle/Photos/`. Photos 1.9.1's `Setting.Admin get` v1 reports `enable_personal_dsm_recycle_bin` and `enable_shared_dsm_recycle_bin` (whether the backing share has a recycle bin; the 1.9.1 client warns admins when it's off). A **non-admin can read it** (verified on both versions); 1.3.4's reply has no such fields. The delete tools read it on 1.9.1 and say "moved to the recycle bin" or "deleted permanently (no recycle bin on that share)"; on 1.3.4, or if the read fails, they say "moved to the share's recycle bin if it has one". Reading this setting (and `Setting.TeamSpace get` for `enable_person`) is in scope; changing Photos settings is not (Decision 6).
+Photos has no trash of its own. Deletes go to the **DSM recycle bin of the share that holds the space**, when that share has one. Verified on the real NAS: a deleted personal-space folder appeared under `/home/#recycle/Photos/`. Photos 1.9.1's `Setting.Admin get` v1 reports `enable_personal_dsm_recycle_bin` and `enable_shared_dsm_recycle_bin` (whether the backing share has a recycle bin; the 1.9.1 client warns admins when it's off). A **non-admin can read it** (verified on both versions); 1.3.4's reply has no such fields. The delete tools read it on 1.9.1 and say "they're in the recycle bin of the share that holds the space" or "deleted permanently: that share has no recycle bin"; on 1.3.4, or if the read fails or gets no answer, they say "they're in the recycle bin of the share that holds the space, if it has one". Reading this setting (and `Setting.TeamSpace get` for `enable_person`) is in scope; changing Photos settings is not (Decision 6).
 
 ### Background tasks (copy, move, delete)
 
@@ -449,11 +449,11 @@ DSM's `action` per file: `new`, `rename` (kept both, as `name_1.jpg`) or `ignore
 **Response shape:**
 
 ```
-Uploaded 3 file(s) to /Trips/2024 (personal space)
+Uploaded 3 of 4 file(s) to /Trips/2024 (personal space)
   beach-sunset.jpg    new      id 41
   beach-sunset.jpg    renamed  id 47 (as beach-sunset_1.jpg)
   forest-trail.jpg    skipped  id 12 (already there)
-  notes.txt           failed   Photos doesn't support this file type (620)
+  notes.txt           failed   Synology Photos doesn't support this file type (620)
 Added 2 item(s) to album "Trip 2024".
 Photos indexes new items over the next seconds to minutes; taken dates and previews appear then.
 ```
@@ -463,6 +463,7 @@ Photos indexes new items over the next seconds to minutes; taken dates and previ
 - Unsupported file types fail with **620**, a missing folder with **621** (verified).
 - **Retry:** an upload that fails with any other code is retried once after 2 s, as the web client does (its retry count is 1; it doesn't retry 604, 605, 620 or 622). vdsm answered **623** to some uploads right after boot, and the retry went through. 621 and the setup and permission codes (105, 160, 602, 801, 803) aren't retried either.
 - A file name that's valid JSON (`2024`) is still sent JSON-quoted.
+- **DSM not answering** (a timeout or dropped connection), or a reverse proxy's 502/504 or login page (#282), on one upload stops the call, as `download_photos` does: that file's row is `unknown` ("… it may or may not have been stored", since the POST may have landed, and a retry with `rename` could make a copy), and the files after it are `not tried`. A refused connection never sent the file, so that row is `failed` ("DSM couldn't be reached"). The rows so far are kept, and the files that were stored still go into the album. A DSM error code, a file that can't be read (including one removed after the checks) or a reply without an ID stays on its own row, and the rest go on. If the renamed items' names, or the album add, get no answer, the uploads stand: the names are left out, or a line says the album add got no answer.
 
 ---
 
@@ -874,7 +875,7 @@ Photo request "mcp spec" → /Trips/2024 (personal space)
 
 **Annotations:** `destructiveHint=true`.
 
-**Response shape:** `Deleted 3 item(s) (personal space); they're in the recycle bin of the share.` (or `deleted permanently: that share has no recycle bin`, or `in the share's recycle bin if it has one` when the setting can't be read; see Deletes). Not-found IDs and DSM-rejected items follow per line; a long delete hands off like `copy_photos`.
+**Response shape:** `Deleted 3 item(s) in the personal space; they're in the recycle bin of the share that holds the space.` (or `deleted permanently: that share has no recycle bin`, or `…, if it has one` when the setting can't be read; see Deletes). Not-found IDs and DSM-rejected items follow per line; a long delete hands off like `copy_photos`.
 
 **Design notes:** IDs are checked with `get` first; unknown ones are reported, not sent (the synchronous delete reports success for them), so the task never gets an unknown ID. The server instructions carry the same confirm-first guidance as `delete_files`.
 

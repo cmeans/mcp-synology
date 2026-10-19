@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from mcp_synology.core.errors import ErrorCode, SynologyError
+from mcp_synology.core.errors import DsmHttpError, DsmReplyError, ErrorCode, SynologyError
 from mcp_synology.core.formatting import error_response, format_size, synology_error_response
 from mcp_synology.core.local_paths import refuse_outside_roots
 from mcp_synology.modules.photos.helpers import (
@@ -320,28 +320,33 @@ async def upload_photos(
                 "target_folder_id": int(target["id"]),
             }
             data = await _upload_one(client, ph.api("Upload.Item"), fields, path)
+            action = str(data.get("action", "new"))
+            item_id = int(data["id"])
+        except (DsmHttpError, DsmReplyError, httpx.TransportError) as e:
+            # No answer, or a proxy's 502/504 or login page (#282): the same stall, which
+            # the rest would most likely meet too, so stop and say which weren't tried (as
+            # download_photos). Unless the request never left, the upload may have landed,
+            # so it isn't reported as failed outright.
+            if isinstance(e, httpx.ConnectError | httpx.ConnectTimeout):
+                rows.append((path.name, "failed", f"DSM couldn't be reached ({type(e).__name__})"))
+            elif isinstance(e, httpx.TransportError):
+                why = f"DSM didn't answer ({type(e).__name__})"
+                rows.append((path.name, "unknown", f"{why}; it may or may not have been stored"))
+            else:
+                rows.append((path.name, "unknown", f"{e} It may or may not have been stored."))
+            rows += [(rest.name, "not tried", "") for rest in files[n + 1 :]]
+            break
         except SynologyError as e:
             code = f" ({e.code})" if e.code else ""
             rows.append((path.name, "failed", f"{e}{code}"))
             continue
-        except OSError as e:
-            rows.append((path.name, "failed", f"couldn't read the file ({e.strerror or e})"))
+        except (OSError, KeyError, TypeError, ValueError) as e:
+            if isinstance(e, OSError):
+                why = f"couldn't read the file ({e.strerror or e})"
+            else:  # DSM's reply had no usable id
+                why = f"DSM's reply couldn't be read ({type(e).__name__})"
+            rows.append((path.name, "failed", why))
             continue
-        except httpx.TransportError as e:
-            # DSM didn't answer: the rest would most likely wait out the same timeout, so
-            # stop and say which weren't tried (as download_photos). The upload may have
-            # landed, so it isn't reported as failed outright.
-            rows.append(
-                (
-                    path.name,
-                    "unknown",
-                    f"DSM didn't answer ({type(e).__name__}); it may or may not have been stored",
-                )
-            )
-            rows += [(rest.name, "not tried", "") for rest in files[n + 1 :]]
-            break
-        action = str(data.get("action", "new"))
-        item_id = int(data["id"])
         uploaded.append(item_id)
         note = f"id {item_id}"
         if action == "ignore":

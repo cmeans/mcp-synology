@@ -415,6 +415,75 @@ class TestUpload:
         }
 
     @respx.mock
+    @pytest.mark.parametrize(
+        ("second", "row"),
+        [
+            (httpx.Response(504, text="<html>Gateway Timeout</html>"),
+             "  b.jpg  unknown  SYNO.Foto.Upload.Item/upload_to_folder: DSM answered HTTP 504. "
+             "It may or may not have been stored."),
+            (httpx.ConnectError("refused"),
+             "  b.jpg  failed   DSM couldn't be reached (ConnectError)"),
+        ],
+    )  # fmt: skip
+    async def test_proxy_error_or_refused_stops_the_batch(
+        self, tmp_path: Path, second: Any, row: str
+    ) -> None:
+        """A proxy's 504 is the same stall as a timeout (#282): unknown, rest not tried. A
+        refused connection never sent the file, so that one is plainly failed."""
+        for name in ("a.jpg", "b.jpg", "c.jpg"):
+            (tmp_path / name).write_bytes(b"x")
+        fake = FakePhotos().on("SYNO.Foto.Browse.Folder", "get", 2, captured("folder-get-root"))
+        answers = iter(
+            [
+                httpx.Response(200, json={"success": True, "data": {"action": "new", "id": 41}}),
+                second,
+            ]
+        )
+
+        def multipart(_r: httpx.Request) -> httpx.Response:
+            answer = next(answers)
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+        fake.multipart = multipart
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await upload_photos(
+                client,
+                local_paths=[str(tmp_path / n) for n in ("a.jpg", "b.jpg", "c.jpg")],
+                allowed_roots=[tmp_path],
+            )
+        lines = out.splitlines()
+        assert lines[2] == row
+        assert lines[3].rstrip() == "  c.jpg  not tried"
+        assert "Gateway" not in out
+
+    @respx.mock
+    async def test_reply_without_id_is_its_own_row(self, tmp_path: Path) -> None:
+        for name in ("a.jpg", "b.jpg"):
+            (tmp_path / name).write_bytes(b"x")
+        fake = FakePhotos().on("SYNO.Foto.Browse.Folder", "get", 2, captured("folder-get-root"))
+        answers = iter(
+            [
+                {"success": True, "data": {}},
+                {"success": True, "data": {"action": "new", "id": 42}},
+            ]
+        )
+        fake.multipart = lambda _r: httpx.Response(200, json=next(answers))
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await upload_photos(
+                client,
+                local_paths=[str(tmp_path / "a.jpg"), str(tmp_path / "b.jpg")],
+                allowed_roots=[tmp_path],
+            )
+        assert "a.jpg  failed   DSM's reply couldn't be read (KeyError)" in out
+        assert out.splitlines()[0] == "Uploaded 1 of 2 file(s) to / (personal space)"
+
+    @respx.mock
     async def test_file_gone_before_upload_is_its_own_row(self, tmp_path: Path) -> None:
         """A file removed after the checks failed the batch at stat(), outside the try."""
         for name in ("a.jpg", "b.jpg"):

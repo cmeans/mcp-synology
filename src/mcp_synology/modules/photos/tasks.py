@@ -6,8 +6,10 @@ delete_photo_folders and photo_task.
 the web client does, until the task is ``done`` or ``task_timeout`` runs out, then
 hands it off with a ``photos:<id>`` handle that ``photo_task`` follows up on, the
 pattern File Station's ``file_task`` uses (#245). A status request that gets no
-answer, an HTTP error status or a reply that isn't DSM's (a reverse proxy's 502/504 or
-login page, #282) hands off too: the task is most likely still running.
+answer, an HTTP error status, a reply that isn't DSM's (a reverse proxy's 502/504 or
+login page, #282) or any other unexpected answer hands off too: the task is most likely
+still running. A DSM error code on a status request stops the task, and so does
+cancellation, as File Station's background tasks (CLAUDE.md, background task cleanup).
 """
 
 from __future__ import annotations
@@ -106,7 +108,7 @@ async def _abort(ph: Photos, task_id: int) -> bool:
     """Stop a task; whether DSM confirmed it. Failures are logged, never raised."""
     try:
         await ph.call("BackgroundTask.Info", "abort_task", {"id": [task_id]}, personal=True)
-    except (SynologyError, httpx.TransportError) as e:
+    except Exception as e:  # never let a failed stop replace the error being reported
         logger.warning("Couldn't stop Photos task %s: %s", task_id, type(e).__name__)
         return False
     return True
