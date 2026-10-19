@@ -680,8 +680,9 @@ _BARE_NUMBER = re.compile(r"[0-9]+(?:[./][0-9]+)?")
 
 def _camera(exif: dict[str, Any]) -> str:
     camera = str(exif.get("camera") or "")
-    # Photos 1.3.4 (DSM 7.1.1) sends these formatted ("F1.5", "1/30 s"); add the unit
-    # only when it's missing, so a bare number still reads right.
+    # Photos sends these formatted: "F1.5", "1/30 s" on 1.3.4 (DSM 7.1.1); "F2.8", "1/2 s"
+    # on 1.9.1 (vdsm DSM 7.2.2). Add the unit only when it's missing, so a bare number
+    # still reads right.
     aperture = str(exif.get("aperture") or "")
     if _BARE_NUMBER.fullmatch(aperture):
         aperture = f"f/{aperture}"
@@ -720,7 +721,8 @@ def _exif_value(value: str) -> str:
     # are binary here.)
     value = value.replace("\r\n", " ").translate({ord("\r"): " ", ord("\n"): " ", ord("\t"): " "})
     if any(c == "\ufffd" or c < " " or "\x7f" <= c <= "\x9f" for c in value):
-        return f"(binary data, {len(value)} characters; not shown)"
+        unit = "character" if len(value) == 1 else "characters"
+        return f"(binary data, {len(value)} {unit}; not shown)"
     if len(value) > _EXIF_VALUE_MAX:
         return f"{value[:_EXIF_VALUE_MAX]}… ({len(value):,} characters)"
     return value

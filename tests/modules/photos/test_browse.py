@@ -456,6 +456,7 @@ class TestGetPhoto:
             ("a\tb", "a b"),
             ("line one\r\nline two\nthree", "line one line two three"),
             ("Canon\ufffd", "(binary data, 6 characters; not shown)"),
+            ("\x17", "(binary data, 1 character; not shown)"),
             ("x\x85y", "(binary data, 3 characters; not shown)"),
             ("\x1ey", "(binary data, 2 characters; not shown)"),
         ],

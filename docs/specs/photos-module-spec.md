@@ -368,7 +368,7 @@ Not found: 999999
 
 With `exif=true`, a `EXIF` table (key, value) from `get_exif` follows each block. Line breaks and tabs in a value become spaces. A value longer than 80 characters is then cut, with its length (a phone photo's Maker Note byte dump ran to 3,029 characters, and every row is padded to the widest value). A value with other control characters (C1 included), or bytes that weren't UTF-8, is shown as `(binary data, N characters; not shown)`.
 
-The camera line uses DSM's own formatting where it gives it (`F1.5`, `1/30 s` on Photos 1.3.4, DSM 7.1.1), and adds `f/` or ` s` only to a bare number or fraction (`1.5`, `1/30`); any other value is shown as sent.
+The camera line uses DSM's own formatting where it gives it (`F1.5`, `1/30 s` on Photos 1.3.4, DSM 7.1.1; `F2.8`, `1/2 s` on Photos 1.9.1, vdsm DSM 7.2.2, QA's probe on #308), and adds `f/` or ` s` only to a bare number or fraction (`1.5`, `1/30`); any other value is shown as sent.
 
 **DSM sends raw bytes in `get_exif`** (seen on DSM 7.1.1, Photos 1.3.4): a binary field such as "Picture Info" is copied into the JSON reply as bytes that aren't UTF-8 (`0xec`), so the reply can't be decoded as sent. `DsmClient` reads such a reply again with those bytes replaced (U+FFFD), for every JSON reply (download error envelopes too), and logs that at DEBUG; before that, `get_photo exif=true` failed on that photo with "the answer wasn't a DSM reply".
 
