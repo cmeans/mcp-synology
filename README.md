@@ -379,6 +379,10 @@ Both support template variables: `{display_name}`, `{instance_id}`, `{host}`, `{
 
 HTML comments (`<!-- ... -->`) are removed from both before the text is sent, so they can hold notes for whoever edits the file. A comment on a line of its own is removed with that line.
 
+## Troubleshooting
+
+An error's `help_url` points to its section in [docs/error-codes.md](docs/error-codes.md). For behavior that looks wrong but isn't an error (a download sitting in `waiting`, a Photos date that reads back old, a delete that hands off with a handle), see [docs/troubleshooting.md](docs/troubleshooting.md), organized by module.
+
 ## Debugging
 
 Two ways to enable debug logging:
