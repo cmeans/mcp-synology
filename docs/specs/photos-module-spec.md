@@ -416,6 +416,7 @@ Downloaded 2 of 3 item(s) to /home/user/Downloads (original, personal space)
 - A preview needs the item's thumbnail status `ready` for that size (from `get` with `additional: ["thumbnail"]`). `converting` gets 404/HTML from DSM (verified), reported as not generated yet; `broken` (e.g. `preview` for photos) as unavailable.
 - `cache_key` isn't checked by DSM (a bogus key still returned the image on both versions), but the tool sends the real one, as the client does.
 - Uses `DsmClient.download_binary()` (streamed, written to a temp file then renamed), with the local-path confinement File Station's `download_file` uses.
+- DSM answers `Download` with `application/force-download` and `Thumbnail` with `image/jpeg`, and errors with `application/json` (verified on DSM 7.1 and 7.2.2). A `text/html` answer on a 200 is a proxy's or captive portal's page: that item's line says the answer wasn't a DSM reply, and nothing is written (#292).
 
 ---
 

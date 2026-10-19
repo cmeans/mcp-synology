@@ -56,6 +56,31 @@ class TestOriginals:
         assert "999  not downloaded: not found" in out
 
     @respx.mock
+    async def test_a_proxy_page_is_not_saved(self, tmp_path: Path) -> None:
+        """A login page in front of the NAS isn't saved as the photo (#292)."""
+        (tmp_path / "forest-trail.jpg").write_bytes(b"mine")
+        fake = FakePhotos().on(ITEM, "get", 2, {"list": _items("ready")["list"][:1]})
+        fake.on("SYNO.Foto.Download", "download", 1, binary(b"<html>Sign in</html>", "text/html"))
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await download_photos(
+                client,
+                ids=[12],
+                dest_folder=str(tmp_path),
+                allowed_roots=[tmp_path],
+                overwrite=True,
+            )
+        assert out.startswith(f"Downloaded 0 of 1 item(s) to {tmp_path}")
+        assert (
+            "12  forest-trail.jpg: not downloaded: SYNO.Foto.Download/download: the answer "
+            "wasn't a DSM reply (Content-Type text/html)." in out
+        )
+        assert "Sign in" not in out
+        assert [p.name for p in tmp_path.iterdir()] == ["forest-trail.jpg"]
+        assert (tmp_path / "forest-trail.jpg").read_bytes() == b"mine"
+
+    @respx.mock
     async def test_existing_file_kept_without_overwrite(self, tmp_path: Path) -> None:
         (tmp_path / "forest-trail.jpg").write_bytes(b"mine")
         install(FakePhotos().on(ITEM, "get", 2, {"list": _items("ready")["list"][:1]}))
