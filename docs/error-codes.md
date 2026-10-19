@@ -370,6 +370,10 @@ Common causes:
   connection but didn't answer within …" (#254). Retry shortly; if it's often
   this slow, raise `connection.timeout`. `mcp-synology check` says the same
   ("… accepted the connection but didn't answer in time").
+- No connection was free in time for the API list or the login: "No
+  connection to the NAS at … was free within N s (PoolTimeout…), so the
+  request wasn't sent." Nothing reached the NAS, so it's safe to retry, and a
+  retry usually clears it.
 - DSM stopped answering partway through. While it deletes or copies very large
   files (multi-TB Time Machine bundles, VM images), DSM can stall for longer
   than the connection timeout (`connection.timeout`, default 30 s).
