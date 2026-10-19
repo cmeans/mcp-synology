@@ -9,7 +9,13 @@ import pytest
 import respx
 from mcp.server.mcpserver.exceptions import ToolError
 
-from mcp_synology.modules.photos.browse import get_photo, list_photo_collections, list_photos
+from mcp_synology.modules.photos.browse import (
+    _camera,
+    _exif_value,
+    get_photo,
+    list_photo_collections,
+    list_photos,
+)
 from tests.modules.photos.dsm import (
     CAPTURE_191,
     PEOPLE,
@@ -408,6 +414,83 @@ class TestGetPhoto:
         assert "SeedCam 1" in out
         assert "GPS Latitude Reference" in out
         assert out.endswith("Not found: 999999")
+
+    @respx.mock
+    async def test_exif_table_cuts_long_values_and_hides_binary(self) -> None:
+        # Real values from a phone photo on DSM 7.1.1: a 3,029-character Maker Note byte
+        # dump padded every row, and "Picture Info" holds binary (here already read as
+        # U+FFFD for its non-UTF-8 bytes).
+        fake = _folders(FakePhotos()).on(ITEM, "get", 2, captured("item-get"))
+        maker = "77 79 84 0 " * 300
+        fake.on(
+            ITEM,
+            "get_exif",
+            1,
+            {
+                "list": [
+                    {
+                        "id": 12,
+                        "exif": [
+                            {"key": "Maker Note", "value": maker},
+                            {"key": "Picture Info", "value": "\x1ey\x14\ufffd\x1b"},
+                            {"key": "Model", "value": "motorola razr plus 2023"},
+                        ],
+                    }
+                ]
+            },
+        )
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await get_photo(client, ids=[12], exif=True)
+        assert f"{maker[:80]}… (3,300 characters)" in out
+        assert "(binary data, 5 characters; not shown)" in out
+        assert "motorola razr plus 2023" in out
+        assert max(len(line) for line in out.splitlines()) < 140
+
+    @pytest.mark.parametrize(
+        ("value", "shown"),
+        [
+            ("a" * 80, "a" * 80),
+            ("a" * 81, "a" * 80 + "… (81 characters)"),
+            ("a\tb", "a b"),
+            ("line one\r\nline two\nthree", "line one line two three"),
+            ("Canon\ufffd", "(binary data, 6 characters; not shown)"),
+            ("\x17", "(binary data, 1 character; not shown)"),
+            ("x\x85y", "(binary data, 3 characters; not shown)"),
+            ("\x1ey", "(binary data, 2 characters; not shown)"),
+        ],
+    )
+    def test_exif_value(self, value: str, shown: str) -> None:
+        assert _exif_value(value) == shown
+
+    @pytest.mark.parametrize(
+        ("exif", "line"),
+        [
+            # Photos 1.3.4 (DSM 7.1.1) formats these itself; nothing is added.
+            (
+                {"camera": "razr", "aperture": "F1.5", "exposure_time": "1/30 s", "iso": "500"},
+                "razr · lens — · F1.5 · 1/30 s · ISO 500",
+            ),
+            (
+                {"camera": "razr", "aperture": "1.5", "exposure_time": "1/30", "iso": "500"},
+                "razr · lens — · f/1.5 · 1/30 s · ISO 500",
+            ),
+            ({"camera": "SeedCam"}, "SeedCam · lens — · aperture — · exposure — · ISO —"),
+            # Not a bare number: shown as sent, never a doubled unit.
+            (
+                {"camera": "x", "aperture": "2.8 (max)"},
+                "x · lens — · 2.8 (max) · exposure — · ISO —",
+            ),
+            (
+                {"camera": "x", "exposure_time": "0.5 sec"},
+                "x · lens — · aperture — · 0.5 sec · ISO —",
+            ),
+            ({"aperture": "", "exposure_time": ""}, "—"),
+        ],
+    )
+    def test_camera_line_units(self, exif: dict[str, str], line: str) -> None:
+        assert _camera(exif) == line
 
     @respx.mock
     async def test_favorite_on_191(self) -> None:

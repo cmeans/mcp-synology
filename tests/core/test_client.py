@@ -352,6 +352,54 @@ class TestHttpErrorStatus:
         self._assert_no_url(exc.value, "SIDSECRET")
 
 
+class TestUndecodableReply:
+    """DSM copies binary EXIF fields into its JSON as raw bytes that aren't UTF-8 (Photos
+    get_exif "Picture Info", DSM 7.1.1). The reply is still read, those bytes as U+FFFD,
+    instead of failing as "the answer wasn't a DSM reply"."""
+
+    def test_bad_bytes_become_replacement_characters(self) -> None:
+        from mcp_synology.core.client import _read_json
+
+        resp = httpx.Response(
+            200,
+            content=b'{"success": true, "data": {"value": "\\u001ey\xec\\u001b", "ok": "fine"}}',
+            headers={"content-type": 'application/json; charset="UTF-8"'},
+        )
+        body = _read_json(resp, "SYNO.Foto.Browse.Item/get_exif")
+        assert body == {"success": True, "data": {"value": "\x1ey\ufffd\x1b", "ok": "fine"}}
+
+    def test_bad_bytes_are_logged_at_debug(self, caplog: pytest.LogCaptureFixture) -> None:
+        from mcp_synology.core.client import _read_json
+
+        resp = httpx.Response(
+            200,
+            content=b'{"success": true, "data": {"value": "\xec"}}',
+            headers={"content-type": "application/json"},
+        )
+        with caplog.at_level("DEBUG", logger="mcp_synology.core.client"):
+            _read_json(resp, "SYNO.Foto.Browse.Item/get_exif")
+        assert (
+            "SYNO.Foto.Browse.Item/get_exif: the reply has bytes that aren't UTF-8; "
+            "reading them as U+FFFD"
+        ) in caplog.text
+
+    def test_bad_bytes_in_a_download_error_envelope(self) -> None:
+        from mcp_synology.core.client import _error_envelope
+
+        body = b'{"success": false, "error": {"code": 408, "errors": [{"path": "/a\xecb"}]}}'
+        assert _error_envelope(body) == {"code": 408, "errors": [{"path": "/a\ufffdb"}]}
+
+    def test_bad_bytes_in_a_page_still_not_a_reply(self) -> None:
+        from mcp_synology.core.client import _read_json
+        from mcp_synology.core.errors import DsmReplyError
+
+        resp = httpx.Response(
+            200, content=b"<html>\xec</html>", headers={"content-type": "text/html"}
+        )
+        with pytest.raises(DsmReplyError):
+            _read_json(resp, "SYNO.Foto.Browse.Item/get_exif")
+
+
 class TestNotADsmReply:
     """#282: an answer that isn't a JSON object (a reverse proxy's or captive portal's
     page) is a DsmReplyError naming the call and Content-Type, never the body. It used
