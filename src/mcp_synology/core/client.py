@@ -161,8 +161,9 @@ _DSM_CALL_ATTR = "mcp_synology_dsm_call"
 # keep the pooled connection and are resent once on a fresh one; anything else goes on a
 # connection that's never reused. A method not recognized here counts as a write, so a
 # wrong guess costs a connection, never a repeated write.
-_READ_PREFIXES = ("get", "list", "count", "query")
-_READ_METHODS = frozenset({"status", "me", "info"})
+# Keep in sync with CLAUDE.md (DSM API Client) and docs/specs/architecture.md.
+_READ_PREFIXES = ("get", "list", "count")
+_READ_METHODS = frozenset({"query", "status", "me", "info"})
 _STALE_CONNECTION = (httpx.RemoteProtocolError, httpx.ReadError, httpx.WriteError)
 
 

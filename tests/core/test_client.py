@@ -85,6 +85,10 @@ class TestStaleConnection:
             ("status", True),
             ("me", True),
             ("info", True),
+            # Exact names, not prefixes: anything else counts as a write.
+            ("query_all", False),
+            ("information", False),
+            ("statuses", False),
             ("start", False),
             ("delete", False),
             ("create", False),
