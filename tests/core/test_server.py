@@ -163,22 +163,44 @@ class TestInstructionsPerModule:
         monkeypatch.setattr("mcp_synology.server._platform_label", lambda: "Linux")
         text = _instructions(**modules)
         local = text.index("LOCAL MACHINE:")
-        assert local < text.index("LOCAL PATHS:")
+        # Directly before LOCAL PATHS, with nothing (e.g. PERMISSIONS) between them.
+        assert "local filesystem.\n\nLOCAL PATHS:" in text
         assert "This MCP server runs on the user's Linux machine." in text
         assert f"Home directory: {Path.home()}" in text
         assert "{" not in text[local:]  # template variables filled in
 
-    def test_no_comment_text_is_sent(self) -> None:
-        text = _instructions(
-            **{
+    @pytest.mark.parametrize(
+        "modules",
+        [
+            {"filestation": {"enabled": True, "permission": "read"}},
+            {"system": {"enabled": True}},
+            {"downloadstation": {"enabled": True, "permission": "write"}},
+            {"photos": {"enabled": True, "permission": "write"}},
+            {
                 m: {"enabled": True, "permission": "write"}
                 for m in ("filestation", "system", "downloadstation", "photos")
-            }
-        )
+            },
+        ],
+        ids=["filestation", "system", "downloadstation", "photos", "all"],
+    )
+    def test_no_comment_text_is_sent(self, modules: dict[str, Any]) -> None:
+        text = _instructions(**modules)
         assert "<!--" not in text
         assert "-->" not in text
         assert "Template variables" not in text
         assert "\n\n\n" not in text
+
+    def test_comments_are_stripped_per_file(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """An unclosed comment in one file can't pair with a `-->` in the next one."""
+        monkeypatch.setattr(
+            "mcp_synology.server._BASE_INSTRUCTIONS", "CORE TEXT\n<!-- unclosed note"
+        )
+        monkeypatch.setitem(
+            _MODULE_INSTRUCTIONS, "filestation", "FILE STATION TEXT\n<!-- a note -->\nMORE"
+        )
+        text = _instructions(filestation={"enabled": True, "permission": "read"})
+        assert "FILE STATION TEXT" in text
+        assert "MORE" in text
 
 
 class TestFileStationSettings:
@@ -268,9 +290,19 @@ class TestCreateServerInstructionPaths:
         server = create_server(config)
         assert server is not None
         instructions = server.instructions or ""
-        # Falls back to the built-in instructions, with File Station's section
+        # Falls back to the full built-in instructions, with File Station's section and
+        # the generated ones, as if no file were set.
         assert "SERVER IDENTITY" in instructions
         assert "PATH FORMAT" in instructions
+        assert "LOCAL MACHINE:" in instructions
+        assert "LOCAL PATHS:" in instructions
+
+    def test_instructions_file_missing_still_gets_permissions(self, tmp_path: Path) -> None:
+        config = make_test_config(
+            instructions_file=str(tmp_path / "nope.md"),
+            modules={"filestation": {"enabled": True, "permission": "read"}},
+        )
+        assert "PERMISSIONS:" in (create_server(config).instructions or "")
 
 
 class TestSharedClientManagerLifecycle:
@@ -1408,10 +1440,10 @@ class TestInstructionComments:
 # mtime_to exclusive.
 # Raised by #313 to 30,182 (+189): Photos' descriptions and instructions name File
 # Station's tools as such, and what to do without them (#304).
-# Raised by #169's PR to 30,228 (+46): the instructions are split by module, and only the
+# Raised by #317 to 30,228 (+46): the instructions are split by module, and only the
 # enabled modules' sections are sent. With every module enabled that adds a "FILE STATION
-# (...)" heading and shortens the first line. A connection without File Station sends about
-# 3,400 characters fewer than before (System only: 4,848 -> 1,402).
+# (...)" heading (+67), shortens the first line (-20) and drops a blank line (-1). A
+# connection without File Station sends about 3,300-3,450 characters fewer.
 PAYLOAD_BUDGET_CHARS = 30_228
 
 

@@ -6,7 +6,8 @@ alias: HomeNAS
 
 # Custom instructions prepended to the built-in server prompt.
 # Useful for guiding Claude on when to use this connection vs others.
-# Supports template variables: {display_name}, {instance_id}, {host}, {port}
+# Supports template variables: {display_name}, {instance_id}, {host}, {port},
+# {home_dir}, {platform}
 # custom_instructions: |
 #   This is the primary NAS for media and backups.
 #   Use this connection for all file operations unless the user

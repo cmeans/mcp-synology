@@ -368,14 +368,14 @@ custom_instructions: |
   Never delete files from /Backups without explicit confirmation.
 ```
 
-**Full control** — `instructions_file` replaces the built-in prompt entirely. Start from the [built-in files](src/mcp_synology/instructions/): `server.md` is sent on every connection, `filestation.md` only when File Station is enabled, and `local.md` before the generated LOCAL PATHS section. A replacement file is used as written, apart from HTML comments, so it doesn't get the generated PERMISSIONS section, which tells the model which tools this connection withholds and how to enable them (`custom_instructions` keeps it):
+**Full control** — `instructions_file` replaces the built-in prompt entirely. Start from the [built-in files](src/mcp_synology/instructions/): `server.md` is sent on every connection, `filestation.md` only when File Station is enabled, and `local.md` before the generated LOCAL PATHS section. The Synology Photos section is generated in `server.py` (`_PHOTOS_NOTICE`); copy it from a Photos connection's instructions if you use Photos. A replacement file is used as written, apart from HTML comments, so it doesn't get the generated PERMISSIONS section, which tells the model which tools this connection withholds and how to enable them (`custom_instructions` keeps it):
 
 ```yaml
 # ~/.config/mcp-synology/config.yaml
 instructions_file: ~/.config/mcp-synology/my-instructions.md
 ```
 
-Both support template variables: `{display_name}`, `{instance_id}`, `{host}`, `{port}`.
+Both support template variables: `{display_name}`, `{instance_id}`, `{host}`, `{port}`, `{home_dir}` (the local home folder) and `{platform}` (`Linux`, `macOS` or `Windows`).
 
 HTML comments (`<!-- ... -->`) are removed from both before the text is sent, so they can hold notes for whoever edits the file. A comment on a line of its own is removed with that line.
 

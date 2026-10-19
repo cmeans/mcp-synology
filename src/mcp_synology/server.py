@@ -653,17 +653,21 @@ def create_server(config: AppConfig) -> MCPServer:
         ]
     )
 
+    replacement: str | None = None
     if config.instructions_file:
         # Full replacement — user provides their own instructions file.
         # They can start from the built-in server.md, filestation.md and local.md.
         instructions_path = Path(config.instructions_file).expanduser()
         try:
-            instructions = _strip_html_comments(
+            replacement = _strip_html_comments(
                 instructions_path.read_text(encoding="utf-8")
             ).strip()
         except OSError as e:
+            # Fall back to the full built-in instructions, generated sections included.
             logger.error("Failed to load instructions_file '%s': %s", instructions_path, e)
-            instructions = builtin
+
+    if replacement is not None:
+        instructions = replacement
     elif config.custom_instructions:
         # Prepend custom instructions before base — gives them priority.
         # Strip each source on its own: an unclosed `<!--` in the custom text must not
@@ -674,8 +678,8 @@ def create_server(config: AppConfig) -> MCPServer:
 
     instructions = instructions.format_map(template_vars)
 
-    if not config.instructions_file:
-        # A full replacement file is the user's own; everything else gets the notice.
+    if replacement is None:
+        # A full replacement file is the user's own; everything else gets the notices.
         instructions += _photos_notice(plan)
         instructions += _withheld_tools_notice(config, plan)
         local_paths = _local_paths_notice(config, plan)
