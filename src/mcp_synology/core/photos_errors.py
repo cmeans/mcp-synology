@@ -63,7 +63,8 @@ PHOTOS_ERROR_CODES: dict[int, tuple[ErrorCode, str, str]] = {
     620: (
         ErrorCode.INVALID_PARAMETER,
         "Synology Photos doesn't support this file type",
-        "Upload photos and videos only; other files can go through upload_file.",
+        "Upload photos and videos only; other files can go through File Station's "
+        "upload_file (needs File Station write permission) or DSM.",
     ),
     621: (
         ErrorCode.NOT_FOUND,

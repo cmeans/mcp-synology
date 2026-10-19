@@ -1326,7 +1326,9 @@ class TestInstructionComments:
 # ask the user to create it in DSM.
 # Raised by #308 to 29,930 (+44): upload_photos' description says the album must already
 # exist and to create it first with photo_album.
-PAYLOAD_BUDGET_CHARS = 29_930
+# Raised by #313 to 30,119 (+189): Photos' descriptions and instructions name File
+# Station's tools as such, and what to do without them (#304).
+PAYLOAD_BUDGET_CHARS = 30_119
 
 
 class TestPayloadBudget:
@@ -1428,6 +1430,11 @@ class TestPhotosNotice:
         assert "space=shared" in section
         assert "confirm with the user first" in section
         assert "photo_task" in section
+        # #304: File Station's tools may not be on this connection, so they're named as
+        # File Station's, and the section doesn't lean on file_task.
+        flat = " ".join(section.split())
+        assert "File Station's tools take paths, when that module is enabled" in flat
+        assert "file_task" not in section
 
     def test_absent_otherwise(self) -> None:
         assert "SYNOLOGY PHOTOS" not in (create_server(make_test_config()).instructions or "")
