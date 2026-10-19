@@ -8,7 +8,9 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Iterator
 
+import keyring
 import pytest
+from keyring.backends.null import Keyring as NullKeyring
 
 from mcp_synology.core.client import DsmClient
 from mcp_synology.core.config import AppConfig
@@ -33,13 +35,15 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
 
 @pytest.fixture(autouse=True)
 def _fake_home(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory) -> None:
-    """Point the home directory at an empty per-test folder (#311).
+    """Point the home directory at an empty per-test folder, and the keyring at nothing (#311).
 
     Without this, tests write the developer's real ~/.local/state/mcp-synology (the
     update-check state), and anything derived from the home path (the LOCAL PATHS
     instructions, the default Downloads folder) depends on where the suite runs.
     `XDG_CONFIG_HOME` is cleared so the Downloads folder isn't read from the real
-    user-dirs.dirs. vdsm and integration tests keep the real home: podman and SSH need it.
+    user-dirs.dirs. The keyring answers "nothing stored", so a test that doesn't mock it
+    never reads the developer's real credentials (the OS keyring isn't under HOME).
+    vdsm and integration tests keep the real home and keyring: podman and SSH need them.
     """
     if {"vdsm", "integration"} & {m.name for m in request.node.iter_markers()}:
         return
@@ -48,6 +52,9 @@ def _fake_home(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPath
     mp.setenv("HOME", str(home))
     mp.setenv("USERPROFILE", str(home))  # Path.home() on Windows
     mp.delenv("XDG_CONFIG_HOME", raising=False)
+    previous = keyring.get_keyring()
+    keyring.set_keyring(NullKeyring())
+    request.addfinalizer(lambda: keyring.set_keyring(previous))
 
 
 BASE_URL = "http://nas:5000"
