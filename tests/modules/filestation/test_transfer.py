@@ -1125,21 +1125,38 @@ class TestLocalPathConfinementErrors:
         message = json.loads(str(exc_info.value))["error"]["message"]
         assert f"resolves to {(tmp_path / 'out').resolve()}" in message
 
-    async def test_unknown_home_user_is_invalid_parameter(
-        self, mock_client: DsmClient, tmp_path: Path
+    @pytest.mark.parametrize("op", ["upload", "download"])
+    async def test_unknown_home_user_refused_like_outside(
+        self, mock_client: DsmClient, tmp_path: Path, op: str
     ) -> None:
-        """``~nosuchuser`` can't be expanded; that's a structured error, not a crash."""
-        with pytest.raises(ToolError) as exc_info:
-            await upload_file(
-                mock_client,
-                local_path="~mcp_no_such_user_xyz/f.txt",
-                dest_folder="/share",
-                allowed_roots=[tmp_path.resolve()],
-            )
-        error = json.loads(str(exc_info.value))["error"]
-        assert error["code"] == "invalid_parameter"
-        assert error["param"] == "local_path"
-        assert ".." not in error["message"]  # QA R2 (#186): no doubled period
+        """With allowed folders, an unknown ``~user`` gets the same refusal as an existing
+        user's home outside them, so the reply doesn't reveal which local users exist
+        (#260, as Download Station's torrent_file_path in #257)."""
+        roots = [tmp_path.resolve()]
+        errors = []
+        for home in ("~mcp_no_such_user_xyz", "~root"):
+            with pytest.raises(ToolError) as exc_info:
+                if op == "upload":
+                    await upload_file(
+                        mock_client,
+                        local_path=f"{home}/f.txt",
+                        dest_folder="/share",
+                        allowed_roots=roots,
+                    )
+                else:
+                    await download_file(
+                        mock_client,
+                        path="/share/f.txt",
+                        dest_folder=f"{home}/dl",
+                        allowed_roots=roots,
+                    )
+            error = json.loads(str(exc_info.value))["error"]
+            error["message"] = error["message"].replace(home, "~USER")
+            error["value"] = error["value"].replace(home, "~USER")
+            errors.append(error)
+        assert errors[0]["code"] == "permission_denied"
+        assert errors[0] == errors[1]
+        assert ".." not in errors[0]["message"]  # QA R2 (#186): no doubled period
 
     async def test_unknown_home_user_without_roots_is_invalid_parameter(
         self, mock_client: DsmClient
