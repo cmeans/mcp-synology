@@ -1145,17 +1145,25 @@ class TestFileTask:
         assert "file_task with this handle" in err["suggestion"]
         assert ("SYNO.FileStation.Delete", "stop") not in calls
 
+    @pytest.mark.parametrize(
+        ("reply", "shown", "retryable"),
+        [
+            (httpx.Response(200, text="<html>login</html>", headers={"content-type": "text/html"}),
+             "the answer wasn't a DSM reply (Content-Type text/html).", True),
+            (httpx.Response(502, text="Bad Gateway"), "DSM answered HTTP 502.", True),
+            (httpx.Response(403, text="Forbidden"), "DSM answered HTTP 403.", False),
+        ],
+    )  # fmt: skip
     @respx.mock
     async def test_file_task_stop_request_proxy_error_may_have_taken_effect(
-        self, mock_client: DsmClient
+        self, mock_client: DsmClient, reply: httpx.Response, shown: str, retryable: bool
     ) -> None:
-        """#282: a 502 on the stop request itself: the stop may or may not have reached DSM."""
+        """#282: a proxy's answer to the stop request itself: the stop may or may not have
+        reached DSM."""
         from mcp_synology.modules.filestation.tasks import file_task
 
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
-            side_effect=_router(
-                {"status": _ok(RUNNING), "stop": httpx.Response(502, text="Bad Gateway")}
-            )
+            side_effect=_router({"status": _ok(RUNNING), "stop": reply})
         )
         with pytest.raises(ToolError) as exc:
             await file_task(
@@ -1163,9 +1171,8 @@ class TestFileTask:
             )
         err = json.loads(str(exc.value))["error"]
         assert err["code"] == "unavailable"
-        assert err["message"].endswith(
-            "DSM answered HTTP 502. The stop may or may not have taken effect."
-        )
+        assert err["retryable"] is retryable
+        assert err["message"].endswith(f"{shown} The stop may or may not have taken effect.")
 
     @respx.mock
     @pytest.mark.parametrize("code", [401, 599])

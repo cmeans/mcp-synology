@@ -142,7 +142,9 @@ async def _check_login(config: object) -> None:
                 await auth.login()
                 click.echo(click.style("Authentication successful!", fg="green"))
                 await auth.logout()
-            except (DsmHttpError, DsmReplyError) as e:
+            except DsmReplyError:
+                raise  # a login page, not DSM: exit_on_connection_failure says so
+            except DsmHttpError as e:
                 # Its own suggestion says to run check; this is check (QA round 1, #233).
                 next_step = "Check the NAS, or the proxy in front of it, and try again."
                 message = f"Authentication failed: {e} {next_step}"

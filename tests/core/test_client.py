@@ -424,6 +424,19 @@ class TestNotADsmReply:
         self._check(exc.value, "SYNO.DownloadStation.Task/create", "text/html", retryable=False)
         assert (exc.value.suggestion or "").startswith("DSM may still have applied the request")
 
+    @respx.mock
+    async def test_torrent_file_create_is_not_retryable(self, tmp_path: Path) -> None:
+        """The torrent-file upload is a create too: DSM may already have added the task."""
+        client = make_client(make_api_cache())
+        torrent = tmp_path / "x.torrent"
+        torrent.write_bytes(b"x")
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").mock(return_value=self._PAGE)
+        async with client:
+            with pytest.raises(SynologyError) as exc:
+                await client.create_download_task_with_file(file_path=torrent, filename="x.torrent")
+        self._check(exc.value, "SYNO.DownloadStation2.Task/create", "text/html", retryable=False)
+        assert (exc.value.suggestion or "").startswith("DSM may still have applied the request")
+
 
 class TestRequestPostForm:
     """request(post_form=True): the login-only POST (#235). The parameters go in the

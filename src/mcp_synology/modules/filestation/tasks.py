@@ -347,9 +347,9 @@ async def poll_task(
                 logger.debug("%s status (%s) unanswered, handing off: %r", api, label, e)
                 return PollResult(status, "stalled", e)
             except Exception as e:
-                # An answer that can't be read, e.g. a 200 text/html page from a captive
-                # portal or a reverse proxy's login: the task may well still be running,
-                # so hand it off like a stall rather than lose it (QA R1 on #251).
+                # Any other unexpected answer (a proxy's page is a DsmReplyError, above):
+                # the task may well still be running, so hand it off like a stall rather
+                # than lose it (QA R1 on #251).
                 logger.warning(
                     "%s status (%s) unreadable, handing off: %s", api, label, type(e).__name__
                 )
@@ -407,8 +407,9 @@ def handoff_reply(
     ``verb`` is "Still deleting", "Still copying", "Still moving" or "Still restoring".
     ``stall``: the status request's error, for a task handed off because the NAS stopped
     answering, or its answer couldn't be read (#245, maintainer decision 2026-10-17).
-    For an unreadable answer only the exception type is shown, never its text, which
-    may quote the body.
+    The error's text is never shown, since it may quote the body: a transport error or
+    any other exception shows its type, an HTTP error its status, and a non-DSM reply
+    a fixed phrase.
     """
     gerund = verb.split()[-1].lower()
     past = _PAST.get(gerund, "done")
