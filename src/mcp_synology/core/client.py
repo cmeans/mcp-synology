@@ -81,12 +81,26 @@ def _read_json(resp: httpx.Response, label: str, *, may_have_applied: bool = Fal
         body = None
     if isinstance(body, dict):
         return body
-    ctype = resp.headers.get("content-type", "").split(";")[0].strip() or "none"
+    ctype = resp.headers.get("content-type", "").split(";")[0].strip().lower() or "none"
     raise DsmReplyError(
         f"{label}: the answer wasn't a DSM reply (Content-Type {ctype}).",
         retryable=not may_have_applied,
         suggestion=f"{_MAY_HAVE_APPLIED} {_NOT_A_REPLY}" if may_have_applied else _NOT_A_REPLY,
     )
+
+
+def _error_envelope(body: bytes) -> dict[str, Any] | None:
+    """The ``error`` object of a DSM error envelope in ``body``, or None if it has none."""
+    try:
+        parsed = json.loads(body)
+    except ValueError:
+        return None
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("error"), dict):
+        return None
+    code = parsed["error"].get("code", 0)
+    if isinstance(code, bool) or not isinstance(code, int | float):
+        return None  # DSM's codes are numbers; a dict or list here would crash the lookup
+    return parsed["error"]  # type: ignore[no-any-return]
 
 
 async def _guarded_post(
@@ -920,7 +934,9 @@ class DsmClient:
 
         Checks Content-Length against local disk free space before writing.
         If the NAS returns a JSON error envelope (Content-Type: application/json)
-        instead of binary data, parses and raises the appropriate exception. An HTTP
+        instead of binary data, parses and raises the appropriate exception. A text/html
+        200, or JSON that isn't an envelope, raises ``DsmReplyError`` before anything is
+        written: DSM never sends a file as text/html (#292). An HTTP
         error status without one raises ``FileStationError`` for File Station (as
         before) and ``DsmHttpError`` for any other API (Photos answers a thumbnail
         that isn't generated yet with a 404 HTML page).
@@ -961,31 +977,38 @@ class DsmClient:
             # Some DSM errors come back as HTTP errors rather than JSON envelopes.
             if resp.status_code >= 400:
                 # Try to read the body for a DSM error envelope
-                body_bytes = await resp.aread()
-                try:
-                    body = json.loads(body_bytes)
-                    error = body.get("error", {})
+                error = _error_envelope(await resp.aread())
+                if error is not None:
                     raise error_from_code(error.get("code", 0), api, error.get("errors"))
-                except (json.JSONDecodeError, KeyError):
-                    if "FileStation" not in api:
-                        _check_status(resp, f"{api}/{method}")
-                    from mcp_synology.core.errors import FileStationError
+                if "FileStation" not in api:
+                    _check_status(resp, f"{api}/{method}")
+                from mcp_synology.core.errors import FileStationError
 
-                    raise FileStationError(
-                        f"HTTP {resp.status_code} from download API",
-                        code=resp.status_code,
-                        suggestion="Check that the file path exists on the NAS.",
-                    ) from None
+                raise FileStationError(
+                    f"HTTP {resp.status_code} from download API",
+                    code=resp.status_code,
+                    suggestion="Check that the file path exists on the NAS.",
+                )
 
             content_type = resp.headers.get("content-type", "")
+            media_type = content_type.split(";")[0].strip().lower()
 
-            # JSON response means error envelope
-            if "application/json" in content_type:
+            # JSON means DSM's error envelope. An HTML page on a 200 is never the file
+            # (DSM sends application/octet-stream for every File Station download, even
+            # a real .html file, and application/force-download or image/* for Photos,
+            # on 7.1 and 7.2.2): it's a reverse proxy's or captive portal's page, so
+            # raise before anything is written (#292).
+            if media_type in ("application/json", "text/html", "application/xhtml+xml"):
                 body_bytes = await resp.aread()
-                body = json.loads(body_bytes)
-                error = body.get("error", {})
+                error = _error_envelope(body_bytes)
+                if error is None:  # a page, or JSON that isn't DSM's error envelope
+                    raise DsmReplyError(
+                        f"{api}/{method}: the answer wasn't a DSM reply (Content-Type "
+                        f"{media_type}).",
+                        suggestion=_NOT_A_REPLY,
+                    )
                 code = error.get("code", 0)
-                logger.debug("DSM response: %s/%s — error code %d", api, method, code)
+                logger.debug("DSM response: %s/%s — error code %s", api, method, code)
 
                 if code in _SESSION_ERROR_CODES and not _is_retry and self._re_auth_callback:
                     logger.info("Session error %d on %s/%s, attempting re-auth.", code, api, method)
