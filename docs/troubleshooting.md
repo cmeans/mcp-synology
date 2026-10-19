@@ -35,6 +35,18 @@ which means no answer came at all (#254, #281).
 and `https`. See [timeout](error-codes.md#timeout) and
 [unavailable](error-codes.md#unavailable).
 
+### A call failed right after a DSM package or setting change
+
+**Why:** DSM reloads its web server (nginx) whenever its web configuration changes: a package
+starting, stopping or updating, or a setting or certificate change. On DSM 7.1 it reloaded
+twice in the 13 s after Download Station started (#222). A request sent at the moment a
+reload closes its connection gets no answer ("Server disconnected without sending a
+response"). Since 0.10.0, mcp-synology sends reads again once on a fresh connection, and sends
+writes on a connection that a reload can't catch, so this should no longer reach you.
+
+**What to do:** if a call still fails this way, retry it once the NAS has settled. For a
+write, check first whether it took effect.
+
 ### "No connection to the NAS at … was free within N s"
 
 **Why:** every connection to the NAS was in use, so the request was never sent (#281).

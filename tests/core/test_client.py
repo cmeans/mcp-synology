@@ -63,6 +63,197 @@ class TestQueryApiInfo:
                 await client.query_api_info()
 
 
+class TestStaleConnection:
+    """#222: DSM reloads nginx when its web configuration changes (twice in the 13 s
+    after Download Station starts on DSM 7.1), which closes idle keep-alive
+    connections; httpx doesn't resend a request sent on one. Reads are resent once on
+    a fresh connection; writes go on a connection that's never reused."""
+
+    _OK = httpx.Response(200, json={"success": True, "data": {"shares": []}})
+
+    @pytest.mark.parametrize(
+        ("method", "read"),
+        [
+            ("list", True),
+            ("list_share", True),
+            ("get", True),
+            ("getinfo", True),
+            ("getconfig", True),
+            ("get_exif", True),
+            ("count_with_filter", True),
+            ("query", True),
+            ("status", True),
+            ("me", True),
+            ("info", True),
+            # Exact names, not prefixes: anything else counts as a write.
+            ("query_all", False),
+            ("information", False),
+            ("statuses", False),
+            ("start", False),
+            ("delete", False),
+            ("create", False),
+            ("edit", False),
+            ("set", False),
+            ("stop", False),
+            ("clean", False),
+            ("login", False),
+            ("logout", False),
+            ("add_tag", False),
+            ("setserverconfig", False),
+        ],
+    )
+    def test_read_or_write(self, method: str, read: bool) -> None:
+        from mcp_synology.core.client import _is_read
+
+        assert _is_read(method) is read
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        "error", [httpx.RemoteProtocolError, httpx.ReadError, httpx.WriteError]
+    )
+    async def test_read_is_resent_once_on_a_fresh_connection(
+        self, error: type[httpx.TransportError]
+    ) -> None:
+        route = respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=[error("Server disconnected without sending a response."), self._OK]
+        )
+        client = make_client(make_api_cache())
+        async with client:
+            data = await client.request("SYNO.FileStation.List", "list_share", version=2)
+        assert data == {"shares": []}
+        assert route.call_count == 2
+
+    @respx.mock
+    async def test_read_failing_twice_raises(self) -> None:
+        drop = httpx.RemoteProtocolError("Server disconnected without sending a response.")
+        route = respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=[drop, drop])
+        client = make_client(make_api_cache())
+        async with client:
+            with pytest.raises(httpx.RemoteProtocolError):
+                await client.request("SYNO.FileStation.List", "list_share", version=2)
+        assert route.call_count == 2
+
+    @respx.mock
+    async def test_write_is_never_resent(self) -> None:
+        drop = httpx.RemoteProtocolError("Server disconnected without sending a response.")
+        route = respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=[drop, self._OK])
+        client = make_client(make_api_cache())
+        async with client:
+            with pytest.raises(httpx.RemoteProtocolError):
+                await client.request("SYNO.FileStation.Delete", "start", version=2)
+        assert route.call_count == 1
+
+    @respx.mock
+    async def test_write_goes_on_the_never_reused_client(self) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(return_value=self._OK)
+        client = make_client(make_api_cache())
+        async with client:
+            pooled = client._http
+            assert pooled is not None
+            once = client._get_http_once()
+            pool = once._transport._pool  # type: ignore[attr-defined]
+            assert pool._max_keepalive_connections == 0
+            used: list[str] = []
+
+            async def spy_get(*args: object, **kwargs: object) -> httpx.Response:
+                used.append("pooled")
+                raise AssertionError("a write must not use the pooled client")
+
+            pooled.get = spy_get  # type: ignore[method-assign]
+            await client.request("SYNO.FileStation.Delete", "start", version=2)
+        assert used == []
+
+    @respx.mock
+    async def test_resend_uses_the_never_reused_client(self) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(return_value=self._OK)
+        client = make_client(make_api_cache())
+        async with client:
+            pooled = client._http
+            assert pooled is not None
+            calls: list[str] = []
+
+            async def drop_once(*args: object, **kwargs: object) -> httpx.Response:
+                calls.append("pooled")
+                if len(calls) > 1:
+                    raise AssertionError("the resend must not use the pooled client")
+                raise httpx.RemoteProtocolError("Server disconnected without sending a response.")
+
+            pooled.get = drop_once  # type: ignore[method-assign]
+            assert await client.request("SYNO.FileStation.List", "list_share", version=2) == {
+                "shares": []
+            }
+        assert calls == ["pooled"]
+
+    @respx.mock
+    async def test_query_api_info_is_resent_once(self) -> None:
+        drop = httpx.RemoteProtocolError("Server disconnected without sending a response.")
+        info = httpx.Response(
+            200,
+            json={
+                "success": True,
+                "data": {"SYNO.API.Auth": {"path": "entry.cgi", "minVersion": 1, "maxVersion": 7}},
+            },
+        )
+        route = respx.get(f"{BASE_URL}/webapi/query.cgi").mock(side_effect=[drop, info])
+        client = make_client()
+        async with client:
+            cache = await client.query_api_info()
+        assert "SYNO.API.Auth" in cache
+        assert route.call_count == 2
+
+    @pytest.mark.parametrize(
+        "call",
+        [
+            "request_form_post",
+            "upload_multipart",
+            "create_download_task_with_file",
+            "download_binary",
+        ],
+    )
+    def test_send_site_uses_the_never_reused_client(self, call: str) -> None:
+        """Uploads, creates and downloads change state or stream, so they never take the
+        pooled client: whatever they do, it must come from _get_http_once()."""
+        import inspect
+
+        from mcp_synology.core.client import DsmClient
+
+        source = inspect.getsource(getattr(DsmClient, call))
+        assert "self._get_http_once()" in source
+        assert "self._get_http()" not in source
+
+    @pytest.mark.parametrize("method", ["list_share", "start"])
+    async def test_outside_the_context_manager_raises(self, method: str) -> None:
+        # A read reaches the pooled client first, a write the never-reused one; both
+        # exist only inside `async with`.
+        client = make_client(make_api_cache())
+        with pytest.raises(RuntimeError, match="async context manager"):
+            await client.request("SYNO.FileStation.List", method, version=2)
+
+    async def test_exit_closes_both_clients(self) -> None:
+        client = make_client(make_api_cache())
+        async with client:
+            once = client._get_http_once()
+            pooled = client._http
+        assert client._http is None and client._http_once is None
+        assert once.is_closed and pooled is not None and pooled.is_closed
+
+    @respx.mock
+    async def test_both_clients_share_cookies(self) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            return_value=httpx.Response(
+                200,
+                json={"success": True, "data": {}},
+                headers={"set-cookie": "did=device123; Path=/"},
+            )
+        )
+        client = make_client(make_api_cache())
+        async with client:
+            # A write (fresh connection) sets a cookie; the pooled client sees it.
+            await client.request("SYNO.FileStation.Delete", "start", version=2)
+            assert client._http is not None
+            assert [c.value for c in client._http.cookies.jar if c.name == "did"] == ["device123"]
+
+
 class TestNegotiateVersion:
     def test_negotiate_picks_highest_compatible(self) -> None:
         client = _make_client(_default_cache())

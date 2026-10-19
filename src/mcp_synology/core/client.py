@@ -14,6 +14,7 @@ import os
 import secrets
 import shutil
 from collections.abc import Awaitable, Callable, Coroutine
+from http.cookiejar import CookieJar
 from typing import TYPE_CHECKING, Any, BinaryIO, Self
 
 if TYPE_CHECKING:
@@ -153,6 +154,23 @@ async def _guarded_post(
 
 _DSM_CALL_ATTR = "mcp_synology_dsm_call"
 
+# DSM reloads its nginx whenever its web configuration changes (a package starts, stops or
+# updates; a setting or certificate changes): twice in the 13 s after Download Station
+# starts on DSM 7.1 (#222). A reload closes idle keep-alive connections, and httpx doesn't
+# retry a request sent on one ("Server disconnected without sending a response"). So reads
+# keep the pooled connection and are resent once on a fresh one; anything else goes on a
+# connection that's never reused. A method not recognized here counts as a write, so a
+# wrong guess costs a connection, never a repeated write.
+# Keep in sync with CLAUDE.md (DSM API Client) and docs/specs/architecture.md.
+_READ_PREFIXES = ("get", "list", "count")
+_READ_METHODS = frozenset({"query", "status", "me", "info"})
+_STALE_CONNECTION = (httpx.RemoteProtocolError, httpx.ReadError, httpx.WriteError)
+
+
+def _is_read(method: str) -> bool:
+    """True for a DSM method that only reads (safe to send again)."""
+    return method in _READ_METHODS or method.startswith(_READ_PREFIXES)
+
 
 def dsm_call_of(exc: BaseException) -> str | None:
     """The ``API/method`` a network error happened on, if ``DsmClient`` recorded it (#237)."""
@@ -225,6 +243,7 @@ class DsmClient:
         self._verify_ssl = verify_ssl
         self._timeout = timeout
         self._http: httpx.AsyncClient | None = None
+        self._http_once: httpx.AsyncClient | None = None
         self._api_cache: dict[str, ApiInfoEntry] = {}
         self._sid: str | None = None
         self._re_auth_callback: ReAuthCallback | None = None
@@ -281,9 +300,15 @@ class DsmClient:
         # We do our own request logging with proper masking in request().
         logging.getLogger("httpx").setLevel(logging.WARNING)
         logging.getLogger("httpcore").setLevel(logging.WARNING)
-        self._http = httpx.AsyncClient(
+        # One cookie jar for both clients, so a cookie DSM sets on either is sent on both.
+        jar = CookieJar()
+        self._http = httpx.AsyncClient(verify=self._verify_ssl, timeout=self._timeout, cookies=jar)
+        # Never reuses a connection: writes, downloads and a read's resend (#222).
+        self._http_once = httpx.AsyncClient(
             verify=self._verify_ssl,
             timeout=self._timeout,
+            cookies=jar,
+            limits=httpx.Limits(max_connections=100, max_keepalive_connections=0),
         )
         return self
 
@@ -292,6 +317,9 @@ class DsmClient:
             logger.debug("Closing HTTP client connection")
             await self._http.aclose()
             self._http = None
+        if self._http_once:
+            await self._http_once.aclose()
+            self._http_once = None
 
     def _get_http(self) -> httpx.AsyncClient:
         if self._http is None:
@@ -299,12 +327,29 @@ class DsmClient:
             raise RuntimeError(msg)
         return self._http
 
+    def _get_http_once(self) -> httpx.AsyncClient:
+        """The client that never reuses a connection (#222)."""
+        if self._http_once is None:
+            msg = "DsmClient must be used as an async context manager."
+            raise RuntimeError(msg)
+        return self._http_once
+
+    async def _send_read(
+        self, label: str, send: Callable[[httpx.AsyncClient], Awaitable[httpx.Response]]
+    ) -> httpx.Response:
+        """Send a read on the pooled connection; if that connection turns out to be one
+        DSM's nginx closed (a reload, #222), send it once more on a fresh connection."""
+        try:
+            return await send(self._get_http())
+        except _STALE_CONNECTION as e:
+            logger.debug("%s: %s on a pooled connection; resending once", label, type(e).__name__)
+            return await send(self._get_http_once())
+
     async def query_api_info(self) -> dict[str, ApiInfoEntry]:
         """Call SYNO.API.Info with query=ALL and populate the API cache.
 
         Returns the cached mapping of API name -> ApiInfoEntry.
         """
-        http = self._get_http()
         url = f"{self._base_url}/webapi/query.cgi"
         params = {
             "api": "SYNO.API.Info",
@@ -314,7 +359,9 @@ class DsmClient:
         }
 
         logger.debug("Querying API info: GET %s", url)
-        resp = await http.get(url, params=params)
+        resp = await self._send_read(
+            "SYNO.API.Info/query", lambda client: client.get(url, params=params)
+        )
         _check_status(resp, "SYNO.API.Info/query")
         body = _read_json(resp, "SYNO.API.Info/query")
 
@@ -457,7 +504,6 @@ class DsmClient:
         still fails fast. File Station task stops use it (#245): DSM 7.1 sometimes
         answers a Delete ``stop`` only after ~60 s, although the stop takes effect at once.
         """
-        http = self._get_http()
 
         # Resolve API path and version
         if api not in self._api_cache:
@@ -503,12 +549,18 @@ class DsmClient:
             if read_timeout is None
             else httpx.Timeout(self._timeout, read=read_timeout)
         )
-        try:
-            headers = self._session_headers()
+        headers = self._session_headers()
+
+        def send(client: httpx.AsyncClient) -> Awaitable[httpx.Response]:
             if post_form:
-                resp = await http.post(url, data=req_params, headers=headers, timeout=req_timeout)
+                return client.post(url, data=req_params, headers=headers, timeout=req_timeout)
+            return client.get(url, params=req_params, headers=headers, timeout=req_timeout)
+
+        try:
+            if _is_read(method):
+                resp = await self._send_read(f"{api}/{method}", send)
             else:
-                resp = await http.get(url, params=req_params, headers=headers, timeout=req_timeout)
+                resp = await send(self._get_http_once())
         except httpx.TransportError as e:
             # Name the call without changing the exception's type: get_client() and
             # `check` rely on httpx.TransportError to report an unreachable NAS (#237).
@@ -586,7 +638,7 @@ class DsmClient:
         everything else goes in the body. Non-2xx HTTP statuses
         and timeouts raise typed ``SynologyError``s rather than httpx errors.
         """
-        http = self._get_http()
+        http = self._get_http_once()  # never reused (#222)
 
         if api not in self._api_cache:
             from mcp_synology.core.errors import ApiNotFoundError
@@ -701,7 +753,7 @@ class DsmClient:
 
         Returns the parsed data dict from the JSON response envelope.
         """
-        http = self._get_http()
+        http = self._get_http_once()  # never reused (#222)
 
         if api not in self._api_cache:
             from mcp_synology.core.errors import ApiNotFoundError
@@ -808,7 +860,7 @@ class DsmClient:
         (``{"task_id": [...], "list_id": [...]}``).
         """
         api = "SYNO.DownloadStation2.Task"
-        http = self._get_http()
+        http = self._get_http_once()  # never reused (#222)
 
         # Raises ApiNotFoundError (102 absent / 104 no v2) — no fallback exists.
         resolved_version = self.negotiate_version(api, min_version=2, max_version=2)
@@ -954,7 +1006,7 @@ class DsmClient:
         before) and ``DsmHttpError`` for any other API (Photos answers a thumbnail
         that isn't generated yet with a 404 HTML page).
         """
-        http = self._get_http()
+        http = self._get_http_once()  # never reused (#222)
 
         if api not in self._api_cache:
             from mcp_synology.core.errors import ApiNotFoundError
