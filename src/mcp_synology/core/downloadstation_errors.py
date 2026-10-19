@@ -37,9 +37,11 @@ DOWNLOADSTATION_ERROR_CODES: dict[int, tuple[str, str]] = {
     ),
     403: (
         "Destination doesn't exist",
-        "Destination path doesn't exist on the NAS. Pass a share-relative path "
-        "('video/Torrents', not '/volume1/video/Torrents') and verify the share "
-        "and folder with list_files before retrying.",
+        "Pass the destination share-relative ('video/Torrents', not "
+        "'/volume1/video/Torrents'). If the folder is new: Download Station doesn't create "
+        "missing folders, so create it first with File Station's create_folder (its path "
+        "form, '/video/TV/New show'; needs File Station write permission) or, without that, "
+        "ask the user to create it in DSM, then retry.",
     ),
     404: (
         "Invalid task id",

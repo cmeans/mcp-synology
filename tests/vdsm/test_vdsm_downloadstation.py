@@ -408,6 +408,31 @@ class TestVdsmDownloadStationTasks:
         assert "DSM error 100" in error["message"], error
         assert "share-relative" in error["suggestion"]
 
+    async def test_missing_destination_folder_then_create_folder(
+        self, nas_client: Any, _clean_queue: None
+    ) -> None:
+        """#296: Download Station doesn't create missing folders. A create into a new
+        subfolder of a share the user can write gets 403, and the suggested fix works:
+        create_folder in File Station's form, then the same create succeeds."""
+        from mcp_synology.modules.downloadstation.tasks import create_download, get_download_info
+        from mcp_synology.modules.filestation.operations import create_folder
+
+        client, _, _, _ = _unpack(nas_client)
+        folder = f"mcp296-{os.urandom(3).hex()}/season 1"
+        with pytest.raises(ToolError) as exc:
+            await create_download(client, uri=_FAKE_MAGNET, destination=f"writable/{folder}")
+        error = _error(exc.value)
+        assert "DSM error 403" in error["message"], error
+        assert "create it first with File Station's create_folder" in error["suggestion"]
+        try:
+            await create_folder(client, paths=[f"/writable/{folder}"])
+            task_id = _ids_in(
+                await create_download(client, uri=_FAKE_MAGNET, destination=f"writable/{folder}")
+            )[0]
+            assert folder in await get_download_info(client, task_id=task_id)
+        finally:
+            await _remove_from_writable(client, folder.split("/")[0])
+
     async def test_error_task_shows_dsm_reason(self, nas_client: Any, _clean_queue: None) -> None:
         """DSM sets ``status_extra.error_detail`` on a failed task (``broken_link`` for a 404)."""
         from mcp_synology.modules.downloadstation.tasks import create_download, list_downloads
