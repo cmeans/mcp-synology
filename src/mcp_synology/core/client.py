@@ -75,10 +75,7 @@ def _read_json(resp: httpx.Response, label: str, *, may_have_applied: bool = Fal
     model as "Expecting value: line 1 column 1 (char 0)". The error names ``label`` and
     the Content-Type, never the body.
     """
-    try:
-        body = resp.json()
-    except ValueError:
-        body = None
+    body = _loads(resp.content, label)
     if isinstance(body, dict):
         return body
     ctype = resp.headers.get("content-type", "").split(";")[0].strip().lower() or "none"
@@ -89,12 +86,28 @@ def _read_json(resp: httpx.Response, label: str, *, may_have_applied: bool = Fal
     )
 
 
-def _error_envelope(body: bytes) -> dict[str, Any] | None:
-    """The ``error`` object of a DSM error envelope in ``body``, or None if it has none."""
+def _loads(content: bytes, label: str) -> Any:
+    """``content`` parsed as JSON, or None if it isn't JSON.
+
+    DSM copies binary EXIF fields into its JSON as raw bytes, which aren't UTF-8 (Photos
+    get_exif, "Picture Info", DSM 7.1.1), so a strict decode would lose the whole reply.
+    Those bytes are read as U+FFFD (replacement characters) instead.
+    """
     try:
-        parsed = json.loads(body)
+        return json.loads(content)
+    except UnicodeDecodeError:
+        logger.debug("%s: the reply has bytes that aren't UTF-8; reading them as U+FFFD", label)
+        try:
+            return json.loads(content.decode("utf-8", errors="replace"))
+        except ValueError:
+            return None
     except ValueError:
         return None
+
+
+def _error_envelope(body: bytes) -> dict[str, Any] | None:
+    """The ``error`` object of a DSM error envelope in ``body``, or None if it has none."""
+    parsed = _loads(body, "download error envelope")
     if not isinstance(parsed, dict) or not isinstance(parsed.get("error"), dict):
         return None
     code = parsed["error"].get("code", 0)
