@@ -8,7 +8,7 @@ missing (a stopped package) goes to ds_backend_ready and fails on CI.
 One test per tool, exercising the real call shapes verified in #123: string
 task statuses, the DS2 weekly-plan API, ``setserverconfig``, ``Task.edit``
 v2, DS2 create (URI as form POST, torrent as multipart), and DSM's actual
-delete semantics. Run on DSM 7.2.2 and 7.1 (``--dsm-version 7.1``).
+delete semantics. Run on every DSM version CI runs (``--dsm-version``; see CLAUDE.md).
 
 Run with: uv run pytest -m vdsm -v tests/vdsm/test_vdsm_downloadstation.py
 """

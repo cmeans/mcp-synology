@@ -615,8 +615,65 @@ class TestUpload:
                 allowed_roots=[tmp_path],
             )
         assert "skipped  id 9 (already there)" in out
+        assert out.startswith("Uploaded 0 of 1 file(s) (1 skipped, already there) to ")
         assert fake.one("SYNO.Foto.Browse.NormalAlbum", "add_item").params == {"id": 4, "item": [9]}
         assert 'Added 1 item(s) to album "mcp-spec-album".' in out
+        # Nothing was stored, so there's nothing for Photos to index.
+        assert "Photos indexes" not in out
+
+    @respx.mock
+    async def test_counts_stored_and_skipped_apart(self, tmp_path: Path) -> None:
+        # The 0.10.0rc1 live test: re-uploading 3 files with skip said "Uploaded 3 of 3".
+        for name in ("a.jpg", "b.jpg", "c.jpg"):
+            (tmp_path / name).write_bytes(b"x")
+        replies = iter(
+            [
+                {"action": "new", "id": 7},
+                {"action": "ignore", "id": 8},
+                {"action": "ignore", "id": 9},
+            ]
+        )
+        fake = FakePhotos().on("SYNO.Foto.Browse.Folder", "get", 2, captured("folder-get-root"))
+        fake.multipart = lambda _r: httpx.Response(
+            200, json={"success": True, "data": next(replies)}
+        )
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await upload_photos(
+                client,
+                local_paths=[str(tmp_path / n) for n in ("a.jpg", "b.jpg", "c.jpg")],
+                on_duplicate="skip",
+                allowed_roots=[tmp_path],
+            )
+        assert out.splitlines()[0] == (
+            "Uploaded 1 of 3 file(s) (2 skipped, already there) to / (personal space)"
+        )
+        assert "Photos indexes new items" in out
+
+    @respx.mock
+    async def test_missing_album_uploads_nothing(self, tmp_path: Path) -> None:
+        # The 0.10.0rc1 live test: a new album name is not_found, and it's checked before
+        # any file is sent, so nothing is half done.
+        (tmp_path / "a.jpg").write_bytes(b"x")
+        fake = FakePhotos().on("SYNO.Foto.Browse.Folder", "get", 2, captured("folder-get-root"))
+        fake.on("SYNO.Foto.Browse.Album", "list", 2, captured("album-list"))
+        sent: list[httpx.Request] = []
+        fake.multipart = lambda r: sent.append(r) or httpx.Response(500)
+        install(fake)
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await upload_photos(
+                    client,
+                    local_paths=[str(tmp_path / "a.jpg")],
+                    album="mcp-rc-0.10 user album",
+                    allowed_roots=[tmp_path],
+                )
+        error = _error(exc)
+        assert error["code"] == "not_found"
+        assert error["message"] == "Upload photos failed: no album 'mcp-rc-0.10 user album'."
+        assert sent == []
 
     @respx.mock
     async def test_folder_lookup_error(self, tmp_path: Path) -> None:

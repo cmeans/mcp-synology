@@ -1324,9 +1324,11 @@ class TestInstructionComments:
 # Raised by #296 to 29,886 (+144): create_download's description says the destination must
 # be an existing folder and to create a new one first with File Station's create_folder, or
 # ask the user to create it in DSM.
-# Raised by #309 to 29,949 (+63): search_files' description says mtime_from is inclusive and
+# Raised by #308 to 29,930 (+44): upload_photos' description says the album must already
+# exist and to create it first with photo_album.
+# Raised by #309 to 29,993 (+63): search_files' description says mtime_from is inclusive and
 # mtime_to exclusive.
-PAYLOAD_BUDGET_CHARS = 29_949
+PAYLOAD_BUDGET_CHARS = 29_993
 
 
 class TestPayloadBudget:
