@@ -1226,9 +1226,11 @@ class TestEditDownload:
         assert "DSM error 100" in envelope["message"]
         assert envelope["suggestion"] == (
             "Pass a share-relative path such as 'video/Torrents' (not "
-            "'/volume1/video/Torrents') and check the folder exists with list_files. "
-            "If the folder is new: Download Station doesn't create missing folders, so "
-            "create it first with create_folder, then retry."
+            "'/volume1/video/Torrents') and check the folder exists with File "
+            "Station's list_files. If the folder is new: Download Station doesn't "
+            "create missing folders, so create it first with File Station's "
+            "create_folder or, without that, ask the user to create it in DSM, then "
+            "retry."
         )
 
     @respx.mock
@@ -1244,8 +1246,9 @@ class TestEditDownload:
         assert _envelope(exc.value)["suggestion"] == (
             "Pass the destination share-relative ('video/Torrents', not "
             "'/volume1/video/Torrents'). If the folder is new: Download Station doesn't create "
-            "missing folders, so create it first with create_folder (File Station's form, "
-            "'/video/TV/New show'; needs File Station write permission), then retry."
+            "missing folders, so create it first with File Station's create_folder (its path "
+            "form, '/video/TV/New show'; needs File Station write permission) or, without that, "
+            "ask the user to create it in DSM, then retry."
         )
 
     async def test_nas_with_task_v1_only_gets_clear_error(self, mock_client: DsmClient) -> None:

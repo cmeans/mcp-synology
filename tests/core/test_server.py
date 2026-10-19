@@ -1321,9 +1321,10 @@ class TestInstructionComments:
 # says a module's list replaces the Downloads default when there's no top-level list.
 # Raised by #258 to 29,742 (+12,160): the opt-in Photos module's 19 tools and its
 # instructions section. A connection without Photos enabled doesn't carry them.
-# Raised by #296 to 29,834 (+92): create_download's description says the destination must
-# be an existing folder and to create a new one with create_folder first.
-PAYLOAD_BUDGET_CHARS = 29_834
+# Raised by #296 to 29,886 (+144): create_download's description says the destination must
+# be an existing folder and to create a new one first with File Station's create_folder, or
+# ask the user to create it in DSM.
+PAYLOAD_BUDGET_CHARS = 29_886
 
 
 class TestPayloadBudget:

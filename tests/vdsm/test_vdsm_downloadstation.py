@@ -423,7 +423,7 @@ class TestVdsmDownloadStationTasks:
             await create_download(client, uri=_FAKE_MAGNET, destination=f"writable/{folder}")
         error = _error(exc.value)
         assert "DSM error 403" in error["message"], error
-        assert "create it first with create_folder" in error["suggestion"]
+        assert "create it first with File Station's create_folder" in error["suggestion"]
         try:
             await create_folder(client, paths=[f"/writable/{folder}"])
             task_id = _ids_in(

@@ -39,8 +39,9 @@ DOWNLOADSTATION_ERROR_CODES: dict[int, tuple[str, str]] = {
         "Destination doesn't exist",
         "Pass the destination share-relative ('video/Torrents', not "
         "'/volume1/video/Torrents'). If the folder is new: Download Station doesn't create "
-        "missing folders, so create it first with create_folder (File Station's form, "
-        "'/video/TV/New show'; needs File Station write permission), then retry.",
+        "missing folders, so create it first with File Station's create_folder (its path "
+        "form, '/video/TV/New show'; needs File Station write permission) or, without that, "
+        "ask the user to create it in DSM, then retry.",
     ),
     404: (
         "Invalid task id",
