@@ -86,10 +86,11 @@ looks slow.
 ### `file_task` says it's "no longer running on the NAS … DSM no longer has its result"
 
 **Why:** DSM can forget a finished delete before any status check sees it finish (on a real NAS,
-after a 36-hour delete, it was gone within 16 minutes of the last check), and it forgets a
-finished copy or move after one status read, so one that finished between checks ends the same
-way. Then `file_task` has no result left to give: the task finished or was stopped, and the reply
-can't say which. #302 tracks checking the path automatically.
+after a 36-hour delete, it was gone within 16 minutes of the last check). It forgets a finished
+copy or move after one status read, but `file_task` keeps the result of a read it makes itself,
+so a copy or move ends this way only when something else read it first (another session for the
+same DSM user). Then `file_task` has no result left to give: the task finished or was stopped,
+and the reply can't say which. #302 tracks checking the path automatically.
 
 **What to do:** list the path. For a delete, DSM removes a folder's contents before the folder,
 so a missing top-level folder means the delete finished; a folder that's still there means it
