@@ -129,7 +129,8 @@ MODULE_INFO = ModuleInfo(
                 'Accepts human-readable sizes like "500MiB". '
                 'mtime_from / mtime_to accept ISO 8601 ("2026-04-01T12:00:00+00:00"), '
                 'a calendar date ("YYYY-MM-DD"), or Unix epoch seconds; naive dates '
-                "are treated as UTC. "
+                "are treated as UTC. mtime_from is inclusive and mtime_to exclusive, to "
+                "the second. "
                 "For directory contents or sizes, use list_files or get_dir_size instead."
             ),
             permission_tier=PermissionTier.READ,
