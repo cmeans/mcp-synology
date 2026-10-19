@@ -75,12 +75,26 @@ want it canceled; it may then be partly done. See
 
 ### A handed-off delete shows no progress for minutes
 
-**Why:** a delete counts finished items, so one large file shows no progress until it's gone, and
-that can take many minutes on a busy NAS (#245; the server's instructions to the model say the
-same).
+**Why:** a delete counts finished items, not bytes, so one large file shows no progress until
+it's gone, and that can take many minutes on a busy NAS (#245; the server's instructions to the
+model say the same). The count can also jump near the end: in a 329-item delete on a real NAS,
+each item took about 15 minutes for a while, and then 179 items cleared in 16 minutes (#302).
 
 **What to do:** wait, and check with `file_task`. Don't stop and restart it because progress
 looks slow.
+
+### `file_task` says it's "no longer running on the NAS … DSM no longer has its result"
+
+**Why:** DSM can forget a finished delete before any status check sees it finish (on a real NAS,
+after a 36-hour delete, it was gone within 16 minutes of the last check), and it forgets a
+finished copy or move after one status read, so one that finished between checks ends the same
+way. Then `file_task` has no result left to give: the task finished or was stopped, and the reply
+can't say which. #302 tracks checking the path automatically.
+
+**What to do:** list the path. For a delete, DSM removes a folder's contents before the folder,
+so a missing top-level folder means the delete finished; a folder that's still there means it
+was stopped or only partly done. For a copy or move, list the destination (and, for a move, the
+source).
 
 ### "DSM lost the search task … so this is not a 0-result answer"
 
@@ -140,8 +154,7 @@ the same problem as DSM error 100. See [dsm_error](error-codes.md#dsm_error).
 ### A task ID shows "not found (no such task, or not yours)"
 
 **Why:** a non-admin (a non-manager, see above) sees only their own tasks, and DSM answers
-another user's task exactly as
-it answers a missing one (DSM 7.1 and 7.2.2, #136).
+another user's task exactly as it answers a missing one (DSM 7.1 and 7.2.2, #136).
 
 **What to do:** check the ID with `list_downloads`, signed in as the task's owner, or use an
 administrator account.
@@ -150,7 +163,7 @@ administrator account.
 
 **Why:** when none of the IDs can be paused, DSM fails the whole call (error 101), whether the
 IDs are missing, another user's, or the caller's own finished or already-paused tasks (DSM 7.1
-and 7.2.2, #146). With at least one pausable ID, the others are refused one by one instead.
+and 7.2.2, #136, #146). With at least one pausable ID, the others are refused one by one instead.
 
 **What to do:** check each task's status with `list_downloads`. See
 [invalid_parameter](error-codes.md#invalid_parameter).
@@ -182,6 +195,29 @@ says `force_complete` keeps it (Download Station 3.9 and 4.1, #128). On a finish
 ---
 
 ## Synology Photos
+
+### A copy, move or delete returns a `photos:<id>` handle instead of a result
+
+**Why:** it's still running on the NAS. `copy_photos`, `move_photos`, `delete_photos` and
+`delete_photo_folders` wait up to the Photos module's `task_timeout` setting (default 30 s, up
+to 600), then hand the task off rather than stopping it (#286). The same happens if the NAS stops
+answering status checks during the wait. These are Photos tasks: follow them up with
+`photo_task`, not `file_task`.
+
+**What to do:** check on it with `photo_task` and the handle; `photo_task` with no handle lists
+this user's copy, move and delete tasks. Don't start it again. Stop it with `photo_task`
+`action="stop"` only if you want it canceled; it may then be partly done. To wait longer before
+the hand-off, raise `task_timeout` under the `photos` module's `settings`.
+
+### `photo_task` says "no task photos:<id>"
+
+**Why:** the handle isn't in this user's task list. Photos keeps finished tasks until they're
+cleared (for example with `photo_task` `action="clear"`), and tasks belong to the DSM user who
+started them (Photos spec, background tasks and `photo_task`). So the task finished and was
+cleared, another DSM user started it, or the handle is mistyped.
+
+**What to do:** check the result directly: `list_photos` on the destination folder, or the
+source for a move or delete.
 
 ### A new upload shows the file's modification time, `0×0`, or `(indexing)`, and search can't find it
 
