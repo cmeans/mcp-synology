@@ -221,6 +221,14 @@ class TestStaleConnection:
         assert "self._get_http_once()" in source
         assert "self._get_http()" not in source
 
+    @pytest.mark.parametrize("method", ["list_share", "start"])
+    async def test_outside_the_context_manager_raises(self, method: str) -> None:
+        # A read reaches the pooled client first, a write the never-reused one; both
+        # exist only inside `async with`.
+        client = make_client(make_api_cache())
+        with pytest.raises(RuntimeError, match="async context manager"):
+            await client.request("SYNO.FileStation.List", method, version=2)
+
     async def test_exit_closes_both_clients(self) -> None:
         client = make_client(make_api_cache())
         async with client:
