@@ -6,7 +6,8 @@ delete_photo_folders and photo_task.
 the web client does, until the task is ``done`` or ``task_timeout`` runs out, then
 hands it off with a ``photos:<id>`` handle that ``photo_task`` follows up on, the
 pattern File Station's ``file_task`` uses (#245). A status request that gets no
-answer hands off too: the task is most likely still running.
+answer, an HTTP error status or a reply that isn't DSM's (a reverse proxy's 502/504 or
+login page, #282) hands off too: the task is most likely still running.
 """
 
 from __future__ import annotations
@@ -16,12 +17,17 @@ import json
 import logging
 import re
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NoReturn
 
 import httpx
 
-from mcp_synology.core.errors import DsmHttpError, DsmReplyError, SynologyError
-from mcp_synology.core.formatting import format_table, format_timestamp, synology_error_response
+from mcp_synology.core.errors import DsmHttpError, DsmReplyError, ErrorCode, SynologyError
+from mcp_synology.core.formatting import (
+    error_response,
+    format_table,
+    format_timestamp,
+    synology_error_response,
+)
 from mcp_synology.modules.photos.helpers import (
     Photos,
     Space,
@@ -355,6 +361,31 @@ def _running_for(status: dict[str, Any]) -> str:
     return f", running {minutes} min {sec} s" if minutes else f", running {sec} s"
 
 
+_NO_ANSWER = (httpx.TransportError, DsmHttpError, DsmReplyError)
+
+
+def _request_failed(op: str, task_id: int, exc: Exception, note: str) -> NoReturn:
+    """The structured error for a status or stop request that got no answer, an HTTP error
+    status or a reply that isn't DSM's (#282): it names the handle, never the page."""
+    handle = handle_of(task_id)
+    if isinstance(exc, httpx.TransportError):
+        timed_out = isinstance(exc, httpx.TimeoutException)
+        code = ErrorCode.TIMEOUT if timed_out else ErrorCode.UNAVAILABLE
+        detail = f"DSM didn't answer ({type(exc).__name__})"
+        retryable = True
+    else:
+        code, detail = ErrorCode.UNAVAILABLE, str(exc)
+        retryable = bool(getattr(exc, "retryable", True))
+    error_response(
+        code,
+        f"{op} failed for `{handle}`: {detail}{note}",
+        retryable=retryable,
+        param="handle",
+        value=handle,
+        suggestion="Call photo_task with this handle to see whether the task is still running.",
+    )
+
+
 async def photo_task(
     client: DsmClient, *, handle: str | None = None, action: str = "status"
 ) -> str:
@@ -402,11 +433,19 @@ async def photo_task(
         if action == "stop":
             try:
                 await ph.call("BackgroundTask.Info", "abort_task", {"id": [task_id]}, personal=True)
+            except _NO_ANSWER as e:
+                _request_failed(op, task_id, e, " The stop may or may not have taken effect.")
             except SynologyError as e:
                 if e.code == 117:
                     not_found(op, f"no task {handle_of(task_id)}.", param="handle", value=handle)
                 raise
-        status = await _status(ph, task_id)
+        try:
+            status = await _status(ph, task_id)
+        except _NO_ANSWER as e:
+            note = (
+                " The stop was requested; its status couldn't be read." if action == "stop" else ""
+            )
+            _request_failed(op, task_id, e, note)
         if status is None:
             not_found(
                 op,
@@ -425,5 +464,13 @@ async def photo_task(
         elif status.get("status") == "done" and int(status.get("error") or 0):
             return "\n".join([line + ".", *await _errors(ph, task_id)])
         return line + ("" if line.endswith(".") else ".")
+    except httpx.TransportError as e:  # listing or clearing: no task to name
+        timed_out = isinstance(e, httpx.TimeoutException)
+        error_response(
+            ErrorCode.TIMEOUT if timed_out else ErrorCode.UNAVAILABLE,
+            f"{op} failed: DSM didn't answer ({type(e).__name__}).",
+            retryable=True,
+            suggestion="Try again shortly; a busy NAS can be slow to answer.",
+        )
     except SynologyError as e:
         synology_error_response(op, e)

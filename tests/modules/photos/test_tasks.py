@@ -24,6 +24,7 @@ ITEM = "SYNO.Foto.Browse.Item"
 FOLDER = "SYNO.Foto.Browse.Folder"
 FILE = "SYNO.Foto.BackgroundTask.File"
 INFO = "SYNO.Foto.BackgroundTask.Info"
+HTML = {"content-type": "text/html"}
 
 
 @pytest.fixture(autouse=True)
@@ -112,8 +113,6 @@ class TestCopyMove:
         assert "didn't answer a status check (ReadTimeout)" in out
         assert "photos:5" in out
 
-    _HTML = {"content-type": "text/html"}  # noqa: RUF012
-
     @respx.mock
     @pytest.mark.parametrize(
         ("reply", "shown"),
@@ -121,7 +120,7 @@ class TestCopyMove:
             (httpx.Response(504, text="<html>Gateway Timeout</html>"),
              "The NAS, or a proxy in front of it, answered a status check with an error "
              "(HTTP 504); the task is most likely still copying."),
-            (httpx.Response(200, text="<html>Sign in</html>", headers=_HTML),
+            (httpx.Response(200, text="<html>Sign in</html>", headers=HTML),
              "The NAS's status reply couldn't be read (not a DSM reply; a proxy or captive "
              "portal may be answering); the task is most likely still copying."),
         ],
@@ -137,9 +136,10 @@ class TestCopyMove:
             out = await copy_or_move(
                 client, operation="copy", ids=[12], folders=None, destination="14"
             )
-        assert shown in out
-        assert "photos:5" in out
-        assert "Gateway" not in out and "Sign in" not in out
+        assert out == (
+            f"Copy of 1 item(s) to /mcp-spec-capture/dest (personal space): {shown} "
+            "Handle: photos:5 — check with photo_task."
+        )
 
     @respx.mock
     async def test_failed_items_listed(self) -> None:
@@ -377,6 +377,75 @@ class TestPhotoTask:
             cleared = await photo_task(client, action="clear")
         assert "photos:1" in table and "copy" in table
         assert cleared == f"Removed {len(listed['list'])} finished task(s) from the list."
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        ("reply", "code", "detail", "retryable"),
+        [
+            (httpx.ReadTimeout("slow"), "timeout", "DSM didn't answer (ReadTimeout)", True),
+            (httpx.Response(502, text="<html>Bad Gateway</html>"), "unavailable",
+             f"{INFO}/get_status: DSM answered HTTP 502.", True),
+            (httpx.Response(403, text="<html>Forbidden</html>"), "unavailable",
+             f"{INFO}/get_status: DSM answered HTTP 403.", False),
+            (httpx.Response(200, text="<html>Sign in</html>", headers=HTML),
+             "unavailable",
+             f"{INFO}/get_status: the answer wasn't a DSM reply (Content-Type text/html).", True),
+        ],
+    )  # fmt: skip
+    @pytest.mark.parametrize("action", ["status", "stop"])
+    async def test_status_read_fails_names_the_handle(
+        self, action: str, reply: Any, code: str, detail: str, retryable: bool
+    ) -> None:
+        """#282: a status read with no answer was a raw ReadTimeout; a proxy's 502 or page
+        gave a generic error with no handle, and after a stop didn't say it was sent."""
+
+        def answer(_p: dict[str, Any]) -> httpx.Response:
+            if isinstance(reply, Exception):
+                raise reply
+            return reply  # type: ignore[no-any-return]
+
+        fake = FakePhotos().on(INFO, "abort_task", 1, {}).on(INFO, "get_status", 1, answer)
+        install(fake)
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await photo_task(client, handle="photos:5", action=action)
+        err = _error(exc)
+        note = " The stop was requested; its status couldn't be read." if action == "stop" else ""
+        assert err["code"] == code
+        assert err["message"] == f"Photo task failed for `photos:5`: {detail}{note}"
+        assert err["retryable"] is retryable
+        assert (err["param"], err["value"]) == ("handle", "photos:5")
+        assert "photo_task with this handle" in err["suggestion"]
+        assert len(fake.of(INFO, "abort_task")) == (action == "stop")
+
+    @respx.mock
+    async def test_stop_request_fails_may_have_taken_effect(self) -> None:
+        fake = FakePhotos().on(INFO, "abort_task", 1, lambda _p: httpx.Response(502, text="x"))
+        install(fake)
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await photo_task(client, handle="photos:5", action="stop")
+        assert _error(exc)["message"] == (
+            f"Photo task failed for `photos:5`: {INFO}/abort_task: DSM answered HTTP 502. "
+            "The stop may or may not have taken effect."
+        )
+        assert not fake.of(INFO, "get_status")
+
+    @respx.mock
+    async def test_list_without_answer_is_structured(self) -> None:
+        def boom(_p: dict[str, Any]) -> httpx.Response:
+            raise httpx.ConnectError("refused")
+
+        install(FakePhotos().on(INFO, "list_user_task", 1, boom))
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await photo_task(client)
+        err = _error(exc)
+        assert (err["code"], err["retryable"]) == ("unavailable", True)
+        assert err["message"] == "Photo task failed: DSM didn't answer (ConnectError)."
 
     async def test_stop_needs_handle(self) -> None:
         with pytest.raises(ToolError) as exc:
