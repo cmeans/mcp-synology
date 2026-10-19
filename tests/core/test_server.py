@@ -6,6 +6,7 @@ import asyncio
 import base64
 import json
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -17,6 +18,7 @@ from mcp.server.mcpserver import MCPServer
 
 from mcp_synology.server import (
     _BASE_INSTRUCTIONS,
+    _MODULE_INSTRUCTIONS,
     SharedClientManager,
     _compact_schema,
     _strip_html_comments,
@@ -26,7 +28,6 @@ from tests.conftest import BASE_URL, make_test_config
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
-    from pathlib import Path
 
 
 class TestCreateServer:
@@ -91,17 +92,93 @@ class TestCreateServer:
 
 
 class TestMcpInstructions:
-    def test_instructions_mention_path_format(self) -> None:
-        assert "PATH FORMAT" in _BASE_INSTRUCTIONS
-
-    def test_instructions_mention_file_sizes(self) -> None:
+    def test_core_file_holds_only_shared_guidance(self) -> None:
+        assert "SERVER IDENTITY" in _BASE_INSTRUCTIONS
         assert "FILE SIZES" in _BASE_INSTRUCTIONS
+        # File Station's sections live in filestation.md (#169).
+        sent = _strip_html_comments(_BASE_INSTRUCTIONS)
+        assert "list_shares" not in sent
+        assert "File Station" not in sent
 
-    def test_instructions_mention_recycle_bin(self) -> None:
-        assert "RECYCLE BIN" in _BASE_INSTRUCTIONS
+    def test_filestation_file_holds_its_sections(self) -> None:
+        text = _MODULE_INSTRUCTIONS["filestation"]
+        for section in ("PATH FORMAT", "RECYCLE BIN", "LONG OPERATIONS", "list_shares"):
+            assert section in text
 
-    def test_instructions_mention_list_shares_first(self) -> None:
-        assert "list_shares" in _BASE_INSTRUCTIONS
+
+def _instructions(**modules: dict[str, Any]) -> str:
+    return create_server(make_test_config(modules=modules)).instructions or ""
+
+
+_FS_SECTIONS = ("FILE STATION", "PATH FORMAT", "list_shares", "RECYCLE BIN", "file_task")
+
+
+class TestInstructionsPerModule:
+    """Only the enabled modules' sections are sent (#169, #304)."""
+
+    @pytest.mark.parametrize(
+        "modules",
+        [
+            {"system": {"enabled": True}},
+            {"downloadstation": {"enabled": True, "permission": "write"}},
+            {"photos": {"enabled": True, "permission": "write"}},
+            # Listed but disabled counts as not enabled.
+            {"filestation": {"enabled": False}, "system": {"enabled": True}},
+        ],
+        ids=["system", "downloadstation", "photos", "filestation-disabled"],
+    )
+    def test_no_file_station_sections_without_file_station(self, modules: dict[str, Any]) -> None:
+        text = _instructions(**modules)
+        assert "You are connected to a Synology NAS through mcp-synology." in text
+        assert "FILE SIZES" in text
+        for section in _FS_SECTIONS:
+            assert section not in text.split("PERMISSIONS:", 1)[0], section
+
+    @pytest.mark.parametrize("permission", ["read", "write"])
+    def test_file_station_sections_when_enabled(self, permission: str) -> None:
+        text = _instructions(filestation={"enabled": True, "permission": permission})
+        for section in _FS_SECTIONS:
+            assert section in text, section
+        # The core file comes first, then File Station's.
+        assert text.index("FILE SIZES") < text.index("FILE STATION")
+
+    def test_system_only_has_no_local_machine(self) -> None:
+        text = _instructions(system={"enabled": True})
+        assert "LOCAL MACHINE" not in text
+        assert "LOCAL PATHS" not in text
+        assert "Home directory" not in text
+
+    @pytest.mark.parametrize(
+        "modules",
+        [
+            {"filestation": {"enabled": True, "permission": "read"}},  # download_file
+            {"downloadstation": {"enabled": True, "permission": "write"}},  # torrent files
+            {"photos": {"enabled": True, "permission": "read"}},  # download_photos
+        ],
+        ids=["filestation", "downloadstation", "photos"],
+    )
+    def test_local_machine_opens_local_paths(
+        self, modules: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("mcp_synology.server._platform_label", lambda: "Linux")
+        text = _instructions(**modules)
+        local = text.index("LOCAL MACHINE:")
+        assert local < text.index("LOCAL PATHS:")
+        assert "This MCP server runs on the user's Linux machine." in text
+        assert f"Home directory: {Path.home()}" in text
+        assert "{" not in text[local:]  # template variables filled in
+
+    def test_no_comment_text_is_sent(self) -> None:
+        text = _instructions(
+            **{
+                m: {"enabled": True, "permission": "write"}
+                for m in ("filestation", "system", "downloadstation", "photos")
+            }
+        )
+        assert "<!--" not in text
+        assert "-->" not in text
+        assert "Template variables" not in text
+        assert "\n\n\n" not in text
 
 
 class TestFileStationSettings:
@@ -191,7 +268,8 @@ class TestCreateServerInstructionPaths:
         server = create_server(config)
         assert server is not None
         instructions = server.instructions or ""
-        # Falls back to _BASE_INSTRUCTIONS
+        # Falls back to the built-in instructions, with File Station's section
+        assert "SERVER IDENTITY" in instructions
         assert "PATH FORMAT" in instructions
 
 
@@ -1330,7 +1408,11 @@ class TestInstructionComments:
 # mtime_to exclusive.
 # Raised by #313 to 30,182 (+189): Photos' descriptions and instructions name File
 # Station's tools as such, and what to do without them (#304).
-PAYLOAD_BUDGET_CHARS = 30_182
+# Raised by #169's PR to 30,228 (+46): the instructions are split by module, and only the
+# enabled modules' sections are sent. With every module enabled that adds a "FILE STATION
+# (...)" heading and shortens the first line. A connection without File Station sends about
+# 3,400 characters fewer than before (System only: 4,848 -> 1,402).
+PAYLOAD_BUDGET_CHARS = 30_228
 
 
 class TestPayloadBudget:

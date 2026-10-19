@@ -368,7 +368,7 @@ custom_instructions: |
   Never delete files from /Backups without explicit confirmation.
 ```
 
-**Full control** — `instructions_file` replaces the built-in prompt entirely. Copy the [built-in server.md](src/mcp_synology/instructions/server.md) as a starting point. A replacement file is used as written, apart from HTML comments, so it doesn't get the generated PERMISSIONS section, which tells the model which tools this connection withholds and how to enable them (`custom_instructions` keeps it):
+**Full control** — `instructions_file` replaces the built-in prompt entirely. Start from the [built-in files](src/mcp_synology/instructions/): `server.md` is sent on every connection, `filestation.md` only when File Station is enabled, and `local.md` before the generated LOCAL PATHS section. A replacement file is used as written, apart from HTML comments, so it doesn't get the generated PERMISSIONS section, which tells the model which tools this connection withholds and how to enable them (`custom_instructions` keeps it):
 
 ```yaml
 # ~/.config/mcp-synology/config.yaml

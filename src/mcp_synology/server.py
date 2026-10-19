@@ -52,6 +52,10 @@ def _load_instruction(name: str) -> str:
 
 
 _BASE_INSTRUCTIONS = _load_instruction("server.md")
+# Sent only with the module they describe (#169): File Station's sections, and the local
+# machine's details when a tool reads or writes local files.
+_MODULE_INSTRUCTIONS = {"filestation": _load_instruction("filestation.md")}
+_LOCAL_MACHINE_INSTRUCTIONS = _load_instruction("local.md")
 
 _ICON_BASE_URL = "https://raw.githubusercontent.com/cmeans/mcp-synology/main/src/mcp_synology/icons"
 
@@ -618,33 +622,8 @@ def create_server(config: AppConfig) -> MCPServer:
     }
     server_name = f"synology-{config.display_name}"
 
-    if config.instructions_file:
-        # Full replacement — user provides their own instructions file.
-        # They can copy the built-in server.md as a starting point.
-        instructions_path = Path(config.instructions_file).expanduser()
-        try:
-            instructions = _strip_html_comments(
-                instructions_path.read_text(encoding="utf-8")
-            ).strip()
-        except OSError as e:
-            logger.error("Failed to load instructions_file '%s': %s", instructions_path, e)
-            instructions = _strip_html_comments(_BASE_INSTRUCTIONS)
-    elif config.custom_instructions:
-        # Prepend custom instructions before base — gives them priority.
-        # Strip each source on its own: an unclosed `<!--` in the custom text must not
-        # pair with a `-->` in the base file and swallow the text between them.
-        instructions = (
-            _strip_html_comments(config.custom_instructions).strip()
-            + "\n\n"
-            + _strip_html_comments(_BASE_INSTRUCTIONS)
-        )
-    else:
-        instructions = _strip_html_comments(_BASE_INSTRUCTIONS)
-
-    instructions = instructions.format_map(template_vars)
-
-    # Resolve each enabled module's tools first, so the instructions can say
-    # which ones this connection withholds.
+    # Resolve each enabled module's tools first, so the instructions can include only the
+    # enabled modules' sections and say which tools this connection withholds.
     plan: _ModulePlan = []
     for mod_name, mod_config in config.modules.items():
         if not mod_config.enabled:
@@ -664,11 +643,45 @@ def create_server(config: AppConfig) -> MCPServer:
             )
         )
 
+    # The built-in instructions: the core file, then each enabled module's own section.
+    # HTML comments are stripped per file, so an unclosed one can't swallow the next file.
+    builtin = "\n\n".join(
+        _strip_html_comments(text).strip()
+        for text in [
+            _BASE_INSTRUCTIONS,
+            *(_MODULE_INSTRUCTIONS[name] for name, _, _, _ in plan if name in _MODULE_INSTRUCTIONS),
+        ]
+    )
+
+    if config.instructions_file:
+        # Full replacement — user provides their own instructions file.
+        # They can start from the built-in server.md, filestation.md and local.md.
+        instructions_path = Path(config.instructions_file).expanduser()
+        try:
+            instructions = _strip_html_comments(
+                instructions_path.read_text(encoding="utf-8")
+            ).strip()
+        except OSError as e:
+            logger.error("Failed to load instructions_file '%s': %s", instructions_path, e)
+            instructions = builtin
+    elif config.custom_instructions:
+        # Prepend custom instructions before base — gives them priority.
+        # Strip each source on its own: an unclosed `<!--` in the custom text must not
+        # pair with a `-->` in the base file and swallow the text between them.
+        instructions = _strip_html_comments(config.custom_instructions).strip() + "\n\n" + builtin
+    else:
+        instructions = builtin
+
+    instructions = instructions.format_map(template_vars)
+
     if not config.instructions_file:
         # A full replacement file is the user's own; everything else gets the notice.
         instructions += _photos_notice(plan)
         instructions += _withheld_tools_notice(config, plan)
-        instructions += _local_paths_notice(config, plan)
+        local_paths = _local_paths_notice(config, plan)
+        if local_paths:
+            local_machine = _strip_html_comments(_LOCAL_MACHINE_INSTRUCTIONS).strip()
+            instructions += "\n\n" + local_machine.format_map(template_vars) + local_paths
 
     server = _SynologyServer(
         server_name,

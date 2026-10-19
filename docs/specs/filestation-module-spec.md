@@ -807,50 +807,7 @@ This is outside the MCP server's scope but worth documenting as a power-user pat
 
 ## MCP Server Instructions
 
-The `MCPServer(instructions=...)` string provides shared knowledge at connection time:
-
-```
-You are connected to a Synology NAS via the mcp-synology File Station module.
-
-PATH FORMAT:
-All file paths start with a shared folder name: /video/..., /music/..., etc.
-Call list_shares first to discover available shared folders and their permissions.
-
-FILE SIZES:
-Sizes are binary (1 KiB = 1024 bytes). Size parameters accept "500MiB", "2GiB",
-"1.5TiB"; KB/MB/GB/TB mean the same binary units.
-
-WORKING WITH FILES:
-- Start with list_shares to discover available paths
-- Use list_files to browse directories, search_files to find specific files
-- get_file_info for detailed metadata, get_dir_size for directory totals
-
-MOVING AND ORGANIZING FILES:
-When a user asks to move or organize files:
-1. Use search_files to find matching files. Use exclude_pattern to filter out
-   unwanted file types (e.g., exclude_pattern="*.torrent" when moving media).
-2. Present the results with a count and confirm with the user before proceeding.
-3. Use move_files or copy_files with the confirmed paths.
-Always search first and confirm before destructive operations.
-
-RECYCLE BIN:
-Some shares have a recycle bin enabled (shown in list_shares output).
-Deleted files on those shares can be recovered:
-- list_recycle_bin to see recently deleted files
-- restore_from_recycle_bin to recover them
-The recycle bin lives at /<share>/#recycle/ internally. Deleting anything
-inside it is permanent.
-
-LONG OPERATIONS:
-A large delete, copy, move or restore can outlast one reply. The tool then hands it off:
-the NAS keeps working, and the reply gives a handle. Tell the user it's still running,
-and include the progress. Don't poll in a loop; check with file_task when the user asks,
-or before doing anything that depends on the result, such as reusing the destination or
-reporting space freed. Never start the same operation again while it's running, and
-don't stop and restart it because progress looks slow: a delete counts finished items, and
-one large file can take many minutes on a busy NAS. Stop it (file_task action="stop") only when the
-user wants it canceled, and say the result may be partial.
-```
+File Station's guidance is in `src/mcp_synology/instructions/filestation.md`. The server sends it after the core `server.md` only when the `filestation` module is enabled, at either permission (#169; the order is in `config-schema-spec.md` under **Built-in instructions**). It covers the path format and calling `list_shares` first, working with files, file transfers and the default download folder, choosing the right tool, browsing vs searching, directory size, the search → review → act pattern for moving files, the recycle bin, and handed-off long operations (`file_task`). Size units are in the core `server.md`, since the other modules show sizes too. When `upload_file` or `download_file` is registered, the generated LOCAL PATHS section names the allowed local folders, after the local OS and home folder from `local.md`.
 
 ---
 
