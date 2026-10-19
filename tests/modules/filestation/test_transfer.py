@@ -318,6 +318,31 @@ class TestDownloadFile:
         assert not (tmp_path / "nonexistent.mkv").exists()
 
     @respx.mock
+    async def test_download_proxy_page_is_not_saved(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """A reverse proxy's or captive portal's login page was saved as the file and
+        reported as downloaded (#292). DSM sends application/octet-stream for every
+        download, even a real .html file, so text/html is never the file."""
+        existing = tmp_path / "movie.mkv"
+        existing.write_bytes(b"local data")
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            200, text="<html>Sign in to proxy</html>", headers={"content-type": "text/html"}
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await download_file(
+                mock_client, path="/video/movie.mkv", dest_folder=str(tmp_path), overwrite=True
+            )
+        err = json.loads(str(exc_info.value))["error"]
+        assert err["code"] == "unavailable"
+        assert err["retryable"] is True
+        assert "the answer wasn't a DSM reply (Content-Type text/html)" in err["message"]
+        assert "Sign in" not in err["message"]
+        assert existing.read_bytes() == b"local data"
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["movie.mkv"]
+
+    @respx.mock
     async def test_download_dsm_error_keeps_existing_file_on_overwrite(
         self, mock_client: DsmClient, tmp_path: Path
     ) -> None:
@@ -1125,21 +1150,38 @@ class TestLocalPathConfinementErrors:
         message = json.loads(str(exc_info.value))["error"]["message"]
         assert f"resolves to {(tmp_path / 'out').resolve()}" in message
 
-    async def test_unknown_home_user_is_invalid_parameter(
-        self, mock_client: DsmClient, tmp_path: Path
+    @pytest.mark.parametrize("op", ["upload", "download"])
+    async def test_unknown_home_user_refused_like_outside(
+        self, mock_client: DsmClient, tmp_path: Path, op: str
     ) -> None:
-        """``~nosuchuser`` can't be expanded; that's a structured error, not a crash."""
-        with pytest.raises(ToolError) as exc_info:
-            await upload_file(
-                mock_client,
-                local_path="~mcp_no_such_user_xyz/f.txt",
-                dest_folder="/share",
-                allowed_roots=[tmp_path.resolve()],
-            )
-        error = json.loads(str(exc_info.value))["error"]
-        assert error["code"] == "invalid_parameter"
-        assert error["param"] == "local_path"
-        assert ".." not in error["message"]  # QA R2 (#186): no doubled period
+        """With allowed folders, an unknown ``~user`` gets the same refusal as an existing
+        user's home outside them, so the reply doesn't reveal which local users exist
+        (#260, as Download Station's torrent_file_path in #257)."""
+        roots = [tmp_path.resolve()]
+        errors = []
+        for home in ("~mcp_no_such_user_xyz", "~root"):
+            with pytest.raises(ToolError) as exc_info:
+                if op == "upload":
+                    await upload_file(
+                        mock_client,
+                        local_path=f"{home}/f.txt",
+                        dest_folder="/share",
+                        allowed_roots=roots,
+                    )
+                else:
+                    await download_file(
+                        mock_client,
+                        path="/share/f.txt",
+                        dest_folder=f"{home}/dl",
+                        allowed_roots=roots,
+                    )
+            error = json.loads(str(exc_info.value))["error"]
+            error["message"] = error["message"].replace(home, "~USER")
+            error["value"] = error["value"].replace(home, "~USER")
+            errors.append(error)
+        assert errors[0]["code"] == "permission_denied"
+        assert errors[0] == errors[1]
+        assert ".." not in errors[0]["message"]  # QA R2 (#186): no doubled period
 
     async def test_unknown_home_user_without_roots_is_invalid_parameter(
         self, mock_client: DsmClient

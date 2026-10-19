@@ -309,3 +309,36 @@ class TestNames:
         assert err["code"] == "invalid_parameter"
         assert err["param"] == "tag"
         assert "3 (Beach)" in str(err["message"]) and "7 (beach)" in str(err["message"])
+
+
+class TestPlaceNode:
+    @respx.mock
+    async def test_unknown_place(self) -> None:
+        from mcp_synology.modules.photos.helpers import Photos
+
+        install(FakePhotos().on("SYNO.Foto.Browse.Geocoding", "list", 1, {"list": []}))
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await Photos(client, "personal", "Op").place_node(999, param="condition")
+        assert _error(exc)["code"] == "not_found"
+
+    @respx.mock
+    async def test_place_missing_from_the_filter_tree(self) -> None:
+        from mcp_synology.modules.photos.helpers import Photos
+
+        place = {"id": 1, "name": "Nowhere", "country_id": 77, "first_level": "Nowhere"}
+        fake = FakePhotos().on("SYNO.Foto.Browse.Geocoding", "list", 1, {"list": [place]})
+        fake.on("SYNO.Foto.Search.Filter", "list", 2, {"geocoding": []})
+        install(fake)
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await Photos(client, "personal", "Op").place_node(1, param="condition")
+        assert _error(exc)["code"] == "invalid_parameter"
+        assert "can't be used in a smart album condition" in str(_error(exc)["message"])
+
+    def test_missing_note_empty(self) -> None:
+        from mcp_synology.modules.photos.helpers import Photos
+
+        assert Photos(make_client(), "personal", "Op").missing_note([]) == ""

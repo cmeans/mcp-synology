@@ -606,7 +606,6 @@ class TestSharedClientManagerUnreachableNas:
         ("raised", "code"),
         [
             (httpx.ConnectTimeout, "timeout"),
-            (httpx.ReadTimeout, "timeout"),
             (httpx.ConnectError, "unavailable"),
         ],
     )
@@ -622,9 +621,80 @@ class TestSharedClientManagerUnreachableNas:
             await manager.get_client()
         err = self._envelope(exc.value)
         assert err["code"] == code
-        assert "nas:5000" in err["message"]
+        assert err["message"].startswith("Can't reach the NAS at http://nas:5000")
         assert err["retryable"] is True
+        assert "powered on" in err["suggestion"]
         assert "mcp-synology check" in err["suggestion"]
+
+    @pytest.mark.parametrize("raised", [httpx.ReadTimeout, httpx.WriteTimeout])
+    @respx.mock
+    async def test_slow_nas_is_not_unreachable(self, raised: type[Exception]) -> None:
+        """#254: a busy NAS that doesn't answer the login in time was told "can't reach",
+        and the model then blamed the network. It's a timeout on a reachable NAS."""
+        from mcp.server.mcpserver.exceptions import ToolError
+
+        manager = SharedClientManager(make_test_config())
+        respx.get(f"{BASE_URL}/webapi/query.cgi").mock(side_effect=raised)
+        with pytest.raises(ToolError) as exc:
+            await manager.get_client()
+        err = self._envelope(exc.value)
+        assert err["code"] == "timeout"
+        assert err["retryable"] is True
+        assert err["message"] == (
+            "The NAS at http://nas:5000 accepted the connection but didn't answer within "
+            f"30 s ({raised.__name__}: Mock Error). It may be busy (heavy load, or a large "
+            "delete or copy)."
+        )
+        assert "connection.timeout" in err["suggestion"]
+        assert "powered on" not in err["suggestion"]
+
+    @pytest.mark.parametrize("raised", [httpx.ReadError, httpx.RemoteProtocolError])
+    @respx.mock
+    async def test_dropped_connection_is_not_unreachable(self, raised: type[Exception]) -> None:
+        """Connected, then dropped: "could not connect" blamed the network too (#254)."""
+        from mcp.server.mcpserver.exceptions import ToolError
+
+        manager = SharedClientManager(make_test_config())
+        respx.get(f"{BASE_URL}/webapi/query.cgi").mock(side_effect=raised("gone"))
+        with pytest.raises(ToolError) as exc:
+            await manager.get_client()
+        err = self._envelope(exc.value)
+        assert (err["code"], err["retryable"]) == ("unavailable", True)
+        assert err["message"] == (
+            f"The NAS at http://nas:5000 accepted the connection but dropped it "
+            f"({raised.__name__}: gone). It may be busy or restarting."
+        )
+        assert "powered on" not in err["suggestion"]
+
+    @respx.mock
+    async def test_pool_timeout_never_sent_anything(self) -> None:
+        from mcp.server.mcpserver.exceptions import ToolError
+
+        manager = SharedClientManager(make_test_config())
+        respx.get(f"{BASE_URL}/webapi/query.cgi").mock(side_effect=httpx.PoolTimeout(""))
+        with pytest.raises(ToolError) as exc:
+            await manager.get_client()
+        err = self._envelope(exc.value)
+        assert err["code"] == "timeout"
+        assert err["message"] == (
+            "No connection to the NAS at http://nas:5000 was free within 30 s (PoolTimeout), "
+            "so the request wasn't sent."
+        )
+
+    @respx.mock
+    async def test_url_in_the_error_text_is_redacted(self) -> None:
+        """As every other transport error (#232): DSM URLs carry passwd or _sid."""
+        from mcp.server.mcpserver.exceptions import ToolError
+
+        manager = SharedClientManager(make_test_config())
+        respx.get(f"{BASE_URL}/webapi/query.cgi").mock(
+            side_effect=httpx.ReadTimeout(
+                "timed out at http://nas:5000/webapi/entry.cgi?passwd=SECRET"
+            )
+        )
+        with pytest.raises(ToolError) as exc:
+            await manager.get_client()
+        assert "SECRET" not in str(exc.value)
 
     @respx.mock
     async def test_half_open_client_is_closed_and_next_call_retries(self) -> None:
@@ -701,6 +771,7 @@ class TestWithheldToolsNotice:
                 "filestation": {"enabled": True, "permission": "write"},
                 "system": {"enabled": True, "permission": "write"},
                 "downloadstation": {"enabled": True, "permission": "write"},
+                "photos": {"enabled": True, "permission": "write"},
             }
         )
         assert "PERMISSIONS" not in text
@@ -842,6 +913,7 @@ ALL_MODULES: dict[str, Any] = {
     "filestation": {"enabled": True, "permission": "write"},
     "system": {"enabled": True},
     "downloadstation": {"enabled": True, "permission": "write"},
+    "photos": {"enabled": True, "permission": "write"},
 }
 
 
@@ -1119,7 +1191,7 @@ class TestServedSchemas:
 
     async def test_client_sees_no_titles_or_null_unions(self) -> None:
         tools, _ = await _served(create_server(make_test_config(modules=ALL_MODULES)))
-        assert len(tools) == 29
+        assert len(tools) == 48
         for tool in tools:
             for node in _walk(tool.input_schema):
                 if isinstance(node, dict):
@@ -1247,7 +1319,18 @@ class TestInstructionComments:
 # not to stop and restart a delete whose count hasn't moved). Raised by #257 to 17,582: the
 # LOCAL PATHS section names create_download's torrent folders and the top-level setting, and
 # says a module's list replaces the Downloads default when there's no top-level list.
-PAYLOAD_BUDGET_CHARS = 17_582
+# Raised by #258 to 29,742 (+12,160): the opt-in Photos module's 19 tools and its
+# instructions section. A connection without Photos enabled doesn't carry them.
+# Raised by #296 to 29,886 (+144): create_download's description says the destination must
+# be an existing folder and to create a new one first with File Station's create_folder, or
+# ask the user to create it in DSM.
+# Raised by #308 to 29,930 (+44): upload_photos' description says the album must already
+# exist and to create it first with photo_album.
+# Raised by #309 to 29,993 (+63): search_files' description says mtime_from is inclusive and
+# mtime_to exclusive.
+# Raised by #313 to 30,182 (+189): Photos' descriptions and instructions name File
+# Station's tools as such, and what to do without them (#304).
+PAYLOAD_BUDGET_CHARS = 30_182
 
 
 class TestPayloadBudget:
@@ -1308,6 +1391,21 @@ class TestLocalPathsNotice:
         assert str((tmp_path / "torrents").resolve()) in section
         assert "top level" in section
 
+    def test_photos_folders_are_named(self, tmp_path: Path) -> None:
+        """#258: upload_photos reads from and download_photos writes to Photos' folders."""
+        config = make_test_config(
+            modules={
+                "photos": {
+                    "enabled": True,
+                    "permission": "read",
+                    "settings": {"allowed_local_paths": [str(tmp_path / "pics")]},
+                }
+            }
+        )
+        section = (create_server(config).instructions or "").split("LOCAL PATHS", 1)[1]
+        assert "upload_photos and download_photos" in section
+        assert str((tmp_path / "pics").resolve()) in section
+
     def test_read_only_connection_still_gets_it_for_download_file(self, tmp_path: Path) -> None:
         text = self._instructions({"allowed_local_paths": [str(tmp_path)]}, permission="read")
         assert "LOCAL PATHS" in text
@@ -1321,3 +1419,24 @@ class TestLocalPathsNotice:
         f.write_text("MINE", encoding="utf-8")
         config = make_test_config(instructions_file=str(f))
         assert "LOCAL PATHS" not in (create_server(config).instructions or "")
+
+
+class TestPhotosNotice:
+    """#258: the Photos section comes with the module, so connections without it don't
+    carry its text."""
+
+    def test_present_when_enabled(self) -> None:
+        config = make_test_config(modules={"photos": {"enabled": True, "permission": "write"}})
+        text = create_server(config).instructions or ""
+        section = text.split("SYNOLOGY PHOTOS:", 1)[1]
+        assert "space=shared" in section
+        assert "confirm with the user first" in section
+        assert "photo_task" in section
+        # #304: File Station's tools may not be on this connection, so they're named as
+        # File Station's, and the section doesn't lean on file_task.
+        flat = " ".join(section.split())
+        assert "File Station's tools take paths, when that module is enabled" in flat
+        assert "file_task" not in section
+
+    def test_absent_otherwise(self) -> None:
+        assert "SYNOLOGY PHOTOS" not in (create_server(make_test_config()).instructions or "")

@@ -62,7 +62,9 @@ jobs:
   # When Dev Active is removed manually, check whether the head commit's CI and
   # vdsm runs already passed. If yes, promote straight to Ready for QA; if a job
   # failed, set CI Failed; if either is still running, Awaiting CI stays and
-  # pr-labels-ci.yml promotes when they complete.
+  # pr-labels-ci.yml promotes when they complete. (A completed run whose jobs
+  # have no result recorded yet also leaves Awaiting CI; only a later event
+  # re-checks it.) Nothing changes if Dev Active was added back during the wait.
   on-unlabel:
     if: >-
       github.event.action == 'unlabeled'
@@ -84,18 +86,43 @@ jobs:
           STATE=pass
           for WF in ci.yml vdsm.yml; do
             RUN=$(gh api "repos/$REPO/actions/workflows/$WF/runs?head_sha=$HEAD_SHA&event=pull_request&per_page=1" \
-              --jq '.workflow_runs[0] // empty | "\(.id) \(.status)"')
+              --jq '.workflow_runs[0] // empty | "\(.id) \(.status) \(.conclusion)"')
             if [ -z "$RUN" ]; then
               echo "$WF: no run yet for $HEAD_SHA"
               STATE=pending; continue
             fi
-            read -r RUN_ID RUN_STATUS <<< "$RUN"
+            read -r RUN_ID RUN_STATUS RUN_CONCLUSION <<< "$RUN"
             if [ "$RUN_STATUS" != completed ]; then
               echo "$WF: run $RUN_ID is $RUN_STATUS"
               STATE=pending; continue
             fi
-            BAD=$(gh api --paginate "repos/$REPO/actions/runs/$RUN_ID/jobs" \
-              --jq '.jobs[] | select(.name != "tool-quality" and .conclusion != "success" and .conclusion != "skipped") | "\(.name): \(.conclusion)"')
+            # A run can read "completed" before its jobs' results are recorded (a
+            # job with no conclusion, or no jobs listed yet; seen twice on #298
+            # during a GitHub Actions incident). That's pending, not failed. Read
+            # the jobs up to 3 times, 20 s apart, since this run's completion may
+            # be the last event that re-checks the commit.
+            for TRY in 1 2 3; do
+              JOBS=$(gh api --paginate "repos/$REPO/actions/runs/$RUN_ID/jobs" \
+                --jq '.jobs[] | select(.name != "tool-quality") | [(.status // "none"), (.conclusion // "none"), .name] | @tsv')
+              OPEN=$(printf '%s\n' "$JOBS" | awk -F'\t' 'NF && ($1 != "completed" || $2 == "none") { print $3 ": " $1 "/" $2 }')
+              if [ -z "$JOBS" ]; then
+                # No jobs at all: a run that failed before starting any (e.g.
+                # startup_failure) has failed; otherwise wait for them.
+                case "$RUN_CONCLUSION" in
+                  success|skipped|null|"") OPEN="no jobs listed" ;;
+                  *) OPEN="" ;;
+                esac
+              fi
+              if [ -z "$OPEN" ] || [ "$TRY" = 3 ]; then break; fi
+              echo "$WF: run $RUN_ID: results not recorded yet (try $TRY), rechecking in 20 s"
+              sleep 20
+            done
+            if [ -n "$OPEN" ]; then
+              echo "$WF: run $RUN_ID is completed, but these jobs have no result yet:"; echo "$OPEN"
+              STATE=pending; continue
+            fi
+            BAD=$(printf '%s\n' "$JOBS" | awk -F'\t' 'NF && $2 != "success" && $2 != "skipped" { print $3 ": " $2 }')
+            if [ -z "$JOBS" ]; then BAD="(no jobs) run conclusion: $RUN_CONCLUSION"; fi
             if [ -n "$BAD" ]; then
               echo "$WF: run $RUN_ID has failed jobs:"; echo "$BAD"
               STATE=fail; break
@@ -104,7 +131,23 @@ jobs:
           done
           echo "Checks on $HEAD_SHA: $STATE"
 
+          # The state took up to 80 s to read (rechecks above): if a newer commit was
+          # pushed meanwhile, its own runs decide the labels.
+          CUR=$(gh pr view "$PR" --repo "$REPO" --json headRefOid --jq .headRefOid)
+          if [ "$CUR" != "$HEAD_SHA" ]; then
+            echo "PR #$PR moved to $CUR — leaving the labels to its runs"
+            exit 0
+          fi
+
+          # The event's labels can be up to 80 s old by now, so read them again: if Dev
+          # Active came back meanwhile, dev isn't done, and pr-labels-ci.yml or the next
+          # removal decides.
+          PR_LABELS=$(gh pr view "$PR" --repo "$REPO" --json labels --jq '[.labels[].name]')
           has() { echo "$PR_LABELS" | grep -q "\"$1\""; }
+          if has "Dev Active"; then
+            echo "Dev Active is back — leaving the labels"
+            exit 0
+          fi
           case "$STATE" in
             pass)
               REMOVE=""

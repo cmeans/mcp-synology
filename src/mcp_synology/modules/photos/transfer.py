@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import errno
 import json
 import logging
@@ -11,10 +12,16 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from mcp_synology.core.errors import ErrorCode, SynologyError
+from mcp_synology.core.errors import DsmHttpError, DsmReplyError, ErrorCode, SynologyError
 from mcp_synology.core.formatting import error_response, format_size, synology_error_response
 from mcp_synology.core.local_paths import refuse_outside_roots
-from mcp_synology.modules.photos.helpers import Photos, check_space, invalid, space_label
+from mcp_synology.modules.photos.helpers import (
+    SETUP_CODES,
+    Photos,
+    check_space,
+    invalid,
+    space_label,
+)
 
 if TYPE_CHECKING:
     from mcp_synology.core.client import DsmClient
@@ -193,3 +200,211 @@ async def _download_one(
             return "not downloaded: no space left on the local disk"
         return f"not downloaded: couldn't write the file ({e.strerror or e})"
     return format_size(written)
+
+
+# -- upload_photos ------------------------------------------------------------------
+
+# Upload errors the web client doesn't retry (604, 605, 620, 622), plus a missing folder
+# (621) and the setup and permission codes. Anything else is retried once, as the web
+# client does (UPLOAD retry count 1): vdsm answered 623 to some uploads right after boot,
+# and the retry went through.
+_UPLOAD_FINAL = frozenset({604, 605, 620, 621, 622}) | SETUP_CODES
+UPLOAD_RETRY_DELAY = 2.0
+
+
+async def _upload_one(
+    client: DsmClient, api: str, fields: dict[str, Any], path: Path
+) -> dict[str, Any]:
+    async def send() -> dict[str, Any]:
+        return await client.upload_multipart(
+            api,
+            "upload_to_folder",
+            1,
+            {k: json.dumps(v) for k, v in fields.items()},
+            file_path=path,
+            filename=path.name,
+        )
+
+    try:
+        return await send()
+    except SynologyError as e:
+        if e.code is None or e.code in _UPLOAD_FINAL:
+            raise
+        logger.info("Photos upload of %s got %s; retrying once", path.name, e.code)
+        await asyncio.sleep(UPLOAD_RETRY_DELAY)
+        return await send()
+
+
+_MAX_UPLOAD = 50
+_DUPLICATE = {"rename": "rename", "skip": "ignore"}
+_ACTIONS = {"new": "new", "rename": "renamed", "ignore": "skipped"}
+
+
+async def upload_photos(
+    client: DsmClient,
+    *,
+    local_paths: list[str],
+    folder: str = "/",
+    space: str = "personal",
+    on_duplicate: str = "rename",
+    album: str | None = None,
+    allowed_roots: list[Path] | None = None,
+) -> str:
+    """Upload local files into a Photos folder (spec: upload_photos), one request each."""
+    op = "Upload photos"
+    sp = check_space(op, space)
+    if on_duplicate not in _DUPLICATE:
+        invalid(
+            op,
+            f"unknown on_duplicate {on_duplicate!r}.",
+            param="on_duplicate",
+            value=on_duplicate,
+            valid=list(_DUPLICATE),
+        )
+    if not local_paths:
+        invalid(op, "pass at least one local path.", param="local_paths", value=local_paths)
+    if len(local_paths) > _MAX_UPLOAD:
+        invalid(
+            op,
+            f"at most {_MAX_UPLOAD} files per call.",
+            param="local_paths",
+            value=len(local_paths),
+        )
+    if album is not None and sp == "shared":
+        invalid(
+            op,
+            "albums are personal space only; upload to the personal space to add "
+            "the files to an album.",
+            param="album",
+            value=album,
+        )
+    files: list[Path] = []
+    for value in local_paths:
+        # Before any existence check, so a refusal doesn't reveal what exists outside.
+        refuse_outside_roots(
+            op,
+            "local_paths",
+            value,
+            Path(value),
+            allowed_roots,
+            module="photos",
+            hide_unknown_users=True,
+        )
+        path = Path(value).expanduser()
+        if not path.is_file():
+            error_response(
+                ErrorCode.NOT_FOUND,
+                f"{op} failed: not a local file: {value}",
+                retryable=False,
+                param="local_paths",
+                value=value,
+                suggestion="Pass files, not folders; check the path.",
+            )
+        files.append(path)
+    try:
+        ph = Photos(client, sp, op)
+        target = await ph.folder(folder)
+        target_album = await ph.album(album) if album is not None else None
+    except SynologyError as e:
+        synology_error_response(op, e)
+    rows: list[tuple[str, str, str]] = []
+    uploaded: list[int] = []  # stored or already there: what an album gets
+    renamed: list[int] = []
+    skipped = 0
+    for n, path in enumerate(files):
+        try:
+            fields = {
+                "duplicate": _DUPLICATE[on_duplicate],
+                "name": path.name,
+                # Photos shows this as the taken time until it indexes the file's EXIF.
+                "mtime": int(path.stat().st_mtime),
+                "target_folder_id": int(target["id"]),
+            }
+            data = await _upload_one(client, ph.api("Upload.Item"), fields, path)
+            action = str(data.get("action", "new"))
+            item_id = int(data["id"])
+        except (DsmHttpError, DsmReplyError, httpx.TransportError) as e:
+            if isinstance(e, DsmHttpError) and 400 <= e.status < 500:
+                # A 4xx is the proxy (or DSM) refusing this request: not stored. A smaller
+                # file may still go through after a 413 (nginx's body-size limit), but
+                # after a 429 (rate limited) the rest would only meet the same limit.
+                hint = " The file may be over the proxy's upload size limit." * (e.status == 413)
+                rows.append((path.name, "failed", f"{e}{hint}"))
+                if e.status == 429:
+                    rows += [(rest.name, "not tried", "") for rest in files[n + 1 :]]
+                    break
+                continue
+            # No answer, or a proxy's 502/504 or login page (#282): the same stall, which
+            # the rest would most likely meet too, so stop and say which weren't tried (as
+            # download_photos). Unless the request never left, the upload may have landed,
+            # so it isn't reported as failed outright.
+            if isinstance(e, httpx.ConnectError | httpx.ConnectTimeout):
+                rows.append((path.name, "failed", f"DSM couldn't be reached ({type(e).__name__})"))
+            elif isinstance(e, httpx.TransportError):
+                why = f"DSM didn't answer ({type(e).__name__})"
+                rows.append((path.name, "unknown", f"{why}; it may or may not have been stored"))
+            else:
+                rows.append((path.name, "unknown", f"{e} It may or may not have been stored."))
+            rows += [(rest.name, "not tried", "") for rest in files[n + 1 :]]
+            break
+        except SynologyError as e:
+            code = f" ({e.code})" if e.code else ""
+            rows.append((path.name, "failed", f"{e}{code}"))
+            continue
+        except (OSError, KeyError, TypeError, ValueError) as e:
+            if isinstance(e, OSError):
+                why = f"couldn't read the file ({e.strerror or e})"
+            else:  # DSM's reply had no usable id
+                why = f"DSM's reply couldn't be read ({type(e).__name__})"
+            rows.append((path.name, "failed", why))
+            continue
+        uploaded.append(item_id)
+        note = f"id {item_id}"
+        if action == "ignore":
+            note += " (already there)"
+            skipped += 1
+        elif action == "rename":
+            renamed.append(item_id)
+        rows.append((path.name, _ACTIONS.get(action, action), note))
+    if renamed:
+        try:
+            data = await ph.call("Browse.Item", "get", {"id": renamed, "additional": []}, version=2)
+            names = {int(i["id"]): str(i.get("filename", "")) for i in data.get("list", [])}
+            rows = [
+                (name, state, f"{note} (as {names[int(note.split()[1])]})")
+                if state == "renamed" and int(note.split()[1]) in names
+                else (name, state, note)
+                for name, state, note in rows
+            ]
+        except (SynologyError, httpx.TransportError) as e:
+            # The uploads are done; only the "(as …)" names are missing.
+            logger.debug("Couldn't read the renamed items' names: %s", type(e).__name__)
+    width = max(len(r[0]) for r in rows)
+    # A skipped duplicate is already there, not uploaded: count it apart.
+    head = f"Uploaded {len(uploaded) - skipped} of {len(files)} file(s)"
+    if skipped:
+        head += f" ({skipped} skipped, already there)"
+    lines = [f"{head} to {target.get('name')} ({space_label(sp)})"]
+    lines += [f"  {name:<{width}}  {state:<8} {note}" for name, state, note in rows]
+    if target_album is not None and uploaded:
+        try:
+            await ph.call(
+                "Browse.NormalAlbum",
+                "add_item",
+                {"id": int(target_album["id"]), "item": uploaded},
+                personal=True,
+            )
+            lines.append(f'Added {len(uploaded)} item(s) to album "{target_album.get("name")}".')
+        except SynologyError as e:
+            lines.append(f'Couldn\'t add them to album "{target_album.get("name")}": {e}')
+        except httpx.TransportError as e:
+            lines.append(
+                f"Couldn't add them to album \"{target_album.get('name')}\": DSM didn't answer "
+                f"({type(e).__name__}). Check the album with list_photos before adding again."
+            )
+    if len(uploaded) > skipped:
+        lines.append(
+            "Photos indexes new items over the next seconds to minutes; taken dates and "
+            "previews appear then."
+        )
+    return "\n".join(lines)

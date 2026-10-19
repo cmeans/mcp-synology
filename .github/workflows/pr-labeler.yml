@@ -1,0 +1,28 @@
+name: PR Labeler
+
+# Labels a PR from the files it changes (.github/labeler.yml), and removes a label
+# again when a later push drops those files (sync-labels). For now, one label:
+# "Rebuilds vdsm image", for PRs whose vdsm runs rebuild the golden image.
+#
+# pull_request_target runs in the base repo with a write token, so fork PRs get
+# labels too. That's safe only because nothing here checks out or runs PR code:
+# actions/labeler reads the PR's changed-file list from the API and its own config
+# from the default branch. That also means a change to this file or to labeler.yml
+# can't label its own PR; check it on the next PR after merging.
+on:
+  pull_request_target:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions: {}
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # the config file
+      pull-requests: write # the labels
+    steps:
+      - uses: actions/labeler@bf12e9b00b37c5c0ca2b87b79b2daf7891dbda13 # v7.0.0
+        with:
+          sync-labels: true

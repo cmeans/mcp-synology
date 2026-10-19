@@ -27,6 +27,7 @@ from mcp_synology.core.state import ServerState
 from mcp_synology.modules import PermissionTier, RegisterContext, filter_tools_by_permission
 from mcp_synology.modules import downloadstation as _downloadstation_mod
 from mcp_synology.modules import filestation as _filestation_mod
+from mcp_synology.modules import photos as _photos_mod
 from mcp_synology.modules import system as _system_mod
 
 if TYPE_CHECKING:
@@ -102,19 +103,53 @@ def _platform_label() -> str:
 _MODULE_REGISTRY: dict[str, ModuleType] = {
     "downloadstation": _downloadstation_mod,
     "filestation": _filestation_mod,
+    "photos": _photos_mod,
     "system": _system_mod,
 }
 
 
 def _unreachable_error(base_url: str, timeout: float, exc: httpx.TransportError) -> NoReturn:
-    """Raise a structured error for a NAS that can't be reached (#138).
+    """Raise a structured error for a first connection (API info + login) that failed (#138).
 
     httpx's connect errors often stringify to ``''``, which used to reach the
     model as "Error executing tool list_shares: " with nothing to act on.
+    Only a failure to connect is "can't reach" (#254): a NAS that accepted the connection
+    and then didn't answer in time, or dropped it, is there but busy (e.g. a large
+    delete), and a pool timeout never sent anything. Any URL in the text is redacted.
     """
+    text = redact_urls(str(exc))
+    detail = f" ({type(exc).__name__}: {text})" if text else f" ({type(exc).__name__})"
+    busy = (
+        "Try again shortly. If the NAS is often this slow, raise connection.timeout "
+        f"in the config (now {timeout:g} s). "
+        "`mcp-synology check --config <file>` tests the connection and login."
+    )
+    if isinstance(exc, httpx.ReadTimeout | httpx.WriteTimeout):
+        error_response(
+            ErrorCode.TIMEOUT,
+            f"The NAS at {base_url} accepted the connection but didn't answer within "
+            f"{timeout:g} s{detail}. It may be busy (heavy load, or a large delete or copy).",
+            retryable=True,
+            suggestion=busy,
+        )
+    if isinstance(exc, httpx.ReadError | httpx.WriteError | httpx.RemoteProtocolError):
+        error_response(
+            ErrorCode.UNAVAILABLE,
+            f"The NAS at {base_url} accepted the connection but dropped it{detail}. It may "
+            "be busy or restarting.",
+            retryable=True,
+            suggestion=busy,
+        )
+    if isinstance(exc, httpx.PoolTimeout):
+        error_response(
+            ErrorCode.TIMEOUT,
+            f"No connection to the NAS at {base_url} was free within {timeout:g} s{detail}, "
+            "so the request wasn't sent.",
+            retryable=True,
+            suggestion="Try again shortly.",
+        )
     timed_out = isinstance(exc, httpx.TimeoutException)
     what = f"timed out after {timeout:g} s" if timed_out else "could not connect"
-    detail = f" ({type(exc).__name__}: {exc})" if str(exc) else f" ({type(exc).__name__})"
     error_response(
         ErrorCode.TIMEOUT if timed_out else ErrorCode.UNAVAILABLE,
         f"Can't reach the NAS at {base_url}: {what}{detail}.",
@@ -494,6 +529,7 @@ def _local_paths_notice(config: AppConfig, plan: _ModulePlan) -> str:
     from mcp_synology.core.local_paths import allowed_local_roots
     from mcp_synology.modules.downloadstation import DownloadStationSettings
     from mcp_synology.modules.filestation import FileStationSettings
+    from mcp_synology.modules.photos import PhotosSettings
 
     def folders(roots: list[Path]) -> str:
         return ", ".join(str(r) for r in roots)
@@ -524,6 +560,17 @@ def _local_paths_notice(config: AppConfig, plan: _ModulePlan) -> str:
                 "create_download's torrent_file_path only reads .torrent and .nzb files "
                 f"inside these folders (or below them): {folders(roots)}."
             )
+        elif mod_name == "photos" and {"upload_photos", "download_photos"} & set(allowed):
+            ph = PhotosSettings(**mod_config.settings)
+            roots = allowed_local_roots(
+                ph.allowed_local_paths,
+                shared_paths=config.allowed_local_paths,
+                module="photos",
+            )
+            lines.append(
+                "upload_photos and download_photos only use local paths inside these folders "
+                f"(or below them): {folders(roots)}."
+            )
     if not lines:
         return ""
     return (
@@ -533,6 +580,23 @@ def _local_paths_notice(config: AppConfig, plan: _ModulePlan) -> str:
         "at the top level of the config for every module or in a module's settings "
         "(without a top-level list, a module's list replaces the Downloads default)."
     )
+
+
+_PHOTOS_NOTICE = """
+
+SYNOLOGY PHOTOS:
+Photos keeps its own library: the personal space (space=personal, the default) and Shared
+Space (space=shared). Photos tools take the ids that list_photos and
+list_photo_collections return; for files outside Photos, File Station's tools take paths,
+when that module is enabled.
+delete_photos, delete_photo_folders, delete_photo_albums and merge_people can't be undone
+from Photos: name what will go and confirm with the user first. A long copy, move or delete
+hands off with a photos:<id> handle; follow up with photo_task."""
+
+
+def _photos_notice(plan: _ModulePlan) -> str:
+    """How to use the Photos tools, when the module is enabled (#258)."""
+    return _PHOTOS_NOTICE if any(name == "photos" for name, _, _, _ in plan) else ""
 
 
 def create_server(config: AppConfig) -> MCPServer:
@@ -602,6 +666,7 @@ def create_server(config: AppConfig) -> MCPServer:
 
     if not config.instructions_file:
         # A full replacement file is the user's own; everything else gets the notice.
+        instructions += _photos_notice(plan)
         instructions += _withheld_tools_notice(config, plan)
         instructions += _local_paths_notice(config, plan)
 

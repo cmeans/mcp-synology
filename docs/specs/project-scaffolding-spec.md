@@ -133,6 +133,7 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "pytest-cov>=5.0",
+    "pytest-xdist>=3.6",
     "ruff>=0.5",               # Linting + formatting
     "mypy>=1.10",              # Type checking
     "respx>=0.22",             # httpx mock library for testing
@@ -281,7 +282,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --dev
-      - run: uv run pytest --cov=mcp_synology --cov-report=xml
+      - run: uv run pytest -n auto --cov=mcp_synology --cov-report=xml
       - uses: codecov/codecov-action@v4
         if: matrix.python-version == '3.12'
         with:
@@ -455,15 +456,15 @@ and their rationale — don't reinvent or contradict them without discussion.
 - Session errors (106/107/119) trigger transparent re-auth — modules never see them
 
 ## Testing
-- `uv run pytest` — unit + module tests (mocked HTTP, fast)
-- `uv run pytest -m integration` — real NAS tests (requires `tests/integration_config.yaml`)
+- `uv run pytest -n auto` — unit + module tests in parallel (mocked HTTP, fast)
+- `uv run pytest -m integration` — real NAS tests (requires `tests/integration_config.yaml`); never with `-n`, since they run in order
 - Mock at the HTTP layer with `respx`, not at the function/method level
 - Test files mirror source files: `listing.py` → `test_listing.py`
 
 ## Common Tasks
 - Add a new File Station tool: add handler in the appropriate domain file, add to `MODULE_INFO.tools`, add tests
 - Add a new module: create `modules/<name>/` with `__init__.py` (MODULE_INFO + register), add to config schema
-- Run all checks: `uv run ruff check src/ tests/ && uv run mypy src/ && uv run pytest`
+- Run all checks: `uv run ruff check src/ tests/ && uv run mypy src/ && uv run pytest -n auto`
 ```
 
 ---

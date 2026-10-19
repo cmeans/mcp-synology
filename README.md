@@ -117,13 +117,43 @@ See **Local path confinement** under [Features](#features). Magnet links and URL
 
 **Known limits:**
 
+- A `destination` must be an existing folder: Download Station doesn't create missing folders. Create it first with File Station's `create_folder` (`/video/TV/New show`; the `filestation` module needs `enabled: true` and `permission: write`) or in DSM's own File Station, then pass it share-relative (`video/TV/New show`). An error that says the destination doesn't exist names this fix (#296).
 - `create_download` returns no task IDs for URLs that use `username` / `password`.
 - `edit_download` changes only the destination.
 - There is no way to pick individual files inside a torrent.
 - BT search and RSS feeds are not supported yet.
 - `delete_download(force_complete=true)` doesn't reliably keep partial data: DSM discarded unfinished HTTP downloads anyway. DSM also refuses it for finished tasks, and the tool reports those as not removed.
 
-Tested against DSM 7.1 (Download Station 3.9-4627) and DSM 7.2.2 (Download Station 4.1-5012).
+Tested against DSM 7.1 (Download Station 3.9-4627) and DSM 7.2.2, 7.3.2 and 7.4.1 (Download Station 4.1-5012).
+
+### Synology Photos
+
+Browse, search, organize and share a Synology Photos library, in your personal space and in Shared Space. 19 tools across two permission tiers:
+
+- **READ** — list_photos, list_photo_collections, get_photo, download_photos
+- **WRITE** — upload_photos, photo_album, photo_share_link, photo_folder, copy_photos, move_photos, photo_task, tag_photos, edit_photo, edit_person, photo_request, merge_people, delete_photos, delete_photo_folders, delete_photo_albums
+
+Photos is opt-in, like Download Station: install **Synology Photos** from Package Center, then add `photos` inside the existing `modules:` section, check the config with `mcp-synology check`, and restart your MCP client.
+
+```yaml
+modules:
+  photos:
+    enabled: true
+    permission: write   # or read
+```
+
+**Accounts.** The account needs the Synology Photos application privilege (**Control Panel → Application Privileges → Synology Photos**), and the personal space needs the user home service (**Control Panel → User & Group → Advanced → User Home**). Shared Space must be enabled in Synology Photos' settings, with access granted to the account. The tools report each of these by name when it's missing.
+
+**Good to know:**
+
+- **Edits change the original files.** Photos writes ratings, descriptions, tags, taken-time changes and rotations into the files themselves, so their dates and sizes change; backup and sync tools see new versions.
+- **Tags are given by name.** A tag exists only while some item has it, so removing it from every item deletes it.
+- **Deletes** go to the recycle bin of the share that holds the space, when it has one; Photos has no trash of its own. A large copy, move or delete hands off with a `photos:<id>` handle that `photo_task` follows up on.
+- **Favorites and concepts** (things and scenes Photos recognized) need Synology Photos 1.9.1 (DSM 7.2); on 1.3.4 they're refused with `not_supported`.
+- **Local files.** `upload_photos` reads and `download_photos` writes only inside the allowed local folders (by default your Downloads folder); see the Download Station torrent-file notes above for `allowed_local_paths`. `task_timeout` (seconds, default 30, up to 600) sets how long a copy, move or delete waits before handing off.
+- **Not covered yet:** Shared Space folder sharing, face-level People edits, guest uploads to photo requests, and changing Photos' own settings.
+
+Tested against DSM 7.1 (Synology Photos 1.3.4), DSM 7.2.2, 7.3.2 and 7.4.1 (Synology Photos 1.9.1). See [`docs/specs/photos-module-spec.md`](docs/specs/photos-module-spec.md) for what each tool sends and the DSM behavior behind it.
 
 ## Features
 
@@ -348,6 +378,10 @@ instructions_file: ~/.config/mcp-synology/my-instructions.md
 Both support template variables: `{display_name}`, `{instance_id}`, `{host}`, `{port}`.
 
 HTML comments (`<!-- ... -->`) are removed from both before the text is sent, so they can hold notes for whoever edits the file. A comment on a line of its own is removed with that line.
+
+## Troubleshooting
+
+An error's `help_url` points to its section in [docs/error-codes.md](docs/error-codes.md). For behavior that looks wrong but isn't an error (a download sitting in `waiting`, a Photos date that reads back old, a delete that hands off with a handle), see [docs/troubleshooting.md](docs/troubleshooting.md), organized by module.
 
 ## Debugging
 

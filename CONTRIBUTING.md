@@ -60,7 +60,7 @@ For anything bigger than a one-line fix:
 
 ```bash
 uv sync --extra dev                                      # install runtime + dev dependencies
-uv run pytest                                            # run unit + module tests
+uv run pytest -n auto                                    # run unit + module tests, one worker per CPU
 uv run pytest tests/modules/filestation/test_listing.py  # single test file
 uv run pytest -k "test_list_shares"                      # single test by name
 uv run ruff check src/ tests/ scripts/                   # lint
@@ -102,7 +102,7 @@ Every PR must:
   issue: `- ... (#NN) — closes #MM`.
 - **Link the issue** with `Closes #N` in the PR body so merging
   auto-closes it.
-- **Pass CI locally first** — run `uv run pytest`, `uv run ruff
+- **Pass CI locally first** — run `uv run pytest -n auto`, `uv run ruff
   check src/ tests/ scripts/`, and `uv run mypy src/ scripts/`
   and confirm green before pushing.
 - **Write a clear commit message.** PRs are squash-merged, so your
@@ -158,6 +158,11 @@ Two required sections:
        Rebase onto `main` and resolve the conflicts. Review waits for
        this one, since resolving it changes the diff: the PR loses
        `Ready for QA` until the fix is pushed and CI passes again.
+   - **`Rebuilds vdsm image`** is informational and doesn't block the
+     merge. It's set automatically when the PR changes the vdsm bake
+     files, so its vdsm runs rebuild the test image (about 10 extra
+     minutes per DSM version). It's removed if a later push drops those
+     changes.
 4. **Final maintainer review and merge.** Once QA is clean, the
    maintainer does a final review and merges the PR. All PRs are
    squash-merged. Your branch is auto-deleted after merge.

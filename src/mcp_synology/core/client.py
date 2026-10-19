@@ -14,6 +14,7 @@ import os
 import secrets
 import shutil
 from collections.abc import Awaitable, Callable, Coroutine
+from http.cookiejar import CookieJar
 from typing import TYPE_CHECKING, Any, BinaryIO, Self
 
 if TYPE_CHECKING:
@@ -23,6 +24,7 @@ import httpx
 
 from mcp_synology.core.errors import (
     DsmHttpError,
+    DsmReplyError,
     DsmTimeoutError,
     DsmUnavailableError,
     RequestTooLongError,
@@ -39,7 +41,8 @@ logger = logging.getLogger(__name__)
 _SESSION_ERROR_CODES = frozenset({106, 107, 119})
 
 # Request params masked as *** in debug logs.
-_SENSITIVE_PARAMS = frozenset({"passwd", "password", "_sid", "device_id", "otp_code"})
+# passphrase: a Photos share link's secret (its URL is /mo/sharing/<passphrase>).
+_SENSITIVE_PARAMS = frozenset({"passwd", "password", "_sid", "device_id", "otp_code", "passphrase"})
 
 
 def _log_safe(
@@ -58,6 +61,60 @@ ProgressCallback = Callable[[int, int | None], Coroutine[Any, Any, None]]
 
 
 _MAY_HAVE_APPLIED = "DSM may still have applied the request; check before retrying."
+
+_NOT_A_REPLY = (
+    "A reverse proxy or captive portal in front of the NAS may be answering instead of "
+    "DSM (a login page, say). Try again shortly; if it keeps happening, check what's in "
+    "front of the NAS, and run 'mcp-synology check'."
+)
+
+
+def _read_json(resp: httpx.Response, label: str, *, may_have_applied: bool = False) -> Any:
+    """The DSM reply envelope, or ``DsmReplyError`` if the answer isn't a JSON object (#282).
+
+    ``resp.json()`` raised a bare ``JSONDecodeError`` for an HTML page, which reached the
+    model as "Expecting value: line 1 column 1 (char 0)". The error names ``label`` and
+    the Content-Type, never the body.
+    """
+    body = _loads(resp.content, label)
+    if isinstance(body, dict):
+        return body
+    ctype = resp.headers.get("content-type", "").split(";")[0].strip().lower() or "none"
+    raise DsmReplyError(
+        f"{label}: the answer wasn't a DSM reply (Content-Type {ctype}).",
+        retryable=not may_have_applied,
+        suggestion=f"{_MAY_HAVE_APPLIED} {_NOT_A_REPLY}" if may_have_applied else _NOT_A_REPLY,
+    )
+
+
+def _loads(content: bytes, label: str) -> Any:
+    """``content`` parsed as JSON, or None if it isn't JSON.
+
+    DSM copies binary EXIF fields into its JSON as raw bytes, which aren't UTF-8 (Photos
+    get_exif, "Picture Info", DSM 7.1.1), so a strict decode would lose the whole reply.
+    Those bytes are read as U+FFFD (replacement characters) instead.
+    """
+    try:
+        return json.loads(content)
+    except UnicodeDecodeError:
+        logger.debug("%s: the reply has bytes that aren't UTF-8; reading them as U+FFFD", label)
+        try:
+            return json.loads(content.decode("utf-8", errors="replace"))
+        except ValueError:
+            return None
+    except ValueError:
+        return None
+
+
+def _error_envelope(body: bytes) -> dict[str, Any] | None:
+    """The ``error`` object of a DSM error envelope in ``body``, or None if it has none."""
+    parsed = _loads(body, "download error envelope")
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("error"), dict):
+        return None
+    code = parsed["error"].get("code", 0)
+    if isinstance(code, bool) or not isinstance(code, int | float):
+        return None  # DSM's codes are numbers; a dict or list here would crash the lookup
+    return parsed["error"]  # type: ignore[no-any-return]
 
 
 async def _guarded_post(
@@ -96,6 +153,23 @@ async def _guarded_post(
 
 
 _DSM_CALL_ATTR = "mcp_synology_dsm_call"
+
+# DSM reloads its nginx whenever its web configuration changes (a package starts, stops or
+# updates; a setting or certificate changes): twice in the 13 s after Download Station
+# starts on DSM 7.1 (#222). A reload closes idle keep-alive connections, and httpx doesn't
+# retry a request sent on one ("Server disconnected without sending a response"). So reads
+# keep the pooled connection and are resent once on a fresh one; anything else goes on a
+# connection that's never reused. A method not recognized here counts as a write, so a
+# wrong guess costs a connection, never a repeated write.
+# Keep in sync with CLAUDE.md (DSM API Client) and docs/specs/architecture.md.
+_READ_PREFIXES = ("get", "list", "count")
+_READ_METHODS = frozenset({"query", "status", "me", "info"})
+_STALE_CONNECTION = (httpx.RemoteProtocolError, httpx.ReadError, httpx.WriteError)
+
+
+def _is_read(method: str) -> bool:
+    """True for a DSM method that only reads (safe to send again)."""
+    return method in _READ_METHODS or method.startswith(_READ_PREFIXES)
 
 
 def dsm_call_of(exc: BaseException) -> str | None:
@@ -169,6 +243,7 @@ class DsmClient:
         self._verify_ssl = verify_ssl
         self._timeout = timeout
         self._http: httpx.AsyncClient | None = None
+        self._http_once: httpx.AsyncClient | None = None
         self._api_cache: dict[str, ApiInfoEntry] = {}
         self._sid: str | None = None
         self._re_auth_callback: ReAuthCallback | None = None
@@ -225,9 +300,15 @@ class DsmClient:
         # We do our own request logging with proper masking in request().
         logging.getLogger("httpx").setLevel(logging.WARNING)
         logging.getLogger("httpcore").setLevel(logging.WARNING)
-        self._http = httpx.AsyncClient(
+        # One cookie jar for both clients, so a cookie DSM sets on either is sent on both.
+        jar = CookieJar()
+        self._http = httpx.AsyncClient(verify=self._verify_ssl, timeout=self._timeout, cookies=jar)
+        # Never reuses a connection: writes, downloads and a read's resend (#222).
+        self._http_once = httpx.AsyncClient(
             verify=self._verify_ssl,
             timeout=self._timeout,
+            cookies=jar,
+            limits=httpx.Limits(max_connections=100, max_keepalive_connections=0),
         )
         return self
 
@@ -236,6 +317,9 @@ class DsmClient:
             logger.debug("Closing HTTP client connection")
             await self._http.aclose()
             self._http = None
+        if self._http_once:
+            await self._http_once.aclose()
+            self._http_once = None
 
     def _get_http(self) -> httpx.AsyncClient:
         if self._http is None:
@@ -243,12 +327,29 @@ class DsmClient:
             raise RuntimeError(msg)
         return self._http
 
+    def _get_http_once(self) -> httpx.AsyncClient:
+        """The client that never reuses a connection (#222)."""
+        if self._http_once is None:
+            msg = "DsmClient must be used as an async context manager."
+            raise RuntimeError(msg)
+        return self._http_once
+
+    async def _send_read(
+        self, label: str, send: Callable[[httpx.AsyncClient], Awaitable[httpx.Response]]
+    ) -> httpx.Response:
+        """Send a read on the pooled connection; if that connection turns out to be one
+        DSM's nginx closed (a reload, #222), send it once more on a fresh connection."""
+        try:
+            return await send(self._get_http())
+        except _STALE_CONNECTION as e:
+            logger.debug("%s: %s on a pooled connection; resending once", label, type(e).__name__)
+            return await send(self._get_http_once())
+
     async def query_api_info(self) -> dict[str, ApiInfoEntry]:
         """Call SYNO.API.Info with query=ALL and populate the API cache.
 
         Returns the cached mapping of API name -> ApiInfoEntry.
         """
-        http = self._get_http()
         url = f"{self._base_url}/webapi/query.cgi"
         params = {
             "api": "SYNO.API.Info",
@@ -258,9 +359,11 @@ class DsmClient:
         }
 
         logger.debug("Querying API info: GET %s", url)
-        resp = await http.get(url, params=params)
+        resp = await self._send_read(
+            "SYNO.API.Info/query", lambda client: client.get(url, params=params)
+        )
         _check_status(resp, "SYNO.API.Info/query")
-        body = resp.json()
+        body = _read_json(resp, "SYNO.API.Info/query")
 
         if not body.get("success"):
             code = body.get("error", {}).get("code", 0)
@@ -401,7 +504,6 @@ class DsmClient:
         still fails fast. File Station task stops use it (#245): DSM 7.1 sometimes
         answers a Delete ``stop`` only after ~60 s, although the stop takes effect at once.
         """
-        http = self._get_http()
 
         # Resolve API path and version
         if api not in self._api_cache:
@@ -447,12 +549,18 @@ class DsmClient:
             if read_timeout is None
             else httpx.Timeout(self._timeout, read=read_timeout)
         )
-        try:
-            headers = self._session_headers()
+        headers = self._session_headers()
+
+        def send(client: httpx.AsyncClient) -> Awaitable[httpx.Response]:
             if post_form:
-                resp = await http.post(url, data=req_params, headers=headers, timeout=req_timeout)
+                return client.post(url, data=req_params, headers=headers, timeout=req_timeout)
+            return client.get(url, params=req_params, headers=headers, timeout=req_timeout)
+
+        try:
+            if _is_read(method):
+                resp = await self._send_read(f"{api}/{method}", send)
             else:
-                resp = await http.get(url, params=req_params, headers=headers, timeout=req_timeout)
+                resp = await send(self._get_http_once())
         except httpx.TransportError as e:
             # Name the call without changing the exception's type: get_client() and
             # `check` rely on httpx.TransportError to report an unreachable NAS (#237).
@@ -464,7 +572,7 @@ class DsmClient:
                 suggestion="Reduce the size of the request (e.g. fewer URIs per call).",
             )
         _check_status(resp, f"{api}/{method}")
-        body = resp.json()
+        body = _read_json(resp, f"{api}/{method}")
 
         if body.get("success"):
             data: dict[str, Any] = body.get("data", {})
@@ -530,7 +638,7 @@ class DsmClient:
         everything else goes in the body. Non-2xx HTTP statuses
         and timeouts raise typed ``SynologyError``s rather than httpx errors.
         """
-        http = self._get_http()
+        http = self._get_http_once()  # never reused (#222)
 
         if api not in self._api_cache:
             from mcp_synology.core.errors import ApiNotFoundError
@@ -553,7 +661,7 @@ class DsmClient:
             f"{api}/{method}",
             lambda: http.post(url, data=form_data, headers=self._session_headers()),
         )
-        body = resp.json()
+        body = _read_json(resp, f"{api}/{method}", may_have_applied=True)
 
         if body.get("success"):
             data: dict[str, Any] = body.get("data", {})
@@ -645,7 +753,7 @@ class DsmClient:
 
         Returns the parsed data dict from the JSON response envelope.
         """
-        http = self._get_http()
+        http = self._get_http_once()  # never reused (#222)
 
         if api not in self._api_cache:
             from mcp_synology.core.errors import ApiNotFoundError
@@ -692,7 +800,7 @@ class DsmClient:
             fh.close()
 
         _check_status(resp, f"{api}/{method}")
-        body = resp.json()
+        body = _read_json(resp, f"{api}/{method}")
 
         if body.get("success"):
             logger.debug("DSM response: %s/%s — success", api, method)
@@ -752,7 +860,7 @@ class DsmClient:
         (``{"task_id": [...], "list_id": [...]}``).
         """
         api = "SYNO.DownloadStation2.Task"
-        http = self._get_http()
+        http = self._get_http_once()  # never reused (#222)
 
         # Raises ApiNotFoundError (102 absent / 104 no v2) — no fallback exists.
         resolved_version = self.negotiate_version(api, min_version=2, max_version=2)
@@ -801,7 +909,7 @@ class DsmClient:
         finally:
             fh.close()
 
-        body = resp.json()
+        body = _read_json(resp, f"{api}/create", may_have_applied=True)
 
         if body.get("success"):
             logger.debug("DSM response: %s/create — success", api)
@@ -891,12 +999,14 @@ class DsmClient:
 
         Checks Content-Length against local disk free space before writing.
         If the NAS returns a JSON error envelope (Content-Type: application/json)
-        instead of binary data, parses and raises the appropriate exception. An HTTP
+        instead of binary data, parses and raises the appropriate exception. A text/html
+        200, or JSON that isn't an envelope, raises ``DsmReplyError`` before anything is
+        written: DSM never sends a file as text/html (#292). An HTTP
         error status without one raises ``FileStationError`` for File Station (as
         before) and ``DsmHttpError`` for any other API (Photos answers a thumbnail
         that isn't generated yet with a 404 HTML page).
         """
-        http = self._get_http()
+        http = self._get_http_once()  # never reused (#222)
 
         if api not in self._api_cache:
             from mcp_synology.core.errors import ApiNotFoundError
@@ -932,31 +1042,38 @@ class DsmClient:
             # Some DSM errors come back as HTTP errors rather than JSON envelopes.
             if resp.status_code >= 400:
                 # Try to read the body for a DSM error envelope
-                body_bytes = await resp.aread()
-                try:
-                    body = json.loads(body_bytes)
-                    error = body.get("error", {})
+                error = _error_envelope(await resp.aread())
+                if error is not None:
                     raise error_from_code(error.get("code", 0), api, error.get("errors"))
-                except (json.JSONDecodeError, KeyError):
-                    if "FileStation" not in api:
-                        _check_status(resp, f"{api}/{method}")
-                    from mcp_synology.core.errors import FileStationError
+                if "FileStation" not in api:
+                    _check_status(resp, f"{api}/{method}")
+                from mcp_synology.core.errors import FileStationError
 
-                    raise FileStationError(
-                        f"HTTP {resp.status_code} from download API",
-                        code=resp.status_code,
-                        suggestion="Check that the file path exists on the NAS.",
-                    ) from None
+                raise FileStationError(
+                    f"HTTP {resp.status_code} from download API",
+                    code=resp.status_code,
+                    suggestion="Check that the file path exists on the NAS.",
+                )
 
             content_type = resp.headers.get("content-type", "")
+            media_type = content_type.split(";")[0].strip().lower()
 
-            # JSON response means error envelope
-            if "application/json" in content_type:
+            # JSON means DSM's error envelope. An HTML page on a 200 is never the file
+            # (DSM sends application/octet-stream for every File Station download, even
+            # a real .html file, and application/force-download or image/* for Photos,
+            # on 7.1 and 7.2.2): it's a reverse proxy's or captive portal's page, so
+            # raise before anything is written (#292).
+            if media_type in ("application/json", "text/html", "application/xhtml+xml"):
                 body_bytes = await resp.aread()
-                body = json.loads(body_bytes)
-                error = body.get("error", {})
+                error = _error_envelope(body_bytes)
+                if error is None:  # a page, or JSON that isn't DSM's error envelope
+                    raise DsmReplyError(
+                        f"{api}/{method}: the answer wasn't a DSM reply (Content-Type "
+                        f"{media_type}).",
+                        suggestion=_NOT_A_REPLY,
+                    )
                 code = error.get("code", 0)
-                logger.debug("DSM response: %s/%s — error code %d", api, method, code)
+                logger.debug("DSM response: %s/%s — error code %s", api, method, code)
 
                 if code in _SESSION_ERROR_CODES and not _is_retry and self._re_auth_callback:
                     logger.info("Session error %d on %s/%s, attempting re-auth.", code, api, method)

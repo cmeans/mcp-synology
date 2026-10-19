@@ -63,12 +63,18 @@ PHOTOS_ERROR_CODES: dict[int, tuple[ErrorCode, str, str]] = {
     620: (
         ErrorCode.INVALID_PARAMETER,
         "Synology Photos doesn't support this file type",
-        "Upload photos and videos only; other files can go through upload_file.",
+        "Upload photos and videos only; other files can go through File Station's "
+        "upload_file (needs File Station write permission) or DSM.",
     ),
     621: (
         ErrorCode.NOT_FOUND,
         "The destination folder doesn't exist in Photos",
         "List folders with list_photo_collections type=folder, or create it first.",
+    ),
+    641: (
+        ErrorCode.ALREADY_EXISTS,
+        "A folder with that name already exists there",
+        "Pick another name, or use the existing folder.",
     ),
     642: (
         ErrorCode.NOT_FOUND,

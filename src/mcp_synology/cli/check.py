@@ -9,9 +9,11 @@ import sys
 from typing import TYPE_CHECKING
 
 import click
+import httpx
 import yaml
 
 from mcp_synology.cli.logging_ import _configure_logging, _init_early_logging
+from mcp_synology.core.redaction import redact_urls
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -52,7 +54,8 @@ def connection_failure_message(base_url: str, host: str, exc: BaseException) -> 
     exception type is named. A TLS verification failure sits in the exception chain as
     ``ssl.SSLCertVerificationError`` and gets its own advice.
     """
-    reason = f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
+    text = redact_urls(str(exc))
+    reason = f"{type(exc).__name__}: {text}" if text else type(exc).__name__
     cause: BaseException | None = exc
     seen: set[int] = set()
     while cause is not None and id(cause) not in seen:  # chains can loop
@@ -64,6 +67,18 @@ def connection_failure_message(base_url: str, host: str, exc: BaseException) -> 
                 "or install a trusted certificate."
             )
         cause = cause.__cause__ or cause.__context__
+    # Connected, then no answer in time or the connection dropped: the NAS is there but
+    # busy, so the host, port and https settings aren't the problem (#254).
+    if isinstance(exc, httpx.ReadTimeout | httpx.WriteTimeout):
+        return (
+            f"{base_url} accepted the connection but didn't answer in time ({reason}). The NAS "
+            "may be busy: try again shortly, or raise connection.timeout."
+        )
+    if isinstance(exc, httpx.ReadError | httpx.WriteError | httpx.RemoteProtocolError):
+        return (
+            f"{base_url} accepted the connection but dropped it ({reason}). The NAS may be "
+            "busy or restarting: try again shortly."
+        )
     return f"Can't connect to {base_url}: {reason}. Check the host, port and https settings."
 
 
@@ -89,11 +104,9 @@ def not_dsm_message(base_url: str, status: int | None) -> str:
 def exit_on_connection_failure(base_url: str, host: str) -> Iterator[None]:
     """Turn a NAS that can't be reached, or a server that isn't DSM, into a red error
     line and exit 1 instead of a traceback (check and setup, #191)."""
-    import json
-
     import httpx
 
-    from mcp_synology.core.errors import DsmHttpError
+    from mcp_synology.core.errors import DsmHttpError, DsmReplyError
 
     try:
         yield
@@ -101,7 +114,7 @@ def exit_on_connection_failure(base_url: str, host: str) -> Iterator[None]:
         message = connection_failure_message(base_url, host, e)
     except DsmHttpError as e:
         message = not_dsm_message(base_url, e.status)
-    except json.JSONDecodeError:
+    except DsmReplyError:
         message = not_dsm_message(base_url, None)
     else:
         return
@@ -129,11 +142,11 @@ async def _check_login(config: object) -> None:
             verify_ssl=config.connection.verify_ssl,
             timeout=config.connection.timeout,
         ) as client:
-            from mcp_synology.core.errors import DsmHttpError, SynologyError
+            from mcp_synology.core.errors import DsmHttpError, DsmReplyError, SynologyError
 
             try:
                 await client.query_api_info()
-            except DsmHttpError:
+            except (DsmHttpError, DsmReplyError):
                 raise  # not DSM's API: exit_on_connection_failure says so
             except SynologyError as e:
                 click.echo(click.style(f"Error: DSM API query failed: {e}", fg="red"), err=True)
@@ -144,6 +157,8 @@ async def _check_login(config: object) -> None:
                 await auth.login()
                 click.echo(click.style("Authentication successful!", fg="green"))
                 await auth.logout()
+            except DsmReplyError:
+                raise  # a login page, not DSM: exit_on_connection_failure says so
             except DsmHttpError as e:
                 # Its own suggestion says to run check; this is check (QA round 1, #233).
                 next_step = "Check the NAS, or the proxy in front of it, and try again."

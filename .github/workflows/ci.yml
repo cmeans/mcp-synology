@@ -12,6 +12,14 @@ on:
 permissions:
   contents: read
 
+# A new push to a PR cancels that PR's older, superseded run (#284). Pushes to main
+# never cancel each other: each main run tests its commit, and vdsm's saves the
+# golden-image cache. The label automation finds a run's PR by its head commit, and a
+# superseded run's commit is no longer any PR's head, so a cancelled run sets no label.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
@@ -67,7 +75,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --extra dev
-      - run: uv run pytest --cov=mcp_synology --cov-report=xml
+      - run: uv run pytest -n auto --cov=mcp_synology --cov-report=xml
       - uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         if: matrix.python-version == '3.12'
         with:
