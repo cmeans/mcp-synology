@@ -474,28 +474,30 @@ async def in_batches(
                 raise
             parts = [before] if before else []
             rest = ids[len(done) :]
+            changed: list[int] = []
 
             def phrase(text: str) -> str:  # "Not changed" or "Favorite not changed"
                 return f"{step} {text[0].lower()}{text[1:]}" if step else text
 
             if done:
                 # IDs an earlier batch's error_list named weren't changed: never count them.
+                # Compared as text, so an entry DSM sends as "9" matches ID 9.
                 rejected = [x for r in replies for x in r.get("error_list") or []]
-                changed = [i for i in done if i not in set(rejected)]
+                refused = {str(x) for x in rejected}
+                changed = [i for i in done if str(i) not in refused]
                 if changed:
                     parts.append(
                         f"{phrase('Already changed')} {len(changed)} of {len(ids)} item(s): "
                         f"{_ids(changed)}."
                     )
                 if rejected:
-                    shown = ", ".join(map(str, sorted(rejected, key=id_order)))
-                    parts.append(f"Rejected by DSM: {shown}.")
+                    parts.append(f"Rejected by DSM, so not changed: {_rejected(rejected)}.")
             if unsure:
                 parts.append(f"{phrase('May or may not have changed')}: {_ids(batch)}.")
                 rest = rest[len(batch) :]
             if rest:
                 parts.append(f"{phrase('Not changed')}: {_ids(rest)}.")
-            if note and (done or unsure):
+            if note and (changed or unsure):
                 parts.append(note)
             detail = " ".join(parts)
             if unsure or isinstance(e, httpx.TransportError):
@@ -523,6 +525,13 @@ async def in_batches(
 
 def _ids(ids: list[int]) -> str:
     return id_list(sorted(ids))
+
+
+def _rejected(entries: list[Any]) -> str:
+    """An error_list's entries: integer IDs sorted with runs collapsed, then anything else."""
+    ints = [x for x in entries if isinstance(x, int)]
+    rest = [str(x) for x in sorted(entries, key=id_order) if not isinstance(x, int)]
+    return ", ".join(([_ids(ints)] if ints else []) + rest)
 
 
 def check_ids(

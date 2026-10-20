@@ -433,9 +433,39 @@ class TestEditPhoto:
             with pytest.raises(ToolError) as exc:
                 await edit_photo(client, ids=list(range(1, 151)), rating=2)
         assert (
-            "Already changed 97 of 150 item(s): 1-8, 11-99. Rejected by DSM: 9, 10, 100. "
+            "Already changed 97 of 150 item(s): 1-8, 11-99. Rejected by DSM, so not changed: "
+            "9-10, 100. "
             "Not changed: 101-150."
         ) in _error(exc)["message"]
+
+    @respx.mock
+    async def test_odd_rejection_entries_and_all_rejected(self) -> None:
+        """A string ID matches its integer; an entry that isn't an ID can't crash the reply;
+        a batch DSM rejected whole changed nothing, so there's no "would shift again"."""
+        rejected = [str(i) for i in range(1, 100)] + [{"id": 100}]
+        fake = self._150(FakePhotos()).on(ITEM, "set", 2, {"error_list": rejected}, _deny)
+        install(fake)
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await edit_photo(client, ids=list(range(1, 151)), shift_hours=2)
+        message = _error(exc)["message"]
+        assert "Already changed 1 of 150 item(s): 100." in message  # the dict matched nothing
+        assert "Rejected by DSM, so not changed: 1, 10, 11, " in message  # text, in order
+        assert "Not changed: 101-150." in message
+
+        fake = self._150(FakePhotos()).on(
+            ITEM, "set", 2, {"error_list": list(range(1, 101))}, _deny
+        )
+        install(fake)
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await edit_photo(client, ids=list(range(1, 151)), shift_hours=2)
+        message = _error(exc)["message"]
+        assert message.endswith(
+            "Permission denied. Rejected by DSM, so not changed: 1-100. Not changed: 101-150."
+        )
 
     @respx.mock
     async def test_ids_are_listed_in_order(self) -> None:
