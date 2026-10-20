@@ -330,6 +330,8 @@ Directory Size: /video/TV Shows/The Bear
   Directories:    12
 ```
 
+**Missing path (#332):** DSM's DirSize task on a path that doesn't exist finishes at once with 0 bytes, 0 files and 0 directories (seen on a real NAS, DSM 7.1.1), which reads as an empty folder. So `get_dir_size` checks the path with `getinfo` first: a `{"code": 408}` entry is `not_found` and a `407` entry `permission_denied`, with no task started. If `getinfo` fails or reports another code, the task runs and DSM's answer stands.
+
 ---
 
 ### 6. `list_recycle_bin`

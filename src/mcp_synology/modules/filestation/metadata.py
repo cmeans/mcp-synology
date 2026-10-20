@@ -20,6 +20,8 @@ from mcp_synology.core.formatting import (
     synology_error_response,
 )
 from mcp_synology.modules.filestation.helpers import (
+    find_missing_paths,
+    missing_paths_suggestion,
     normalize_path,
     task_request,
     unanswered_status_response,
@@ -215,6 +217,36 @@ async def get_dir_size(
 ) -> str:
     """Calculate the total size of a directory."""
     normalized = normalize_path(path)
+
+    # DSM's DirSize task on a path that doesn't exist finishes at once with 0 bytes, 0
+    # files and 0 folders (seska, DSM 7.1.1), which reads as "empty". Check the path
+    # first, as delete_files does. Best-effort: if getinfo fails or reports another
+    # code, DirSize runs and DSM's own answer stands.
+    try:
+        missing = await find_missing_paths(client, [normalized])
+    except SynologyError as e:
+        logger.debug("Get directory size: path check failed: %s", e)
+        missing = []
+    if missing:
+        _, code = missing[0]
+        if code == 408:
+            error_response(
+                ErrorCode.NOT_FOUND,
+                f"Get directory size failed: {normalized} doesn't exist on the NAS.",
+                retryable=False,
+                param="path",
+                value=path,
+                suggestion=missing_paths_suggestion(missing),
+            )
+        if code == 407:  # no permission for it
+            error_response(
+                ErrorCode.PERMISSION_DENIED,
+                f"Get directory size failed: no permission to read {normalized} on the NAS.",
+                retryable=False,
+                param="path",
+                value=path,
+                suggestion="Check the DSM user's permissions for that shared folder.",
+            )
 
     try:
         start_data = await client.request(

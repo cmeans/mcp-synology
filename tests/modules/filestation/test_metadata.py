@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import httpx
 import pytest
@@ -299,6 +299,64 @@ class TestGetDirSize:
             await get_dir_size(mock_client, path="/nonexistent")
         body = json.loads(str(exc_info.value))
         assert body["error"]["code"] == "not_found"
+
+    @staticmethod
+    def _getinfo_then_dirsize(entry: dict[str, Any] | None, calls: list[str]) -> None:
+        """getinfo answers with ``entry`` (or fails, if None); DirSize finishes at 0."""
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            method = dict(request.url.params).get("method", "")
+            calls.append(method)
+            if method == "getinfo":
+                if entry is None:
+                    return httpx.Response(502, text="<html>Bad Gateway</html>")
+                return httpx.Response(200, json={"success": True, "data": {"files": [entry]}})
+            if method == "start":
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "ds-1"}})
+            if method == "status":
+                done = {"finished": True, "total_size": 0, "num_file": 0, "num_dir": 0}
+                return httpx.Response(200, json={"success": True, "data": done})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        ("code", "error", "message"),
+        [
+            (408, "not_found", "Get directory size failed: /video/nope doesn't exist on the NAS."),
+            (407, "permission_denied", None),
+        ],
+    )
+    async def test_dir_size_missing_path_is_refused(
+        self, mock_client: DsmClient, code: int, error: str, message: str | None
+    ) -> None:
+        """DSM's DirSize on a missing path finishes with 0 B, 0 files (seska, DSM 7.1.1),
+        which read as "empty". getinfo is checked first; no task is started."""
+        calls: list[str] = []
+        self._getinfo_then_dirsize({"code": code, "path": "/video/nope"}, calls)
+        with pytest.raises(ToolError) as exc_info:
+            await get_dir_size(mock_client, path="video/nope")
+        err = json.loads(str(exc_info.value))["error"]
+        assert err["code"] == error
+        if message:
+            assert err["message"] == message
+        assert calls == ["getinfo"]
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        "entry",
+        [None, {"path": "/video", "name": "video", "isdir": True}],
+        ids=["getinfo-failed", "exists"],
+    )
+    async def test_dir_size_runs_when_the_path_exists_or_the_check_fails(
+        self, mock_client: DsmClient, entry: dict[str, Any] | None
+    ) -> None:
+        calls: list[str] = []
+        self._getinfo_then_dirsize(entry, calls)
+        result = await get_dir_size(mock_client, path="/video")
+        assert "Total size" in result
+        assert calls[:2] == ["getinfo", "start"]
 
     @respx.mock
     async def test_dir_size_poll_error(self, mock_client: DsmClient) -> None:
