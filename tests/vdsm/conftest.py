@@ -199,9 +199,48 @@ def vdsm_container(dsm_version: str) -> Any:
             str(meta.get("admin_user", "admin")),
             str(meta.get("admin_password", "")),
         )
+        _wait_for_file_station(container)
         yield container
     finally:
         container.stop()
+
+
+# DSM's boot done doesn't mean File Station has registered its APIs: on CI (DSM 7.1,
+# #332) the first four sessions after boot done listed 467 APIs, without
+# SYNO.FileStation.DirSize, and got api_not_found; the next listed 595. Wait for every
+# API the File Station module requires.
+_FILE_STATION_READY_WAIT = 120
+
+
+def _file_station_problem(base_url: str) -> str | None:
+    """Which required File Station APIs SYNO.API.Info doesn't list yet, or None."""
+    from mcp_synology.modules.filestation import MODULE_INFO
+
+    try:
+        resp = httpx.get(
+            f"{base_url}/webapi/query.cgi",
+            params={"api": "SYNO.API.Info", "version": "1", "method": "query", "query": "ALL"},
+            timeout=15,
+        )
+        apis = resp.json().get("data") or {}
+    except (httpx.HTTPError, ValueError, AttributeError) as e:
+        return f"{type(e).__name__}"
+    missing = [
+        r.api_name for r in MODULE_INFO.required_apis if not r.optional and r.api_name not in apis
+    ]
+    return f"not registered yet: {', '.join(missing)}" if missing else None
+
+
+def _wait_for_file_station(container: VirtualDsmContainer) -> None:
+    started = time.monotonic()
+    problem = _poll(lambda: _file_station_problem(container.base_url), _FILE_STATION_READY_WAIT)
+    if problem is not None:
+        pytest.fail(
+            f"File Station didn't register its APIs within {_FILE_STATION_READY_WAIT}s of "
+            f"DSM boot done ({problem}).",
+            pytrace=False,
+        )
+    logger.info("File Station APIs listed %.0fs after boot done", time.monotonic() - started)
 
 
 # Download Station readiness. DSM starts the package at boot as the systemd
