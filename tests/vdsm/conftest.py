@@ -38,6 +38,7 @@ from tests.vdsm.golden_image import (
     stale_golden_image_reason,
 )
 from tests.vdsm.ssh import ssh_exec
+from tests.vdsm.transport import MODES, rewrite_client
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -46,12 +47,21 @@ logger = logging.getLogger(__name__)
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
-    """Add --dsm-version command line option."""
+    """Add the --dsm-version and --dsm-transport command line options."""
     parser.addoption(
         "--dsm-version",
         default=DEFAULT_DSM_VERSION,
         choices=list(DSM_VERSIONS.keys()),
         help=f"DSM version to test against (default: {DEFAULT_DSM_VERSION})",
+    )
+    parser.addoption(
+        "--dsm-transport",
+        default="get",
+        choices=list(MODES),
+        help=(
+            "Resend every DSM request of the test clients another way (#263): post, "
+            "post_sid_body, cookie_get or cookie_post. Default get: as the code sends it."
+        ),
     )
 
 
@@ -59,6 +69,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 def dsm_version(request: pytest.FixtureRequest) -> str:
     """The DSM version to test, from --dsm-version CLI option."""
     return request.config.getoption("--dsm-version")  # type: ignore[no-any-return]
+
+
+@pytest.fixture(scope="session")
+def dsm_transport(request: pytest.FixtureRequest) -> str:
+    """How the test clients send DSM requests, from --dsm-transport (#263)."""
+    return request.config.getoption("--dsm-transport")  # type: ignore[no-any-return]
 
 
 # DSM answers SYNO.API.Info before it has finished booting: on CI (#107) the
@@ -570,13 +586,24 @@ def live_clients() -> set[DsmClient]:
 
 
 async def _user_session(
-    config: AppConfig, test_paths: dict[str, str], dsm_version: str, label: str
+    config: AppConfig,
+    test_paths: dict[str, str],
+    dsm_version: str,
+    label: str,
+    transport: str = "get",
 ) -> Any:
-    """Yield ``(client, auth, config, test_paths)`` logged in with ``config``'s account."""
+    """Yield ``(client, auth, config, test_paths)`` logged in with ``config``'s account.
+
+    ``transport`` other than ``get`` rewrites every request the client sends
+    (``tests/vdsm/transport.py``, #263), on both of the client's httpx clients (reads,
+    writes and downloads, #222), so the module code under test runs unchanged.
+    """
     conn = config.connection
     assert conn is not None
     client = DsmClient(base_url=f"http://{conn.host}:{conn.port}", verify_ssl=False, timeout=30)
     async with client:
+        if transport != "get":
+            rewrite_client(client, transport)
         cache = await client.query_api_info()
         logger.info("vDSM API cache: %d APIs discovered (DSM %s)", len(cache), dsm_version)
         auth = AuthManager(config, client)
@@ -594,6 +621,7 @@ async def _user_session(
 async def nas_client(
     vdsm_config: tuple[AppConfig, dict[str, str]],
     dsm_version: str,
+    dsm_transport: str,
 ) -> Any:
     """Provide a DsmClient logged in as the golden image's **non-admin** test user.
 
@@ -602,7 +630,7 @@ async def nas_client(
     that need admin use ``admin_client``; ``nas_persona`` says who this is.
     """
     config, test_paths = vdsm_config
-    async for session in _user_session(config, test_paths, dsm_version, "test user"):
+    async for session in _user_session(config, test_paths, dsm_version, "test user", dsm_transport):
         yield session
 
 
@@ -617,6 +645,7 @@ def nas_persona(dsm_version: str) -> Persona:
 async def fresh_client(
     vdsm_config: tuple[AppConfig, dict[str, str]],
     dsm_version: str,
+    dsm_transport: str,
 ) -> Any:
     """A DS-granted non-admin that has never set a DS default destination (#124)."""
     config, test_paths = vdsm_config
@@ -632,7 +661,7 @@ async def fresh_client(
             ),
         }
     )
-    async for session in _user_session(fresh, test_paths, dsm_version, "fresh user"):
+    async for session in _user_session(fresh, test_paths, dsm_version, "fresh user", dsm_transport):
         yield session
 
 
@@ -640,6 +669,7 @@ async def fresh_client(
 async def admin_client(
     vdsm_config: tuple[AppConfig, dict[str, str]],
     dsm_version: str,
+    dsm_transport: str,
 ) -> Any:
     """Provide a DsmClient logged in as the golden image's admin.
 
@@ -659,5 +689,5 @@ async def admin_client(
             ),
         }
     )
-    async for session in _user_session(admin, test_paths, dsm_version, "admin"):
+    async for session in _user_session(admin, test_paths, dsm_version, "admin", dsm_transport):
         yield session

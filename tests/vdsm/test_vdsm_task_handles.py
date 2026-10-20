@@ -47,6 +47,7 @@ from mcp_synology.modules.filestation.tasks import (
 )
 from tests.vdsm.conftest import _ssh
 from tests.vdsm.golden_image import load_golden_meta
+from tests.vdsm.transport import rewrite_client
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable
@@ -149,7 +150,7 @@ def nas(vdsm_container: VirtualDsmContainer, dsm_version: str) -> Any:
 
 @pytest.fixture
 def admin_session(
-    vdsm_config: tuple[AppConfig, dict[str, str]], dsm_version: str
+    vdsm_config: tuple[AppConfig, dict[str, str]], dsm_version: str, dsm_transport: str
 ) -> Callable[[], contextlib.AbstractAsyncContextManager[DsmClient]]:
     """Open another, separately logged-in admin session (a second client of one user)."""
     config, _ = vdsm_config
@@ -172,6 +173,8 @@ def admin_session(
         assert conn is not None
         client = DsmClient(base_url=f"http://{conn.host}:{conn.port}", verify_ssl=False, timeout=30)
         async with client:
+            if dsm_transport != "get":  # as the conftest's sessions (#263)
+                rewrite_client(client, dsm_transport)
             await client.query_api_info()
             auth = AuthManager(admin, client)
             await auth.login()
