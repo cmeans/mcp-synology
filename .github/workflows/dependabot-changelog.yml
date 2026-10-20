@@ -18,7 +18,8 @@ name: Dependabot CHANGELOG
 # normally.
 #
 # Required repo secrets (operator must configure once):
-#   BOT_APP_ID         — GitHub App ID (numeric)
+#   BOT_APP_ID         — GitHub App ID (numeric). Passed as `client-id`: the action
+#                        accepts the App ID or the Client ID there (#300)
 #   BOT_APP_PRIVATE_KEY — PEM contents of the App's private key
 #
 # Loop guard: skips if the latest commit on the head branch was
@@ -44,7 +45,9 @@ jobs:
         id: app-token
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          app-id: ${{ secrets.BOT_APP_ID }}
+          # client-id replaces the deprecated app-id input; it takes the numeric App ID
+          # as well as the Client ID (both become the JWT's issuer, #300).
+          client-id: ${{ secrets.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
 
       - name: Checkout PR branch
