@@ -6,9 +6,13 @@ user's running tasks, follows one up (from any session of the same user) and
 stops it. A new server process seeds its records from the running tasks at its
 first connection (``discover_running_tasks``).
 
-The trees are 300,000 empty files (600 dirs x 500), built over SSH; on vdsm
-they delete in about 14 s and copy in about 45 s, so a 2 s wait always hands
-off. Run on every DSM version CI runs (``--dsm-version``; see CLAUDE.md).
+The delete trees are 300,000 empty files (600 dirs x 500), built over SSH in
+about 19 s; on CI's vdsm they delete in about 20 s. Copy, move and restore are
+slower per file (300,000 files took 90-105 s to copy and 50-70 s to move or
+restore, depending on the DSM version, #132), so their trees are a quarter of
+that, 75,000 files.
+Either way a 2 s wait always hands off, with time left for the follow-ups. Run on
+every DSM version CI runs (``--dsm-version``; see CLAUDE.md).
 
 Run with: uv run pytest -m vdsm -v tests/vdsm/test_vdsm_task_handles.py
 """
@@ -55,6 +59,8 @@ pytestmark = pytest.mark.vdsm
 
 DIRS, PER_DIR = 600, 500
 TREE_FILES = DIRS * PER_DIR
+COPY_DIRS = DIRS // 4  # copy, move and restore trees (#132: the slowest tests)
+COPY_FILES = COPY_DIRS * PER_DIR
 WAIT = 2  # seconds before a handoff; every tree here takes far longer
 FINISH_WITHIN = 300  # seconds a handed-off task gets to finish
 _HANDLE = re.compile(r"Handle: `((?:delete|copy|move|restore):FileStation_\w+)`")
@@ -425,7 +431,7 @@ async def test_copy_handoff_then_status_until_finished(
 ) -> None:
     client = _admin(admin_client)
     user_client: DsmClient = nas_client[0]
-    src = nas.tree("/writable/cp245a")
+    src = nas.tree("/writable/cp245a", dirs=COPY_DIRS)
     dest = nas.folder("/writable/cp245a_dst")
     records = TaskRecords()
 
@@ -458,13 +464,13 @@ async def test_copy_handoff_then_status_until_finished(
             assert seen, "the copy finished before the first follow-up"
             assert f"Copied 1 item(s) to {dest}/:" in final, final
 
-    assert nas.count(f"{dest}/cp245a") == TREE_FILES
-    assert nas.count(src) == TREE_FILES
+    assert nas.count(f"{dest}/cp245a") == COPY_FILES
+    assert nas.count(src) == COPY_FILES
 
 
 async def test_copy_handoff_then_stop(admin_client: Any, admin_session: Any, nas: Nas) -> None:
     client = _admin(admin_client)
-    src = nas.tree("/writable/cp245b")
+    src = nas.tree("/writable/cp245b", dirs=COPY_DIRS)
     dest = nas.folder("/writable/cp245b_dst")
     records = TaskRecords()
 
@@ -480,7 +486,7 @@ async def test_copy_handoff_then_stop(admin_client: Any, admin_session: Any, nas
             copied = nas.count(dest)
             await asyncio.sleep(10)
             assert nas.count(dest) == copied
-            assert copied < TREE_FILES
+            assert copied < COPY_FILES
             await _gone(other, records, handle)
 
 
@@ -563,7 +569,7 @@ async def test_move_handoff_then_status_until_finished(
 ) -> None:
     """A move to another share copies across btrfs subvolumes, so it takes a while."""
     client = _admin(admin_client)
-    src = nas.tree("/writable/mv245")
+    src = nas.tree("/writable/mv245", dirs=COPY_DIRS)
     nas.created.append("/volume1/testshare/mv245")
     dest = "/testshare"
     records = TaskRecords()
@@ -590,7 +596,7 @@ async def test_move_handoff_then_status_until_finished(
             assert "Source files have been removed from /writable/." in final
 
     assert not nas.exists(src)
-    assert nas.count("/testshare/mv245") == TREE_FILES
+    assert nas.count("/testshare/mv245") == COPY_FILES
 
 
 async def test_restore_handoff_then_status_until_finished(
@@ -598,7 +604,7 @@ async def test_restore_handoff_then_status_until_finished(
 ) -> None:
     """A restore to another share; the item sits in /writable/#recycle (made over SSH)."""
     client = _admin(admin_client)
-    nas.tree("/writable/#recycle/rs245")
+    nas.tree("/writable/#recycle/rs245", dirs=COPY_DIRS)
     nas.created.append("/volume1/testshare/rs245")
     dest = "/testshare"
     records = TaskRecords()
@@ -629,4 +635,4 @@ async def test_restore_handoff_then_status_until_finished(
             assert "Restored from /writable recycle bin: 1 item(s)" in final, final
 
     assert not nas.exists("/writable/#recycle/rs245")
-    assert nas.count("/testshare/rs245") == TREE_FILES
+    assert nas.count("/testshare/rs245") == COPY_FILES
