@@ -19,7 +19,14 @@ from typing import TYPE_CHECKING, Any, Literal, NoReturn
 
 import httpx
 
-from mcp_synology.core.errors import DsmUnavailableError, ErrorCode, SynologyError
+from mcp_synology.core.errors import (
+    DsmHttpError,
+    DsmReplyError,
+    DsmTimeoutError,
+    DsmUnavailableError,
+    ErrorCode,
+    SynologyError,
+)
 from mcp_synology.core.formatting import error_response, format_timestamp
 
 if TYPE_CHECKING:
@@ -436,11 +443,12 @@ async def in_batches(
 ) -> list[dict[str, Any]]:
     """``send`` each batch of ``ids`` in turn; the replies, in order.
 
-    When a batch fails after earlier ones succeeded, the error says which IDs were
-    already changed and which weren't, so a retry can cover only the rest (#322), and
-    adds ``note`` (e.g. that a relative edit must not be repeated). ``before`` says what
-    earlier steps of the call already changed; it's added to any error. A batch that got
-    no answer may or may not have been applied, and is named as such.
+    When a batch fails, the error says which IDs were already changed, which may or may
+    not have been, and which weren't, so a retry can cover only the rest (#322), and
+    adds ``note`` (e.g. that a relative edit must not be repeated). IDs DSM rejected in
+    an earlier batch (``error_list``) are named too. ``before`` says what earlier steps
+    of the call already changed. A failure on the first batch, with nothing changed and
+    nothing in doubt, is raised as it is.
     """
     done: list[int] = []
     replies: list[dict[str, Any]] = []
@@ -448,31 +456,53 @@ async def in_batches(
         try:
             replies.append(await send(batch))
         except (SynologyError, httpx.TransportError) as e:
-            unsure = isinstance(e, httpx.TransportError)
-            parts = [before] if before else []
-            if done:
-                parts.append(f"Already changed {len(done)} of {len(ids)} item(s): {id_list(done)}.")
-                rest = ids[len(done) :]
-                if unsure:
-                    parts.append(f"May or may not have changed: {id_list(batch)}.")
-                    rest = rest[len(batch) :]
-                if rest:
-                    parts.append(f"Not changed: {id_list(rest)}.")
-                if note:
-                    parts.append(note)
-            if not parts:
+            # No answer, or a proxy's error status or page: the write may have reached
+            # DSM. A connection that couldn't be opened sent nothing.
+            unsure = isinstance(
+                e, httpx.TransportError | DsmHttpError | DsmReplyError
+            ) and not isinstance(e, httpx.ConnectError | httpx.ConnectTimeout)
+            if not (done or before or unsure):
                 raise
+            parts = [before] if before else []
+            rest = ids[len(done) :]
+            if done:
+                parts.append(f"Already changed {len(done)} of {len(ids)} item(s): {_ids(done)}.")
+                rejected = [x for r in replies for x in r.get("error_list") or []]
+                if rejected:
+                    parts.append(f"Rejected by DSM: {', '.join(map(str, rejected))}.")
             if unsure:
-                raise DsmUnavailableError(
-                    f"no answer from DSM ({type(e).__name__}). {' '.join(parts)}",
-                    suggestion="Check the items before trying again.",
+                parts.append(f"May or may not have changed: {_ids(batch)}.")
+                rest = rest[len(batch) :]
+            if rest:
+                parts.append(f"Not changed: {_ids(rest)}.")
+            if note and (done or unsure):
+                parts.append(note)
+            detail = " ".join(parts)
+            if unsure or isinstance(e, httpx.TransportError):
+                if isinstance(e, httpx.ConnectError | httpx.ConnectTimeout):
+                    what = f"couldn't reach DSM ({type(e).__name__})"
+                elif isinstance(e, httpx.TransportError):
+                    what = f"no answer from DSM ({type(e).__name__})"
+                else:
+                    what = str(e).rstrip().rstrip(".")
+                kind = (
+                    DsmTimeoutError
+                    if isinstance(e, httpx.TimeoutException)
+                    else DsmUnavailableError
+                )
+                raise kind(
+                    f"{what}. {detail}", suggestion="Check the items before trying again."
                 ) from e
             text = str(e).rstrip()
             stop = "" if text.endswith((".", "!", "?")) else "."
-            e.args = (f"{text}{stop} {' '.join(parts)}",)
+            e.args = (f"{text}{stop} {detail}",)
             raise
         done += batch
     return replies
+
+
+def _ids(ids: list[int]) -> str:
+    return id_list(sorted(ids))
 
 
 def check_ids(
