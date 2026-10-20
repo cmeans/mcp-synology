@@ -38,8 +38,7 @@ MODULE_INFO = ModuleInfo(
             description=(
                 "Get live resource utilization: CPU load, memory usage, disk I/O, "
                 "and network throughput. Use this to check if the NAS is under "
-                "heavy load before running expensive operations like search or "
-                "large file copies."
+                "heavy load before starting expensive work on it."
             ),
             permission_tier=PermissionTier.READ,
         ),

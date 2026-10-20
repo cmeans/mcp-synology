@@ -52,6 +52,12 @@ def _load_instruction(name: str) -> str:
 
 
 _BASE_INSTRUCTIONS = _load_instruction("server.md")
+# Sent only with the module they describe (#169): File Station's sections, and the local
+# machine's details when a tool reads or writes local files. A module's WRITE-tool guidance
+# is sent only when those tools are registered (#318).
+_MODULE_INSTRUCTIONS = {"filestation": _load_instruction("filestation.md")}
+_MODULE_WRITE_INSTRUCTIONS = {"filestation": _load_instruction("filestation-write.md")}
+_LOCAL_MACHINE_INSTRUCTIONS = _load_instruction("local.md")
 
 _ICON_BASE_URL = "https://raw.githubusercontent.com/cmeans/mcp-synology/main/src/mcp_synology/icons"
 
@@ -534,6 +540,11 @@ def _local_paths_notice(config: AppConfig, plan: _ModulePlan) -> str:
     def folders(roots: list[Path]) -> str:
         return ", ".join(str(r) for r in roots)
 
+    def only_use(tools: tuple[str, ...], allowed: set[str]) -> str:
+        # Name only the registered tools: no upload tool at permission: read (#318).
+        names = [t for t in tools if t in allowed]
+        return " and ".join(names) + (" only use" if len(names) > 1 else " only uses")
+
     lines: list[str] = []
     for mod_name, _module, mod_config, allowed in plan:
         if mod_name == "filestation" and {"upload_file", "download_file"} & set(allowed):
@@ -546,8 +557,8 @@ def _local_paths_notice(config: AppConfig, plan: _ModulePlan) -> str:
                 module="filestation",
             )
             lines.append(
-                "upload_file and download_file only use local paths inside these folders "
-                f"(or below them): {folders(roots)}."
+                f"{only_use(('upload_file', 'download_file'), allowed)} local paths inside "
+                f"these folders (or below them): {folders(roots)}."
             )
         elif mod_name == "downloadstation" and "create_download" in allowed:
             ds = DownloadStationSettings(**mod_config.settings)
@@ -568,8 +579,8 @@ def _local_paths_notice(config: AppConfig, plan: _ModulePlan) -> str:
                 module="photos",
             )
             lines.append(
-                "upload_photos and download_photos only use local paths inside these folders "
-                f"(or below them): {folders(roots)}."
+                f"{only_use(('upload_photos', 'download_photos'), allowed)} local paths inside "
+                f"these folders (or below them): {folders(roots)}."
             )
     if not lines:
         return ""
@@ -588,15 +599,33 @@ SYNOLOGY PHOTOS:
 Photos keeps its own library: the personal space (space=personal, the default) and Shared
 Space (space=shared). Photos tools take the ids that list_photos and
 list_photo_collections return; for files outside Photos, File Station's tools take paths,
-when that module is enabled.
+when that module is enabled."""
+
+# Only when the Photos WRITE tools are registered (#318).
+_PHOTOS_WRITE_NOTICE = """
 delete_photos, delete_photo_folders, delete_photo_albums and merge_people can't be undone
 from Photos: name what will go and confirm with the user first. A long copy, move or delete
 hands off with a photos:<id> handle; follow up with photo_task."""
 
 
+def _writes_registered(module: ModuleType, allowed: set[str]) -> bool:
+    """Whether this connection registers any of the module's WRITE tools (#318)."""
+    return any(
+        t.name in allowed and t.permission_tier is PermissionTier.WRITE
+        for t in module.MODULE_INFO.tools
+    )
+
+
 def _photos_notice(plan: _ModulePlan) -> str:
-    """How to use the Photos tools, when the module is enabled (#258)."""
-    return _PHOTOS_NOTICE if any(name == "photos" for name, _, _, _ in plan) else ""
+    """How to use the Photos tools, when the module is enabled (#258).
+
+    The paragraph about deletes and handed-off tasks only when the WRITE tools are (#318).
+    """
+    for name, module, _, allowed in plan:
+        if name == "photos":
+            writes = _writes_registered(module, allowed)
+            return _PHOTOS_NOTICE + (_PHOTOS_WRITE_NOTICE if writes else "")
+    return ""
 
 
 def create_server(config: AppConfig) -> MCPServer:
@@ -618,33 +647,8 @@ def create_server(config: AppConfig) -> MCPServer:
     }
     server_name = f"synology-{config.display_name}"
 
-    if config.instructions_file:
-        # Full replacement — user provides their own instructions file.
-        # They can copy the built-in server.md as a starting point.
-        instructions_path = Path(config.instructions_file).expanduser()
-        try:
-            instructions = _strip_html_comments(
-                instructions_path.read_text(encoding="utf-8")
-            ).strip()
-        except OSError as e:
-            logger.error("Failed to load instructions_file '%s': %s", instructions_path, e)
-            instructions = _strip_html_comments(_BASE_INSTRUCTIONS)
-    elif config.custom_instructions:
-        # Prepend custom instructions before base — gives them priority.
-        # Strip each source on its own: an unclosed `<!--` in the custom text must not
-        # pair with a `-->` in the base file and swallow the text between them.
-        instructions = (
-            _strip_html_comments(config.custom_instructions).strip()
-            + "\n\n"
-            + _strip_html_comments(_BASE_INSTRUCTIONS)
-        )
-    else:
-        instructions = _strip_html_comments(_BASE_INSTRUCTIONS)
-
-    instructions = instructions.format_map(template_vars)
-
-    # Resolve each enabled module's tools first, so the instructions can say
-    # which ones this connection withholds.
+    # Resolve each enabled module's tools first, so the instructions can include only the
+    # enabled modules' sections and say which tools this connection withholds.
     plan: _ModulePlan = []
     for mod_name, mod_config in config.modules.items():
         if not mod_config.enabled:
@@ -664,11 +668,51 @@ def create_server(config: AppConfig) -> MCPServer:
             )
         )
 
-    if not config.instructions_file:
-        # A full replacement file is the user's own; everything else gets the notice.
+    # The built-in instructions: the core file, then each enabled module's own section, and
+    # its WRITE-tool guidance when those tools are registered (#318).
+    # HTML comments are stripped per file, so an unclosed one can't swallow the next file.
+    texts = [_BASE_INSTRUCTIONS]
+    for name, module, _, allowed in plan:
+        if name in _MODULE_INSTRUCTIONS:
+            texts.append(_MODULE_INSTRUCTIONS[name])
+        if name in _MODULE_WRITE_INSTRUCTIONS and _writes_registered(module, allowed):
+            texts.append(_MODULE_WRITE_INSTRUCTIONS[name])
+    builtin = "\n\n".join(_strip_html_comments(text).strip() for text in texts)
+
+    replacement: str | None = None
+    if config.instructions_file:
+        # Full replacement — user provides their own instructions file.
+        # They can start from the built-in server.md, filestation.md, filestation-write.md
+        # and local.md.
+        instructions_path = Path(config.instructions_file).expanduser()
+        try:
+            replacement = _strip_html_comments(
+                instructions_path.read_text(encoding="utf-8")
+            ).strip()
+        except OSError as e:
+            # Fall back to the full built-in instructions, generated sections included.
+            logger.error("Failed to load instructions_file '%s': %s", instructions_path, e)
+
+    if replacement is not None:
+        instructions = replacement
+    elif config.custom_instructions:
+        # Prepend custom instructions before the built-in text — gives them priority.
+        # Strip each source on its own: an unclosed `<!--` in the custom text must not
+        # pair with a `-->` in a built-in file and swallow the text between them.
+        instructions = _strip_html_comments(config.custom_instructions).strip() + "\n\n" + builtin
+    else:
+        instructions = builtin
+
+    instructions = instructions.format_map(template_vars)
+
+    if replacement is None:
+        # A full replacement file is the user's own; everything else gets the notices.
         instructions += _photos_notice(plan)
         instructions += _withheld_tools_notice(config, plan)
-        instructions += _local_paths_notice(config, plan)
+        local_paths = _local_paths_notice(config, plan)
+        if local_paths:
+            local_machine = _strip_html_comments(_LOCAL_MACHINE_INSTRUCTIONS).strip()
+            instructions += "\n\n" + local_machine.format_map(template_vars) + local_paths
 
     server = _SynologyServer(
         server_name,
