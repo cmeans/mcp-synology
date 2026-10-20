@@ -220,8 +220,9 @@ async def get_dir_size(
 
     # DSM's DirSize task on a path that doesn't exist finishes at once with 0 bytes, 0
     # files and 0 folders (seska, DSM 7.1.1), which reads as "empty". Check the path
-    # first, as delete_files does. Best-effort: if getinfo fails or reports another
-    # code, DirSize runs and DSM's own answer stands.
+    # first, as delete_files does. Best-effort: if getinfo gets a DSM error or an
+    # unreadable reply, or reports another code, DirSize runs and DSM's answer stands.
+    # A network error ends the call, as it would at the DirSize start.
     try:
         missing = await find_missing_paths(client, [normalized])
     except SynologyError as e:
