@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NoReturn
 
 import httpx
 
@@ -20,6 +20,7 @@ from mcp_synology.core.formatting import (
     synology_error_response,
 )
 from mcp_synology.modules.filestation.helpers import (
+    missing_paths_suggestion,
     normalize_path,
     task_request,
     unanswered_status_response,
@@ -207,6 +208,81 @@ def _format_single_info(file_data: dict[str, Any]) -> str:
     return format_key_value(pairs, title=f"File Info: {path}")
 
 
+def _refuse_path(normalized: str, path: str, code: int, missing: list[tuple[str, int]]) -> None:
+    """Refuse get_dir_size for a path DSM reports as missing (408) or unreadable (407)."""
+    if code == 408:
+        error_response(
+            ErrorCode.NOT_FOUND,
+            f"Get directory size failed: {normalized} doesn't exist on the NAS.",
+            retryable=False,
+            param="path",
+            value=path,
+            suggestion=missing_paths_suggestion(missing),
+        )
+    if code == 407:  # no permission for it
+        error_response(
+            ErrorCode.PERMISSION_DENIED,
+            f"Get directory size failed: no permission to read {normalized} on the NAS.",
+            retryable=False,
+            param="path",
+            value=path,
+            suggestion="Check the DSM user's permissions for that shared folder.",
+        )
+
+
+def _status_errors_response(normalized: str, path: str, errors: list[Any]) -> NoReturn:
+    """A finished DirSize status that carries errors: the entry for the path, else the first.
+
+    The message names the path DSM's entry names, so a subfolder's code is never reported
+    as the requested folder's.
+    """
+    entries = [
+        e
+        for e in errors
+        if isinstance(e, dict)
+        and isinstance(e.get("code"), int)
+        and not isinstance(e["code"], bool)
+    ]
+    entry = next((e for e in entries if e.get("path") == normalized), None)
+    if entry is None and entries:
+        entry = entries[0]
+    if entry is None:
+        error_response(
+            ErrorCode.FILESTATION_ERROR,
+            "Get directory size failed: DSM reported errors without saying what they were.",
+            retryable=False,
+            param="path",
+            value=path,
+            suggestion="Check that the DSM user can read every folder under that path.",
+        )
+    code = int(entry["code"])
+    entry_path = str(entry.get("path") or normalized)
+    _refuse_path(entry_path, path, code, [(entry_path, code)])
+    synology_error_response("Get directory size", error_from_code(code, "SYNO.FileStation.DirSize"))
+
+
+async def _getinfo_entry(client: DsmClient, normalized: str) -> dict[str, Any]:
+    """getinfo's entry for the path, with its permissions (``{}`` if DSM gave none)."""
+    version = min(2, client.negotiate_version("SYNO.FileStation.List", max_version=2))
+    data = await client.request(
+        "SYNO.FileStation.List",
+        "getinfo",
+        version=version,
+        params={"path": normalized, "additional": '["perm"]'},
+    )
+    files = data.get("files")
+    first = files[0] if isinstance(files, list) and files else None
+    return first if isinstance(first, dict) else {}
+
+
+def _read_denied(entry: dict[str, Any]) -> bool:
+    """True when getinfo's permissions say the user can't read the path."""
+    acl: Any = entry
+    for key in ("additional", "perm", "acl"):
+        acl = acl.get(key) if isinstance(acl, dict) else None
+    return isinstance(acl, dict) and acl.get("read") is False
+
+
 async def get_dir_size(
     client: DsmClient,
     *,
@@ -215,6 +291,25 @@ async def get_dir_size(
 ) -> str:
     """Calculate the total size of a directory."""
     normalized = normalize_path(path)
+
+    # DSM's DirSize task on a path that doesn't exist finishes at once with 0 bytes, 0
+    # files and 0 folders (seska, DSM 7.1.1), which reads as "empty"; so does a folder
+    # the user is denied by an ACL or POSIX mode (vdsm 7.1, 7.2.2; #336), which getinfo
+    # still reports, with read: false in its permissions. Check the path first.
+    # Best-effort: if getinfo gets a DSM error or an unreadable reply, or reports another
+    # code, DirSize runs; a finished status that carries errors is then mapped the same
+    # way, never read as 0 B. A network error ends the call, as it would at the DirSize
+    # start.
+    try:
+        entry = await _getinfo_entry(client, normalized)
+    except SynologyError as e:
+        logger.debug("Get directory size: path check failed: %s", e)
+        entry = {}
+    code = entry.get("code")
+    if isinstance(code, int) and not isinstance(code, bool):
+        _refuse_path(normalized, path, code, [(str(entry.get("path") or normalized), code)])
+    if _read_denied(entry):
+        _refuse_path(normalized, path, 407, [(normalized, 407)])
 
     try:
         start_data = await client.request(
@@ -235,6 +330,7 @@ async def get_dir_size(
     poll_error: SynologyError | None = None
     unanswered: httpx.TransportError | None = None
     result: str | None = None
+    status_errors: list[Any] = []
 
     try:
         while time.monotonic() < deadline:
@@ -250,6 +346,12 @@ async def get_dir_size(
                 break
 
             if status.get("finished", False):
+                # A path the user can't read finishes with errors and no totals
+                # (vdsm 7.1: {"errors": [{"code": 407, "path": ...}], "finished": true}).
+                raw_errors = status.get("errors") or []
+                status_errors = raw_errors if isinstance(raw_errors, list) else [raw_errors]
+                if status_errors:
+                    break
                 total_size = status.get("total_size", 0)
                 num_file = status.get("num_file", 0)
                 num_dir = status.get("num_dir", 0)
@@ -270,6 +372,8 @@ async def get_dir_size(
 
     if poll_error:
         synology_error_response("Get directory size", poll_error)
+    if status_errors:
+        _status_errors_response(normalized, path, status_errors)
     if unanswered:
         unanswered_status_response(
             "Get directory size",

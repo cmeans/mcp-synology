@@ -151,7 +151,9 @@ MODULE_INFO = ModuleInfo(
             description=(
                 "Calculate the total size of a directory, including all files and "
                 "subdirectories. Returns total size, file count, and directory count. "
-                "This is the best tool for answering 'how much space does X use' questions."
+                "This is the best tool for answering 'how much space does X use' questions. "
+                "Counts only what this DSM user can read: a subfolder it can't read is left "
+                "out without notice."
             ),
             permission_tier=PermissionTier.READ,
         ),

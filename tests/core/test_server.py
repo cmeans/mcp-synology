@@ -1547,7 +1547,9 @@ class TestInstructionComments:
 # Station's search and copies).
 # Raised by #327 to 30,333 (+86): download_file's description says a folder downloads
 # as <folder>.zip, not a whole shared folder (#330).
-PAYLOAD_BUDGET_CHARS = 30_333
+# Raised by #332 to 30,428 (+95): get_dir_size's description says it counts only what the
+# DSM user can read, leaving out a subfolder it can't read without notice (#336).
+PAYLOAD_BUDGET_CHARS = 30_428
 
 
 class TestPayloadBudget:
