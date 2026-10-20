@@ -187,7 +187,7 @@ async def download_file(
     progress_callback: ProgressCallback | None = None,
     allowed_roots: list[Path] | None = None,
 ) -> str:
-    """Download a NAS file to a local directory."""
+    """Download a NAS file, or a folder as a ZIP of it, to a local directory."""
     # Before the existence check, so a refusal doesn't reveal what exists outside.
     refuse_outside_roots(
         "Download",
@@ -210,6 +210,8 @@ async def download_file(
         )
 
     nas_path = normalize_path(path)
+
+    # Checked before anything is asked of the NAS; a folder's ".zip" doesn't change it.
     effective_name = filename or PurePosixPath(nas_path).name
     problem = _local_name_problem(effective_name)
     if problem:
@@ -238,38 +240,19 @@ async def download_file(
             suggestion="Pass a plain file name (no folders) as filename.",
         )
 
-    if dest_file.is_dir() and not dest_file.is_symlink():
-        # Neither mode can replace a folder; refuse before downloading (QA R1 on #178).
-        error_response(
-            ErrorCode.INVALID_PARAMETER,
-            f"Download failed: {dest_file} is a folder, so the file can't be saved there.",
-            retryable=False,
-            param="filename" if filename else "path",
-            value=filename if filename else path,
-            suggestion="Pass a different filename, or choose another dest_folder.",
-        )
-
-    # lexists, not exists: a dangling symlink is still a name in the way (QA R1 on #178).
-    if os.path.lexists(dest_file) and not overwrite:
-        error_response(
-            ErrorCode.ALREADY_EXISTS,
-            f"Download failed: Local file already exists: {dest_file}",
-            retryable=False,
-            param="filename",
-            value=dest_file.name,
-            suggestion="Use overwrite=true to replace the existing file.",
-        )
-
     # Pre-flight disk space check using NAS file metadata.
     # Best-effort: if the API call fails, skip the check and let the
     # download proceed (client.download() also checks Content-Length).
     # It also tells a missing file apart: DSM answers the download of one with an HTTP
     # 502 and its own error page (DSM 7.1 and 7.2.2, #292), the same status a proxy
-    # gives for a server error (#324). So does a path the user can't read, and a share
-    # root (502, or 404 as admin); a folder below one downloads as a ZIP (vdsm).
+    # gives for a server error (#324). So does a path the user can't read, and a share's
+    # top level (502, or 404 as admin). A folder below one downloads as a ZIP of it
+    # (vdsm 7.1 and 7.2.2), saved as <folder>.zip. Run before the local name is chosen,
+    # since a folder's name gets ".zip".
     nas_file_size: int | None = None
     exists: bool | None = None  # True only for a file; None: the check didn't say
     unanswered = False  # the check got no DSM answer: a 5xx, a page that isn't DSM's, none
+    is_folder = False  # DSM sends a folder as a ZIP of it
     entry: dict[str, Any] = {}
     try:
         info = await client.request(
@@ -297,7 +280,9 @@ async def download_file(
             value=nas_path,
             suggestion="Check the DSM user's permissions for that shared folder.",
         )
-    elif entry and "code" not in entry and not entry.get("isdir"):
+    elif entry.get("isdir"):
+        is_folder = True
+    elif entry and "code" not in entry:
         exists = True
         nas_file_size = entry.get("additional", {}).get("size", 0)
 
@@ -309,6 +294,45 @@ async def download_file(
             param="path",
             value=nas_path,
             suggestion="Check the path with list_files or search_files.",
+        )
+
+    if len(PurePosixPath(nas_path).parts) == 2:  # a missing share was refused above
+        # A share's top level: DSM can't send it (502, or 404 as admin; vdsm 7.1, 7.2.2).
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            f"Download failed: {nas_path} is a whole shared folder, which DSM can't send "
+            "as one download.",
+            retryable=False,
+            param="path",
+            value=path,
+            suggestion="Download what's inside it: list it with list_files, then download "
+            "a file or a folder below it (a folder comes as a .zip).",
+        )
+
+    if is_folder and not filename:
+        effective_name += ".zip"
+        dest_file = local_dir / effective_name
+
+    if dest_file.is_dir() and not dest_file.is_symlink():
+        # Neither mode can replace a folder; refuse before downloading (QA R1 on #178).
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            f"Download failed: {dest_file} is a folder, so the file can't be saved there.",
+            retryable=False,
+            param="filename" if filename else "path",
+            value=filename if filename else path,
+            suggestion="Pass a different filename, or choose another dest_folder.",
+        )
+
+    # lexists, not exists: a dangling symlink is still a name in the way (QA R1 on #178).
+    if os.path.lexists(dest_file) and not overwrite:
+        error_response(
+            ErrorCode.ALREADY_EXISTS,
+            f"Download failed: Local file already exists: {dest_file}",
+            retryable=False,
+            param="filename",
+            value=dest_file.name,
+            suggestion="Use overwrite=true to replace the existing file.",
         )
 
     if nas_file_size:
@@ -393,9 +417,15 @@ async def download_file(
                 "Use the filename parameter to specify a compatible name."
             ),
         )
-    result = format_status(
-        f"Downloaded {effective_name} ({format_size(bytes_written)}) to {dest_file}"
-    )
+    if is_folder:
+        result = format_status(
+            f"Downloaded the folder {nas_path} as a ZIP archive of it "
+            f"({format_size(bytes_written)}) to {dest_file}"
+        )
+    else:
+        result = format_status(
+            f"Downloaded {effective_name} ({format_size(bytes_written)}) to {dest_file}"
+        )
 
     if bytes_written >= _LARGE_FILE_THRESHOLD:
         result += (

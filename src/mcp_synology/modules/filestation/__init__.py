@@ -159,7 +159,8 @@ MODULE_INFO = ModuleInfo(
             name="download_file",
             description=(
                 "Download a NAS file to a local directory on this machine. "
-                "Provide the NAS file path. dest_folder is optional if "
+                "Provide the NAS file path; a folder downloads as a ZIP of it, saved as "
+                "<folder>.zip (not a whole shared folder). dest_folder is optional if "
                 "default_download_dir is configured. "
                 "Does not overwrite existing local files by default."
             ),

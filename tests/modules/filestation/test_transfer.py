@@ -7,7 +7,7 @@ import errno
 import json
 import os
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 from unittest.mock import patch
 
@@ -401,23 +401,87 @@ class TestDownloadFile:
         )
         assert calls == ["getinfo"]
 
+    @staticmethod
+    def _folder_info(path: str = "/video/shows") -> httpx.Response:
+        folder = {"path": path, "name": PurePosixPath(path).name, "isdir": True}
+        return httpx.Response(200, json={"success": True, "data": {"files": [folder]}})
+
     @respx.mock
-    async def test_download_folder_is_unchanged(
+    async def test_download_folder_saves_its_zip(
         self, mock_client: DsmClient, tmp_path: Path
     ) -> None:
-        """A folder downloads as DSM's ZIP, as before; a share root's 502 (also a folder in
-        getinfo) keeps the old error, not "exists, retry" (vdsm 7.1, 7.2.2)."""
-        folder = {"path": "/video/shows", "name": "shows", "isdir": True}
-        info = httpx.Response(200, json={"success": True, "data": {"files": [folder]}})
-        self._route(info, httpx.Response(200, content=b"PK\x03\x04zip"))
-        await download_file(mock_client, path="/video/shows", dest_folder=str(tmp_path))
-        assert (tmp_path / "shows").read_bytes() == b"PK\x03\x04zip"
+        """DSM sends a folder below a share as a ZIP of it (vdsm 7.1, 7.2.2); it's saved as
+        <folder>.zip, and the reply says what it is (maintainer decision on #327)."""
+        zip_bytes = b"PK\x03\x04zip"
+        self._route(self._folder_info(), httpx.Response(200, content=zip_bytes))
+        out = await download_file(mock_client, path="/video/shows", dest_folder=str(tmp_path))
+        assert (tmp_path / "shows.zip").read_bytes() == zip_bytes
+        assert not (tmp_path / "shows").exists()
+        assert "Downloaded the folder /video/shows as a ZIP archive of it" in out
+        assert str(tmp_path / "shows.zip") in out
 
-        self._route(info, httpx.Response(502, text="<html>DSM error page</html>"))
+    @respx.mock
+    async def test_download_folder_filename_and_overwrite(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """filename is used as given; overwrite applies to the .zip name."""
+        self._route(self._folder_info(), httpx.Response(200, content=b"PK\x03\x04"))
+        await download_file(
+            mock_client, path="/video/shows", dest_folder=str(tmp_path), filename="tv.zip"
+        )
+        assert (tmp_path / "tv.zip").exists()
+
+        (tmp_path / "shows.zip").write_bytes(b"old")
+        calls = self._route(self._folder_info(), httpx.Response(200, content=b"PK\x03\x04"))
         with pytest.raises(ToolError) as exc_info:
-            await download_file(mock_client, path="/video", dest_folder=str(tmp_path))
+            await download_file(mock_client, path="/video/shows", dest_folder=str(tmp_path))
         err = json.loads(str(exc_info.value))["error"]
-        assert (err["code"], err["retryable"]) == ("filestation_error", False)
+        assert err["code"] == "already_exists"
+        assert str(tmp_path / "shows.zip") in err["message"]
+        assert calls == ["getinfo"]
+        await download_file(
+            mock_client, path="/video/shows", dest_folder=str(tmp_path), overwrite=True
+        )
+        assert (tmp_path / "shows.zip").read_bytes() == b"PK\x03\x04"
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        "getinfo",
+        [None, httpx.Response(502, text="<html>Bad Gateway</html>")],
+        ids=["folder-entry", "getinfo-failed"],
+    )
+    async def test_download_share_root_refused_up_front(
+        self, mock_client: DsmClient, tmp_path: Path, getinfo: httpx.Response | None
+    ) -> None:
+        """A share's top level: DSM can't send it (502, or 404 as admin), so it's refused
+        before any download, whatever getinfo said."""
+        calls = self._route(getinfo or self._folder_info("/video"), httpx.Response(502))
+        with pytest.raises(ToolError) as exc_info:
+            await download_file(mock_client, path="video", dest_folder=str(tmp_path))
+        err = json.loads(str(exc_info.value))["error"]
+        assert (err["code"], err["retryable"], err["param"]) == (
+            "invalid_parameter",
+            False,
+            "path",
+        )
+        assert err["message"] == (
+            "Download failed: /video is a whole shared folder, which DSM can't send as one "
+            "download."
+        )
+        assert calls == ["getinfo"]
+        assert list(tmp_path.iterdir()) == []
+
+    @respx.mock
+    async def test_download_missing_share_is_not_found(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        missing = {"files": [{"code": 408, "path": "/nosuch"}]}
+        self._route(
+            httpx.Response(200, json={"success": True, "data": missing}), httpx.Response(502)
+        )
+        with pytest.raises(ToolError) as exc_info:
+            await download_file(mock_client, path="/nosuch", dest_folder=str(tmp_path))
+        assert json.loads(str(exc_info.value))["error"]["code"] == "not_found"
 
     @respx.mock
     async def test_download_dsm_error_code_over_500_is_not_an_http_status(
@@ -988,7 +1052,9 @@ class TestDownloadFile:
         body = json.loads(str(exc_info.value))
         assert body["error"]["code"] == "already_exists"
         assert "while the download" not in body["error"]["message"]
-        assert not route.called
+        # Refused before the download: only the getinfo check, which picks the local
+        # name (a folder's gets ".zip"), went to the NAS.
+        assert [c.request.url.params.get("method") for c in route.calls] == ["getinfo"]
 
     @pytest.mark.parametrize("overwrite", [False, True])
     @respx.mock
@@ -1013,7 +1079,9 @@ class TestDownloadFile:
         assert "is a folder" in error["message"]
         assert str(tmp_path / "report.txt") in error["message"]
         assert "filename" in error["suggestion"]
-        assert not route.called
+        # Refused before the download: only the getinfo check, which picks the local
+        # name (a folder's gets ".zip"), went to the NAS.
+        assert [c.request.url.params.get("method") for c in route.calls] == ["getinfo"]
         assert (tmp_path / "report.txt").is_dir()
 
     async def test_download_write_error_names_the_destination_not_the_temp_file(

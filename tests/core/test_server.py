@@ -1545,7 +1545,9 @@ class TestInstructionComments:
 # Lowered by #317 to 30,247 (-58): list_photos, list_recycle_bin and get_resource_usage no
 # longer point at tools a connection may not have (tag_photos and restoring at read; File
 # Station's search and copies).
-PAYLOAD_BUDGET_CHARS = 30_247
+# Raised by #327 to 30,333 (+86): download_file's description says a folder downloads
+# as <folder>.zip, not a whole shared folder (#330).
+PAYLOAD_BUDGET_CHARS = 30_333
 
 
 class TestPayloadBudget:

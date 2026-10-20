@@ -377,24 +377,25 @@ Contents of /video/#recycle (3 items)
 
 ### 7. `download_file`
 
-Download a NAS file to a local directory on this machine.
+Download a NAS file, or a folder as a ZIP of it, to a local directory on this machine.
 
 **Permission tier:** READ
 
 **DSM API:** `SYNO.FileStation.Download` / `download` (GET, binary response)
 
 **Tool description (LLM-facing):**
-> Download a NAS file to a local directory on this machine. Provide the NAS file path. dest_folder is
-> optional if default_download_dir is configured. Does not overwrite existing local files by default.
+> Download a NAS file to a local directory on this machine. Provide the NAS file path; a folder
+> downloads as a ZIP of it, saved as <folder>.zip (not a whole shared folder). dest_folder is optional
+> if default_download_dir is configured. Does not overwrite existing local files by default.
 
 **Parameters:**
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `path` | `str` | **Yes** | — | NAS file path to download. |
+| `path` | `str` | **Yes** | — | NAS file or folder path to download. A share's top level (`/video`) is refused (`invalid_parameter`). |
 | `dest_folder` | `str` | No | `default_download_dir` | Local directory to save the file to. With neither set, `invalid_parameter` (`param: dest_folder`) before any NAS request (#194). |
-| `filename` | `str` | No | `None` | Rename on download (defaults to the NAS filename). Must be a plain file name: no `/` or `\`, not `.` or `..`, no NUL, no drive (`D:x`); otherwise `invalid_parameter` before the NAS is contacted. The same rule applies to a name taken from the NAS path. |
-| `overwrite` | `bool` | No | `false` | Replace existing local file. |
+| `filename` | `str` | No | `None` | Rename on download (defaults to the NAS filename, or `<folder>.zip` for a folder; a given `filename` is used as is). Must be a plain file name: no `/` or `\`, not `.` or `..`, no NUL, no drive (`D:x`); otherwise `invalid_parameter` before the NAS is contacted. The same rule applies to a name taken from the NAS path. |
+| `overwrite` | `bool` | No | `false` | Replace existing local file (for a folder, the `.zip`). |
 
 **Response shape:**
 
@@ -403,10 +404,10 @@ Download a NAS file to a local directory on this machine.
 ```
 
 **Design notes:**
-- Single-file download only in v1. Multi-file download (returns zip) deferred.
+- **Folders (#327, closes #330):** DSM sends a folder below a share as a ZIP of it (`PK\x03\x04`; vdsm 7.1 and 7.2.2). `download_file` reads `isdir` from its `getinfo` check and saves it as `<folder>.zip` (unless `filename` is given), and the reply says it's a ZIP archive of the folder. Its size isn't known ahead, so there's no disk-space pre-check for it. A share's top level (a path with one component) is refused up front: DSM answers it with a 502 (404 as admin). If `getinfo` can't answer, a folder is saved under its bare name, as before. Downloading several files at once is still out of scope.
 - Binary data streamed to disk in 64 KB chunks — never buffered entirely in memory.
 - If the NAS returns `Content-Type: application/json` instead of binary, it's an error envelope — parsed and raised. JSON that isn't DSM's error envelope (not an object, or an object without an `error` object) is `unavailable` (#292).
-- **DSM sends `application/octet-stream` for every download** (`mode=download`), whatever the file: a real `.html`, a `.json` shaped like an error envelope, `.txt`, binary or no extension (verified on DSM 7.1 and 7.2.2, #292; `mode=open` sends `text/plain` for text files, never `text/html`). So an HTML answer (`text/html` or `application/xhtml+xml`) on a 200 is a reverse proxy's or captive portal's page, not the file: it's `unavailable` ("the answer wasn't a DSM reply"), and nothing is written. A missing file gets HTTP 502 with DSM's own HTML error page, the same status a proxy gives for a server error. A path the user can't read gets the same answer, and so does a share root (502, or 404 as admin); a folder below a share downloads as a ZIP (vdsm 7.1 and 7.2.2). So `download_file` reads its `getinfo` check first and sends no download for a missing path (the `{"code": 408}` entry: `not_found`) or a path the user can't read (`407`: `permission_denied`). A 5xx for a file `getinfo` found, or after a `getinfo` that got no DSM answer either (a proxy's 5xx or page, or no answer at all), is a retryable `unavailable`; once the NAS answers, a missing file is `not_found`. Otherwise, for a folder or another `getinfo` error entry, a 502 stays `filestation_error` (#324).
+- **DSM sends `application/octet-stream` for every download** (`mode=download`), whatever the file: a real `.html`, a `.json` shaped like an error envelope, `.txt`, binary or no extension (verified on DSM 7.1 and 7.2.2, #292; `mode=open` sends `text/plain` for text files, never `text/html`). So an HTML answer (`text/html` or `application/xhtml+xml`) on a 200 is a reverse proxy's or captive portal's page, not the file: it's `unavailable` ("the answer wasn't a DSM reply"), and nothing is written. A missing file gets HTTP 502 with DSM's own HTML error page, the same status a proxy gives for a server error. A path the user can't read gets the same answer, and so does a share's top level (502, or 404 as admin); a folder below a share downloads as a ZIP (see Folders). So `download_file` reads its `getinfo` check first and sends no download for a missing path (the `{"code": 408}` entry: `not_found`), a path the user can't read (`407`: `permission_denied`) or a share's top level (`invalid_parameter`). A 5xx for a file `getinfo` found, or after a `getinfo` that got no DSM answer either (a proxy's 5xx or page, or no answer at all), is a retryable `unavailable`; once the NAS answers, a missing file is `not_found`. Otherwise, for a folder or another `getinfo` error entry, a 502 stays `filestation_error` (#324).
 - **Never destroys or escapes local files.** The body streams to a temp file `.mcp-synology-<hex>.part` in `dest_folder`, flushed to disk (`fsync`) and then moved onto the destination only when complete. On any failure (DSM error, dropped connection, cancellation) only the temp file is removed; an existing destination is never truncated or deleted. A hard crash (power loss, SIGKILL) can leave a `.part` file behind.
 - **`overwrite=false` holds to the end:** the finished file is published with a hard link, which fails if the destination exists (falling back to a final existence check where links aren't supported), so a file created during the download is never replaced; that is `already_exists`. With `overwrite=true` the destination is replaced and keeps its permission bits. Replacing needs free space for both copies until the rename.
 - **Containment:** the resulting file must sit directly in `dest_folder`; anything else is `invalid_parameter`.
