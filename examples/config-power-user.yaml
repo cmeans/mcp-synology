@@ -37,6 +37,7 @@ modules:
     settings:
       file_type_indicator: text
       async_timeout: 180      # search_files and get_dir_size time limit (default 120)
+      search_poll_interval: 2.0  # seconds between checks on a running search (default 1.0)
       # delete/copy/move/restore: how long a call waits before handing a still-running
       # task off to the NAS (default 30, capped at 600). The reply gives a handle for
       # file_task, which checks on the task or stops it.

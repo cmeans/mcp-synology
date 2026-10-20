@@ -125,8 +125,8 @@ modules:
     # Module-specific settings (optional, all have defaults)
     settings:
       # Hide #recycle folders from list_files output.
-      # Default: true
-      hide_recycle_in_listings: true
+      # Default: false
+      hide_recycle_in_listings: false
 
       # Output style for file type indicators.
       #   emoji — 📁 📄 🎬 (default)
@@ -139,6 +139,10 @@ modules:
       # copy_move_timeout (default 30, capped at 600) and then hand off (#245).
       # Default: 120
       async_timeout: 120
+
+      # Seconds search_files waits between checks on DSM's search while it runs.
+      # Accepted: 0.5-10.0. Default: 1.0
+      search_poll_interval: 1.0
 
       # Local folders upload_file may read from and download_file may write to,
       # including anything below them. Paths are compared after resolving ~, ..
@@ -262,12 +266,13 @@ Each key is a module name (e.g., `filestation`, `docker`, `system_info`). The va
 
 | Key | Type | Required | Default | Description |
 |-----|------|----------|---------|-------------|
-| `hide_recycle_in_listings` | `bool` | No | `true` | Hide `#recycle` folders from `list_files` output. |
+| `hide_recycle_in_listings` | `bool` | No | `false` | Hide `#recycle` folders from `list_files` output. |
 | `file_type_indicator` | `str` | No | `"emoji"` | File type display: `emoji` or `text`. |
 | `async_timeout` | `int` | No | `120` | Default timeout (seconds, 10–3600) for File Station's Search and DirSize background tasks. Wall-clock time, including slow status requests (#237). It doesn't apply to delete, copy, move or restore (#245). |
 | `search_timeout`, `dir_size_timeout` | `int` | No | `async_timeout` | Per-operation overrides (seconds, 10–3600). The task is stopped when it runs out. |
 | `delete_timeout`, `copy_move_timeout` | `int` | No | `30` | How long `delete_files` (`delete_timeout`) and `copy_files`, `move_files` and `restore_from_recycle_bin` (`copy_move_timeout`) wait before handing a still-running task off (seconds, 10–3600 accepted). The wait is capped at **600 s** whatever the setting, below known client timeouts (a client's timeout arrives as a cancel, which stops the task). A handed-off task keeps running on the NAS and the reply gives a handle for `file_task` (#245). |
 | `upload_timeout`, `download_timeout` | `int` | No | `300` | Transfer timeouts (seconds, 10–3600). |
+| `search_poll_interval` | `float` | No | `1.0` | Seconds `search_files` waits between checks on DSM's search while it runs (0.5–10.0). |
 | `allowed_local_paths` | `list[str]` | No | the user's Downloads folder (unless the top-level `allowed_local_paths` is set) | Local folders `upload_file` and `download_file` may use, including subfolders, added to the top-level `allowed_local_paths` when that's set (#257). Compared after resolving `~`, `..` and symlinks; `/` allows everything on macOS/Linux (on Windows, list each drive). `default_download_dir` is always allowed. Entries must be absolute or start with `~` (a relative entry would depend on the server's working directory); an empty list, a relative entry, or one that can't be resolved (a NUL byte, a symlink loop) is a config error. A path outside is refused with `permission_denied` before any NAS request; a path that can't be resolved is `invalid_parameter`. The refusal shows where a path resolves to only when the path itself is inside an allowed folder (a symlink there leading out), so it never reveals what exists outside. |
 
 ### `modules.downloadstation.settings` Object
@@ -583,7 +588,7 @@ Example for File Station:
 
 ```python
 class FileStationSettings(BaseModel):
-    hide_recycle_in_listings: bool = True
+    hide_recycle_in_listings: bool = False
     file_type_indicator: Literal["emoji", "text"] = "emoji"
     async_timeout: int = Field(default=120, ge=10, le=3600)
 
