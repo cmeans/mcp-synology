@@ -618,12 +618,12 @@ Album 9 "Trip 2024" is shared.
 **Response shape:**
 
 ```
-Copied 3 item(s) and 1 folder to /Albums/Best (personal space): 4 done, 0 skipped (already there), 0 overwritten.
+Copied 3 item(s) and 1 folder(s) to /Albums/Best (personal space): 4 of 4 processed, 0 skipped (already there), 0 overwritten.
 ```
 
-DSM's `completion` counts skipped and failed items too (captured: `completion: 1, skip: 1`), so when anything was skipped or failed the headline doesn't say "Copied": `Copy of 3 item(s) to /Albums/Best (personal space) finished: 3 of 3 done, 1 skipped (already there), 0 overwritten.`, or `Nothing was copied to … (1 item(s) requested): …` when every item was skipped or failed (0.10.0rc4 live test).
+DSM's `completion` counts skipped and failed items too (captured: `completion: 1, skip: 1`), so when anything was skipped or failed the headline doesn't say "Copied": `Copy of 3 item(s) to /Albums/Best (personal space) finished: 3 of 3 processed, 1 skipped (already there), 0 overwritten.`, or `Nothing was copied to … (1 item(s) requested): …` when every item was skipped or failed (0.10.0rc4 live test).
 
-Still running at `task_timeout`: `Still copying on the NAS (2 of 9 done). Handle: photos:14 — check with photo_task.` When a status check fails, the lead says why instead: `The NAS didn't answer a status check (ReadTimeout)`, `The NAS, or a proxy in front of it, answered a status check with an error (HTTP 504)` or `The NAS's status reply couldn't be read (not a DSM reply; a proxy or captive portal may be answering)`, followed by `; the task is most likely still copying.` and the handle. Failed items from `get_error_detail` follow as `  item 41: <reason>` lines.
+Still running at `task_timeout`: `Still copying on the NAS (2 of 9 processed). Handle: photos:14 — check with photo_task.` When a status check fails, the lead says why instead: `The NAS didn't answer a status check (ReadTimeout)`, `The NAS, or a proxy in front of it, answered a status check with an error (HTTP 504)` or `The NAS's status reply couldn't be read (not a DSM reply; a proxy or captive portal may be answering)`, followed by `; the task is most likely still copying.` and the handle. Failed items from `get_error_detail` follow as `  item 41: <reason>` lines.
 
 **Design notes:** the task's `skip` and `overwrite` counters are reported (verified: a repeat copy with `skip` finished with `skip: 1`). `get_error_detail` (scalar `id`) lists failed items. **Cross-space** (verified on 7.1 and 7.2.2): the call goes to the **source space's** API with a `target_folder_id` in the other space; sent through the destination's API, the task finished with the item failing as `not_existed`. `extra_info` carries `{"version": 2, "source_library": …}` as a JSON **string**, JSON-encoded again, as the web client sends it (the copy worked with or without it). Personal → Shared Space copies and moves work, and a Shared Space → personal copy works, but **a move out of Shared Space into a personal space answers 640**, so `move_photos` refuses it locally and suggests a copy followed by a delete. `Browse.Item copy/move` also exist (they require `action`) but the web client doesn't use them; neither does this module.
 
@@ -678,7 +678,7 @@ Still running at `task_timeout`: `Still copying on the NAS (2 of 9 done). Handle
 
 **Annotations:** `readOnlyHint=false`, `destructiveHint=true`: `stop` can leave a move or delete half done (as `file_task`, #183).
 
-**Response shape:** with a handle, one line: `photos:14 copy to /Albums/Best: processing, 2 of 9 done (0 skipped, 0 overwritten), running 1 min 12 s.` or the final result in the starting tool's shape. Without a handle, a table: handle, operation, target folder, status, done/total, started (UTC). `clear` says how many finished tasks were removed.
+**Response shape:** with a handle, one line: `photos:14 copy to /Albums/Best: processing, 2 of 9 processed, 0 skipped (already there), 0 overwritten, running 1 min 12 s.`; a finished task gets the same line with `done`, plus its failed items. Without a handle, a table: handle, operation, target folder, status, done/total, started (UTC). `clear` says how many finished tasks were removed.
 
 **Design notes:** an unknown ID: `get_status` returns an empty list, `abort_task` 117; both are `not_found`. Tasks are per user and cover both spaces.
 
@@ -728,8 +728,9 @@ Photos rewrites tagged files, so their dates and sizes change.
 **DSM API:** `Browse.Item set` v2 (`id: [..]` + `rating` | `description` | `time` | `shift_time` | `rotate_action`); 1.9.1: `Browse.Item set_favorite` v7 (`id: [..]`, `favorite`)
 
 **Tool description (LLM-facing):**
-> Edit Synology Photos items: rating (0-5, 0 clears), description, taken time (set to a date-time,
-> or shift by hours), rotate (left or right), favorite (Photos 1.9.1+). Applies to every id given.
+> Edit Synology Photos items: rating (0-5, 0 clears), description, taken time (set to a local
+> date-time, no zone: an offset is ignored; or shift by hours), rotate (left or right), favorite
+> (Photos 1.9.1+). Applies to every id given.
 > Photos writes these into the original files, so file dates and sizes change. Location can't be
 > edited. space: personal (default) or shared.
 

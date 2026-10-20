@@ -66,7 +66,7 @@ class TestCopyMove:
         }
         assert [c.params for c in fake.of(INFO, "get_status")] == [{"id": [5]}, {"id": [5]}]
         assert out.splitlines()[0] == (
-            "Copied 1 item(s) to /mcp-spec-capture/dest (personal space): 1 of 1 done, "
+            "Copied 1 item(s) to /mcp-spec-capture/dest (personal space): 1 of 1 processed, "
             "0 skipped (already there), 0 overwritten."
         )
         assert "Not found: 99" in out
@@ -86,7 +86,7 @@ class TestCopyMove:
         # the headline mustn't say it was copied (rc4 live test).
         assert out.splitlines()[0] == (
             "Nothing was copied to /mcp-spec-capture/dest (personal space) (1 item(s) "
-            "requested): 1 of 1 done, 1 skipped (already there), 0 overwritten."
+            "requested): 1 of 1 processed, 1 skipped (already there), 0 overwritten."
         )
 
     @pytest.mark.parametrize(
@@ -94,17 +94,18 @@ class TestCopyMove:
         [
             (
                 {"completion": 3, "total": 3, "skip": 1},
-                "Move of 3 item(s) to /d finished: 3 of 3 done, 1 skipped (already there), "
+                "Move of 3 item(s) to /d finished: 3 of 3 processed, 1 skipped (already there), "
                 "0 overwritten.",
             ),
             (
                 {"completion": 2, "total": 2, "skip": 1, "error": 1},
-                "Nothing was moved to /d (2 item(s) requested): 2 of 2 done, 1 skipped "
+                "Nothing was moved to /d (2 item(s) requested): 2 of 2 processed, 1 skipped "
                 "(already there), 0 overwritten, 1 failed.",
             ),
             (
                 {"completion": 2, "total": 2},
-                "Moved 2 item(s) to /d: 2 of 2 done, 0 skipped (already there), 0 overwritten.",
+                "Moved 2 item(s) to /d: 2 of 2 processed, 0 skipped (already there), "
+                "0 overwritten.",
             ),
         ],
         ids=["some-skipped", "none-moved", "all-moved"],
@@ -123,7 +124,7 @@ class TestCopyMove:
             out = await copy_or_move(
                 client, operation="move", ids=[12], folders=None, destination="14", timeout=0
             )
-        assert "Still moving on the NAS (0 of 1 done). Handle: photos:6" in out
+        assert "Still moving on the NAS (0 of 1 processed). Handle: photos:6" in out
         assert not fake.of(INFO)
 
     @respx.mock
@@ -486,7 +487,9 @@ class TestPhotoTask:
         client = make_client()
         async with client:
             out = await photo_task(client, handle="photos:5")
-        assert out.startswith("photos:5 copy to /mcp-spec-capture/dest: processing, 0 of 1 done")
+        assert out.startswith(
+            "photos:5 copy to /mcp-spec-capture/dest: processing, 0 of 1 processed"
+        )
         assert "running" in out
 
     @respx.mock
@@ -632,7 +635,7 @@ class TestPhotoTask:
         client = make_client()
         async with client:
             out = await photo_task(client, handle="photos:5")
-        assert out.startswith("photos:5 copy to folder 14: processing, 0 of 1 done")
+        assert out.startswith("photos:5 copy to folder 14: processing, 0 of 1 processed")
 
     @respx.mock
     async def test_list_stops_folder_lookups_after_no_answer(self) -> None:
@@ -865,5 +868,5 @@ class TestCoverage:
         client = make_client()
         async with client:
             out = await photo_task(client, handle="photos:5")
-        assert out.startswith("photos:5 delete: processing, 1 of 2 done")
+        assert out.startswith("photos:5 delete: processing, 1 of 2 processed")
         assert "running" not in out

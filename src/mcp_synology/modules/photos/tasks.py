@@ -174,7 +174,7 @@ async def _poll(
 def _progress(status: dict[str, Any]) -> str:
     total = int(status.get("total") or 0)
     done = int(status.get("completion") or 0)
-    return f"{done} of {total} done"
+    return f"{done} of {total} processed"
 
 
 def _counts(status: dict[str, Any]) -> str:

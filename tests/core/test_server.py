@@ -1549,7 +1549,9 @@ class TestInstructionComments:
 # as <folder>.zip, not a whole shared folder (#330).
 # Raised by #332 to 30,428 (+95): get_dir_size's description says it counts only what the
 # DSM user can read, leaving out a subfolder it can't read without notice (#336).
-PAYLOAD_BUDGET_CHARS = 30_428
+# Raised by #342 to 30,465 (+37): edit_photo's description says taken_time is a local
+# date-time with no zone, an offset ignored (Photos stores wall-clock time).
+PAYLOAD_BUDGET_CHARS = 30_465
 
 
 class TestPayloadBudget:

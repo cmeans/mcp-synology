@@ -192,7 +192,8 @@ MODULE_INFO = ModuleInfo(
             name="edit_photo",
             description=(
                 "Edit Synology Photos items: rating (0-5, 0 clears), description, taken time "
-                "(set to a date-time, or shift by hours), rotate (left or right), favorite "
+                "(set to a local date-time, no zone: an offset is ignored; or shift by hours), "
+                "rotate (left or right), favorite "
                 "(Photos 1.9.1+). Applies to every id given. Photos writes these into the "
                 "original files, so file dates and sizes change. Location can't be edited. "
                 "space: personal (default) or shared."
