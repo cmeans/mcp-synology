@@ -106,6 +106,17 @@ async def test_denied_folder_is_permission_denied(
     assert error["code"] == "permission_denied", error
 
 
+@pytest.mark.parametrize("sub", ["acl", "posix"])
+async def test_denied_folder_is_measured_for_admin(
+    admin_client: Any, denied_folders: str, sub: str
+) -> None:
+    """The read check doesn't misfire for a user who can read the folder."""
+    from mcp_synology.modules.filestation.metadata import get_dir_size
+
+    result = await get_dir_size(admin_client[0], path=f"{denied_folders}/{sub}")
+    assert re.search(r"Total size:\s+8 B\n", result), result
+
+
 async def test_denied_subfolders_are_left_out(
     nas_client: Any, admin_client: Any, denied_folders: str
 ) -> None:

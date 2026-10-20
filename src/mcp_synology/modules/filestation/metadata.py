@@ -270,8 +270,9 @@ async def _getinfo_entry(client: DsmClient, normalized: str) -> dict[str, Any]:
         version=version,
         params={"path": normalized, "additional": '["perm"]'},
     )
-    files = data.get("files") or []
-    return files[0] if files and isinstance(files[0], dict) else {}
+    files = data.get("files")
+    first = files[0] if isinstance(files, list) and files else None
+    return first if isinstance(first, dict) else {}
 
 
 def _read_denied(entry: dict[str, Any]) -> bool:
@@ -304,8 +305,8 @@ async def get_dir_size(
     except SynologyError as e:
         logger.debug("Get directory size: path check failed: %s", e)
         entry = {}
-    if "code" in entry:
-        code = int(entry["code"])
+    code = entry.get("code")
+    if isinstance(code, int) and not isinstance(code, bool):
         _refuse_path(normalized, path, code, [(str(entry.get("path") or normalized), code)])
     if _read_denied(entry):
         _refuse_path(normalized, path, 407, [(normalized, 407)])

@@ -312,14 +312,17 @@ class TestGetDirSize:
         ``status`` (default 0 B, 0 files)."""
 
         def side_effect(request: httpx.Request) -> httpx.Response:
-            method = dict(request.url.params).get("method", "")
+            params = dict(request.url.params)
+            method = params.get("method", "")
             calls.append(method)
             if method == "getinfo":
+                assert params.get("additional") == '["perm"]'
                 if transport_error:
                     raise httpx.ConnectError("connection refused", request=request)
                 if entry is None:
                     return httpx.Response(502, text="<html>Bad Gateway</html>")
-                return httpx.Response(200, json={"success": True, "data": {"files": [entry]}})
+                files = entry.get("_files", [entry])
+                return httpx.Response(200, json={"success": True, "data": {"files": files}})
             if method == "start":
                 return httpx.Response(200, json={"success": True, "data": {"taskid": "ds-1"}})
             if method == "status":
@@ -384,8 +387,10 @@ class TestGetDirSize:
             {"path": "/video", "name": "video", "isdir": True},
             {"path": "/video", "isdir": True, "additional": {"perm": {"acl": {"read": True}}}},
             {"path": "/video", "isdir": True, "additional": {"perm": "garbled"}},
+            {"_files": {"a": 1}},
+            {"code": "abc", "path": "/video"},
         ],
-        ids=["getinfo-failed", "exists", "readable", "garbled-perm"],
+        ids=["getinfo-failed", "exists", "readable", "garbled-perm", "garbled-files", "odd-code"],
     )
     async def test_dir_size_runs_when_the_path_exists_or_the_check_fails(
         self, mock_client: DsmClient, entry: dict[str, Any] | None
