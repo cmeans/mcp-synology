@@ -11,6 +11,7 @@ import pytest
 import respx
 from mcp.server.mcpserver.exceptions import ToolError
 
+from mcp_synology.core.errors import DsmHttpError
 from mcp_synology.modules.photos import tasks
 from mcp_synology.modules.photos.tasks import (
     copy_or_move,
@@ -121,6 +122,10 @@ class TestCopyMove:
             (httpx.Response(504, text="<html>Gateway Timeout</html>"),
              "The NAS, or a proxy in front of it, answered a status check with an error "
              "(HTTP 504); the task is most likely still copying."),
+            # #325: a status URL is short, so a 414 comes from a proxy too.
+            (httpx.Response(414, text="<html>Too long</html>"),
+             "The NAS, or a proxy in front of it, answered a status check with an error "
+             "(HTTP 414); the task is most likely still copying."),
             (httpx.Response(200, text="<html>Sign in</html>", headers=HTML),
              "The NAS's status reply couldn't be read (not a DSM reply; a proxy or captive "
              "portal may be answering); the task is most likely still copying."),
@@ -141,6 +146,27 @@ class TestCopyMove:
             f"Copy of 1 item(s) to /mcp-spec-capture/dest (personal space): {shown} "
             "Handle: photos:5 — check with photo_task."
         )
+
+    @respx.mock
+    async def test_relogin_proxy_error_hands_off(self) -> None:
+        """#321: a session error on the status read, then a proxy 502 on the re-login,
+        used to stop the task as if DSM had answered "Invalid session"."""
+        fake = FakePhotos().on(ITEM, "get", 2, _items(12)).on(FOLDER, "get", 2, _DEST)
+        fake.on(FILE, "copy", 1, captured("bg-copy")).error(INFO, "get_status", 1, 119)
+        install(fake)
+        client = make_client()
+
+        async def reauth() -> None:
+            raise DsmHttpError("SYNO.API.Auth/login: DSM answered HTTP 502.", 502)
+
+        client.set_re_auth_callback(reauth)
+        async with client:
+            out = await copy_or_move(
+                client, operation="copy", ids=[12], folders=None, destination="14"
+            )
+        assert "answered a status check with an error (HTTP 502)" in out
+        assert "photos:5" in out
+        assert not fake.of(INFO, "abort_task")
 
     @respx.mock
     @pytest.mark.parametrize("abort_ok", [True, False])

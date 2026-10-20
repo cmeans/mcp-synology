@@ -13,7 +13,7 @@ import pytest
 import respx
 from mcp.server.mcpserver.exceptions import ToolError
 
-from mcp_synology.core.errors import DsmHttpError, DsmReplyError
+from mcp_synology.core.errors import DsmHttpError, DsmReplyError, RequestTooLongError
 from mcp_synology.modules.filestation.tasks import (
     DiscoveryNote,
     Handle,
@@ -299,6 +299,50 @@ class TestPollTask:
         assert result.stopped is False
         assert result.status == RUNNING
         assert calls == ["status", "status"]
+
+    @respx.mock
+    async def test_poll_proxy_414_is_a_handoff_without_stop(
+        self, mock_client: DsmClient, clock: list[float]
+    ) -> None:
+        """#325: a status URL is short, so a 414 comes from a proxy: hand off, don't stop."""
+        calls: list[str] = []
+        replies = iter([_ok(RUNNING), httpx.Response(414, text="<html>Too long</html>")])
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            calls.append(_method(request))
+            return next(replies)
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        result = await poll_task(mock_client, api=API, version=2, taskid="t1", wait=30, label="x")
+        assert result.outcome == "stalled"
+        assert isinstance(result.error, RequestTooLongError)
+        assert result.stopped is False
+        assert calls == ["status", "status"]
+
+    @respx.mock
+    async def test_poll_relogin_proxy_error_is_a_handoff_without_stop(
+        self, mock_client: DsmClient, clock: list[float]
+    ) -> None:
+        """#321: a session error on the status read, then a proxy 502 on the re-login,
+        used to surface as "Invalid session" and stop the task."""
+        calls: list[str] = []
+        replies = iter([_ok(RUNNING), _err(119)])
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            calls.append(_method(request))
+            return next(replies)
+
+        async def reauth() -> None:
+            calls.append("login")
+            raise DsmHttpError("SYNO.API.Auth/login: DSM answered HTTP 502.", 502)
+
+        mock_client.set_re_auth_callback(reauth)
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        result = await poll_task(mock_client, api=API, version=2, taskid="t1", wait=30, label="x")
+        assert result.outcome == "stalled"
+        assert isinstance(result.error, DsmHttpError)
+        assert result.stopped is False
+        assert calls == ["status", "status", "login"]  # no stop
 
     @respx.mock
     async def test_poll_status_data_not_an_object_is_a_handoff(

@@ -24,7 +24,13 @@ from typing import TYPE_CHECKING, Any, NoReturn
 import anyio
 import httpx
 
-from mcp_synology.core.errors import DsmHttpError, DsmReplyError, ErrorCode, SynologyError
+from mcp_synology.core.errors import (
+    DsmHttpError,
+    DsmReplyError,
+    ErrorCode,
+    RequestTooLongError,
+    SynologyError,
+)
 from mcp_synology.core.formatting import (
     error_response,
     format_table,
@@ -126,11 +132,13 @@ async def _poll(
         except httpx.TransportError as e:
             logger.warning("Photos task %s status got no answer: %s", task_id, type(e).__name__)
             return status, f"The NAS didn't answer a status check ({type(e).__name__})"
-        except DsmHttpError as e:
-            logger.warning("Photos task %s status got HTTP %s", task_id, e.status)
+        except (DsmHttpError, RequestTooLongError) as e:
+            # A status URL is short, so a 414 comes from a proxy, not the request (#325).
+            http = e.status if isinstance(e, DsmHttpError) else 414
+            logger.warning("Photos task %s status got HTTP %s", task_id, http)
             return status, (
                 "The NAS, or a proxy in front of it, answered a status check with an error "
-                f"(HTTP {e.status})"
+                f"(HTTP {http})"
             )
         except DsmReplyError:
             logger.warning("Photos task %s status reply wasn't a DSM reply", task_id)

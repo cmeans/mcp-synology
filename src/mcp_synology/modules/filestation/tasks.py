@@ -14,7 +14,13 @@ from typing import TYPE_CHECKING, Any, Literal, NoReturn, get_args
 import anyio
 import httpx
 
-from mcp_synology.core.errors import DsmHttpError, DsmReplyError, ErrorCode, SynologyError
+from mcp_synology.core.errors import (
+    DsmHttpError,
+    DsmReplyError,
+    ErrorCode,
+    RequestTooLongError,
+    SynologyError,
+)
 from mcp_synology.core.formatting import (
     error_response,
     format_size,
@@ -331,10 +337,11 @@ async def poll_task(
                 if not isinstance(reply, dict):
                     raise TypeError("status data is not an object")
                 status = reply
-            except (DsmHttpError, DsmReplyError) as e:
+            except (DsmHttpError, DsmReplyError, RequestTooLongError) as e:
                 # Not DSM's verdict on the task: a proxy's 502/504 or login page, or a
                 # DSM too busy to answer properly. Hand it off like a stall, never stop
-                # it; the stop would go through the same broken path anyway (#282).
+                # it; the stop would go through the same broken path anyway (#282). A
+                # status URL is short, so a 414 comes from a proxy too (#325).
                 logger.warning(
                     "%s status (%s) failed, handing off: %s", api, label, type(e).__name__
                 )
@@ -422,9 +429,9 @@ def handoff_reply(
         last = f"; last progress: {progress_text(status)}" if status else ""
         if isinstance(stall, httpx.TransportError):
             what, why = "The NAS stopped answering", describe_transport_error(stall)
-        elif isinstance(stall, DsmHttpError):
+        elif isinstance(stall, (DsmHttpError, RequestTooLongError)):
             what = "The NAS, or a proxy in front of it, answered a status request with an error"
-            why = f"HTTP {stall.status}"
+            why = f"HTTP {stall.status if isinstance(stall, DsmHttpError) else 414}"
         elif isinstance(stall, DsmReplyError):
             what = "The NAS's status reply couldn't be read"
             why = "not a DSM reply; a proxy or captive portal may be answering"

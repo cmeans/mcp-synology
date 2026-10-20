@@ -293,6 +293,23 @@ class DsmClient:
         """Set callback for transparent re-authentication on session errors."""
         self._re_auth_callback = callback
 
+    async def _re_authenticate(self, code: int, api: str) -> None:
+        """Log in again after session error ``code``; raise if the login fails.
+
+        A DSM or auth error from the login (e.g. a changed password) is raised as the
+        original session error. A proxy's answer to the login (an HTTP error status, a
+        page that isn't DSM's, a 414) is raised as it is: it isn't DSM's verdict, and a
+        task poll must hand the task off on it, not stop the task (#321).
+        """
+        if self._re_auth_callback is None:
+            raise error_from_code(code, api)
+        try:
+            await self._re_auth_callback()
+        except (DsmHttpError, DsmReplyError, RequestTooLongError):
+            raise
+        except SynologyError:
+            raise error_from_code(code, api) from None
+
     async def __aenter__(self) -> Self:
         logger.debug("Opening HTTP client connection to %s", self._base_url)
         # Silence httpx's built-in request logger — it logs full URLs at INFO level,
@@ -599,10 +616,7 @@ class DsmClient:
         # Transparent re-auth on session errors (one retry)
         if code in _SESSION_ERROR_CODES and not _is_retry and self._re_auth_callback:
             logger.info("Session error %d on %s/%s, attempting re-auth.", code, api, method)
-            try:
-                await self._re_auth_callback()
-            except SynologyError:
-                raise error_from_code(code, api) from None
+            await self._re_authenticate(code, api)
             return await self.request(
                 api,
                 method,
@@ -673,10 +687,7 @@ class DsmClient:
 
         if code in _SESSION_ERROR_CODES and not _is_retry and self._re_auth_callback:
             logger.info("Session error %d on %s/%s, attempting re-auth.", code, api, method)
-            try:
-                await self._re_auth_callback()
-            except SynologyError:
-                raise error_from_code(code, api) from None
+            await self._re_authenticate(code, api)
             return await self.request_form_post(api, method, version, params, _is_retry=True)
 
         raise error_from_code(code, api)
@@ -820,10 +831,7 @@ class DsmClient:
         # Re-auth on session errors (file must be re-opened on retry)
         if code in _SESSION_ERROR_CODES and not _is_retry and self._re_auth_callback:
             logger.info("Session error %d on %s/%s, attempting re-auth.", code, api, method)
-            try:
-                await self._re_auth_callback()
-            except SynologyError:
-                raise error_from_code(code, api) from None
+            await self._re_authenticate(code, api)
             return await self.upload_multipart(
                 api,
                 method,
@@ -922,10 +930,7 @@ class DsmClient:
         # Re-auth on session errors (file must be re-opened on retry)
         if code in _SESSION_ERROR_CODES and not _is_retry and self._re_auth_callback:
             logger.info("Session error %d on %s/create, attempting re-auth.", code, api)
-            try:
-                await self._re_auth_callback()
-            except SynologyError:
-                raise error_from_code(code, api) from None
+            await self._re_authenticate(code, api)
             return await self.create_download_task_with_file(
                 file_path,
                 filename,
@@ -1045,7 +1050,9 @@ class DsmClient:
                 error = _error_envelope(await resp.aread())
                 if error is not None:
                     raise error_from_code(error.get("code", 0), api, error.get("errors"))
-                if "FileStation" not in api:
+                if "FileStation" not in api or resp.status_code >= 500:
+                    # A 5xx is DSM's or a proxy's server error, never a missing file:
+                    # report it as one, retryable, for File Station too (#324).
                     _check_status(resp, f"{api}/{method}")
                 from mcp_synology.core.errors import FileStationError
 
@@ -1077,10 +1084,7 @@ class DsmClient:
 
                 if code in _SESSION_ERROR_CODES and not _is_retry and self._re_auth_callback:
                     logger.info("Session error %d on %s/%s, attempting re-auth.", code, api, method)
-                    try:
-                        await self._re_auth_callback()
-                    except SynologyError:
-                        raise error_from_code(code, api) from None
+                    await self._re_authenticate(code, api)
                     return await self.download_binary(
                         api,
                         method,

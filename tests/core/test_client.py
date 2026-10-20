@@ -14,8 +14,11 @@ if TYPE_CHECKING:
 from mcp_synology.core.client import DsmClient
 from mcp_synology.core.errors import (
     ApiNotFoundError,
+    AuthenticationError,
     DsmHttpError,
+    DsmReplyError,
     PathNotFoundError,
+    RequestTooLongError,
     SessionExpiredError,
     SynologyError,
 )
@@ -734,9 +737,8 @@ class TestNotADsmReply:
         self, tmp_path: Path, api: str, method: str
     ) -> None:
         """A 502 whose body is a JSON list crashed with AttributeError; it's the same
-        HTTP error as any other body that isn't a DSM envelope."""
-        from mcp_synology.core.errors import FileStationError
-
+        HTTP error as any other body that isn't a DSM envelope. File Station too: a 5xx
+        is never a missing file (#324)."""
         cache = make_api_cache()
         cache["SYNO.Foto.Thumbnail"] = ApiInfoEntry(path="entry.cgi", min_version=1, max_version=2)
         client = make_client(cache)
@@ -744,12 +746,23 @@ class TestNotADsmReply:
         async with client:
             with pytest.raises(SynologyError) as exc:
                 await self._download(client, api, tmp_path / "x")
-        if api == "SYNO.FileStation.Download":
-            assert isinstance(exc.value, FileStationError)
-            assert str(exc.value) == "HTTP 502 from download API"
-        else:
-            assert isinstance(exc.value, DsmHttpError)
-            assert exc.value.status == 502
+        assert isinstance(exc.value, DsmHttpError)
+        assert exc.value.status == 502
+        assert exc.value.retryable
+        assert not (tmp_path / "x").exists()
+
+    @respx.mock
+    async def test_file_station_download_4xx_keeps_its_own_error(self, tmp_path: Path) -> None:
+        """#324 changes only 5xx: a File Station 4xx without a DSM envelope stays a
+        FileStationError."""
+        from mcp_synology.core.errors import FileStationError
+
+        client = make_client(make_api_cache())
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(404, text="<html>Not Found</html>")
+        async with client:
+            with pytest.raises(FileStationError) as exc:
+                await self._download(client, "SYNO.FileStation.Download", tmp_path / "x")
+        assert str(exc.value) == "HTTP 404 from download API"
         assert not (tmp_path / "x").exists()
 
     @respx.mock
@@ -782,6 +795,23 @@ class TestNotADsmReply:
         assert reauths == [True]
         assert written == 4
         assert (tmp_path / "movie.mkv").read_bytes() == b"DATA"
+
+    @respx.mock
+    async def test_download_keeps_a_relogin_proxy_error(self, tmp_path: Path) -> None:
+        """#321: a proxy's 502 on the re-login is raised as it is, not as error 119."""
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            200, json={"success": False, "error": {"code": 119}}
+        )
+
+        async def reauth() -> None:
+            raise DsmHttpError("SYNO.API.Auth/login: DSM answered HTTP 502.", 502)
+
+        client = make_client(make_api_cache())
+        async with client:
+            client.set_re_auth_callback(reauth)
+            with pytest.raises(DsmHttpError):
+                await client.download("/video/movie.mkv", tmp_path / "movie.mkv")
+        assert not (tmp_path / "movie.mkv").exists()
 
     @respx.mock
     async def test_download_http_error_with_a_dsm_envelope(self, tmp_path: Path) -> None:
@@ -1117,6 +1147,67 @@ class TestRequestFormPost:
         async with client:
             with pytest.raises(ApiNotFoundError):
                 await client.request_form_post("SYNO.Nope", "create", version=1)
+
+
+_PROXY_ERRORS = [
+    DsmHttpError("SYNO.API.Auth/login: DSM answered HTTP 502.", 502),
+    DsmReplyError("SYNO.API.Auth/login: the reply wasn't DSM's (text/html)."),
+    RequestTooLongError("SYNO.API.Auth/login: DSM rejected the request with HTTP 414."),
+]
+
+
+class TestReauthProxyErrors:
+    """#321: a proxy's answer to the re-login is raised as it is, not as the session error,
+    so a task poll hands the task off instead of stopping it."""
+
+    @respx.mock
+    @pytest.mark.parametrize("error", _PROXY_ERRORS, ids=lambda e: type(e).__name__)
+    async def test_request_keeps_the_relogin_error(self, error: SynologyError) -> None:
+        client = make_client(make_api_cache())
+
+        async def reauth() -> None:
+            raise error
+
+        client.set_re_auth_callback(reauth)
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 119}}
+        )
+        async with client:
+            with pytest.raises(type(error)) as exc:
+                await client.request("SYNO.FileStation.Delete", "status", version=2)
+        assert exc.value is error
+
+    @respx.mock
+    @pytest.mark.parametrize("error", _PROXY_ERRORS, ids=lambda e: type(e).__name__)
+    async def test_form_post_keeps_the_relogin_error(self, error: SynologyError) -> None:
+        client = make_client(make_api_cache())
+
+        async def reauth() -> None:
+            raise error
+
+        client.set_re_auth_callback(reauth)
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 106}}
+        )
+        async with client:
+            with pytest.raises(type(error)):
+                await client.request_form_post("SYNO.DownloadStation2.Task", "create", version=2)
+
+    @respx.mock
+    async def test_dsm_login_error_still_raises_the_session_error(self) -> None:
+        """A DSM verdict on the login (e.g. a changed password) keeps the old mapping."""
+        client = make_client(make_api_cache())
+
+        async def reauth() -> None:
+            raise AuthenticationError("Login failed", code=400)
+
+        client.set_re_auth_callback(reauth)
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 119}}
+        )
+        async with client:
+            with pytest.raises(SessionExpiredError):
+                await client.request("SYNO.FileStation.Delete", "status", version=2)
 
 
 class TestCreateDownloadTaskWithFile:
@@ -1484,6 +1575,31 @@ class TestGeneralTransfers:
         assert reauths == [1]
         assert route.call_count == 2
         assert b"\r\n\r\na\r\n" in route.calls.last.request.content
+
+    @respx.mock
+    async def test_upload_multipart_keeps_a_relogin_proxy_error(self, tmp_path: Path) -> None:
+        """#321: a proxy's 502 on the re-login is raised as it is, not as error 119."""
+        client = make_client(self._cache())
+        local = tmp_path / "a.jpg"
+        local.write_bytes(b"a")
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 119}}
+        )
+
+        async def _reauth() -> None:
+            raise DsmHttpError("SYNO.API.Auth/login: DSM answered HTTP 502.", 502)
+
+        client.set_re_auth_callback(_reauth)
+        async with client:
+            with pytest.raises(DsmHttpError):
+                await client.upload_multipart(
+                    "SYNO.Foto.Upload.Item",
+                    "upload_to_folder",
+                    1,
+                    {},
+                    file_path=local,
+                    filename="a",
+                )
 
     @respx.mock
     async def test_upload_multipart_error_names_the_parameter(self, tmp_path: Path) -> None:
