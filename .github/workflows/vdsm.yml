@@ -199,8 +199,9 @@ jobs:
         # tests/vdsm must be on the command line: --dsm-version is defined in
         # tests/vdsm/conftest.py, which pytest only loads early enough to register
         # options when the directory is given. It collects the same tests as
-        # `pytest -m vdsm` from the root.
-        run: uv run pytest tests/vdsm -m vdsm -v --no-cov --log-cli-level=INFO --dsm-version "${DSM_VERSION}"
+        # `pytest -m vdsm` from the root. --durations lists the 30 slowest setups, calls
+        # and teardowns (1 s or more) at the end, to show where the job's time goes (#132).
+        run: uv run pytest tests/vdsm -m vdsm -v --no-cov --log-cli-level=INFO --durations=30 --durations-min=1.0 --dsm-version "${DSM_VERSION}"
 
       - name: Upload logs on failure
         if: failure() || cancelled()
