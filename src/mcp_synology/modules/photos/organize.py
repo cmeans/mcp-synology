@@ -153,8 +153,8 @@ async def tag_photos(
                 )
             if rejected:
                 lines.append(
-                    f"  Rejected by DSM: {', '.join(map(str, rejected))} (error_list; e.g. "
-                    "still being indexed)"
+                    f"  Rejected by DSM: {', '.join(map(str, sorted(rejected, key=id_order)))} "
+                    "(error_list; e.g. still being indexed)"
                 )
         else:
             lines.append("No items changed: none of the ids exist.")

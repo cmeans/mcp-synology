@@ -174,6 +174,17 @@ class TestTags:
         assert [len(c.params["id"]) for c in fake.of(ITEM, "add_tag")] == [100, 50]
 
     @respx.mock
+    async def test_rejected_ids_are_sorted(self) -> None:
+        fake = FakePhotos().on(ITEM, "get", 2, _items(*range(1, 101)), _items(*range(101, 151)))
+        fake.on(TAG, "list", 1, captured("tag-list"))
+        fake.on(ITEM, "add_tag", 1, {"error_list": [100, 9]}, {"error_list": [120]})
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await tag_photos(client, action="add", ids=list(range(1, 151)), tags=["2024"])
+        assert "  Rejected by DSM: 9, 100, 120 (error_list; e.g. still being indexed)" in out
+
+    @respx.mock
     async def test_failed_batch_names_what_was_tagged(self) -> None:
         """#322: as edit_photo, a later batch failing says which items were tagged."""
         fake = FakePhotos().on(ITEM, "get", 2, _items(*range(1, 101)), _items(*range(101, 151)))
@@ -422,7 +433,7 @@ class TestEditPhoto:
             with pytest.raises(ToolError) as exc:
                 await edit_photo(client, ids=list(range(1, 151)), rating=2)
         assert (
-            "Already changed 100 of 150 item(s): 1-100. Rejected by DSM: 9, 10, 100. "
+            "Already changed 97 of 150 item(s): 1-8, 11-99. Rejected by DSM: 9, 10, 100. "
             "Not changed: 101-150."
         ) in _error(exc)["message"]
 

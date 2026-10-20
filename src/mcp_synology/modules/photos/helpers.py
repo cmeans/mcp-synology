@@ -479,10 +479,14 @@ async def in_batches(
                 return f"{step} {text[0].lower()}{text[1:]}" if step else text
 
             if done:
-                parts.append(
-                    f"{phrase('Already changed')} {len(done)} of {len(ids)} item(s): {_ids(done)}."
-                )
+                # IDs an earlier batch's error_list named weren't changed: never count them.
                 rejected = [x for r in replies for x in r.get("error_list") or []]
+                changed = [i for i in done if i not in set(rejected)]
+                if changed:
+                    parts.append(
+                        f"{phrase('Already changed')} {len(changed)} of {len(ids)} item(s): "
+                        f"{_ids(changed)}."
+                    )
                 if rejected:
                     shown = ", ".join(map(str, sorted(rejected, key=id_order)))
                     parts.append(f"Rejected by DSM: {shown}.")
