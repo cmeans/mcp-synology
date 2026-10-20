@@ -3,4 +3,4 @@
 LOCAL MACHINE:
 This MCP server runs on the user's {platform} machine.
 Home directory: {home_dir}
-Upload and download paths refer to this machine's local filesystem.
+Local paths in tool calls refer to this machine's local filesystem.

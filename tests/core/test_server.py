@@ -6,6 +6,7 @@ import asyncio
 import base64
 import json
 import logging
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -16,9 +17,12 @@ import respx
 from mcp.client import Client
 from mcp.server.mcpserver import MCPServer
 
+from mcp_synology.modules import PermissionTier
 from mcp_synology.server import (
     _BASE_INSTRUCTIONS,
     _MODULE_INSTRUCTIONS,
+    _MODULE_REGISTRY,
+    _MODULE_WRITE_INSTRUCTIONS,
     SharedClientManager,
     _compact_schema,
     _strip_html_comments,
@@ -102,15 +106,39 @@ class TestMcpInstructions:
 
     def test_filestation_file_holds_its_sections(self) -> None:
         text = _MODULE_INSTRUCTIONS["filestation"]
-        for section in ("PATH FORMAT", "RECYCLE BIN", "LONG OPERATIONS", "list_shares"):
+        for section in ("PATH FORMAT", "RECYCLE BIN", "DOWNLOADING", "list_shares"):
             assert section in text
+        write = _MODULE_WRITE_INSTRUCTIONS["filestation"]
+        for section in ("UPLOADING", "MOVING AND ORGANIZING", "LONG OPERATIONS", "file_task"):
+            assert section in write
 
 
 def _instructions(**modules: dict[str, Any]) -> str:
     return create_server(make_test_config(modules=modules)).instructions or ""
 
 
-_FS_SECTIONS = ("FILE STATION", "PATH FORMAT", "list_shares", "RECYCLE BIN", "file_task")
+_FS_SECTIONS = ("FILE STATION", "PATH FORMAT", "list_shares", "RECYCLE BIN", "download_file")
+_FS_WRITE_SECTIONS = ("UPLOADING", "MOVING AND ORGANIZING", "LONG OPERATIONS", "file_task")
+
+
+def _guidance(text: str) -> str:
+    """The instructions before the PERMISSIONS section, which names withheld tools."""
+    return text.split("\n\nPERMISSIONS:", 1)[0]
+
+
+def _without_permissions(text: str) -> str:
+    """Everything but the PERMISSIONS section (LOCAL MACHINE and LOCAL PATHS follow it)."""
+    before, _, rest = text.partition("\n\nPERMISSIONS:")
+    _, _, after = rest.partition("\n\n")
+    return before + "\n\n" + after
+
+
+def _write_tools(module: str) -> list[str]:
+    return [
+        t.name
+        for t in _MODULE_REGISTRY[module].MODULE_INFO.tools
+        if t.permission_tier is PermissionTier.WRITE
+    ]
 
 
 class TestInstructionsPerModule:
@@ -131,16 +159,61 @@ class TestInstructionsPerModule:
         text = _instructions(**modules)
         assert "You are connected to a Synology NAS through mcp-synology." in text
         assert "FILE SIZES" in text
-        for section in _FS_SECTIONS:
-            assert section not in text.split("PERMISSIONS:", 1)[0], section
+        for section in _FS_SECTIONS + _FS_WRITE_SECTIONS:
+            assert section not in _guidance(text), section
 
     @pytest.mark.parametrize("permission", ["read", "write"])
     def test_file_station_sections_when_enabled(self, permission: str) -> None:
-        text = _instructions(filestation={"enabled": True, "permission": permission})
+        text = _guidance(_instructions(filestation={"enabled": True, "permission": permission}))
         for section in _FS_SECTIONS:
             assert section in text, section
         # The core file comes first, then File Station's.
         assert text.index("FILE SIZES") < text.index("FILE STATION")
+
+    @pytest.mark.parametrize("permission", ["write", "admin"])
+    def test_file_station_write_guidance_with_write_tools(self, permission: str) -> None:
+        text = _guidance(_instructions(filestation={"enabled": True, "permission": permission}))
+        for section in _FS_WRITE_SECTIONS:
+            assert section in text, section
+        # After File Station's shared sections.
+        assert text.index("RECYCLE BIN") < text.index("UPLOADING")
+
+    @pytest.mark.parametrize("module", ["filestation", "photos"])
+    def test_read_only_guidance_names_no_write_tools(self, module: str) -> None:
+        """At permission: read, only PERMISSIONS names the withheld WRITE tools (#318)."""
+        text = _instructions(**{module: {"enabled": True, "permission": "read"}})
+        assert "LOCAL PATHS:" in text  # the download tool is registered
+        guidance = _without_permissions(text)
+        for tool in _write_tools(module):
+            assert not re.search(rf"\b{tool}\b", guidance), tool
+            assert tool in text.split("\n\nPERMISSIONS:", 1)[1], tool  # still listed as withheld
+        for section in _FS_WRITE_SECTIONS:
+            assert section not in guidance, section
+
+    @pytest.mark.parametrize(
+        ("module", "upload", "download"),
+        [
+            ("filestation", "upload_file", "download_file"),
+            ("photos", "upload_photos", "download_photos"),
+        ],
+    )
+    def test_local_paths_names_only_registered_tools(
+        self, module: str, upload: str, download: str
+    ) -> None:
+        read = _instructions(**{module: {"enabled": True, "permission": "read"}})
+        write = _instructions(**{module: {"enabled": True, "permission": "write"}})
+        read_paths = read.split("LOCAL PATHS:", 1)[1]
+        assert f"{download} only uses local paths" in read_paths
+        assert upload not in read_paths
+        assert f"{upload} and {download} only use local paths" in write.split("LOCAL PATHS:", 1)[1]
+
+    def test_photos_write_guidance_with_write_tools(self) -> None:
+        read = _guidance(_instructions(photos={"enabled": True, "permission": "read"}))
+        write = _guidance(_instructions(photos={"enabled": True, "permission": "write"}))
+        assert "SYNOLOGY PHOTOS" in read
+        assert "photo_task" not in read
+        assert "delete_photos" in write
+        assert "photo_task" in write
 
     def test_system_only_has_no_local_machine(self) -> None:
         text = _instructions(system={"enabled": True})
@@ -176,12 +249,22 @@ class TestInstructionsPerModule:
             {"system": {"enabled": True}},
             {"downloadstation": {"enabled": True, "permission": "write"}},
             {"photos": {"enabled": True, "permission": "write"}},
+            {"filestation": {"enabled": True, "permission": "write"}},
+            {"photos": {"enabled": True, "permission": "read"}},
             {
                 m: {"enabled": True, "permission": "write"}
                 for m in ("filestation", "system", "downloadstation", "photos")
             },
         ],
-        ids=["filestation", "system", "downloadstation", "photos", "all"],
+        ids=[
+            "filestation",
+            "system",
+            "downloadstation",
+            "photos",
+            "filestation-write",
+            "photos-read",
+            "all",
+        ],
     )
     def test_no_comment_text_is_sent(self, modules: dict[str, Any]) -> None:
         text = _instructions(**modules)
@@ -1446,7 +1529,10 @@ class TestInstructionComments:
 # enabled modules' sections are sent. With every module enabled that adds a "FILE STATION
 # (...)" heading (+67), shortens the first line (-20) and drops a blank line (-1). A
 # connection without File Station sends about 3,300-3,450 characters fewer.
-PAYLOAD_BUDGET_CHARS = 30_220
+# Raised by #317 (#318) to 30,305 (+85): File Station's and Photos' WRITE-tool guidance is
+# sent only when those tools are registered, under headings of its own (UPLOADING,
+# RESTORING DELETED FILES). A File Station read connection sends 1,396 characters fewer.
+PAYLOAD_BUDGET_CHARS = 30_305
 
 
 class TestPayloadBudget:
@@ -1519,7 +1605,7 @@ class TestLocalPathsNotice:
             modules={
                 "photos": {
                     "enabled": True,
-                    "permission": "read",
+                    "permission": "write",  # upload_photos is a WRITE tool (#318)
                     "settings": {"allowed_local_paths": [str(tmp_path / "pics")]},
                 }
             }

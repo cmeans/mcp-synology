@@ -7,8 +7,9 @@
   {platform}      — local OS: "Linux", "macOS", or "Windows"
 
 The server sends this file on every connection, then each enabled module's own file
-(filestation.md when File Station is enabled), then the generated sections. local.md opens
-the LOCAL PATHS section when a tool that reads or writes local files is enabled (#169).
+(filestation.md when File Station is enabled, then filestation-write.md when its WRITE tools
+are), then the generated sections. local.md opens the LOCAL PATHS section when a tool that
+reads or writes local files is enabled (#169).
 -->
 SERVER IDENTITY: This is the '{display_name}' NAS connection ({host}:{port}).
 Only use these tools when the user refers to '{display_name}'.

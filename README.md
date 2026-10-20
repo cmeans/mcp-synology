@@ -368,7 +368,7 @@ custom_instructions: |
   Never delete files from /Backups without explicit confirmation.
 ```
 
-**Full control** — `instructions_file` replaces the built-in prompt entirely. Start from the [built-in files](src/mcp_synology/instructions/): `server.md` is sent on every connection, `filestation.md` only when File Station is enabled, and `local.md` before the generated LOCAL PATHS section. The Synology Photos section is generated in `server.py` (`_PHOTOS_NOTICE`); copy it from a Photos connection's instructions if you use Photos. A replacement file is used as written, apart from HTML comments, so it doesn't get the generated PERMISSIONS section, which tells the model which tools this connection withholds and how to enable them (`custom_instructions` keeps it):
+**Full control** — `instructions_file` replaces the built-in prompt entirely. Start from the [built-in files](src/mcp_synology/instructions/): `server.md` is sent on every connection, `filestation.md` only when File Station is enabled, `filestation-write.md` after it only when File Station's WRITE tools are enabled (`permission: write` or `admin`), and `local.md` before the generated LOCAL PATHS section. The Synology Photos section is generated in `server.py` (`_PHOTOS_NOTICE`, plus `_PHOTOS_WRITE_NOTICE` when the Photos WRITE tools are enabled); copy it from a Photos connection's instructions if you use Photos. A replacement file is used as written, apart from HTML comments, so it doesn't get the generated PERMISSIONS section, which tells the model which tools this connection withholds and how to enable them (`custom_instructions` keeps it):
 
 ```yaml
 # ~/.config/mcp-synology/config.yaml

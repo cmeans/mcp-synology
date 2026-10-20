@@ -53,8 +53,10 @@ def _load_instruction(name: str) -> str:
 
 _BASE_INSTRUCTIONS = _load_instruction("server.md")
 # Sent only with the module they describe (#169): File Station's sections, and the local
-# machine's details when a tool reads or writes local files.
+# machine's details when a tool reads or writes local files. A module's WRITE-tool guidance
+# is sent only when those tools are registered (#318).
 _MODULE_INSTRUCTIONS = {"filestation": _load_instruction("filestation.md")}
+_MODULE_WRITE_INSTRUCTIONS = {"filestation": _load_instruction("filestation-write.md")}
 _LOCAL_MACHINE_INSTRUCTIONS = _load_instruction("local.md")
 
 _ICON_BASE_URL = "https://raw.githubusercontent.com/cmeans/mcp-synology/main/src/mcp_synology/icons"
@@ -538,6 +540,11 @@ def _local_paths_notice(config: AppConfig, plan: _ModulePlan) -> str:
     def folders(roots: list[Path]) -> str:
         return ", ".join(str(r) for r in roots)
 
+    def only_use(tools: tuple[str, ...], allowed: set[str]) -> str:
+        # Name only the registered tools: no upload tool at permission: read (#318).
+        names = [t for t in tools if t in allowed]
+        return " and ".join(names) + (" only use" if len(names) > 1 else " only uses")
+
     lines: list[str] = []
     for mod_name, _module, mod_config, allowed in plan:
         if mod_name == "filestation" and {"upload_file", "download_file"} & set(allowed):
@@ -550,8 +557,8 @@ def _local_paths_notice(config: AppConfig, plan: _ModulePlan) -> str:
                 module="filestation",
             )
             lines.append(
-                "upload_file and download_file only use local paths inside these folders "
-                f"(or below them): {folders(roots)}."
+                f"{only_use(('upload_file', 'download_file'), allowed)} local paths inside "
+                f"these folders (or below them): {folders(roots)}."
             )
         elif mod_name == "downloadstation" and "create_download" in allowed:
             ds = DownloadStationSettings(**mod_config.settings)
@@ -572,8 +579,8 @@ def _local_paths_notice(config: AppConfig, plan: _ModulePlan) -> str:
                 module="photos",
             )
             lines.append(
-                "upload_photos and download_photos only use local paths inside these folders "
-                f"(or below them): {folders(roots)}."
+                f"{only_use(('upload_photos', 'download_photos'), allowed)} local paths inside "
+                f"these folders (or below them): {folders(roots)}."
             )
     if not lines:
         return ""
@@ -592,15 +599,33 @@ SYNOLOGY PHOTOS:
 Photos keeps its own library: the personal space (space=personal, the default) and Shared
 Space (space=shared). Photos tools take the ids that list_photos and
 list_photo_collections return; for files outside Photos, File Station's tools take paths,
-when that module is enabled.
+when that module is enabled."""
+
+# Only when the Photos WRITE tools are registered (#318).
+_PHOTOS_WRITE_NOTICE = """
 delete_photos, delete_photo_folders, delete_photo_albums and merge_people can't be undone
 from Photos: name what will go and confirm with the user first. A long copy, move or delete
 hands off with a photos:<id> handle; follow up with photo_task."""
 
 
+def _writes_registered(module: ModuleType, allowed: set[str]) -> bool:
+    """Whether this connection registers any of the module's WRITE tools (#318)."""
+    return any(
+        t.name in allowed and t.permission_tier is PermissionTier.WRITE
+        for t in module.MODULE_INFO.tools
+    )
+
+
 def _photos_notice(plan: _ModulePlan) -> str:
-    """How to use the Photos tools, when the module is enabled (#258)."""
-    return _PHOTOS_NOTICE if any(name == "photos" for name, _, _, _ in plan) else ""
+    """How to use the Photos tools, when the module is enabled (#258).
+
+    The paragraph about deletes and handed-off tasks only when the WRITE tools are (#318).
+    """
+    for name, module, _, allowed in plan:
+        if name == "photos":
+            writes = _writes_registered(module, allowed)
+            return _PHOTOS_NOTICE + (_PHOTOS_WRITE_NOTICE if writes else "")
+    return ""
 
 
 def create_server(config: AppConfig) -> MCPServer:
@@ -643,20 +668,22 @@ def create_server(config: AppConfig) -> MCPServer:
             )
         )
 
-    # The built-in instructions: the core file, then each enabled module's own section.
+    # The built-in instructions: the core file, then each enabled module's own section, and
+    # its WRITE-tool guidance when those tools are registered (#318).
     # HTML comments are stripped per file, so an unclosed one can't swallow the next file.
-    builtin = "\n\n".join(
-        _strip_html_comments(text).strip()
-        for text in [
-            _BASE_INSTRUCTIONS,
-            *(_MODULE_INSTRUCTIONS[name] for name, _, _, _ in plan if name in _MODULE_INSTRUCTIONS),
-        ]
-    )
+    texts = [_BASE_INSTRUCTIONS]
+    for name, module, _, allowed in plan:
+        if name in _MODULE_INSTRUCTIONS:
+            texts.append(_MODULE_INSTRUCTIONS[name])
+        if name in _MODULE_WRITE_INSTRUCTIONS and _writes_registered(module, allowed):
+            texts.append(_MODULE_WRITE_INSTRUCTIONS[name])
+    builtin = "\n\n".join(_strip_html_comments(text).strip() for text in texts)
 
     replacement: str | None = None
     if config.instructions_file:
         # Full replacement — user provides their own instructions file.
-        # They can start from the built-in server.md, filestation.md and local.md.
+        # They can start from the built-in server.md, filestation.md, filestation-write.md
+        # and local.md.
         instructions_path = Path(config.instructions_file).expanduser()
         try:
             replacement = _strip_html_comments(
