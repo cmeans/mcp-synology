@@ -1207,7 +1207,7 @@ class TestFileTask:
         self, mock_client: DsmClient, reply: httpx.Response, shown: str, retryable: bool
     ) -> None:
         """#282: a proxy's answer to the stop request itself: the stop may or may not have
-        reached DSM."""
+        reached DSM. A 414 is rejected before anything acts on it: nothing was stopped (#325)."""
         from mcp_synology.modules.filestation.tasks import file_task
 
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
