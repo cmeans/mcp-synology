@@ -11,6 +11,7 @@ import pytest
 import respx
 from mcp.server.mcpserver.exceptions import ToolError
 
+from mcp_synology.core.errors import DsmHttpError
 from mcp_synology.modules.photos import tasks
 from mcp_synology.modules.photos.tasks import (
     copy_or_move,
@@ -121,6 +122,10 @@ class TestCopyMove:
             (httpx.Response(504, text="<html>Gateway Timeout</html>"),
              "The NAS, or a proxy in front of it, answered a status check with an error "
              "(HTTP 504); the task is most likely still copying."),
+            # #325: a status URL is short, so a 414 comes from a proxy too.
+            (httpx.Response(414, text="<html>Too long</html>"),
+             "The NAS, or a proxy in front of it, answered a status check with an error "
+             "(HTTP 414); the task is most likely still copying."),
             (httpx.Response(200, text="<html>Sign in</html>", headers=HTML),
              "The NAS's status reply couldn't be read (not a DSM reply; a proxy or captive "
              "portal may be answering); the task is most likely still copying."),
@@ -141,6 +146,27 @@ class TestCopyMove:
             f"Copy of 1 item(s) to /mcp-spec-capture/dest (personal space): {shown} "
             "Handle: photos:5 — check with photo_task."
         )
+
+    @respx.mock
+    async def test_relogin_proxy_error_hands_off(self) -> None:
+        """#321: a session error on the status read, then a proxy 502 on the re-login,
+        used to stop the task as if DSM had answered "Invalid session"."""
+        fake = FakePhotos().on(ITEM, "get", 2, _items(12)).on(FOLDER, "get", 2, _DEST)
+        fake.on(FILE, "copy", 1, captured("bg-copy")).error(INFO, "get_status", 1, 119)
+        install(fake)
+        client = make_client()
+
+        async def reauth() -> None:
+            raise DsmHttpError("SYNO.API.Auth/login: DSM answered HTTP 502.", 502)
+
+        client.set_re_auth_callback(reauth)
+        async with client:
+            out = await copy_or_move(
+                client, operation="copy", ids=[12], folders=None, destination="14"
+            )
+        assert "answered a status check with an error (HTTP 502)" in out
+        assert "photos:5" in out
+        assert not fake.of(INFO, "abort_task")
 
     @respx.mock
     @pytest.mark.parametrize("abort_ok", [True, False])
@@ -495,6 +521,10 @@ class TestPhotoTask:
              f"{INFO}/get_status: DSM answered HTTP 502.", True),
             (httpx.Response(403, text="<html>Forbidden</html>"), "unavailable",
              f"{INFO}/get_status: DSM answered HTTP 403.", False),
+            # A 414 comes from a proxy too: a status URL is short (#325).
+            (httpx.Response(414, text="<html>Too long</html>"), "unavailable",
+             f"{INFO}/get_status: DSM rejected the request with HTTP 414 (Request-URI Too "
+             "Large).", False),
             (httpx.Response(200, text="<html>Sign in</html>", headers=HTML),
              "unavailable",
              f"{INFO}/get_status: the answer wasn't a DSM reply (Content-Type text/html).", True),
@@ -527,6 +557,7 @@ class TestPhotoTask:
         assert err["suggestion"].endswith(
             "Call photo_task with this handle to see whether the task is still running."
         )
+        assert "Reduce the size" not in err["suggestion"]
         if "DSM reply" in detail:  # the error's own hint comes first, as in file_task
             assert "reverse proxy" in err["suggestion"]
         assert len(fake.of(INFO, "abort_task")) == (action == "stop")
@@ -633,6 +664,19 @@ class TestPhotoTask:
             "The stop may or may not have taken effect."
         )
         assert not fake.of(INFO, "get_status")
+
+    @respx.mock
+    async def test_stop_request_414_stopped_nothing(self) -> None:
+        """#325: a 414 is rejected before anything acts on it, so nothing was stopped."""
+        fake = FakePhotos().on(INFO, "abort_task", 1, lambda _p: httpx.Response(414, text="x"))
+        install(fake)
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await photo_task(client, handle="photos:5", action="stop")
+        err = _error(exc)
+        assert err["message"].endswith("HTTP 414 (Request-URI Too Large). Nothing was stopped.")
+        assert "Reduce the size" not in err["suggestion"]
 
     @respx.mock
     async def test_list_without_answer_is_structured(self) -> None:

@@ -14,7 +14,13 @@ from typing import TYPE_CHECKING, Any, Literal, NoReturn, get_args
 import anyio
 import httpx
 
-from mcp_synology.core.errors import DsmHttpError, DsmReplyError, ErrorCode, SynologyError
+from mcp_synology.core.errors import (
+    DsmHttpError,
+    DsmReplyError,
+    ErrorCode,
+    RequestTooLongError,
+    SynologyError,
+)
 from mcp_synology.core.formatting import (
     error_response,
     format_size,
@@ -331,10 +337,11 @@ async def poll_task(
                 if not isinstance(reply, dict):
                     raise TypeError("status data is not an object")
                 status = reply
-            except (DsmHttpError, DsmReplyError) as e:
+            except (DsmHttpError, DsmReplyError, RequestTooLongError) as e:
                 # Not DSM's verdict on the task: a proxy's 502/504 or login page, or a
                 # DSM too busy to answer properly. Hand it off like a stall, never stop
-                # it; the stop would go through the same broken path anyway (#282).
+                # it; the stop would go through the same broken path anyway (#282). A
+                # status URL is short, so a 414 comes from a proxy too (#325).
                 logger.warning(
                     "%s status (%s) failed, handing off: %s", api, label, type(e).__name__
                 )
@@ -422,9 +429,9 @@ def handoff_reply(
         last = f"; last progress: {progress_text(status)}" if status else ""
         if isinstance(stall, httpx.TransportError):
             what, why = "The NAS stopped answering", describe_transport_error(stall)
-        elif isinstance(stall, DsmHttpError):
+        elif isinstance(stall, (DsmHttpError, RequestTooLongError)):
             what = "The NAS, or a proxy in front of it, answered a status request with an error"
-            why = f"HTTP {stall.status}"
+            why = f"HTTP {stall.status if isinstance(stall, DsmHttpError) else 414}"
         elif isinstance(stall, DsmReplyError):
             what = "The NAS's status reply couldn't be read"
             why = "not a DSM reply; a proxy or captive portal may be answering"
@@ -741,21 +748,28 @@ def _unanswered(
 
 
 def _unreadable(
-    handle: Handle, exc: DsmHttpError | DsmReplyError, *, operation: str, note: str
+    handle: Handle,
+    exc: DsmHttpError | DsmReplyError | RequestTooLongError,
+    *,
+    operation: str,
+    note: str,
 ) -> NoReturn:
     """Raise the structured error for a status or stop request answered with an HTTP error
-    status or something that isn't a DSM reply (a proxy's 502 or login page, #282)."""
+    status or something that isn't a DSM reply (a proxy's 502 or login page, #282). A 414
+    comes from a proxy too: a status or stop URL is short, so its own suggestion (make the
+    request smaller) doesn't apply (#325)."""
     follow_up = (
         "Call file_task with this handle to see whether the task is still running, or list "
         "the path to see what's left."
     )
+    hint = None if isinstance(exc, RequestTooLongError) else exc.suggestion
     error_response(
         ErrorCode.UNAVAILABLE,
         f"{operation} failed for `{handle}`: {exc}{note}",
         retryable=exc.retryable,
         param="handle",
         value=str(handle),
-        suggestion=f"{exc.suggestion} {follow_up}" if exc.suggestion else follow_up,
+        suggestion=f"{hint} {follow_up}" if hint else follow_up,
     )
 
 
@@ -801,7 +815,7 @@ async def file_task(
             data: dict[str, Any] = await client.request(
                 parsed.api, "status", version=version, params={"taskid": taskid}
             )
-        except (DsmHttpError, DsmReplyError) as e:
+        except (DsmHttpError, DsmReplyError, RequestTooLongError) as e:
             stopping = action == "stop"
             _unreadable(
                 parsed,
@@ -864,9 +878,16 @@ async def file_task(
                 params={"taskid": taskid},
                 read_timeout=STOP_TIMEOUT,
             )
-        except (DsmHttpError, DsmReplyError) as e:
+        except (DsmHttpError, DsmReplyError, RequestTooLongError) as e:
+            # A 414 is rejected before anything acts on it: nothing was stopped.
+            sent = not isinstance(e, RequestTooLongError)
             _unreadable(
-                parsed, e, operation="Stop task", note=" The stop may or may not have taken effect."
+                parsed,
+                e,
+                operation="Stop task",
+                note=" The stop may or may not have taken effect."
+                if sent
+                else " Nothing was stopped.",
             )
         except SynologyError as e:
             if e.code in (401, 599):

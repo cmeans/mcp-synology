@@ -24,7 +24,13 @@ from typing import TYPE_CHECKING, Any, NoReturn
 import anyio
 import httpx
 
-from mcp_synology.core.errors import DsmHttpError, DsmReplyError, ErrorCode, SynologyError
+from mcp_synology.core.errors import (
+    DsmHttpError,
+    DsmReplyError,
+    ErrorCode,
+    RequestTooLongError,
+    SynologyError,
+)
 from mcp_synology.core.formatting import (
     error_response,
     format_table,
@@ -126,11 +132,13 @@ async def _poll(
         except httpx.TransportError as e:
             logger.warning("Photos task %s status got no answer: %s", task_id, type(e).__name__)
             return status, f"The NAS didn't answer a status check ({type(e).__name__})"
-        except DsmHttpError as e:
-            logger.warning("Photos task %s status got HTTP %s", task_id, e.status)
+        except (DsmHttpError, RequestTooLongError) as e:
+            # A status URL is short, so a 414 comes from a proxy, not the request (#325).
+            http = e.status if isinstance(e, DsmHttpError) else 414
+            logger.warning("Photos task %s status got HTTP %s", task_id, http)
             return status, (
                 "The NAS, or a proxy in front of it, answered a status check with an error "
-                f"(HTTP {e.status})"
+                f"(HTTP {http})"
             )
         except DsmReplyError:
             logger.warning("Photos task %s status reply wasn't a DSM reply", task_id)
@@ -396,7 +404,8 @@ async def delete_photo_folders(
 # -- photo_task ---------------------------------------------------------------------
 
 
-_NO_ANSWER = (httpx.TransportError, DsmHttpError, DsmReplyError)
+# A 414 too: a status, stop or lookup URL is short, so it comes from a proxy (#325).
+_NO_ANSWER = (httpx.TransportError, DsmHttpError, DsmReplyError, RequestTooLongError)
 
 
 async def _target(
@@ -461,7 +470,8 @@ def _request_failed(op: str, task_id: int, exc: Exception, *, request: str, note
     else:
         code, detail = ErrorCode.UNAVAILABLE, str(exc)
         retryable = bool(getattr(exc, "retryable", True))
-        hint = getattr(exc, "suggestion", None)
+        # A 414's own suggestion (make the request smaller) doesn't fit a short URL.
+        hint = None if isinstance(exc, RequestTooLongError) else getattr(exc, "suggestion", None)
         suggestion = f"{hint} {follow_up}" if hint else follow_up
     error_response(
         code,
@@ -526,9 +536,10 @@ async def photo_task(
             try:
                 await ph.call("BackgroundTask.Info", "abort_task", {"id": [task_id]}, personal=True)
             except _NO_ANSWER as e:
+                # A 414 is rejected before anything acts on it, like a refused connection.
                 note = (
                     " Nothing was stopped."
-                    if _never_sent(e)
+                    if _never_sent(e) or isinstance(e, RequestTooLongError)
                     else " The stop may or may not have taken effect."
                 )
                 _request_failed(op, task_id, e, request="stop", note=note)
