@@ -232,13 +232,33 @@ def _refuse_path(normalized: str, path: str, code: int, missing: list[tuple[str,
 
 
 def _status_errors_response(normalized: str, path: str, errors: list[Any]) -> NoReturn:
-    """A finished DirSize status that carries errors: the entry for the path, else the first."""
-    entries = [e for e in errors if isinstance(e, dict) and isinstance(e.get("code"), int)]
+    """A finished DirSize status that carries errors: the entry for the path, else the first.
+
+    The message names the path DSM's entry names, so a subfolder's code is never reported
+    as the requested folder's.
+    """
+    entries = [
+        e
+        for e in errors
+        if isinstance(e, dict)
+        and isinstance(e.get("code"), int)
+        and not isinstance(e["code"], bool)
+    ]
     entry = next((e for e in entries if e.get("path") == normalized), None)
     if entry is None and entries:
         entry = entries[0]
-    code = int(entry["code"]) if entry else 0
-    _refuse_path(normalized, path, code, [(normalized, code)])
+    if entry is None:
+        error_response(
+            ErrorCode.FILESTATION_ERROR,
+            "Get directory size failed: DSM reported errors without saying what they were.",
+            retryable=False,
+            param="path",
+            value=path,
+            suggestion="Check that the DSM user can read every folder under that path.",
+        )
+    code = int(entry["code"])
+    entry_path = str(entry.get("path") or normalized)
+    _refuse_path(entry_path, path, code, [(entry_path, code)])
     synology_error_response("Get directory size", error_from_code(code, "SYNO.FileStation.DirSize"))
 
 
