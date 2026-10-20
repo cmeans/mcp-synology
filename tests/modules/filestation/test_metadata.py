@@ -301,20 +301,29 @@ class TestGetDirSize:
         assert body["error"]["code"] == "not_found"
 
     @staticmethod
-    def _getinfo_then_dirsize(entry: dict[str, Any] | None, calls: list[str]) -> None:
-        """getinfo answers with ``entry`` (or fails, if None); DirSize finishes at 0."""
+    def _getinfo_then_dirsize(
+        entry: dict[str, Any] | None,
+        calls: list[str],
+        status: dict[str, Any] | None = None,
+        *,
+        transport_error: bool = False,
+    ) -> None:
+        """getinfo answers with ``entry`` (or fails, if None); DirSize finishes with
+        ``status`` (default 0 B, 0 files)."""
 
         def side_effect(request: httpx.Request) -> httpx.Response:
             method = dict(request.url.params).get("method", "")
             calls.append(method)
             if method == "getinfo":
+                if transport_error:
+                    raise httpx.ConnectError("connection refused", request=request)
                 if entry is None:
                     return httpx.Response(502, text="<html>Bad Gateway</html>")
                 return httpx.Response(200, json={"success": True, "data": {"files": [entry]}})
             if method == "start":
                 return httpx.Response(200, json={"success": True, "data": {"taskid": "ds-1"}})
             if method == "status":
-                done = {"finished": True, "total_size": 0, "num_file": 0, "num_dir": 0}
+                done = status or {"finished": True, "total_size": 0, "num_file": 0, "num_dir": 0}
                 return httpx.Response(200, json={"success": True, "data": done})
             return httpx.Response(200, json={"success": True, "data": {}})
 
@@ -325,11 +334,15 @@ class TestGetDirSize:
         ("code", "error", "message"),
         [
             (408, "not_found", "Get directory size failed: /video/nope doesn't exist on the NAS."),
-            (407, "permission_denied", None),
+            (
+                407,
+                "permission_denied",
+                "Get directory size failed: no permission to read /video/nope on the NAS.",
+            ),
         ],
     )
     async def test_dir_size_missing_path_is_refused(
-        self, mock_client: DsmClient, code: int, error: str, message: str | None
+        self, mock_client: DsmClient, code: int, error: str, message: str
     ) -> None:
         """DSM's DirSize on a missing path finishes with 0 B, 0 files (seska, DSM 7.1.1),
         which read as "empty". getinfo is checked first; no task is started."""
@@ -339,8 +352,9 @@ class TestGetDirSize:
             await get_dir_size(mock_client, path="video/nope")
         err = json.loads(str(exc_info.value))["error"]
         assert err["code"] == error
-        if message:
-            assert err["message"] == message
+        assert err["message"] == message
+        if code == 407:
+            assert err["suggestion"] == "Check the DSM user's permissions for that shared folder."
         assert calls == ["getinfo"]
 
     @respx.mock
@@ -357,6 +371,67 @@ class TestGetDirSize:
         result = await get_dir_size(mock_client, path="/video")
         assert "Total size" in result
         assert calls[:2] == ["getinfo", "start"]
+
+    @respx.mock
+    async def test_dir_size_runs_when_getinfo_reports_another_code(
+        self, mock_client: DsmClient
+    ) -> None:
+        calls: list[str] = []
+        self._getinfo_then_dirsize({"code": 418, "path": "/video"}, calls)
+        result = await get_dir_size(mock_client, path="/video")
+        assert "Total size" in result
+        assert calls[:2] == ["getinfo", "start"]
+
+    @respx.mock
+    async def test_dir_size_network_error_on_the_check_ends_the_call(
+        self, mock_client: DsmClient
+    ) -> None:
+        calls: list[str] = []
+        self._getinfo_then_dirsize(None, calls, transport_error=True)
+        with pytest.raises(httpx.TransportError):
+            await get_dir_size(mock_client, path="/video")
+        assert calls == ["getinfo"]
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        ("errors", "error", "message"),
+        [
+            (
+                [{"code": 407, "path": "/homes/admin"}],
+                "permission_denied",
+                "Get directory size failed: no permission to read /homes/admin on the NAS.",
+            ),
+            (
+                [{"code": 401, "path": "/homes"}, {"code": 408, "path": "/homes/admin"}],
+                "not_found",
+                "Get directory size failed: /homes/admin doesn't exist on the NAS.",
+            ),
+            ({"code": 401, "path": "/homes/admin/x"}, "filestation_error", None),
+        ],
+        ids=["unreadable", "entry-for-the-path", "other-code"],
+    )
+    async def test_dir_size_status_errors_are_not_an_empty_folder(
+        self,
+        mock_client: DsmClient,
+        errors: object,
+        error: str,
+        message: str | None,
+    ) -> None:
+        """A path the user can't read finishes with errors and no totals (vdsm 7.1). When
+        the getinfo check fails, that status must not read as 0 B; the task is stopped."""
+        calls: list[str] = []
+        status = {"finished": True, "errors": errors}
+        self._getinfo_then_dirsize(None, calls, status)
+        with pytest.raises(ToolError) as exc_info:
+            await get_dir_size(mock_client, path="homes/admin")
+        err = json.loads(str(exc_info.value))["error"]
+        assert err["code"] == error, err
+        if message:
+            assert err["message"] == message
+        else:
+            assert "DSM error 401" in err["message"], err
+        assert "0 B" not in str(exc_info.value)
+        assert calls == ["getinfo", "start", "status", "stop"]
 
     @respx.mock
     async def test_dir_size_poll_error(self, mock_client: DsmClient) -> None:
