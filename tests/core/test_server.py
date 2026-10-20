@@ -207,6 +207,16 @@ class TestInstructionsPerModule:
         assert upload not in read_paths
         assert f"{upload} and {download} only use local paths" in write.split("LOCAL PATHS:", 1)[1]
 
+    @pytest.mark.parametrize("module", ["filestation", "photos", "downloadstation"])
+    async def test_read_tools_name_no_write_tools(self, module: str) -> None:
+        """A READ tool's description and schema don't name the module's WRITE tools (#318)."""
+        server = create_server(make_test_config(modules={module: {"enabled": True}}))
+        tools, _ = await _served(server)
+        for tool in tools:
+            text = (tool.description or "") + json.dumps(tool.input_schema)
+            for name in _write_tools(module):
+                assert not re.search(rf"\b{name}\b", text), (tool.name, name)
+
     def test_photos_write_guidance_with_write_tools(self) -> None:
         read = _guidance(_instructions(photos={"enabled": True, "permission": "read"}))
         write = _guidance(_instructions(photos={"enabled": True, "permission": "write"}))
@@ -1532,7 +1542,10 @@ class TestInstructionComments:
 # Raised by #317 (#318) to 30,305 (+85): File Station's and Photos' WRITE-tool guidance is
 # sent only when those tools are registered, under headings of its own (UPLOADING,
 # RESTORING DELETED FILES). A File Station read connection sends 1,396 characters fewer.
-PAYLOAD_BUDGET_CHARS = 30_305
+# Lowered by #317 to 30,247 (-58): list_photos, list_recycle_bin and get_resource_usage no
+# longer point at tools a connection may not have (tag_photos and restoring at read; File
+# Station's search and copies).
+PAYLOAD_BUDGET_CHARS = 30_247
 
 
 class TestPayloadBudget:

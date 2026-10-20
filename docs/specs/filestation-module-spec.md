@@ -341,8 +341,7 @@ List contents of a shared folder's recycle bin.
 **DSM API:** `SYNO.FileStation.List` / `list` (targeting `/<share>/#recycle/`)
 
 **Tool description (LLM-facing):**
-> List the contents of a shared folder's recycle bin. Shows recently deleted files that can be
-> restored.
+> List the contents of a shared folder's recycle bin: its recently deleted files.
 
 **Parameters:**
 
