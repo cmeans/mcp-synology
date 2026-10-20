@@ -114,8 +114,7 @@ MODULE_INFO = ModuleInfo(
         ToolInfo(
             name="list_recycle_bin",
             description=(
-                "List the contents of a shared folder's recycle bin. Shows recently "
-                "deleted files that can be restored."
+                "List the contents of a shared folder's recycle bin: its recently deleted files."
             ),
             permission_tier=PermissionTier.READ,
         ),
