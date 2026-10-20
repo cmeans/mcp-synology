@@ -1052,11 +1052,11 @@ class DsmClient:
                     raise error_from_code(error.get("code", 0), api, error.get("errors"))
                 if "FileStation" not in api:
                     _check_status(resp, f"{api}/{method}")
-                from mcp_synology.core.errors import FileStationError
+                from mcp_synology.core.errors import DownloadHttpError
 
-                raise FileStationError(
+                raise DownloadHttpError(
                     f"HTTP {resp.status_code} from download API",
-                    code=resp.status_code,
+                    resp.status_code,
                     suggestion="Check that the file path exists on the NAS.",
                 )
 

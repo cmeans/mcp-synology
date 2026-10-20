@@ -193,6 +193,19 @@ class FileStationError(SynologyError):
     error_code = ErrorCode.FILESTATION_ERROR
 
 
+class DownloadHttpError(FileStationError):
+    """A File Station download answered with an HTTP error status and no DSM reply.
+
+    ``code`` and ``status`` are the HTTP status. DSM answers the download of a missing
+    file with a bare 502 (#292), so this can't say whether the file is missing or a
+    server or proxy failed; ``download_file`` tells them apart with ``getinfo`` (#324).
+    """
+
+    def __init__(self, message: str, status: int, suggestion: str | None = None):
+        super().__init__(message, code=status, suggestion=suggestion)
+        self.status = status
+
+
 class PathNotFoundError(FileStationError):
     """Path not found (code 408)."""
 

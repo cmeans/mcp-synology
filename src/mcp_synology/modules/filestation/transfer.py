@@ -7,11 +7,11 @@ import logging
 import os
 import shutil
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import TYPE_CHECKING, NoReturn
+from typing import TYPE_CHECKING, Any, NoReturn
 
 from mcp_synology.core.errors import (
+    DownloadHttpError,
     ErrorCode,
-    FileStationError,
     SynologyError,
     SynologyFileExistsError,
 )
@@ -264,6 +264,7 @@ async def download_file(
     # gives for a server error (#324).
     nas_file_size: int | None = None
     exists: bool | None = None  # None: the check didn't say
+    entry: dict[str, Any] = {}
     try:
         info = await client.request(
             "SYNO.FileStation.List",
@@ -271,14 +272,35 @@ async def download_file(
             params={"path": nas_path, "additional": '["size"]'},
         )
         files = info.get("files", [])
-        if files:
-            if files[0].get("code") == 408:  # getinfo's entry for a missing path (#161)
-                exists = False
-            elif "code" not in files[0]:
-                exists = True
-                nas_file_size = files[0].get("additional", {}).get("size", 0)
+        if files and isinstance(files[0], dict):
+            entry = files[0]
     except Exception as e:  # noqa: BLE001
         logger.debug("Pre-flight getinfo failed: %s", e)
+
+    if entry.get("code") == 408:  # getinfo's entry for a missing path (#161)
+        exists = False
+    elif entry.get("code") == 407:  # no permission for it (vdsm 7.1 and 7.2.2)
+        error_response(
+            ErrorCode.PERMISSION_DENIED,
+            f"Download failed: no permission to read {nas_path} on the NAS.",
+            retryable=False,
+            param="path",
+            value=nas_path,
+            suggestion="Check the DSM user's permissions for that shared folder.",
+        )
+    elif entry.get("isdir"):
+        # DSM answers a folder's download with the same bare 502 (vdsm).
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            f"Download failed: {nas_path} is a folder; download_file fetches one file.",
+            retryable=False,
+            param="path",
+            value=nas_path,
+            suggestion="Download the files in it one at a time (list them with list_files).",
+        )
+    elif entry and "code" not in entry:
+        exists = True
+        nas_file_size = entry.get("additional", {}).get("size", 0)
 
     if exists is False:
         error_response(
@@ -325,12 +347,12 @@ async def download_file(
         # client.download() streams to a temp file and removes it on failure,
         # so there is nothing to clean up here. Never unlink dest_file: with
         # overwrite=True it is the user's pre-existing file.
-        if exists and isinstance(e, FileStationError) and (e.code or 0) >= 500:
+        if exists and isinstance(e, DownloadHttpError) and e.status >= 500:
             # The file is there, so this 5xx is a server or proxy error, not DSM's
             # answer for a missing file (#324).
             error_response(
                 ErrorCode.UNAVAILABLE,
-                f"Download failed: DSM, or a proxy in front of it, answered HTTP {e.code} "
+                f"Download failed: DSM, or a proxy in front of it, answered HTTP {e.status} "
                 f"for {nas_path}, which exists.",
                 retryable=True,
                 suggestion="Try again shortly; if it keeps happening, run 'mcp-synology check'.",

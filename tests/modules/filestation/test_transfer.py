@@ -376,14 +376,67 @@ class TestDownloadFile:
         assert list(tmp_path.iterdir()) == []
 
     @respx.mock
-    async def test_download_5xx_when_getinfo_failed_keeps_the_old_error(
+    @pytest.mark.parametrize(
+        ("entry", "code", "message"),
+        [
+            ({"code": 407, "path": "/video/x.mkv"}, "permission_denied",
+             "Download failed: no permission to read /video/x.mkv on the NAS."),
+            ({"path": "/video/x.mkv", "name": "x.mkv", "isdir": True}, "invalid_parameter",
+             "Download failed: /video/x.mkv is a folder; download_file fetches one file."),
+        ],
+    )  # fmt: skip
+    async def test_download_refused_up_front(
+        self,
+        mock_client: DsmClient,
+        tmp_path: Path,
+        entry: dict[str, object],
+        code: str,
+        message: str,
+    ) -> None:
+        """A path the user can't read (407 entry) or a folder: DSM would answer the download
+        with the same bare 502 as a missing file (vdsm 7.1, 7.2.2), so it's refused first."""
+        calls = self._route(
+            httpx.Response(200, json={"success": True, "data": {"files": [entry]}}),
+            httpx.Response(502, text="<html>DSM error page</html>"),
+        )
+        with pytest.raises(ToolError) as exc_info:
+            await download_file(mock_client, path="/video/x.mkv", dest_folder=str(tmp_path))
+        err = json.loads(str(exc_info.value))["error"]
+        assert (err["code"], err["message"], err["retryable"]) == (code, message, False)
+        assert calls == ["getinfo"]
+
+    @respx.mock
+    async def test_download_dsm_error_code_over_500_is_not_an_http_status(
         self, mock_client: DsmClient, tmp_path: Path
     ) -> None:
-        """Without getinfo's answer the 502 may be DSM's missing-file reply: unchanged."""
+        """A DSM error reply with a code like 900 isn't an HTTP status: not retryable."""
+        info = {"files": [{"path": "/video/x.mkv", "name": "x.mkv", "additional": {"size": 3}}]}
         self._route(
-            httpx.Response(502, text="<html>Bad Gateway</html>"),
-            httpx.Response(502, text="<html>Bad Gateway</html>"),
+            httpx.Response(200, json={"success": True, "data": info}),
+            httpx.Response(200, json={"success": False, "error": {"code": 900}}),
         )
+        with pytest.raises(ToolError) as exc_info:
+            await download_file(mock_client, path="/video/x.mkv", dest_folder=str(tmp_path))
+        err = json.loads(str(exc_info.value))["error"]
+        assert err["code"] != "unavailable"
+        assert "HTTP" not in err["message"]
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        "getinfo",
+        [
+            httpx.Response(502, text="<html>Bad Gateway</html>"),
+            httpx.Response(
+                200, json={"success": True, "data": {"files": [{"code": 418, "path": "/v"}]}}
+            ),
+        ],
+        ids=["getinfo-failed", "other-error-entry"],
+    )
+    async def test_download_5xx_when_getinfo_didnt_say_keeps_the_old_error(
+        self, mock_client: DsmClient, tmp_path: Path, getinfo: httpx.Response
+    ) -> None:
+        """Without getinfo finding the file, the 502 may be DSM's missing-file reply."""
+        self._route(getinfo, httpx.Response(502, text="<html>Bad Gateway</html>"))
         with pytest.raises(ToolError) as exc_info:
             await download_file(mock_client, path="/video/x.mkv", dest_folder=str(tmp_path))
         err = json.loads(str(exc_info.value))["error"]
