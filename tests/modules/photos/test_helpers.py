@@ -13,6 +13,7 @@ from mcp_synology.modules.photos.helpers import (
     Photos,
     check_space,
     encode,
+    id_list,
     is_indexing,
     page_footer,
     parse_date,
@@ -342,3 +343,11 @@ class TestPlaceNode:
         from mcp_synology.modules.photos.helpers import Photos
 
         assert Photos(make_client(), "personal", "Op").missing_note([]) == ""
+
+
+@pytest.mark.parametrize(
+    ("ids", "shown"),
+    [([5], "5"), ([1, 2, 3], "1-3"), ([1, 2, 3, 7, 9, 10], "1-3, 7, 9-10"), ([4, 2], "4, 2")],
+)
+def test_id_list_collapses_runs(ids: list[int], shown: str) -> None:
+    assert id_list(ids) == shown
