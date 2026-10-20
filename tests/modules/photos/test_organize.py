@@ -415,14 +415,14 @@ class TestEditPhoto:
 
     @respx.mock
     async def test_earlier_rejections_are_named(self) -> None:
-        fake = self._150(FakePhotos()).on(ITEM, "set", 2, {"error_list": [8, 7]}, _deny)
+        fake = self._150(FakePhotos()).on(ITEM, "set", 2, {"error_list": [10, 9, 100]}, _deny)
         install(fake)
         client = make_client()
         async with client:
             with pytest.raises(ToolError) as exc:
                 await edit_photo(client, ids=list(range(1, 151)), rating=2)
         assert (
-            "Already changed 100 of 150 item(s): 1-100. Rejected by DSM: 7, 8. "
+            "Already changed 100 of 150 item(s): 1-100. Rejected by DSM: 9, 10, 100. "
             "Not changed: 101-150."
         ) in _error(exc)["message"]
 

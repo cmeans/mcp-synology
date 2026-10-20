@@ -423,6 +423,11 @@ def batches(ids: list[int], size: int = BATCH_SIZE) -> list[list[int]]:
     return [ids[i : i + size] for i in range(0, len(ids), size)]
 
 
+def id_order(x: object) -> tuple[int, int, str]:
+    """Sort key: IDs as numbers, anything else (an unexpected error_list entry) after."""
+    return (0, x, "") if isinstance(x, int) else (1, 0, str(x))
+
+
 def id_list(ids: Sequence[int]) -> str:
     """``1-3, 7, 9-10``: runs of consecutive IDs collapsed, so a long list stays short."""
     runs: list[list[int]] = []
@@ -479,7 +484,7 @@ async def in_batches(
                 )
                 rejected = [x for r in replies for x in r.get("error_list") or []]
                 if rejected:
-                    shown = ", ".join(map(str, sorted(rejected, key=str)))
+                    shown = ", ".join(map(str, sorted(rejected, key=id_order)))
                     parts.append(f"Rejected by DSM: {shown}.")
             if unsure:
                 parts.append(f"{phrase('May or may not have changed')}: {_ids(batch)}.")

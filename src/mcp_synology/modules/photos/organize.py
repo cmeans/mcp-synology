@@ -15,6 +15,7 @@ from mcp_synology.modules.photos.helpers import (
     Photos,
     check_ids,
     check_space,
+    id_order,
     in_batches,
     invalid,
     not_found,
@@ -267,7 +268,7 @@ async def edit_photo(
                     rejected.update(data.get("error_list") or [])
                 done += [label for _key, label, _value in fields]
             if favorite is not None:
-                refused = ", ".join(map(str, sorted(rejected, key=str)))
+                refused = ", ".join(map(str, sorted(rejected, key=id_order)))
                 await in_batches(
                     list(found),
                     lambda batch: ph.call(
@@ -289,7 +290,7 @@ async def edit_photo(
             lines.append(f"Edited {len(found)} item(s) ({space_label(sp)}): {', '.join(done)}.")
             if rejected:
                 lines.append(
-                    f"  Rejected by DSM: {', '.join(map(str, sorted(rejected, key=str)))}"
+                    f"  Rejected by DSM: {', '.join(map(str, sorted(rejected, key=id_order)))}"
                     " (error_list)"
                 )
         else:
