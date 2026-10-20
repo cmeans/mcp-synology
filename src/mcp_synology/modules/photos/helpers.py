@@ -491,7 +491,7 @@ async def in_batches(
                         f"{_ids(changed)}."
                     )
                 if rejected:
-                    parts.append(f"Rejected by DSM, so not changed: {_rejected(rejected)}.")
+                    parts.append(f"Rejected by DSM, so not changed: {rejected_text(rejected)}.")
             if unsure:
                 parts.append(f"{phrase('May or may not have changed')}: {_ids(batch)}.")
                 rest = rest[len(batch) :]
@@ -527,11 +527,21 @@ def _ids(ids: list[int]) -> str:
     return id_list(sorted(ids))
 
 
-def _rejected(entries: list[Any]) -> str:
-    """An error_list's entries: integer IDs sorted with runs collapsed, then anything else."""
-    ints = [x for x in entries if isinstance(x, int)]
-    rest = [str(x) for x in sorted(entries, key=id_order) if not isinstance(x, int)]
-    return ", ".join(([_ids(ints)] if ints else []) + rest)
+def rejected_text(entries: list[Any]) -> str:
+    """error_list entries: integer IDs sorted with runs collapsed, then anything else."""
+    ints = sorted({x for x in entries if type(x) is int})
+    rest = [str(x) for x in sorted(entries, key=id_order) if type(x) is not int]
+    return ", ".join(([id_list(ints)] if ints else []) + rest)
+
+
+def add_rejected(rejected: list[Any], entries: list[Any]) -> None:
+    """Add error_list ``entries`` to ``rejected``, once each by their text. A list, not a
+    set: an entry needn't be hashable (only integer IDs have been seen)."""
+    seen = {str(x) for x in rejected}
+    for x in entries:
+        if str(x) not in seen:
+            seen.add(str(x))
+            rejected.append(x)
 
 
 def check_ids(

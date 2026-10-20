@@ -13,13 +13,14 @@ from mcp_synology.core.formatting import format_size, format_table, synology_err
 from mcp_synology.modules.photos.helpers import (
     V7,
     Photos,
+    add_rejected,
     check_ids,
     check_space,
-    id_order,
     in_batches,
     invalid,
     not_found,
     parse_date,
+    rejected_text,
     space_label,
 )
 
@@ -140,7 +141,7 @@ async def tag_photos(
                     lambda batch: ph.call("Browse.Item", method, {"id": batch, "tag": tag_ids}),
                 )
                 for data in replies:
-                    rejected += data.get("error_list") or []
+                    add_rejected(rejected, data.get("error_list") or [])
             shown = ", ".join(t for t in names if t not in unknown)
             if tag_ids:
                 verb = "Added tags" if action == "add" else "Removed tags"
@@ -153,7 +154,7 @@ async def tag_photos(
                 )
             if rejected:
                 lines.append(
-                    f"  Rejected by DSM: {', '.join(map(str, sorted(rejected, key=id_order)))} "
+                    f"  Rejected by DSM: {rejected_text(rejected)} "
                     "(error_list; e.g. still being indexed)"
                 )
         else:
@@ -242,7 +243,7 @@ async def edit_photo(
             ph.require_v7("favorite", param="favorite")
         found, missing = await ph.items(ids)
         lines: list[str] = []
-        rejected: set[Any] = set()
+        rejected: list[Any] = []
         done: list[str] = []
         if found:
             # Every field in one set (verified on both versions), so each file is rewritten
@@ -265,10 +266,10 @@ async def edit_photo(
                     ),
                 )
                 for data in replies:
-                    rejected.update(data.get("error_list") or [])
+                    add_rejected(rejected, data.get("error_list") or [])
                 done += [label for _key, label, _value in fields]
             if favorite is not None:
-                refused = ", ".join(map(str, sorted(rejected, key=id_order)))
+                refused = rejected_text(rejected)
                 await in_batches(
                     list(found),
                     lambda batch: ph.call(
@@ -289,10 +290,7 @@ async def edit_photo(
                 done.append("favorite" if favorite else "not favorite")
             lines.append(f"Edited {len(found)} item(s) ({space_label(sp)}): {', '.join(done)}.")
             if rejected:
-                lines.append(
-                    f"  Rejected by DSM: {', '.join(map(str, sorted(rejected, key=id_order)))}"
-                    " (error_list)"
-                )
+                lines.append(f"  Rejected by DSM: {rejected_text(rejected)} (error_list)")
         else:
             lines.append("No items changed: none of the ids exist.")
         if missing:

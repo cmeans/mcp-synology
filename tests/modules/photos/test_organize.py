@@ -439,6 +439,19 @@ class TestEditPhoto:
         ) in _error(exc)["message"]
 
     @respx.mock
+    async def test_odd_rejection_entries_on_success(self) -> None:
+        """Every batch succeeding with odd error_list entries (a dict, a string, a repeat)
+        can't crash the reply; integer IDs are sorted and runs collapsed."""
+        fake = self._150(FakePhotos()).on(
+            ITEM, "set", 2, {"error_list": [{"id": 5}, 4, 3]}, {"error_list": ["7", 3]}
+        )
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await edit_photo(client, ids=list(range(1, 151)), rating=2)
+        assert "  Rejected by DSM: 3-4, 7, {'id': 5} (error_list)" in out
+
+    @respx.mock
     async def test_odd_rejection_entries_and_all_rejected(self) -> None:
         """A string ID matches its integer; an entry that isn't an ID can't crash the reply;
         a batch DSM rejected whole changed nothing, so there's no "would shift again"."""
