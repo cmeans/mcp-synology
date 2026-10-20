@@ -541,7 +541,7 @@ def add_rejected(rejected: list[Any], entries: list[Any]) -> None:
     set: an entry needn't be hashable (only integer IDs have been seen)."""
     seen = {str(x) for x in rejected}
     for x in entries:
-        if isinstance(x, str) and x.isdigit():
+        if isinstance(x, str) and x.isascii() and x.isdigit():
             x = int(x)  # "9" is ID 9
         if str(x) not in seen:
             seen.add(str(x))
