@@ -312,6 +312,17 @@ async def download_file(
     if is_folder and not filename:
         effective_name += ".zip"
         dest_file = local_dir / effective_name
+        if len(os.fsencode(effective_name)) > 255:
+            # The folder's name fits; with ".zip" it's past the local limit.
+            error_response(
+                ErrorCode.INVALID_PARAMETER,
+                f"Download failed: Can't save as {effective_name!r}: the name is too long "
+                "for a local file.",
+                retryable=False,
+                param="filename",
+                value=filename,
+                suggestion="Pass a shorter name as filename.",
+            )
 
     if dest_file.is_dir() and not dest_file.is_symlink():
         # Neither mode can replace a folder; refuse before downloading (QA R1 on #178).

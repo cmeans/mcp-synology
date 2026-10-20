@@ -421,6 +421,21 @@ class TestDownloadFile:
         assert str(tmp_path / "shows.zip") in out
 
     @respx.mock
+    async def test_download_folder_name_too_long_with_zip(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """A 253-byte folder name fits; with ".zip" it doesn't: a structured error, not
+        a raw OSError (File name too long)."""
+        path = "/video/" + "a" * 253
+        calls = self._route(self._folder_info(path), httpx.Response(200, content=b"PK"))
+        with pytest.raises(ToolError) as exc_info:
+            await download_file(mock_client, path=path, dest_folder=str(tmp_path))
+        err = json.loads(str(exc_info.value))["error"]
+        assert (err["code"], err["param"]) == ("invalid_parameter", "filename")
+        assert "too long" in err["message"]
+        assert calls == ["getinfo"]
+
+    @respx.mock
     async def test_download_folder_filename_and_overwrite(
         self, mock_client: DsmClient, tmp_path: Path
     ) -> None:
