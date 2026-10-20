@@ -17,11 +17,20 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, NoReturn
 
-from mcp_synology.core.errors import ErrorCode, SynologyError
+import httpx
+
+from mcp_synology.core.errors import (
+    DsmHttpError,
+    DsmReplyError,
+    DsmTimeoutError,
+    DsmUnavailableError,
+    ErrorCode,
+    SynologyError,
+)
 from mcp_synology.core.formatting import error_response, format_timestamp
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Awaitable, Callable, Sequence
 
     from mcp_synology.core.client import DsmClient
 
@@ -412,6 +421,131 @@ class Photos:
 def batches(ids: list[int], size: int = BATCH_SIZE) -> list[list[int]]:
     """``ids`` in chunks of ``size`` (the web client's BATCH_UPDATE_SIZE)."""
     return [ids[i : i + size] for i in range(0, len(ids), size)]
+
+
+def id_order(x: object) -> tuple[int, int, str]:
+    """Sort key: IDs as numbers, anything else (an unexpected error_list entry) after."""
+    return (0, x, "") if isinstance(x, int) else (1, 0, str(x))
+
+
+def id_list(ids: Sequence[int]) -> str:
+    """``1-3, 7, 9-10``: runs of consecutive IDs collapsed, so a long list stays short."""
+    runs: list[list[int]] = []
+    for i in ids:
+        if runs and i == runs[-1][-1] + 1:
+            runs[-1].append(i)
+        else:
+            runs.append([i])
+    return ", ".join(str(r[0]) if len(r) == 1 else f"{r[0]}-{r[-1]}" for r in runs)
+
+
+async def in_batches(
+    ids: list[int],
+    send: Callable[[list[int]], Awaitable[dict[str, Any]]],
+    *,
+    note: str = "",
+    before: str = "",
+    step: str = "",
+) -> list[dict[str, Any]]:
+    """``send`` each batch of ``ids`` in turn; the replies, in order.
+
+    When a batch fails, the error says which IDs were already changed, which may or may
+    not have been, and which weren't, so a retry can cover only the rest (#322), and
+    adds ``note`` (e.g. that a relative edit must not be repeated). IDs DSM rejected in
+    an earlier batch (``error_list``) are named too. ``before`` says what earlier steps
+    of the call already changed, and ``step`` names this one in the error ("Favorite
+    not changed: …"). A failure on the first batch, with nothing changed and nothing in
+    doubt, is raised as it is.
+    """
+    done: list[int] = []
+    replies: list[dict[str, Any]] = []
+    for batch in batches(ids):
+        try:
+            replies.append(await send(batch))
+        except (SynologyError, httpx.TransportError) as e:
+            # No answer, or a proxy's server error or page: the write may have reached
+            # DSM. A connection that couldn't be opened sent nothing, and a 4xx is the
+            # proxy (or DSM) refusing the request, as for Photos uploads.
+            unsure = (
+                isinstance(e, httpx.TransportError | DsmReplyError)
+                and not isinstance(e, httpx.ConnectError | httpx.ConnectTimeout)
+            ) or (isinstance(e, DsmHttpError) and not 400 <= e.status < 500)
+            if not (done or before or unsure):
+                raise
+            parts = [before] if before else []
+            rest = ids[len(done) :]
+            changed: list[int] = []
+
+            def phrase(text: str) -> str:  # "Not changed" or "Favorite not changed"
+                return f"{step} {text[0].lower()}{text[1:]}" if step else text
+
+            if done:
+                # IDs an earlier batch's error_list named weren't changed: never count them.
+                # Compared as text, so an entry DSM sends as "9" matches ID 9.
+                rejected: list[Any] = []
+                for r in replies:
+                    add_rejected(rejected, r.get("error_list") or [])
+                refused = {str(x) for x in rejected}
+                changed = [i for i in done if str(i) not in refused]
+                if changed:
+                    parts.append(
+                        f"{phrase('Already changed')} {len(changed)} of {len(ids)} item(s): "
+                        f"{_ids(changed)}."
+                    )
+                if rejected:
+                    parts.append(f"Rejected by DSM, so not changed: {rejected_text(rejected)}.")
+            if unsure:
+                parts.append(f"{phrase('May or may not have changed')}: {_ids(batch)}.")
+                rest = rest[len(batch) :]
+            if rest:
+                parts.append(f"{phrase('Not changed')}: {_ids(rest)}.")
+            if note and (changed or unsure):
+                parts.append(note)
+            detail = " ".join(parts)
+            if unsure or isinstance(e, httpx.TransportError):
+                if isinstance(e, httpx.ConnectError | httpx.ConnectTimeout):
+                    what = f"couldn't reach DSM ({type(e).__name__})"
+                elif isinstance(e, httpx.TransportError):
+                    what = f"no answer from DSM ({type(e).__name__})"
+                else:
+                    what = str(e).rstrip().rstrip(".")
+                kind = (
+                    DsmTimeoutError
+                    if isinstance(e, httpx.TimeoutException)
+                    else DsmUnavailableError
+                )
+                raise kind(
+                    f"{what}. {detail}", suggestion="Check the items before trying again."
+                ) from e
+            text = str(e).rstrip()
+            stop = "" if text.endswith((".", "!", "?")) else "."
+            e.args = (f"{text}{stop} {detail}",)
+            raise
+        done += batch
+    return replies
+
+
+def _ids(ids: list[int]) -> str:
+    return id_list(sorted(ids))
+
+
+def rejected_text(entries: list[Any]) -> str:
+    """error_list entries: integer IDs sorted with runs collapsed, then anything else."""
+    ints = sorted(x for x in entries if type(x) is int)  # add_rejected deduped them
+    rest = [str(x) for x in sorted(entries, key=id_order) if type(x) is not int]
+    return ", ".join(([id_list(ints)] if ints else []) + rest)
+
+
+def add_rejected(rejected: list[Any], entries: list[Any]) -> None:
+    """Add error_list ``entries`` to ``rejected``, once each by their text. A list, not a
+    set: an entry needn't be hashable (only integer IDs have been seen)."""
+    seen = {str(x) for x in rejected}
+    for x in entries:
+        if isinstance(x, str) and x.isascii() and x.isdigit():
+            x = int(x)  # "9" is ID 9
+        if str(x) not in seen:
+            seen.add(str(x))
+            rejected.append(x)
 
 
 def check_ids(
