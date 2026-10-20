@@ -383,8 +383,39 @@ class TestEditPhoto:
         assert "May or may not" not in message
 
     @respx.mock
+    async def test_favorite_dsm_error_names_the_step_and_rejections(self) -> None:
+        """The favorite step's "not changed" can't read as the rating's, and IDs the set
+        rejected aren't claimed as changed."""
+        fake = self._150(FakePhotos()).on(ITEM, "set", 2, {"error_list": [9, 3]})
+        fake.error(ITEM, "set_favorite", 7, 105)
+        install(fake)
+        client = make_client(CAPTURE_191)
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await edit_photo(client, ids=list(range(1, 151)), rating=3, favorite=True)
+        assert (
+            "The other changes (rating 3) were already made to all 150 item(s) except those "
+            "DSM rejected (3, 9). Favorite not changed: 1-150."
+        ) in _error(exc)["message"]
+
+    @respx.mock
+    async def test_proxy_4xx_is_not_changed(self) -> None:
+        """A 4xx is the proxy (or DSM) refusing the request, as for uploads."""
+        fake = self._150(FakePhotos()).on(
+            ITEM, "set", 2, {"error_list": []}, lambda _p: httpx.Response(403, text="no")
+        )
+        install(fake)
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await edit_photo(client, ids=list(range(1, 151)), shift_hours=2)
+        message = _error(exc)["message"]
+        assert "Already changed 100 of 150 item(s): 1-100. Not changed: 101-150." in message
+        assert "May or may not" not in message
+
+    @respx.mock
     async def test_earlier_rejections_are_named(self) -> None:
-        fake = self._150(FakePhotos()).on(ITEM, "set", 2, {"error_list": [7, 8]}, _deny)
+        fake = self._150(FakePhotos()).on(ITEM, "set", 2, {"error_list": [8, 7]}, _deny)
         install(fake)
         client = make_client()
         async with client:
@@ -422,7 +453,7 @@ class TestEditPhoto:
                 await edit_photo(client, ids=list(range(1, 151)), rating=3, favorite=True)
         assert (
             "The other changes (rating 3) were already made to all 150 item(s). "
-            "May or may not have changed: 1-100. Not changed: 101-150."
+            "Favorite may or may not have changed: 1-100. Favorite not changed: 101-150."
         ) in _error(exc)["message"]
 
     @respx.mock

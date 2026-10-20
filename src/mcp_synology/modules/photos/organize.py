@@ -267,6 +267,7 @@ async def edit_photo(
                     rejected.update(data.get("error_list") or [])
                 done += [label for _key, label, _value in fields]
             if favorite is not None:
+                refused = ", ".join(map(str, sorted(rejected, key=str)))
                 await in_batches(
                     list(found),
                     lambda batch: ph.call(
@@ -277,10 +278,12 @@ async def edit_photo(
                     ),
                     before=(
                         f"The other changes ({', '.join(done)}) were already made to all "
-                        f"{len(found)} item(s)."
+                        f"{len(found)} item(s)"
+                        + (f" except those DSM rejected ({refused})." if rejected else ".")
                         if done
                         else ""
                     ),
+                    step="Favorite",
                 )
                 done.append("favorite" if favorite else "not favorite")
             lines.append(f"Edited {len(found)} item(s) ({space_label(sp)}): {', '.join(done)}.")

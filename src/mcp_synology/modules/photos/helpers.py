@@ -440,6 +440,7 @@ async def in_batches(
     *,
     note: str = "",
     before: str = "",
+    step: str = "",
 ) -> list[dict[str, Any]]:
     """``send`` each batch of ``ids`` in turn; the replies, in order.
 
@@ -447,8 +448,9 @@ async def in_batches(
     not have been, and which weren't, so a retry can cover only the rest (#322), and
     adds ``note`` (e.g. that a relative edit must not be repeated). IDs DSM rejected in
     an earlier batch (``error_list``) are named too. ``before`` says what earlier steps
-    of the call already changed. A failure on the first batch, with nothing changed and
-    nothing in doubt, is raised as it is.
+    of the call already changed, and ``step`` names this one in the error ("Favorite
+    not changed: …"). A failure on the first batch, with nothing changed and nothing in
+    doubt, is raised as it is.
     """
     done: list[int] = []
     replies: list[dict[str, Any]] = []
@@ -456,25 +458,34 @@ async def in_batches(
         try:
             replies.append(await send(batch))
         except (SynologyError, httpx.TransportError) as e:
-            # No answer, or a proxy's error status or page: the write may have reached
-            # DSM. A connection that couldn't be opened sent nothing.
-            unsure = isinstance(
-                e, httpx.TransportError | DsmHttpError | DsmReplyError
-            ) and not isinstance(e, httpx.ConnectError | httpx.ConnectTimeout)
+            # No answer, or a proxy's server error or page: the write may have reached
+            # DSM. A connection that couldn't be opened sent nothing, and a 4xx is the
+            # proxy (or DSM) refusing the request, as for Photos uploads.
+            unsure = (
+                isinstance(e, httpx.TransportError | DsmReplyError)
+                and not isinstance(e, httpx.ConnectError | httpx.ConnectTimeout)
+            ) or (isinstance(e, DsmHttpError) and not 400 <= e.status < 500)
             if not (done or before or unsure):
                 raise
             parts = [before] if before else []
             rest = ids[len(done) :]
+
+            def phrase(text: str) -> str:  # "Not changed" or "Favorite not changed"
+                return f"{step} {text[0].lower()}{text[1:]}" if step else text
+
             if done:
-                parts.append(f"Already changed {len(done)} of {len(ids)} item(s): {_ids(done)}.")
+                parts.append(
+                    f"{phrase('Already changed')} {len(done)} of {len(ids)} item(s): {_ids(done)}."
+                )
                 rejected = [x for r in replies for x in r.get("error_list") or []]
                 if rejected:
-                    parts.append(f"Rejected by DSM: {', '.join(map(str, rejected))}.")
+                    shown = ", ".join(map(str, sorted(rejected, key=str)))
+                    parts.append(f"Rejected by DSM: {shown}.")
             if unsure:
-                parts.append(f"May or may not have changed: {_ids(batch)}.")
+                parts.append(f"{phrase('May or may not have changed')}: {_ids(batch)}.")
                 rest = rest[len(batch) :]
             if rest:
-                parts.append(f"Not changed: {_ids(rest)}.")
+                parts.append(f"{phrase('Not changed')}: {_ids(rest)}.")
             if note and (done or unsure):
                 parts.append(note)
             detail = " ".join(parts)
