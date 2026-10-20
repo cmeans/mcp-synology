@@ -358,10 +358,34 @@ class TestGetDirSize:
         assert calls == ["getinfo"]
 
     @respx.mock
+    async def test_dir_size_folder_the_user_cant_read_is_refused(
+        self, mock_client: DsmClient
+    ) -> None:
+        """A folder denied by an ACL or POSIX mode: getinfo reports it with read: false,
+        and DirSize would answer 0 B (vdsm 7.1, 7.2.2; #336). No task is started."""
+        calls: list[str] = []
+        perm = {"acl": {"read": False, "del": True}, "is_acl_mode": True, "posix": 0}
+        entry = {"path": "/video/locked", "isdir": True, "additional": {"perm": perm}}
+        self._getinfo_then_dirsize(entry, calls)
+        with pytest.raises(ToolError) as exc_info:
+            await get_dir_size(mock_client, path="/video/locked")
+        err = json.loads(str(exc_info.value))["error"]
+        assert err["code"] == "permission_denied"
+        assert err["message"] == (
+            "Get directory size failed: no permission to read /video/locked on the NAS."
+        )
+        assert calls == ["getinfo"]
+
+    @respx.mock
     @pytest.mark.parametrize(
         "entry",
-        [None, {"path": "/video", "name": "video", "isdir": True}],
-        ids=["getinfo-failed", "exists"],
+        [
+            None,
+            {"path": "/video", "name": "video", "isdir": True},
+            {"path": "/video", "isdir": True, "additional": {"perm": {"acl": {"read": True}}}},
+            {"path": "/video", "isdir": True, "additional": {"perm": "garbled"}},
+        ],
+        ids=["getinfo-failed", "exists", "readable", "garbled-perm"],
     )
     async def test_dir_size_runs_when_the_path_exists_or_the_check_fails(
         self, mock_client: DsmClient, entry: dict[str, Any] | None

@@ -20,7 +20,6 @@ from mcp_synology.core.formatting import (
     synology_error_response,
 )
 from mcp_synology.modules.filestation.helpers import (
-    find_missing_paths,
     missing_paths_suggestion,
     normalize_path,
     task_request,
@@ -262,6 +261,27 @@ def _status_errors_response(normalized: str, path: str, errors: list[Any]) -> No
     synology_error_response("Get directory size", error_from_code(code, "SYNO.FileStation.DirSize"))
 
 
+async def _getinfo_entry(client: DsmClient, normalized: str) -> dict[str, Any]:
+    """getinfo's entry for the path, with its permissions (``{}`` if DSM gave none)."""
+    version = min(2, client.negotiate_version("SYNO.FileStation.List", max_version=2))
+    data = await client.request(
+        "SYNO.FileStation.List",
+        "getinfo",
+        version=version,
+        params={"path": normalized, "additional": '["perm"]'},
+    )
+    files = data.get("files") or []
+    return files[0] if files and isinstance(files[0], dict) else {}
+
+
+def _read_denied(entry: dict[str, Any]) -> bool:
+    """True when getinfo's permissions say the user can't read the path."""
+    acl: Any = entry
+    for key in ("additional", "perm", "acl"):
+        acl = acl.get(key) if isinstance(acl, dict) else None
+    return isinstance(acl, dict) and acl.get("read") is False
+
+
 async def get_dir_size(
     client: DsmClient,
     *,
@@ -272,18 +292,23 @@ async def get_dir_size(
     normalized = normalize_path(path)
 
     # DSM's DirSize task on a path that doesn't exist finishes at once with 0 bytes, 0
-    # files and 0 folders (seska, DSM 7.1.1), which reads as "empty". Check the path
-    # first, as delete_files does. Best-effort: if getinfo gets a DSM error or an
-    # unreadable reply, or reports another code, DirSize runs; a finished status that
-    # carries errors is then mapped the same way, never read as 0 B. A network error
-    # ends the call, as it would at the DirSize start.
+    # files and 0 folders (seska, DSM 7.1.1), which reads as "empty"; so does a folder
+    # the user is denied by an ACL or POSIX mode (vdsm 7.1, 7.2.2; #336), which getinfo
+    # still reports, with read: false in its permissions. Check the path first.
+    # Best-effort: if getinfo gets a DSM error or an unreadable reply, or reports another
+    # code, DirSize runs; a finished status that carries errors is then mapped the same
+    # way, never read as 0 B. A network error ends the call, as it would at the DirSize
+    # start.
     try:
-        missing = await find_missing_paths(client, [normalized])
+        entry = await _getinfo_entry(client, normalized)
     except SynologyError as e:
         logger.debug("Get directory size: path check failed: %s", e)
-        missing = []
-    if missing:
-        _refuse_path(normalized, path, missing[0][1], missing)
+        entry = {}
+    if "code" in entry:
+        code = int(entry["code"])
+        _refuse_path(normalized, path, code, [(str(entry.get("path") or normalized), code)])
+    if _read_denied(entry):
+        _refuse_path(normalized, path, 407, [(normalized, 407)])
 
     try:
         start_data = await client.request(

@@ -312,7 +312,8 @@ Calculate the total size of a directory (recursive).
 **Tool description (LLM-facing):**
 > Calculate the total size of a directory, including all files and subdirectories. Returns total size,
 > file count, and directory count. This is the best tool for answering 'how much space does X use'
-> questions.
+> questions. Counts only what this DSM user can read: a subfolder it can't read is left out without
+> notice.
 
 **Parameters:**
 
@@ -330,7 +331,7 @@ Directory Size: /video/TV Shows/The Bear
   Directories:    12
 ```
 
-**Missing or unreadable path (#332):** DSM's DirSize task on a path that doesn't exist finishes at once with 0 bytes, 0 files and 0 directories (seen on a real NAS, DSM 7.1.1), which reads as an empty folder. On a path the user can't read, it finishes with `errors` and no totals: `{"errors": [{"code": 407, "path": "/homes/admin"}], "finished": true}` (vdsm 7.1). So `get_dir_size` checks the path with `getinfo` first: a `{"code": 408}` entry is `not_found` and a `407` entry `permission_denied`, with no task started. If `getinfo` gets a DSM error or an unreadable reply (such as a proxy's 502), or reports another code, the task runs. A finished status that carries `errors` is then mapped from the entry for the requested path (else the first, and the message names that entry's path): 408 `not_found`, 407 `permission_denied`, any other code as for any DSM error; entries with no integer code give `filestation_error`. It is never formatted as 0 B. A network error on the check ends the call, as it would at the task's start. A subfolder the user can't read gets no `errors` entry; DSM leaves it out of the totals (an ACL deny or POSIX `700`, vdsm 7.1), and for the denied folder itself `getinfo` reports an ordinary folder while DirSize reports 0 B (#336).
+**Missing or unreadable path (#332):** DSM's DirSize task on a path that doesn't exist finishes at once with 0 bytes, 0 files and 0 directories (seen on a real NAS, DSM 7.1.1), which reads as an empty folder. On a path the user can't read, it finishes with `errors` and no totals: `{"errors": [{"code": 407, "path": "/homes/admin"}], "finished": true}` (vdsm 7.1). A folder the user is denied by an ACL entry or a POSIX mode (such as root's `700`) finishes with 0 bytes and no `errors` (vdsm 7.1 and 7.2.2, #336), but `getinfo` with `additional=["perm"]` reports it with `perm.acl.read: false`. So `get_dir_size` checks the path with `getinfo` (with `perm`) first: a `{"code": 408}` entry is `not_found`, and a `407` entry or `acl.read: false` is `permission_denied`, with no task started. If `getinfo` gets a DSM error or an unreadable reply (such as a proxy's 502), or reports another code, the task runs. A finished status that carries `errors` is then mapped from the entry for the requested path (else the first, and the message names that entry's path): 408 `not_found`, 407 `permission_denied`, any other code as for any DSM error; entries with no integer code give `filestation_error`. It is never formatted as 0 B. A network error on the check ends the call, as it would at the task's start. A subfolder the user can't read gets no `errors` entry either: DSM leaves it out of the totals without notice (vdsm 7.1 and 7.2.2). Finding it would take a walk of the whole tree, so the tool description says the totals count only what the DSM user can read (#336).
 
 ---
 
