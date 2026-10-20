@@ -1007,8 +1007,8 @@ class DsmClient:
         instead of binary data, parses and raises the appropriate exception. A text/html
         200, or JSON that isn't an envelope, raises ``DsmReplyError`` before anything is
         written: DSM never sends a file as text/html (#292). An HTTP
-        error status without one raises ``FileStationError`` for File Station (as
-        before) and ``DsmHttpError`` for any other API (Photos answers a thumbnail
+        error status without one raises ``DownloadHttpError`` (a ``FileStationError``)
+        for File Station and ``DsmHttpError`` for any other API (Photos answers a thumbnail
         that isn't generated yet with a 404 HTML page).
         """
         http = self._get_http_once()  # never reused (#222)
