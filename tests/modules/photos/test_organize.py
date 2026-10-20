@@ -443,13 +443,35 @@ class TestEditPhoto:
         """Every batch succeeding with odd error_list entries (a dict, a string, a repeat)
         can't crash the reply; integer IDs are sorted and runs collapsed."""
         fake = self._150(FakePhotos()).on(
-            ITEM, "set", 2, {"error_list": [{"id": 5}, 4, 3]}, {"error_list": ["7", 3]}
+            ITEM,
+            "set",
+            2,
+            {"error_list": [{"id": 5}, 4, 3, True]},
+            {"error_list": ["7", 3, {"id": 5}, 7]},
         )
         install(fake)
         client = make_client()
         async with client:
             out = await edit_photo(client, ids=list(range(1, 151)), rating=2)
-        assert "  Rejected by DSM: 3-4, 7, {'id': 5} (error_list)" in out
+        # Each once; "7" is ID 7; True isn't an ID, so it doesn't join a run.
+        assert "  Rejected by DSM: 3-4, 7, True, {'id': 5} (error_list)" in out
+
+    @respx.mock
+    async def test_repeated_rejections_on_the_failure_path_are_listed_once(self) -> None:
+        reply = {"error_list": ["7", {"id": 5}]}
+        fake = FakePhotos().on(
+            ITEM, "get", 2, _items(*range(1, 101)), _items(*range(101, 201)), _items(201)
+        )
+        fake.on(ITEM, "set", 2, reply, {"error_list": [7, {"id": 5}]}, _deny)
+        install(fake)
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await edit_photo(client, ids=list(range(1, 202)), rating=2)
+        assert (
+            "Already changed 199 of 201 item(s): 1-6, 8-200. Rejected by DSM, so not changed: "
+            "7, {'id': 5}. Not changed: 201."
+        ) in _error(exc)["message"]
 
     @respx.mock
     async def test_odd_rejection_entries_and_all_rejected(self) -> None:
@@ -464,7 +486,7 @@ class TestEditPhoto:
                 await edit_photo(client, ids=list(range(1, 151)), shift_hours=2)
         message = _error(exc)["message"]
         assert "Already changed 1 of 150 item(s): 100." in message  # the dict matched nothing
-        assert "Rejected by DSM, so not changed: 1, 10, 11, " in message  # text, in order
+        assert "Rejected by DSM, so not changed: 1-99, {'id': 100}." in message
         assert "Not changed: 101-150." in message
 
         fake = self._150(FakePhotos()).on(

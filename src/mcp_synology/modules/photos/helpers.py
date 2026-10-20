@@ -482,7 +482,9 @@ async def in_batches(
             if done:
                 # IDs an earlier batch's error_list named weren't changed: never count them.
                 # Compared as text, so an entry DSM sends as "9" matches ID 9.
-                rejected = [x for r in replies for x in r.get("error_list") or []]
+                rejected: list[Any] = []
+                for r in replies:
+                    add_rejected(rejected, r.get("error_list") or [])
                 refused = {str(x) for x in rejected}
                 changed = [i for i in done if str(i) not in refused]
                 if changed:
@@ -529,7 +531,7 @@ def _ids(ids: list[int]) -> str:
 
 def rejected_text(entries: list[Any]) -> str:
     """error_list entries: integer IDs sorted with runs collapsed, then anything else."""
-    ints = sorted({x for x in entries if type(x) is int})
+    ints = sorted(x for x in entries if type(x) is int)  # add_rejected deduped them
     rest = [str(x) for x in sorted(entries, key=id_order) if type(x) is not int]
     return ", ".join(([id_list(ints)] if ints else []) + rest)
 
@@ -539,6 +541,8 @@ def add_rejected(rejected: list[Any], entries: list[Any]) -> None:
     set: an entry needn't be hashable (only integer IDs have been seen)."""
     seen = {str(x) for x in rejected}
     for x in entries:
+        if isinstance(x, str) and x.isdigit():
+            x = int(x)  # "9" is ID 9
         if str(x) not in seen:
             seen.add(str(x))
             rejected.append(x)
