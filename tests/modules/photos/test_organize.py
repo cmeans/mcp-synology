@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import httpx
 import pytest
 import respx
 from mcp.server.mcpserver.exceptions import ToolError
@@ -29,6 +30,10 @@ REQ = "SYNO.Foto.PhotoRequest"
 def _error(exc: pytest.ExceptionInfo[ToolError]) -> dict[str, Any]:
     text = str(exc.value)
     return json.loads(text[text.index("{") :])["error"]  # type: ignore[no-any-return]
+
+
+def _deny(_p: dict[str, Any]) -> dict[str, Any]:
+    return {"success": False, "error": {"code": 105}}
 
 
 def _items(*ids: int) -> dict[str, Any]:
@@ -162,6 +167,22 @@ class TestTags:
         assert [len(c.params["id"]) for c in fake.of(ITEM, "add_tag")] == [100, 50]
 
     @respx.mock
+    async def test_failed_batch_names_what_was_tagged(self) -> None:
+        """#322: as edit_photo, a later batch failing says which items were tagged."""
+        fake = FakePhotos().on(ITEM, "get", 2, _items(*range(1, 101)), _items(*range(101, 151)))
+        fake.on(TAG, "list", 1, captured("tag-list"))
+        fake.on(ITEM, "add_tag", 1, {"error_list": []}, _deny)
+        install(fake)
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await tag_photos(client, action="add", ids=list(range(1, 151)), tags=["2024"])
+        assert (
+            "Already changed 100 of 150 item(s): 1-100. Not changed: 101-150."
+            in (_error(exc)["message"])
+        )
+
+    @respx.mock
     async def test_shared_space_missing_note(self) -> None:
         """An entry-only Shared Space user's get leaves the item out; nothing is sent."""
         fake = FakePhotos().on("SYNO.FotoTeam.Browse.Item", "get", 2, {"list": []})
@@ -254,6 +275,77 @@ class TestEditPhoto:
             out = await edit_photo(client, ids=[38], favorite=False)
         assert fake.one(ITEM, "set_favorite").params == {"id": [38], "favorite": False}
         assert "not favorite" in out
+
+    @staticmethod
+    def _150(fake: FakePhotos) -> FakePhotos:
+        return fake.on(ITEM, "get", 2, _items(*range(1, 101)), _items(*range(101, 151)))
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        ("kwargs", "retry_note"),
+        [({"shift_hours": 2}, True), ({"rotate": "left"}, True), ({"rating": 3}, False)],
+    )
+    async def test_failed_batch_names_what_changed(
+        self, kwargs: dict[str, Any], retry_note: bool
+    ) -> None:
+        """#322: a later batch failing used to report only the error, so a retry shifted
+        or rotated the first 100 items again."""
+        fake = self._150(FakePhotos()).on(ITEM, "set", 2, {"error_list": []}, _deny)
+        install(fake)
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await edit_photo(client, ids=list(range(1, 151)), **kwargs)
+        assert [len(c.params["id"]) for c in fake.of(ITEM, "set")] == [100, 50]
+        err = _error(exc)
+        assert err["code"] == "permission_denied"
+        assert (
+            "Already changed 100 of 150 item(s): 1-100. Not changed: 101-150." in (err["message"])
+        )
+        assert ("Retry with only the ids not changed" in err["message"]) is retry_note
+
+    @respx.mock
+    async def test_first_batch_failing_adds_nothing(self) -> None:
+        fake = self._150(FakePhotos()).error(ITEM, "set", 2, 105)
+        install(fake)
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await edit_photo(client, ids=list(range(1, 151)), shift_hours=2)
+        assert "changed" not in _error(exc)["message"].lower()
+
+    @respx.mock
+    async def test_unanswered_batch_may_have_changed(self) -> None:
+        def drop(_p: dict[str, Any]) -> dict[str, Any]:
+            raise httpx.ReadTimeout("")
+
+        fake = self._150(FakePhotos()).on(ITEM, "set", 2, {"error_list": []}, drop)
+        install(fake)
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await edit_photo(client, ids=list(range(1, 151)), shift_hours=2)
+        err = _error(exc)
+        assert err["code"] == "unavailable"
+        assert err["retryable"] is False
+        assert (
+            "no answer from DSM (ReadTimeout). Already changed 100 of 150 item(s): 1-100. "
+            "May or may not have changed: 101-150. Retry with only"
+        ) in err["message"]
+
+    @respx.mock
+    async def test_favorite_failing_says_the_other_changes_were_made(self) -> None:
+        fake = self._150(FakePhotos()).on(ITEM, "set", 2, {"error_list": []})
+        fake.error(ITEM, "set_favorite", 7, 105)
+        install(fake)
+        client = make_client(CAPTURE_191)
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await edit_photo(client, ids=list(range(1, 151)), rating=3, favorite=True)
+        assert (
+            "The other changes (rating 3) were already made to all 150 item(s)."
+            in (_error(exc)["message"])
+        )
 
     async def test_favorite_refused_on_134(self) -> None:
         with pytest.raises(ToolError) as exc:

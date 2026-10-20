@@ -17,11 +17,13 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, NoReturn
 
-from mcp_synology.core.errors import ErrorCode, SynologyError
+import httpx
+
+from mcp_synology.core.errors import DsmUnavailableError, ErrorCode, SynologyError
 from mcp_synology.core.formatting import error_response, format_timestamp
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Awaitable, Callable, Sequence
 
     from mcp_synology.core.client import DsmClient
 
@@ -412,6 +414,65 @@ class Photos:
 def batches(ids: list[int], size: int = BATCH_SIZE) -> list[list[int]]:
     """``ids`` in chunks of ``size`` (the web client's BATCH_UPDATE_SIZE)."""
     return [ids[i : i + size] for i in range(0, len(ids), size)]
+
+
+def id_list(ids: Sequence[int]) -> str:
+    """``1-3, 7, 9-10``: runs of consecutive IDs collapsed, so a long list stays short."""
+    runs: list[list[int]] = []
+    for i in ids:
+        if runs and i == runs[-1][-1] + 1:
+            runs[-1].append(i)
+        else:
+            runs.append([i])
+    return ", ".join(str(r[0]) if len(r) == 1 else f"{r[0]}-{r[-1]}" for r in runs)
+
+
+async def in_batches(
+    ids: list[int],
+    send: Callable[[list[int]], Awaitable[dict[str, Any]]],
+    *,
+    note: str = "",
+    before: str = "",
+) -> list[dict[str, Any]]:
+    """``send`` each batch of ``ids`` in turn; the replies, in order.
+
+    When a batch fails after earlier ones succeeded, the error says which IDs were
+    already changed and which weren't, so a retry can cover only the rest (#322), and
+    adds ``note`` (e.g. that a relative edit must not be repeated). ``before`` says what
+    earlier steps of the call already changed; it's added to any error. A batch that got
+    no answer may or may not have been applied, and is named as such.
+    """
+    done: list[int] = []
+    replies: list[dict[str, Any]] = []
+    for batch in batches(ids):
+        try:
+            replies.append(await send(batch))
+        except (SynologyError, httpx.TransportError) as e:
+            unsure = isinstance(e, httpx.TransportError)
+            parts = [before] if before else []
+            if done:
+                parts.append(f"Already changed {len(done)} of {len(ids)} item(s): {id_list(done)}.")
+                rest = ids[len(done) :]
+                if unsure:
+                    parts.append(f"May or may not have changed: {id_list(batch)}.")
+                    rest = rest[len(batch) :]
+                if rest:
+                    parts.append(f"Not changed: {id_list(rest)}.")
+                if note:
+                    parts.append(note)
+            if not parts:
+                raise
+            if unsure:
+                raise DsmUnavailableError(
+                    f"no answer from DSM ({type(e).__name__}). {' '.join(parts)}",
+                    suggestion="Check the items before trying again.",
+                ) from e
+            text = str(e).rstrip()
+            stop = "" if text.endswith((".", "!", "?")) else "."
+            e.args = (f"{text}{stop} {' '.join(parts)}",)
+            raise
+        done += batch
+    return replies
 
 
 def check_ids(

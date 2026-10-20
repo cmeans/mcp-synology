@@ -13,9 +13,9 @@ from mcp_synology.core.formatting import format_size, format_table, synology_err
 from mcp_synology.modules.photos.helpers import (
     V7,
     Photos,
-    batches,
     check_ids,
     check_space,
+    in_batches,
     invalid,
     not_found,
     parse_date,
@@ -134,8 +134,11 @@ async def tag_photos(
                 method = "add_tag" if action == "add" else "remove_tag"
                 # One call per batch carries every tag: several add_tag calls in quick
                 # succession on one item overwrite each other (#248).
-                for batch in batches(list(found)):
-                    data = await ph.call("Browse.Item", method, {"id": batch, "tag": tag_ids})
+                replies = await in_batches(
+                    list(found),
+                    lambda batch: ph.call("Browse.Item", method, {"id": batch, "tag": tag_ids}),
+                )
+                for data in replies:
                     rejected += data.get("error_list") or []
             shown = ", ".join(t for t in names if t not in unknown)
             if tag_ids:
@@ -245,20 +248,40 @@ async def edit_photo(
             # once. The web client sends one set per field; but a taken-time change that
             # follows another edit within seconds can be undone by Photos' re-index of the
             # earlier rewrite (seen on 7.2.2), and one set leaves nothing to follow.
+            # shift_hours and rotate are relative: a retry over items already changed
+            # would shift or rotate them again (#322).
+            relative = shift_hours is not None or rotate is not None
             if fields:
                 values = {key: value for key, _label, value in fields}
-                for batch in batches(list(found)):
-                    data = await ph.call("Browse.Item", "set", {"id": batch, **values}, version=2)
+                replies = await in_batches(
+                    list(found),
+                    lambda batch: ph.call("Browse.Item", "set", {"id": batch, **values}, version=2),
+                    note=(
+                        "Retry with only the ids not changed: shift_hours and rotate are "
+                        "relative, so the changed items would shift or rotate again."
+                        if relative
+                        else ""
+                    ),
+                )
+                for data in replies:
                     rejected.update(data.get("error_list") or [])
                 done += [label for _key, label, _value in fields]
             if favorite is not None:
-                for batch in batches(list(found)):
-                    await ph.call(
+                await in_batches(
+                    list(found),
+                    lambda batch: ph.call(
                         "Browse.Item",
                         "set_favorite",
                         {"id": batch, "favorite": favorite},
                         version=V7,
-                    )
+                    ),
+                    before=(
+                        f"The other changes ({', '.join(done)}) were already made to all "
+                        f"{len(found)} item(s)."
+                        if done
+                        else ""
+                    ),
+                )
                 done.append("favorite" if favorite else "not favorite")
             lines.append(f"Edited {len(found)} item(s) ({space_label(sp)}): {', '.join(done)}.")
             if rejected:

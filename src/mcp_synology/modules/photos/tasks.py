@@ -543,6 +543,14 @@ async def photo_task(
                 " The stop was requested; its status couldn't be read." if action == "stop" else ""
             )
             _request_failed(op, task_id, e, request="status", note=note)
+        except SynologyError as e:
+            # A DSM error on the status read after a stop DSM accepted: say the stop was
+            # sent, or it reads as a failed stop (#323).
+            if action == "stop":
+                text = str(e).rstrip()
+                stop = "" if text.endswith((".", "!", "?")) else "."
+                e.args = (f"{text}{stop} The stop was requested; its status couldn't be read.",)
+            raise
         if status is None:
             not_found(
                 op,
