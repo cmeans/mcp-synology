@@ -668,8 +668,23 @@ class TestCheckConnectionFailures:
         assert result.exit_code == 1, result.output
         assert "Can't connect to http://127.0.0.1:5000: ConnectTimeout." in result.output
 
+    @pytest.mark.parametrize(
+        ("raised", "line"),
+        [
+            (httpx.ReadError("connection reset"),
+             "http://127.0.0.1:5000 accepted the connection but dropped it (ReadError: connection "
+             "reset). The NAS may be busy or restarting: try again shortly."),
+            (httpx.ReadTimeout(""),
+             "http://127.0.0.1:5000 accepted the connection but didn't answer in time "
+             "(ReadTimeout). The NAS may be busy: try again shortly, or raise connection.timeout."),
+        ],
+    )  # fmt: skip
     @respx.mock
-    def test_failure_during_login_is_reported_the_same_way(self, tmp_path: Path) -> None:
+    def test_failure_during_login_is_reported_the_same_way(
+        self, tmp_path: Path, raised: Exception, line: str
+    ) -> None:
+        """A busy NAS that connected isn't "can't connect": the setting advice was wrong
+        (#254), the same split as the server's first-connection error."""
         respx.get("http://127.0.0.1:5000/webapi/query.cgi").mock(
             return_value=httpx.Response(
                 200,
@@ -681,15 +696,11 @@ class TestCheckConnectionFailures:
                 },
             )
         )
-        respx.post("http://127.0.0.1:5000/webapi/entry.cgi").mock(
-            side_effect=httpx.ReadError("connection reset")
-        )
+        respx.post("http://127.0.0.1:5000/webapi/entry.cgi").mock(side_effect=raised)
         result = CliRunner().invoke(main, ["check", "-c", str(_check_config(tmp_path, 5000))])
         assert result.exit_code == 1, result.output
-        assert "Can't connect to http://127.0.0.1:5000: ReadError: connection reset" in (
-            result.output
-        )
-        assert "Traceback" not in result.output
+        assert f"Error: {line}" in " ".join(result.output.split())
+        assert "Can't connect" not in result.output and "Traceback" not in result.output
 
     @pytest.mark.parametrize("status", [404, 500])
     @respx.mock
@@ -1113,6 +1124,39 @@ class TestCheckLogin:
             "Check the NAS, or the proxy in front of it, and try again." in err
         )
         assert "mcp-synology check" not in err
+
+    async def test_check_login_not_a_dsm_reply_is_reported_as_not_dsm(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A login answered by a proxy's page reads as before: not a DSM API response,
+        never "run check" inside check (#282)."""
+        import pytest
+
+        from mcp_synology.cli.check import _check_login
+        from mcp_synology.core.errors import DsmReplyError
+        from tests.conftest import make_test_config
+
+        config = make_test_config()
+        fake_client = self._make_fake_client()
+        fake_auth = MagicMock()
+        fake_auth.login = AsyncMock(
+            side_effect=DsmReplyError(
+                "SYNO.API.Auth/login: the answer wasn't a DSM reply (Content-Type text/html).",
+                suggestion="... run 'mcp-synology check'.",
+            )
+        )
+
+        with (
+            patch("mcp_synology.core.client.DsmClient", return_value=fake_client),
+            patch("mcp_synology.core.auth.AuthManager", return_value=fake_auth),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            await _check_login(config)
+
+        assert exc_info.value.code == 1
+        err = capsys.readouterr().err
+        assert "didn't return a DSM API response (not JSON)" in err
+        assert "Authentication failed" not in err and "mcp-synology check" not in err
 
     async def test_check_api_query_failure_exits_cleanly(
         self, capsys: pytest.CaptureFixture[str]

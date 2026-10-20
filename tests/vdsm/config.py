@@ -60,15 +60,24 @@ DSM_VERSIONS: dict[str, DsmVersionInfo] = {
             "/7.3.2/86009/DSM_VirtualDSM_86009.pat"
         ),
     ),
+    "7.4.1": DsmVersionInfo(
+        version="7.4.1",
+        build="90080",
+        pat_url=(
+            "https://global.synologydownload.com/download/DSM/release"
+            "/7.4.1/90080/DSM_VirtualDSM_90080.pat"
+        ),
+    ),
 }
 
 DEFAULT_DSM_VERSION: str = "7.2.2"
 
 # Bumped on every change to what the bake puts into a golden image. The bake
-# records it in meta.json, and the vdsm conftest refuses older images: CI's
-# cache key hashes the bake files, but a local .vdsm/golden/ image is reused
-# indefinitely and would otherwise silently lack newer setup (e.g. the
-# test user's Download Station grant, added in v2).
+# records it in meta.json, and the vdsm conftest refuses older images: a local
+# .vdsm/golden/ image is reused indefinitely and would otherwise silently lack
+# newer setup (e.g. the test user's Download Station grant, added in v2). CI's
+# golden-image cache is keyed on it too (#132): a bake change without a bump
+# is baked fresh on its own PR, but main would keep restoring the old image.
 #   v3: the bake shuts DSM down cleanly before saving; v2 images were saved
 #       from a SIGKILLed VM (on CI, DS's pkg-synodl-apid unit came up masked).
 #   v4: the test user sets its own DS default destination (DS never starts a
@@ -78,7 +87,9 @@ DEFAULT_DSM_VERSION: str = "7.2.2"
 #       service (each user's personal space), the test user's Photos privilege,
 #       and Shared Space with the test user as a manager. DEFAULT_FRESH_USER has
 #       no Photos privilege.
-BAKE_VERSION: int = 5
+#   v6: DSM 7.3.2 and 7.4.1 (#307): their Synology Photos package lists. The
+#       7.1 and 7.2.2 bakes are unchanged.
+BAKE_VERSION: int = 6
 
 # Project root / .vdsm directory for all virtual-dsm artifacts
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent

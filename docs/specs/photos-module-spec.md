@@ -1,13 +1,13 @@
 # Photos Module — Tool Specifications
 
-> **Version:** 0.1 (draft for review) | **Updated:** 2026-10-17. Written before the code (#258), from live request and reply captures. Tool count: 4 READ + 15 WRITE = 19.
+> **Version:** 1.0 | **Updated:** 2026-10-17. Written before the code (#258) from live request and reply captures, then corrected by the implementation's live runs on vdsm (DSM 7.1 and 7.2.2). Tool count: 4 READ + 15 WRITE = 19.
 > **Parent doc:** `docs/specs/architecture.md`
 >
 > **Verified on:** DSM 7.1 with Synology Photos 1.3.4 and DSM 7.2.2 with Photos 1.9.1 (vdsm; non-admin and admin personas), and a real NAS (DS1618+, DSM 7.1.1, Photos 1.3.4; non-admin, personal space with 944 items and 150 face clusters). Request shapes were first taken from the Photos web client (`react.js` in 1.3.4, `react_bundle.js` in 1.9.1), since Synology publishes no Photos API guide, then sent and their replies recorded. A claim marked **verified** has a capture in the fixtures; one marked **web client** comes only from the client's code and is checked at the implementation PR's vdsm gate (open item 1).
 >
 > **Fixtures:** `tests/modules/photos/fixtures/dsm-7.1-photos-1.3.4.json`, `dsm-7.2.2-photos-1.9.1.json` (vdsm, synthetic library) and `dsm-7.1.1-photos-1.3.4-people.json` (the real NAS, People only, names and filenames anonymized). Keys are capture labels; each value holds the request as sent and DSM's reply.
 >
-> Once the module ships, `tests/test_module_specs.py` keeps this spec and the code in sync (tool headings, tiers, parameter names, LLM-facing descriptions).
+> `tests/test_module_specs.py` keeps this spec and the code in sync (tool headings, tiers, parameter names, LLM-facing descriptions).
 
 ## Module Metadata
 
@@ -51,7 +51,7 @@ class PhotosSettings(BaseModel):
     # Station's lists (#257, core/local_paths.allowed_local_roots): with no top-level
     # list, this list, or else the Downloads folder.
     allowed_local_paths: list[str] | None = None
-    # Seconds copy_photos / move_photos wait before handing the task off (default 30,
+    # Seconds copy_photos, move_photos and the deletes wait before handing the task off (default 30,
     # cap 600), as File Station's copy_move_timeout (#245).
     task_timeout: int = 30
 ```
@@ -130,6 +130,7 @@ Photos writes ratings, descriptions, tags, taken-time changes and rotations **in
 - tools take tag **names** and resolve them to IDs immediately before each call (`GeneralTag.list`), never from a cache;
 - `GeneralTag.create` is idempotent by name (it returns the existing tag's ID, verified), so "create if missing" is just `create`;
 - `add_tag` for one item sends all its tags in a single call. Several `add_tag` calls in quick succession on one item overwrite each other (seen on the real NAS while bulk tagging, #248).
+- A **taken-time** change within seconds of an earlier edit to the same file can be undone: Photos' re-index of the earlier rewrite reads the file's old date back (seen on 7.2.2; ratings and descriptions weren't affected). `edit_photo` sends its fields in one `set` for that reason.
 
 ### Writes that report success for nothing
 
@@ -137,7 +138,7 @@ DSM answers **success** for these when an ID doesn't exist (verified on both ver
 
 So the ID check below catches this case too, before anything is sent: an item the user can't see comes back missing from `get`, and is reported as "not found, or no permission for its Shared Space folder". Deletes also use the background task, which answers 803 on its own (see Deletes).
 
-So every tool that takes IDs **checks them first** (one `get` or `list` call) and reports unknown IDs as `not_found` without sending the write. `error_list` in a reply lists IDs DSM did reject (seen for `add_tag` on an item still being indexed); those are reported per item.
+So every tool that takes IDs **checks them first** (one `get` or `list` call) and sends the write only for the IDs that exist. The reply lists the others on a "Not found" line; when none exist, nothing is sent. The two `set_cover` actions refuse an unknown ID outright with `not_found`. `error_list` in a reply lists IDs DSM did reject (seen for `add_tag` on an item still being indexed); those are reported per item.
 
 ### Missing features (by API, not by choice)
 
@@ -181,11 +182,11 @@ An upload returns an item ID at once, but Photos indexes it afterwards (seconds 
 
 Item and folder deletes use **`BackgroundTask.File delete`** (`item_id: [..]`, `folder_id: [..]`), a background task like copy and move: it exists on both versions (verified), the 1.9.1 web client uses it, and a large delete then reports progress and hands off instead of blocking. `Browse.Item delete` and `Browse.Folder delete` also work synchronously on both versions (verified) but are not used.
 
-Photos has no trash of its own. Deletes go to the **DSM recycle bin of the share that holds the space**, when that share has one. Verified on the real NAS: a deleted personal-space folder appeared under `/home/#recycle/Photos/`. Photos 1.9.1's `Setting.Admin get` v1 reports `enable_personal_dsm_recycle_bin` and `enable_shared_dsm_recycle_bin` (whether the backing share has a recycle bin; the 1.9.1 client warns admins when it's off). A **non-admin can read it** (verified on both versions); 1.3.4's reply has no such fields. The delete tools read it on 1.9.1 and say "moved to the recycle bin" or "deleted permanently (no recycle bin on that share)"; on 1.3.4, or if the read fails, they say "moved to the share's recycle bin if it has one". Reading this setting (and `Setting.TeamSpace get` for `enable_person`) is in scope; changing Photos settings is not (Decision 6).
+Photos has no trash of its own. Deletes go to the **DSM recycle bin of the share that holds the space**, when that share has one. Verified on the real NAS: a deleted personal-space folder appeared under `/home/#recycle/Photos/`. Photos 1.9.1's `Setting.Admin get` v1 reports `enable_personal_dsm_recycle_bin` and `enable_shared_dsm_recycle_bin` (whether the backing share has a recycle bin; the 1.9.1 client warns admins when it's off). A **non-admin can read it** (verified on both versions); 1.3.4's reply has no such fields. The delete tools read it on 1.9.1 and say "they're in the recycle bin of the share that holds the space" or "deleted permanently: that share has no recycle bin"; on 1.3.4, or if the read fails or gets no answer, they say "they're in the recycle bin of the share that holds the space, if it has one". Reading this setting (and `Setting.TeamSpace get` for `enable_person`) is in scope; changing Photos settings is not (Decision 6).
 
 ### Background tasks (copy, move, delete)
 
-`BackgroundTask.File copy|move|delete` returns a `task_info` (`id`, `status` `waiting|processing|aborting|done`, `total`, `completion`, `skip`, `overwrite`, `error`). `copy_photos`, `move_photos`, `delete_photos` and `delete_photo_folders` poll `BackgroundTask.Info get_status` (1 s, as the web client) until `done` or `task_timeout`, then hand off with a handle `photos:<id>` that `photo_task` follows up on (a delete task with a small batch finished within 2 s on vdsm), the same pattern as File Station's `file_task` (#245). A finished task stays listed until `clear_completed_task`; an unknown ID returns an empty list (status) or **117** (abort).
+`BackgroundTask.File copy|move|delete` returns a `task_info` (`id`, `status` `waiting|processing|aborting|done`, `total`, `completion`, `skip`, `overwrite`, `error`). `copy_photos`, `move_photos`, `delete_photos` and `delete_photo_folders` poll `BackgroundTask.Info get_status` (1 s, as the web client) until `done` or `task_timeout`, then hand off with a handle `photos:<id>` that `photo_task` follows up on, the same pattern as File Station's `file_task` (#245; a delete task with a small batch finished within 2 s on vdsm). A status request that gets no answer (a transport error), an HTTP error status, a reply that isn't DSM's (a reverse proxy's 502/504 or login page, #282) or any other unexpected answer hands off too, saying why, since the task is most likely still running. As File Station's `poll_task` (CLAUDE.md, background task cleanup), a **DSM error code** on a status request **stops** the task (`abort_task`) and the error says so (`The task was stopped on the NAS; what was already done stays done.`, or, if the stop fails, that it may still be running, with its handle), and a **canceled** call stops it too (shielded, so the stop isn't canceled with it). `photo_task`'s own status or stop request failing that way is an error naming the handle (`timeout` or `unavailable`, `retryable` as the error's own), and says whether a stop was sent (`The stop was requested; its status couldn't be read.`) or may not have reached DSM (`The stop may or may not have taken effect.`), or `Nothing was stopped.` when the connection couldn't be opened ("DSM couldn't be reached for the stop request") or the stop got a 414 (#325). A DSM error code on the status read after a stop DSM accepted keeps its code and adds `The stop was requested; its status couldn't be read.` (#323). If the status was read but the target folder's name lookup gets no answer, the folder's ID stands in (`photos:5 copy to folder 14: …`), and a task list stops looking names up after the first such failure; if the failed items can't be read, the reply ends `  (couldn't read the failed items: …)`. A finished task stays listed until `clear_completed_task`; an unknown ID returns an empty list (status) or **117** (abort).
 
 ### Identifiers and names
 
@@ -209,6 +210,7 @@ Photos-specific codes, dispatched when the API name starts with `SYNO.Foto`. Cod
 | 602 | No personal space (user home service off) | `unavailable` (see Prerequisites) |
 | 620 | Upload of a file Photos doesn't support (`.txt`) | `invalid_parameter` |
 | 621 | Upload into a folder that doesn't exist | `not_found` |
+| 641 | A folder with that name already exists in the parent (`Folder.create`, `Folder.rename`; verified on both, #258 implementation) | `already_exists` |
 | 642 | Folder doesn't exist (`Folder.get`) | `not_found` |
 | 801 | Shared Space disabled or not granted | `permission_denied` (see Prerequisites) |
 | 803 | No permission on that Shared Space folder | `permission_denied` (see Prerequisites) |
@@ -236,8 +238,8 @@ Browse or search items.
 > (Photos 1.9.1+); or list one album, place or concept (1.9.1+) on its own; or search by keyword
 > (filename and tags). Returns id, filename, taken time, type, size and folder; paged with
 > offset/limit (default 50) with the total. space: personal (default) or shared. Use the ids with
-> get_photo, download_photos, tag_photos and the other photo tools. For files outside Photos, use
-> list_files.
+> the other Photos tools, such as get_photo and download_photos. For files outside Photos, use
+> File Station's list_files when that module is enabled.
 
 **Parameters:**
 
@@ -359,12 +361,16 @@ Item 41: beach-sunset.jpg
   Tags:         beach, 2024
   People:       Person 1, (unnamed)
   Location:     41.8781, -87.6298 · Chicago, Cook County, Illinois, United States
-  Camera:       MCPTest SeedCam 1 · lens — · f/— · — s · ISO —
+  Camera:       MCPTest SeedCam 1 · lens — · aperture — · exposure — · ISO —
 
 Not found: 999999
 ```
 
-With `exif=true`, a `EXIF` table (key, value) from `get_exif` follows each block.
+With `exif=true`, a `EXIF` table (key, value) from `get_exif` follows each block. Line breaks and tabs in a value become spaces. A value longer than 80 characters is then cut, with its length (a phone photo's Maker Note byte dump ran to 3,029 characters, and every row is padded to the widest value). A value with other control characters (C1 included), or bytes that weren't UTF-8, is shown as `(binary data, N characters; not shown)`.
+
+The camera line uses DSM's own formatting where it gives it (`F1.5`, `1/30 s` on Photos 1.3.4, DSM 7.1.1; `F2.8`, `1/2 s` on Photos 1.9.1, vdsm DSM 7.2.2, QA's probe on #308), and adds `f/` or ` s` only to a bare number or fraction (`1.5`, `1/30`); any other value is shown as sent.
+
+**DSM sends raw bytes in `get_exif`** (seen on DSM 7.1.1, Photos 1.3.4): a binary field such as "Picture Info" is copied into the JSON reply as bytes that aren't UTF-8 (`0xec`), so the reply can't be decoded as sent. `DsmClient` reads such a reply again with those bytes replaced (U+FFFD), for every JSON reply (download error envelopes too), and logs that at DEBUG; before that, `get_photo exif=true` failed on that photo with "the answer wasn't a DSM reply".
 
 **Design notes:**
 - An unknown ID is simply missing from `list` (no error); the tool reports it as not found.
@@ -385,7 +391,7 @@ Originals or thumbnails to a local folder.
 > Download Synology Photos items to a local folder by id: the original file, or a JPEG preview
 > (size xl ~1280px, m ~320px, sm ~240px). Only writes inside the allowed local folders, and never
 > overwrites unless overwrite=true. Up to 50 ids. space: personal (default) or shared. For files
-> outside Photos, use download_file.
+> outside Photos, use File Station's download_file when that module is enabled.
 
 **Parameters:**
 
@@ -414,6 +420,7 @@ Downloaded 2 of 3 item(s) to /home/user/Downloads (original, personal space)
 - A preview needs the item's thumbnail status `ready` for that size (from `get` with `additional: ["thumbnail"]`). `converting` gets 404/HTML from DSM (verified), reported as not generated yet; `broken` (e.g. `preview` for photos) as unavailable.
 - `cache_key` isn't checked by DSM (a bogus key still returned the image on both versions), but the tool sends the real one, as the client does.
 - Uses `DsmClient.download_binary()` (streamed, written to a temp file then renamed), with the local-path confinement File Station's `download_file` uses.
+- DSM answers `Download` with `application/force-download` and `Thumbnail` with `image/jpeg`, and errors with `application/json` (verified on DSM 7.1 and 7.2.2). An HTML answer (`text/html` or `application/xhtml+xml`) on a 200, or JSON that isn't DSM's error envelope, is a proxy's or captive portal's page: that item's line says the answer wasn't a DSM reply, and nothing is written (#292).
 
 ---
 
@@ -427,9 +434,9 @@ Downloaded 2 of 3 item(s) to /home/user/Downloads (original, personal space)
 
 **Tool description (LLM-facing):**
 > Upload local photos or videos into a Synology Photos folder (default the space root). on_duplicate:
-> rename (default, keeps both) or skip. Optionally add them to an album. Only reads files inside the
-> allowed local folders. Photos indexes new items over the next seconds to minutes. space: personal
-> (default) or shared.
+> rename (default, keeps both) or skip. Optionally add them to an existing album (create it first
+> with photo_album). Only reads files inside the allowed local folders. Photos indexes new items over
+> the next seconds to minutes. space: personal (default) or shared.
 
 **Parameters:**
 
@@ -439,26 +446,28 @@ Downloaded 2 of 3 item(s) to /home/user/Downloads (original, personal space)
 | `folder` | `str` | No | `"/"` | Folder ID or path in the space; must exist. |
 | `space` | `str` | No | `"personal"` | |
 | `on_duplicate` | `str` | No | `"rename"` | `rename` or `skip` (DSM `duplicate`: `rename` / `ignore`). |
-| `album` | `str` | No | — | Album ID or unique name to add the uploads to (personal only). |
+| `album` | `str` | No | — | Album ID or unique name to add the uploads to (personal only). It must already exist; a missing one is `not_found` before any file is uploaded. |
 
-DSM's `action` per file: `new`, `rename` (kept both, as `name_1.jpg`) or `ignore` (skipped; the reply's `id` is the **existing** item's).
+DSM's `action` per file: `new`, `rename` (kept both, as `name_1.jpg`) or `ignore` (skipped; the reply's `id` is the **existing** item's). The count in the first line is files stored (new or renamed); skipped ones are counted apart, and an album gets both, since a skipped file's item is already there. The indexing note appears only when something was stored.
 
 **Response shape:**
 
 ```
-Uploaded 3 file(s) to /Trips/2024 (personal space)
+Uploaded 2 of 4 file(s) (1 skipped, already there) to /Trips/2024 (personal space)
   beach-sunset.jpg    new      id 41
   beach-sunset.jpg    renamed  id 47 (as beach-sunset_1.jpg)
   forest-trail.jpg    skipped  id 12 (already there)
-  notes.txt           failed   Photos doesn't support this file type (620)
-Added 2 item(s) to album "Trip 2024".
+  notes.txt           failed   Synology Photos doesn't support this file type (620)
+Added 3 item(s) to album "Trip 2024".
 Photos indexes new items over the next seconds to minutes; taken dates and previews appear then.
 ```
 
 **Design notes:**
 - `mtime` is the local file's modification time in seconds; Photos uses it as the taken time until EXIF is indexed.
 - Unsupported file types fail with **620**, a missing folder with **621** (verified).
+- **Retry:** an upload that fails with any other code is retried once after 2 s, as the web client does (its retry count is 1; it doesn't retry 604, 605, 620 or 622). vdsm answered **623** to some uploads right after boot, and the retry went through. 621 and the setup and permission codes (105, 160, 602, 801, 803) aren't retried either.
 - A file name that's valid JSON (`2024`) is still sent JSON-quoted.
+- **DSM not answering** (a timeout or dropped connection), or a reverse proxy's 502/504 or login page (#282), on one upload stops the call, as `download_photos` does: that file's row is `unknown` ("… it may or may not have been stored", since the POST may have landed, and a retry with `rename` could make a copy), and the files after it are `not tried`. A refused connection never sent the file, and a 4xx is the proxy (or DSM) refusing it, so those rows are `failed` and the next file is tried: a 413 (nginx's body-size limit) adds "The file may be over the proxy's upload size limit.", and after a 429 (rate limited) the rest are `not tried`. A 3xx (a proxy's redirect to its login page) stops the call like a login page. The rows so far are kept, and the files that were stored still go into the album. A DSM error code, a file that can't be read (including one removed after the checks) or a reply without an ID stays on its own row, and the rest go on. If the renamed items' names, or the album add, get no answer, the uploads stand: the names are left out, or a line says the album add got no answer.
 
 ---
 
@@ -498,7 +507,8 @@ Album 9: Trip 2024 · normal · 2 item(s) · 2024-07-04 – 2024-07-06 · not sh
 **Design notes:**
 - Album names needn't be unique: DSM created a second album with the same name (verified). `create` warns when the name already exists; name lookup then needs the ID.
 - `set_cover` takes `id_item` as a **scalar** (unlike `Folder.set_cover`).
-- **Smart album condition** (tool input → DSM): `folders` → `folder_filter: [ids]`, `people` → `person: [ids]` + `person_policy` (`any`/`all` → `or`/`and`), `tags` → `general_tag` + `general_tag_policy`, `places` → `geocoding`, `start_date`/`end_date` → `time: [{start_time, end_time}]`, `type` → `item_type` (`[]`, `[-1]` photos, `[-2]` videos), `ratings` → `rating: [..]`, `keywords` → `keyword` + `keyword_policy`; `user_id` is filled in (the caller's id from `UserInfo me`, or `0` for a Shared Space source). The tool previews the match count with `peek_item_count` and returns it.
+- **Smart album condition** (tool input → DSM): `folders` → `folder_filter: [ids]`, `people` → `person: [ids]` + `person_policy` (`any`/`all` → `or`/`and`), `tags` → `general_tag` + `general_tag_policy`, `places` → `geocoding` (see below), `start_date`/`end_date` → `time: [{start_time, end_time}]`, `type` → `item_type` (`[]`, `[-1]` photos, `[-2]` videos), `ratings` → `rating: [..]`, `keywords` → `keyword` + `keyword_policy`; `user_id` is filled in (the caller's id from `UserInfo me`, or `0` for a Shared Space source). The tool previews the match count with `peek_item_count` and returns it.
+- **Places in a condition** use the address-tree node IDs of `Search.Filter list`'s `geocoding` tree, not `Geocoding.list`'s place IDs: a place ID there answered **950** (verified on 7.1). The tool takes place IDs from `list_photo_collections(type="place")` and maps each to its node (the place's `country_id` is the tree's root; `first_level`, then `second_level`, name the node), which worked on both versions.
 - A condition DSM can't use fails with 953 (e.g. `user_id` missing or null) or 950 (a referenced tag/person/folder no longer exists; see tag IDs above). A condition with only `user_id` is accepted and matches everything (verified), so the tool requires at least one other key.
 
 ---
@@ -540,7 +550,7 @@ Album 9 "Trip 2024" is shared.
 `stop` says `Album 9 is no longer shared; the link stops working (DSM keeps it, so sharing again may restore it).` On an HTTP connection, a line says the password crossed the network unencrypted.
 
 **Design notes:**
-- `share` sends `set_shared` `enabled: true`, then `update` for any settings; the reply has `passphrase` and `sharing_link` (`http(s)://<host>/mo/sharing/<passphrase>`). `stop` sends `enabled: false`; its reply still carries the passphrase and link (verified), so re-sharing probably restores the same link (checked at the vdsm gate).
+- `share` sends `set_shared` `enabled: true`, then `update` for any settings; the reply has `passphrase` and `sharing_link` (`http(s)://<host>/mo/sharing/<passphrase>`). `stop` sends `enabled: false`; its reply still carries the passphrase and link (verified). Sharing again restores **the same link with its settings reset**: public access none, no password, no expiry, no members (verified on both).
 - `update`'s `permission` entries: public `{action: "update", role: "view"|"download", member: {type: "public"}}` or `{action: "delete", member: {type: "public"}}`; members `{action, role, member: {type, id}}`.
 - Over plain HTTP the web client RSA/AES-wraps `password` (`encryption: ["password"]`); over HTTPS it's sent as is. The tool sends it as is in the POST body and, on an HTTP connection, says the password crossed the network unencrypted (#193).
 - `Album.get` with `additional: ["sharing_info"]` reads the current state (`privacy_type`, `enable_password`, `expiration`, `is_expired`, `sharing_link`).
@@ -558,7 +568,8 @@ Album 9 "Trip 2024" is shared.
 > Create or rename a folder in Synology Photos, or set its cover photo. action: create (name inside
 > parent, default the space root), rename or set_cover. space: personal (default) or shared. To copy
 > or move folders use copy_photos / move_photos; to delete, delete_photo_folders. For folders
-> outside Photos, use create_folder and rename.
+> outside Photos, use File Station's create_folder and rename when File Station write is enabled,
+> or ask the user to do it in DSM.
 
 **Parameters:**
 
@@ -571,11 +582,11 @@ Album 9 "Trip 2024" is shared.
 | `item_id` | `int` | No | — | `set_cover`. |
 | `space` | `str` | No | `"personal"` | |
 
-**Annotations:** `destructiveHint=true`, `idempotentHint=true`: `rename` and `set_cover` replace the previous name or cover (as `edit_person`). File Station's `rename` is non-destructive only because DSM refuses an existing name there; whether Photos does is open item 1.
+**Annotations:** `destructiveHint=true`, `idempotentHint=true`: `rename` and `set_cover` replace the previous name or cover (as `edit_person`). Photos also refuses a name taken in the parent (641, `already_exists`; verified on both), but a rename still replaces the folder's old name.
 
 **Response shape:** `Created /Trips/2024/Day 1 (id 33, personal space).` · `Renamed folder 33 to /Trips/2024/Day One.` · `Folder 33's cover is now item 41.`
 
-**Design notes:** reply `folder` has `id`, full-path `name`, `parent`. Creating a folder whose name exists in the parent: checked at the vdsm gate (the capture created same-named folders only under different parents).
+**Design notes:** reply `folder` has `id`, full-path `name`, `parent`. Creating or renaming a folder to a name its parent already has fails with 641 (verified on both). The space's root folder can't be renamed (refused locally).
 
 ---
 
@@ -610,9 +621,9 @@ Album 9 "Trip 2024" is shared.
 Copied 3 item(s) and 1 folder to /Albums/Best (personal space): 4 done, 1 skipped (already there), 0 overwritten.
 ```
 
-Still running at `task_timeout`: `Still copying on the NAS (2 of 9 done). Handle: photos:14 — check with photo_task.` Failed items from `get_error_detail` follow as `  item 41: <reason>` lines.
+Still running at `task_timeout`: `Still copying on the NAS (2 of 9 done). Handle: photos:14 — check with photo_task.` When a status check fails, the lead says why instead: `The NAS didn't answer a status check (ReadTimeout)`, `The NAS, or a proxy in front of it, answered a status check with an error (HTTP 504)` or `The NAS's status reply couldn't be read (not a DSM reply; a proxy or captive portal may be answering)`, followed by `; the task is most likely still copying.` and the handle. Failed items from `get_error_detail` follow as `  item 41: <reason>` lines.
 
-**Design notes:** the task's `skip` and `overwrite` counters are reported (verified: a repeat copy with `skip` finished with `skip: 1`). `get_error_detail` (scalar `id`) lists failed items. Cross-space: the call goes to the **destination's** API and `extra_info` carries `{"version": 2, "source_library": "personal_space"|"shared_space"}` as a JSON **string**, JSON-encoded again (web client; cross-space verified at the vdsm gate). `Browse.Item copy/move` also exist (they require `action`) but the web client doesn't use them; neither does this module.
+**Design notes:** the task's `skip` and `overwrite` counters are reported (verified: a repeat copy with `skip` finished with `skip: 1`). `get_error_detail` (scalar `id`) lists failed items. **Cross-space** (verified on 7.1 and 7.2.2): the call goes to the **source space's** API with a `target_folder_id` in the other space; sent through the destination's API, the task finished with the item failing as `not_existed`. `extra_info` carries `{"version": 2, "source_library": …}` as a JSON **string**, JSON-encoded again, as the web client sends it (the copy worked with or without it). Personal → Shared Space copies and moves work, and a Shared Space → personal copy works, but **a move out of Shared Space into a personal space answers 640**, so `move_photos` refuses it locally and suggests a copy followed by a delete. `Browse.Item copy/move` also exist (they require `action`) but the web client doesn't use them; neither does this module.
 
 ---
 
@@ -704,7 +715,7 @@ Added tags beach, 2024 to 3 item(s) (personal space).
 Photos rewrites tagged files, so their dates and sizes change.
 ```
 
-**Design notes:** names are resolved right before the call (see tag IDs); one `add_tag` per batch of up to 100 items carries all the tags, never repeated calls on the same item. The reply reports `error_list` items. `get_tag` (`intersection`, `union`) confirms the result. Tags are per space.
+**Design notes:** names are resolved right before the call (see tag IDs); one `add_tag` per batch of up to 100 items carries all the tags, never repeated calls on the same item. The reply reports `error_list` items. If a later batch fails, the error says which items were already tagged and which weren't (as `edit_photo`, #322). `get_tag` (`intersection`, `union`) confirms the result. Tags are per space.
 
 ---
 
@@ -730,10 +741,10 @@ Photos rewrites tagged files, so their dates and sizes change.
 | `description` | `str` | No | — | `""` clears. |
 | `taken_time` | `str` | No | — | ISO 8601 date-time (UTC if no offset) → `time` (Unix seconds). |
 | `shift_hours` | `float` | No | — | → `shift_time` (seconds). |
-| `rotate` | `str` | No | — | `left` (`counter_clockwise`, verified) or `right` (`clockwise`, in the client's enum, checked at the vdsm gate). |
+| `rotate` | `str` | No | — | `left` (`counter_clockwise`, verified) or `right` (`clockwise`, verified on both). |
 | `favorite` | `bool` | No | — | 1.9.1+ (verified set and unset). On 1.3.4, `not_supported`. |
 
-**Annotations:** `destructiveHint=true`, `idempotentHint=true`: each field replaces the previous value (a description or taken time is lost), and repeating the call changes nothing more.
+**Annotations:** `destructiveHint=true`: each field replaces the previous value (a description or taken time is lost). Not `idempotentHint`: `shift_hours` and `rotate` are relative, so repeating the call (a client's retry after a timeout, say) shifts the time or rotates again.
 
 **Response shape:**
 
@@ -744,7 +755,7 @@ Edited 2 item(s) (personal space): rating 4, description.
 Photos rewrites edited files, so their dates and sizes change.
 ```
 
-**Design notes:** DSM accepted two fields in one `set` (verified), but the tool sends one `set` per field, as the web client does, so a failure names the field. Batches of 100 IDs (a **new** module constant, as the web client's `BATCH_UPDATE_SIZE`). `taken_time` and `shift_hours` are mutually exclusive. IDs are checked with `get` first, which also catches items in a Shared Space folder the user has no permission for: `set` would answer success and do nothing (see Writes that report success).
+**Design notes:** all fields go in **one** `set` (rating, description, time and rotation together verified on both versions), so each file is rewritten once. The web client sends one `set` per field, but on 7.2.2 a taken-time change made within seconds of an earlier edit to the same file was undone by Photos' re-index of that earlier rewrite (the rating sent with it stuck). The reply to a taken-time edit says to wait before changing it again; a 120 still names the rejected field (`errors.name`). Batches of 100 IDs (a **new** module constant, as the web client's `BATCH_UPDATE_SIZE`). If a batch fails after earlier ones were applied, the error keeps its code and adds which IDs were already changed and which weren't (`Already changed 100 of 150 item(s): 1-100. Not changed: 101-150.`); for `shift_hours` or `rotate`, which are relative, it adds that a retry must cover only the IDs not changed. A batch that got no answer, an HTTP status other than a 4xx, or a page that isn't DSM's (a proxy's; the write may still have reached DSM) is named as one that may or may not have changed, in a non-retryable `timeout` or `unavailable`, also when it's the first batch; a connection that couldn't be opened sent nothing, and a 4xx is the proxy (or DSM) refusing it, as for uploads, so those batches are `Not changed`. If `set_favorite` fails, its lines say `Favorite …`. IDs DSM rejected in an earlier batch (`error_list`) are named too (`Rejected by DSM, so not changed: …`) and not counted as changed, and ID lists are sorted, with runs collapsed (`1-100`). If `set_favorite` fails after the `set`, the error says the other changes were already made to every item, except those DSM rejected (#322). `taken_time` and `shift_hours` are mutually exclusive. IDs are checked with `get` first, which also catches items in a Shared Space folder the user has no permission for: `set` would answer success and do nothing (see Writes that report success).
 
 ---
 
@@ -869,9 +880,9 @@ Photo request "mcp spec" → /Trips/2024 (personal space)
 
 **Annotations:** `destructiveHint=true`.
 
-**Response shape:** `Deleted 3 item(s) (personal space); they're in the recycle bin of the share.` (or `deleted permanently: that share has no recycle bin`, or `in the share's recycle bin if it has one` when the setting can't be read; see Deletes). Not-found IDs and DSM-rejected items follow per line; a long delete hands off like `copy_photos`.
+**Response shape:** `Deleted 3 item(s) in the personal space; they're in the recycle bin of the share that holds the space.` (or `deleted permanently: that share has no recycle bin`, or `…, if it has one` when the setting can't be read; see Deletes). Not-found IDs and DSM-rejected items follow per line; a long delete hands off like `copy_photos`.
 
-**Design notes:** IDs are checked with `get` first; unknown ones are reported, not sent (the synchronous delete reports success for them; the task's behavior with an unknown ID is checked at the vdsm gate). The server instructions carry the same confirm-first guidance as `delete_files`.
+**Design notes:** IDs are checked with `get` first; unknown ones are reported, not sent (the synchronous delete reports success for them), so the task never gets an unknown ID. The server instructions carry the same confirm-first guidance as `delete_files`.
 
 ---
 
@@ -962,8 +973,8 @@ Maintainer, 2026-10-17 (the first group), with the 1.9.1-only additions found af
 
 ## Remaining Open Items
 
-1. **From the web client only, checked at the implementation PR's vdsm gate:** keyword search over descriptions (tags verified); `rotate=right`; a same-name folder in one parent; cross-space copy and move (`extra_info`); `BackgroundTask.File delete` with an unknown ID; re-sharing after `stop`; the recycle-bin flags turning off when a share's recycle bin is off; whether a Shared Space favorite is per user; error 901 (People disabled); People and concepts on vdsm (clusters may not form without a GPU; then they're fixture- and real-NAS-tested only); `Browse.Concept get`'s reply shape and concept `visibility` values (no capture has a concept, so the tool's handling of both is unverified until a real-NAS check); a Shared Space user **with** folder view rights trying to edit or delete (needs `FolderPermission`, out of scope; the entry-only case is verified).
+1. **Not verified yet** (from the web client only, or needing a setup vdsm doesn't have): keyword search over descriptions (filenames and tags verified); the recycle-bin flags turning off when a share's recycle bin is off; whether a Shared Space favorite is per user; error 901 (People disabled); People and concepts on vdsm (clusters may not form without a GPU; then they're fixture- and real-NAS-tested only); `Browse.Concept get`'s reply shape and concept `visibility` values (no capture has a concept, so the tool's handling of both is unverified until a real-NAS check); a Shared Space user **with** folder view rights trying to edit or delete (needs `FolderPermission`, out of scope; the entry-only case is verified).
 2. **A 119 right after login** was seen once on 7.2.2 (the first call of a fresh session; the retry was clean). The cause was #176: DSM misreads some session IDs as `_sid`; #271 sends the session as the `id` cookie.
 3. **Out of scope:** see Resolved Design Decision 6.
-4. **Payload:** measured in the implementation PR, with `PAYLOAD_BUDGET_CHARS` raised and the growth stated.
+4. **Payload:** measured in the implementation: enabling Photos adds about 12,085 characters (schemas, descriptions and its instructions section), measured as the payload with every module on minus the payload without Photos. A connection without Photos carries none of it.
 5. **JPEG conversion on download (1.9.1):** `Download download` v2 takes `download_type` (`source`, `optimized_jpeg`, `original_size_jpeg`), which would let `download_photos` hand HEIC originals over as JPEG. Not verified; proposed as a `download_photos` option for 1.9.1 if wanted.

@@ -14,8 +14,11 @@ if TYPE_CHECKING:
 from mcp_synology.core.client import DsmClient
 from mcp_synology.core.errors import (
     ApiNotFoundError,
+    AuthenticationError,
     DsmHttpError,
+    DsmReplyError,
     PathNotFoundError,
+    RequestTooLongError,
     SessionExpiredError,
     SynologyError,
 )
@@ -61,6 +64,197 @@ class TestQueryApiInfo:
         async with DsmClient(base_url=BASE_URL) as client:
             with pytest.raises(ApiNotFoundError):
                 await client.query_api_info()
+
+
+class TestStaleConnection:
+    """#222: DSM reloads nginx when its web configuration changes (twice in the 13 s
+    after Download Station starts on DSM 7.1), which closes idle keep-alive
+    connections; httpx doesn't resend a request sent on one. Reads are resent once on
+    a fresh connection; writes go on a connection that's never reused."""
+
+    _OK = httpx.Response(200, json={"success": True, "data": {"shares": []}})
+
+    @pytest.mark.parametrize(
+        ("method", "read"),
+        [
+            ("list", True),
+            ("list_share", True),
+            ("get", True),
+            ("getinfo", True),
+            ("getconfig", True),
+            ("get_exif", True),
+            ("count_with_filter", True),
+            ("query", True),
+            ("status", True),
+            ("me", True),
+            ("info", True),
+            # Exact names, not prefixes: anything else counts as a write.
+            ("query_all", False),
+            ("information", False),
+            ("statuses", False),
+            ("start", False),
+            ("delete", False),
+            ("create", False),
+            ("edit", False),
+            ("set", False),
+            ("stop", False),
+            ("clean", False),
+            ("login", False),
+            ("logout", False),
+            ("add_tag", False),
+            ("setserverconfig", False),
+        ],
+    )
+    def test_read_or_write(self, method: str, read: bool) -> None:
+        from mcp_synology.core.client import _is_read
+
+        assert _is_read(method) is read
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        "error", [httpx.RemoteProtocolError, httpx.ReadError, httpx.WriteError]
+    )
+    async def test_read_is_resent_once_on_a_fresh_connection(
+        self, error: type[httpx.TransportError]
+    ) -> None:
+        route = respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=[error("Server disconnected without sending a response."), self._OK]
+        )
+        client = make_client(make_api_cache())
+        async with client:
+            data = await client.request("SYNO.FileStation.List", "list_share", version=2)
+        assert data == {"shares": []}
+        assert route.call_count == 2
+
+    @respx.mock
+    async def test_read_failing_twice_raises(self) -> None:
+        drop = httpx.RemoteProtocolError("Server disconnected without sending a response.")
+        route = respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=[drop, drop])
+        client = make_client(make_api_cache())
+        async with client:
+            with pytest.raises(httpx.RemoteProtocolError):
+                await client.request("SYNO.FileStation.List", "list_share", version=2)
+        assert route.call_count == 2
+
+    @respx.mock
+    async def test_write_is_never_resent(self) -> None:
+        drop = httpx.RemoteProtocolError("Server disconnected without sending a response.")
+        route = respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=[drop, self._OK])
+        client = make_client(make_api_cache())
+        async with client:
+            with pytest.raises(httpx.RemoteProtocolError):
+                await client.request("SYNO.FileStation.Delete", "start", version=2)
+        assert route.call_count == 1
+
+    @respx.mock
+    async def test_write_goes_on_the_never_reused_client(self) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(return_value=self._OK)
+        client = make_client(make_api_cache())
+        async with client:
+            pooled = client._http
+            assert pooled is not None
+            once = client._get_http_once()
+            pool = once._transport._pool  # type: ignore[attr-defined]
+            assert pool._max_keepalive_connections == 0
+            used: list[str] = []
+
+            async def spy_get(*args: object, **kwargs: object) -> httpx.Response:
+                used.append("pooled")
+                raise AssertionError("a write must not use the pooled client")
+
+            pooled.get = spy_get  # type: ignore[method-assign]
+            await client.request("SYNO.FileStation.Delete", "start", version=2)
+        assert used == []
+
+    @respx.mock
+    async def test_resend_uses_the_never_reused_client(self) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(return_value=self._OK)
+        client = make_client(make_api_cache())
+        async with client:
+            pooled = client._http
+            assert pooled is not None
+            calls: list[str] = []
+
+            async def drop_once(*args: object, **kwargs: object) -> httpx.Response:
+                calls.append("pooled")
+                if len(calls) > 1:
+                    raise AssertionError("the resend must not use the pooled client")
+                raise httpx.RemoteProtocolError("Server disconnected without sending a response.")
+
+            pooled.get = drop_once  # type: ignore[method-assign]
+            assert await client.request("SYNO.FileStation.List", "list_share", version=2) == {
+                "shares": []
+            }
+        assert calls == ["pooled"]
+
+    @respx.mock
+    async def test_query_api_info_is_resent_once(self) -> None:
+        drop = httpx.RemoteProtocolError("Server disconnected without sending a response.")
+        info = httpx.Response(
+            200,
+            json={
+                "success": True,
+                "data": {"SYNO.API.Auth": {"path": "entry.cgi", "minVersion": 1, "maxVersion": 7}},
+            },
+        )
+        route = respx.get(f"{BASE_URL}/webapi/query.cgi").mock(side_effect=[drop, info])
+        client = make_client()
+        async with client:
+            cache = await client.query_api_info()
+        assert "SYNO.API.Auth" in cache
+        assert route.call_count == 2
+
+    @pytest.mark.parametrize(
+        "call",
+        [
+            "request_form_post",
+            "upload_multipart",
+            "create_download_task_with_file",
+            "download_binary",
+        ],
+    )
+    def test_send_site_uses_the_never_reused_client(self, call: str) -> None:
+        """Uploads, creates and downloads change state or stream, so they never take the
+        pooled client: whatever they do, it must come from _get_http_once()."""
+        import inspect
+
+        from mcp_synology.core.client import DsmClient
+
+        source = inspect.getsource(getattr(DsmClient, call))
+        assert "self._get_http_once()" in source
+        assert "self._get_http()" not in source
+
+    @pytest.mark.parametrize("method", ["list_share", "start"])
+    async def test_outside_the_context_manager_raises(self, method: str) -> None:
+        # A read reaches the pooled client first, a write the never-reused one; both
+        # exist only inside `async with`.
+        client = make_client(make_api_cache())
+        with pytest.raises(RuntimeError, match="async context manager"):
+            await client.request("SYNO.FileStation.List", method, version=2)
+
+    async def test_exit_closes_both_clients(self) -> None:
+        client = make_client(make_api_cache())
+        async with client:
+            once = client._get_http_once()
+            pooled = client._http
+        assert client._http is None and client._http_once is None
+        assert once.is_closed and pooled is not None and pooled.is_closed
+
+    @respx.mock
+    async def test_both_clients_share_cookies(self) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            return_value=httpx.Response(
+                200,
+                json={"success": True, "data": {}},
+                headers={"set-cookie": "did=device123; Path=/"},
+            )
+        )
+        client = make_client(make_api_cache())
+        async with client:
+            # A write (fresh connection) sets a cookie; the pooled client sees it.
+            await client.request("SYNO.FileStation.Delete", "start", version=2)
+            assert client._http is not None
+            assert [c.value for c in client._http.cookies.jar if c.name == "did"] == ["device123"]
 
 
 class TestNegotiateVersion:
@@ -352,6 +546,279 @@ class TestHttpErrorStatus:
         self._assert_no_url(exc.value, "SIDSECRET")
 
 
+class TestUndecodableReply:
+    """DSM copies binary EXIF fields into its JSON as raw bytes that aren't UTF-8 (Photos
+    get_exif "Picture Info", DSM 7.1.1). The reply is still read, those bytes as U+FFFD,
+    instead of failing as "the answer wasn't a DSM reply"."""
+
+    def test_bad_bytes_become_replacement_characters(self) -> None:
+        from mcp_synology.core.client import _read_json
+
+        resp = httpx.Response(
+            200,
+            content=b'{"success": true, "data": {"value": "\\u001ey\xec\\u001b", "ok": "fine"}}',
+            headers={"content-type": 'application/json; charset="UTF-8"'},
+        )
+        body = _read_json(resp, "SYNO.Foto.Browse.Item/get_exif")
+        assert body == {"success": True, "data": {"value": "\x1ey\ufffd\x1b", "ok": "fine"}}
+
+    def test_bad_bytes_are_logged_at_debug(self, caplog: pytest.LogCaptureFixture) -> None:
+        from mcp_synology.core.client import _read_json
+
+        resp = httpx.Response(
+            200,
+            content=b'{"success": true, "data": {"value": "\xec"}}',
+            headers={"content-type": "application/json"},
+        )
+        with caplog.at_level("DEBUG", logger="mcp_synology.core.client"):
+            _read_json(resp, "SYNO.Foto.Browse.Item/get_exif")
+        assert (
+            "SYNO.Foto.Browse.Item/get_exif: the reply has bytes that aren't UTF-8; "
+            "reading them as U+FFFD"
+        ) in caplog.text
+
+    def test_bad_bytes_in_a_download_error_envelope(self) -> None:
+        from mcp_synology.core.client import _error_envelope
+
+        body = b'{"success": false, "error": {"code": 408, "errors": [{"path": "/a\xecb"}]}}'
+        assert _error_envelope(body) == {"code": 408, "errors": [{"path": "/a\ufffdb"}]}
+
+    def test_bad_bytes_in_a_page_still_not_a_reply(self) -> None:
+        from mcp_synology.core.client import _read_json
+        from mcp_synology.core.errors import DsmReplyError
+
+        resp = httpx.Response(
+            200, content=b"<html>\xec</html>", headers={"content-type": "text/html"}
+        )
+        with pytest.raises(DsmReplyError):
+            _read_json(resp, "SYNO.Foto.Browse.Item/get_exif")
+
+
+class TestNotADsmReply:
+    """#282: an answer that isn't a JSON object (a reverse proxy's or captive portal's
+    page) is a DsmReplyError naming the call and Content-Type, never the body. It used
+    to reach the model as "Expecting value: line 1 column 1 (char 0)"."""
+
+    _PAGE = httpx.Response(
+        200,
+        text="<html>Sign in to proxy secret-token</html>",
+        headers={"content-type": "text/html; charset=utf-8"},
+    )
+
+    @staticmethod
+    def _check(exc: BaseException, label: str, ctype: str, *, retryable: bool = True) -> None:
+        from mcp_synology.core.errors import DsmReplyError, ErrorCode
+
+        assert isinstance(exc, DsmReplyError)
+        assert str(exc) == f"{label}: the answer wasn't a DSM reply (Content-Type {ctype})."
+        assert exc.error_code == ErrorCode.UNAVAILABLE
+        assert exc.code is None
+        assert exc.retryable is retryable
+        assert "reverse proxy" in (exc.suggestion or "")
+        assert "secret-token" not in str(exc) and "secret-token" not in (exc.suggestion or "")
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        ("reply", "ctype"),
+        [
+            (_PAGE, "text/html"),
+            (httpx.Response(200, json=["not", "an", "object"]), "application/json"),
+            (httpx.Response(200, content=b""), "none"),
+        ],
+    )
+    async def test_request(self, reply: httpx.Response, ctype: str) -> None:
+        client = make_client(make_api_cache())
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(return_value=reply)
+        async with client:
+            with pytest.raises(SynologyError) as exc:
+                await client.request("SYNO.FileStation.List", "list_share")
+        self._check(exc.value, "SYNO.FileStation.List/list_share", ctype)
+
+    @respx.mock
+    async def test_query_api_info(self) -> None:
+        respx.get(f"{BASE_URL}/webapi/query.cgi").mock(return_value=self._PAGE)
+        async with DsmClient(base_url=BASE_URL) as client:
+            with pytest.raises(SynologyError) as exc:
+                await client.query_api_info()
+        self._check(exc.value, "SYNO.API.Info/query", "text/html")
+
+    @respx.mock
+    async def test_upload(self, tmp_path: Path) -> None:
+        client = make_client(make_api_cache())
+        local = tmp_path / "a.txt"
+        local.write_bytes(b"a")
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").mock(return_value=self._PAGE)
+        async with client:
+            with pytest.raises(SynologyError) as exc:
+                await client.upload("/video", local, "a.txt")
+        self._check(exc.value, "SYNO.FileStation.Upload/upload", "text/html")
+
+    @respx.mock
+    async def test_form_post_create_is_not_retryable(self) -> None:
+        """Download Station's create may already have been applied: check, don't retry."""
+        client = make_client(make_api_cache())
+        respx.post(f"{BASE_URL}/webapi/DownloadStation/task.cgi").mock(return_value=self._PAGE)
+        async with client:
+            with pytest.raises(SynologyError) as exc:
+                await client.request_form_post(
+                    "SYNO.DownloadStation.Task", "create", version=1, params={"uri": "x"}
+                )
+        self._check(exc.value, "SYNO.DownloadStation.Task/create", "text/html", retryable=False)
+        assert (exc.value.suggestion or "").startswith("DSM may still have applied the request")
+
+    @respx.mock
+    async def test_torrent_file_create_is_not_retryable(self, tmp_path: Path) -> None:
+        """The torrent-file upload is a create too: DSM may already have added the task."""
+        client = make_client(make_api_cache())
+        torrent = tmp_path / "x.torrent"
+        torrent.write_bytes(b"x")
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").mock(return_value=self._PAGE)
+        async with client:
+            with pytest.raises(SynologyError) as exc:
+                await client.create_download_task_with_file(file_path=torrent, filename="x.torrent")
+        self._check(exc.value, "SYNO.DownloadStation2.Task/create", "text/html", retryable=False)
+        assert (exc.value.suggestion or "").startswith("DSM may still have applied the request")
+
+    # Downloads (#292). DSM sends application/octet-stream for every File Station
+    # download (mode=download), including real .html and .json files, and
+    # application/force-download or image/jpeg for Photos, on DSM 7.1 and 7.2.2; so a
+    # text/html 200 is never the file.
+    _DOWNLOADS = [
+        ("SYNO.FileStation.Download", "download"),
+        ("SYNO.Foto.Thumbnail", "get"),
+    ]
+
+    @staticmethod
+    async def _download(client: DsmClient, api: str, dest: Path) -> int:
+        if api == "SYNO.FileStation.Download":
+            return await client.download("/video/movie.mkv", dest)
+        return await client.download_binary(api, "get", 2, {"id": "1"}, dest)
+
+    @respx.mock
+    @pytest.mark.parametrize(("api", "method"), _DOWNLOADS)
+    @pytest.mark.parametrize(
+        ("reply", "ctype"),
+        [
+            (_PAGE, "text/html"),
+            (httpx.Response(200, json=["x"]), "application/json"),
+            (httpx.Response(200, content=b"", headers={"content-type": "application/json"}),
+             "application/json"),
+            (httpx.Response(200, json={"success": False}), "application/json"),
+            (httpx.Response(200, json={"error": "boom"}), "application/json"),
+            (httpx.Response(200, json={"error": {"code": {"a": 1}}}), "application/json"),
+            (httpx.Response(200, text="<html/>", headers={"content-type": "TEXT/HTML; charset=x"}),
+             "text/html"),
+            (httpx.Response(200, text="<html/>", headers={"content-type": "application/xhtml+xml"}),
+             "application/xhtml+xml"),
+        ],
+    )  # fmt: skip
+    async def test_download_writes_nothing(
+        self, tmp_path: Path, api: str, method: str, reply: httpx.Response, ctype: str
+    ) -> None:
+        """A proxy's page used to be saved as the file and reported as downloaded; a JSON
+        body that isn't an object crashed with AttributeError. Neither touches the
+        existing file, and no temp file is left."""
+        cache = make_api_cache()
+        cache["SYNO.Foto.Thumbnail"] = ApiInfoEntry(path="entry.cgi", min_version=1, max_version=2)
+        client = make_client(cache)
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(return_value=reply)
+        dest = tmp_path / "movie.mkv"
+        dest.write_bytes(b"the user's file")
+        async with client:
+            with pytest.raises(SynologyError) as exc:
+                await self._download(client, api, dest)
+        self._check(exc.value, f"{api}/{method}", ctype)
+        assert dest.read_bytes() == b"the user's file"
+        assert [p.name for p in tmp_path.iterdir()] == ["movie.mkv"]
+
+    @respx.mock
+    @pytest.mark.parametrize(("api", "method"), _DOWNLOADS)
+    async def test_download_http_error_with_a_json_list(
+        self, tmp_path: Path, api: str, method: str
+    ) -> None:
+        """A 502 whose body is a JSON list crashed with AttributeError; it's the same
+        HTTP error as any other body that isn't a DSM envelope."""
+        from mcp_synology.core.errors import FileStationError
+
+        cache = make_api_cache()
+        cache["SYNO.Foto.Thumbnail"] = ApiInfoEntry(path="entry.cgi", min_version=1, max_version=2)
+        client = make_client(cache)
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(502, json=["x"])
+        async with client:
+            with pytest.raises(SynologyError) as exc:
+                await self._download(client, api, tmp_path / "x")
+        if api == "SYNO.FileStation.Download":
+            # DSM's own answer for a missing file is a bare 502 (#292); download_file
+            # tells it from a server error with getinfo (#324).
+            assert isinstance(exc.value, FileStationError)
+            assert str(exc.value) == "HTTP 502 from download API"
+        else:
+            assert isinstance(exc.value, DsmHttpError)
+            assert exc.value.status == 502
+        assert not (tmp_path / "x").exists()
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        "ctype", ["application/json", 'application/json; charset="UTF-8"', "text/html"]
+    )
+    async def test_download_session_error_reauths_and_retries(
+        self, tmp_path: Path, ctype: str
+    ) -> None:
+        """DSM's session-error envelope on a download re-authenticates and retries, also
+        when it comes as text/html, which used to be saved as the file."""
+        envelope = httpx.Response(
+            200,
+            content=b'{"success": false, "error": {"code": 119}}',
+            headers={"content-type": ctype},
+        )
+        data = httpx.Response(
+            200, content=b"DATA", headers={"content-type": "application/octet-stream"}
+        )
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=[envelope, data])
+        reauths: list[bool] = []
+
+        async def reauth() -> None:
+            reauths.append(True)
+
+        client = make_client(make_api_cache())
+        async with client:
+            client.set_re_auth_callback(reauth)
+            written = await client.download("/video/movie.mkv", tmp_path / "movie.mkv")
+        assert reauths == [True]
+        assert written == 4
+        assert (tmp_path / "movie.mkv").read_bytes() == b"DATA"
+
+    @respx.mock
+    async def test_download_keeps_a_relogin_proxy_error(self, tmp_path: Path) -> None:
+        """#321: a proxy's 502 on the re-login is raised as it is, not as error 119."""
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            200, json={"success": False, "error": {"code": 119}}
+        )
+
+        async def reauth() -> None:
+            raise DsmHttpError("SYNO.API.Auth/login: DSM answered HTTP 502.", 502)
+
+        client = make_client(make_api_cache())
+        async with client:
+            client.set_re_auth_callback(reauth)
+            with pytest.raises(DsmHttpError):
+                await client.download("/video/movie.mkv", tmp_path / "movie.mkv")
+        assert not (tmp_path / "movie.mkv").exists()
+
+    @respx.mock
+    async def test_download_http_error_with_a_dsm_envelope(self, tmp_path: Path) -> None:
+        """An HTTP error that carries DSM's envelope is that DSM error."""
+        client = make_client(make_api_cache())
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            404, json={"success": False, "error": {"code": 408}}
+        )
+        async with client:
+            with pytest.raises(SynologyError) as exc:
+                await client.download("/video/missing.mkv", tmp_path / "x")
+        assert exc.value.code == 408
+        assert not (tmp_path / "x").exists()
+
+
 class TestRequestPostForm:
     """request(post_form=True): the login-only POST (#235). The parameters go in the
     form body, the session goes as the id cookie (#176), and the rest of request() applies."""
@@ -411,6 +878,13 @@ class TestRequestPostForm:
                 )
         assert "DSM POST: SYNO.API.Auth/login v6" in caplog.text
         assert "S3cretPW" not in caplog.text
+
+    def test_log_safe_masks_share_passphrase(self) -> None:
+        """A Photos share link's passphrase is its secret, as a password is."""
+        from mcp_synology.core.client import _log_safe
+
+        safe = _log_safe({"passphrase": "AbCd1234", "password": "pw", "album_id": 4})
+        assert safe == {"passphrase": "***", "password": "***", "album_id": 4}
 
     @respx.mock
     async def test_session_retry_stays_post(self) -> None:
@@ -665,6 +1139,67 @@ class TestRequestFormPost:
         async with client:
             with pytest.raises(ApiNotFoundError):
                 await client.request_form_post("SYNO.Nope", "create", version=1)
+
+
+_PROXY_ERRORS = [
+    DsmHttpError("SYNO.API.Auth/login: DSM answered HTTP 502.", 502),
+    DsmReplyError("SYNO.API.Auth/login: the reply wasn't DSM's (text/html)."),
+    RequestTooLongError("SYNO.API.Auth/login: DSM rejected the request with HTTP 414."),
+]
+
+
+class TestReauthProxyErrors:
+    """#321: a proxy's answer to the re-login is raised as it is, not as the session error,
+    so a task poll hands the task off instead of stopping it."""
+
+    @respx.mock
+    @pytest.mark.parametrize("error", _PROXY_ERRORS, ids=lambda e: type(e).__name__)
+    async def test_request_keeps_the_relogin_error(self, error: SynologyError) -> None:
+        client = make_client(make_api_cache())
+
+        async def reauth() -> None:
+            raise error
+
+        client.set_re_auth_callback(reauth)
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 119}}
+        )
+        async with client:
+            with pytest.raises(type(error)) as exc:
+                await client.request("SYNO.FileStation.Delete", "status", version=2)
+        assert exc.value is error
+
+    @respx.mock
+    @pytest.mark.parametrize("error", _PROXY_ERRORS, ids=lambda e: type(e).__name__)
+    async def test_form_post_keeps_the_relogin_error(self, error: SynologyError) -> None:
+        client = make_client(make_api_cache())
+
+        async def reauth() -> None:
+            raise error
+
+        client.set_re_auth_callback(reauth)
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 106}}
+        )
+        async with client:
+            with pytest.raises(type(error)):
+                await client.request_form_post("SYNO.DownloadStation2.Task", "create", version=2)
+
+    @respx.mock
+    async def test_dsm_login_error_still_raises_the_session_error(self) -> None:
+        """A DSM verdict on the login (e.g. a changed password) keeps the old mapping."""
+        client = make_client(make_api_cache())
+
+        async def reauth() -> None:
+            raise AuthenticationError("Login failed", code=400)
+
+        client.set_re_auth_callback(reauth)
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 119}}
+        )
+        async with client:
+            with pytest.raises(SessionExpiredError):
+                await client.request("SYNO.FileStation.Delete", "status", version=2)
 
 
 class TestCreateDownloadTaskWithFile:
@@ -1032,6 +1567,31 @@ class TestGeneralTransfers:
         assert reauths == [1]
         assert route.call_count == 2
         assert b"\r\n\r\na\r\n" in route.calls.last.request.content
+
+    @respx.mock
+    async def test_upload_multipart_keeps_a_relogin_proxy_error(self, tmp_path: Path) -> None:
+        """#321: a proxy's 502 on the re-login is raised as it is, not as error 119."""
+        client = make_client(self._cache())
+        local = tmp_path / "a.jpg"
+        local.write_bytes(b"a")
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 119}}
+        )
+
+        async def _reauth() -> None:
+            raise DsmHttpError("SYNO.API.Auth/login: DSM answered HTTP 502.", 502)
+
+        client.set_re_auth_callback(_reauth)
+        async with client:
+            with pytest.raises(DsmHttpError):
+                await client.upload_multipart(
+                    "SYNO.Foto.Upload.Item",
+                    "upload_to_folder",
+                    1,
+                    {},
+                    file_path=local,
+                    filename="a",
+                )
 
     @respx.mock
     async def test_upload_multipart_error_names_the_parameter(self, tmp_path: Path) -> None:

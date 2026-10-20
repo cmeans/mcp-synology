@@ -6,15 +6,18 @@ alias: HomeNAS
 
 # Custom instructions prepended to the built-in server prompt.
 # Useful for guiding Claude on when to use this connection vs others.
-# Supports template variables: {display_name}, {instance_id}, {host}, {port}
+# Supports template variables: {display_name}, {instance_id}, {host}, {port},
+# {home_dir}, {platform}
 # custom_instructions: |
 #   This is the primary NAS for media and backups.
 #   Use this connection for all file operations unless the user
 #   specifies a different NAS by name.
 
 # Full replacement for the built-in server instructions.
-# Copy the built-in server.md as a starting point, customize it,
-# and point to your version. Same template variables are supported.
+# Start from the built-in files in src/mcp_synology/instructions/ (server.md;
+# filestation.md and filestation-write.md if you use File Station; local.md if you use a
+# tool that reads or writes local files), customize them in one file, and point to your
+# version. Same template variables are supported.
 # instructions_file: ~/.config/mcp-synology/my-instructions.md
 
 connection:
@@ -55,6 +58,14 @@ modules:
       allowed_local_paths:  # folders create_download may read .torrent/.nzb files from;
         - ~/Downloads       # adds to a top-level list; without one, replaces the Downloads
         - ~/Torrents        # default, so ~/Downloads is listed to keep it
+  photos:
+    enabled: true  # needs the Synology Photos package on the NAS
+    permission: write
+    settings:
+      allowed_local_paths:  # folders upload_photos reads from and download_photos writes to
+        - ~/Downloads
+        - ~/Pictures
+      task_timeout: 60      # seconds a copy, move or delete waits before handing off
 
 logging:
   level: debug

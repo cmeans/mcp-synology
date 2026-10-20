@@ -1716,6 +1716,41 @@ class TestStallHandoff:
         assert record.paths == ["/Backups/huge.sparsebundle"]
 
     @respx.mock
+    @pytest.mark.parametrize("status_code", [502, 504])
+    async def test_delete_proxy_http_error_hands_off(
+        self, mock_client: DsmClient, status_code: int
+    ) -> None:
+        """#282: a reverse proxy's 502/504 while DSM is busy with a huge delete stopped the
+        task and called it a retryable failure. It's handed off like any other stall."""
+        calls: list[dict[str, str]] = []
+        dsm = self._dsm(calls, httpx.ReadTimeout(""), answer_first=True)
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            if params.get("method") == "status" and any(c.get("method") == "status" for c in calls):
+                calls.append(params)
+                return httpx.Response(status_code, text="<html>Bad Gateway</html>")
+            return dsm(request)
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        records = TaskRecords()
+        result = await delete_files(
+            mock_client,
+            paths=["/Backups/huge.sparsebundle"],
+            recycle_bin_status={"Backups": True},
+            records=records,
+        )
+        assert not self._stops(calls)
+        assert result.startswith(
+            "The NAS, or a proxy in front of it, answered a status request with an error "
+            f"while deleting /Backups/huge.sparsebundle (HTTP {status_code}; last progress: "
+            "8 of 342 items, 2%). It's probably still running there; don't start it again.\n"
+            "Handle: `delete:FileStation_HUGE.SPARSEBUNDLE`\n"
+        )
+        assert "Bad Gateway" not in result
+        assert records.get(Handle("delete", "FileStation_HUGE.SPARSEBUNDLE")) is not None
+
+    @respx.mock
     @pytest.mark.parametrize(
         "exc",
         [
@@ -1841,7 +1876,8 @@ class TestStallHandoff:
         )
         assert not self._stops(calls)
         assert result.startswith(
-            "The NAS's status reply couldn't be read while deleting /s/big (JSONDecodeError). "
+            "The NAS's status reply couldn't be read while deleting /s/big (not a DSM reply; "
+            "a proxy or captive portal may be answering). "
             "It's probably still running there; don't start it again.\n"
             "Handle: `delete:FileStation_BIG`\n"
         )
@@ -1853,8 +1889,8 @@ class TestStallHandoff:
     async def test_unexpected_exception_on_status_hands_off_copy(
         self, mock_client: DsmClient
     ) -> None:
-        """A status reply that is JSON but not an object (here a list) breaks parsing in
-        the client with an AttributeError: any unexpected exception hands off too."""
+        """A status reply that is JSON but not an object (here a list) isn't a DSM reply
+        either (#282; it used to break parsing with an AttributeError): it hands off too."""
         calls: list[dict[str, str]] = []
         dsm = self._dsm(calls, httpx.ReadTimeout(""))
 
@@ -1872,7 +1908,7 @@ class TestStallHandoff:
         )
         assert not self._stops(calls)
         assert result.startswith(
-            "The NAS's status reply couldn't be read while copying /s/big (AttributeError)."
+            "The NAS's status reply couldn't be read while copying /s/big (not a DSM reply;"
         )
         assert "must not leak" not in result
         assert "Handle: `copy:FileStation_BIG`" in result

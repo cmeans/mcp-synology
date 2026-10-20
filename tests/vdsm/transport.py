@@ -30,9 +30,13 @@ Other cookies are kept.
 from __future__ import annotations
 
 from collections import Counter
+from typing import TYPE_CHECKING
 from urllib.parse import parse_qsl, urlencode
 
 import httpx
+
+if TYPE_CHECKING:
+    from mcp_synology.core.client import DsmClient
 
 MODES = ("get", "post", "post_sid_body", "cookie_get", "cookie_post")
 
@@ -123,3 +127,11 @@ class RewritingTransport(httpx.AsyncBaseTransport):
             content=content,
             extensions=request.extensions,
         )
+
+
+def rewrite_client(client: DsmClient, mode: str) -> None:
+    """Swap ``mode``'s rewriting transport in under both of ``client``'s httpx clients:
+    the pooled one (reads) and the one that never reuses a connection (writes, #222).
+    A private attribute, so the module code under test runs unchanged."""
+    for http in (client._get_http(), client._get_http_once()):
+        http._transport = RewritingTransport(http._transport, mode)

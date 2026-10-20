@@ -17,10 +17,21 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, NoReturn
 
-from mcp_synology.core.errors import ErrorCode, SynologyError
+import httpx
+
+from mcp_synology.core.errors import (
+    DsmHttpError,
+    DsmReplyError,
+    DsmTimeoutError,
+    DsmUnavailableError,
+    ErrorCode,
+    SynologyError,
+)
 from mcp_synology.core.formatting import error_response, format_timestamp
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable, Sequence
+
     from mcp_synology.core.client import DsmClient
 
 logger = logging.getLogger(__name__)
@@ -183,6 +194,31 @@ class Photos:
             if len(page) < WALK_PAGE:
                 return out
 
+    async def items(self, ids: list[int]) -> tuple[dict[int, dict[str, Any]], list[int]]:
+        """The items that exist (by ID) and the IDs that don't, checked before a write.
+
+        DSM answers success for unknown IDs on several writes, and for items in a Shared
+        Space folder the user has no permission for, while doing nothing; ``get`` leaves
+        both out (spec: Writes that report success for nothing).
+        """
+        found: dict[int, dict[str, Any]] = {}
+        unique = list(dict.fromkeys(ids))
+        for start in range(0, len(unique), BATCH_SIZE):
+            batch = unique[start : start + BATCH_SIZE]
+            data = await self.call("Browse.Item", "get", {"id": batch, "additional": []}, version=2)
+            for item in data.get("list", []):
+                found[int(item["id"])] = item
+        return found, [i for i in unique if i not in found]
+
+    def missing_note(self, missing: list[int] | list[str]) -> str:
+        """The line naming IDs that weren't found (and why that may be, in Shared Space)."""
+        if not missing:
+            return ""
+        why = "Not found"
+        if self.space == "shared":
+            why += ", or no permission for its Shared Space folder"
+        return f"  {why}: {', '.join(str(m) for m in missing)}"
+
     # -- folders ------------------------------------------------------------
 
     async def folder(self, value: str, *, param: str = "folder") -> dict[str, Any]:
@@ -300,6 +336,53 @@ class Photos:
             hint="list_photo_collections type=person include_hidden=true lists people.",
         )
 
+    async def place_node(self, place_id: int, *, param: str) -> int:
+        """The address-tree node a smart album condition needs for a place.
+
+        ``list_photo_collections`` gives ``Geocoding.list`` place IDs; conditions (and
+        ``list_with_filter``) take the node IDs of ``Search.Filter list``'s geocoding tree
+        instead (Chicago was place 5 and node 4; a place ID there answers 950, verified).
+        The place's ``country_id`` is the tree's root, and its ``first_level`` and
+        ``second_level`` names lead to the node.
+        """
+        places = {int(p["id"]): p for p in await self.walk("Browse.Geocoding")}
+        place = places.get(place_id)
+        if place is None:
+            not_found(
+                self.operation,
+                f"no place {place_id}.",
+                param=param,
+                value=place_id,
+                suggestion="list_photo_collections type=place lists places.",
+            )
+        data = await self.call(
+            "Search.Filter", "list", {"setting": {"geocoding": True}, "additional": []}, version=2
+        )
+        tree = data.get("geocoding", [])
+        roots = [n for n in tree if n.get("id") == place.get("country_id")]
+
+        def find(nodes: list[dict[str, Any]], name: str) -> dict[str, Any] | None:
+            for node in nodes:
+                if str(node.get("name", "")) == name:
+                    return node
+                hit = find(node.get("children") or [], name)
+                if hit is not None:
+                    return hit
+            return None
+
+        node = find(roots, str(place.get("first_level", "")))
+        if node is not None and place.get("second_level"):
+            node = find(node.get("children") or [], str(place["second_level"]))
+        if node is None:
+            invalid(
+                self.operation,
+                f"place {place_id} ({place.get('name', '')}) can't be "
+                "used in a smart album condition here.",
+                param=param,
+                value=place_id,
+            )
+        return int(node["id"])
+
     async def tag_ids(self, names: list[str], *, param: str = "tag") -> dict[str, int | None]:
         """Each tag name's current ID (``None`` if no item has it), looked up now.
 
@@ -333,6 +416,146 @@ class Photos:
 
 
 # -- formatting ---------------------------------------------------------------
+
+
+def batches(ids: list[int], size: int = BATCH_SIZE) -> list[list[int]]:
+    """``ids`` in chunks of ``size`` (the web client's BATCH_UPDATE_SIZE)."""
+    return [ids[i : i + size] for i in range(0, len(ids), size)]
+
+
+def id_order(x: object) -> tuple[int, int, str]:
+    """Sort key: IDs as numbers, anything else (an unexpected error_list entry) after."""
+    return (0, x, "") if isinstance(x, int) else (1, 0, str(x))
+
+
+def id_list(ids: Sequence[int]) -> str:
+    """``1-3, 7, 9-10``: runs of consecutive IDs collapsed, so a long list stays short."""
+    runs: list[list[int]] = []
+    for i in ids:
+        if runs and i == runs[-1][-1] + 1:
+            runs[-1].append(i)
+        else:
+            runs.append([i])
+    return ", ".join(str(r[0]) if len(r) == 1 else f"{r[0]}-{r[-1]}" for r in runs)
+
+
+async def in_batches(
+    ids: list[int],
+    send: Callable[[list[int]], Awaitable[dict[str, Any]]],
+    *,
+    note: str = "",
+    before: str = "",
+    step: str = "",
+) -> list[dict[str, Any]]:
+    """``send`` each batch of ``ids`` in turn; the replies, in order.
+
+    When a batch fails, the error says which IDs were already changed, which may or may
+    not have been, and which weren't, so a retry can cover only the rest (#322), and
+    adds ``note`` (e.g. that a relative edit must not be repeated). IDs DSM rejected in
+    an earlier batch (``error_list``) are named too. ``before`` says what earlier steps
+    of the call already changed, and ``step`` names this one in the error ("Favorite
+    not changed: …"). A failure on the first batch, with nothing changed and nothing in
+    doubt, is raised as it is.
+    """
+    done: list[int] = []
+    replies: list[dict[str, Any]] = []
+    for batch in batches(ids):
+        try:
+            replies.append(await send(batch))
+        except (SynologyError, httpx.TransportError) as e:
+            # No answer, or a proxy's server error or page: the write may have reached
+            # DSM. A connection that couldn't be opened sent nothing, and a 4xx is the
+            # proxy (or DSM) refusing the request, as for Photos uploads.
+            unsure = (
+                isinstance(e, httpx.TransportError | DsmReplyError)
+                and not isinstance(e, httpx.ConnectError | httpx.ConnectTimeout)
+            ) or (isinstance(e, DsmHttpError) and not 400 <= e.status < 500)
+            if not (done or before or unsure):
+                raise
+            parts = [before] if before else []
+            rest = ids[len(done) :]
+            changed: list[int] = []
+
+            def phrase(text: str) -> str:  # "Not changed" or "Favorite not changed"
+                return f"{step} {text[0].lower()}{text[1:]}" if step else text
+
+            if done:
+                # IDs an earlier batch's error_list named weren't changed: never count them.
+                # Compared as text, so an entry DSM sends as "9" matches ID 9.
+                rejected: list[Any] = []
+                for r in replies:
+                    add_rejected(rejected, r.get("error_list") or [])
+                refused = {str(x) for x in rejected}
+                changed = [i for i in done if str(i) not in refused]
+                if changed:
+                    parts.append(
+                        f"{phrase('Already changed')} {len(changed)} of {len(ids)} item(s): "
+                        f"{_ids(changed)}."
+                    )
+                if rejected:
+                    parts.append(f"Rejected by DSM, so not changed: {rejected_text(rejected)}.")
+            if unsure:
+                parts.append(f"{phrase('May or may not have changed')}: {_ids(batch)}.")
+                rest = rest[len(batch) :]
+            if rest:
+                parts.append(f"{phrase('Not changed')}: {_ids(rest)}.")
+            if note and (changed or unsure):
+                parts.append(note)
+            detail = " ".join(parts)
+            if unsure or isinstance(e, httpx.TransportError):
+                if isinstance(e, httpx.ConnectError | httpx.ConnectTimeout):
+                    what = f"couldn't reach DSM ({type(e).__name__})"
+                elif isinstance(e, httpx.TransportError):
+                    what = f"no answer from DSM ({type(e).__name__})"
+                else:
+                    what = str(e).rstrip().rstrip(".")
+                kind = (
+                    DsmTimeoutError
+                    if isinstance(e, httpx.TimeoutException)
+                    else DsmUnavailableError
+                )
+                raise kind(
+                    f"{what}. {detail}", suggestion="Check the items before trying again."
+                ) from e
+            text = str(e).rstrip()
+            stop = "" if text.endswith((".", "!", "?")) else "."
+            e.args = (f"{text}{stop} {detail}",)
+            raise
+        done += batch
+    return replies
+
+
+def _ids(ids: list[int]) -> str:
+    return id_list(sorted(ids))
+
+
+def rejected_text(entries: list[Any]) -> str:
+    """error_list entries: integer IDs sorted with runs collapsed, then anything else."""
+    ints = sorted(x for x in entries if type(x) is int)  # add_rejected deduped them
+    rest = [str(x) for x in sorted(entries, key=id_order) if type(x) is not int]
+    return ", ".join(([id_list(ints)] if ints else []) + rest)
+
+
+def add_rejected(rejected: list[Any], entries: list[Any]) -> None:
+    """Add error_list ``entries`` to ``rejected``, once each by their text. A list, not a
+    set: an entry needn't be hashable (only integer IDs have been seen)."""
+    seen = {str(x) for x in rejected}
+    for x in entries:
+        if isinstance(x, str) and x.isascii() and x.isdigit():
+            x = int(x)  # "9" is ID 9
+        if str(x) not in seen:
+            seen.add(str(x))
+            rejected.append(x)
+
+
+def check_ids(
+    operation: str, ids: Sequence[object], *, param: str = "ids", limit: int = 1000
+) -> None:
+    """At least one ID (or folder), and not more than ``limit``."""
+    if not ids:
+        invalid(operation, f"pass at least one id in {param}.", param=param, value=ids)
+    if len(ids) > limit:
+        invalid(operation, f"at most {limit} ids per call.", param=param, value=len(ids))
 
 
 def taken(item: dict[str, Any]) -> str:

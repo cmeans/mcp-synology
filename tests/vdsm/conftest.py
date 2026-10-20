@@ -38,7 +38,7 @@ from tests.vdsm.golden_image import (
     stale_golden_image_reason,
 )
 from tests.vdsm.ssh import ssh_exec
-from tests.vdsm.transport import MODES, RewritingTransport
+from tests.vdsm.transport import MODES, rewrite_client
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -595,16 +595,15 @@ async def _user_session(
     """Yield ``(client, auth, config, test_paths)`` logged in with ``config``'s account.
 
     ``transport`` other than ``get`` rewrites every request the client sends
-    (``tests/vdsm/transport.py``, #263). The client's httpx transport is swapped in
-    place, a private attribute, so the module code under test runs unchanged.
+    (``tests/vdsm/transport.py``, #263), on both of the client's httpx clients (reads
+    and writes, #222), so the module code under test runs unchanged.
     """
     conn = config.connection
     assert conn is not None
     client = DsmClient(base_url=f"http://{conn.host}:{conn.port}", verify_ssl=False, timeout=30)
     async with client:
         if transport != "get":
-            http = client._get_http()
-            http._transport = RewritingTransport(http._transport, transport)
+            rewrite_client(client, transport)
         cache = await client.query_api_info()
         logger.info("vDSM API cache: %d APIs discovered (DSM %s)", len(cache), dsm_version)
         auth = AuthManager(config, client)

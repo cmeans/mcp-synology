@@ -65,11 +65,11 @@ A failed task's status carries DSM's reason from `status_extra.error_detail`: `e
 
 ### Destinations
 
-Download Station takes share-relative paths (`video/Torrents`), while File Station shows `/share/...`. DSM rejects the slash form: 403 "Destination doesn't exist" on create, and 100 "Unknown error" on edit (DSM 7.2.2). So `create_download`, `edit_download` and `set_download_config(default_destination=...)` trim surrounding whitespace and drop leading and trailing slashes before sending (`" /writable "` → `writable`). A destination with no share left (`/`, empty) gets `invalid_parameter`, naming the caller's argument (`destination`, or `default_destination` for `set_download_config`) (#147). A folder that doesn't exist still fails at DSM: create's 403 and edit's whole-call 100 both suggest a share-relative path (`video/Torrents`, not the `/volume1/video/Torrents` real path that `get_file_info` prints) and checking the folder with `list_files`. Edit keeps 100's `dsm_error` code, since 100 isn't specific, but says the destination is the likely cause (#147). Destinations are displayed as DSM stores them, share-relative.
+Download Station takes share-relative paths (`video/Torrents`), while File Station shows `/share/...`. DSM rejects the slash form: 403 "Destination doesn't exist" on create, and 100 "Unknown error" on edit (DSM 7.2.2). So `create_download`, `edit_download` and `set_download_config(default_destination=...)` trim surrounding whitespace and drop leading and trailing slashes before sending (`" /writable "` → `writable`). A destination with no share left (`/`, empty) gets `invalid_parameter`, naming the caller's argument (`destination`, or `default_destination` for `set_download_config`) (#147). A folder that doesn't exist still fails at DSM, since **Download Station doesn't create missing folders** (#296; verified on vdsm 7.1 and 7.2.2 for a non-admin, see `test_missing_destination_folder_then_create_folder`): create's 403 and edit's whole-call 100 both suggest a share-relative path (`video/Torrents`, not the `/volume1/video/Torrents` real path that `get_file_info` prints) and, for a new folder, creating it first with File Station's `create_folder` (a WRITE tool) or, on a connection without it, asking the user to create it in DSM, and retrying; edit's also says to check the folder with File Station's `list_files`. Each names File Station, because on a Download-Station-only connection `create_folder` isn't registered and nothing else ties it to the File Station module. Whether DSM answers 403 or 402 to an existing folder the user can't write is not captured. Edit keeps 100's `dsm_error` code, since 100 isn't specific, but says the destination is the likely cause (#147). Destinations are displayed as DSM stores them, share-relative.
 
 ### Managers and non-managers
 
-`ds_is_manager()` reads `is_manager` from `SYNO.DownloadStation.Info` / `getinfo`. It returns `None` when that can't be determined, and callers then keep their default behavior instead of failing. A non-manager is an account with the Download Station app privilege that isn't a DS manager (typically a non-admin).
+`ds_is_manager()` reads `is_manager` from `SYNO.DownloadStation.Info` / `getinfo`. It returns `None` when that can't be determined, and callers then keep their default behavior instead of failing. A non-manager is an account with the Download Station app privilege that isn't in DSM's `administrators` group: adding an account to that group makes `is_manager` true. Verified on DSM 7.1 (Download Station 3.9) and 7.2.2 (4.1) on vdsm, 2026-10-19: the non-admin `mcptest` read `is_manager: false` and didn't see the admin's task; after `synogroup --memberadd administrators mcptest` and a new login it read `true` and saw the admin's task. Removing an account from the group again wasn't tested, nor were DSM 7.2's delegated admin roles. We found no separate manager setting; Synology's API guide defines `is_manager` only as "If the logged in user is manager".
 
 - **Sees only their own tasks,** in v1 `Task.list` and in DS2's total alike (verified on both versions). List output says "your tasks only".
 - **Gets a sanitized, per-user view from `Info.getconfig`:** a null default destination, zeroed rates. `get_download_config` labels it as such.
@@ -120,7 +120,7 @@ DS-specific codes (`core/downloadstation_errors.py`) are dispatched when the API
 | 400 | File upload failed | Check the .torrent/.nzb is readable and within DSM's size limit |
 | 401 | Max number of tasks reached | Pause or delete finished tasks first |
 | 402 | Destination denied | Check write permission on the destination share |
-| 403 | Destination doesn't exist | Verify the share and folder with `list_files` |
+| 403 | Destination doesn't exist | Pass it share-relative; a new folder must be created first with File Station's `create_folder`, or by the user in DSM (Download Station doesn't create folders), then retry |
 | 404 | Invalid task id | No such task, or another user's; run `list_downloads` |
 | 405 | Invalid task action | Not valid for the task's current state: resuming an active or finished task, or pausing a paused or finished task (per task, in a list that has other valid IDs) |
 | 406 | No default destination | Set one with `set_download_config` |
@@ -346,12 +346,13 @@ Create tasks from URIs, or from a local .torrent / .nzb file.
 
 **Tool description (LLM-facing):**
 > Create one or more download tasks. Pass a comma-separated list of URIs (HTTP, FTP, magnet, etc.) via
-> `uri` OR pass a local path to a .torrent / .nzb file via `torrent_file_path`. `destination` is a
-> share-relative path (omit to use your default destination; a non-manager who has none must set it
-> first with `set_download_config`, because DS won't start their tasks until then). `username` /
-> `password` may be supplied for protected URLs (not for torrent files). Returns the new task IDs when
-> DSM provides them (not for URLs with `username` / `password`); long magnet links and URI lists are
-> supported.
+> `uri` OR pass a local path to a .torrent / .nzb file via `torrent_file_path`. `destination` must be
+> an existing folder, share-relative (DS doesn't create folders; make a new one first with File
+> Station's `create_folder`, or ask the user to create it in DSM). Omit it to use your default
+> destination (a non-manager who has none must set it first with `set_download_config`, because DS
+> won't start their tasks until then). `username` / `password` may
+> be supplied for protected URLs (not for torrent files). Returns the new task IDs when DSM provides
+> them (not for URLs with `username` / `password`); long magnet links and URI lists are supported.
 
 **Parameters:**
 

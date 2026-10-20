@@ -51,6 +51,12 @@ def test_setup_errors_name_the_fix() -> None:
     assert "Shared Space" in (error_from_code(801, "SYNO.FotoTeam.Browse.Folder").suggestion or "")
 
 
+def test_unsupported_file_type_names_file_station() -> None:
+    """#304: upload_file is File Station's and may not be on a Photos-only connection."""
+    suggestion = error_from_code(620, "SYNO.Foto.Upload.Item").suggestion or ""
+    assert "File Station's upload_file (needs File Station write permission) or DSM" in suggestion
+
+
 def test_photos_codes_only_for_photos_apis() -> None:
     """Photos' 117/160 mean nothing to File Station; 105 stays the common handler."""
     assert not isinstance(error_from_code(160, "SYNO.FileStation.List"), PhotosError)

@@ -897,7 +897,11 @@ async def edit_download(
                 retryable=False,
                 suggestion=(
                     "Pass a share-relative path such as 'video/Torrents' (not "
-                    "'/volume1/video/Torrents') and check the folder exists with list_files."
+                    "'/volume1/video/Torrents') and check the folder exists with File "
+                    "Station's list_files. If the folder is new: Download Station doesn't "
+                    "create missing folders, so create it first with File Station's "
+                    "create_folder or, without that, ask the user to create it in DSM, then "
+                    "retry."
                 ),
                 help_url=e.help_url,
             )

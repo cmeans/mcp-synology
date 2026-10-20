@@ -47,7 +47,7 @@ All tools use the shared core formatters (`format_table`, `format_key_value`, `f
 Several File Station APIs are non-blocking (start → poll status → stop/clean). These are abstracted internally — the tool starts the operation, polls at ~500ms intervals, reports progress via MCP progress notifications when available, and returns the final result.
 
 - **Search and DirSize:** wait up to `search_timeout` / `dir_size_timeout` (default `async_timeout`, 120 s). On timeout, stop the background task and return an error with the last known progress.
-- **Delete and CopyMove hand off (#245):** `delete_files` waits up to `delete_timeout`; `copy_files`, `move_files` and `restore_from_recycle_bin` up to `copy_move_timeout`. Unset, the wait is **30 s** (`async_timeout` doesn't apply), and it's capped at **600 s** whatever the setting, below known client timeouts. A task still running when the wait ends is **not stopped**: the reply is a normal (non-error) result saying it's still running on the NAS, with its progress and a handle (`delete:<taskid>`, `copy:…`, `move:…`, `restore:…`) for `file_task`. In a multi-path call the remaining paths aren't started and are listed as `Not started:`. A status request that gets no answer during the wait (a transport error: any timeout, a refused or dropped connection) or an answer that can't be read (any other exception, e.g. a 200 text/html page from a captive portal or a reverse proxy's login) hands the task off too, without stopping it (maintainer decision 2026-10-17): the task is most likely still running, and stopping or losing it would cut a huge delete short or leave it unreported. Its reply says the NAS stopped answering, or that its status reply couldn't be read, naming only the exception type (see "Handoff reply"). A canceled call (the user, or a client's own timeout) and a DSM error code on a status request still stop the task. If the `start` request itself gets no answer there's no task ID, so the network error surfaces as before. A task finishing within the wait gives the same result as before. The server keeps an in-memory record per handed-off task (last 50, 24 h, lost on restart) so `file_task` can give the original tool's result shape. A path that already has a running task of the same kind isn't started twice; the reply returns that task's handle.
+- **Delete and CopyMove hand off (#245):** `delete_files` waits up to `delete_timeout`; `copy_files`, `move_files` and `restore_from_recycle_bin` up to `copy_move_timeout`. Unset, the wait is **30 s** (`async_timeout` doesn't apply), and it's capped at **600 s** whatever the setting, below known client timeouts. A task still running when the wait ends is **not stopped**: the reply is a normal (non-error) result saying it's still running on the NAS, with its progress and a handle (`delete:<taskid>`, `copy:…`, `move:…`, `restore:…`) for `file_task`. In a multi-path call the remaining paths aren't started and are listed as `Not started:`. A status request that gets no answer during the wait (a transport error: any timeout, a refused or dropped connection), an HTTP error status (`DsmHttpError`, e.g. a reverse proxy's 502 or 504, which is how a proxy reports the same stall; #282), an answer that isn't a DSM reply (`DsmReplyError`, e.g. a 200 text/html page from a captive portal or a reverse proxy's login; #282) or any other unexpected answer hands the task off too, without stopping it (maintainer decision 2026-10-17): the task is most likely still running, and stopping or losing it would cut a huge delete short or leave it unreported. Its reply says the NAS stopped answering, that it or a proxy answered with an error (naming the HTTP status), or that its status reply couldn't be read, and never quotes the error's text (see "Handoff reply"). A canceled call (the user, or a client's own timeout) and a DSM error code on a status request still stop the task. If the `start` request itself gets no answer there's no task ID, so the network error surfaces as before. A task finishing within the wait gives the same result as before. The server keeps an in-memory record per handed-off task (last 50, 24 h, lost on restart) so `file_task` can give the original tool's result shape. A path that already has a running task of the same kind isn't started twice; the reply returns that task's handle.
 - **Running-task discovery (#245):** where `file_task` is registered, the first successful client of a server process lists the user's running Delete/CopyMove tasks (`SYNO.FileStation.BackgroundTask` `list` v2), seeds the task records from each task's start params, and appends a one-time note (after any update notice) to the first File Station reply naming them and their handles. If that first reply is `file_task` about one handle, the note leaves that task out and is skipped when nothing else is running. A `file_task` list uses the note up without showing it, since the list shows the same tasks. Any failure is logged at DEBUG and ignored; nothing is shown when nothing is running.
 - **Progress reporting:** Via `ctx.report_progress(current, total, message)` using the MCP progress notification protocol. Delete and CopyMove send it while waiting (about one every 2 s, only when the numbers change), e.g. `Deleting /s/x: 124,219 of 200,400 items`; CopyMove counts bytes. While DSM is still counting (`progress: -1`) a heartbeat with no total is sent. The progress value increases with every notification, as MCP requires: a heartbeat, or a count that doesn't exceed the last value sent (including the next path of a multi-path call, which shares the progress token), is raised by 0.001 and sent without a total, so it's never shown against the wrong total. A failing notification is logged at DEBUG and never ends the wait. Whether the client renders this visually depends on the client implementation.
 - **Failures without an `error` key:** a finished task can still have failed. CopyMove lists a missing source under `errors` (`[{"code": 408, "path": ...}]`), and a Delete of a missing path finishes with `total: -1` (DSM 7.1 and 7.2.2). Both are reported as structured errors naming the path, never as success (#162).
@@ -259,8 +259,8 @@ Search for files by name, type, size, or modification date within a given scope.
 > parameter is a keyword/substring match on filenames (not glob). Use extension for file type
 > filtering (e.g., extension="mkv"). Accepts human-readable sizes like "500MiB". mtime_from / mtime_to
 > accept ISO 8601 ("2026-04-01T12:00:00+00:00"), a calendar date ("YYYY-MM-DD"), or Unix epoch
-> seconds; naive dates are treated as UTC. For directory contents or sizes, use list_files or
-> get_dir_size instead.
+> seconds; naive dates are treated as UTC. mtime_from is inclusive and mtime_to exclusive, to the
+> second. For directory contents or sizes, use list_files or get_dir_size instead.
 
 **Parameters:**
 
@@ -272,8 +272,8 @@ Search for files by name, type, size, or modification date within a given scope.
 | `filetype` | `str` | No | `"all"` | Filter: `all`, `file`, `dir`. |
 | `size_from` | `str \| int` | No | `None` | Minimum file size. Accepts bytes (int) or human-readable (`"500MiB"`, `"2GiB"`; `"500MB"` means the same). |
 | `size_to` | `str \| int` | No | `None` | Maximum file size. Same format as `size_from`. |
-| `mtime_from` | `str` | No | `None` | Modified after this date (ISO 8601 or `YYYY-MM-DD`). |
-| `mtime_to` | `str` | No | `None` | Modified before this date. |
+| `mtime_from` | `str` | No | `None` | Modified at or after this time (ISO 8601, `YYYY-MM-DD` or epoch seconds). Inclusive, in whole seconds: a file modified at exactly this time matches, and one at T+0.9 s counts as T, so it doesn't match `mtime_from=T+1` (DSM 7.2.2 and 7.3.2, #306). |
+| `mtime_to` | `str` | No | `None` | Modified before this time. **Exclusive**: a file modified at exactly this time doesn't match (DSM 7.2.2 and 7.3.2, #306). |
 | `exclude_pattern` | `str` | No | `None` | Glob pattern to exclude from results (e.g., `*.torrent`). Applied client-side after DSM returns results. |
 | `recursive` | `bool` | No | `true` | Search subdirectories. |
 | `limit` | `int` | No | `500` | Max results to return. |
@@ -293,6 +293,8 @@ Search results in /video (pattern: *Severance*, excluding: *.torrent)
 
 **Design notes:**
 - Async search fully abstracted internally. The task ID, `pattern` and `extension` are sent JSON-quoted, because DSM parses File Station values as JSON first (#121). A `list` reply without `total`/`files` (a bare `{"finished": true}`) is DSM's answer for a task it doesn't know, so it's reported as a lost, retryable task, never as 0 results. A full, finished reply is trusted on the first poll.
+- **Nothing to match on:** with `filetype=all` and no pattern, extension, size or date, DSM refuses the search with error 600, "Search folder access denied" (DSM 7.2.2 and 7.3.2; it came back as `filestation_error`). On 7.2.2, `filetype=file` or `dir` alone works, and so does an empty-looking filter such as `size_from=0`, while an empty `pattern` or no `filetype` at all is refused too. So the tool sends `pattern="*"` when `filetype=all` and nothing else is sent, which returns everything under the folder (#306). The heading shows only the caller's own filters.
+- **How often DSM loses a task** (DSM 7.2.2 and 7.3.2, #306): 0 of 20 back-to-back searches with the task ID quoted, against 15 and 13 of 20 with it unquoted. That's the #121 cause, and why the tool quotes it.
 - `exclude_pattern` is applied **client-side** because the Synology Search API doesn't support exclusion natively. The response notes how many items were filtered out for transparency.
 - If 0 results, suggest broadening the pattern or checking the folder path.
 - Timeout: 60 seconds. If hit, return partial results with a note.
@@ -339,8 +341,7 @@ List contents of a shared folder's recycle bin.
 **DSM API:** `SYNO.FileStation.List` / `list` (targeting `/<share>/#recycle/`)
 
 **Tool description (LLM-facing):**
-> List the contents of a shared folder's recycle bin. Shows recently deleted files that can be
-> restored.
+> List the contents of a shared folder's recycle bin: its recently deleted files.
 
 **Parameters:**
 
@@ -376,24 +377,25 @@ Contents of /video/#recycle (3 items)
 
 ### 7. `download_file`
 
-Download a NAS file to a local directory on this machine.
+Download a NAS file, or a folder as a ZIP of it, to a local directory on this machine.
 
 **Permission tier:** READ
 
 **DSM API:** `SYNO.FileStation.Download` / `download` (GET, binary response)
 
 **Tool description (LLM-facing):**
-> Download a NAS file to a local directory on this machine. Provide the NAS file path. dest_folder is
-> optional if default_download_dir is configured. Does not overwrite existing local files by default.
+> Download a NAS file to a local directory on this machine. Provide the NAS file path; a folder
+> downloads as a ZIP of it, saved as <folder>.zip (not a whole shared folder). dest_folder is optional
+> if default_download_dir is configured. Does not overwrite existing local files by default.
 
 **Parameters:**
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `path` | `str` | **Yes** | — | NAS file path to download. |
+| `path` | `str` | **Yes** | — | NAS file or folder path to download. A share's top level (`/video`) is refused (`invalid_parameter`). |
 | `dest_folder` | `str` | No | `default_download_dir` | Local directory to save the file to. With neither set, `invalid_parameter` (`param: dest_folder`) before any NAS request (#194). |
-| `filename` | `str` | No | `None` | Rename on download (defaults to the NAS filename). Must be a plain file name: no `/` or `\`, not `.` or `..`, no NUL, no drive (`D:x`); otherwise `invalid_parameter` before the NAS is contacted. The same rule applies to a name taken from the NAS path. |
-| `overwrite` | `bool` | No | `false` | Replace existing local file. |
+| `filename` | `str` | No | `None` | Rename on download (defaults to the NAS filename, or `<folder>.zip` for a folder; a given `filename` is used as is). Must be a plain file name: no `/` or `\`, not `.` or `..`, no NUL, no drive (`D:x`); otherwise `invalid_parameter` before the NAS is contacted. The same rule applies to a name taken from the NAS path. |
+| `overwrite` | `bool` | No | `false` | Replace existing local file (for a folder, the `.zip`). |
 
 **Response shape:**
 
@@ -402,16 +404,17 @@ Download a NAS file to a local directory on this machine.
 ```
 
 **Design notes:**
-- Single-file download only in v1. Multi-file download (returns zip) deferred.
+- **Folders (#327, closes #330):** DSM sends a folder below a share as a ZIP of it (`PK\x03\x04`; vdsm 7.1 and 7.2.2). `download_file` reads `isdir` from its `getinfo` check and saves it as `<folder>.zip` (unless `filename` is given), and the reply says it's a ZIP archive of the folder. Its size isn't known ahead, so there's no disk-space pre-check for it. A share's top level (a path with one component) is refused up front: DSM answers it with a 502 (404 as admin). If `getinfo` can't answer, a folder is saved under its bare name, as before. Downloading several files at once is still out of scope.
 - Binary data streamed to disk in 64 KB chunks — never buffered entirely in memory.
-- If the NAS returns `Content-Type: application/json` instead of binary, it's an error envelope — parsed and raised.
+- If the NAS returns `Content-Type: application/json` instead of binary, it's an error envelope — parsed and raised. JSON that isn't DSM's error envelope (not an object, or an object without an `error` object) is `unavailable` (#292).
+- **DSM sends `application/octet-stream` for every download** (`mode=download`), whatever the file: a real `.html`, a `.json` shaped like an error envelope, `.txt`, binary or no extension (verified on DSM 7.1 and 7.2.2, #292; `mode=open` sends `text/plain` for text files, never `text/html`). So an HTML answer (`text/html` or `application/xhtml+xml`) on a 200 is a reverse proxy's or captive portal's page, not the file: it's `unavailable` ("the answer wasn't a DSM reply"), and nothing is written. A missing file gets HTTP 502 with DSM's own HTML error page, the same status a proxy gives for a server error. A path the user can't read gets the same answer, and so does a share's top level (502, or 404 as admin); a folder below a share downloads as a ZIP (see Folders). So `download_file` reads its `getinfo` check first and sends no download for a missing path (the `{"code": 408}` entry: `not_found`), a path the user can't read (`407`: `permission_denied`) or a share's top level (`invalid_parameter`). A 5xx for a file `getinfo` found, or after a `getinfo` that got no DSM answer either (a proxy's 5xx or page, or no answer at all), is a retryable `unavailable`; once the NAS answers, a missing file is `not_found`. Otherwise, for a folder or another `getinfo` error entry, a 502 stays `filestation_error` (#324).
 - **Never destroys or escapes local files.** The body streams to a temp file `.mcp-synology-<hex>.part` in `dest_folder`, flushed to disk (`fsync`) and then moved onto the destination only when complete. On any failure (DSM error, dropped connection, cancellation) only the temp file is removed; an existing destination is never truncated or deleted. A hard crash (power loss, SIGKILL) can leave a `.part` file behind.
 - **`overwrite=false` holds to the end:** the finished file is published with a hard link, which fails if the destination exists (falling back to a final existence check where links aren't supported), so a file created during the download is never replaced; that is `already_exists`. With `overwrite=true` the destination is replaced and keeps its permission bits. Replacing needs free space for both copies until the rename.
 - **Containment:** the resulting file must sit directly in `dest_folder`; anything else is `invalid_parameter`.
 - **Checked before downloading:** a folder at the destination is `invalid_parameter` in both modes (it can't be replaced). With `overwrite=false`, any name already there, including a dangling symlink, is `already_exists`. With `overwrite=true`, a symlink at the destination is replaced by the downloaded file; its target is untouched. Local write errors name the destination file, never the internal temp file.
 - **Annotations:** READ tier (it only reads the NAS), but `readOnlyHint=false`, `destructiveHint=true`, because it writes and can replace a file on this machine. Tiers guard the NAS only (see `architecture.md`).
 - The MCP server runs locally, so `dest_folder` refers to a path on the machine running the server.
-- **Local path confinement:** `dest_folder` must resolve (after `~`, `..` and symlinks) to a path inside one of the allowed folders (the top-level `allowed_local_paths` plus File Station's own; with no top-level list, File Station's list or the user's Downloads folder; `default_download_dir` is always allowed; #257). Otherwise it's `permission_denied`, listing the allowed folders, before any NAS request and before the folder's existence is checked. The message shows where the path resolves to only when the path itself is inside an allowed folder (a symlink there that leads out), so a refusal doesn't reveal what exists outside. A path that can't be resolved (a NUL byte, a symlink loop) is `invalid_parameter`. The server instructions list the allowed folders under LOCAL PATHS. See `core/local_paths.py` and `config-schema-spec.md`.
+- **Local path confinement:** `dest_folder` must resolve (after `~`, `..` and symlinks) to a path inside one of the allowed folders (the top-level `allowed_local_paths` plus File Station's own; with no top-level list, File Station's list or the user's Downloads folder; `default_download_dir` is always allowed; #257). Otherwise it's `permission_denied`, listing the allowed folders, before any NAS request and before the folder's existence is checked. The message shows where the path resolves to only when the path itself is inside an allowed folder (a symlink there that leads out), so a refusal doesn't reveal what exists outside. A `~user` that doesn't exist gets the same refusal, so it doesn't reveal which local users exist either (#260). A path that can't be resolved (a NUL byte, a symlink loop) is `invalid_parameter`. The server instructions list the allowed folders under LOCAL PATHS. See `core/local_paths.py` and `config-schema-spec.md`.
 
 ---
 
@@ -453,7 +456,7 @@ Upload a local file from this machine to a NAS folder.
 - On session error (106/107/119), re-auth and retry with a fresh file handle.
 - **`overwrite` is sent only when true (#195).** DSM's Upload reads `overwrite=false` as *skip*: it answers success with `data.blSkip: true` and leaves the existing file alone (verified on DSM 7.2.2; it took ~10 s). With `overwrite` omitted, DSM fails with 414 instead (also after ~10 s). So `overwrite=false` omits the parameter, and both 414 and a `blSkip: true` answer become `already_exists` (`param: filename`, value = the effective name) with a suggestion to use `overwrite=true`. A skipped upload is never reported as uploaded.
 - The MCP server runs locally, so `local_path` refers to a path on the machine running the server.
-- **Local path confinement:** `local_path` must resolve (after `~`, `..` and symlinks) to a path inside one of the allowed folders (the top-level `allowed_local_paths` plus File Station's own; with no top-level list, File Station's list or the user's Downloads folder; `default_download_dir` is always allowed; #257). Otherwise it's `permission_denied`, listing the allowed folders, before any NAS request; a symlink inside an allowed folder that points outside is refused. The server instructions list the allowed folders under LOCAL PATHS. See `core/local_paths.py` and `config-schema-spec.md`.
+- **Local path confinement:** `local_path` must resolve (after `~`, `..` and symlinks) to a path inside one of the allowed folders (the top-level `allowed_local_paths` plus File Station's own; with no top-level list, File Station's list or the user's Downloads folder; `default_download_dir` is always allowed; #257). Otherwise it's `permission_denied`, listing the allowed folders, before any NAS request; a symlink inside an allowed folder that points outside is refused. A `~user` that doesn't exist gets the same refusal, so the reply doesn't reveal which local users exist (#260). The server instructions list the allowed folders under LOCAL PATHS. See `core/local_paths.py` and `config-schema-spec.md`.
 
 ---
 
@@ -700,7 +703,7 @@ To check on it, call file_task with this handle. To stop it, call file_task with
 Not started: /Backups/Y, /Backups/Z. Run them again once this one finishes.
 ```
 
-When DSM stops answering status requests during the wait (2026-10-17), the first line instead says so; the progress part appears only if DSM answered at least once. An unreadable answer reads `The NAS's status reply couldn't be read while deleting /Backups/X (JSONDecodeError). It's probably still running there; don't start it again.` (the exception type only, never its text):
+When DSM stops answering status requests during the wait (2026-10-17), the first line instead says so; the progress part appears only if DSM answered at least once. An answer that isn't a DSM reply reads `The NAS's status reply couldn't be read while deleting /Backups/X (not a DSM reply; a proxy or captive portal may be answering). It's probably still running there; don't start it again.`; an HTTP error status reads `The NAS, or a proxy in front of it, answered a status request with an error while deleting /Backups/X (HTTP 504). …`; any other unexpected answer names only its exception type. The error's text is never shown:
 
 ```
 The NAS stopped answering while deleting /Backups/X (ReadTimeout; last progress: 8 of 342 items, 2%). It's probably still running there; don't start it again.
@@ -744,6 +747,7 @@ Follow up on, list, or stop a delete, copy, move or restore that was handed off 
 - **stop without a handle** (omitted, empty or blank): `invalid_parameter` (param `handle`) saying stopping needs a handle, with a suggestion to call `file_task` without a handle to list the running operations. Nothing is listed or stopped, and DSM isn't called.
 - **stop:** reads the task's `status` first, because CopyMove `stop` answers success for any task ID: finished (read or not), forgotten, made up or another user's (vdsm 7.1 and 7.2.2). Unknown (599): the same reply as `status` gives, plus `Nothing was stopped.` when no final result is remembered, prefixed with `That task had already finished, so nothing was stopped.` when a final result is remembered. Finished: `That task had already finished, so nothing was stopped.` and the final result, which is kept in the record. Still running: `stop`, then `Stopped <kind> of <path>; it may be partly done. List the path to see what's left.` A stop answered with 401 or 599 (it finished in between) says the task had already finished or isn't running.
 - **DSM doesn't answer (transport error):** a `timeout` (or `unavailable`) error naming the handle, saying for the status read that nothing was stopped, or for the stop that it may or may not have taken effect, and suggesting `file_task` status or listing the path (#237).
+- **An HTTP error status or a non-DSM reply (#282), or a 414 (#325):** an `unavailable` error naming the handle: ``Check task failed for `<handle>`: …``, or for a stop ``Stop task failed for `<handle>`: …``, ending `Nothing was stopped.` when the status read failed, or when the stop request itself got a 414 (rejected before anything acts on it), and otherwise `The stop may or may not have taken effect.` when the stop request failed. `retryable` is the error's own: true for a 5xx or a non-DSM reply, false for a 4xx such as a proxy's 403.
 
 **Design notes:**
 - **Handle format:** `delete:<taskid>`, `copy:<taskid>`, `move:<taskid>` or `restore:<taskid>`. Backticks, quotes, surrounding spaces and a trailing period are stripped. Anything else is `invalid_parameter` (param `handle`) before any DSM call, so a handle can never reach another API.
@@ -803,50 +807,7 @@ This is outside the MCP server's scope but worth documenting as a power-user pat
 
 ## MCP Server Instructions
 
-The `MCPServer(instructions=...)` string provides shared knowledge at connection time:
-
-```
-You are connected to a Synology NAS via the mcp-synology File Station module.
-
-PATH FORMAT:
-All file paths start with a shared folder name: /video/..., /music/..., etc.
-Call list_shares first to discover available shared folders and their permissions.
-
-FILE SIZES:
-Sizes are binary (1 KiB = 1024 bytes). Size parameters accept "500MiB", "2GiB",
-"1.5TiB"; KB/MB/GB/TB mean the same binary units.
-
-WORKING WITH FILES:
-- Start with list_shares to discover available paths
-- Use list_files to browse directories, search_files to find specific files
-- get_file_info for detailed metadata, get_dir_size for directory totals
-
-MOVING AND ORGANIZING FILES:
-When a user asks to move or organize files:
-1. Use search_files to find matching files. Use exclude_pattern to filter out
-   unwanted file types (e.g., exclude_pattern="*.torrent" when moving media).
-2. Present the results with a count and confirm with the user before proceeding.
-3. Use move_files or copy_files with the confirmed paths.
-Always search first and confirm before destructive operations.
-
-RECYCLE BIN:
-Some shares have a recycle bin enabled (shown in list_shares output).
-Deleted files on those shares can be recovered:
-- list_recycle_bin to see recently deleted files
-- restore_from_recycle_bin to recover them
-The recycle bin lives at /<share>/#recycle/ internally. Deleting anything
-inside it is permanent.
-
-LONG OPERATIONS:
-A large delete, copy, move or restore can outlast one reply. The tool then hands it off:
-the NAS keeps working, and the reply gives a handle. Tell the user it's still running,
-and include the progress. Don't poll in a loop; check with file_task when the user asks,
-or before doing anything that depends on the result, such as reusing the destination or
-reporting space freed. Never start the same operation again while it's running, and
-don't stop and restart it because progress looks slow: a delete counts finished items, and
-one large file can take many minutes on a busy NAS. Stop it (file_task action="stop") only when the
-user wants it canceled, and say the result may be partial.
-```
+File Station's guidance is in `src/mcp_synology/instructions/filestation.md` and `filestation-write.md`. The server sends `filestation.md` after the core `server.md` only when the `filestation` module is enabled, at either permission (#169; the order is in `config-schema-spec.md` under **Built-in instructions**). It covers the path format and calling `list_shares` first, working with files, downloading and the default download folder, choosing the right tool, browsing vs searching, directory size, and listing the recycle bin. `filestation-write.md` follows it only when the WRITE tools are registered (`permission: write` or `admin`, #318): uploading, the search → review → act pattern for moving files, restoring from the recycle bin, and handed-off long operations (`file_task`). At `permission: read` only the PERMISSIONS section names the WRITE tools, as withheld, and LOCAL PATHS names `download_file` alone. Size units are in the core `server.md`, since the other modules show sizes too. When `upload_file` or `download_file` is registered, the generated LOCAL PATHS section names the allowed local folders, after the local OS and home folder from `local.md`.
 
 ---
 

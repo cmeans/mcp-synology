@@ -28,14 +28,14 @@ def mt() -> ModuleType:
 def test_offline_config_uses_test_net_and_all_modules(mt: ModuleType, tmp_path: Path) -> None:
     text = mt.write_offline_config(tmp_path).read_text()
     assert "host: 192.0.2.1" in text
-    for module in ("filestation", "system", "downloadstation"):
+    for module in ("filestation", "system", "downloadstation", "photos"):
         assert module in text
     assert "password" not in text
 
 
-def test_measure_size_counts_all_29_tools(mt: ModuleType, tmp_path: Path) -> None:
+def test_measure_size_counts_all_48_tools(mt: ModuleType, tmp_path: Path) -> None:
     size = mt.measure_size(mt.write_offline_config(tmp_path))
-    assert size["tools"] == 29
+    assert size["tools"] == 48
     assert size["total"] == size["schemas"] + size["descriptions"] + size["instructions"]
     assert size["schema_titles"] == 0
 

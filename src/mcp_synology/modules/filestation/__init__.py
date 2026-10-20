@@ -114,8 +114,7 @@ MODULE_INFO = ModuleInfo(
         ToolInfo(
             name="list_recycle_bin",
             description=(
-                "List the contents of a shared folder's recycle bin. Shows recently "
-                "deleted files that can be restored."
+                "List the contents of a shared folder's recycle bin: its recently deleted files."
             ),
             permission_tier=PermissionTier.READ,
         ),
@@ -129,7 +128,8 @@ MODULE_INFO = ModuleInfo(
                 'Accepts human-readable sizes like "500MiB". '
                 'mtime_from / mtime_to accept ISO 8601 ("2026-04-01T12:00:00+00:00"), '
                 'a calendar date ("YYYY-MM-DD"), or Unix epoch seconds; naive dates '
-                "are treated as UTC. "
+                "are treated as UTC. mtime_from is inclusive and mtime_to exclusive, to "
+                "the second. "
                 "For directory contents or sizes, use list_files or get_dir_size instead."
             ),
             permission_tier=PermissionTier.READ,
@@ -159,7 +159,8 @@ MODULE_INFO = ModuleInfo(
             name="download_file",
             description=(
                 "Download a NAS file to a local directory on this machine. "
-                "Provide the NAS file path. dest_folder is optional if "
+                "Provide the NAS file path; a folder downloads as a ZIP of it, saved as "
+                "<folder>.zip (not a whole shared folder). dest_folder is optional if "
                 "default_download_dir is configured. "
                 "Does not overwrite existing local files by default."
             ),

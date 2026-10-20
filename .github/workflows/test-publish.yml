@@ -25,7 +25,7 @@ jobs:
       - name: Run tests
         run: |
           uv sync --extra dev
-          uv run pytest
+          uv run pytest -n auto
 
       - name: Build distributions
         run: uv build

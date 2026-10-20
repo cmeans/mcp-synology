@@ -14,7 +14,13 @@ from typing import TYPE_CHECKING, Any, Literal, NoReturn, get_args
 import anyio
 import httpx
 
-from mcp_synology.core.errors import ErrorCode, SynologyError
+from mcp_synology.core.errors import (
+    DsmHttpError,
+    DsmReplyError,
+    ErrorCode,
+    RequestTooLongError,
+    SynologyError,
+)
 from mcp_synology.core.formatting import (
     error_response,
     format_size,
@@ -193,9 +199,9 @@ class MonotonicProgress:
 class PollResult:
     """How a poll of a background task ended.
 
-    ``stalled``: a status request got no answer (a transport error) or an answer that
-    couldn't be read (any other exception); the task was left running, like
-    ``handoff`` (#245, maintainer decision 2026-10-17).
+    ``stalled``: a status request got no answer (a transport error), an HTTP error
+    status (a proxy's 502/504), or an answer that couldn't be read; the task was left
+    running, like ``handoff`` (#245, maintainer decision 2026-10-17; #282).
     """
 
     status: dict[str, Any]
@@ -307,9 +313,10 @@ async def poll_task(
     A task still running at the deadline is handed off (left running, not stopped),
     and so is one whose status request gets no answer or an answer that can't be read
     (``stalled``: a transport error, since a DSM stalled by a huge delete is still
-    working, or any other unexpected exception; maintainer decision 2026-10-17). A DSM
-    error on a status request stops the task; so does cancellation, which then
-    propagates. The deadline is wall-clock (#237).
+    working; an HTTP error status, which is how a reverse proxy reports that same stall
+    (504) or a restart (502), #282; or an answer that can't be read; maintainer
+    decision 2026-10-17). Only a DSM error code on a status request stops the task; so
+    does cancellation, which then propagates. The deadline is wall-clock (#237).
     """
     quoted = dsm_str(taskid)
     deadline = time.monotonic() + wait
@@ -330,6 +337,15 @@ async def poll_task(
                 if not isinstance(reply, dict):
                     raise TypeError("status data is not an object")
                 status = reply
+            except (DsmHttpError, DsmReplyError, RequestTooLongError) as e:
+                # Not DSM's verdict on the task: a proxy's 502/504 or login page, or a
+                # DSM too busy to answer properly. Hand it off like a stall, never stop
+                # it; the stop would go through the same broken path anyway (#282). A
+                # status URL is short, so a 414 comes from a proxy too (#325).
+                logger.warning(
+                    "%s status (%s) failed, handing off: %s", api, label, type(e).__name__
+                )
+                return PollResult(status, "stalled", e)
             except SynologyError as e:
                 return PollResult(status, "poll_error", e, await stop())
             except httpx.TransportError as e:
@@ -338,9 +354,9 @@ async def poll_task(
                 logger.debug("%s status (%s) unanswered, handing off: %r", api, label, e)
                 return PollResult(status, "stalled", e)
             except Exception as e:
-                # An answer that can't be read, e.g. a 200 text/html page from a captive
-                # portal or a reverse proxy's login: the task may well still be running,
-                # so hand it off like a stall rather than lose it (QA R1 on #251).
+                # Any other unexpected answer (a proxy's page is a DsmReplyError, above):
+                # the task may well still be running, so hand it off like a stall rather
+                # than lose it (QA R1 on #251).
                 logger.warning(
                     "%s status (%s) unreadable, handing off: %s", api, label, type(e).__name__
                 )
@@ -398,8 +414,9 @@ def handoff_reply(
     ``verb`` is "Still deleting", "Still copying", "Still moving" or "Still restoring".
     ``stall``: the status request's error, for a task handed off because the NAS stopped
     answering, or its answer couldn't be read (#245, maintainer decision 2026-10-17).
-    For an unreadable answer only the exception type is shown, never its text, which
-    may quote the body.
+    The error's text is never shown, since it may quote the body: a transport error or
+    any other exception shows its type, an HTTP error its status, and a non-DSM reply
+    a fixed phrase.
     """
     gerund = verb.split()[-1].lower()
     past = _PAST.get(gerund, "done")
@@ -412,6 +429,12 @@ def handoff_reply(
         last = f"; last progress: {progress_text(status)}" if status else ""
         if isinstance(stall, httpx.TransportError):
             what, why = "The NAS stopped answering", describe_transport_error(stall)
+        elif isinstance(stall, (DsmHttpError, RequestTooLongError)):
+            what = "The NAS, or a proxy in front of it, answered a status request with an error"
+            why = f"HTTP {stall.status if isinstance(stall, DsmHttpError) else 414}"
+        elif isinstance(stall, DsmReplyError):
+            what = "The NAS's status reply couldn't be read"
+            why = "not a DSM reply; a proxy or captive portal may be answering"
         else:
             what, why = "The NAS's status reply couldn't be read", type(stall).__name__
         first = (
@@ -724,6 +747,32 @@ def _unanswered(
     )
 
 
+def _unreadable(
+    handle: Handle,
+    exc: DsmHttpError | DsmReplyError | RequestTooLongError,
+    *,
+    operation: str,
+    note: str,
+) -> NoReturn:
+    """Raise the structured error for a status or stop request answered with an HTTP error
+    status or something that isn't a DSM reply (a proxy's 502 or login page, #282). A 414
+    comes from a proxy too: a status or stop URL is short, so its own suggestion (make the
+    request smaller) doesn't apply (#325)."""
+    follow_up = (
+        "Call file_task with this handle to see whether the task is still running, or list "
+        "the path to see what's left."
+    )
+    hint = None if isinstance(exc, RequestTooLongError) else exc.suggestion
+    error_response(
+        ErrorCode.UNAVAILABLE,
+        f"{operation} failed for `{handle}`: {exc}{note}",
+        retryable=exc.retryable,
+        param="handle",
+        value=str(handle),
+        suggestion=f"{hint} {follow_up}" if hint else follow_up,
+    )
+
+
 async def file_task(
     client: DsmClient,
     *,
@@ -765,6 +814,14 @@ async def file_task(
         try:
             data: dict[str, Any] = await client.request(
                 parsed.api, "status", version=version, params={"taskid": taskid}
+            )
+        except (DsmHttpError, DsmReplyError, RequestTooLongError) as e:
+            stopping = action == "stop"
+            _unreadable(
+                parsed,
+                e,
+                operation="Stop task" if stopping else "Check task",
+                note=" Nothing was stopped." if stopping else "",
             )
         except SynologyError as e:
             if e.code != 599:
@@ -820,6 +877,17 @@ async def file_task(
                 version=version,
                 params={"taskid": taskid},
                 read_timeout=STOP_TIMEOUT,
+            )
+        except (DsmHttpError, DsmReplyError, RequestTooLongError) as e:
+            # A 414 is rejected before anything acts on it: nothing was stopped.
+            sent = not isinstance(e, RequestTooLongError)
+            _unreadable(
+                parsed,
+                e,
+                operation="Stop task",
+                note=" The stop may or may not have taken effect."
+                if sent
+                else " Nothing was stopped.",
             )
         except SynologyError as e:
             if e.code in (401, 599):

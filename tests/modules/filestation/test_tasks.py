@@ -13,6 +13,7 @@ import pytest
 import respx
 from mcp.server.mcpserver.exceptions import ToolError
 
+from mcp_synology.core.errors import DsmHttpError, DsmReplyError, RequestTooLongError
 from mcp_synology.modules.filestation.tasks import (
     DiscoveryNote,
     Handle,
@@ -272,9 +273,76 @@ class TestPollTask:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
         result = await poll_task(mock_client, api=API, version=2, taskid="t1", wait=30, label="x")
         assert result.outcome == "stalled"
-        assert isinstance(result.error, ValueError)
+        assert isinstance(result.error, DsmReplyError)
         assert result.stopped is False
         assert calls == ["status"]
+
+    @pytest.mark.parametrize("status_code", [502, 504])
+    @respx.mock
+    async def test_poll_proxy_http_error_is_a_handoff_without_stop(
+        self, mock_client: DsmClient, clock: list[float], status_code: int
+    ) -> None:
+        """#282: a reverse proxy's 502/504 is how a DSM stalled by a huge delete shows up
+        behind a proxy. It used to stop the task (DsmHttpError is a SynologyError)."""
+        calls: list[str] = []
+        replies = iter([_ok(RUNNING), httpx.Response(status_code, text="<html>Bad Gateway</html>")])
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            calls.append(_method(request))
+            return next(replies)
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        result = await poll_task(mock_client, api=API, version=2, taskid="t1", wait=30, label="x")
+        assert result.outcome == "stalled"
+        assert isinstance(result.error, DsmHttpError)
+        assert result.error.status == status_code
+        assert result.stopped is False
+        assert result.status == RUNNING
+        assert calls == ["status", "status"]
+
+    @respx.mock
+    async def test_poll_proxy_414_is_a_handoff_without_stop(
+        self, mock_client: DsmClient, clock: list[float]
+    ) -> None:
+        """#325: a status URL is short, so a 414 comes from a proxy: hand off, don't stop."""
+        calls: list[str] = []
+        replies = iter([_ok(RUNNING), httpx.Response(414, text="<html>Too long</html>")])
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            calls.append(_method(request))
+            return next(replies)
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        result = await poll_task(mock_client, api=API, version=2, taskid="t1", wait=30, label="x")
+        assert result.outcome == "stalled"
+        assert isinstance(result.error, RequestTooLongError)
+        assert result.stopped is False
+        assert calls == ["status", "status"]
+
+    @respx.mock
+    async def test_poll_relogin_proxy_error_is_a_handoff_without_stop(
+        self, mock_client: DsmClient, clock: list[float]
+    ) -> None:
+        """#321: a session error on the status read, then a proxy 502 on the re-login,
+        used to surface as "Invalid session" and stop the task."""
+        calls: list[str] = []
+        replies = iter([_ok(RUNNING), _err(119)])
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            calls.append(_method(request))
+            return next(replies)
+
+        async def reauth() -> None:
+            calls.append("login")
+            raise DsmHttpError("SYNO.API.Auth/login: DSM answered HTTP 502.", 502)
+
+        mock_client.set_re_auth_callback(reauth)
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        result = await poll_task(mock_client, api=API, version=2, taskid="t1", wait=30, label="x")
+        assert result.outcome == "stalled"
+        assert isinstance(result.error, DsmHttpError)
+        assert result.stopped is False
+        assert calls == ["status", "status", "login"]  # no stop
 
     @respx.mock
     async def test_poll_status_data_not_an_object_is_a_handoff(
@@ -1073,6 +1141,92 @@ class TestFileTask:
         assert text == (
             "Stopped move of /s/b; it may be partly done. List the path to see what's left."
         )
+
+    @pytest.mark.parametrize("action", ["status", "stop"])
+    @pytest.mark.parametrize(
+        ("reply", "shown", "retryable"),
+        [
+            (httpx.Response(200, text="<html>login</html>", headers={"content-type": "text/html"}),
+             "the answer wasn't a DSM reply (Content-Type text/html)", True),
+            (httpx.Response(502, text="<html>Bad Gateway</html>"), "DSM answered HTTP 502", True),
+            # A 4xx isn't retryable, as on every other call (DsmHttpError.retryable).
+            (httpx.Response(403, text="<html>Forbidden</html>"), "DSM answered HTTP 403", False),
+            # A 414 comes from a proxy too: a status URL is short (#325).
+            (httpx.Response(414, text="<html>Too long</html>"), "HTTP 414", False),
+        ],
+    )  # fmt: skip
+    @respx.mock
+    async def test_file_task_unreadable_status_is_structured(
+        self,
+        mock_client: DsmClient,
+        action: str,
+        reply: httpx.Response,
+        shown: str,
+        retryable: bool,
+    ) -> None:
+        """#282: a proxy page or 502 on the status read was a raw JSONDecodeError crash (or,
+        for a 502 on stop, didn't say nothing was stopped)."""
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        calls: list[tuple[str, str]] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=_router({"status": reply, "stop": _ok({})}, calls)
+        )
+        with pytest.raises(ToolError) as exc:
+            await file_task(
+                mock_client,
+                records=TaskRecords(),
+                handle="delete:FileStation_D1",
+                action=action,  # type: ignore[arg-type]
+            )
+        err = json.loads(str(exc.value))["error"]
+        assert err["code"] == "unavailable"
+        assert err["retryable"] is retryable
+        assert err["param"] == "handle"
+        op = "Stop task" if action == "stop" else "Check task"
+        assert err["message"].startswith(f"{op} failed for `delete:FileStation_D1`: ")
+        assert shown in err["message"]
+        assert err["message"].endswith("Nothing was stopped.") is (action == "stop")
+        assert not any(w in err["message"] for w in ("login", "Bad Gateway", "Forbidden"))
+        assert "file_task with this handle" in err["suggestion"]
+        assert "Reduce the size" not in err["suggestion"]
+        assert ("SYNO.FileStation.Delete", "stop") not in calls
+
+    @pytest.mark.parametrize(
+        ("reply", "shown", "retryable"),
+        [
+            (httpx.Response(200, text="<html>login</html>", headers={"content-type": "text/html"}),
+             "the answer wasn't a DSM reply (Content-Type text/html).", True),
+            (httpx.Response(502, text="Bad Gateway"), "DSM answered HTTP 502.", True),
+            (httpx.Response(403, text="Forbidden"), "DSM answered HTTP 403.", False),
+            (httpx.Response(414, text="Too long"), "HTTP 414 (Request-URI Too Large).", False),
+        ],
+    )  # fmt: skip
+    @respx.mock
+    async def test_file_task_stop_request_proxy_error_may_have_taken_effect(
+        self, mock_client: DsmClient, reply: httpx.Response, shown: str, retryable: bool
+    ) -> None:
+        """#282: a proxy's answer to the stop request itself: the stop may or may not have
+        reached DSM. A 414 is rejected before anything acts on it: nothing was stopped (#325)."""
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=_router({"status": _ok(RUNNING), "stop": reply})
+        )
+        with pytest.raises(ToolError) as exc:
+            await file_task(
+                mock_client, records=TaskRecords(), handle="delete:FileStation_D1", action="stop"
+            )
+        err = json.loads(str(exc.value))["error"]
+        assert err["code"] == "unavailable"
+        assert err["retryable"] is retryable
+        # A 414 is rejected before anything acts on it, so nothing was stopped.
+        note = (
+            "Nothing was stopped."
+            if "414" in shown
+            else "The stop may or may not have taken effect."
+        )
+        assert err["message"].endswith(f"{shown} {note}")
 
     @respx.mock
     @pytest.mark.parametrize("code", [401, 599])
