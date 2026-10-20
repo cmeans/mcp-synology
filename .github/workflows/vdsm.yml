@@ -57,7 +57,7 @@ jobs:
 
       # A PR that changes no code (#284): only Markdown at the repository root
       # (README, CHANGELOG, CLAUDE.md, ...), docs/, issue templates or LICENSE. Not
-      # Markdown elsewhere: src/mcp_synology/instructions/server.md is the server's
+      # Markdown elsewhere: src/mcp_synology/instructions/*.md are the server's
       # instructions. The job still runs and passes with every later step skipped, so the
       # checks keep their names (a job skipped by `if:` loses its matrix name, which
       # #25 would make required) and the label automation finds a passed run for the

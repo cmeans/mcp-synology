@@ -6,6 +6,8 @@ import asyncio
 import base64
 import json
 import logging
+import re
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -15,8 +17,12 @@ import respx
 from mcp.client import Client
 from mcp.server.mcpserver import MCPServer
 
+from mcp_synology.modules import PermissionTier
 from mcp_synology.server import (
     _BASE_INSTRUCTIONS,
+    _MODULE_INSTRUCTIONS,
+    _MODULE_REGISTRY,
+    _MODULE_WRITE_INSTRUCTIONS,
     SharedClientManager,
     _compact_schema,
     _strip_html_comments,
@@ -26,7 +32,6 @@ from tests.conftest import BASE_URL, make_test_config
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
-    from pathlib import Path
 
 
 class TestCreateServer:
@@ -91,17 +96,204 @@ class TestCreateServer:
 
 
 class TestMcpInstructions:
-    def test_instructions_mention_path_format(self) -> None:
-        assert "PATH FORMAT" in _BASE_INSTRUCTIONS
-
-    def test_instructions_mention_file_sizes(self) -> None:
+    def test_core_file_holds_only_shared_guidance(self) -> None:
+        assert "SERVER IDENTITY" in _BASE_INSTRUCTIONS
         assert "FILE SIZES" in _BASE_INSTRUCTIONS
+        # File Station's sections live in filestation.md (#169).
+        sent = _strip_html_comments(_BASE_INSTRUCTIONS)
+        assert "list_shares" not in sent
+        assert "File Station" not in sent
 
-    def test_instructions_mention_recycle_bin(self) -> None:
-        assert "RECYCLE BIN" in _BASE_INSTRUCTIONS
+    def test_filestation_file_holds_its_sections(self) -> None:
+        text = _MODULE_INSTRUCTIONS["filestation"]
+        for section in ("PATH FORMAT", "RECYCLE BIN", "DOWNLOADING", "list_shares"):
+            assert section in text
+        write = _MODULE_WRITE_INSTRUCTIONS["filestation"]
+        for section in ("UPLOADING", "MOVING AND ORGANIZING", "LONG OPERATIONS", "file_task"):
+            assert section in write
 
-    def test_instructions_mention_list_shares_first(self) -> None:
-        assert "list_shares" in _BASE_INSTRUCTIONS
+
+def _instructions(**modules: dict[str, Any]) -> str:
+    return create_server(make_test_config(modules=modules)).instructions or ""
+
+
+_FS_SECTIONS = ("FILE STATION", "PATH FORMAT", "list_shares", "RECYCLE BIN", "download_file")
+_FS_WRITE_SECTIONS = ("UPLOADING", "MOVING AND ORGANIZING", "LONG OPERATIONS", "file_task")
+
+
+def _guidance(text: str) -> str:
+    """The instructions before the PERMISSIONS section, which names withheld tools."""
+    return text.split("\n\nPERMISSIONS:", 1)[0]
+
+
+def _without_permissions(text: str) -> str:
+    """Everything but the PERMISSIONS section (LOCAL MACHINE and LOCAL PATHS follow it)."""
+    before, _, rest = text.partition("\n\nPERMISSIONS:")
+    _, _, after = rest.partition("\n\n")
+    return before + "\n\n" + after
+
+
+def _write_tools(module: str) -> list[str]:
+    return [
+        t.name
+        for t in _MODULE_REGISTRY[module].MODULE_INFO.tools
+        if t.permission_tier is PermissionTier.WRITE
+    ]
+
+
+class TestInstructionsPerModule:
+    """Only the enabled modules' sections are sent (#169, #304)."""
+
+    @pytest.mark.parametrize(
+        "modules",
+        [
+            {"system": {"enabled": True}},
+            {"downloadstation": {"enabled": True, "permission": "write"}},
+            {"photos": {"enabled": True, "permission": "write"}},
+            # Listed but disabled counts as not enabled.
+            {"filestation": {"enabled": False}, "system": {"enabled": True}},
+        ],
+        ids=["system", "downloadstation", "photos", "filestation-disabled"],
+    )
+    def test_no_file_station_sections_without_file_station(self, modules: dict[str, Any]) -> None:
+        text = _instructions(**modules)
+        assert "You are connected to a Synology NAS through mcp-synology." in text
+        assert "FILE SIZES" in text
+        for section in _FS_SECTIONS + _FS_WRITE_SECTIONS:
+            assert section not in _guidance(text), section
+
+    @pytest.mark.parametrize("permission", ["read", "write"])
+    def test_file_station_sections_when_enabled(self, permission: str) -> None:
+        text = _guidance(_instructions(filestation={"enabled": True, "permission": permission}))
+        for section in _FS_SECTIONS:
+            assert section in text, section
+        # The core file comes first, then File Station's.
+        assert text.index("FILE SIZES") < text.index("FILE STATION")
+
+    @pytest.mark.parametrize("permission", ["write", "admin"])
+    def test_file_station_write_guidance_with_write_tools(self, permission: str) -> None:
+        text = _guidance(_instructions(filestation={"enabled": True, "permission": permission}))
+        for section in _FS_WRITE_SECTIONS:
+            assert section in text, section
+        # After File Station's shared sections.
+        assert text.index("RECYCLE BIN") < text.index("UPLOADING")
+
+    @pytest.mark.parametrize("module", ["filestation", "photos"])
+    def test_read_only_guidance_names_no_write_tools(self, module: str) -> None:
+        """At permission: read, only PERMISSIONS names the withheld WRITE tools (#318)."""
+        text = _instructions(**{module: {"enabled": True, "permission": "read"}})
+        assert "LOCAL PATHS:" in text  # the download tool is registered
+        guidance = _without_permissions(text)
+        for tool in _write_tools(module):
+            assert not re.search(rf"\b{tool}\b", guidance), tool
+            assert tool in text.split("\n\nPERMISSIONS:", 1)[1], tool  # still listed as withheld
+        for section in _FS_WRITE_SECTIONS:
+            assert section not in guidance, section
+
+    @pytest.mark.parametrize(
+        ("module", "upload", "download"),
+        [
+            ("filestation", "upload_file", "download_file"),
+            ("photos", "upload_photos", "download_photos"),
+        ],
+    )
+    def test_local_paths_names_only_registered_tools(
+        self, module: str, upload: str, download: str
+    ) -> None:
+        read = _instructions(**{module: {"enabled": True, "permission": "read"}})
+        write = _instructions(**{module: {"enabled": True, "permission": "write"}})
+        read_paths = read.split("LOCAL PATHS:", 1)[1]
+        assert f"{download} only uses local paths" in read_paths
+        assert upload not in read_paths
+        assert f"{upload} and {download} only use local paths" in write.split("LOCAL PATHS:", 1)[1]
+
+    @pytest.mark.parametrize("module", ["filestation", "photos", "downloadstation"])
+    async def test_read_tools_name_no_write_tools(self, module: str) -> None:
+        """A READ tool's description and schema don't name the module's WRITE tools (#318)."""
+        server = create_server(make_test_config(modules={module: {"enabled": True}}))
+        tools, _ = await _served(server)
+        for tool in tools:
+            text = (tool.description or "") + json.dumps(tool.input_schema)
+            for name in _write_tools(module):
+                assert not re.search(rf"\b{name}\b", text), (tool.name, name)
+
+    def test_photos_write_guidance_with_write_tools(self) -> None:
+        read = _guidance(_instructions(photos={"enabled": True, "permission": "read"}))
+        write = _guidance(_instructions(photos={"enabled": True, "permission": "write"}))
+        assert "SYNOLOGY PHOTOS" in read
+        assert "photo_task" not in read
+        assert "delete_photos" in write
+        assert "photo_task" in write
+
+    def test_system_only_has_no_local_machine(self) -> None:
+        text = _instructions(system={"enabled": True})
+        assert "LOCAL MACHINE" not in text
+        assert "LOCAL PATHS" not in text
+        assert "Home directory" not in text
+
+    @pytest.mark.parametrize(
+        "modules",
+        [
+            {"filestation": {"enabled": True, "permission": "read"}},  # download_file
+            {"downloadstation": {"enabled": True, "permission": "write"}},  # torrent files
+            {"photos": {"enabled": True, "permission": "read"}},  # download_photos
+        ],
+        ids=["filestation", "downloadstation", "photos"],
+    )
+    def test_local_machine_opens_local_paths(
+        self, modules: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("mcp_synology.server._platform_label", lambda: "Linux")
+        text = _instructions(**modules)
+        local = text.index("LOCAL MACHINE:")
+        # Directly before LOCAL PATHS, with nothing (e.g. PERMISSIONS) between them.
+        assert "local filesystem.\n\nLOCAL PATHS:" in text
+        assert "This MCP server runs on the user's Linux machine." in text
+        assert f"Home directory: {Path.home()}" in text
+        assert "{" not in text[local:]  # template variables filled in
+
+    @pytest.mark.parametrize(
+        "modules",
+        [
+            {"filestation": {"enabled": True, "permission": "read"}},
+            {"system": {"enabled": True}},
+            {"downloadstation": {"enabled": True, "permission": "write"}},
+            {"photos": {"enabled": True, "permission": "write"}},
+            {"filestation": {"enabled": True, "permission": "write"}},
+            {"photos": {"enabled": True, "permission": "read"}},
+            {
+                m: {"enabled": True, "permission": "write"}
+                for m in ("filestation", "system", "downloadstation", "photos")
+            },
+        ],
+        ids=[
+            "filestation",
+            "system",
+            "downloadstation",
+            "photos",
+            "filestation-write",
+            "photos-read",
+            "all",
+        ],
+    )
+    def test_no_comment_text_is_sent(self, modules: dict[str, Any]) -> None:
+        text = _instructions(**modules)
+        assert "<!--" not in text
+        assert "-->" not in text
+        assert "Template variables" not in text
+        assert "\n\n\n" not in text
+
+    def test_comments_are_stripped_per_file(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """An unclosed comment in one file can't pair with a `-->` in the next one."""
+        monkeypatch.setattr(
+            "mcp_synology.server._BASE_INSTRUCTIONS", "CORE TEXT\n<!-- unclosed note"
+        )
+        monkeypatch.setitem(
+            _MODULE_INSTRUCTIONS, "filestation", "FILE STATION TEXT\n<!-- a note -->\nMORE"
+        )
+        text = _instructions(filestation={"enabled": True, "permission": "read"})
+        assert "FILE STATION TEXT" in text
+        assert "MORE" in text
 
 
 class TestFileStationSettings:
@@ -167,13 +359,13 @@ class TestCreateServerInstructionPaths:
         config = make_test_config(custom_instructions="EXTRA RULES FOR THIS NAS")
         server = create_server(config)
         assert server is not None
-        # The instructions should contain both our custom text and the base text
+        # The instructions should contain both our custom text and the built-in text
         instructions = server.instructions or ""
         assert "EXTRA RULES FOR THIS NAS" in instructions
-        # Custom text appears before base
+        # Custom text appears before the built-in text
         custom_idx = instructions.index("EXTRA RULES FOR THIS NAS")
-        base_idx = instructions.index("PATH FORMAT")
-        assert custom_idx < base_idx
+        builtin_idx = instructions.index("PATH FORMAT")
+        assert custom_idx < builtin_idx
 
     def test_instructions_file_loaded(self, tmp_path: Path) -> None:
         instructions_file = tmp_path / "custom.md"
@@ -186,13 +378,24 @@ class TestCreateServerInstructionPaths:
         # Template variables get expanded — display_name should be filled in
         assert "{display_name}" not in instructions
 
-    def test_instructions_file_missing_falls_back_to_base(self, tmp_path: Path) -> None:
+    def test_instructions_file_missing_falls_back_to_builtin(self, tmp_path: Path) -> None:
         config = make_test_config(instructions_file=str(tmp_path / "nope.md"))
         server = create_server(config)
         assert server is not None
         instructions = server.instructions or ""
-        # Falls back to _BASE_INSTRUCTIONS
+        # Falls back to the full built-in instructions, with File Station's section and
+        # the generated ones, as if no file were set.
+        assert "SERVER IDENTITY" in instructions
         assert "PATH FORMAT" in instructions
+        assert "LOCAL MACHINE:" in instructions
+        assert "LOCAL PATHS:" in instructions
+
+    def test_instructions_file_missing_still_gets_permissions(self, tmp_path: Path) -> None:
+        config = make_test_config(
+            instructions_file=str(tmp_path / "nope.md"),
+            modules={"filestation": {"enabled": True, "permission": "read"}},
+        )
+        assert "PERMISSIONS:" in (create_server(config).instructions or "")
 
 
 class TestSharedClientManagerLifecycle:
@@ -1332,7 +1535,17 @@ class TestInstructionComments:
 # Station's tools as such, and what to do without them (#304).
 # Set by #311 to 30,174 (-8): measured with a fixed home directory, /fake/home. The
 # budgets above were measured with CI's /home/runner, which the instructions name 4 times.
-PAYLOAD_BUDGET_CHARS = 30_174
+# Raised by #317 to 30,220 (+46): the instructions are split by module, and only the
+# enabled modules' sections are sent. With every module enabled that adds a "FILE STATION
+# (...)" heading (+67), shortens the first line (-20) and drops a blank line (-1). A
+# connection without File Station sends about 3,300-3,450 characters fewer.
+# Raised by #317 (#318) to 30,305 (+85): File Station's and Photos' WRITE-tool guidance is
+# sent only when those tools are registered, under headings of its own (UPLOADING,
+# RESTORING DELETED FILES). A File Station read connection sends 1,396 characters fewer.
+# Lowered by #317 to 30,247 (-58): list_photos, list_recycle_bin and get_resource_usage no
+# longer point at tools a connection may not have (tag_photos and restoring at read; File
+# Station's search and copies).
+PAYLOAD_BUDGET_CHARS = 30_247
 
 
 class TestPayloadBudget:
@@ -1405,7 +1618,7 @@ class TestLocalPathsNotice:
             modules={
                 "photos": {
                     "enabled": True,
-                    "permission": "read",
+                    "permission": "write",  # upload_photos is a WRITE tool (#318)
                     "settings": {"allowed_local_paths": [str(tmp_path / "pics")]},
                 }
             }

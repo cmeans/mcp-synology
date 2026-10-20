@@ -109,8 +109,7 @@ Live utilization, for deciding whether the NAS is busy before an expensive opera
 
 **Tool description (LLM-facing):**
 > Get live resource utilization: CPU load, memory usage, disk I/O, and network throughput. Use this to
-> check if the NAS is under heavy load before running expensive operations like search or large file
-> copies.
+> check if the NAS is under heavy load before starting expensive work on it.
 
 **Parameters:** None.
 
