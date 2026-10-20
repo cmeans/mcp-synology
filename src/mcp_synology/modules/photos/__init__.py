@@ -94,9 +94,9 @@ MODULE_INFO = ModuleInfo(
                 " place or concept (1.9.1+) on its own; or search by keyword (filename and "
                 "tags). Returns id, filename, taken time, type, size and folder; paged with "
                 "offset/limit (default 50) with the total. space: personal (default) or shared."
-                " Use the ids with get_photo, download_photos, tag_photos and the other photo "
-                "tools. For files outside Photos, use File Station's list_files when that "
-                "module is enabled."
+                " Use the ids with the other Photos tools, such as get_photo and "
+                "download_photos. For files outside Photos, use File Station's list_files "
+                "when that module is enabled."
             ),
             permission_tier=PermissionTier.READ,
         ),
