@@ -131,7 +131,8 @@ class RewritingTransport(httpx.AsyncBaseTransport):
 
 def rewrite_client(client: DsmClient, mode: str) -> None:
     """Swap ``mode``'s rewriting transport in under both of ``client``'s httpx clients:
-    the pooled one (reads) and the one that never reuses a connection (writes, #222).
+    the pooled one (reads) and the one that never reuses a connection (writes, downloads
+    and a read's one resend, #222).
     A private attribute, so the module code under test runs unchanged."""
     for http in (client._get_http(), client._get_http_once()):
         http._transport = RewritingTransport(http._transport, mode)
