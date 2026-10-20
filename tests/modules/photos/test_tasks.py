@@ -456,6 +456,23 @@ class TestPhotoTask:
         assert "Stop requested" in out
 
     @respx.mock
+    @pytest.mark.parametrize("action", ["stop", "status"])
+    async def test_dsm_error_on_status_after_stop_says_it_was_sent(self, action: str) -> None:
+        """#323: a stop DSM accepted, then a DSM error reading the status, read as a
+        failed stop. The error now says the stop was sent (only for a stop)."""
+        fake = FakePhotos().on(INFO, "abort_task", 1, {}).error(INFO, "get_status", 1, 105)
+        install(fake)
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await photo_task(client, handle="photos:5", action=action)
+        err = _error(exc)
+        assert err["code"] == "permission_denied"
+        sent = "The stop was requested; its status couldn't be read." in err["message"]
+        assert sent is (action == "stop")
+        assert len(fake.of(INFO, "abort_task")) == (1 if action == "stop" else 0)
+
+    @respx.mock
     async def test_list_and_clear(self) -> None:
         listed = captured("bg-list-user-task")
         fake = FakePhotos().on(INFO, "list_user_task", 1, listed, listed, {"list": []})
