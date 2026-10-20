@@ -318,14 +318,18 @@ class TestDownloadFile:
         assert not (tmp_path / "nonexistent.mkv").exists()
 
     @staticmethod
-    def _route(getinfo: httpx.Response, download: httpx.Response) -> list[str]:
-        """Answer getinfo and download separately; the methods called, in order."""
+    def _route(getinfo: httpx.Response | Exception, download: httpx.Response) -> list[str]:
+        """Answer getinfo (or raise for it) and download separately; the methods called."""
         calls: list[str] = []
 
         def side_effect(request: httpx.Request) -> httpx.Response:
             method = request.url.params.get("method", "")
             calls.append(method)
-            return getinfo if method == "getinfo" else download
+            if method != "getinfo":
+                return download
+            if isinstance(getinfo, Exception):
+                raise getinfo
+            return getinfo
 
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
         return calls
@@ -437,11 +441,12 @@ class TestDownloadFile:
         [
             httpx.Response(502, text="<html>Bad Gateway</html>"),
             httpx.Response(200, text="<html>Sign in</html>", headers={"content-type": "text/html"}),
+            httpx.ConnectError("refused"),
         ],
-        ids=["getinfo-502", "getinfo-page"],
+        ids=["getinfo-502", "getinfo-page", "getinfo-unreachable"],
     )
     async def test_download_5xx_after_an_unanswered_check_is_retryable(
-        self, mock_client: DsmClient, tmp_path: Path, getinfo: httpx.Response
+        self, mock_client: DsmClient, tmp_path: Path, getinfo: httpx.Response | Exception
     ) -> None:
         """#324's own case: a proxy answering 502 answers the getinfo check too. Neither got
         a DSM answer, so it's a server or proxy failure; a retry that gets through reports a
@@ -457,14 +462,22 @@ class TestDownloadFile:
         )
 
     @respx.mock
+    @pytest.mark.parametrize(
+        "getinfo",
+        [
+            httpx.Response(
+                200, json={"success": True, "data": {"files": [{"code": 418, "path": "/v"}]}}
+            ),
+            httpx.Response(200, json={"success": False, "error": {"code": 105}}),
+            httpx.Response(403, text="<html>Forbidden</html>"),
+        ],
+        ids=["other-error-entry", "dsm-error", "proxy-4xx"],
+    )
     async def test_download_5xx_when_getinfo_didnt_say_keeps_the_old_error(
-        self, mock_client: DsmClient, tmp_path: Path
+        self, mock_client: DsmClient, tmp_path: Path, getinfo: httpx.Response
     ) -> None:
-        """getinfo answered, but not that the file exists: the 502 may be DSM's
-        missing-file reply."""
-        getinfo = httpx.Response(
-            200, json={"success": True, "data": {"files": [{"code": 418, "path": "/v"}]}}
-        )
+        """getinfo answered, but not that the file exists (DSM's own error, another error
+        entry, or a 4xx refusal): the 502 may be DSM's missing-file reply."""
         self._route(getinfo, httpx.Response(502, text="<html>Bad Gateway</html>"))
         with pytest.raises(ToolError) as exc_info:
             await download_file(mock_client, path="/video/x.mkv", dest_folder=str(tmp_path))

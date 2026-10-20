@@ -879,8 +879,15 @@ async def file_task(
                 read_timeout=STOP_TIMEOUT,
             )
         except (DsmHttpError, DsmReplyError, RequestTooLongError) as e:
+            # A 414 is rejected before anything acts on it: nothing was stopped.
+            sent = not isinstance(e, RequestTooLongError)
             _unreadable(
-                parsed, e, operation="Stop task", note=" The stop may or may not have taken effect."
+                parsed,
+                e,
+                operation="Stop task",
+                note=" The stop may or may not have taken effect."
+                if sent
+                else " Nothing was stopped.",
             )
         except SynologyError as e:
             if e.code in (401, 599):

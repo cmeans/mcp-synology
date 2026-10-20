@@ -1220,7 +1220,13 @@ class TestFileTask:
         err = json.loads(str(exc.value))["error"]
         assert err["code"] == "unavailable"
         assert err["retryable"] is retryable
-        assert err["message"].endswith(f"{shown} The stop may or may not have taken effect.")
+        # A 414 is rejected before anything acts on it, so nothing was stopped.
+        note = (
+            "Nothing was stopped."
+            if "414" in shown
+            else "The stop may or may not have taken effect."
+        )
+        assert err["message"].endswith(f"{shown} {note}")
 
     @respx.mock
     @pytest.mark.parametrize("code", [401, 599])

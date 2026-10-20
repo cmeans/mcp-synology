@@ -269,7 +269,7 @@ async def download_file(
     # root (502, or 404 as admin); a folder below one downloads as a ZIP (vdsm).
     nas_file_size: int | None = None
     exists: bool | None = None  # True only for a file; None: the check didn't say
-    unanswered = False  # the check got no DSM answer either (a proxy's 5xx or page)
+    unanswered = False  # the check got no DSM answer: a 5xx, a page that isn't DSM's, none
     entry: dict[str, Any] = {}
     try:
         info = await client.request(
@@ -282,7 +282,9 @@ async def download_file(
             entry = files[0]
     except Exception as e:  # noqa: BLE001
         logger.debug("Pre-flight getinfo failed: %s", e)
-        unanswered = isinstance(e, httpx.TransportError | DsmHttpError | DsmReplyError)
+        unanswered = isinstance(e, httpx.TransportError | DsmReplyError) or (
+            isinstance(e, DsmHttpError) and e.status >= 500
+        )
 
     if entry.get("code") == 408:  # getinfo's entry for a missing path (#161)
         exists = False

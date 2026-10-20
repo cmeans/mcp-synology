@@ -649,6 +649,19 @@ class TestPhotoTask:
         assert not fake.of(INFO, "get_status")
 
     @respx.mock
+    async def test_stop_request_414_stopped_nothing(self) -> None:
+        """#325: a 414 is rejected before anything acts on it, so nothing was stopped."""
+        fake = FakePhotos().on(INFO, "abort_task", 1, lambda _p: httpx.Response(414, text="x"))
+        install(fake)
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await photo_task(client, handle="photos:5", action="stop")
+        err = _error(exc)
+        assert err["message"].endswith("HTTP 414 (Request-URI Too Large). Nothing was stopped.")
+        assert "Reduce the size" not in err["suggestion"]
+
+    @respx.mock
     async def test_list_without_answer_is_structured(self) -> None:
         def boom(_p: dict[str, Any]) -> httpx.Response:
             raise httpx.ConnectError("refused")

@@ -536,9 +536,10 @@ async def photo_task(
             try:
                 await ph.call("BackgroundTask.Info", "abort_task", {"id": [task_id]}, personal=True)
             except _NO_ANSWER as e:
+                # A 414 is rejected before anything acts on it, like a refused connection.
                 note = (
                     " Nothing was stopped."
-                    if _never_sent(e)
+                    if _never_sent(e) or isinstance(e, RequestTooLongError)
                     else " The stop may or may not have taken effect."
                 )
                 _request_failed(op, task_id, e, request="stop", note=note)
