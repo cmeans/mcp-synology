@@ -504,6 +504,10 @@ class TestPhotoTask:
              f"{INFO}/get_status: DSM answered HTTP 502.", True),
             (httpx.Response(403, text="<html>Forbidden</html>"), "unavailable",
              f"{INFO}/get_status: DSM answered HTTP 403.", False),
+            # A 414 comes from a proxy too: a status URL is short (#325).
+            (httpx.Response(414, text="<html>Too long</html>"), "unavailable",
+             f"{INFO}/get_status: DSM rejected the request with HTTP 414 (Request-URI Too "
+             "Large).", False),
             (httpx.Response(200, text="<html>Sign in</html>", headers=HTML),
              "unavailable",
              f"{INFO}/get_status: the answer wasn't a DSM reply (Content-Type text/html).", True),
@@ -536,6 +540,7 @@ class TestPhotoTask:
         assert err["suggestion"].endswith(
             "Call photo_task with this handle to see whether the task is still running."
         )
+        assert "Reduce the size" not in err["suggestion"]
         if "DSM reply" in detail:  # the error's own hint comes first, as in file_task
             assert "reverse proxy" in err["suggestion"]
         assert len(fake.of(INFO, "abort_task")) == (action == "stop")

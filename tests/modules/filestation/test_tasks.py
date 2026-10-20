@@ -1151,6 +1151,8 @@ class TestFileTask:
             (httpx.Response(502, text="<html>Bad Gateway</html>"), "DSM answered HTTP 502", True),
             # A 4xx isn't retryable, as on every other call (DsmHttpError.retryable).
             (httpx.Response(403, text="<html>Forbidden</html>"), "DSM answered HTTP 403", False),
+            # A 414 comes from a proxy too: a status URL is short (#325).
+            (httpx.Response(414, text="<html>Too long</html>"), "HTTP 414", False),
         ],
     )  # fmt: skip
     @respx.mock
@@ -1187,6 +1189,7 @@ class TestFileTask:
         assert err["message"].endswith("Nothing was stopped.") is (action == "stop")
         assert not any(w in err["message"] for w in ("login", "Bad Gateway", "Forbidden"))
         assert "file_task with this handle" in err["suggestion"]
+        assert "Reduce the size" not in err["suggestion"]
         assert ("SYNO.FileStation.Delete", "stop") not in calls
 
     @pytest.mark.parametrize(
@@ -1196,6 +1199,7 @@ class TestFileTask:
              "the answer wasn't a DSM reply (Content-Type text/html).", True),
             (httpx.Response(502, text="Bad Gateway"), "DSM answered HTTP 502.", True),
             (httpx.Response(403, text="Forbidden"), "DSM answered HTTP 403.", False),
+            (httpx.Response(414, text="Too long"), "HTTP 414 (Request-URI Too Large).", False),
         ],
     )  # fmt: skip
     @respx.mock

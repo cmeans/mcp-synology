@@ -404,7 +404,8 @@ async def delete_photo_folders(
 # -- photo_task ---------------------------------------------------------------------
 
 
-_NO_ANSWER = (httpx.TransportError, DsmHttpError, DsmReplyError)
+# A 414 too: a status, stop or lookup URL is short, so it comes from a proxy (#325).
+_NO_ANSWER = (httpx.TransportError, DsmHttpError, DsmReplyError, RequestTooLongError)
 
 
 async def _target(
@@ -469,7 +470,8 @@ def _request_failed(op: str, task_id: int, exc: Exception, *, request: str, note
     else:
         code, detail = ErrorCode.UNAVAILABLE, str(exc)
         retryable = bool(getattr(exc, "retryable", True))
-        hint = getattr(exc, "suggestion", None)
+        # A 414's own suggestion (make the request smaller) doesn't fit a short URL.
+        hint = None if isinstance(exc, RequestTooLongError) else getattr(exc, "suggestion", None)
         suggestion = f"{hint} {follow_up}" if hint else follow_up
     error_response(
         code,

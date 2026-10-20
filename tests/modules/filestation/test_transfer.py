@@ -376,34 +376,44 @@ class TestDownloadFile:
         assert list(tmp_path.iterdir()) == []
 
     @respx.mock
-    @pytest.mark.parametrize(
-        ("entry", "code", "message"),
-        [
-            ({"code": 407, "path": "/video/x.mkv"}, "permission_denied",
-             "Download failed: no permission to read /video/x.mkv on the NAS."),
-            ({"path": "/video/x.mkv", "name": "x.mkv", "isdir": True}, "invalid_parameter",
-             "Download failed: /video/x.mkv is a folder; download_file fetches one file."),
-        ],
-    )  # fmt: skip
-    async def test_download_refused_up_front(
-        self,
-        mock_client: DsmClient,
-        tmp_path: Path,
-        entry: dict[str, object],
-        code: str,
-        message: str,
+    async def test_download_unreadable_path_refused_up_front(
+        self, mock_client: DsmClient, tmp_path: Path
     ) -> None:
-        """A path the user can't read (407 entry) or a folder: DSM would answer the download
+        """A path the user can't read (getinfo's 407 entry): DSM would answer the download
         with the same bare 502 as a missing file (vdsm 7.1, 7.2.2), so it's refused first."""
         calls = self._route(
-            httpx.Response(200, json={"success": True, "data": {"files": [entry]}}),
+            httpx.Response(
+                200, json={"success": True, "data": {"files": [{"code": 407, "path": "/v"}]}}
+            ),
             httpx.Response(502, text="<html>DSM error page</html>"),
         )
         with pytest.raises(ToolError) as exc_info:
             await download_file(mock_client, path="/video/x.mkv", dest_folder=str(tmp_path))
         err = json.loads(str(exc_info.value))["error"]
-        assert (err["code"], err["message"], err["retryable"]) == (code, message, False)
+        assert (err["code"], err["message"], err["retryable"]) == (
+            "permission_denied",
+            "Download failed: no permission to read /video/x.mkv on the NAS.",
+            False,
+        )
         assert calls == ["getinfo"]
+
+    @respx.mock
+    async def test_download_folder_is_unchanged(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """A folder downloads as DSM's ZIP, as before; a share root's 502 (also a folder in
+        getinfo) keeps the old error, not "exists, retry" (vdsm 7.1, 7.2.2)."""
+        folder = {"path": "/video/shows", "name": "shows", "isdir": True}
+        info = httpx.Response(200, json={"success": True, "data": {"files": [folder]}})
+        self._route(info, httpx.Response(200, content=b"PK\x03\x04zip"))
+        await download_file(mock_client, path="/video/shows", dest_folder=str(tmp_path))
+        assert (tmp_path / "shows").read_bytes() == b"PK\x03\x04zip"
+
+        self._route(info, httpx.Response(502, text="<html>DSM error page</html>"))
+        with pytest.raises(ToolError) as exc_info:
+            await download_file(mock_client, path="/video", dest_folder=str(tmp_path))
+        err = json.loads(str(exc_info.value))["error"]
+        assert (err["code"], err["retryable"]) == ("filestation_error", False)
 
     @respx.mock
     async def test_download_dsm_error_code_over_500_is_not_an_http_status(
@@ -426,16 +436,35 @@ class TestDownloadFile:
         "getinfo",
         [
             httpx.Response(502, text="<html>Bad Gateway</html>"),
-            httpx.Response(
-                200, json={"success": True, "data": {"files": [{"code": 418, "path": "/v"}]}}
-            ),
+            httpx.Response(200, text="<html>Sign in</html>", headers={"content-type": "text/html"}),
         ],
-        ids=["getinfo-failed", "other-error-entry"],
+        ids=["getinfo-502", "getinfo-page"],
     )
-    async def test_download_5xx_when_getinfo_didnt_say_keeps_the_old_error(
+    async def test_download_5xx_after_an_unanswered_check_is_retryable(
         self, mock_client: DsmClient, tmp_path: Path, getinfo: httpx.Response
     ) -> None:
-        """Without getinfo finding the file, the 502 may be DSM's missing-file reply."""
+        """#324's own case: a proxy answering 502 answers the getinfo check too. Neither got
+        a DSM answer, so it's a server or proxy failure; a retry that gets through reports a
+        missing file as not_found."""
+        self._route(getinfo, httpx.Response(502, text="<html>Bad Gateway</html>"))
+        with pytest.raises(ToolError) as exc_info:
+            await download_file(mock_client, path="/video/x.mkv", dest_folder=str(tmp_path))
+        err = json.loads(str(exc_info.value))["error"]
+        assert (err["code"], err["retryable"]) == ("unavailable", True)
+        assert err["message"] == (
+            "Download failed: DSM, or a proxy in front of it, answered HTTP 502 and the check "
+            "of /video/x.mkv before it got no DSM answer either."
+        )
+
+    @respx.mock
+    async def test_download_5xx_when_getinfo_didnt_say_keeps_the_old_error(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """getinfo answered, but not that the file exists: the 502 may be DSM's
+        missing-file reply."""
+        getinfo = httpx.Response(
+            200, json={"success": True, "data": {"files": [{"code": 418, "path": "/v"}]}}
+        )
         self._route(getinfo, httpx.Response(502, text="<html>Bad Gateway</html>"))
         with pytest.raises(ToolError) as exc_info:
             await download_file(mock_client, path="/video/x.mkv", dest_folder=str(tmp_path))

@@ -748,21 +748,28 @@ def _unanswered(
 
 
 def _unreadable(
-    handle: Handle, exc: DsmHttpError | DsmReplyError, *, operation: str, note: str
+    handle: Handle,
+    exc: DsmHttpError | DsmReplyError | RequestTooLongError,
+    *,
+    operation: str,
+    note: str,
 ) -> NoReturn:
     """Raise the structured error for a status or stop request answered with an HTTP error
-    status or something that isn't a DSM reply (a proxy's 502 or login page, #282)."""
+    status or something that isn't a DSM reply (a proxy's 502 or login page, #282). A 414
+    comes from a proxy too: a status or stop URL is short, so its own suggestion (make the
+    request smaller) doesn't apply (#325)."""
     follow_up = (
         "Call file_task with this handle to see whether the task is still running, or list "
         "the path to see what's left."
     )
+    hint = None if isinstance(exc, RequestTooLongError) else exc.suggestion
     error_response(
         ErrorCode.UNAVAILABLE,
         f"{operation} failed for `{handle}`: {exc}{note}",
         retryable=exc.retryable,
         param="handle",
         value=str(handle),
-        suggestion=f"{exc.suggestion} {follow_up}" if exc.suggestion else follow_up,
+        suggestion=f"{hint} {follow_up}" if hint else follow_up,
     )
 
 
@@ -808,7 +815,7 @@ async def file_task(
             data: dict[str, Any] = await client.request(
                 parsed.api, "status", version=version, params={"taskid": taskid}
             )
-        except (DsmHttpError, DsmReplyError) as e:
+        except (DsmHttpError, DsmReplyError, RequestTooLongError) as e:
             stopping = action == "stop"
             _unreadable(
                 parsed,
@@ -871,7 +878,7 @@ async def file_task(
                 params={"taskid": taskid},
                 read_timeout=STOP_TIMEOUT,
             )
-        except (DsmHttpError, DsmReplyError) as e:
+        except (DsmHttpError, DsmReplyError, RequestTooLongError) as e:
             _unreadable(
                 parsed, e, operation="Stop task", note=" The stop may or may not have taken effect."
             )
