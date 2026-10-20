@@ -82,7 +82,36 @@ class TestCopyMove:
             out = await copy_or_move(
                 client, operation="copy", ids=[12], folders=None, destination="14"
             )
-        assert "1 skipped (already there)" in out
+        # DSM's completion counts the skipped item (captured: completion 1, skip 1), so
+        # the headline mustn't say it was copied (rc4 live test).
+        assert out.splitlines()[0] == (
+            "Nothing was copied to /mcp-spec-capture/dest (personal space) (1 item(s) "
+            "requested): 1 of 1 done, 1 skipped (already there), 0 overwritten."
+        )
+
+    @pytest.mark.parametrize(
+        ("status", "line"),
+        [
+            (
+                {"completion": 3, "total": 3, "skip": 1},
+                "Move of 3 item(s) to /d finished: 3 of 3 done, 1 skipped (already there), "
+                "0 overwritten.",
+            ),
+            (
+                {"completion": 2, "total": 2, "skip": 1, "error": 1},
+                "Nothing was moved to /d (2 item(s) requested): 2 of 2 done, 1 skipped "
+                "(already there), 0 overwritten, 1 failed.",
+            ),
+            (
+                {"completion": 2, "total": 2},
+                "Moved 2 item(s) to /d: 2 of 2 done, 0 skipped (already there), 0 overwritten.",
+            ),
+        ],
+        ids=["some-skipped", "none-moved", "all-moved"],
+    )
+    def test_finished_headline(self, status: dict[str, Any], line: str) -> None:
+        n = status["total"]
+        assert tasks._finished_line("move", f"{n} item(s)", "/d", status) == line
 
     @respx.mock
     async def test_timeout_hands_off(self) -> None:

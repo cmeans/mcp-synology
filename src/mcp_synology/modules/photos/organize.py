@@ -184,9 +184,9 @@ def _taken_time(op: str, value: str) -> int:
             param="taken_time",
             value=value,
         )
-    if when.tzinfo is None:
-        when = when.replace(tzinfo=datetime.UTC)
-    return int(when.timestamp())
+    # Photos stores the wall-clock time, encoded as if UTC (helpers.photo_time), so an
+    # offset is dropped rather than converted: 10:00+02:00 is stored as 10:00.
+    return int(when.replace(tzinfo=datetime.UTC).timestamp())
 
 
 async def edit_photo(

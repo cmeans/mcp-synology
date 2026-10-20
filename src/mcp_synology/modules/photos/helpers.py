@@ -27,7 +27,7 @@ from mcp_synology.core.errors import (
     ErrorCode,
     SynologyError,
 )
-from mcp_synology.core.formatting import error_response, format_timestamp
+from mcp_synology.core.formatting import error_response
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Sequence
@@ -558,10 +558,21 @@ def check_ids(
         invalid(operation, f"at most {limit} ids per call.", param=param, value=len(ids))
 
 
+def photo_time(seconds: float) -> str:
+    """A Photos ``time`` as ``YYYY-MM-DD HH:MM:SS``, with no zone.
+
+    Photos stores the wall-clock time a photo was taken (EXIF's, or the file's time in
+    the NAS's zone) encoded as if it were UTC: a file with mtime 16:09:03 UTC on a NAS
+    in US Central (CDT) reads back as 11:09:03 (seska, Synology Photos 1.3.4, rc4). So
+    it isn't a UTC instant, and is shown as the local time it records.
+    """
+    return datetime.datetime.fromtimestamp(seconds, tz=datetime.UTC).strftime("%Y-%m-%d %H:%M:%S")
+
+
 def taken(item: dict[str, Any]) -> str:
-    """An item's taken time (Unix seconds) as UTC."""
+    """An item's taken time as Photos records it (local wall-clock time, no zone)."""
     value = item.get("time")
-    return format_timestamp(float(value)) if value else "—"
+    return photo_time(float(value)) if value else "—"
 
 
 def is_indexing(item: dict[str, Any]) -> bool:
@@ -571,7 +582,8 @@ def is_indexing(item: dict[str, Any]) -> bool:
 
 
 def parse_date(operation: str, param: str, value: str, *, end: bool = False) -> int:
-    """``YYYY-MM-DD`` (UTC) as Unix seconds; ``end`` gives the day's last second."""
+    """``YYYY-MM-DD`` as Unix seconds in Photos' encoding (see ``photo_time``): the
+    day's local wall-clock times. ``end`` gives the day's last second."""
     try:
         day = datetime.date.fromisoformat(value)
     except ValueError:

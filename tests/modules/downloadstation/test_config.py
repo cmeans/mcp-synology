@@ -308,8 +308,15 @@ class TestSetDownloadConfig:
         envelope = _envelope(exc.value)
         assert envelope["code"] == "permission_denied"
         assert "silently ignores" in envelope["message"]
-        assert "bt_max_download" in envelope["message"]
+        assert "bt_max_download requires a Download Station" in envelope["message"]
         assert not route.called
+
+    @respx.mock
+    async def test_non_manager_refusal_names_each_field(self, mock_client: DsmClient) -> None:
+        _manager(is_manager=False)
+        with pytest.raises(ToolError) as exc:
+            await set_download_config(mock_client, bt_max_download=1, bt_max_upload=2)
+        assert "bt_max_download, bt_max_upload require a" in _envelope(exc.value)["message"]
 
     @respx.mock
     async def test_non_manager_default_destination_is_sent(self, mock_client: DsmClient) -> None:

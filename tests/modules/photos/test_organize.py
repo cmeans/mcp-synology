@@ -272,15 +272,18 @@ class TestEditPhoto:
         assert "Not found: 9" in out
 
     @respx.mock
-    async def test_shift_hours_and_naive_time_is_utc(self) -> None:
+    async def test_shift_hours_and_taken_time_is_wall_clock(self) -> None:
+        """Photos stores wall-clock time encoded as if UTC, so an offset is dropped."""
         fake = FakePhotos().on(ITEM, "get", 2, _items(15)).on(ITEM, "set", 2, {"error_list": []})
         install(fake)
         client = make_client()
         async with client:
             await edit_photo(client, ids=[15], shift_hours=-1.5)
             await edit_photo(client, ids=[15], taken_time="2020-09-13T12:26:40")
+            await edit_photo(client, ids=[15], taken_time="2020-09-13T12:26:40+02:00")
         assert [c.params for c in fake.of(ITEM, "set")] == [
             {"id": [15], "shift_time": -5400},
+            {"id": [15], "time": 1600000000},
             {"id": [15], "time": 1600000000},
         ]
 

@@ -17,7 +17,9 @@ from mcp_synology.modules.photos.helpers import (
     is_indexing,
     page_footer,
     parse_date,
+    photo_time,
     prefix,
+    taken,
 )
 from tests.modules.photos.dsm import CAPTURE_191, PEOPLE, FakePhotos, captured, install, make_client
 
@@ -48,6 +50,13 @@ class TestBasics:
             "ok": "true",
             "ids": "[1]",
         }
+
+    def test_photo_time_has_no_zone(self) -> None:
+        """Photos' ``time`` is wall-clock time encoded as if UTC: a file with mtime
+        16:09:03 UTC on a NAS in CDT reads back as 11:09:03 (seska, rc4)."""
+        assert photo_time(1792494543) == "2026-10-20 11:09:03"
+        assert taken({"time": 1792494543}) == "2026-10-20 11:09:03"
+        assert taken({}) == "—"
 
     def test_parse_date(self) -> None:
         assert parse_date("Op", "d", "2024-07-04") == 1720051200

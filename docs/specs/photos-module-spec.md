@@ -194,7 +194,7 @@ Tools take the IDs list calls return, and also **names where they're unique**: t
 
 ### Formatting
 
-Plain text through the shared formatters. `time` (taken time) is Unix seconds and shown as UTC (`YYYY-MM-DD HH:MM:SS UTC`); `indexed_time` and task `create_time` are **milliseconds**. Sizes are binary units. Shared links are shown in full: they are what the user asked for.
+Plain text through the shared formatters. `time` (taken time) is Unix seconds, but it encodes the **wall-clock** time the photo was taken as if it were UTC: EXIF's time, or for a file without one its mtime in the NAS's zone (a file with mtime 16:09:03 UTC reads back as 11:09:03 on a NAS in US Central time, seska, Photos 1.3.4, 0.10.0rc4 live test). So it's shown with no zone (`YYYY-MM-DD HH:MM:SS`), and date filters and `taken_time` use the same encoding; `indexed_time` and task `create_time` are **milliseconds**. Sizes are binary units. Shared links are shown in full: they are what the user asked for.
 
 ### Errors
 
@@ -252,8 +252,8 @@ Browse or search items.
 | `place` | `int` | No | — | Place ID from `list_photo_collections(type="place")`. Can't be combined with other filters. |
 | `tag` | `str` | No | — | Tag name. |
 | `keyword` | `str` | No | — | Search text. Can't be combined with other filters. |
-| `start_date` | `str` | No | — | `YYYY-MM-DD` (UTC), inclusive. |
-| `end_date` | `str` | No | — | `YYYY-MM-DD` (UTC), inclusive. |
+| `start_date` | `str` | No | — | `YYYY-MM-DD`, inclusive: the taken time's own date (Photos' times carry no zone). |
+| `end_date` | `str` | No | — | `YYYY-MM-DD`, inclusive: the taken time's own date. |
 | `type` | `str` | No | `"all"` | `all`, `photo` or `video`. |
 | `min_rating` | `int` | No | — | 1–5. |
 | `favorite` | `bool` | No | — | Only favorites. Photos 1.9.1+; on 1.3.4, `not_supported`. |
@@ -270,8 +270,8 @@ Photos in /Trips/2024 (personal space; newest first)
 ==============================================================================
   ID   Filename          Taken                    Type   Size      Folder
   ───  ────────────────  ───────────────────────  ─────  ────────  ───────────
-  41   beach-sunset.jpg  2024-07-04 19:30:00 UTC  photo  50.1 KiB  /Trips/2024
-  36   clip-test.mp4     2024-07-06 07:00:00 UTC  video  22.2 KiB  /Trips/2024
+  41   beach-sunset.jpg  2024-07-04 19:30:00  photo  50.1 KiB  /Trips/2024
+  36   clip-test.mp4     2024-07-06 07:00:00  video  22.2 KiB  /Trips/2024
 
 2 item(s) total; showing 1–2.
 ```
@@ -354,7 +354,7 @@ One or more items in full.
 ```
 Item 41: beach-sunset.jpg
   Folder:       /Trips/2024 (personal space)
-  Taken:        2024-07-04 19:30:00 UTC
+  Taken:        2024-07-04 19:30:00
   Size:         50.1 KiB · 1600×1200 · photo
   Rating:       4 · favorite: yes (1.9.1+)
   Description:  spec capture
@@ -618,8 +618,10 @@ Album 9 "Trip 2024" is shared.
 **Response shape:**
 
 ```
-Copied 3 item(s) and 1 folder to /Albums/Best (personal space): 4 done, 1 skipped (already there), 0 overwritten.
+Copied 3 item(s) and 1 folder to /Albums/Best (personal space): 4 done, 0 skipped (already there), 0 overwritten.
 ```
+
+DSM's `completion` counts skipped and failed items too (captured: `completion: 1, skip: 1`), so when anything was skipped or failed the headline doesn't say "Copied": `Copy of 3 item(s) to /Albums/Best (personal space) finished: 3 of 3 done, 1 skipped (already there), 0 overwritten.`, or `Nothing was copied to … (1 item(s) requested): …` when every item was skipped or failed (0.10.0rc4 live test).
 
 Still running at `task_timeout`: `Still copying on the NAS (2 of 9 done). Handle: photos:14 — check with photo_task.` When a status check fails, the lead says why instead: `The NAS didn't answer a status check (ReadTimeout)`, `The NAS, or a proxy in front of it, answered a status check with an error (HTTP 504)` or `The NAS's status reply couldn't be read (not a DSM reply; a proxy or captive portal may be answering)`, followed by `; the task is most likely still copying.` and the handle. Failed items from `get_error_detail` follow as `  item 41: <reason>` lines.
 
@@ -739,7 +741,7 @@ Photos rewrites tagged files, so their dates and sizes change.
 | `space` | `str` | No | `"personal"` | |
 | `rating` | `int` | No | — | 0–5; outside that, DSM answers 120 (`reason: condition`, verified). |
 | `description` | `str` | No | — | `""` clears. |
-| `taken_time` | `str` | No | — | ISO 8601 date-time (UTC if no offset) → `time` (Unix seconds). |
+| `taken_time` | `str` | No | — | ISO 8601 date-time → `time`, as the wall-clock time it names: an offset is dropped, not converted (`10:00+02:00` is stored as 10:00), since Photos keeps no zone. |
 | `shift_hours` | `float` | No | — | → `shift_time` (seconds). |
 | `rotate` | `str` | No | — | `left` (`counter_clockwise`, verified) or `right` (`clockwise`, verified on both). |
 | `favorite` | `bool` | No | — | 1.9.1+ (verified set and unset). On 1.3.4, `not_supported`. |

@@ -235,7 +235,8 @@ async def test_get_photo(photos: DsmClient) -> None:
     async with seeded(photos, JPEGS[:1]) as (path, ids):
         out = await get_photo(photos, ids=[ids["beach-sunset.jpg"], 999999], exif=True)
         assert f"Folder:       {path} (personal space)" in out
-        assert "2024-07-04 19:30:00 UTC" in out
+        # EXIF DateTimeOriginal, shown as recorded: Photos times carry no zone.
+        assert "2024-07-04 19:30:00\n" in out
         assert "SeedCam 1" in out and "41.8781" in out
         assert "GPS Latitude" in out
         assert out.endswith("Not found: 999999")
@@ -341,7 +342,7 @@ async def test_tags_and_edits(photos: DsmClient) -> None:
         # Photos re-indexes the rewritten file; the new taken time shows up then.
         async def retimed() -> str | None:
             details = await get_photo(photos, ids=[edited])
-            return details if "2021-02-03 04:05:06 UTC" in details else None
+            return details if "2021-02-03 04:05:06\n" in details else None
 
         details = await _wait_for(retimed, "the edited taken time")
         assert "Rating:       4" in details and "t258" in details
@@ -352,7 +353,7 @@ async def test_tags_and_edits(photos: DsmClient) -> None:
 
         async def shifted() -> str | None:
             details = await get_photo(photos, ids=[other])
-            return details if "2024-07-04 21:00:00 UTC" in details else None
+            return details if "2024-07-04 21:00:00\n" in details else None
 
         await _wait_for(shifted, "the shifted taken time")
 
@@ -460,7 +461,7 @@ async def test_copy_move_delete(photos: DsmClient) -> None:
         out = await copy_or_move(
             photos, operation="copy", ids=[ids["beach-sunset.jpg"]], folders=None, destination=dst
         )
-        assert "1 skipped (already there)" in out
+        assert out.startswith(f"Nothing was copied to {dst}") and "1 skipped (already there)" in out
         out = await copy_or_move(
             photos, operation="move", ids=[ids["city-night.jpg"]], folders=None, destination=dst
         )
