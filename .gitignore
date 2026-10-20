@@ -1,8 +1,9 @@
 # mcp-synology
 tests/integration_config.yaml
 
-# Virtual DSM test infrastructure (golden images ~2GB each)
-.vdsm/
+# Virtual DSM test infrastructure (golden images ~2GB each). `/.vdsm`, without a trailing
+# slash, also matches a worktree's `.vdsm` symlink to the main checkout's images.
+/.vdsm
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

@@ -152,10 +152,12 @@ Two required sections:
      and both are removed automatically once fixed:
      - **`Behind main`:** `main` has commits your branch doesn't. `main`
        requires branches to be up to date, so the PR can't merge until
-       you update it. Rebase onto `main`, or use GitHub's "Update
-       branch" button.
+       it's updated. Review goes ahead meanwhile: the branch is updated
+       (by you, or by the maintainer's dev agent) just before merging.
      - **`Merge conflict`:** your branch no longer merges cleanly.
-       Rebase onto `main` and resolve the conflicts.
+       Rebase onto `main` and resolve the conflicts. Review waits for
+       this one, since resolving it changes the diff: the PR loses
+       `Ready for QA` until the fix is pushed and CI passes again.
    - **`Rebuilds vdsm image`** is informational and doesn't block the
      merge. It's set automatically when the PR changes the vdsm bake
      files, so its vdsm runs rebuild the test image (about 10 extra
