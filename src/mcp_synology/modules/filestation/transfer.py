@@ -9,7 +9,12 @@ import shutil
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import TYPE_CHECKING, NoReturn
 
-from mcp_synology.core.errors import ErrorCode, SynologyError, SynologyFileExistsError
+from mcp_synology.core.errors import (
+    ErrorCode,
+    FileStationError,
+    SynologyError,
+    SynologyFileExistsError,
+)
 from mcp_synology.core.formatting import (
     error_response,
     format_size,
@@ -254,7 +259,11 @@ async def download_file(
     # Pre-flight disk space check using NAS file metadata.
     # Best-effort: if the API call fails, skip the check and let the
     # download proceed (client.download() also checks Content-Length).
+    # It also tells a missing file apart: DSM answers the download of one with an HTTP
+    # 502 and its own error page (DSM 7.1 and 7.2.2, #292), the same status a proxy
+    # gives for a server error (#324).
     nas_file_size: int | None = None
+    exists: bool | None = None  # None: the check didn't say
     try:
         info = await client.request(
             "SYNO.FileStation.List",
@@ -263,9 +272,23 @@ async def download_file(
         )
         files = info.get("files", [])
         if files:
-            nas_file_size = files[0].get("additional", {}).get("size", 0)
+            if files[0].get("code") == 408:  # getinfo's entry for a missing path (#161)
+                exists = False
+            elif "code" not in files[0]:
+                exists = True
+                nas_file_size = files[0].get("additional", {}).get("size", 0)
     except Exception as e:  # noqa: BLE001
         logger.debug("Pre-flight getinfo failed: %s", e)
+
+    if exists is False:
+        error_response(
+            ErrorCode.NOT_FOUND,
+            f"Download failed: {nas_path} doesn't exist on the NAS.",
+            retryable=False,
+            param="path",
+            value=nas_path,
+            suggestion="Check the path with list_files or search_files.",
+        )
 
     if nas_file_size:
         free_space = shutil.disk_usage(local_dir).free
@@ -302,6 +325,16 @@ async def download_file(
         # client.download() streams to a temp file and removes it on failure,
         # so there is nothing to clean up here. Never unlink dest_file: with
         # overwrite=True it is the user's pre-existing file.
+        if exists and isinstance(e, FileStationError) and (e.code or 0) >= 500:
+            # The file is there, so this 5xx is a server or proxy error, not DSM's
+            # answer for a missing file (#324).
+            error_response(
+                ErrorCode.UNAVAILABLE,
+                f"Download failed: DSM, or a proxy in front of it, answered HTTP {e.code} "
+                f"for {nas_path}, which exists.",
+                retryable=True,
+                suggestion="Try again shortly; if it keeps happening, run 'mcp-synology check'.",
+            )
         synology_error_response("Download", e)
     except OSError as e:
         # Filesystem rejected the write. Possibilities:

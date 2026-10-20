@@ -737,8 +737,9 @@ class TestNotADsmReply:
         self, tmp_path: Path, api: str, method: str
     ) -> None:
         """A 502 whose body is a JSON list crashed with AttributeError; it's the same
-        HTTP error as any other body that isn't a DSM envelope. File Station too: a 5xx
-        is never a missing file (#324)."""
+        HTTP error as any other body that isn't a DSM envelope."""
+        from mcp_synology.core.errors import FileStationError
+
         cache = make_api_cache()
         cache["SYNO.Foto.Thumbnail"] = ApiInfoEntry(path="entry.cgi", min_version=1, max_version=2)
         client = make_client(cache)
@@ -746,23 +747,14 @@ class TestNotADsmReply:
         async with client:
             with pytest.raises(SynologyError) as exc:
                 await self._download(client, api, tmp_path / "x")
-        assert isinstance(exc.value, DsmHttpError)
-        assert exc.value.status == 502
-        assert exc.value.retryable
-        assert not (tmp_path / "x").exists()
-
-    @respx.mock
-    async def test_file_station_download_4xx_keeps_its_own_error(self, tmp_path: Path) -> None:
-        """#324 changes only 5xx: a File Station 4xx without a DSM envelope stays a
-        FileStationError."""
-        from mcp_synology.core.errors import FileStationError
-
-        client = make_client(make_api_cache())
-        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(404, text="<html>Not Found</html>")
-        async with client:
-            with pytest.raises(FileStationError) as exc:
-                await self._download(client, "SYNO.FileStation.Download", tmp_path / "x")
-        assert str(exc.value) == "HTTP 404 from download API"
+        if api == "SYNO.FileStation.Download":
+            # DSM's own answer for a missing file is a bare 502 (#292); download_file
+            # tells it from a server error with getinfo (#324).
+            assert isinstance(exc.value, FileStationError)
+            assert str(exc.value) == "HTTP 502 from download API"
+        else:
+            assert isinstance(exc.value, DsmHttpError)
+            assert exc.value.status == 502
         assert not (tmp_path / "x").exists()
 
     @respx.mock

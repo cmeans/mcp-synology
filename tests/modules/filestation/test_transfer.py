@@ -317,6 +317,79 @@ class TestDownloadFile:
         # Partial file should not exist
         assert not (tmp_path / "nonexistent.mkv").exists()
 
+    @staticmethod
+    def _route(getinfo: httpx.Response, download: httpx.Response) -> list[str]:
+        """Answer getinfo and download separately; the methods called, in order."""
+        calls: list[str] = []
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            method = request.url.params.get("method", "")
+            calls.append(method)
+            return getinfo if method == "getinfo" else download
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        return calls
+
+    @respx.mock
+    async def test_download_missing_file_is_not_found_up_front(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """#324: getinfo's 408 entry is a missing file. DSM would answer the download with
+        a bare 502 (#292), which can't be told from a server error."""
+        calls = self._route(
+            httpx.Response(
+                200, json={"success": True, "data": {"files": [{"code": 408, "path": "/v/x"}]}}
+            ),
+            httpx.Response(502, text="<html>DSM error page</html>"),
+        )
+        with pytest.raises(ToolError) as exc_info:
+            await download_file(mock_client, path="/video/x.mkv", dest_folder=str(tmp_path))
+        err = json.loads(str(exc_info.value))["error"]
+        assert err["code"] == "not_found"
+        assert err["retryable"] is False
+        assert err["message"] == "Download failed: /video/x.mkv doesn't exist on the NAS."
+        assert calls == ["getinfo"]  # no download sent
+        assert list(tmp_path.iterdir()) == []
+
+    @respx.mock
+    @pytest.mark.parametrize("status", [502, 504])
+    async def test_download_5xx_on_a_file_that_exists_is_retryable(
+        self, mock_client: DsmClient, tmp_path: Path, status: int
+    ) -> None:
+        """#324: getinfo found the file, so a bare 5xx is a server or proxy error. It was
+        filestation_error "DSM error 502", not retryable, "check that the file exists"."""
+        info = {"files": [{"path": "/video/x.mkv", "name": "x.mkv", "additional": {"size": 3}}]}
+        calls = self._route(
+            httpx.Response(200, json={"success": True, "data": info}),
+            httpx.Response(status, text="<html>Bad Gateway</html>"),
+        )
+        with pytest.raises(ToolError) as exc_info:
+            await download_file(mock_client, path="/video/x.mkv", dest_folder=str(tmp_path))
+        err = json.loads(str(exc_info.value))["error"]
+        assert err["code"] == "unavailable"
+        assert err["retryable"] is True
+        assert err["message"] == (
+            f"Download failed: DSM, or a proxy in front of it, answered HTTP {status} for "
+            "/video/x.mkv, which exists."
+        )
+        assert calls == ["getinfo", "download"]
+        assert list(tmp_path.iterdir()) == []
+
+    @respx.mock
+    async def test_download_5xx_when_getinfo_failed_keeps_the_old_error(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """Without getinfo's answer the 502 may be DSM's missing-file reply: unchanged."""
+        self._route(
+            httpx.Response(502, text="<html>Bad Gateway</html>"),
+            httpx.Response(502, text="<html>Bad Gateway</html>"),
+        )
+        with pytest.raises(ToolError) as exc_info:
+            await download_file(mock_client, path="/video/x.mkv", dest_folder=str(tmp_path))
+        err = json.loads(str(exc_info.value))["error"]
+        assert err["code"] == "filestation_error"
+        assert err["retryable"] is False
+
     @respx.mock
     async def test_download_proxy_page_is_not_saved(
         self, mock_client: DsmClient, tmp_path: Path

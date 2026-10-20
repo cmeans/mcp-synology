@@ -1050,9 +1050,7 @@ class DsmClient:
                 error = _error_envelope(await resp.aread())
                 if error is not None:
                     raise error_from_code(error.get("code", 0), api, error.get("errors"))
-                if "FileStation" not in api or resp.status_code >= 500:
-                    # A 5xx is DSM's or a proxy's server error, never a missing file:
-                    # report it as one, retryable, for File Station too (#324).
+                if "FileStation" not in api:
                     _check_status(resp, f"{api}/{method}")
                 from mcp_synology.core.errors import FileStationError
 
