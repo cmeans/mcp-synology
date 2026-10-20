@@ -696,9 +696,9 @@ def create_server(config: AppConfig) -> MCPServer:
     if replacement is not None:
         instructions = replacement
     elif config.custom_instructions:
-        # Prepend custom instructions before base — gives them priority.
+        # Prepend custom instructions before the built-in text — gives them priority.
         # Strip each source on its own: an unclosed `<!--` in the custom text must not
-        # pair with a `-->` in the base file and swallow the text between them.
+        # pair with a `-->` in a built-in file and swallow the text between them.
         instructions = _strip_html_comments(config.custom_instructions).strip() + "\n\n" + builtin
     else:
         instructions = builtin

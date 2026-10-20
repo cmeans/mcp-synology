@@ -14,9 +14,10 @@ alias: HomeNAS
 #   specifies a different NAS by name.
 
 # Full replacement for the built-in server instructions.
-# Start from the built-in files in src/mcp_synology/instructions/ (server.md, then
-# filestation.md, filestation-write.md and local.md if you use File Station), customize
-# them in one file, and point to your version. Same template variables are supported.
+# Start from the built-in files in src/mcp_synology/instructions/ (server.md;
+# filestation.md and filestation-write.md if you use File Station; local.md if you use a
+# tool that reads or writes local files), customize them in one file, and point to your
+# version. Same template variables are supported.
 # instructions_file: ~/.config/mcp-synology/my-instructions.md
 
 connection:

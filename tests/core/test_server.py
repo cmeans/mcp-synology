@@ -359,13 +359,13 @@ class TestCreateServerInstructionPaths:
         config = make_test_config(custom_instructions="EXTRA RULES FOR THIS NAS")
         server = create_server(config)
         assert server is not None
-        # The instructions should contain both our custom text and the base text
+        # The instructions should contain both our custom text and the built-in text
         instructions = server.instructions or ""
         assert "EXTRA RULES FOR THIS NAS" in instructions
-        # Custom text appears before base
+        # Custom text appears before the built-in text
         custom_idx = instructions.index("EXTRA RULES FOR THIS NAS")
-        base_idx = instructions.index("PATH FORMAT")
-        assert custom_idx < base_idx
+        builtin_idx = instructions.index("PATH FORMAT")
+        assert custom_idx < builtin_idx
 
     def test_instructions_file_loaded(self, tmp_path: Path) -> None:
         instructions_file = tmp_path / "custom.md"
@@ -378,7 +378,7 @@ class TestCreateServerInstructionPaths:
         # Template variables get expanded — display_name should be filled in
         assert "{display_name}" not in instructions
 
-    def test_instructions_file_missing_falls_back_to_base(self, tmp_path: Path) -> None:
+    def test_instructions_file_missing_falls_back_to_builtin(self, tmp_path: Path) -> None:
         config = make_test_config(instructions_file=str(tmp_path / "nope.md"))
         server = create_server(config)
         assert server is not None

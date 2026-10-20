@@ -1,5 +1,5 @@
 <!-- File Station's guidance for its WRITE tools: sent after filestation.md when the
-filestation module has permission: write (#318). -->
+filestation module has permission: write or admin (#318). -->
 UPLOADING:
 - upload_file: Upload a local file to the NAS (local path + NAS destination folder)
 It doesn't overwrite an existing file by default — use overwrite=true when intended.
