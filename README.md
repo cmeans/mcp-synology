@@ -29,6 +29,8 @@
 
 MCP server for Synology NAS devices. Exposes Synology DSM API functionality as MCP tools that Claude can use.
 
+Tested against DSM 7.1, 7.2.2, 7.3.2 and 7.4.1: CI runs the integration tests for every module on a virtual DSM of each version.
+
 <!-- mcp-name: io.github.cmeans/mcp-synology -->
 
 ## Migrating from synology-mcp
@@ -58,6 +60,8 @@ Browse, search, transfer, and manage files on your NAS. 15 tools across two perm
 
 - **READ** — list_shares, list_files, list_recycle_bin, search_files, get_file_info, get_dir_size, download_file
 - **WRITE** — create_folder, rename, copy_files, move_files, delete_files, restore_from_recycle_bin, upload_file, file_task
+
+`download_file` of a folder saves DSM's ZIP of it as `<folder>.zip` (or under `filename`, when given). A whole shared folder can't be downloaded this way (DSM doesn't send one), so it's refused.
 
 ### System
 
@@ -158,9 +162,9 @@ Tested against DSM 7.1 (Synology Photos 1.3.4), DSM 7.2.2, 7.3.2 and 7.4.1 (Syno
 ## Features
 
 - **Interactive setup** — guided configuration that creates your config, stores credentials, handles 2FA, and emits a Claude Desktop snippet
-- **Permission tiers** — READ or WRITE per module, enforced at tool registration. Tiers control what the server can do on the NAS; `download_file`, which writes on this machine, is annotated as destructive so your client can confirm it. A read-only connection tells the model which tools it withholds and how to enable them, so the model doesn't claim the server can't do it
-- **Long operations keep running** — a large delete, copy, move or recycle-bin restore reports progress while the call waits, and if it's still running when the wait ends (30 s by default) the NAS keeps working on it: the reply gives a handle for `file_task`, which checks on it, lists running operations or stops one. See [File Station settings](#file-station-settings)
-- **Local path confinement** — `upload_file`, `download_file` and `create_download`'s torrent files only use local folders listed in `allowed_local_paths`, by default your Downloads folder. Set it at the top level of the config for every module, or per module in that module's settings. A module's own list adds to the top-level list when that's set. Without a top-level list, it **replaces** the Downloads default, so include `~/Downloads` if you still want it. `create_download` only reads `.torrent` and `.nzb` files. Symlinks and `..` are resolved first, so they can't lead outside. Set it to `["/"]` to allow everything (macOS/Linux)
+- **Permission tiers** — READ or WRITE per module, enforced at tool registration. Tiers control what the server can do on the NAS. Tools that write on this machine (`download_file`, `download_photos`) are annotated as destructive so your client can confirm them, and so is every WRITE tool except `create_folder`, `rename`, `upload_photos`, `create_download`, `pause_download` and `resume_download`. A read-only connection tells the model which tools it withholds and how to enable them, so the model doesn't claim the server can't do it
+- **Long operations keep running** — a large delete, copy, move or recycle-bin restore reports progress while the call waits, and if it's still running when the wait ends (30 s by default) the NAS keeps working on it: the reply gives a handle for `file_task`, which checks on it, lists running operations or stops one. See [File Station settings](#file-station-settings). Photos' `copy_photos`, `move_photos`, `delete_photos` and `delete_photo_folders` also hand off, after `task_timeout` (default 30 s, up to 600), with a `photos:<id>` handle for `photo_task`
+- **Local path confinement** — `upload_file`, `download_file`, `upload_photos`, `download_photos` and `create_download`'s torrent files only use local folders listed in `allowed_local_paths`, by default your Downloads folder. Set it at the top level of the config for every module, or per module in that module's settings (File Station, Download Station and Photos each have their own list). A module's own list adds to the top-level list when that's set. Without a top-level list, it **replaces** the Downloads default, so include `~/Downloads` if you still want it. `create_download` only reads `.torrent` and `.nzb` files. Symlinks and `..` are resolved first, so they can't lead outside. Set it to `["/"]` to allow everything (macOS/Linux)
 - **2FA support** — auto-detected; device token bootstrap with automatic silent re-auth
 - **Secure credentials** — OS keyring integration that works transparently on macOS, Windows, and Linux (including from Claude Desktop). See [docs/credentials.md](docs/credentials.md).
 - **Multi-NAS** — manage multiple NAS devices with separate configs, credentials, and state
@@ -347,6 +351,7 @@ Other settings:
 - `default_upload_dir` — NAS folder `upload_file` uses when no `dest_folder` is given.
 - `hide_recycle_in_listings` — hide `#recycle` folders from `list_files` (default: `false`).
 - `file_type_indicator` — `emoji` (default) or `text` markers in listings.
+- `search_poll_interval` — seconds `search_files` waits between checks on DSM's search while it runs (default `1.0`, `0.5`–`10.0` accepted).
 
 See [docs/specs/config-schema-spec.md](docs/specs/config-schema-spec.md) for the full schema, and [examples/config-power-user.yaml](examples/config-power-user.yaml) for a complete config.
 
@@ -411,7 +416,7 @@ See [DEVELOPMENT.md](DEVELOPMENT.md) for build commands, testing, integration te
 
 This project was built using a **Spec-First Coding** approach — a human-AI collaboration model where design precedes implementation and specs are the contract between the two.
 
-Unlike vibe coding, where you describe what you want and let the AI generate code on the fly, spec-first coding treats design as a separate, deliberate phase. The four specs in `docs/specs/` were developed through extended conversation — exploring trade-offs, rejecting alternatives, and documenting decisions with rationale. Implementation then used the specs as the source of truth across 11 build phases.
+Unlike vibe coding, where you describe what you want and let the AI generate code on the fly, spec-first coding treats design as a separate, deliberate phase. The four original specs in `docs/specs/` were developed through extended conversation — exploring trade-offs, rejecting alternatives, and documenting decisions with rationale. Implementation then used the specs as the source of truth across 11 build phases.
 
 Live testing against real hardware revealed behaviors the specs couldn't anticipate (DSM API quirks, such as JSON-parsed parameter values that once looked like search-service throttling, and version format incompatibilities). These discoveries are documented in `CLAUDE.md` and the code, which is authoritative where specs diverge.
 
