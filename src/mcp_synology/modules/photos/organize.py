@@ -19,7 +19,7 @@ from mcp_synology.modules.photos.helpers import (
     in_batches,
     invalid,
     not_found,
-    parse_date,
+    parse_expires,
     rejected_text,
     space_label,
 )
@@ -184,9 +184,9 @@ def _taken_time(op: str, value: str) -> int:
             param="taken_time",
             value=value,
         )
-    if when.tzinfo is None:
-        when = when.replace(tzinfo=datetime.UTC)
-    return int(when.timestamp())
+    # Photos stores the wall-clock time, encoded as if UTC (helpers.photo_time), so an
+    # offset is dropped rather than converted: 10:00+02:00 is stored as 10:00.
+    return int(when.replace(tzinfo=datetime.UTC).timestamp())
 
 
 async def edit_photo(
@@ -485,7 +485,7 @@ async def photo_request(
         invalid(op, "max_file_mib can't be negative.", param="max_file_mib", value=max_file_mib)
     expiration = None
     if expires is not None:
-        expiration = 0 if expires == "never" else parse_date(op, "expires", expires, end=True)
+        expiration = parse_expires(op, expires)
     try:
         ph = Photos(client, "personal", op)
         if action == "list":

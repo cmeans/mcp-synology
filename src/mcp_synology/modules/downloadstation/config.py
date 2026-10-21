@@ -190,7 +190,8 @@ async def set_download_config(
     if is_manager is False and nas_wide:
         error_response(
             ErrorCode.PERMISSION_DENIED,
-            f"Set download config failed: {', '.join(nas_wide)} require a Download Station "
+            f"Set download config failed: {', '.join(nas_wide)} "
+            f"{'requires' if len(nas_wide) == 1 else 'require'} a Download Station "
             "manager/admin account. DSM accepts these changes from non-managers but "
             "silently ignores them, so nothing was sent.",
             retryable=False,

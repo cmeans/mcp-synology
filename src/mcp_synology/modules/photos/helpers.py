@@ -14,6 +14,7 @@ from __future__ import annotations
 import datetime
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, NoReturn
 
@@ -27,7 +28,7 @@ from mcp_synology.core.errors import (
     ErrorCode,
     SynologyError,
 )
-from mcp_synology.core.formatting import error_response, format_timestamp
+from mcp_synology.core.formatting import error_response
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Sequence
@@ -558,10 +559,21 @@ def check_ids(
         invalid(operation, f"at most {limit} ids per call.", param=param, value=len(ids))
 
 
+def photo_time(seconds: float) -> str:
+    """A Photos ``time`` as ``YYYY-MM-DD HH:MM:SS``, with no zone.
+
+    Photos stores the wall-clock time a photo was taken (EXIF's, or the file's time in
+    the NAS's zone) encoded as if it were UTC: a file with mtime 16:09:03 UTC on a NAS
+    in US Central (CDT) reads back as 11:09:03 (seska, Synology Photos 1.3.4, rc4). So
+    it isn't a UTC instant, and is shown as the local time it records.
+    """
+    return datetime.datetime.fromtimestamp(seconds, tz=datetime.UTC).strftime("%Y-%m-%d %H:%M:%S")
+
+
 def taken(item: dict[str, Any]) -> str:
-    """An item's taken time (Unix seconds) as UTC."""
+    """An item's taken time as Photos records it (local wall-clock time, no zone)."""
     value = item.get("time")
-    return format_timestamp(float(value)) if value else "—"
+    return photo_time(float(value)) if value else "—"
 
 
 def is_indexing(item: dict[str, Any]) -> bool:
@@ -571,7 +583,10 @@ def is_indexing(item: dict[str, Any]) -> bool:
 
 
 def parse_date(operation: str, param: str, value: str, *, end: bool = False) -> int:
-    """``YYYY-MM-DD`` (UTC) as Unix seconds; ``end`` gives the day's last second."""
+    """``YYYY-MM-DD`` as Unix seconds for that day read as UTC; ``end`` gives the day's
+    last second. That's Photos' own encoding of the day's wall-clock times (see
+    ``photo_time``), so it suits the taken-time filters and smart-album date spans. A
+    share link's or request's ``expires`` is a real instant: see ``parse_expires``."""
     try:
         day = datetime.date.fromisoformat(value)
     except ValueError:
@@ -584,6 +599,44 @@ def parse_date(operation: str, param: str, value: str, *, end: bool = False) -> 
     start = datetime.datetime(day.year, day.month, day.day, tzinfo=datetime.UTC)
     seconds = int(start.timestamp())
     return seconds + 86399 if end else seconds
+
+
+def parse_expires(operation: str, value: str) -> int:
+    """A share link's or photo request's ``expires`` as Unix seconds (0 for ``never``).
+
+    The expiration is a real UTC instant: DSM refuses a visitor after it whatever the
+    NAS's zone (verified on vdsm, 1.3.4 and 1.9.1, in US Central and India). A date is
+    the end of that day UTC; a date-time needs an offset or ``Z``, since without one it
+    names no instant (the NAS's zone isn't readable by a non-admin, and the user may be
+    in another zone anyway).
+    """
+    text = value.strip()
+    if text == "never":
+        return 0
+    problem = "isn't a date or date-time"
+    when: datetime.datetime | None = None
+    try:
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+            day = datetime.date.fromisoformat(text)
+            when = datetime.datetime(day.year, day.month, day.day, 23, 59, 59, tzinfo=datetime.UTC)
+        else:
+            when = datetime.datetime.fromisoformat(text)
+            if when.tzinfo is None:
+                problem, when = "has no offset", None
+    except ValueError:
+        when = None
+    # 0 is DSM's "never", and what DSM does with an earlier instant isn't known.
+    if when is not None and when.timestamp() <= 0:
+        problem, when = "isn't after 1970-01-01", None
+    if when is None:
+        invalid(
+            operation,
+            f"expires {value!r} {problem}: pass YYYY-MM-DD (the end of that day, UTC), a "
+            "date-time with an offset such as 2026-10-25T23:59:59-04:00, or never.",
+            param="expires",
+            value=value,
+        )
+    return int(when.timestamp())
 
 
 def page_footer(total: int | None, offset: int, shown: int, noun: str = "item(s)") -> str:

@@ -272,15 +272,18 @@ class TestEditPhoto:
         assert "Not found: 9" in out
 
     @respx.mock
-    async def test_shift_hours_and_naive_time_is_utc(self) -> None:
+    async def test_shift_hours_and_taken_time_is_wall_clock(self) -> None:
+        """Photos stores wall-clock time encoded as if UTC, so an offset is dropped."""
         fake = FakePhotos().on(ITEM, "get", 2, _items(15)).on(ITEM, "set", 2, {"error_list": []})
         install(fake)
         client = make_client()
         async with client:
             await edit_photo(client, ids=[15], shift_hours=-1.5)
             await edit_photo(client, ids=[15], taken_time="2020-09-13T12:26:40")
+            await edit_photo(client, ids=[15], taken_time="2020-09-13T12:26:40+02:00")
         assert [c.params for c in fake.of(ITEM, "set")] == [
             {"id": [15], "shift_time": -5400},
+            {"id": [15], "time": 1600000000},
             {"id": [15], "time": 1600000000},
         ]
 
@@ -734,6 +737,21 @@ class TestRequests:
         assert "Warning:   its folder no longer exists, so uploads fail." in out
 
     @respx.mock
+    async def test_update_expiry_with_offset(self) -> None:
+        listed = captured("request-list")
+        fake = FakePhotos().on(REQ, "list", 1, listed, listed).on(REQ, "update", 1, {})
+        install(fake)
+        client = make_client()
+        async with client:
+            await photo_request(
+                client, action="update", request="ZxOc9Ep8q", expires="2030-03-17T23:59:59-04:00"
+            )
+        assert fake.one(REQ, "update").params == {
+            "passphrase": "ZxOc9Ep8q",
+            "expiration": 1900036799,  # 2030-03-18 03:59:59 UTC
+        }
+
+    @respx.mock
     async def test_update_nothing_to_change(self) -> None:
         fake = FakePhotos().on(REQ, "list", 1, captured("request-list"))
         install(fake)
@@ -762,6 +780,7 @@ class TestRequests:
             ({"action": "update"}, "request"),
             ({"action": "list", "max_file_mib": -1}, "max_file_mib"),
             ({"action": "list", "expires": "2030"}, "expires"),
+            ({"action": "list", "expires": "2030-03-17T23:59:59"}, "expires"),
         ],
     )
     async def test_refusals(self, kwargs: dict[str, Any], param: str) -> None:

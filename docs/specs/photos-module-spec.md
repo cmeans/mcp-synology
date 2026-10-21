@@ -194,7 +194,7 @@ Tools take the IDs list calls return, and also **names where they're unique**: t
 
 ### Formatting
 
-Plain text through the shared formatters. `time` (taken time) is Unix seconds and shown as UTC (`YYYY-MM-DD HH:MM:SS UTC`); `indexed_time` and task `create_time` are **milliseconds**. Sizes are binary units. Shared links are shown in full: they are what the user asked for.
+Plain text through the shared formatters. `time` (taken time) is Unix seconds, but it encodes the **wall-clock** time the photo was taken as if it were UTC: EXIF's time, or for a file without one its mtime in the NAS's zone (a file with mtime 16:09:03 UTC reads back as 11:09:03 on a NAS in US Central time, seska, Photos 1.3.4, 0.10.0rc4 live test). On vdsm, `test_taken_time_is_wall_clock` pins it in four zones, one per DSM version (US Central, GMT, India's +05:30 and Amsterdam), reading the expected time from the NAS's own clock. Synology Photos applies a zone change to files it indexes afterwards, with no restart (vdsm 7.1, 7.2.2, 7.3.2 and 7.4.1). So it's shown with no zone (`YYYY-MM-DD HH:MM:SS`), and date filters and `taken_time` use the same encoding. Synology's web client does the same: it shows `time` with `dayjs.utc(1000 * time)` and parses EXIF strings with `.utc(true)` (1.3.4 bundle). The other times are **real UTC instants**, shown with "UTC" (each measured in US Central and India's +05:30 on vdsm 7.1 and 7.3.2, Photos 1.3.4 and 1.9.1): task `create_time` (**milliseconds**) matched the clock to the second; a share link's `expiration` gave `is_expired` false an hour ahead and true an hour back, in both zones; and for a share link and a photo request alike, a visitor's `SYNO.Core.Sharing.Login` succeeds before the `expiration` and fails after it (1000, "login fail"), in both zones. Seska (DSM 7.1.1, 1.3.4) gave the same link and request results. `indexed_time` is milliseconds too and isn't shown. Sizes are binary units. Shared links are shown in full: they are what the user asked for.
 
 ### Errors
 
@@ -252,8 +252,8 @@ Browse or search items.
 | `place` | `int` | No | — | Place ID from `list_photo_collections(type="place")`. Can't be combined with other filters. |
 | `tag` | `str` | No | — | Tag name. |
 | `keyword` | `str` | No | — | Search text. Can't be combined with other filters. |
-| `start_date` | `str` | No | — | `YYYY-MM-DD` (UTC), inclusive. |
-| `end_date` | `str` | No | — | `YYYY-MM-DD` (UTC), inclusive. |
+| `start_date` | `str` | No | — | `YYYY-MM-DD`, inclusive: the taken time's own date (Photos' times carry no zone). |
+| `end_date` | `str` | No | — | `YYYY-MM-DD`, inclusive: the taken time's own date. |
 | `type` | `str` | No | `"all"` | `all`, `photo` or `video`. |
 | `min_rating` | `int` | No | — | 1–5. |
 | `favorite` | `bool` | No | — | Only favorites. Photos 1.9.1+; on 1.3.4, `not_supported`. |
@@ -270,8 +270,8 @@ Photos in /Trips/2024 (personal space; newest first)
 ==============================================================================
   ID   Filename          Taken                    Type   Size      Folder
   ───  ────────────────  ───────────────────────  ─────  ────────  ───────────
-  41   beach-sunset.jpg  2024-07-04 19:30:00 UTC  photo  50.1 KiB  /Trips/2024
-  36   clip-test.mp4     2024-07-06 07:00:00 UTC  video  22.2 KiB  /Trips/2024
+  41   beach-sunset.jpg  2024-07-04 19:30:00  photo  50.1 KiB  /Trips/2024
+  36   clip-test.mp4     2024-07-06 07:00:00  video  22.2 KiB  /Trips/2024
 
 2 item(s) total; showing 1–2.
 ```
@@ -354,7 +354,7 @@ One or more items in full.
 ```
 Item 41: beach-sunset.jpg
   Folder:       /Trips/2024 (personal space)
-  Taken:        2024-07-04 19:30:00 UTC
+  Taken:        2024-07-04 19:30:00
   Size:         50.1 KiB · 1600×1200 · photo
   Rating:       4 · favorite: yes (1.9.1+)
   Description:  spec capture
@@ -522,8 +522,8 @@ Album 9: Trip 2024 · normal · 2 item(s) · 2024-07-04 – 2024-07-06 · not sh
 **Tool description (LLM-facing):**
 > Share a Synology Photos album by link, change its link settings, or stop sharing. action: share
 > (returns the link), update or stop. public: none, view or download; password (empty string
-> removes it); expires (YYYY-MM-DD, or never); users/groups with view, download or upload roles.
-> Personal space albums only.
+> removes it); expires (YYYY-MM-DD: end of that day UTC; a date-time with offset; or never);
+> users/groups with view, download or upload roles. Personal space albums only.
 
 **Parameters:**
 
@@ -533,7 +533,7 @@ Album 9: Trip 2024 · normal · 2 item(s) · 2024-07-04 – 2024-07-06 · not sh
 | `album` | `str` | **Yes** | — | Album ID or unique name. |
 | `public` | `str` | No | — | `none`, `view` or `download` (DSM privacy `private` / `public-view` / `public-download`). |
 | `password` | `str` | No | — | Set; `""` removes. |
-| `expires` | `str` | No | — | `YYYY-MM-DD` (end of day UTC) or `never` (`0`). |
+| `expires` | `str` | No | — | `YYYY-MM-DD` (end of that day UTC), an ISO 8601 date-time with an offset or `Z` (that instant; without an offset it's refused, since it names no instant), or `never` (`0`). The expiration is a real UTC instant (see Formatting). A value at or before 1970-01-01 is refused: 0 is DSM's `never`, and DSM's handling of an earlier instant isn't known. |
 | `members` | `list[dict]` | No | — | `{name, type: user|group, role: view|download|upload|none}`; `none` removes. Names resolved with `list_user_group`. |
 
 **Annotations:** `destructiveHint=true`: `stop` and `update` replace the link's settings (an old password or public access is gone).
@@ -618,10 +618,12 @@ Album 9 "Trip 2024" is shared.
 **Response shape:**
 
 ```
-Copied 3 item(s) and 1 folder to /Albums/Best (personal space): 4 done, 1 skipped (already there), 0 overwritten.
+Copied 3 item(s) and 1 folder(s) to /Albums/Best (personal space): 4 of 4 processed, 0 skipped (already there), 0 overwritten.
 ```
 
-Still running at `task_timeout`: `Still copying on the NAS (2 of 9 done). Handle: photos:14 — check with photo_task.` When a status check fails, the lead says why instead: `The NAS didn't answer a status check (ReadTimeout)`, `The NAS, or a proxy in front of it, answered a status check with an error (HTTP 504)` or `The NAS's status reply couldn't be read (not a DSM reply; a proxy or captive portal may be answering)`, followed by `; the task is most likely still copying.` and the handle. Failed items from `get_error_detail` follow as `  item 41: <reason>` lines.
+DSM's `completion` counts skipped and failed items too (captured: `completion: 1, skip: 1`), so when anything was skipped or failed the headline doesn't say "Copied": `Copy of 3 item(s) to /Albums/Best (personal space) finished: 3 of 3 processed, 1 skipped (already there), 0 overwritten.`, or `Nothing was copied to … (1 item(s) requested): …` when every item was skipped or failed (0.10.0rc4 live test).
+
+Still running at `task_timeout`: `Still copying on the NAS (2 of 9 processed). Handle: photos:14 — check with photo_task.` When a status check fails, the lead says why instead: `The NAS didn't answer a status check (ReadTimeout)`, `The NAS, or a proxy in front of it, answered a status check with an error (HTTP 504)` or `The NAS's status reply couldn't be read (not a DSM reply; a proxy or captive portal may be answering)`, followed by `; the task is most likely still copying.` and the handle. Failed items from `get_error_detail` follow as `  item 41: <reason>` lines.
 
 **Design notes:** the task's `skip` and `overwrite` counters are reported (verified: a repeat copy with `skip` finished with `skip: 1`). `get_error_detail` (scalar `id`) lists failed items. **Cross-space** (verified on 7.1 and 7.2.2): the call goes to the **source space's** API with a `target_folder_id` in the other space; sent through the destination's API, the task finished with the item failing as `not_existed`. `extra_info` carries `{"version": 2, "source_library": …}` as a JSON **string**, JSON-encoded again, as the web client sends it (the copy worked with or without it). Personal → Shared Space copies and moves work, and a Shared Space → personal copy works, but **a move out of Shared Space into a personal space answers 640**, so `move_photos` refuses it locally and suggests a copy followed by a delete. `Browse.Item copy/move` also exist (they require `action`) but the web client doesn't use them; neither does this module.
 
@@ -676,7 +678,7 @@ Still running at `task_timeout`: `Still copying on the NAS (2 of 9 done). Handle
 
 **Annotations:** `readOnlyHint=false`, `destructiveHint=true`: `stop` can leave a move or delete half done (as `file_task`, #183).
 
-**Response shape:** with a handle, one line: `photos:14 copy to /Albums/Best: processing, 2 of 9 done (0 skipped, 0 overwritten), running 1 min 12 s.` or the final result in the starting tool's shape. Without a handle, a table: handle, operation, target folder, status, done/total, started (UTC). `clear` says how many finished tasks were removed.
+**Response shape:** with a handle, one line: `photos:14 copy to /Albums/Best: processing, 2 of 9 processed, 0 skipped (already there), 0 overwritten, running 1 min 12 s.`; a finished task gets the same line with `done`, plus its failed items. Without a handle, a table: handle, operation, target folder, status, done/total, started (UTC). `clear` says how many finished tasks were removed.
 
 **Design notes:** an unknown ID: `get_status` returns an empty list, `abort_task` 117; both are `not_found`. Tasks are per user and cover both spaces.
 
@@ -726,8 +728,9 @@ Photos rewrites tagged files, so their dates and sizes change.
 **DSM API:** `Browse.Item set` v2 (`id: [..]` + `rating` | `description` | `time` | `shift_time` | `rotate_action`); 1.9.1: `Browse.Item set_favorite` v7 (`id: [..]`, `favorite`)
 
 **Tool description (LLM-facing):**
-> Edit Synology Photos items: rating (0-5, 0 clears), description, taken time (set to a date-time,
-> or shift by hours), rotate (left or right), favorite (Photos 1.9.1+). Applies to every id given.
+> Edit Synology Photos items: rating (0-5, 0 clears), description, taken time (set to a local
+> date-time, no zone: an offset is ignored; or shift by hours), rotate (left or right), favorite
+> (Photos 1.9.1+). Applies to every id given.
 > Photos writes these into the original files, so file dates and sizes change. Location can't be
 > edited. space: personal (default) or shared.
 
@@ -739,7 +742,7 @@ Photos rewrites tagged files, so their dates and sizes change.
 | `space` | `str` | No | `"personal"` | |
 | `rating` | `int` | No | — | 0–5; outside that, DSM answers 120 (`reason: condition`, verified). |
 | `description` | `str` | No | — | `""` clears. |
-| `taken_time` | `str` | No | — | ISO 8601 date-time (UTC if no offset) → `time` (Unix seconds). |
+| `taken_time` | `str` | No | — | ISO 8601 date-time → `time`, as the wall-clock time it names: an offset is dropped, not converted (`10:00+02:00` is stored as 10:00), since Photos keeps no zone. |
 | `shift_hours` | `float` | No | — | → `shift_time` (seconds). |
 | `rotate` | `str` | No | — | `left` (`counter_clockwise`, verified) or `right` (`clockwise`, verified on both). |
 | `favorite` | `bool` | No | — | 1.9.1+ (verified set and unset). On 1.3.4, `not_supported`. |
@@ -800,8 +803,9 @@ Photos rewrites edited files, so their dates and sizes change.
 
 **Tool description (LLM-facing):**
 > Manage Synology Photos photo requests: links that let others upload into one of your folders.
-> action: create (subject, folder, optional description, size limit in MiB, expiry date), list,
-> update or delete. Returns the request link.
+> action: create (subject, folder, optional description, size limit in MiB, expires: YYYY-MM-DD
+> for the end of that day UTC, a date-time with offset, or never), list, update or delete.
+> Returns the request link.
 
 **Parameters:**
 
@@ -814,7 +818,7 @@ Photos rewrites edited files, so their dates and sizes change.
 | `folder` | `str` | No | — | Destination path (`folder_home_path`). |
 | `space` | `str` | No | `"personal"` | `library`: `personal_space` / `shared_space`. |
 | `max_file_mib` | `int` | No | — | `filesize_limit` in bytes; `0` none. |
-| `expires` | `str` | No | — | `YYYY-MM-DD` or `never`. |
+| `expires` | `str` | No | — | As for `photo_share_link`: `YYYY-MM-DD` (end of that day UTC), a date-time with an offset or `Z`, or `never`. |
 
 **Annotations:** `destructiveHint=true`: `delete` removes a request whose link others may hold, and `update` replaces its settings.
 

@@ -17,6 +17,7 @@ from mcp_synology.modules.photos.helpers import (
     invalid,
     not_found,
     parse_date,
+    parse_expires,
 )
 
 if TYPE_CHECKING:
@@ -396,7 +397,7 @@ async def photo_share_link(
         )
     expiration = None
     if expires is not None:
-        expiration = 0 if expires == "never" else parse_date(op, "expires", expires, end=True)
+        expiration = parse_expires(op, expires)
     for member in members or []:
         if not isinstance(member, dict) or not member.get("name"):
             invalid(op, "each member needs a name.", param="members", value=member)

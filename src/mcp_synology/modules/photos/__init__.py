@@ -154,9 +154,9 @@ MODULE_INFO = ModuleInfo(
             description=(
                 "Share a Synology Photos album by link, change its link settings, or stop "
                 "sharing. action: share (returns the link), update or stop. public: none, view "
-                "or download; password (empty string removes it); expires (YYYY-MM-DD, or "
-                "never); users/groups with view, download or upload roles. Personal space "
-                "albums only."
+                "or download; password (empty string removes it); expires (YYYY-MM-DD: end "
+                "of that day UTC; a date-time with offset; or never); users/groups with view, "
+                "download or upload roles. Personal space albums only."
             ),
             permission_tier=PermissionTier.WRITE,
             annotations=_ANNO_DESTRUCTIVE,
@@ -192,7 +192,8 @@ MODULE_INFO = ModuleInfo(
             name="edit_photo",
             description=(
                 "Edit Synology Photos items: rating (0-5, 0 clears), description, taken time "
-                "(set to a date-time, or shift by hours), rotate (left or right), favorite "
+                "(set to a local date-time, no zone: an offset is ignored; or shift by hours), "
+                "rotate (left or right), favorite "
                 "(Photos 1.9.1+). Applies to every id given. Photos writes these into the "
                 "original files, so file dates and sizes change. Location can't be edited. "
                 "space: personal (default) or shared."
@@ -216,7 +217,8 @@ MODULE_INFO = ModuleInfo(
             description=(
                 "Manage Synology Photos photo requests: links that let others upload into one "
                 "of your folders. action: create (subject, folder, optional description, size "
-                "limit in MiB, expiry date), list, update or delete. Returns the request link."
+                "limit in MiB, expires: YYYY-MM-DD for the end of that day UTC, a date-time "
+                "with offset, or never), list, update or delete. Returns the request link."
             ),
             permission_tier=PermissionTier.WRITE,
             annotations=_ANNO_DESTRUCTIVE,

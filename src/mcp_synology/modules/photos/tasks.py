@@ -174,7 +174,7 @@ async def _poll(
 def _progress(status: dict[str, Any]) -> str:
     total = int(status.get("total") or 0)
     done = int(status.get("completion") or 0)
-    return f"{done} of {total} done"
+    return f"{done} of {total} processed"
 
 
 def _counts(status: dict[str, Any]) -> str:
@@ -182,6 +182,20 @@ def _counts(status: dict[str, Any]) -> str:
     errors = int(status.get("error") or 0)
     text = f"{_progress(status)}, {skip} skipped (already there), {over} overwritten"
     return text + (f", {errors} failed" if errors else "")
+
+
+def _finished_line(operation: str, what: str, where: str, status: dict[str, Any]) -> str:
+    """The headline of a finished copy or move. DSM's ``completion`` counts skipped and
+    failed items too, so a headline never claims items moved that were skipped (rc4)."""
+    skipped, failed = int(status.get("skip") or 0), int(status.get("error") or 0)
+    if not skipped and not failed:
+        done = "Copied" if operation == "copy" else "Moved"
+        return f"{done} {what} to {where}: {_counts(status)}."
+    if int(status.get("completion") or 0) - skipped - failed <= 0:
+        noun = "copied" if operation == "copy" else "moved"
+        return f"Nothing was {noun} to {where} ({what} requested): {_counts(status)}."
+    kind = "Copy" if operation == "copy" else "Move"
+    return f"{kind} of {what} to {where} finished: {_counts(status)}."
 
 
 async def _errors(ph: Photos, task_id: int) -> list[str]:
@@ -295,8 +309,7 @@ async def copy_or_move(
                 + _handoff(verb, status, why)
             ]
         else:
-            done = "Copied" if operation == "copy" else "Moved"
-            lines = [f"{done} {what} to {where}: {_counts(status)}."]
+            lines = [_finished_line(operation, what, where, status)]
             if int(status.get("error") or 0):
                 lines += await _errors(source, int(status["id"]))
         if missing:
