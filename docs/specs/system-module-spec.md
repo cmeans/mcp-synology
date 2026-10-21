@@ -89,13 +89,14 @@ System Info
   RAM:          4096 MiB
   Temperature:  49°C
   Uptime:       123d 3h 9m
-  System time:  Sun Oct 11 21:54:52 2026
+  System time:  Sun Oct 11 21:54:52 2026 (NAS local time)
   NTP:          time.google.com
 ```
 
 **Design notes:**
 - Field precedence: `DSM.Info` first, then `Core.System`. Temperature tells a missing value from 0°C with explicit `None` checks. RAM and uptime are shown only when nonzero.
 - `NTP` appears only when NTP is enabled and a server is set.
+- `System time` is DSM's string as sent: the NAS's current local time, with no zone (seska, DSM 7.1.1: `Wed Oct 21 15:47:18 2026` at 20:47 UTC, NAS in CDT; `SYNO.DSM.Info` has no zone field). So it's labeled `(NAS local time)`.
 
 ---
 

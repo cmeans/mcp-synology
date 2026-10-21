@@ -1558,10 +1558,11 @@ class TestInstructionComments:
 # 30,575 (+110): photo_share_link's and photo_request's descriptions say expires takes a
 # date (the end of that day, UTC) or a date-time with an offset. Then to 30,582 (+7):
 # photo_request's names never too.
-# Raised by #350 to 30,823 (+241): a TIMES section says UTC times are exact instants to
+# Raised by #350 to 30,874 (+292): a TIMES section says UTC times are exact instants to
 # give in the user's zone and zone-less ones local clock times; the Photos section says
-# taken times aren't to be converted; set_schedule's plan is in the NAS's local hours.
-PAYLOAD_BUDGET_CHARS = 30_823
+# taken times are the photo's own clock time, not to be converted; set_schedule's plan
+# is in the NAS's local hours.
+PAYLOAD_BUDGET_CHARS = 30_874
 
 
 class TestPayloadBudget:
@@ -1674,7 +1675,10 @@ class TestPhotosNotice:
         flat = " ".join(section.split())
         assert "File Station's tools take paths, when that module is enabled" in flat
         assert "file_task" not in section
-        assert "Taken times are local to where the photo was taken: don't convert them." in flat
+        assert (
+            "Taken times are the photo's own local clock time (the camera's, or the NAS's for "
+            "a file without EXIF): don't convert them." in flat
+        )
 
     def test_absent_otherwise(self) -> None:
         assert "SYNOLOGY PHOTOS" not in (create_server(make_test_config()).instructions or "")

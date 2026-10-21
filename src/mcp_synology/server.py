@@ -599,8 +599,8 @@ SYNOLOGY PHOTOS:
 Photos keeps its own library: the personal space (space=personal, the default) and Shared
 Space (space=shared). Photos tools take the ids that list_photos and
 list_photo_collections return; for files outside Photos, File Station's tools take paths,
-when that module is enabled. Taken times are local to where the photo was taken: don't
-convert them."""
+when that module is enabled. Taken times are the photo's own local clock time (the
+camera's, or the NAS's for a file without EXIF): don't convert them."""
 
 # Only when the Photos WRITE tools are registered (#318).
 _PHOTOS_WRITE_NOTICE = """
