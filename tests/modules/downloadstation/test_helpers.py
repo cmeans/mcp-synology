@@ -45,6 +45,12 @@ class TestFormatScheduleGrid:
         assert "~ = limited (alt speed)" in out
         assert ". = no download" in out
 
+    def test_grid_says_hours_are_the_nas_local_time(self) -> None:
+        """The plan's hours are the NAS's (verified on vdsm, NAS in +05:30)."""
+        from mcp_synology.modules.downloadstation.helpers import format_schedule_grid
+
+        assert "Hours are the NAS's local time." in format_schedule_grid("1" * 168)
+
     def test_three_is_not_a_valid_cell(self) -> None:
         """'3' was an invented on+eMule value; DSM's widget only knows 0/1/2."""
         from mcp_synology.modules.downloadstation.helpers import format_schedule_grid

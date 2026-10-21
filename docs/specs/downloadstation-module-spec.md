@@ -324,10 +324,12 @@ Sun  # # # # # # # # # # # # # # # # # # # # # # # #
 Sat  # # # # # # # # # # # # # # # # # # # # # # # #
 
 Legend: # = full speed   ~ = limited (alt speed)   . = no download
+Hours are the NAS's local time.
 ```
 
 **Design notes:**
 - The plan is stored as 168 characters, day-major from Sunday, 24 per day: `0` no download, `1` full speed, `2` limited.
+- **The hours are the NAS's local time** (verified on vdsm DSM 7.2.2, DS 4.1, and DSM 7.1, DS 3.9, with the NAS switched to Calcutta, +05:30, so local and UTC hours differ). With only the current local hour set to `0`, a new HTTP task and a BitTorrent task both stayed `waiting`. With only the current UTC hour set to `0`, the HTTP task finished and the BitTorrent task went to `downloading`. The plan applies to HTTP tasks as well as BitTorrent. A newly enabled plan applied within 5 s. After the NAS's zone changes, DS keeps using the old zone for about a minute (51–76 s on 7.2.2), then the new one. The grid says the hours are the NAS's local time, and so does `set_schedule`'s description, so a plan isn't written in the user's zone by mistake.
 - A malformed stored plan is still rendered, never rejected: unreadable cells show `?`, plus a note. Other clients can store anything, and a read must not fail on it.
 - When DS2 is absent, or refuses (105 for non-admins, with no re-auth), only the flags are shown, followed by `Note: weekly plan not available (<reason>).`
 - DS2's `enable_schedule` is the same flag as v1's `enabled`.
@@ -532,7 +534,8 @@ Remove tasks.
 > Set the Download Station schedule. All parameters optional — only what you pass gets updated.
 > `enabled` / `emule_enabled` toggle whether the schedule applies (DSM lets any Download Station user
 > toggle this NAS-wide flag). `schedule_plan` is a 168-character string, 24 chars per day, Sun first
-> through Sat; each char is '0' no download, '1' full speed, '2' limited. `download_rate` /
+> through Sat, in the NAS's local hours; each char is '0' no download, '1' full speed, '2' limited.
+> `download_rate` /
 > `upload_rate` set the limited speed in KB/s (0 = unlimited). The plan and rates need a Download
 > Station manager/admin account; if that write is refused, nothing is applied.
 
