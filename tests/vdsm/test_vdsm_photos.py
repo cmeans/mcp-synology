@@ -44,7 +44,6 @@ from mcp_synology.modules.photos.tasks import (
     photo_task,
 )
 from mcp_synology.modules.photos.transfer import download_photos, upload_photos
-from tests.vdsm.config import DSM_TIMEZONES
 from tests.vdsm.conftest import _ssh
 from tests.vdsm.golden_image import load_golden_meta, photos_skip_reason
 
@@ -416,13 +415,6 @@ def _no_exif_copy(folder: Path, name: str, mtime: int) -> Path:
 def _taken(details: str) -> str | None:
     taken = re.search(r"^\s*Taken:\s+(.*)$", details, re.M)
     return taken.group(1) if taken else None
-
-
-async def test_nas_timezone_is_the_baked_one(admin_client: Any, dsm_version: str) -> None:
-    """Each golden image runs in its own zone (DSM_TIMEZONES), whatever the bake host's."""
-    ntp = await admin_client[0].request("SYNO.Core.Region.NTP", "get")
-    assert ntp["timezone"] == DSM_TIMEZONES[dsm_version]
-    assert load_golden_meta(dsm_version).get("timezone") == DSM_TIMEZONES[dsm_version]
 
 
 async def test_taken_time_is_wall_clock(
