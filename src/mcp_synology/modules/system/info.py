@@ -113,10 +113,11 @@ async def get_system_info(client: DsmClient) -> str:
     if uptime:
         pairs.append(("Uptime", _format_uptime(uptime)))
 
-    # System time
+    # System time: DSM sends the NAS's local time with no zone (seska, DSM 7.1.1:
+    # "Wed Oct 21 15:47:18 2026" at 20:47 UTC, NAS in CDT), so the label says whose.
     sys_time = dsm.get("time") or core.get("time", "")
     if sys_time:
-        pairs.append(("System time", sys_time))
+        pairs.append(("System time", f"{sys_time} (NAS local time)"))
 
     # NTP (Core.System only)
     ntp_enabled = core.get("enabled_ntp", False)

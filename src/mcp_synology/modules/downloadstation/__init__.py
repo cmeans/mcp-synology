@@ -206,8 +206,9 @@ MODULE_INFO = ModuleInfo(
                 "you pass gets updated. `enabled` / `emule_enabled` toggle whether the "
                 "schedule applies (DSM lets any Download Station user toggle this NAS-wide "
                 "flag). `schedule_plan` is a 168-character string, 24 chars per day, Sun "
-                "first through Sat; each char is '0' no download, '1' full speed, '2' "
-                "limited. `download_rate` / `upload_rate` set the limited speed in KB/s "
+                "first through Sat, in the NAS's local hours; each char is '0' no download, "
+                "'1' full speed, '2' limited. `download_rate` / `upload_rate` set the "
+                "limited speed in KB/s "
                 "(0 = unlimited). The plan and rates need a Download Station manager/admin "
                 "account; if that write is refused, nothing is applied."
             ),

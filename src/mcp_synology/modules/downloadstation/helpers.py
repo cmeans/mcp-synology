@@ -193,6 +193,7 @@ def format_schedule_grid(plan: str) -> str:
 
     lines.append("")
     lines.append("Legend: # = full speed   ~ = limited (alt speed)   . = no download")
+    lines.append("Hours are the NAS's local time.")
     if len(plan) != SCHEDULE_PLAN_LENGTH:
         lines.append(
             f"Note: stored plan is malformed ({len(plan)} chars, expected "

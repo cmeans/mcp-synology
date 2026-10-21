@@ -20,3 +20,7 @@ You are connected to a Synology NAS through mcp-synology.
 FILE SIZES:
 Sizes are binary (1 KiB = 1024 bytes). Size parameters accept "500MiB", "2GiB",
 "1.5TiB"; KB/MB/GB/TB mean the same binary units.
+
+TIMES:
+Times ending in UTC are exact: give them in the user's own time zone. Times with no zone are
+local clock times; show them as they are.
