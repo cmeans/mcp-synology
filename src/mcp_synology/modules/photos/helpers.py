@@ -584,9 +584,9 @@ def is_indexing(item: dict[str, Any]) -> bool:
 
 def parse_date(operation: str, param: str, value: str, *, end: bool = False) -> int:
     """``YYYY-MM-DD`` as Unix seconds for that day read as UTC; ``end`` gives the day's
-    last second. For taken-time filters that's Photos' own encoding of the day's
-    wall-clock times (see ``photo_time``); for share-link and request ``expires`` it's
-    a real UTC instant (end of day UTC)."""
+    last second. That's Photos' own encoding of the day's wall-clock times (see
+    ``photo_time``), so it suits the taken-time filters and smart-album date spans. A
+    share link's or request's ``expires`` is a real instant: see ``parse_expires``."""
     try:
         day = datetime.date.fromisoformat(value)
     except ValueError:

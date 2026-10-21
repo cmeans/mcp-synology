@@ -217,8 +217,8 @@ MODULE_INFO = ModuleInfo(
             description=(
                 "Manage Synology Photos photo requests: links that let others upload into one "
                 "of your folders. action: create (subject, folder, optional description, size "
-                "limit in MiB, expires: YYYY-MM-DD for the end of that day UTC, or a date-time "
-                "with offset), list, update or delete. Returns the request link."
+                "limit in MiB, expires: YYYY-MM-DD for the end of that day UTC, a date-time "
+                "with offset, or never), list, update or delete. Returns the request link."
             ),
             permission_tier=PermissionTier.WRITE,
             annotations=_ANNO_DESTRUCTIVE,
