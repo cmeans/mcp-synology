@@ -2524,3 +2524,80 @@ class TestDuplicateStart:
         record = records.get(Handle("copy", "FileStation_179219158016597225"))
         assert record is not None
         assert (record.dest, record.overwrite) == ("/s/dst", True)
+
+
+class TestRestoreRecreatesMissingFolders:
+    """#333: restoring out of a folder deleted along with the item.
+
+    DSM refuses the move into a missing folder with 1002 (DSM 7.1 and 7.3.2), so an
+    inferred destination that's gone is re-created first, as the spec says.
+    """
+
+    @staticmethod
+    def _responder(missing: set[str], created: list[dict[str, str]]) -> object:
+        def respond(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            api, method = params.get("api", ""), params.get("method", "")
+            if method == "getinfo":
+                path = params["path"]
+                entry = {"code": 408, "path": path} if path in missing else {"path": path}
+                return httpx.Response(200, json={"success": True, "data": {"files": [entry]}})
+            if api == "SYNO.FileStation.CreateFolder":
+                created.append(params)
+                folder = f"{params['folder_path']}/{json.loads(params['name'])}"
+                return httpx.Response(
+                    200, json={"success": True, "data": {"folders": [{"path": folder}]}}
+                )
+            if method == "start":
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "t-1"}})
+            if method == "status":
+                return httpx.Response(200, json={"success": True, "data": {"finished": True}})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        return respond
+
+    @respx.mock
+    async def test_missing_original_folder_is_recreated(self, mock_client: DsmClient) -> None:
+        created: list[dict[str, str]] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._responder({"/home/t333/sub"}, created)
+        )
+        out = await restore_from_recycle_bin(mock_client, share="home", paths=["t333/sub/b2.txt"])
+        assert [(c["folder_path"], c["name"], c["force_parent"]) for c in created] == [
+            ("/home/t333", '"sub"', "true")
+        ]
+        assert "Re-created /home/t333/sub (no longer there) to restore into." in out
+        assert "[+]" in out
+
+    @respx.mock
+    async def test_nested_missing_folders_are_created_once(self, mock_client: DsmClient) -> None:
+        created: list[dict[str, str]] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._responder({"/home/t/sub", "/home/t/sub/deeper"}, created)
+        )
+        out = await restore_from_recycle_bin(
+            mock_client, share="home", paths=["t/sub/a.txt", "t/sub/deeper/b.txt"]
+        )
+        # force_parent makes /home/t/sub along with the deeper one.
+        assert [c["folder_path"] + "/" + json.loads(c["name"]) for c in created] == [
+            "/home/t/sub/deeper"
+        ]
+        assert "Re-created /home/t/sub/deeper (no longer there)" in out
+
+    @respx.mock
+    async def test_existing_destination_is_left_alone(self, mock_client: DsmClient) -> None:
+        created: list[dict[str, str]] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._responder(set(), created))
+        out = await restore_from_recycle_bin(mock_client, share="home", paths=["t/sub/a.txt"])
+        assert created == [] and "Re-created" not in out
+
+    @respx.mock
+    async def test_explicit_dest_folder_is_never_created(self, mock_client: DsmClient) -> None:
+        created: list[dict[str, str]] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._responder({"/home/elsewhere"}, created)
+        )
+        await restore_from_recycle_bin(
+            mock_client, share="home", paths=["t/sub/a.txt"], dest_folder="/home/elsewhere"
+        )
+        assert created == []

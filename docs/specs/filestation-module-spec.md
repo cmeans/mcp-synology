@@ -161,16 +161,17 @@ List files and folders within a given directory path.
 
 **Tool description (LLM-facing):**
 > List files and folders in a directory. Supports glob pattern filtering, file type filtering,
-> sorting, and pagination.
+> sorting, and pagination. DSM sorts folders and files separately: ascending lists folders first,
+> descending files first.
 
 **Parameters:**
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
 | `path` | `str` | **Yes** | — | Folder path to list (e.g., `/video/TV Shows`). |
-| `pattern` | `str` | No | `None` | Glob pattern filter (e.g., `*.mkv`, `*holiday*`). |
+| `pattern` | `str` | No | `None` | Name filter, matched by DSM: case-insensitive; `*` and `?` wildcards (with one, the whole name must match: `b2*`); a bare word matches anywhere in the name (`b2` finds `ab2c.log`); commas separate alternatives (`*.mkv,*.mp4`); no `[...]` classes. Measured on DSM 7.1 and 7.3.2 (#333). |
 | `filetype` | `str` | No | `"all"` | Filter by type: `all`, `file`, `dir`. |
-| `sort_by` | `str` | No | `"name"` | Sort field. Options: `name`, `size`, `user`, `mtime`, `crtime`, `atime`, `type`. |
+| `sort_by` | `str` | No | `"name"` | Sort field. Options: `name`, `size`, `user`, `mtime`, `crtime`, `atime`, `ctime`, `type`; aliases `modified`, `date`, `time` (mtime), `created` (crtime), `accessed` (atime), `changed` (ctime), `owner` (user). |
 | `sort_direction` | `str` | No | `"asc"` | Sort direction: `asc` or `desc`. |
 | `offset` | `int` | No | `0` | Starting index for pagination. |
 | `limit` | `int` | No | `200` | Max items to return (API max: 5000). |
@@ -182,11 +183,12 @@ Contents of /video/TV Shows (5 items)
 ====================================================
   Type  Name           Size    Modified
   ────  ─────────────  ──────  ───────────────────────
-  📁     Breaking Bad/  —       2024-08-15 10:30:00 UTC
-  📁     Severance/     —       2024-08-15 10:30:00 UTC
-  📁     The Bear/      —       2024-08-15 10:30:00 UTC
-  📄     show.nfo       2 KiB    2024-04-03 11:25:00 UTC
+  📁     Breaking Bad/  —        2024-08-15 10:30:00 UTC
+  📁     Severance/     —        2024-08-15 10:30:00 UTC
+  📁     The Bear/      —        2024-08-15 10:30:00 UTC
   🎬     clip.mp4       284 MiB  2024-08-15 10:30:00 UTC
+  📄     show.nfo       2 KiB    2024-04-03 11:25:00 UTC
+DSM sorts folders and files separately; folders come first.
 
 5 of 5 items.
 ```
@@ -197,6 +199,7 @@ Contents of /video/TV Shows (5 items)
 - Trailing `/` on directory names for visual distinction.
 - Footer: `N of N items.` when everything fits, or `"Showing 200 of 1,432 items. Use offset=200 to see more."` when truncated.
 - `#recycle` folders are **hidden by default**. They appear only via `list_recycle_bin` or direct path access.
+- **DSM sorts by type first (#333):** ascending puts every folder before the files, descending puts the files first, and each group is sorted on its own (measured for `name`, `size`, `mtime` and `ctime` on DSM 7.1 and 7.3.2, and on seska's 7.1.1). A listing that mixes the two says so after the table: `DSM sorts folders and files separately; folders come first.` (`files` for descending). Without it, a listing sorted by date looked unsorted where the groups meet (0.10.0rc3 live test).
 
 ---
 
@@ -344,16 +347,19 @@ List contents of a shared folder's recycle bin.
 **DSM API:** `SYNO.FileStation.List` / `list` (targeting `/<share>/#recycle/`)
 
 **Tool description (LLM-facing):**
-> List the contents of a shared folder's recycle bin: its recently deleted files.
+> List the contents of a shared folder's recycle bin: its recently deleted files. With pattern, it
+> searches the whole bin, subfolders included, and shows paths in the bin. Modified is the file's
+> own time, not when it was deleted; sort_by=ctime is the closest to deletion time. Without pattern,
+> DSM sorts folders and files separately, as in list_files.
 
 **Parameters:**
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
 | `share` | `str` | **Yes** | — | Shared folder name (e.g., `video`) or path (e.g., `/video`). |
-| `pattern` | `str` | No | `None` | Glob pattern filter within the recycle bin. |
-| `sort_by` | `str` | No | `"mtime"` | Sort field. Default: modification time (most recently deleted first). |
-| `sort_direction` | `str` | No | `"desc"` | Sort direction. Default: descending (newest first). |
+| `pattern` | `str` | No | `None` | Name filter, matched as `list_files` matches it (case-insensitive; `*`/`?`; a bare word matches anywhere; commas for alternatives), but **across the whole bin, subfolders included** (#333). |
+| `sort_by` | `str` | No | `"mtime"` | Sort field. `mtime` is the file's own modified time, kept when it went into the bin, **not** the deletion time. `ctime` (alias `changed`) changes when the file is moved into the bin, so it's the closest to a deletion time, but any later metadata change updates it too. |
+| `sort_direction` | `str` | No | `"desc"` | Sort direction. Default: descending. |
 | `limit` | `int` | No | `100` | Max items to return. |
 
 **Response shape:**
@@ -364,17 +370,29 @@ Contents of /video/#recycle (3 items)
   Type  Name           Size    Modified
   ────  ─────────────  ──────  ───────────────────────
   🎬     old-movie.mkv  4.5 GiB  2024-03-14 12:30:00 UTC
-  📁     Season 3/      —       2024-03-08 09:00:00 UTC
   📄     notes.txt      1 KiB    2024-03-01 11:00:00 UTC
+  📁     Season 3/      —        2024-03-08 09:00:00 UTC
+DSM sorts folders and files separately; files come first.
 
 3 of 3 items.
 ```
 
 **Design notes:**
-- Convenience wrapper around `list_files` targeting `/<share>/#recycle/`; it returns `list_files`' output as is (title `Contents of /<share>/#recycle`, a `Modified` column).
-- Default sort is most recently deleted first.
+- Without `pattern`: a wrapper around `list_files` targeting `/<share>/#recycle/`; it returns `list_files`' output as is (title `Contents of /<share>/#recycle`, a `Modified` column, and the folders-and-files sort note). Only the bin's top level is listed.
+- **With `pattern`: the whole bin is searched (#333).** DSM matches `pattern` only at the level listed, so a file deleted from a subfolder never matched (0.10.0rc3 live test on seska: `pattern=b2*` answered 0 items while `mcp-rc3/photos-zip/b2.txt` was in the bin, and restoring that path worked). DSM's Search can't help: it refuses `#recycle` with 600 "Search folder access denied", for the admin too (seska 7.1.1). So the tool walks the bin, one `List.list` per folder (pages of 1,000), and matches names locally with DSM's rules (`dsm_pattern_matcher`). It stops at 200 folders or 5,000 entries and then says so, so a partial search never reads as complete. A subfolder that can't be listed is named and skipped. Each item's path in the bin is built from the walk, not taken from DSM's `path`, whose case can differ from the share name given (share names match case-insensitively). Matches are sorted locally by the requested field, not grouped by type (`name` orders by the path in the bin; `type`, `user` and other fields the search can't sort by fall back to `mtime`, and the reply says so), and shown with paths relative to the bin, which `restore_from_recycle_bin` takes as is:
+
+  ```
+  Matches for "b2*" in /home/#recycle (1 found in 4 folder(s), subfolders included)
+  =================================================================================
+    Type  Path in bin                Size  Modified
+    ────  ─────────────────────────  ────  ───────────────────────
+    📄     mcp-rc3/photos-zip/b2.txt  2 B   2026-10-19 10:58:00 UTC
+
+  Paths are relative to the recycle bin, as a restore takes them.
+  ```
+- **What `Modified` means here:** an item keeps its own mtime in the bin (seska: `desktop.ini` deleted in 2026 shows 2019), so the default sort isn't "most recently deleted first". `ctime` moves when the item goes into the bin (seska: `mcp-rc3`, `mcp-rc4` show their deletion times), though a later metadata change also updates it (several older items share one `ctime`).
 - If recycle bin is not enabled: `"Recycle bin is not enabled on /video. Deleted files cannot be recovered."`
-- The `#recycle` folder preserves original directory structure. Top-level listing shown; deeper browsing possible via `list_files` on `#recycle` subpaths.
+- The `#recycle` folder preserves the original directory structure. Without `pattern`, only the top level is listed; `list_files` on a `#recycle` subpath browses deeper.
 
 ---
 
@@ -498,7 +516,8 @@ Restore files from a shared folder's recycle bin.
 - **Permission tier is WRITE.** Although the intent is recovery/undo, the operation physically moves files. Keeping it at WRITE is the principled choice — a user who has only opted in to READ-tier tools should not have tools that modify the filesystem.
 - Original location inferred by stripping the `#recycle` path component: `/video/#recycle/Shows/Ep1.mkv` → `/video/Shows/Ep1.mkv`.
 - If `dest_folder` is specified, all files go there flat.
-- If original parent no longer exists, auto-create it.
+- **If the original folder no longer exists, it's re-created first (#333).** A file restored out of a folder that was deleted along with it has nowhere to go, and DSM refuses the move with 1002 "Destination error" (vdsm DSM 7.1 and 7.3.2). Before #333 this was promised here but not done. The tool checks each inferred destination with `getinfo`, creates the missing ones with `CreateFolder` `force_parent=true` (deepest first, so a parent made along the way isn't created twice), and the reply ends `Re-created <folders> (no longer there) to restore into.` If a `CreateFolder` fails partway, its error is returned and any folders already made stay. An explicit `dest_folder` that doesn't exist is never created; DSM's error stands (#344 tracks a clearer one).
+- DSM's recycle bin doesn't keep an empty folder: deleting `a/` with an empty `a/empty/` leaves no `empty` in the bin (vdsm DSM 7.1 and 7.3.2). A folder that holds a file is kept.
 - **Long operations (#245):** hands off after the capped wait instead of stopping (see "Async Operations"); the reply's handle works with `file_task`.
 
 ---

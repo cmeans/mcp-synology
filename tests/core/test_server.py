@@ -1562,7 +1562,10 @@ class TestInstructionComments:
 # give in the user's zone and zone-less ones local clock times; the Photos section says
 # taken times are the photo's own clock time, not to be converted; set_schedule's plan
 # is in the NAS's local hours.
-PAYLOAD_BUDGET_CHARS = 30_874
+# Raised by #352 to 31,239 (+365): list_files' and list_recycle_bin's descriptions say
+# DSM sorts folders and files separately; list_recycle_bin's also says a pattern
+# searches the whole bin and what Modified and ctime mean there (#333).
+PAYLOAD_BUDGET_CHARS = 31_239
 
 
 class TestPayloadBudget:
