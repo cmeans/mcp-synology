@@ -74,3 +74,13 @@ def test_photos_not_listed_in_image_skips() -> None:
     reason = photos_skip_reason({"dsm_packages": ["DownloadStation"]}, {"SYNO.API.Info"})
     assert reason is not None
     assert "not installed" in reason
+
+
+def test_every_dsm_version_has_a_bake_timezone() -> None:
+    # The bake refuses a version without one (#342), as it does one without a Photos
+    # package list; the zones are listzone values seen on vdsm 7.1 through 7.4.1.
+    from tests.vdsm.config import DSM_TIMEZONES
+    from tests.vdsm.setup_dsm import PHOTOS_PACKAGES
+
+    assert set(DSM_TIMEZONES) == set(PHOTOS_PACKAGES)
+    assert "GMT" in DSM_TIMEZONES.values()  # one image covers UTC
