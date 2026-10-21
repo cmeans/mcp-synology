@@ -44,6 +44,7 @@ from mcp_synology.modules.photos.tasks import (
     photo_task,
 )
 from mcp_synology.modules.photos.transfer import download_photos, upload_photos
+from tests.vdsm.config import DSM_TIMEZONES
 from tests.vdsm.conftest import _ssh
 from tests.vdsm.golden_image import load_golden_meta, photos_skip_reason
 
@@ -393,33 +394,68 @@ def _strip_exif(data: bytes) -> bytes:
     return bytes(out)
 
 
+def _nas_clock(container: VirtualDsmContainer, dsm_version: str, t: int) -> tuple[str, str]:
+    """The instant ``t`` on the NAS's clock (``YYYY-MM-DD HH:MM:SS``) and its zone."""
+    password = str(load_golden_meta(dsm_version).get("admin_password", ""))
+    fmt = shlex.quote("+%Y-%m-%d %H:%M:%S|%Z %z")
+    rc, out = _ssh(container, password, f"date -d @{t} {fmt}", 30, sudo=False)
+    assert rc == 0, out
+    clock, zone = out.strip().splitlines()[-1].split("|")
+    return clock, zone
+
+
+def _no_exif_copy(folder: Path, name: str, mtime: int) -> Path:
+    """A seed JPEG without EXIF, so Photos takes its time from ``mtime``."""
+    path = folder / name
+    path.write_bytes(_strip_exif((SEED / "beach-sunset.jpg").read_bytes()))
+    assert b"Exif\x00\x00" not in path.read_bytes()
+    os.utime(path, (mtime, mtime))
+    return path
+
+
+def _taken(details: str) -> str | None:
+    taken = re.search(r"^\s*Taken:\s+(.*)$", details, re.M)
+    return taken.group(1) if taken else None
+
+
+async def test_nas_timezone_is_the_baked_one(admin_client: Any, dsm_version: str) -> None:
+    """Each golden image runs in its own zone (DSM_TIMEZONES), whatever the bake host's."""
+    ntp = await admin_client[0].request("SYNO.Core.Region.NTP", "get")
+    assert ntp["timezone"] == DSM_TIMEZONES[dsm_version]
+    assert load_golden_meta(dsm_version).get("timezone") == DSM_TIMEZONES[dsm_version]
+
+
 async def test_taken_time_is_wall_clock(
     photos: DsmClient, vdsm_container: VirtualDsmContainer, dsm_version: str, tmp_path: Path
 ) -> None:
     """Photos stores the time a photo was taken as wall-clock time encoded as UTC (#342).
 
-    A file with no EXIF date gets its mtime in the NAS's zone, and a taken_time edit's
-    offset is dropped, not converted. The golden images run in US Central, so a UTC
-    reading of either would show here.
+    A file with no EXIF date gets its mtime on the NAS's clock, which the test reads
+    from the NAS rather than assuming a zone; each DSM version runs in another one
+    (DSM_TIMEZONES). The date filters find it on that local day: the two mtimes are
+    early and late in the UTC day, so in each baked zone but GMT one of them falls
+    on another local date. A taken_time edit's offset is dropped, not converted.
     """
-    mtime = 1_792_494_543  # 2026-10-20 11:09:03 UTC
-    password = str(load_golden_meta(dsm_version).get("admin_password", ""))
-    fmt = shlex.quote("+%Y-%m-%d %H:%M:%S")
-    rc, out = _ssh(vdsm_container, password, f"date -d @{mtime} {fmt}", 30, sudo=False)
-    assert rc == 0, out
-    wall_clock = out.strip().splitlines()[-1]
-    utc = datetime.fromtimestamp(mtime, UTC).strftime("%Y-%m-%d %H:%M:%S")
-    assert wall_clock != utc, f"the NAS is in UTC ({wall_clock}): this test would prove nothing"
+    mtimes = {
+        "early-utc.jpg": 1_792_465_200,  # 2026-10-20 03:00:00 UTC
+        "late-utc.jpg": 1_792_539_000,  # 2026-10-20 23:30:00 UTC
+    }
+    files = [_no_exif_copy(tmp_path, name, t) for name, t in mtimes.items()]
 
-    no_exif = tmp_path / "no-exif.jpg"
-    no_exif.write_bytes(_strip_exif((SEED / "beach-sunset.jpg").read_bytes()))
-    assert b"Exif\x00\x00" not in no_exif.read_bytes()
-    os.utime(no_exif, (mtime, mtime))
+    async with seeded(photos, [*files, "city-night.jpg"]) as (path, ids):
+        for name, t in mtimes.items():
+            clock, zone = _nas_clock(vdsm_container, dsm_version, t)
+            where = f"{name}, NAS zone {zone}"
+            details = await get_photo(photos, ids=[ids[name]])
+            assert _taken(details) == clock, (where, details)
 
-    async with seeded(photos, [no_exif, "city-night.jpg"]) as (_path, ids):
-        details = await get_photo(photos, ids=[ids["no-exif.jpg"]])
-        taken = re.search(r"^\s*Taken:\s+(.*)$", details, re.M)
-        assert taken is not None and taken.group(1) == wall_clock, details
+            day = clock[:10]
+            found = await list_photos(photos, folder=path, start_date=day, end_date=day)
+            assert name in found, (where, day, found)
+            utc_day = datetime.fromtimestamp(t, UTC).strftime("%Y-%m-%d")
+            if utc_day != day:
+                found = await list_photos(photos, folder=path, start_date=utc_day, end_date=utc_day)
+                assert name not in found, (where, utc_day, found)
 
         item = ids["city-night.jpg"]
         out = await edit_photo(photos, ids=[item], taken_time="2021-02-03T04:05:06+02:00")
@@ -427,7 +463,7 @@ async def test_taken_time_is_wall_clock(
 
         async def retimed() -> str | None:
             details = await get_photo(photos, ids=[item])
-            return details if "2021-02-03 04:05:06\n" in details else None
+            return details if _taken(details) == "2021-02-03 04:05:06" else None
 
         await _wait_for(retimed, "the edited taken time, offset dropped")
 

@@ -34,6 +34,7 @@ from tests.vdsm.config import (
     DEFAULT_TEST_USER,
     DSM_API_POLL_INTERVAL,
     DSM_BOOT_TIMEOUT,
+    DSM_TIMEZONES,
 )
 
 if TYPE_CHECKING:
@@ -455,7 +456,7 @@ def _install_download_station_via_ssh(
     admin_password: str,
     base_url: str,
     *,
-    install_timeout_sec: int = 300,
+    install_timeout_sec: int = 900,
 ) -> None:
     """Install Download Station via synopkg over SSH.
 
@@ -482,8 +483,8 @@ def _install_download_station_via_ssh(
     already registered.
     """
 
-    def ssh(cmd: str, *, sudo: bool = True) -> tuple[int, str]:
-        return _ssh(host, ssh_port, admin_password, cmd, sudo=sudo)
+    def ssh(cmd: str, *, sudo: bool = True, timeout: int = 30) -> tuple[int, str]:
+        return _ssh_exec(host, ssh_port, admin_password, cmd, sudo=sudo, timeout=timeout)
 
     # All DS APIs the downstream bake steps + the vdsm tests touch.
     # Different DS APIs register at different times after start —
@@ -521,12 +522,14 @@ def _install_download_station_via_ssh(
     if not missing_ds_apis():
         print("    Download Station already running (all DS APIs in cache)")
         return
-    # Install (~3s on a warm Synology package server, 30-60s on cold cache).
+    # Install (~3s on a warm Synology package server, 30-60s on cold cache, and
+    # minutes when Synology's download servers are slow; ssh_exec's default is 30 s).
     print("    Running synopkg install_from_server DownloadStation...")
     start = time.monotonic()
     rc, out = ssh(
         "/usr/syno/bin/synopkg install_from_server DownloadStation",
         sudo=True,
+        timeout=install_timeout_sec,
     )
     elapsed = int(time.monotonic() - start)
     if rc != 0:
@@ -961,6 +964,36 @@ def _wait_for(check: Any, what: str, *, timeout_sec: int = 60) -> None:
     raise RuntimeError(msg)
 
 
+def _set_timezone_via_api(base_url: str, admin_user: str, admin_password: str, zone: str) -> None:
+    """Set DSM's timezone to ``zone`` (a ``SYNO.Core.Region.NTP listzone`` value).
+
+    ``set`` answers 5701 unless it also gets ``enable_ntp`` and ``server``, so they
+    are sent back as ``get`` reported them. The zone takes effect at once
+    (``/etc/localtime``, and Synology Photos' times for files indexed after it).
+    """
+    with _user_session(base_url, admin_user, admin_password) as (client, sid):
+        zones = _core_call(client, sid, "SYNO.Core.Region.NTP", "listzone")
+        names = {z.get("value") for z in zones.get("zonedata", [])}
+        if zone not in names:
+            msg = f"DSM has no timezone {zone!r}; listzone offers {sorted(names)}"
+            raise RuntimeError(msg)
+        ntp = _core_call(client, sid, "SYNO.Core.Region.NTP", "get")
+        _core_call(
+            client,
+            sid,
+            "SYNO.Core.Region.NTP",
+            "set",
+            timezone=zone,
+            enable_ntp=str(ntp["enable_ntp"]),
+            server=str(ntp["server"]),
+        )
+        now = _core_call(client, sid, "SYNO.Core.Region.NTP", "get").get("timezone")
+        if now != zone:
+            msg = f"Setting the timezone to {zone} left it at {now}"
+            raise RuntimeError(msg)
+    print(f"    Timezone set to {zone} (was {ntp.get('timezone')})")
+
+
 def _configure_photos_via_api(
     base_url: str, admin_user: str, admin_password: str, photos_user: str
 ) -> None:
@@ -1088,10 +1121,10 @@ def setup_dsm_for_testing(
 ) -> dict[str, Any]:
     """Run the full post-wizard setup.
 
-    Enables SSH via the DSM API, then SSHes into the DSM guest VM (via QEMU)
-    to create the test user (synouser), install Download Station and Synology
-    Photos (synopkg), and create shared folders, test data, and permissions
-    (synoshare).
+    Sets the timezone (DSM_TIMEZONES) and enables SSH via the DSM API, then
+    SSHes into the DSM guest VM (via QEMU) to create the test user (synouser),
+    install Download Station and Synology Photos (synopkg), and create shared
+    folders, test data, and permissions (synoshare).
 
     Returns metadata dict for the golden image sidecar.
     """
@@ -1113,25 +1146,33 @@ def setup_dsm_for_testing(
     if photos_packages is None:
         msg = f"No Synology Photos package list for DSM {dsm_version} (PHOTOS_PACKAGES)."
         raise RuntimeError(msg)
+    timezone = DSM_TIMEZONES.get(dsm_version)
+    if timezone is None:
+        msg = f"No timezone for DSM {dsm_version} (DSM_TIMEZONES)."
+        raise RuntimeError(msg)
 
-    print("\n  [1/7] Enabling SSH...")
+    # First, so every file and Photos item the bake creates gets times in this zone.
+    print(f"\n  [1/8] Setting the timezone to {timezone}...")
+    _set_timezone_via_api(base_url, admin_user, admin_password, timezone)
+
+    print("\n  [2/8] Enabling SSH...")
     _enable_ssh(base_url, admin_user, admin_password)
 
     test_users = (
         (DEFAULT_TEST_USER, DEFAULT_TEST_PASSWORD),
         (DEFAULT_FRESH_USER, DEFAULT_FRESH_PASSWORD),
     )
-    print("\n  [2/7] Creating test users via synouser (SSH)...")
+    print("\n  [3/8] Creating test users via synouser (SSH)...")
     for user, password in test_users:
         _create_user_via_ssh(ssh_host, ssh_port, admin_password, user, password)
 
-    print("\n  [3/7] Installing Download Station via synopkg (SSH)...")
+    print("\n  [4/8] Installing Download Station via synopkg (SSH)...")
     _install_download_station_via_ssh(ssh_host, ssh_port, admin_password, base_url)
 
-    print("\n  [4/7] Installing Synology Photos via synopkg (SSH)...")
+    print("\n  [5/8] Installing Synology Photos via synopkg (SSH)...")
     _install_photos_via_ssh(ssh_host, ssh_port, admin_password, base_url, photos_packages)
 
-    print("\n  [5/7] Creating shared folders and test data via SSH...")
+    print("\n  [6/8] Creating shared folders and test data via SSH...")
     _create_shared_folders_via_ssh(
         ssh_host,
         ssh_port,
@@ -1139,7 +1180,7 @@ def setup_dsm_for_testing(
         tuple(user for user, _ in test_users),
     )
 
-    print("\n  [6/7] Configuring Download Station...")
+    print("\n  [7/8] Configuring Download Station...")
     _configure_download_station_via_api(
         base_url=base_url,
         admin_user=admin_user,
@@ -1150,7 +1191,7 @@ def setup_dsm_for_testing(
     _set_own_ds_default_destination(base_url, DEFAULT_TEST_USER, DEFAULT_TEST_PASSWORD, "writable")
     _verify_no_ds_default_destination(base_url, DEFAULT_FRESH_USER, DEFAULT_FRESH_PASSWORD)
 
-    print("\n  [7/7] Configuring Synology Photos...")
+    print("\n  [8/8] Configuring Synology Photos...")
     _configure_photos_via_api(base_url, admin_user, admin_password, DEFAULT_TEST_USER)
     _verify_photos_access(
         base_url,
@@ -1176,6 +1217,7 @@ def setup_dsm_for_testing(
         "test_password": DEFAULT_TEST_PASSWORD,
         "dsm_packages": ["DownloadStation", *photos_packages],
         "bake_version": BAKE_VERSION,
+        "timezone": timezone,
         "fresh_user": DEFAULT_FRESH_USER,
         "fresh_password": DEFAULT_FRESH_PASSWORD,
         "grants": [

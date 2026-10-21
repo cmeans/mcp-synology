@@ -89,7 +89,21 @@ DEFAULT_DSM_VERSION: str = "7.2.2"
 #       no Photos privilege.
 #   v6: DSM 7.3.2 and 7.4.1 (#307): their Synology Photos package lists. The
 #       7.1 and 7.2.2 bakes are unchanged.
-BAKE_VERSION: int = 6
+#   v7: each DSM version runs in its own fixed timezone (DSM_TIMEZONES, #342).
+#       Before, DSM kept the zone the wizard's browser had, i.e. the bake
+#       host's: US Central for local bakes, UTC for CI's.
+BAKE_VERSION: int = 7
+
+# The timezone each golden image runs in, as SYNO.Core.Region.NTP names it
+# (listzone). Tests read the NAS's zone rather than assume one; between them
+# these cover a negative offset, UTC, a half-hour offset, and a positive one
+# with daylight saving (#342). 7.1 matches seska, the maintainer's real NAS.
+DSM_TIMEZONES: dict[str, str] = {
+    "7.1": "Central",  # America/Chicago, -06:00 / -05:00
+    "7.2.2": "GMT",  # +00:00, no daylight saving
+    "7.3.2": "Calcutta",  # Asia/Kolkata, +05:30
+    "7.4.1": "Amsterdam",  # Europe/Amsterdam (Berlin's zone), +01:00 / +02:00
+}
 
 # Project root / .vdsm directory for all virtual-dsm artifacts
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
