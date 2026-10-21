@@ -1550,8 +1550,10 @@ class TestInstructionComments:
 # Raised by #332 to 30,428 (+95): get_dir_size's description says it counts only what the
 # DSM user can read, leaving out a subfolder it can't read without notice (#336).
 # Raised by #342 to 30,465 (+37): edit_photo's description says taken_time is a local
-# date-time with no zone, an offset ignored (Photos stores wall-clock time).
-PAYLOAD_BUDGET_CHARS = 30_465
+# date-time with no zone, an offset ignored (Photos stores wall-clock time). Then to
+# 30,575 (+110): photo_share_link's and photo_request's descriptions say expires takes a
+# date (the end of that day, UTC) or a date-time with an offset.
+PAYLOAD_BUDGET_CHARS = 30_575
 
 
 class TestPayloadBudget:

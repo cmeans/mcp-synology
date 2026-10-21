@@ -426,6 +426,7 @@ class TestShareLink:
             ({"action": "share", "public": "all"}, "public"),
             ({"action": "stop", "password": "x"}, "action"),
             ({"action": "share", "expires": "soon"}, "expires"),
+            ({"action": "share", "expires": "2030-03-17 23:59"}, "expires"),
             ({"action": "share", "members": [{"type": "user"}]}, "members"),
             ({"action": "share", "members": [{"name": "a", "role": "own"}]}, "members"),
             ({"action": "share", "members": [{"name": "a", "type": "robot"}]}, "members"),

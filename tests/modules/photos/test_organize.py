@@ -737,6 +737,21 @@ class TestRequests:
         assert "Warning:   its folder no longer exists, so uploads fail." in out
 
     @respx.mock
+    async def test_update_expiry_with_offset(self) -> None:
+        listed = captured("request-list")
+        fake = FakePhotos().on(REQ, "list", 1, listed, listed).on(REQ, "update", 1, {})
+        install(fake)
+        client = make_client()
+        async with client:
+            await photo_request(
+                client, action="update", request="ZxOc9Ep8q", expires="2030-03-17T23:59:59-04:00"
+            )
+        assert fake.one(REQ, "update").params == {
+            "passphrase": "ZxOc9Ep8q",
+            "expiration": 1900036799,  # 2030-03-18 03:59:59 UTC
+        }
+
+    @respx.mock
     async def test_update_nothing_to_change(self) -> None:
         fake = FakePhotos().on(REQ, "list", 1, captured("request-list"))
         install(fake)
@@ -765,6 +780,7 @@ class TestRequests:
             ({"action": "update"}, "request"),
             ({"action": "list", "max_file_mib": -1}, "max_file_mib"),
             ({"action": "list", "expires": "2030"}, "expires"),
+            ({"action": "list", "expires": "2030-03-17T23:59:59"}, "expires"),
         ],
     )
     async def test_refusals(self, kwargs: dict[str, Any], param: str) -> None:

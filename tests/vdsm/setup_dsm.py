@@ -967,9 +967,10 @@ def _wait_for(check: Any, what: str, *, timeout_sec: int = 60) -> None:
 def _set_timezone_via_api(base_url: str, admin_user: str, admin_password: str, zone: str) -> None:
     """Set DSM's timezone to ``zone`` (a ``SYNO.Core.Region.NTP listzone`` value).
 
-    ``set`` answers 5701 unless it also gets ``enable_ntp`` and ``server``, so they
-    are sent back as ``get`` reported them. The zone takes effect at once
-    (``/etc/localtime``, and Synology Photos' times for files indexed after it).
+    ``set`` v1 answers 5701 unless it also gets ``enable_ntp`` and ``server``, so they
+    are sent back as ``get`` reported them (v2 answers 5701 even with them). The zone
+    takes effect at once (``/etc/localtime``, and Synology Photos' times for files
+    indexed after it).
     """
     with _user_session(base_url, admin_user, admin_password) as (client, sid):
         zones = _core_call(client, sid, "SYNO.Core.Region.NTP", "listzone")

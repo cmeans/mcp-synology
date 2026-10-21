@@ -14,6 +14,7 @@ from __future__ import annotations
 import datetime
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, NoReturn
 
@@ -598,6 +599,44 @@ def parse_date(operation: str, param: str, value: str, *, end: bool = False) -> 
     start = datetime.datetime(day.year, day.month, day.day, tzinfo=datetime.UTC)
     seconds = int(start.timestamp())
     return seconds + 86399 if end else seconds
+
+
+def parse_expires(operation: str, value: str) -> int:
+    """A share link's or photo request's ``expires`` as Unix seconds (0 for ``never``).
+
+    The expiration is a real UTC instant: DSM refuses a visitor after it whatever the
+    NAS's zone (verified on vdsm, 1.3.4 and 1.9.1, in US Central and India). A date is
+    the end of that day UTC; a date-time needs an offset or ``Z``, since without one it
+    names no instant (the NAS's zone isn't readable by a non-admin, and the user may be
+    in another zone anyway).
+    """
+    text = value.strip()
+    if text == "never":
+        return 0
+    problem = "isn't a date or date-time"
+    when: datetime.datetime | None = None
+    try:
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+            day = datetime.date.fromisoformat(text)
+            when = datetime.datetime(day.year, day.month, day.day, 23, 59, 59, tzinfo=datetime.UTC)
+        else:
+            when = datetime.datetime.fromisoformat(text)
+            if when.tzinfo is None:
+                problem, when = "has no offset", None
+    except ValueError:
+        when = None
+    # 0 is DSM's "never", and what DSM does with an earlier instant isn't known.
+    if when is not None and when.timestamp() <= 0:
+        problem, when = "isn't after 1970-01-01", None
+    if when is None:
+        invalid(
+            operation,
+            f"expires {value!r} {problem}: pass YYYY-MM-DD (the end of that day, UTC), a "
+            "date-time with an offset such as 2026-10-25T23:59:59-04:00, or never.",
+            param="expires",
+            value=value,
+        )
+    return int(when.timestamp())
 
 
 def page_footer(total: int | None, offset: int, shown: int, noun: str = "item(s)") -> str:

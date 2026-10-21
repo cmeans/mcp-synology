@@ -502,6 +502,11 @@ async def test_albums_and_share_links(photos: DsmClient) -> None:
                 expires="2035-01-01",
             )
             assert "/mo/sharing/" in out and "password: yes" in out
+            # A date-time with an offset is that exact instant (a real UTC instant).
+            out = await photo_share_link(
+                photos, action="update", album=name, expires="2034-12-31T23:59:59-05:00"
+            )
+            assert "expires 2035-01-01 04:59:59 UTC" in out, out
             link = re.search(r"Link:\s+(\S+)", out).group(1)  # type: ignore[union-attr]
             await photo_share_link(photos, action="stop", album=name)
             again = await photo_share_link(photos, action="share", album=name)
@@ -510,6 +515,14 @@ async def test_albums_and_share_links(photos: DsmClient) -> None:
         finally:
             out = await delete_photo_albums(photos, albums=made)
             assert f"Deleted {len(made)} album(s)" in out
+        # DSM answers success for unknown album IDs, so the reply alone proves nothing:
+        # the normal and the smart album must both be gone.
+        listed = await list_photo_collections(photos, type="album")
+        assert not [m for m in made if m in listed], listed
+        for gone in made:
+            with pytest.raises(ToolError) as exc:
+                await list_photos(photos, album=gone)
+            assert _error(exc)["code"] == "not_found"
 
 
 async def test_photo_requests(photos: DsmClient) -> None:

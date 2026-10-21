@@ -154,9 +154,9 @@ MODULE_INFO = ModuleInfo(
             description=(
                 "Share a Synology Photos album by link, change its link settings, or stop "
                 "sharing. action: share (returns the link), update or stop. public: none, view "
-                "or download; password (empty string removes it); expires (YYYY-MM-DD, or "
-                "never); users/groups with view, download or upload roles. Personal space "
-                "albums only."
+                "or download; password (empty string removes it); expires (YYYY-MM-DD: end "
+                "of that day UTC; a date-time with offset; or never); users/groups with view, "
+                "download or upload roles. Personal space albums only."
             ),
             permission_tier=PermissionTier.WRITE,
             annotations=_ANNO_DESTRUCTIVE,
@@ -217,7 +217,8 @@ MODULE_INFO = ModuleInfo(
             description=(
                 "Manage Synology Photos photo requests: links that let others upload into one "
                 "of your folders. action: create (subject, folder, optional description, size "
-                "limit in MiB, expiry date), list, update or delete. Returns the request link."
+                "limit in MiB, expires: YYYY-MM-DD for the end of that day UTC, or a date-time "
+                "with offset), list, update or delete. Returns the request link."
             ),
             permission_tier=PermissionTier.WRITE,
             annotations=_ANNO_DESTRUCTIVE,

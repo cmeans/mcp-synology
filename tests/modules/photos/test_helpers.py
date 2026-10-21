@@ -17,6 +17,7 @@ from mcp_synology.modules.photos.helpers import (
     is_indexing,
     page_footer,
     parse_date,
+    parse_expires,
     photo_time,
     prefix,
     taken,
@@ -64,6 +65,30 @@ class TestBasics:
         with pytest.raises(ToolError) as exc:
             parse_date("Op", "start_date", "07/04/2024")
         assert _error(exc)["param"] == "start_date"
+
+    def test_parse_expires(self) -> None:
+        """A real UTC instant: a date is the end of that day UTC; a date-time keeps its offset."""
+        assert parse_expires("Op", "never") == 0
+        assert parse_expires("Op", "2030-03-17") == 1900022399  # 23:59:59 UTC
+        assert parse_expires("Op", "2030-03-17T23:59:59Z") == 1900022399
+        assert parse_expires("Op", "2030-03-17T23:59:59-04:00") == 1900022399 + 4 * 3600
+        assert parse_expires("Op", " 2030-03-18T05:29:59+05:30 ") == 1900022399
+        assert parse_expires("Op", "2030-03-17 23:59:59+0530") == 1900002599
+        for bad, problem in (
+            ("2030-03-17T23:59:59", "has no offset"),
+            ("20300317", "has no offset"),  # a basic-format date is a naive date-time
+            ("soon", "isn't a date or date-time"),
+            ("2030", "isn't a date or date-time"),
+            ("2030-0317x", "isn't a date or date-time"),
+            ("2030-02-30", "isn't a date or date-time"),
+            ("1970-01-01T00:00:00Z", "isn't after 1970-01-01"),  # 0 would mean never
+            ("1960-01-01", "isn't after 1970-01-01"),
+        ):
+            with pytest.raises(ToolError) as exc:
+                parse_expires("Op", bad)
+            err = _error(exc)
+            assert err["param"] == "expires" and problem in err["message"], err
+            assert "2026-10-25T23:59:59-04:00" in err["message"]
 
     def test_page_footer(self) -> None:
         assert (

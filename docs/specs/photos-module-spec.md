@@ -194,7 +194,7 @@ Tools take the IDs list calls return, and also **names where they're unique**: t
 
 ### Formatting
 
-Plain text through the shared formatters. `time` (taken time) is Unix seconds, but it encodes the **wall-clock** time the photo was taken as if it were UTC: EXIF's time, or for a file without one its mtime in the NAS's zone (a file with mtime 16:09:03 UTC reads back as 11:09:03 on a NAS in US Central time, seska, Photos 1.3.4, 0.10.0rc4 live test). On vdsm, `test_taken_time_is_wall_clock` pins it in four zones, one per DSM version (US Central, GMT, India's +05:30 and Amsterdam), reading the expected time from the NAS's own clock. Synology Photos applies a zone change to files it indexes afterwards, with no restart (vdsm 7.1, 7.2.2, 7.3.2 and 7.4.1). So it's shown with no zone (`YYYY-MM-DD HH:MM:SS`), and date filters and `taken_time` use the same encoding; `indexed_time` and task `create_time` are **milliseconds**. Sizes are binary units. Shared links are shown in full: they are what the user asked for.
+Plain text through the shared formatters. `time` (taken time) is Unix seconds, but it encodes the **wall-clock** time the photo was taken as if it were UTC: EXIF's time, or for a file without one its mtime in the NAS's zone (a file with mtime 16:09:03 UTC reads back as 11:09:03 on a NAS in US Central time, seska, Photos 1.3.4, 0.10.0rc4 live test). On vdsm, `test_taken_time_is_wall_clock` pins it in four zones, one per DSM version (US Central, GMT, India's +05:30 and Amsterdam), reading the expected time from the NAS's own clock. Synology Photos applies a zone change to files it indexes afterwards, with no restart (vdsm 7.1, 7.2.2, 7.3.2 and 7.4.1). So it's shown with no zone (`YYYY-MM-DD HH:MM:SS`), and date filters and `taken_time` use the same encoding. Synology's web client does the same: it shows `time` with `dayjs.utc(1000 * time)` and parses EXIF strings with `.utc(true)` (1.3.4 bundle). The other times are **real UTC instants**, shown with "UTC" (each measured in US Central and India's +05:30 on vdsm 7.1 and 7.3.2, Photos 1.3.4 and 1.9.1): task `create_time` (**milliseconds**) matched the clock to the second; a share link's `expiration` gave `is_expired` false an hour ahead and true an hour back, in both zones; and for a share link and a photo request alike, a visitor's `SYNO.Core.Sharing.Login` succeeds before the `expiration` and fails after it (1000, "login fail"), in both zones. Seska (DSM 7.1.1, 1.3.4) gave the same link and request results. `indexed_time` is milliseconds too and isn't shown. Sizes are binary units. Shared links are shown in full: they are what the user asked for.
 
 ### Errors
 
@@ -522,8 +522,8 @@ Album 9: Trip 2024 · normal · 2 item(s) · 2024-07-04 – 2024-07-06 · not sh
 **Tool description (LLM-facing):**
 > Share a Synology Photos album by link, change its link settings, or stop sharing. action: share
 > (returns the link), update or stop. public: none, view or download; password (empty string
-> removes it); expires (YYYY-MM-DD, or never); users/groups with view, download or upload roles.
-> Personal space albums only.
+> removes it); expires (YYYY-MM-DD: end of that day UTC; a date-time with offset; or never);
+> users/groups with view, download or upload roles. Personal space albums only.
 
 **Parameters:**
 
@@ -533,7 +533,7 @@ Album 9: Trip 2024 · normal · 2 item(s) · 2024-07-04 – 2024-07-06 · not sh
 | `album` | `str` | **Yes** | — | Album ID or unique name. |
 | `public` | `str` | No | — | `none`, `view` or `download` (DSM privacy `private` / `public-view` / `public-download`). |
 | `password` | `str` | No | — | Set; `""` removes. |
-| `expires` | `str` | No | — | `YYYY-MM-DD` (end of day UTC) or `never` (`0`). |
+| `expires` | `str` | No | — | `YYYY-MM-DD` (end of that day UTC), an ISO 8601 date-time with an offset or `Z` (that instant; without an offset it's refused, since it names no instant), or `never` (`0`). The expiration is a real UTC instant (see Formatting). A value at or before 1970-01-01 is refused: 0 is DSM's `never`, and DSM's handling of an earlier instant isn't known. |
 | `members` | `list[dict]` | No | — | `{name, type: user|group, role: view|download|upload|none}`; `none` removes. Names resolved with `list_user_group`. |
 
 **Annotations:** `destructiveHint=true`: `stop` and `update` replace the link's settings (an old password or public access is gone).
@@ -803,8 +803,9 @@ Photos rewrites edited files, so their dates and sizes change.
 
 **Tool description (LLM-facing):**
 > Manage Synology Photos photo requests: links that let others upload into one of your folders.
-> action: create (subject, folder, optional description, size limit in MiB, expiry date), list,
-> update or delete. Returns the request link.
+> action: create (subject, folder, optional description, size limit in MiB, expires: YYYY-MM-DD
+> for the end of that day UTC, or a date-time with offset), list, update or delete. Returns the
+> request link.
 
 **Parameters:**
 
@@ -817,7 +818,7 @@ Photos rewrites edited files, so their dates and sizes change.
 | `folder` | `str` | No | — | Destination path (`folder_home_path`). |
 | `space` | `str` | No | `"personal"` | `library`: `personal_space` / `shared_space`. |
 | `max_file_mib` | `int` | No | — | `filesize_limit` in bytes; `0` none. |
-| `expires` | `str` | No | — | `YYYY-MM-DD` or `never`. |
+| `expires` | `str` | No | — | As for `photo_share_link`: `YYYY-MM-DD` (end of that day UTC), a date-time with an offset or `Z`, or `never`. |
 
 **Annotations:** `destructiveHint=true`: `delete` removes a request whose link others may hold, and `update` replaces its settings.
 
