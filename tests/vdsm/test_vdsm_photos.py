@@ -14,9 +14,13 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
 import re
+import shlex
+import struct
 import uuid
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -40,12 +44,14 @@ from mcp_synology.modules.photos.tasks import (
     photo_task,
 )
 from mcp_synology.modules.photos.transfer import download_photos, upload_photos
+from tests.vdsm.conftest import _ssh
 from tests.vdsm.golden_image import load_golden_meta, photos_skip_reason
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Sequence
 
     from mcp_synology.core.client import DsmClient
+    from tests.vdsm.container import VirtualDsmContainer
 
 pytestmark = pytest.mark.vdsm
 
@@ -86,13 +92,19 @@ async def _wait_for(probe: Any, what: str, timeout: float = INDEX_TIMEOUT) -> An
         await asyncio.sleep(2)
 
 
-async def _upload(client: DsmClient, ph: Photos, folder_id: int, file: str) -> dict[str, Any]:
-    """One raw upload, retried once like upload_photos (vdsm answers 623 right after boot)."""
+async def _upload(
+    client: DsmClient, ph: Photos, folder_id: int, file: str | Path
+) -> dict[str, Any]:
+    """One raw upload, retried once like upload_photos (vdsm answers 623 right after boot).
+
+    ``file`` is a seed's name or a local file; either is sent with its own mtime.
+    """
+    source = file if isinstance(file, Path) else SEED / file
     fields = encode(
         {
             "duplicate": "rename",
-            "name": file,
-            "mtime": int((SEED / file).stat().st_mtime),
+            "name": source.name,
+            "mtime": int(source.stat().st_mtime),
             "target_folder_id": folder_id,
         }
     )
@@ -103,8 +115,8 @@ async def _upload(client: DsmClient, ph: Photos, folder_id: int, file: str) -> d
                 "upload_to_folder",
                 1,
                 fields,
-                file_path=SEED / file,
-                filename=file,
+                file_path=source,
+                filename=source.name,
             )
         except SynologyError as e:
             if attempt == 2 or e.code in (620, 621):
@@ -115,9 +127,9 @@ async def _upload(client: DsmClient, ph: Photos, folder_id: int, file: str) -> d
 
 @asynccontextmanager
 async def seeded(
-    client: DsmClient, files: list[str], space: Space = "personal"
+    client: DsmClient, files: Sequence[str | Path], space: Space = "personal"
 ) -> AsyncIterator[tuple[str, dict[str, int]]]:
-    """A fresh folder holding ``files``, indexed; yields its path and the items' IDs.
+    """A fresh folder holding ``files``, indexed; yields its path and the items' IDs by name.
 
     Seeded with raw API calls, not the module's tools, so a broken upload_photos or
     photo_folder doesn't fail every test.
@@ -132,7 +144,7 @@ async def seeded(
         ids: dict[str, int] = {}
         for file in files:
             data = await _upload(client, ph, int(folder["id"]), file)
-            ids[file] = int(data["id"])
+            ids[file.name if isinstance(file, Path) else file] = int(data["id"])
 
         async def indexed() -> bool:
             if not ids:
@@ -364,6 +376,60 @@ async def test_tags_and_edits(photos: DsmClient) -> None:
             with pytest.raises(ToolError) as exc:
                 await edit_photo(photos, ids=[other], favorite=True)
             assert _error(exc)["code"] == "not_supported"
+
+
+def _strip_exif(data: bytes) -> bytes:
+    """The JPEG without its APP1 (EXIF) segment, so Photos takes the time from the mtime."""
+    out, i = bytearray(data[:2]), 2
+    while i < len(data):
+        marker = data[i + 1]
+        if marker == 0xDA:  # start of scan: the image data follows
+            out += data[i:]
+            break
+        (length,) = struct.unpack(">H", data[i + 2 : i + 4])
+        if marker != 0xE1:
+            out += data[i : i + 2 + length]
+        i += 2 + length
+    return bytes(out)
+
+
+async def test_taken_time_is_wall_clock(
+    photos: DsmClient, vdsm_container: VirtualDsmContainer, dsm_version: str, tmp_path: Path
+) -> None:
+    """Photos stores the time a photo was taken as wall-clock time encoded as UTC (#342).
+
+    A file with no EXIF date gets its mtime in the NAS's zone, and a taken_time edit's
+    offset is dropped, not converted. The golden images run in US Central, so a UTC
+    reading of either would show here.
+    """
+    mtime = 1_792_494_543  # 2026-10-20 11:09:03 UTC
+    password = str(load_golden_meta(dsm_version).get("admin_password", ""))
+    fmt = shlex.quote("+%Y-%m-%d %H:%M:%S")
+    rc, out = _ssh(vdsm_container, password, f"date -d @{mtime} {fmt}", 30, sudo=False)
+    assert rc == 0, out
+    wall_clock = out.strip().splitlines()[-1]
+    utc = datetime.fromtimestamp(mtime, UTC).strftime("%Y-%m-%d %H:%M:%S")
+    assert wall_clock != utc, f"the NAS is in UTC ({wall_clock}): this test would prove nothing"
+
+    no_exif = tmp_path / "no-exif.jpg"
+    no_exif.write_bytes(_strip_exif((SEED / "beach-sunset.jpg").read_bytes()))
+    assert b"Exif\x00\x00" not in no_exif.read_bytes()
+    os.utime(no_exif, (mtime, mtime))
+
+    async with seeded(photos, [no_exif, "city-night.jpg"]) as (_path, ids):
+        details = await get_photo(photos, ids=[ids["no-exif.jpg"]])
+        taken = re.search(r"^\s*Taken:\s+(.*)$", details, re.M)
+        assert taken is not None and taken.group(1) == wall_clock, details
+
+        item = ids["city-night.jpg"]
+        out = await edit_photo(photos, ids=[item], taken_time="2021-02-03T04:05:06+02:00")
+        assert "taken time" in out
+
+        async def retimed() -> str | None:
+            details = await get_photo(photos, ids=[item])
+            return details if "2021-02-03 04:05:06\n" in details else None
+
+        await _wait_for(retimed, "the edited taken time, offset dropped")
 
 
 async def test_albums_and_share_links(photos: DsmClient) -> None:

@@ -194,7 +194,7 @@ Tools take the IDs list calls return, and also **names where they're unique**: t
 
 ### Formatting
 
-Plain text through the shared formatters. `time` (taken time) is Unix seconds, but it encodes the **wall-clock** time the photo was taken as if it were UTC: EXIF's time, or for a file without one its mtime in the NAS's zone (a file with mtime 16:09:03 UTC reads back as 11:09:03 on a NAS in US Central time, seska, Photos 1.3.4, 0.10.0rc4 live test). So it's shown with no zone (`YYYY-MM-DD HH:MM:SS`), and date filters and `taken_time` use the same encoding; `indexed_time` and task `create_time` are **milliseconds**. Sizes are binary units. Shared links are shown in full: they are what the user asked for.
+Plain text through the shared formatters. `time` (taken time) is Unix seconds, but it encodes the **wall-clock** time the photo was taken as if it were UTC: EXIF's time, or for a file without one its mtime in the NAS's zone (a file with mtime 16:09:03 UTC reads back as 11:09:03 on a NAS in US Central time, seska, Photos 1.3.4, 0.10.0rc4 live test; on vdsm, also in US Central, `test_taken_time_is_wall_clock` pins it on every tested DSM version). So it's shown with no zone (`YYYY-MM-DD HH:MM:SS`), and date filters and `taken_time` use the same encoding; `indexed_time` and task `create_time` are **milliseconds**. Sizes are binary units. Shared links are shown in full: they are what the user asked for.
 
 ### Errors
 
