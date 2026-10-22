@@ -16,7 +16,7 @@ import pytest
 from mcp.server.mcpserver.exceptions import ToolError
 
 from mcp_synology.modules.filestation.helpers import ensure_known_shares
-from mcp_synology.modules.filestation.listing import list_files, list_recycle_bin
+from mcp_synology.modules.filestation.listing import list_files, list_recycle_bin, list_shares
 from mcp_synology.modules.filestation.operations import (
     create_folder,
     delete_files,
@@ -167,3 +167,31 @@ async def test_home_takes_only_its_listed_name(nas_client: Any, tmp_path: Path) 
 
 async def test_home_takes_only_its_listed_name_admin(admin_client: Any, tmp_path: Path) -> None:
     await _home_takes_only_its_listed_name(admin_client[0], tmp_path)
+
+
+async def _recycle_column(client: DsmClient) -> tuple[dict[str, str], dict[str, bool], str]:
+    cache: dict[str, bool] = {}
+    out = await list_shares(client, recycle_bin_status=cache)
+    rows = [ln.split() for ln in out.splitlines() if ln.startswith("  ") and " /" in ln]
+    column = {r[0]: "couldn't check" if r[-1] == "check" else r[-1] for r in rows}
+    return column, cache, out
+
+
+async def _every_shares_bin(client: DsmClient) -> None:
+    """#255, #335: list_shares checks every share's bin, in a fresh session too.
+
+    The bake's shares have no recycle bin; the user home service has one.
+    """
+    column, cache, out = await _recycle_column(client)
+    assert column.get("home") == "enabled", out
+    assert column.get("testshare") == "disabled", out
+    assert set(column.values()) <= {"enabled", "disabled"}, out
+    assert cache == {name: state == "enabled" for name, state in column.items()}, out
+
+
+async def test_list_shares_shows_every_shares_bin(nas_client: Any) -> None:
+    await _every_shares_bin(nas_client[0])
+
+
+async def test_list_shares_shows_every_shares_bin_admin(admin_client: Any) -> None:
+    await _every_shares_bin(admin_client[0])

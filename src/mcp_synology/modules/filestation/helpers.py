@@ -337,12 +337,57 @@ def matches_pattern(filename: str, pattern: str) -> bool:
 #
 # Probe: `SYNO.FileStation.List` on `/{share}/#recycle/` with `limit=1`: one entry at
 # most (DSM's `limit=0` means all of them, #353).
-#   - Success                     -> recycle bin enabled  (True)
-#   - DSM 408 (path not found)    -> recycle bin disabled (False)
-#   - DSM 105 (permission denied) -> unknown; default True + WARN so the
-#       message stays optimistic about recoverability and the operator sees a
-#       diagnostic in the log
-#   - Other errors                -> unknown; same optimistic-True + WARN
+#   - Success                     -> recycle bin enabled  (True), cached
+#   - DSM 408 (path not found)    -> recycle bin disabled (False), cached
+#   - Anything else (105 permission denied, another DSM error, no answer) -> unknown
+#       (None), NOT cached (#255): the next call probes again. `ensure_recycle_status`
+#       then answers True so `delete_files` stays optimistic about recoverability;
+#       `list_shares` shows "couldn't check". A WARNING names the cause.
+# Shares whose bin couldn't be checked were warned about once per server run; later
+# misses log at DEBUG, since an uncached share is checked again on every use (#255).
+_warned_recycle: set[str] = set()
+
+
+def _warn_once(share_name: str, message: str, *args: object) -> None:
+    level = logging.DEBUG if share_name in _warned_recycle else logging.WARNING
+    _warned_recycle.add(share_name)
+    logger.log(level, message, *args)
+
+
+async def probe_recycle_status(client: DsmClient, share_name: str) -> bool | None:
+    """Probe `/{share_name}/#recycle`: True on, False off, None when it can't tell."""
+    try:
+        await client.request(
+            "SYNO.FileStation.List",
+            "list",
+            params={"folder_path": f"/{share_name}/#recycle", "limit": 1},
+        )
+    except SynologyError as e:
+        if e.code == 408:
+            logger.debug("Probed recycle bin on /%s: disabled (#recycle missing)", share_name)
+            return False
+        if e.code == 105:
+            _warn_once(
+                share_name,
+                "Recycle-bin probe on /%s returned DSM 105 (permission denied); can't tell "
+                "whether its recycle bin is on. Grant the MCP service account read access "
+                "on /%s/#recycle for accurate delete-files messaging.",
+                share_name,
+                share_name,
+            )
+        else:
+            _warn_once(
+                share_name,
+                "Recycle-bin probe on /%s failed (%s); can't tell whether its recycle bin "
+                "is on. It will be checked again on next use.",
+                share_name,
+                f"DSM error {e.code}" if e.code is not None else type(e).__name__,
+            )
+        return None
+    logger.debug("Probed recycle bin on /%s: enabled", share_name)
+    return True
+
+
 async def ensure_recycle_status(
     client: DsmClient,
     share_name: str,
@@ -350,49 +395,17 @@ async def ensure_recycle_status(
 ) -> bool:
     """Return cached recycle-bin status for `share_name`, probing on first call.
 
-    Caches the result in `recycle_status` in-place so subsequent calls hit the
-    dict and skip the probe. Probe failures fall back to True (the optimistic
-    default that preserves prior messaging behavior) and emit a WARNING.
+    Caches a definite answer in `recycle_status` in place so later calls skip the
+    probe. A probe that can't tell isn't cached and answers True (the optimistic
+    default that keeps delete-files messaging hopeful), #255.
     """
     if share_name in recycle_status:
         return recycle_status[share_name]
-
-    try:
-        await client.request(
-            "SYNO.FileStation.List",
-            "list",
-            params={"folder_path": f"/{share_name}/#recycle", "limit": 1},
-        )
-        recycle_status[share_name] = True
-        logger.debug("Probed recycle bin on /%s: enabled", share_name)
-    except SynologyError as e:
-        if e.code == 408:
-            recycle_status[share_name] = False
-            logger.debug("Probed recycle bin on /%s: disabled (#recycle missing)", share_name)
-        elif e.code == 105:
-            # Permission denied — the bot user lacks read access on
-            # `/{share}/#recycle`. Operator-actionable: grant the MCP
-            # service account read on the recycle subfolder. We can't
-            # tell whether the bin is on or off from here; default to
-            # enabled so messaging stays optimistic.
-            recycle_status[share_name] = True
-            logger.warning(
-                "Recycle-bin probe on /%s returned DSM 105 (permission denied); "
-                "assuming enabled. Grant the MCP service account read access on "
-                "/%s/#recycle for accurate delete-files messaging.",
-                share_name,
-                share_name,
-            )
-        else:
-            recycle_status[share_name] = True
-            logger.warning(
-                "Recycle-bin probe on /%s returned DSM error %s; assuming enabled. "
-                "Delete-files messaging may be incorrect for this share until re-auth.",
-                share_name,
-                e.code,
-            )
-
-    return recycle_status[share_name]
+    status = await probe_recycle_status(client, share_name)
+    if status is None:
+        return True
+    recycle_status[share_name] = status
+    return status
 
 
 def correct_recycle_status_from_observation(
