@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from mcp.server.mcpserver.exceptions import ToolError
 
+from mcp_synology.modules.filestation.helpers import ensure_known_shares
 from mcp_synology.modules.filestation.listing import list_files, list_recycle_bin
 from mcp_synology.modules.filestation.operations import (
     create_folder,
@@ -113,3 +114,56 @@ async def test_listings_say_dsm_sorts_folders_and_files_separately(
                 assert f"DSM sorts folders and files separately; {group} come first." in out
     finally:
         await _clean(client, top.rsplit("/", 1)[1])
+
+
+async def _home_takes_only_its_listed_name(client: DsmClient, tmp_path: Path) -> None:
+    """#353: DSM takes an ordinary share in any case, but the home service only as /home.
+
+    So the share check sends the name as listed, and a /Home that does reach
+    list_recycle_bin says it's not there, never "cannot be recovered".
+    """
+    assert "TESTSHARE" in await list_files(client, path="/TESTSHARE")
+    with pytest.raises(ToolError, match="408"):
+        await list_files(client, path="/Home")
+    known: set[str] = set()
+    assert await ensure_known_shares(client, ["/Home/x", "Testshare"], known) == [
+        "/home/x",
+        "/testshare",
+    ]
+    assert "home" in known
+
+    top = f"t353-{uuid.uuid4().hex[:8]}"
+    local = tmp_path / "f.txt"
+    local.write_text("deleted, then listed through share=Home")
+    try:
+        await create_folder(client, paths=[f"/home/{top}"])
+        await create_folder(client, paths=[f"/home/{top}/sub"])
+        await upload_file(
+            client, local_path=str(local), dest_folder=f"/home/{top}", allowed_roots=[tmp_path]
+        )
+        # The existence probes ask for one entry: DSM's limit=0 lists them all.
+        for limit, count in ((0, 2), (1, 1)):
+            data = await client.request(
+                "SYNO.FileStation.List",
+                "list",
+                params={"folder_path": f"/home/{top}", "limit": limit},
+            )
+            assert len(data["files"]) == count and data["total"] == 2, (limit, data)
+        await delete_files(client, paths=[f"/home/{top}"], recycle_bin_status={})
+        [share] = await ensure_known_shares(client, ["Home"], known)
+        found = await list_recycle_bin(client, share=share, pattern=top)
+        assert f"{top}/" in found, found
+        status: dict[str, bool] = {}
+        with pytest.raises(ToolError, match="The user home folder is /home"):
+            await list_recycle_bin(client, share="Home", recycle_bin_status=status)
+        assert status == {}
+    finally:
+        await _clean(client, top)
+
+
+async def test_home_takes_only_its_listed_name(nas_client: Any, tmp_path: Path) -> None:
+    await _home_takes_only_its_listed_name(nas_client[0], tmp_path)
+
+
+async def test_home_takes_only_its_listed_name_admin(admin_client: Any, tmp_path: Path) -> None:
+    await _home_takes_only_its_listed_name(admin_client[0], tmp_path)

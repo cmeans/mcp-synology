@@ -429,7 +429,7 @@ def register(ctx: RegisterContext) -> None:
             limit: int = 200,
         ) -> str:
             client = await _fs_client()
-            await ensure_known_shares(client, [path], known_shares)
+            [path] = await ensure_known_shares(client, [path], known_shares)
             return _reply(
                 await list_files(
                     client,
@@ -460,7 +460,7 @@ def register(ctx: RegisterContext) -> None:
             limit: int = 100,
         ) -> str:
             client = await _fs_client()
-            await ensure_known_shares(client, [share], known_shares)
+            [share] = await ensure_known_shares(client, [share], known_shares)
             return _reply(
                 await list_recycle_bin(
                     client,
@@ -495,7 +495,7 @@ def register(ctx: RegisterContext) -> None:
             limit: int = 500,
         ) -> str:
             client = await _fs_client()
-            await ensure_known_shares(client, [folder_path], known_shares)
+            [folder_path] = await ensure_known_shares(client, [folder_path], known_shares)
             return _reply(
                 await search_files(
                     client,
@@ -525,7 +525,7 @@ def register(ctx: RegisterContext) -> None:
         )
         async def tool_get_file_info(paths: list[str], additional: list[str] | None = None) -> str:
             client = await _fs_client()
-            await ensure_known_shares(client, paths, known_shares)
+            paths = await ensure_known_shares(client, paths, known_shares)
             return _reply(await get_file_info(client, paths=paths, additional=additional))
 
     if "get_dir_size" in ctx.allowed_tools:
@@ -537,7 +537,7 @@ def register(ctx: RegisterContext) -> None:
         )
         async def tool_get_dir_size(path: str) -> str:
             client = await _fs_client()
-            await ensure_known_shares(client, [path], known_shares)
+            [path] = await ensure_known_shares(client, [path], known_shares)
             result = await get_dir_size(client, path=path, timeout=dir_size_timeout)
             return _reply(result)
 
@@ -572,7 +572,7 @@ def register(ctx: RegisterContext) -> None:
                 )
 
             client = await _fs_client()
-            await ensure_known_shares(client, [path], known_shares)
+            [path] = await ensure_known_shares(client, [path], known_shares)
 
             async def _progress(current: int, total: int | None) -> None:
                 await ctx.report_progress(float(current), float(total) if total else None)
@@ -603,7 +603,7 @@ def register(ctx: RegisterContext) -> None:
             force_parent: bool = True,
         ) -> str:
             client = await _fs_client()
-            await ensure_known_shares(client, paths, known_shares)
+            paths = await ensure_known_shares(client, paths, known_shares)
             result = await create_folder(client, paths=paths, force_parent=force_parent)
             return _reply(result)
 
@@ -616,7 +616,7 @@ def register(ctx: RegisterContext) -> None:
         )
         async def tool_rename(path: str, new_name: str) -> str:
             client = await _fs_client()
-            await ensure_known_shares(client, [path], known_shares)
+            [path] = await ensure_known_shares(client, [path], known_shares)
             return _reply(await rename(client, path=path, new_name=new_name))
 
     if "copy_files" in ctx.allowed_tools:
@@ -633,7 +633,9 @@ def register(ctx: RegisterContext) -> None:
             overwrite: bool = False,
         ) -> str:
             client = await _fs_client()
-            await ensure_known_shares(client, [*paths, dest_folder], known_shares)
+            *paths, dest_folder = await ensure_known_shares(
+                client, [*paths, dest_folder], known_shares
+            )
             return _reply(
                 await copy_files(
                     client,
@@ -660,7 +662,9 @@ def register(ctx: RegisterContext) -> None:
             overwrite: bool = False,
         ) -> str:
             client = await _fs_client()
-            await ensure_known_shares(client, [*paths, dest_folder], known_shares)
+            *paths, dest_folder = await ensure_known_shares(
+                client, [*paths, dest_folder], known_shares
+            )
             return _reply(
                 await move_files(
                     client,
@@ -686,7 +690,7 @@ def register(ctx: RegisterContext) -> None:
             recursive: bool = True,
         ) -> str:
             client = await _fs_client()
-            await ensure_known_shares(client, paths, known_shares)
+            paths = await ensure_known_shares(client, paths, known_shares)
             return _reply(
                 await delete_files(
                     client,
@@ -730,9 +734,7 @@ def register(ctx: RegisterContext) -> None:
                 )
 
             client = await _fs_client()
-            await ensure_known_shares(
-                client, [d] if (d := dest_folder or default_upload_dir) else [], known_shares
-            )
+            [effective_dest] = await ensure_known_shares(client, [effective_dest], known_shares)
 
             async def _progress(current: int, total: int | None) -> None:
                 await ctx.report_progress(float(current), float(total) if total else None)
@@ -766,9 +768,10 @@ def register(ctx: RegisterContext) -> None:
             overwrite: bool = False,
         ) -> str:
             client = await _fs_client()
-            await ensure_known_shares(
+            share, *dest = await ensure_known_shares(
                 client, [share, *([dest_folder] if dest_folder else [])], known_shares
             )
+            dest_folder = dest[0] if dest else None
             return _reply(
                 await restore_from_recycle_bin(
                     client,
