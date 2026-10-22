@@ -400,6 +400,25 @@ class TestCorrectRecycleStatusFromObservation:
         assert recycle_status == {"scratch": False}
 
 
+class TestWithListedShareName:
+    """#353: the share is renamed to its listed spelling; anything else is left alone."""
+
+    @pytest.mark.parametrize(
+        ("path", "expected"),
+        [
+            ("/home/a", "/home/a"),  # already listed
+            ("/Home/a/b", "/home/a/b"),  # another case
+            ("HOME", "/home"),  # no leading slash
+            ("/other/a", "/other/a"),  # not a listed share: left for the caller
+            ("/", "/"),
+        ],
+    )
+    def test_listed_spelling(self, path: str, expected: str) -> None:
+        from mcp_synology.modules.filestation.helpers import _with_listed_share_name
+
+        assert _with_listed_share_name(path, {"home", "video"}) == expected
+
+
 class TestEnsureKnownShares:
     """#160: validate the share name against the NAS's share list before any DSM call."""
 

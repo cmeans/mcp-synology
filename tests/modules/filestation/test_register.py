@@ -585,6 +585,27 @@ LISTED_CASES = [
     ("list_recycle_bin", "listing.list_recycle_bin", {"share": "Home"}, {"share": "/home"}),
     ("delete_files", "operations.delete_files", {"paths": ["/Home/x"]}, {"paths": ["/home/x"]}),
     ("list_files", "listing.list_files", {"path": "/Home"}, {"path": "/home"}),
+    ("search_files", "search.search_files", {"folder_path": "/Home"}, {"folder_path": "/home"}),
+    (
+        "get_file_info",
+        "metadata.get_file_info",
+        {"paths": ["/Video/a", "/Home/b"]},
+        {"paths": ["/video/a", "/home/b"]},
+    ),
+    ("get_dir_size", "metadata.get_dir_size", {"path": "/Home/d"}, {"path": "/home/d"}),
+    (
+        "download_file",
+        "transfer.download_file",
+        {"path": "/Home/f", "dest_folder": "/tmp"},
+        {"path": "/home/f"},
+    ),
+    (
+        "create_folder",
+        "operations.create_folder",
+        {"paths": ["/Home/n", "/Video/m"]},
+        {"paths": ["/home/n", "/video/m"]},
+    ),
+    ("rename", "operations.rename", {"path": "/Home/x", "new_name": "y"}, {"path": "/home/x"}),
 ]
 
 
