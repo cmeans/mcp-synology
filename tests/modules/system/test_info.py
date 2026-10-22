@@ -76,7 +76,8 @@ class TestGetSystemInfo:
         assert "2000 MHz" in result
         assert "8192 MiB" in result
         assert "42°C" in result
-        assert "pool.ntp.org" in result
+        # The whole row, not a substring (CodeQL read `"<host>" in s` as a URL check).
+        assert ["NTP:", "pool.ntp.org"] in [line.split() for line in result.splitlines()]
         # DSM sends the NAS's local time with no zone, so the label says whose.
         assert "System time:  2026-04-10 12:00:00 (NAS local time)" in result
 

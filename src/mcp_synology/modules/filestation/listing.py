@@ -9,8 +9,9 @@ from typing import TYPE_CHECKING, Any
 
 from mcp.server.mcpserver.exceptions import ToolError
 
-from mcp_synology.core.errors import SynologyError
+from mcp_synology.core.errors import ErrorCode, SynologyError
 from mcp_synology.core.formatting import (
+    error_response,
     format_size,
     format_table,
     format_timestamp,
@@ -261,6 +262,38 @@ async def list_files(
     return result
 
 
+async def _not_enabled(
+    client: DsmClient, share_name: str, recycle_bin_status: dict[str, bool] | None
+) -> str:
+    """Say the share has no bin, once DSM confirms the share itself is there (#353).
+
+    DSM answers 408 for ``/<share>/#recycle`` both when the bin is off and when the share
+    isn't there: a typo, or ``/Home`` for the home service, which only answers as ``home``.
+    Without this check, a restorable file read as "cannot be recovered".
+    """
+    try:
+        await client.request(
+            "SYNO.FileStation.List", "list", params={"folder_path": f"/{share_name}", "limit": 1}
+        )
+    except SynologyError as e:
+        if e.code != 408:
+            synology_error_response("List recycle bin", e)
+        if recycle_bin_status is not None:
+            recycle_bin_status.pop(share_name, None)
+        home = (
+            " The user home folder is /home (lowercase)." if share_name.casefold() == "home" else ""
+        )
+        error_response(
+            ErrorCode.NOT_FOUND,
+            f"No shared folder /{share_name} on this NAS.{home}",
+            retryable=False,
+            param="share",
+            value=share_name,
+            suggestion="Call list_shares and use a share name as it lists it.",
+        )
+    return f"Recycle bin is not enabled on /{share_name}. Deleted files cannot be recovered."
+
+
 async def list_recycle_bin(
     client: DsmClient,
     *,
@@ -282,9 +315,7 @@ async def list_recycle_bin(
     if recycle_bin_status is not None:
         enabled = await ensure_recycle_status(client, share_name, recycle_bin_status)
         if not enabled:
-            return (
-                f"Recycle bin is not enabled on /{share_name}. Deleted files cannot be recovered."
-            )
+            return await _not_enabled(client, share_name, recycle_bin_status)
 
     recycle_path = f"/{share_name}/#recycle"
 
@@ -330,10 +361,7 @@ async def list_recycle_bin(
                     correct_recycle_status_from_observation(
                         share_name, observed_enabled=False, recycle_status=recycle_bin_status
                     )
-                return (
-                    f"Recycle bin is not enabled on /{share_name}. "
-                    "Deleted files cannot be recovered."
-                )
+                return await _not_enabled(client, share_name, recycle_bin_status)
         except (json.JSONDecodeError, TypeError):
             pass
         raise

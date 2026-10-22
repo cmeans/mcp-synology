@@ -954,9 +954,12 @@ async def restore_from_recycle_bin(
 
     for p in paths:
         p = p.strip()
-        # Ensure the path is within #recycle
-        if f"/{share_name}/#recycle" in p:
-            full_paths.append(normalize_path(p))
+        # Ensure the path is within #recycle. A full path may spell the share in another case;
+        # it's re-rooted on the share as given, which the handler has set to the listed
+        # spelling (#353).
+        head, _, rest = p.lstrip("/").partition("/")
+        if head.casefold() == share_name.casefold() and rest.startswith("#recycle"):
+            full_paths.append(normalize_path(f"/{share_name}/{rest}"))
         elif p.startswith("#recycle"):
             full_paths.append(normalize_path(f"/{share_name}/{p}"))
         else:

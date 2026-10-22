@@ -301,7 +301,7 @@ class TestEnsureRecycleStatus:
         client.request.assert_awaited_once_with(
             "SYNO.FileStation.List",
             "list",
-            params={"folder_path": "/video/#recycle", "limit": 0},
+            params={"folder_path": "/video/#recycle", "limit": 1},
         )
 
     @pytest.mark.asyncio
@@ -400,6 +400,25 @@ class TestCorrectRecycleStatusFromObservation:
         assert recycle_status == {"scratch": False}
 
 
+class TestWithListedShareName:
+    """#353: the share is renamed to its listed spelling; anything else is left alone."""
+
+    @pytest.mark.parametrize(
+        ("path", "expected"),
+        [
+            ("/home/a", "/home/a"),  # already listed
+            ("/Home/a/b", "/home/a/b"),  # another case
+            ("HOME", "/home"),  # no leading slash
+            ("/other/a", "/other/a"),  # not a listed share: left for the caller
+            ("/", "/"),
+        ],
+    )
+    def test_listed_spelling(self, path: str, expected: str) -> None:
+        from mcp_synology.modules.filestation.helpers import _with_listed_share_name
+
+        assert _with_listed_share_name(path, {"home", "video"}) == expected
+
+
 class TestEnsureKnownShares:
     """#160: validate the share name against the NAS's share list before any DSM call."""
 
@@ -467,7 +486,7 @@ class TestEnsureKnownShares:
         calls: list[str] = []
         self._route([["writable"]], calls)
         cache: set[str] = set()
-        await ensure_known_shares(mock_client, [], cache)
+        assert await ensure_known_shares(mock_client, [], cache) == []
         assert calls == [] and cache == set()
 
     @respx.mock
@@ -477,8 +496,32 @@ class TestEnsureKnownShares:
         calls: list[str] = []
         self._route([["testshare", "writable"]], calls)
         cache = {"testshare", "writable"}
-        await ensure_known_shares(mock_client, ["/TESTSHARE/Documents", "/Writable/x"], cache)
+        out = await ensure_known_shares(mock_client, ["/TESTSHARE/Documents", "/Writable/x"], cache)
         assert calls == []
+        # Sent as listed (#353): DSM takes /TESTSHARE, but not /Home for the home service.
+        assert out == ["/testshare/Documents", "/writable/x"]
+
+    @respx.mock
+    async def test_paths_come_back_with_the_listed_share_name(self, mock_client: DsmClient) -> None:
+        """#353: /Home and /HOME get 408 where /home lists (vdsm 7.1 and 7.4.1, seska 7.1.1)."""
+        calls: list[str] = []
+        self._route([["home", "homes", "Backups"]], calls)
+        out = await ensure_known_shares(
+            mock_client,
+            ["Home", "/HOME/docs/a.txt", "homes/x/", "/backups", "/Backups/y", "home/z"],
+            set(),
+        )
+        # Changed only where the share name differs; anything else is left as given.
+        assert out == ["/home", "/home/docs/a.txt", "homes/x/", "/Backups", "/Backups/y", "home/z"]
+
+    @respx.mock
+    async def test_paths_come_back_unchanged_when_dsm_wont_list(
+        self, mock_client: DsmClient
+    ) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 105}}
+        )
+        assert await ensure_known_shares(mock_client, ["/Home/x"], set()) == ["/Home/x"]
 
     @respx.mock
     async def test_recycle_as_share_is_rejected(self, mock_client: DsmClient) -> None:

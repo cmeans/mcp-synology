@@ -20,6 +20,7 @@ copy_files, move_files, delete_files and restore_from_recycle_bin) take an extra
 
 from __future__ import annotations
 
+import inspect
 import json
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock
@@ -176,7 +177,8 @@ class TestFilestationToolInvocation:
     def _shares_known(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # These tests cover the closures' plumbing; share validation (#160) has its own.
         monkeypatch.setattr(
-            "mcp_synology.modules.filestation.helpers.ensure_known_shares", AsyncMock()
+            "mcp_synology.modules.filestation.helpers.ensure_known_shares",
+            AsyncMock(side_effect=lambda _client, paths, _cache: list(paths)),
         )
 
     @staticmethod
@@ -548,6 +550,91 @@ class TestFilestationToolInvocation:
         mock.assert_awaited_once()
 
 
+# (tool, domain function, tool kwargs, the kwargs the domain function must get)
+LISTED_CASES = [
+    (
+        "copy_files",
+        "operations.copy_files",
+        {"paths": ["/Video/a", "/Video/b"], "dest_folder": "/Video/c"},
+        {"paths": ["/video/a", "/video/b"], "dest_folder": "/video/c"},
+    ),
+    (
+        "move_files",
+        "operations.move_files",
+        {"paths": ["/Video/a"], "dest_folder": "/Home/c"},
+        {"paths": ["/video/a"], "dest_folder": "/home/c"},
+    ),
+    (
+        "restore_from_recycle_bin",
+        "operations.restore_from_recycle_bin",
+        {"share": "Home", "paths": ["x"], "dest_folder": "/Video/c"},
+        {"share": "/home", "paths": ["x"], "dest_folder": "/video/c"},
+    ),
+    (
+        "restore_from_recycle_bin",
+        "operations.restore_from_recycle_bin",
+        {"share": "Home", "paths": ["x"]},
+        {"share": "/home", "paths": ["x"], "dest_folder": None},
+    ),
+    (
+        "upload_file",
+        "transfer.upload_file",
+        {"local_path": "/tmp/f", "dest_folder": "/Home/up"},
+        {"dest_folder": "/home/up"},
+    ),
+    ("list_recycle_bin", "listing.list_recycle_bin", {"share": "Home"}, {"share": "/home"}),
+    ("delete_files", "operations.delete_files", {"paths": ["/Home/x"]}, {"paths": ["/home/x"]}),
+    ("list_files", "listing.list_files", {"path": "/Home"}, {"path": "/home"}),
+    ("search_files", "search.search_files", {"folder_path": "/Home"}, {"folder_path": "/home"}),
+    (
+        "get_file_info",
+        "metadata.get_file_info",
+        {"paths": ["/Video/a", "/Home/b"]},
+        {"paths": ["/video/a", "/home/b"]},
+    ),
+    ("get_dir_size", "metadata.get_dir_size", {"path": "/Home/d"}, {"path": "/home/d"}),
+    (
+        "download_file",
+        "transfer.download_file",
+        {"path": "/Home/f", "dest_folder": "/tmp"},
+        {"path": "/home/f"},
+    ),
+    (
+        "create_folder",
+        "operations.create_folder",
+        {"paths": ["/Home/n", "/Video/m"]},
+        {"paths": ["/home/n", "/video/m"]},
+    ),
+    ("rename", "operations.rename", {"path": "/Home/x", "new_name": "y"}, {"path": "/home/x"}),
+]
+
+
+@pytest.mark.parametrize(("tool", "target", "kwargs", "expected"), LISTED_CASES)
+async def test_tools_send_the_share_name_as_listed(
+    monkeypatch: pytest.MonkeyPatch,
+    tool: str,
+    target: str,
+    kwargs: dict[str, object],
+    expected: dict[str, object],
+) -> None:
+    """#353: every handler hands on the paths ensure_known_shares returns, in order."""
+    from mcp_synology.modules.filestation.helpers import _with_listed_share_name
+
+    async def listed(_client: object, paths: list[str], _cache: set[str]) -> list[str]:
+        return [_with_listed_share_name(p, {"video", "home"}) for p in paths]
+
+    monkeypatch.setattr("mcp_synology.modules.filestation.helpers.ensure_known_shares", listed)
+    mock = AsyncMock(return_value="ok")
+    monkeypatch.setattr(f"mcp_synology.modules.filestation.{target}", mock)
+    server, _manager, ctx = _make_ctx(shared_paths=["/tmp"])
+    register(ctx)
+    fn = server._tool_manager._tools[tool].fn
+    params = inspect.signature(fn).parameters
+    await fn(**({"ctx": _fake_mcp_ctx()} if "ctx" in params else {}), **kwargs)
+    got = mock.await_args.kwargs
+    assert {k: got[k] for k in expected} == expected
+
+
 UNKNOWN = "/nosuchshare/x"
 # (tool, domain function it must not reach, kwargs naming the unknown share)
 SHARE_CASES = [
@@ -655,7 +742,8 @@ class TestFileTaskAndHandoff:
     @pytest.fixture(autouse=True)
     def _shares_known(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
-            "mcp_synology.modules.filestation.helpers.ensure_known_shares", AsyncMock()
+            "mcp_synology.modules.filestation.helpers.ensure_known_shares",
+            AsyncMock(side_effect=lambda _client, paths, _cache: list(paths)),
         )
 
     def test_file_task_registered_write_only(self) -> None:
