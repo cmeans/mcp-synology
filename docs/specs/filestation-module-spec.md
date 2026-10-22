@@ -35,7 +35,7 @@ MODULE_INFO = ModuleInfo(
 
 - **Input:** Accept paths with or without leading `/`. Normalize internally by prepending `/` if missing.
 - **Output:** Always return fully-qualified paths starting with `/shared_folder/...`.
-- **Validation:** Check that the first path component corresponds to a known shared folder (from `SYNO.FileStation.List` / `list_share` cache). Return a clear error with `list_shares` guidance if not. Every path-taking tool does this in its wrapper before any DSM call (#160): the cache is per session, filled on first use, reloaded once when a path names a share it doesn't hold (so a new share is found), and cleared on re-auth. Share names match case-insensitively, as DSM does for ordinary shares (`/TESTSHARE/...` works for share `testshare`); the user home service is case-sensitive (`/Home` gets 408, #353). An unknown share is a non-retryable `not_found` naming the shares that exist (for an account that isn't an admin, the shares it can see). If DSM won't list shares, the check is skipped and DSM's own error stands. Without it, DSM answers an unknown share with misleading codes: 900 "Unexpected server error" (Delete) and 1100 "Insufficient filesystem permissions" (CreateFolder), on DSM 7.1 and 7.2.2.
+- **Validation:** Check that the first path component corresponds to a known shared folder (from `SYNO.FileStation.List` / `list_share` cache). Return a clear error with `list_shares` guidance if not. Every path-taking tool does this in its wrapper before any DSM call (#160): the cache is per session, filled on first use, reloaded once when a path names a share it doesn't hold (so a new share is found), and cleared on re-auth. A share name in another case passes, and the path goes on to DSM with the name as `list_share` spells it (#353): DSM takes an ordinary share in any case (`/TESTSHARE/...` for `testshare`), but the user home service only as `home` (`/Home` and `/HOME` get 408 "No such file or directory": vdsm DSM 7.1 and 7.4.1, and seska's DSM 7.1.1 on Btrfs, admin and not). An unknown share is a non-retryable `not_found` naming the shares that exist (for an account that isn't an admin, the shares it can see). If DSM won't list shares, the check is skipped and DSM's own error stands. Without it, DSM answers an unknown share with misleading codes: 900 "Unexpected server error" (Delete) and 1100 "Insufficient filesystem permissions" (CreateFolder), on DSM 7.1 and 7.2.2.
 - **Escaping:** The DSM API uses commas as separators in multi-path parameters. Commas in paths must be escaped to `\,` and backslashes to `\\`. The core client handles this transparently.
 
 ### Response Formatting
@@ -71,7 +71,7 @@ Synology's recycle bin is implemented as a `#recycle` subfolder within each shar
 **At module initialization:**
 - Query `SYNO.FileStation.Info` / `get` to check NAS-level settings
 - Query `list_share` to identify which shares exist
-- For each share, check if `#recycle` exists (lightweight: attempt `list` on `/<share>/#recycle/` with `limit=0`)
+- For each share, check if `#recycle` exists (lightweight: attempt `list` on `/<share>/#recycle/` with `limit=1`; DSM's `limit=0` lists everything)
 - Cache recycle bin status per shared folder
 
 **Impact on tools:**
@@ -391,7 +391,7 @@ DSM sorts folders and files separately; files come first.
   Paths are relative to the recycle bin, as a restore takes them.
   ```
 - **What `Modified` means here:** an item keeps its own mtime in the bin (seska: `desktop.ini` deleted in 2026 shows 2019), so the default sort isn't "most recently deleted first". `ctime` moves when the item goes into the bin (seska: `mcp-rc3`, `mcp-rc4` show their deletion times), though a later metadata change also updates it (several older items share one `ctime`).
-- If recycle bin is not enabled: `"Recycle bin is not enabled on /video. Deleted files cannot be recovered."`
+- If recycle bin is not enabled: `"Recycle bin is not enabled on /video. Deleted files cannot be recovered."` DSM answers 408 for `/<share>/#recycle` both when the bin is off and when the share isn't there, so this is said only after `/<share>` itself lists. A share that isn't there is a non-retryable `not_found` ("No shared folder /Home on this NAS. The user home folder is /home (lowercase)." — the hint only for `home` in another case), and no recycle status is kept for it (#353). The share check above normally catches both cases first; this one covers DSM refusing to list shares.
 - The `#recycle` folder preserves the original directory structure. Without `pattern`, only the top level is listed; `list_files` on a `#recycle` subpath browses deeper.
 
 ---

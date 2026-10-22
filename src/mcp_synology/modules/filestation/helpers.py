@@ -335,8 +335,8 @@ def matches_pattern(filename: str, pattern: str) -> bool:
 # the life of the session, and let the auth manager invalidate the cache on
 # session re-auth (since admin could toggle `#recycle` between sessions).
 #
-# Probe: `SYNO.FileStation.List` on `/{share}/#recycle/` with `limit=0`. Cheap;
-# only fetches the directory entry, not its contents.
+# Probe: `SYNO.FileStation.List` on `/{share}/#recycle/` with `limit=1`: one entry at
+# most (DSM's `limit=0` means all of them, #353).
 #   - Success                     -> recycle bin enabled  (True)
 #   - DSM 408 (path not found)    -> recycle bin disabled (False)
 #   - DSM 105 (permission denied) -> unknown; default True + WARN so the
@@ -361,7 +361,7 @@ async def ensure_recycle_status(
         await client.request(
             "SYNO.FileStation.List",
             "list",
-            params={"folder_path": f"/{share_name}/#recycle", "limit": 0},
+            params={"folder_path": f"/{share_name}/#recycle", "limit": 1},
         )
         recycle_status[share_name] = True
         logger.debug("Probed recycle bin on /%s: enabled", share_name)
@@ -489,17 +489,38 @@ async def _refresh_known_shares(client: DsmClient, known_shares: set[str]) -> bo
     return True
 
 
-async def ensure_known_shares(client: DsmClient, paths: list[str], known_shares: set[str]) -> None:
+def _with_listed_share_name(path: str, known_shares: set[str]) -> str:
+    """Return ``path`` with its share named as ``list_share`` names it (#353).
+
+    DSM takes an ordinary share in any case (``/TESTSHARE`` for ``testshare``), but not the
+    user home service: ``/Home`` and ``/HOME`` get 408 where ``/home`` lists (vdsm DSM 7.1
+    and 7.4.1; seska's DSM 7.1.1, admin and not). So the listed spelling is always sent.
+    """
+    parts = normalize_path(path).split("/")
+    if len(parts) < 2 or not parts[1] or parts[1] in known_shares:
+        return path
+    listed = next((s for s in known_shares if s.casefold() == parts[1].casefold()), None)
+    if listed is None:
+        return path
+    return "/".join(["", listed, *parts[2:]])
+
+
+async def ensure_known_shares(
+    client: DsmClient, paths: list[str], known_shares: set[str]
+) -> list[str]:
     """Raise ``not_found`` for a path whose first component isn't a shared folder (#160).
+
+    Returns ``paths`` in order, each with its share named as DSM lists it (#353): DSM
+    takes an ordinary share in any case, but the home service only as ``home``.
 
     ``known_shares`` is a cache owned by the caller (cleared on re-auth). It's filled on
     first use and reloaded once when a path names a share it doesn't hold, so a share
     created since is still found. For an account that isn't an admin, the list is the
     shares it can see, which is what it should be told about. If DSM won't list shares,
-    the check is skipped and DSM's own error stands.
+    the check is skipped, ``paths`` come back unchanged and DSM's own error stands.
     """
     if not paths:
-        return
+        return []
 
     def _shares() -> set[str]:
         return {
@@ -510,7 +531,7 @@ async def ensure_known_shares(client: DsmClient, paths: list[str], known_shares:
     if (not known_shares or not _shares() <= known) and not await _refresh_known_shares(
         client, known_shares
     ):
-        return
+        return list(paths)
     for path in paths:
         problem = validate_share_path(path, known_shares)
         if problem:
@@ -522,3 +543,4 @@ async def ensure_known_shares(client: DsmClient, paths: list[str], known_shares:
                 value=path,
                 suggestion="Call list_shares to see the shared folders on this NAS.",
             )
+    return [_with_listed_share_name(path, known_shares) for path in paths]
