@@ -2601,3 +2601,32 @@ class TestRestoreRecreatesMissingFolders:
             mock_client, share="home", paths=["t/sub/a.txt"], dest_folder="/home/elsewhere"
         )
         assert created == []
+
+    @respx.mock
+    async def test_a_failed_check_or_create_is_an_error(self, mock_client: DsmClient) -> None:
+        """Neither failure is swallowed: the move into a missing folder would fail anyway."""
+        created: list[dict[str, str]] = []
+        inner = self._responder({"/home/t/sub"}, created)
+
+        def check_fails(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            if params.get("method") == "getinfo" and "#recycle" not in params["path"]:
+                return httpx.Response(200, json={"success": False, "error": {"code": 407}})
+            return inner(request)  # type: ignore[operator, no-any-return]
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=check_fails)
+        with pytest.raises(ToolError, match="Restore files"):
+            await restore_from_recycle_bin(mock_client, share="home", paths=["t/sub/a.txt"])
+
+        tried: list[str] = []
+
+        def create_fails(request: httpx.Request) -> httpx.Response:
+            if dict(request.url.params).get("api") == "SYNO.FileStation.CreateFolder":
+                tried.append(request.url.params["folder_path"])
+                return httpx.Response(200, json={"success": False, "error": {"code": 1100}})
+            return inner(request)  # type: ignore[operator, no-any-return]
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=create_fails)
+        with pytest.raises(ToolError, match="Restore files"):
+            await restore_from_recycle_bin(mock_client, share="home", paths=["t/sub/a.txt"])
+        assert tried == ["/home/t"]  # the create was tried once, and its error stands

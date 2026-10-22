@@ -169,8 +169,9 @@ Common causes:
 
 Fix:
 
-1. Call `list_shares` to see exact share names. They are case-sensitive on
-   Btrfs and case-insensitive on ext4 — when in doubt, match the displayed case.
+1. Call `list_shares` to see exact share names, and use them as listed. An
+   ordinary share matches in any case (`/BACKUPS` for `Backups`, on Btrfs), but
+   the user home service doesn't: `/Home` is "not found", `/home` lists.
 2. Call `list_files` on the parent directory to confirm the target exists with
    the expected name and case.
 3. For uncertain locations, call `search_files` with a substring of the name.

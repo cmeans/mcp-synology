@@ -681,16 +681,66 @@ class TestRecycleBinSearch:
 
     @respx.mock
     async def test_paths_come_from_the_walk_not_dsm_path(self, mock_client: DsmClient) -> None:
-        """share="Home" is accepted (share names match case-insensitively), while DSM
-        may echo the path as /home/...: the walk mustn't depend on DSM's path."""
+        """share="Video" lists share video (ordinary share names match case-insensitively),
+        while DSM echoes the path as /video/...: the walk mustn't depend on DSM's path."""
         tree = {
-            "/Home/#recycle": [_entry(f"{_BIN}/mcp-rc3", isdir=True)],
-            "/Home/#recycle/mcp-rc3": [_entry(f"{_BIN}/mcp-rc3/b2.txt")],
+            "/Video/#recycle": [_entry("/video/#recycle/mcp-rc3", isdir=True)],
+            "/Video/#recycle/mcp-rc3": [_entry("/video/#recycle/mcp-rc3/b2.txt")],
         }
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_bin_responder(tree))
-        out = await list_recycle_bin(mock_client, share="Home", pattern="b2*")
-        assert "mcp-rc3/b2.txt" in out and "/home/#recycle/" not in out.split("\n", 3)[3]
+        out = await list_recycle_bin(mock_client, share="Video", pattern="b2*")
+        assert "mcp-rc3/b2.txt" in out and "/video/#recycle/" not in out.split("\n", 3)[3]
         assert "Not searched" not in out
+
+    @respx.mock
+    async def test_a_search_records_the_bin_as_enabled(
+        self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from mcp_synology.modules.filestation import listing
+
+        seen: list[tuple[str, bool]] = []
+
+        def spy(share: str, *, observed_enabled: bool, recycle_status: dict[str, bool]) -> None:
+            seen.append((share, observed_enabled))
+
+        monkeypatch.setattr(listing, "correct_recycle_status_from_observation", spy)
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_bin_responder(_TREE))
+        status: dict[str, bool] = {}
+        out = await list_recycle_bin(
+            mock_client, share="home", pattern="b2*", recycle_bin_status=status
+        )
+        assert "photos-zip/b2.txt" in out and seen == [("home", True)]
+
+    @respx.mock
+    async def test_entry_cap_inside_a_folder(
+        self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from mcp_synology.modules.filestation import listing
+
+        monkeypatch.setattr(listing, "_WALK_MAX_ENTRIES", 4)
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_bin_responder(_TREE))
+        out = await list_recycle_bin(mock_client, share="home", pattern="*")
+        # 2 at the top, 1 in mcp-rc3, then 1 of photos-zip's 3: the rest is unread.
+        assert "Stopped after 3 folder(s) and 4 item(s)" in out
+        assert "photos-zip/b2.txt" in out and "a1.txt" not in out
+
+    @pytest.mark.parametrize(
+        ("sort_by", "direction", "order"),
+        [
+            ("name", "asc", ["photos-zip/a1.txt", "photos-zip/AB2-upper.TXT", "photos-zip/b2.txt"]),
+            ("size", "desc", ["photos-zip/b2.txt", "photos-zip/AB2-upper.TXT"]),
+        ],
+    )
+    @respx.mock
+    async def test_sort_by_name_and_size(
+        self, mock_client: DsmClient, sort_by: str, direction: str, order: list[str]
+    ) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_bin_responder(_TREE))
+        out = await list_recycle_bin(
+            mock_client, share="home", pattern="*.txt", sort_by=sort_by, sort_direction=direction
+        )
+        positions = [out.index(n) for n in order]
+        assert positions == sorted(positions), out
 
     @respx.mock
     async def test_a_sort_the_search_cant_do_says_so(self, mock_client: DsmClient) -> None:
@@ -728,6 +778,17 @@ class TestRecycleBinSearch:
         assert "desktop.ini" in out
 
     @respx.mock
+    async def test_more_than_five_unreadable_subfolders_are_counted(
+        self, mock_client: DsmClient
+    ) -> None:
+        names = [f"d{i}" for i in range(7)]
+        tree = {_BIN: [_entry(f"{_BIN}/{n}", isdir=True) for n in names]}
+        errors = {f"{_BIN}/{n}": 407 for n in names}
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_bin_responder(tree, errors))
+        out = await list_recycle_bin(mock_client, share="home", pattern="zzz")
+        assert "Not searched (couldn't be listed): d0, d1, d2, d3, d4 and 2 more." in out
+
+    @respx.mock
     async def test_pattern_on_a_share_without_a_bin(self, mock_client: DsmClient) -> None:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_bin_responder({}))
         out = await list_recycle_bin(mock_client, share="home", pattern="b2*")
@@ -761,6 +822,7 @@ class TestDsmPatternMatcher:
             ("b?.txt", ["b2.txt"]),
             ("b2*,other*", ["B2-upper.TXT", "b2.txt", "other.txt"]),
             ("[ab]2*", []),
+            ("b2*, ,", ["B2-upper.TXT", "b2.txt"]),  # empty alternatives are ignored
         ],
     )
     def test_matches_like_dsm(self, pattern: str, expected: list[str]) -> None:
