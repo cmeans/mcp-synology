@@ -182,6 +182,7 @@ The heading adds `; newest completed first` (or `created`) for a sort, and `; yo
   - **Unfiltered, queue order:** one v1 page. A short page gives the total (`offset + rows`) with no extra call. A full page, or an empty page past offset 0, takes the total from DS2 `Task.list` (`limit=1`: 51 ms and under 1 KB at 1,214 tasks). If DS2 is absent or refuses, the fallback is a v1 `limit=-1` listing without `additional` (373 ms, 192 KB).
   - **Filtered or sorted:** fetch every task (`limit=-1` with `detail,transfer`: 750 ms, 846 KB at 1,214 tasks), filter, sort, then page. The total is the number of matches. A filter used to see only the first page.
 - DS2's total is scoped to the caller, like v1's list: a non-manager's count is their own tasks. That's verified on both versions.
+- **A size of 0 means DSM doesn't know it yet** (#345), e.g. an HTTP download whose server sends no size (seska, DSM 7.1.1, at 70.1 MiB downloaded). `Size` then reads `unknown` and `Progress` `70.1 MiB downloaded (size unknown)`, here and in `get_download_info`. Only a finished or seeding task with nothing downloaded keeps `0 B`, as a real empty download.
 - `Down` and `Up` are the current speeds. An all-seeding queue used to look idle because only the download speed was shown (#145).
 - `sort_by="completed", limit=1` answers "what finished last?" in one call. Creation order isn't completion order, because seeders vary.
 - The default page is 25 to save model context (100 rows came to about 15 KB).
