@@ -223,8 +223,8 @@ def validate_share_path(path: str, known_shares: set[str]) -> str | None:
     if share == "#recycle":
         return f"Invalid path '{path}': must start with a shared folder name, not #recycle."
 
-    # DSM share names aren't case-sensitive: /TESTSHARE/... works for share "testshare"
-    # (DSM 7.1 and 7.2.2; QA R1 on #173).
+    # DSM takes an ordinary share in any case: /TESTSHARE/... works for share "testshare"
+    # (DSM 7.1 and 7.2.2; QA R1 on #173). The user home service doesn't: /Home is 408 (#353).
     if share.casefold() not in {s.casefold() for s in known_shares}:
         available = ", ".join(sorted(known_shares)) if known_shares else "(none)"
         return (

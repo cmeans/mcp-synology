@@ -107,14 +107,19 @@ MODULE_INFO = ModuleInfo(
             name="list_files",
             description=(
                 "List files and folders in a directory. Supports glob pattern filtering, "
-                "file type filtering, sorting, and pagination."
+                "file type filtering, sorting, and pagination. DSM sorts folders and files "
+                "separately: ascending lists folders first, descending files first."
             ),
             permission_tier=PermissionTier.READ,
         ),
         ToolInfo(
             name="list_recycle_bin",
             description=(
-                "List the contents of a shared folder's recycle bin: its recently deleted files."
+                "List the contents of a shared folder's recycle bin: its recently deleted files. "
+                "With pattern, it searches the whole bin, subfolders included, and shows paths "
+                "in the bin. Modified is the file's own time, not when it was deleted; "
+                "sort_by=ctime is the closest to deletion time. Without pattern, DSM sorts "
+                "folders and files separately, as in list_files."
             ),
             permission_tier=PermissionTier.READ,
         ),

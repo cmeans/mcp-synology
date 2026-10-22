@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import TYPE_CHECKING, Any
 
 from mcp.server.mcpserver.exceptions import ToolError
@@ -35,12 +36,50 @@ _SORT_ALIASES: dict[str, str] = {
     "time": "mtime",
     "created": "crtime",
     "accessed": "atime",
+    "changed": "ctime",
     "owner": "user",
 }
 
 
 def _resolve_sort_by(sort_by: str) -> str:
     return _SORT_ALIASES.get(sort_by, sort_by)
+
+
+def _sort_note(files: list[dict[str, Any]], sort_by: str, sort_direction: str) -> str:
+    """Say how DSM ordered a listing that mixes folders and files (#333).
+
+    DSM sorts by type first: ascending puts every folder before the files, descending
+    puts the files first, and each group is sorted on its own (verified on DSM 7.1,
+    7.3.2 and seska's 7.1.1 for name, size, mtime and ctime). Without the note a
+    listing sorted by date looks unsorted where the groups meet.
+    """
+    kinds = {bool(f.get("isdir")) for f in files}
+    if len(kinds) < 2 or sort_by == "type":
+        return ""
+    first = "files" if sort_direction == "desc" else "folders"
+    return f"\nDSM sorts folders and files separately; {first} come first."
+
+
+def dsm_pattern_matcher(pattern: str) -> Any:
+    """Match names the way DSM's ``List.list`` ``pattern`` does (#333).
+
+    Measured on DSM 7.1 and 7.3.2: case is ignored; a comma separates alternatives; a
+    pattern without ``*`` or ``?`` matches anywhere in the name; with one, it must match
+    the whole name; ``[...]`` is not a character class (``[ab]2*`` matched nothing).
+    """
+    regexes = []
+    for part in (p.strip() for p in pattern.split(",")):
+        if not part:
+            continue
+        body = re.escape(part).replace(r"\*", ".*").replace(r"\?", ".")
+        if "*" not in part and "?" not in part:
+            body = f".*{body}.*"
+        regexes.append(re.compile(body, re.IGNORECASE | re.DOTALL))
+
+    def matches(name: str) -> bool:
+        return any(r.fullmatch(name) for r in regexes)
+
+    return matches
 
 
 def _volume_name(real_path: object) -> str:
@@ -211,6 +250,7 @@ async def list_files(
     shown = len(files)
     title = f"Contents of {normalized} ({total} items)"
     result = format_table(headers=headers, rows=rows, title=title)
+    result += _sort_note(files, sort_by, sort_direction)
 
     next_offset = offset + shown
     if next_offset < total:
@@ -249,6 +289,23 @@ async def list_recycle_bin(
     recycle_path = f"/{share_name}/#recycle"
 
     try:
+        if pattern:
+            # DSM matches a pattern only at the level listed, and its Search refuses
+            # #recycle (600, admin included; seska 7.1.1), so the bin is walked here.
+            result = await _search_recycle_bin(
+                client,
+                recycle_path,
+                pattern=pattern,
+                sort_by=sort_by,
+                sort_direction=sort_direction,
+                limit=limit,
+                file_type_indicator=file_type_indicator,
+            )
+            if recycle_bin_status is not None:
+                correct_recycle_status_from_observation(
+                    share_name, observed_enabled=True, recycle_status=recycle_bin_status
+                )
+            return result
         result = await list_files(
             client,
             path=recycle_path,
@@ -287,3 +344,130 @@ async def list_recycle_bin(
             share_name, observed_enabled=True, recycle_status=recycle_bin_status
         )
     return result
+
+
+# Caps for walking a recycle bin (#333): enough for a typical bin, and a walk that
+# hits one says so, so a partial search never reads as complete.
+_WALK_MAX_FOLDERS = 200
+_WALK_MAX_ENTRIES = 5000
+_WALK_PAGE = 1000
+_WALK_SORT_KEYS = {"name", "size", "mtime", "ctime", "crtime", "atime"}
+
+
+async def _search_recycle_bin(
+    client: DsmClient,
+    recycle_path: str,
+    *,
+    pattern: str,
+    sort_by: str,
+    sort_direction: str,
+    limit: int,
+    file_type_indicator: str,
+) -> str:
+    """Find ``pattern`` anywhere in a recycle bin: subfolders included, paths in the bin.
+
+    A missing bin raises the ``not_found`` ToolError ``list_files`` would, so the caller
+    reports "not enabled" the same way.
+    """
+    matches = dsm_pattern_matcher(pattern)
+    found: list[tuple[str, dict[str, Any]]] = []
+    # Each folder's path in the bin is built from the walk itself, never taken from
+    # DSM's ``path`` (its case or form could differ from the share name given).
+    queue = [""]
+    folders = entries = 0
+    unreadable: list[str] = []
+    stopped = False
+    while queue and not stopped:
+        folder_rel = queue.pop(0)
+        # A folder is left: stop before opening it if a cap is reached.
+        if folders >= _WALK_MAX_FOLDERS or entries >= _WALK_MAX_ENTRIES:
+            stopped = True
+            break
+        folders += 1
+        folder = f"{recycle_path}/{folder_rel}" if folder_rel else recycle_path
+        offset = 0
+        while True:
+            params = {
+                "folder_path": folder,
+                "additional": _FILE_FIELDS,
+                "offset": str(offset),
+                "limit": str(_WALK_PAGE),
+            }
+            try:
+                data = await client.request("SYNO.FileStation.List", "list", params=params)
+            except SynologyError as e:
+                if not folder_rel:
+                    synology_error_response("List recycle bin", e)
+                unreadable.append(folder_rel)
+                break
+            page = data.get("files", [])
+            for f in page:
+                if entries >= _WALK_MAX_ENTRIES:
+                    stopped = True  # there's at least one more entry, unread
+                    break
+                entries += 1
+                name = str(f.get("name", ""))
+                rel = f"{folder_rel}/{name}" if folder_rel else name
+                if matches(name):
+                    found.append((rel, f))
+                if f.get("isdir"):
+                    queue.append(rel)
+            offset += len(page)
+            if stopped or not page or offset >= int(data.get("total", 0)):
+                break
+
+    resolved = _resolve_sort_by(sort_by)
+    key = resolved if resolved in _WALK_SORT_KEYS else "mtime"
+    fallback = (
+        f"sort_by={sort_by} doesn't apply to a search of the bin; sorted by mtime."
+        if key != resolved
+        else ""
+    )
+
+    def sort_value(item: tuple[str, dict[str, Any]]) -> Any:
+        rel, f = item
+        add = f.get("additional", {})
+        if key == "name":
+            return rel.casefold()
+        if key == "size":
+            return 0 if f.get("isdir") else int(add.get("size", 0))
+        return int(add.get("time", {}).get(key, 0))
+
+    found.sort(key=sort_value, reverse=sort_direction == "desc")
+    shown = found[:limit]
+    title = (
+        f'Matches for "{pattern}" in {recycle_path} ({len(found)} found in '
+        f"{folders} folder(s), subfolders included)"
+    )
+    rows = []
+    for rel, f in shown:
+        is_dir = bool(f.get("isdir"))
+        add = f.get("additional", {})
+        size = "—" if is_dir or "size" not in add else format_size(add["size"])
+        mtime = add.get("time", {}).get("mtime", 0)
+        rows.append(
+            [
+                file_type_icon(is_dir, str(f.get("name", "")), style=file_type_indicator),
+                rel + ("/" if is_dir else ""),
+                size,
+                format_timestamp(mtime) if mtime else "—",
+            ]
+        )
+    result = format_table(
+        headers=["Type", "Path in bin", "Size", "Modified"], rows=rows, title=title
+    )
+    notes = [fallback] if fallback else []
+    if len(found) > len(shown):
+        notes.append(f"Showing {len(shown)} of {len(found)} matches (limit={limit}).")
+    if found:
+        notes.append("Paths are relative to the recycle bin, as a restore takes them.")
+    if unreadable:
+        more = f" and {len(unreadable) - 5} more" if len(unreadable) > 5 else ""
+        notes.append(f"Not searched (couldn't be listed): {', '.join(unreadable[:5])}{more}.")
+    if stopped:
+        notes.append(
+            f"Stopped after {folders} folder(s) and {entries} item(s), so there may be more "
+            f"matches: narrow the pattern, or list a subfolder with list_files on "
+            f"{recycle_path}/<folder>."
+        )
+    return result + ("\n\n" + "\n".join(notes) if notes else "")

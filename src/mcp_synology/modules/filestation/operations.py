@@ -971,6 +971,12 @@ async def restore_from_recycle_bin(
             restore_destinations.append("/".join(original.split("/")[:-1]) or f"/{share_name}")
 
     await _refuse_missing_sources(client, "Restore", full_paths, paths)
+    recreated = [] if dest_folder else await _recreate_missing_folders(client, restore_destinations)
+    note = (
+        f"\nRe-created {', '.join(recreated)} (no longer there) to restore into."
+        if recreated
+        else ""
+    )
 
     # Use the first destination (or provided dest_folder)
     actual_dest = dest_folder or restore_destinations[0]
@@ -995,7 +1001,7 @@ async def restore_from_recycle_bin(
             )
             if handed_off:
                 results.append(r)
-                return "\n".join(results)
+                return "\n".join(results) + note
             results.append(_as_restore(r, share_name))
             restored.append(fp)
         partial = [r for r in results if r.startswith("[!]")]
@@ -1009,7 +1015,7 @@ async def restore_from_recycle_bin(
                     success=False,
                 ),
             )
-        return "\n".join(results)
+        return "\n".join(results) + note
 
     result, handed_off = await _copy_move(
         client,
@@ -1024,7 +1030,44 @@ async def restore_from_recycle_bin(
         on_progress=on_progress,
     )
     if handed_off:
-        return result
+        return result + note
 
     # Rephrase from "Moved" to "Restored"
-    return _as_restore(result, share_name)
+    return _as_restore(result, share_name) + note
+
+
+async def _recreate_missing_folders(client: DsmClient, folders: list[str]) -> list[str]:
+    """Create the inferred restore destinations that no longer exist; return them.
+
+    A file restored out of a folder that was deleted with it has no original folder to
+    go back to, and DSM refuses that move with 1002 "Destination error" (DSM 7.1 and
+    7.3.2, #333). The spec always said a missing parent is re-created; this does it,
+    deepest first, since ``force_parent`` creates the folders above it.
+    """
+    try:
+        missing = [
+            path
+            for path, code in await find_missing_paths(client, sorted(set(folders)))
+            if code == 408
+        ]
+    except SynologyError as e:
+        synology_error_response("Restore files", e)
+    created: list[str] = []
+    for path in sorted(missing, key=lambda p: p.count("/"), reverse=True):
+        if any(done.startswith(path + "/") for done in created):
+            continue  # made already, as a parent of a deeper one
+        parent, _, name = path.rpartition("/")
+        try:
+            await client.request(
+                "SYNO.FileStation.CreateFolder",
+                "create",
+                params={
+                    "folder_path": parent or "/",
+                    "name": dsm_str(name),
+                    "force_parent": "true",
+                },
+            )
+        except SynologyError as e:
+            synology_error_response("Restore files", e)
+        created.append(path)
+    return sorted(created)
