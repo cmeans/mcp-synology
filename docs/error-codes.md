@@ -155,7 +155,7 @@ does not exist, or a Download Station task ID matched no task.**
 
 Common causes:
 
-- Typo or wrong case in the share name (case sensitivity depends on the volume's filesystem).
+- Typo in the share name, or `home` in another case: an ordinary share matches in any case, but the user home service only as `/home`.
 - Share name omitted: paths must start with a real share, e.g. `/volume1` is wrong, `/photos` is right.
 - The user lacks list permission on a parent directory, so DSM reports "not
   found" rather than "denied" — DSM does this deliberately to avoid leaking
