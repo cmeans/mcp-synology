@@ -175,6 +175,7 @@ Reference the PR number and any closed issue: `- ... (#16) — closes #14`. If n
 This convention was retired-and-restored on 2026-04-11 after PRs #13, #15, and #16 all merged or were under review without entries because the prior practice was "CHANGELOG only at release time." Reconstructing the changelog from `git log` at release time loses per-PR rationale.
 
 ### Bumping the version for a release
+0. Before the release PR: live-test a release candidate built from the commit to be released, following `docs/live-testing.md` (at least two clients; admin, regular, read-only and restricted users), and fix or file what it finds
 1. Update `[project].version` in `pyproject.toml` (single source of truth)
 2. Run `python scripts/sync-server-json.py` to propagate the version into `server.json` (top-level + `packages[0].version`)
 3. Run `uv lock` to refresh `uv.lock`
