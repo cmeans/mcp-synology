@@ -246,7 +246,7 @@ class _SynologyServer(MCPServer):
         meta: dict[str, Any] | None = None,
         structured_output: bool | None = None,
     ) -> None:
-        """Register every tool as unstructured (#375).
+        """Register every tool as unstructured (#377).
 
         Every tool returns text written for the model. Left to auto-detect, the SDK
         treats ``-> str`` as structured: it gives each tool an ``outputSchema`` of

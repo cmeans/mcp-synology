@@ -1,6 +1,6 @@
 <!-- File Station's guidance for its WRITE tools: sent after filestation.md when the
 filestation module has permission: write or admin (#318). What a single tool's own
-description already says isn't repeated here (#375). -->
+description already says isn't repeated here (#377). -->
 MOVING AND ORGANIZING FILES:
 When a user asks to move or organize files:
 1. Use search_files to find matching files. Use exclude_pattern to filter out

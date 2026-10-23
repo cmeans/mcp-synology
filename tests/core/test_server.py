@@ -157,7 +157,7 @@ def _instructions(**modules: dict[str, Any]) -> str:
     return create_server(make_test_config(modules=modules)).instructions or ""
 
 
-# What each tool says about itself stays in its own description (#375).
+# What each tool says about itself stays in its own description (#377).
 _FS_SECTIONS = ("FILE STATION", "PATH FORMAT", "list_shares", "DOWNLOADING")
 _FS_WRITE_SECTIONS = ("MOVING AND ORGANIZING", "LONG OPERATIONS", "file_task")
 
@@ -1614,13 +1614,13 @@ class TestInstructionComments:
 # went (Download Station's descriptions -592 net). Facts were not moved into the
 # instructions: claude.ai's desktop app doesn't receive them, and an instructions_file
 # replaces them, so a tool's own text has to carry what the model needs to use it.
-# Lowered by #375 to 48,145 (-1,981; and outputSchema is now counted): tools are registered
+# Lowered by #377 to 48,249 (-1,877; and outputSchema is now counted): tools are registered
 # as unstructured, so none has the SDK's generated {"result": string} outputSchema (6,937
 # characters on the wire that this budget didn't count) and each reply is sent once, not
 # again as structuredContent. filestation.md and filestation-write.md keep only what no
-# single tool says (path format, the default download folder, organizing files, long
-# operations); the rest is in the tools' own descriptions since #247.
-PAYLOAD_BUDGET_CHARS = 48_145
+# single tool says (path format, the default download folder, the #recycle folder,
+# organizing files, long operations); the rest is in the tools' own descriptions since #247.
+PAYLOAD_BUDGET_CHARS = 48_249
 
 
 class TestPayloadBudget:
@@ -1647,7 +1647,7 @@ class TestPayloadBudget:
 
 
 class TestTextOnlyResults:
-    """Tools are unstructured (#375): no outputSchema in the list, each reply sent once."""
+    """Tools are unstructured (#377): no outputSchema in the list, each reply sent once."""
 
     async def test_no_served_tool_has_an_output_schema(self) -> None:
         tools, _ = await _served(create_server(make_test_config(modules=ALL_MODULES)))
