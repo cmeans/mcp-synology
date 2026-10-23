@@ -16,6 +16,7 @@ Run with: uv run pytest -m vdsm -v tests/vdsm/test_vdsm_downloadstation.py
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import json
 import os
@@ -28,6 +29,7 @@ import pytest
 from mcp.server.mcpserver.exceptions import ToolError
 
 from tests.vdsm.golden_image import download_station_skip_reason, load_golden_meta
+from tests.vdsm.ssh import ssh_exec
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -244,6 +246,56 @@ async def _wait_for(
 
 def _downloaded(task: dict[str, Any]) -> int:
     return int(task.get("additional", {}).get("transfer", {}).get("size_downloaded", 0))
+
+
+# An HTTP/1.0 server with no Content-Length, run inside the DSM guest (#355): DS
+# can't know the size until the connection closes. 40 chunks of 64 KiB, one every
+# 0.75 s, so the task stays partial for about 30 s.
+_UNSIZED_PORT = 8099
+_UNSIZED_BYTES = 40 * 65536
+_UNSIZED_SERVER = f"""
+import socket, time
+s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(("127.0.0.1", {_UNSIZED_PORT})); s.listen(5)
+while True:
+    c, _ = s.accept()
+    try:
+        c.recv(65536)
+        c.sendall(b"HTTP/1.0 200 OK\\r\\nContent-Type: application/octet-stream\\r\\n"
+                  b"Connection: close\\r\\n\\r\\n")
+        for _ in range(40):
+            c.sendall(b"x" * 65536); time.sleep(0.75)
+    except Exception:
+        pass
+    c.close()
+"""
+
+
+@pytest.fixture
+def _unsized_server(vdsm_container: Any, dsm_version: str) -> Any:
+    """Serve an unsized download on the guest's loopback; stop it after."""
+    password = str(load_golden_meta(dsm_version).get("admin_password", ""))
+
+    def ssh(cmd: str) -> tuple[int, str]:
+        return ssh_exec(vdsm_container.host, vdsm_container.ssh_port, password, cmd, sudo=False)
+
+    def run(cmd: str) -> str:
+        rc, out = ssh(cmd)
+        assert rc == 0, f"{cmd!r} failed ({rc}): {out}"
+        return out
+
+    script = base64.b64encode(_UNSIZED_SERVER.encode()).decode()
+    run(f"echo {script} | base64 -d > /tmp/mcp_unsized.py")
+    run("setsid nohup python3 /tmp/mcp_unsized.py > /dev/null 2>&1 < /dev/null &")
+    time.sleep(2)
+    try:
+        yield f"http://127.0.0.1:{_UNSIZED_PORT}/mcp-unsized.bin"
+    finally:
+        # Best effort, so a failed test keeps its own error. The brackets keep the
+        # name out of this shell's own command line, or pkill would kill the shell.
+        rc, out = ssh("pkill -f '[m]cp_unsized.py'; rm -f /tmp/[m]cp_unsized.py")
+        if rc != 0:
+            print(f"unsized server cleanup failed ({rc}): {out}")
 
 
 class TestVdsmDownloadStationReads:
@@ -577,6 +629,49 @@ class TestVdsmDownloadStationTasks:
         await asyncio.sleep(10)  # give DS time for any deferred move
         names = await _writable_names(client)
         assert task["title"] not in names, f"partial data should be discarded: {names}"
+
+    async def test_unknown_size_reads_unknown_until_dsm_knows_it(
+        self, nas_client: Any, _clean_queue: None, _unsized_server: str
+    ) -> None:
+        """#345: a download whose server sends no size has size 0 in DSM while it runs.
+
+        The tools show ``unknown`` and ``<n> downloaded (size unknown)`` then, not
+        ``0 B``. DSM fills in the real size once the task completes (at
+        ``finishing`` or ``finished``; QA's probe, all four versions).
+        """
+        from mcp_synology.modules.downloadstation.tasks import (
+            create_download,
+            get_download_info,
+            list_downloads,
+        )
+
+        client, _, _, _ = _unpack(nas_client)
+        name = _unsized_server.rsplit("/", 1)[1]
+        await _remove_from_writable(client, name)
+        try:
+            created = await create_download(client, uri=_unsized_server, destination="writable")
+            task_id = _ids_in(created)[0]
+            task = await _wait_for(client, task_id, lambda t: _downloaded(t) > 0)
+            assert task["status"] not in ("finishing", "finished"), task
+            assert int(task["size"]) == 0, f"DSM knew the size: {task}"
+
+            listed = await list_downloads(client)
+            row = next(line for line in listed.splitlines() if task_id in line)
+            assert re.search(r"\bunknown\s+\S+ \S+ downloaded \(size unknown\)", row), row
+            info = await get_download_info(client, task_id=task_id)
+            assert re.search(r"Size:\s+unknown", info), info
+            assert re.search(r"\S+ \S+ downloaded \(size unknown\)", info), info
+
+            task = await _wait_for(
+                client, task_id, lambda t: t["status"] == "finished", timeout=180
+            )
+            assert int(task["size"]) == _UNSIZED_BYTES, task
+            info = await get_download_info(client, task_id=task_id)
+            assert re.search(r"Size:\s+2\.5 MiB", info), info
+            assert "2.5 MiB / 2.5 MiB (100%)" in info, info
+            assert "size unknown" not in info, info
+        finally:
+            await _remove_from_writable(client, name)
 
 
 class TestVdsmDownloadStationSettings:

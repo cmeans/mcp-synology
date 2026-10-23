@@ -155,7 +155,7 @@ does not exist, or a Download Station task ID matched no task.**
 
 Common causes:
 
-- Typo in the share name, or `home` in another case: an ordinary share matches in any case, but the user home service only as `/home`.
+- Typo in the share name. Case doesn't matter to the File Station tools: they send a share name as `list_shares` lists it (`/Home` goes to DSM as `/home`). Only if DSM won't list shares does the name go as given, and then the user home service takes only `/home` in lowercase.
 - Share name omitted: paths must start with a real share, e.g. `/volume1` is wrong, `/photos` is right.
 - The user lacks list permission on a parent directory, so DSM reports "not
   found" rather than "denied" — DSM does this deliberately to avoid leaking
@@ -169,9 +169,11 @@ Common causes:
 
 Fix:
 
-1. Call `list_shares` to see exact share names, and use them as listed. An
-   ordinary share matches in any case (`/BACKUPS` for `Backups`, on Btrfs), but
-   the user home service doesn't: `/Home` is "not found", `/home` lists.
+1. Call `list_shares` to see the share names. The File Station tools send a
+   share name as `list_shares` lists it, in any case you give (`/BACKUPS` goes
+   to DSM as `/Backups`, `/Home` as `/home`). If DSM won't list shares, the
+   name goes as given: use `/home` in lowercase, since DSM takes the user home
+   service only that way.
 2. Call `list_files` on the parent directory to confirm the target exists with
    the expected name and case.
 3. For uncertain locations, call `search_files` with a substring of the name.

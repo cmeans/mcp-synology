@@ -455,6 +455,49 @@ class TestGetDownloadInfo:
         assert _envelope(exc.value)["code"] == "not_found"
 
 
+def _unsized(status: str, downloaded: int) -> dict[str, Any]:
+    """A task whose size DSM reports as 0, as for an HTTP server that sends none (#345)."""
+    row = _task("dbid_1", status, title="1Gb.dat", size=0)
+    row["type"] = "http"
+    row["additional"]["transfer"]["size_downloaded"] = downloaded
+    return row
+
+
+class TestUnknownSize:
+    """#345: DSM's size 0 for a download whose size isn't known yet."""
+
+    MIB_70 = int(70.1 * 1024 * 1024)
+
+    @respx.mock
+    async def test_list_shows_size_unknown(self, mock_client: DsmClient) -> None:
+        _manager()
+        _v1_list().respond(
+            json=ok({"offset": 0, "total": 1, "tasks": [_unsized("downloading", self.MIB_70)]})
+        )
+        result = await list_downloads(mock_client)
+        assert "70.1 MiB downloaded (size unknown)" in result
+        assert "0 B" not in result
+        assert re.search(r"\bunknown\s+70\.1 MiB downloaded", result)
+
+    @respx.mock
+    async def test_info_shows_size_unknown(self, mock_client: DsmClient) -> None:
+        body = ok({"tasks": [_unsized("downloading", self.MIB_70)]})
+        get_route(TASK, "getinfo", version=1).respond(json=body)
+        result = await get_download_info(mock_client, task_id="dbid_1")
+        assert re.search(r"Size:\s+unknown", result)
+        assert "70.1 MiB downloaded (size unknown)" in result
+        assert "/ 0 B" not in result  # "Uploaded: 0 B" is a real 0
+
+    @respx.mock
+    async def test_finished_empty_download_keeps_0_b(self, mock_client: DsmClient) -> None:
+        body = ok({"tasks": [_unsized("finished", 0)]})
+        get_route(TASK, "getinfo", version=1).respond(json=body)
+        result = await get_download_info(mock_client, task_id="dbid_1")
+        assert re.search(r"Size:\s+0 B", result)
+        assert "0 B / 0 B" in result
+        assert "size unknown" not in result
+
+
 class TestGetDownloadInfoBtSections:
     @respx.mock
     async def test_file_tracker_peer_tables_render(self, mock_client: DsmClient) -> None:

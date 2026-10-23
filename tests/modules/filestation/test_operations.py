@@ -917,6 +917,24 @@ class TestRestoreFromRecycleBin:
         assert "[+]" in result
 
     @respx.mock
+    @pytest.mark.parametrize(
+        "path", ["/Video/#recycle/Shows/ep.mkv", "Video/#recycle/Shows/ep.mkv"]
+    )
+    async def test_restore_full_path_in_another_case(
+        self, mock_client: DsmClient, path: str
+    ) -> None:
+        """The handler sends the listed share (video); a path spelled /Video/... is re-rooted on
+        it, not doubled (#353)."""
+        route = respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=_async_task_side_effect()
+        )
+        result = await restore_from_recycle_bin(mock_client, share="video", paths=[path])
+        assert "[+]" in result
+        sent = [str(call.request.url.params.get("path", "")) for call in route.calls]
+        assert any("/video/#recycle/Shows/ep.mkv" in s for s in sent), sent
+        assert not any("Video" in s for s in sent), sent
+
+    @respx.mock
     async def test_restore_error(self, mock_client: DsmClient) -> None:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
             json={"success": False, "error": {"code": 408}}

@@ -367,6 +367,13 @@ class TestListFiles:
         assert captured[0]["additional"] == '["size","time"]'
 
 
+def _no_bin(request: httpx.Request) -> httpx.Response:
+    """A share with no recycle bin: the share lists, its #recycle is 408."""
+    if "#recycle" in request.url.params.get("folder_path", ""):
+        return httpx.Response(200, json={"success": False, "error": {"code": 408}})
+    return httpx.Response(200, json={"success": True, "data": {"files": [], "total": 0}})
+
+
 class TestListRecycleBin:
     @respx.mock
     async def test_list_recycle_bin(self, mock_client: DsmClient) -> None:
@@ -388,7 +395,9 @@ class TestListRecycleBin:
         result = await list_recycle_bin(mock_client, share="video")
         assert "old_file.mkv" in result
 
+    @respx.mock
     async def test_recycle_bin_disabled(self, mock_client: DsmClient) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_no_bin)
         result = await list_recycle_bin(
             mock_client,
             share="docker",
@@ -403,12 +412,53 @@ class TestListRecycleBin:
         list_recycle_bin should catch the ToolError and return a friendly
         message instead of crashing.
         """
-        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
-            json={"success": False, "error": {"code": 408}}
-        )
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_no_bin)
         result = await list_recycle_bin(mock_client, share="writable")
         assert "not enabled" in result
         assert "writable" in result
+
+    @pytest.mark.parametrize("cached", [True, False])
+    @respx.mock
+    async def test_a_share_that_isnt_there_is_not_found(
+        self, mock_client: DsmClient, cached: bool
+    ) -> None:
+        """#353: /Home/#recycle and /Home both 408 (the home service is only /home), and a
+        restorable file mustn't read as "cannot be recovered"."""
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 408}}
+        )
+        status = {"Home": False} if cached else {}
+        with pytest.raises(ToolError) as exc_info:
+            await list_recycle_bin(mock_client, share="Home", recycle_bin_status=status)
+        err = json.loads(str(exc_info.value))["error"]
+        assert err["code"] == "not_found" and err["retryable"] is False
+        assert err["message"] == (
+            "No shared folder /Home on this NAS. The user home folder is /home (lowercase)."
+        )
+        assert status == {}  # no recycle status is kept for a share that isn't there
+
+    @respx.mock
+    async def test_a_typo_share_gets_no_home_hint(self, mock_client: DsmClient) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 408}}
+        )
+        with pytest.raises(ToolError) as exc_info:
+            await list_recycle_bin(mock_client, share="vidoe")
+        assert json.loads(str(exc_info.value))["error"]["message"] == (
+            "No shared folder /vidoe on this NAS."
+        )
+
+    @respx.mock
+    async def test_another_error_checking_the_share_propagates(
+        self, mock_client: DsmClient
+    ) -> None:
+        def respond(request: httpx.Request) -> httpx.Response:
+            code = 408 if "#recycle" in request.url.params.get("folder_path", "") else 407
+            return httpx.Response(200, json={"success": False, "error": {"code": code}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=respond)
+        with pytest.raises(ToolError, match="List recycle bin failed"):
+            await list_recycle_bin(mock_client, share="writable")
 
     @respx.mock
     async def test_recycle_bin_other_error_propagates(self, mock_client: DsmClient) -> None:
@@ -438,22 +488,20 @@ class TestListRecycleBin:
         list, list_recycle_bin should flip the cache to False so subsequent
         delete_files calls in the same session emit the correct messaging.
         """
-        # First the lazy probe in `ensure_recycle_status` returns success
-        # (the list call against /share/#recycle?limit=0 succeeds), so the
-        # cache stays True. Then the FULL list (no limit=0) returns 408 —
-        # contradicting the probe's view.
+        # The cache says True, so there's no probe. The full list of
+        # /share/#recycle returns 408, contradicting it; the share itself
+        # still lists (#353 checks that before saying "not enabled").
         call_count = 0
 
         def side_effect(request: httpx.Request) -> httpx.Response:
             nonlocal call_count
             call_count += 1
             params = dict(request.url.params)
-            # Probe: limit=0 → success (recycle path exists at this moment)
-            if params.get("limit") == "0":
+            if "#recycle" not in params.get("folder_path", ""):
                 return httpx.Response(
                     200, json={"success": True, "data": {"files": [], "total": 0}}
                 )
-            # Subsequent full list: simulate the recycle dir disappeared
+            # The full list: simulate the recycle dir disappeared
             return httpx.Response(200, json={"success": False, "error": {"code": 408}})
 
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
@@ -490,7 +538,7 @@ class TestListRecycleBin:
             #
             # To exercise self-correct-on-success, we simulate cache==True by
             # NOT pre-populating, then return success.
-            if params.get("limit") == "0":
+            if params.get("limit") == "1":  # the probe
                 return httpx.Response(
                     200, json={"success": True, "data": {"files": [], "total": 0}}
                 )
@@ -790,7 +838,7 @@ class TestRecycleBinSearch:
 
     @respx.mock
     async def test_pattern_on_a_share_without_a_bin(self, mock_client: DsmClient) -> None:
-        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_bin_responder({}))
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_bin_responder({"/home": []}))
         out = await list_recycle_bin(mock_client, share="home", pattern="b2*")
         assert out == "Recycle bin is not enabled on /home. Deleted files cannot be recovered."
 
