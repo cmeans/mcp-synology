@@ -782,6 +782,7 @@ Follow up on, list, or stop a delete, copy, move or restore that was handed off 
 | 400 | Invalid parameter | "Invalid parameter in the file operation request." | Check path format and parameter values. |
 | 401 | Unknown error | "An unknown file operation error occurred." | Retry or check NAS logs. |
 | 402 | System too busy | "The NAS is too busy to process this request." | Wait and retry. |
+| 407 | Operation not permitted | "Operation not permitted" (reported as `permission_denied`, like 105; never re-auths) | Check the folder's permissions in DSM, or use an account with access. Seen as `list_files /home` for a non-admin service account whose `home` share showed volume `var`, 0 B free (seska DSM 7.1.1, 0.10.0rc5 live test; the cause isn't known). |
 | 408 | No such file/directory | "Path not found: '{path}'." | Use `list_files` or `search_files` to find the correct path. |
 | 414 | File already exists | "A file already exists at the destination." | Use `overwrite=true` to replace. |
 | 415 | Disk quota exceeded | "Disk quota exceeded." | Free space or contact NAS administrator. |
