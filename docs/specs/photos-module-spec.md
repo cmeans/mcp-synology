@@ -533,8 +533,8 @@ Album 9: Trip 2024 · normal · 2 item(s) · 2024-07-04 – 2024-07-06 · not sh
 | `action` | `str` | **Yes** | — | `share`, `update` or `stop`. |
 | `album` | `str` | **Yes** | — | Album ID or unique name. |
 | `public` | `str` | No | — | `none`, `view` or `download` (DSM privacy `private` / `public-view` / `public-download`). |
-| `password` | `str` | No | — | Set; `""` removes. |
-| `expires` | `str` | No | — | `YYYY-MM-DD` (end of that day UTC), an ISO 8601 date-time with an offset or `Z` (that instant; without an offset it's refused, since it names no instant), or `never` (`0`). The expiration is a real UTC instant (see Formatting). A value at or before 1970-01-01 is refused: 0 is DSM's `never`, and DSM's handling of an earlier instant isn't known. |
+| `password` | `str` | No | — | Set; `""` removes. Setting a password needs public `view` or `download` after the call, or it's refused: Photos drops a password on a link with no public access (#348). |
+| `expires` | `str` | No | — | `YYYY-MM-DD` (end of that day UTC), an ISO 8601 date-time with an offset or `Z` (that instant; without an offset it's refused, since it names no instant), or `never` (`0`). The expiration is a real UTC instant (see Formatting). A value at or before 1970-01-01 is refused: 0 is DSM's `never`, and DSM's handling of an earlier instant isn't known. An expiry other than `never` needs public `view` or `download` after the call, or it's refused: Photos drops an expiry on a link with no public access (#348). |
 | `members` | `list[dict]` | No | — | `{name, type: user|group, role: view|download|upload|none}`; `none` removes. Names resolved with `list_user_group`. |
 
 **Annotations:** `destructiveHint=true`: `stop` and `update` replace the link's settings (an old password or public access is gone).
