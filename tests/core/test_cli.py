@@ -361,6 +361,40 @@ class TestSetupInteractive:
         assert data["connection"]["verify_ssl"] is False
         assert data["alias"] == "MyNAS"
 
+    @pytest.mark.parametrize(("answer", "https"), [("", True), ("n", False)])
+    def test_interactive_setup_defaults_to_https(
+        self, tmp_path: Path, answer: str, https: bool
+    ) -> None:
+        """#193: pressing Enter at "Use HTTPS?" picks HTTPS (port 5001, derived); choosing
+        plain HTTP says what that exposes."""
+        runner = CliRunner()
+        config_dir = tmp_path / "config"
+        clean_env = {k: v for k, v in os.environ.items() if not k.startswith("SYNOLOGY_")}
+        with (
+            patch("mcp_synology.cli.setup._CONFIG_DIR", config_dir),
+            patch("mcp_synology.core.config.discover_config_path", side_effect=FileNotFoundError),
+            patch("mcp_synology.cli.setup._store_keyring", return_value=True),
+            patch("mcp_synology.cli.setup.asyncio.run", return_value={"success": True}),
+            patch.dict(os.environ, clean_env, clear=True),
+        ):
+            # host, https(answer), permission, alias(""), [verify_ssl(default)], user, pass
+            verify = "\n" if https else ""
+            result = runner.invoke(
+                main,
+                ["setup"],
+                input=f"nas.local\n{answer}\nread\n\n{verify}admin\npassword\n",
+            )
+        assert result.exit_code == 0, result.output
+        import yaml
+
+        data = yaml.safe_load((config_dir / "nas.yaml").read_text())
+        assert data["connection"].get("https", False) is https
+        assert "Use HTTPS? [Y/n]" in result.output
+        if https:
+            assert "self-signed" in result.output  # the verify question is explained
+        else:
+            assert "cross the network unencrypted" in result.output
+
     def test_interactive_setup_keyring_failure(self, tmp_path: Path) -> None:
         """When keyring fails, show env var instructions and return."""
         runner = CliRunner()
