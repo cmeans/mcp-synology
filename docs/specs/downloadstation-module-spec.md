@@ -497,10 +497,11 @@ Remove tasks.
 **DSM API:** `SYNO.DownloadStation.Info` / `setserverconfig` v1
 
 **Tool description (LLM-facing):**
-> Set Download Station global configuration. All parameters are optional — only fields you pass get
-> updated. The rate fields require a Download Station manager/admin account: DSM silently ignores
-> them from other accounts, so the tool refuses them. Any user can set `default_destination`: DSM
-> applies it per user, and DS won't start a non-manager's tasks until it is set.
+> Set Download Station global configuration. All parameters are optional: only the fields you pass
+> are updated. The rate fields require a Download Station manager/admin account: DSM silently
+> ignores them from other accounts, so the tool refuses them. Any user can set
+> `default_destination`: DSM applies it per user, and DS won't start a non-manager's tasks until it
+> is set.
 
 **Parameters:**
 
@@ -529,11 +530,11 @@ Remove tasks.
 **DSM API:** `SYNO.DownloadStation2.Settings.Scheduler` / `set` v1 (plan and rates); `SYNO.DownloadStation.Schedule` / `setconfig` v1 (flags)
 
 **Tool description (LLM-facing):**
-> Set the Download Station schedule. All parameters optional — only what you pass gets updated.
-> `enabled` / `emule_enabled` toggle whether the schedule applies (DSM lets any Download Station
-> user toggle this NAS-wide flag). `schedule_plan` is in the NAS's local hours, and `download_rate`
-> / `upload_rate` are the limited speed. The plan and rates need a Download Station manager/admin
-> account; if that write is refused, nothing is applied.
+> Set the Download Station schedule; get_schedule shows the current one. All parameters are
+> optional: only what you pass is updated. `enabled` / `emule_enabled` toggle whether the schedule
+> applies (DSM lets any Download Station user toggle this NAS-wide flag). `schedule_plan` is in the
+> NAS's local hours, and `download_rate` / `upload_rate` are the limited speed. The plan and rates
+> need a Download Station manager/admin account; if that write is refused, nothing is applied.
 
 **Parameters:**
 

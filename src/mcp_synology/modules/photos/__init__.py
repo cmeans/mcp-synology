@@ -571,7 +571,7 @@ def register(ctx: RegisterContext) -> None:
                     description=(
                         "`create` (`name`, optional `ids`), `create_smart` (`name`, `condition`), "
                         "`rename` (`name`), `add` / `remove` (`ids`; normal albums), `set_cover` "
-                        "(one id in `ids`), `copy` (a new normal album `name` with the same items) "
+                        "(one id in `ids`), `copy` (a normal album, into a new one named `name`) "
                         "or `set_condition` (replaces a smart album's)."
                     )
                 ),
@@ -946,13 +946,18 @@ def register(ctx: RegisterContext) -> None:
                 Field(
                     description=(
                         "A file with that name already there: `rename` (default) keeps both, "
-                        "`skip` uploads nothing."
+                        "`skip` leaves the existing one and skips that file."
                     )
                 ),
             ] = "rename",
             album: Annotated[
                 str | None,
-                Field(description=(f"An existing album to add them to (personal space). {_ALBUM}")),
+                Field(
+                    description=(
+                        "An existing album to add them to (personal space; create one with "
+                        f"photo_album). {_ALBUM}"
+                    )
+                ),
             ] = None,
         ) -> str:
             from mcp_synology.modules.photos.transfer import upload_photos

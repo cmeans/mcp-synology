@@ -1606,21 +1606,21 @@ class TestInstructionComments:
 # password or an expiry needs public view or download (#348).
 # Raised by #364 to 31,347 (+45): list_recycle_bin's offset parameter, which its
 # "Use offset=N to see more" hint names.
-# Raised by #373 (#247) to 49,965 (+18,618, +59%; maintainer-approved): every tool parameter
-# gets a schema description, 182 of them where only file_task's 2 had one (~14,600
-# characters of text, ~2,000 of `"description"` keys), and Glama's lowest-scoring File
+# Raised by #373 (#247) to 50,126 (+18,779, +60%; maintainer-approved): every tool parameter
+# gets a schema description, 182 of them where only file_task's 2 had one (~14,500
+# characters of text, ~3,500 of `"description"` keys), and Glama's lowest-scoring File
 # Station descriptions were rewritten (list_recycle_bin, list_files, create_folder,
 # delete_files, restore_from_recycle_bin). Prose that only repeated a tool's own schema
-# went (Download Station -908). Facts were not moved into the instructions: claude.ai's
-# desktop app doesn't receive them, and an instructions_file replaces them, so a tool's
-# own text has to carry what the model needs to use it.
-# Lowered by #375 to 48,047 (-1,918; and outputSchema is now counted): tools are registered
+# went (Download Station's descriptions -592 net). Facts were not moved into the
+# instructions: claude.ai's desktop app doesn't receive them, and an instructions_file
+# replaces them, so a tool's own text has to carry what the model needs to use it.
+# Lowered by #375 to 48,145 (-1,981; and outputSchema is now counted): tools are registered
 # as unstructured, so none has the SDK's generated {"result": string} outputSchema (6,937
 # characters on the wire that this budget didn't count) and each reply is sent once, not
 # again as structuredContent. filestation.md and filestation-write.md keep only what no
 # single tool says (path format, the default download folder, organizing files, long
 # operations); the rest is in the tools' own descriptions since #247.
-PAYLOAD_BUDGET_CHARS = 48_047
+PAYLOAD_BUDGET_CHARS = 48_145
 
 
 class TestPayloadBudget:
