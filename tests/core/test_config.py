@@ -112,6 +112,19 @@ class TestAppConfig:
         with pytest.raises(ValueError):
             AppConfig(**raw)
 
+    def test_unknown_module_key_rejected(self) -> None:
+        """A typo directly under a module (only enabled/permission/settings exist) is an
+        error: `permision: write` used to be dropped, leaving the module read-only."""
+        from pydantic import ValidationError
+
+        from mcp_synology.core.config import format_validation_error
+
+        raw = _minimal_raw()
+        raw["modules"] = {"filestation": {"enabled": True, "permision": "write"}}
+        with pytest.raises(ValidationError) as exc:
+            AppConfig(**raw)
+        assert "modules.filestation.permision" in format_validation_error(exc.value)
+
     def test_invalid_instance_id_characters(self) -> None:
         raw = _minimal_raw()
         raw["instance_id"] = "bad_chars!"

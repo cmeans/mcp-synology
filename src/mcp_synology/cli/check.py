@@ -43,6 +43,11 @@ def check(config: str | None, verbose: bool) -> None:
     if not verbose:
         _configure_logging(app_config.logging.level, app_config.logging.file)
 
+    from mcp_synology.server import config_notices
+
+    for notice in config_notices(app_config):
+        click.echo(click.style(f"Warning: {notice}", fg="yellow"), err=True)
+
     click.echo(f"Checking credentials for '{app_config.display_name}'...")
     asyncio.run(_check_login(app_config))
 

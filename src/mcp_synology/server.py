@@ -629,12 +629,42 @@ def _photos_notice(plan: _ModulePlan) -> str:
     return ""
 
 
+def config_notices(config: AppConfig) -> list[str]:
+    """Warnings for config keys this version doesn't know: misspelled or newer.
+
+    An unknown module name, or an unknown key in a module's `settings`, would otherwise
+    be ignored without a word (an `allowed_local_paths` typo left the Downloads default in
+    force). They're warnings, not errors, so a config written for a newer version still
+    starts; `serve` logs them and `check` prints them. Unknown keys directly under a
+    module are errors (`ModuleConfig`, extra="forbid").
+    """
+    notices = []
+    known = ", ".join(sorted(_MODULE_REGISTRY))
+    for mod_name, mod_config in config.modules.items():
+        module = _MODULE_REGISTRY.get(mod_name)
+        if module is None:
+            notices.append(f"Unknown module '{mod_name}' in modules: skipped. Known: {known}.")
+            continue
+        schema = module.MODULE_INFO.settings_schema
+        valid = sorted(schema.model_fields) if schema else []
+        for key in sorted(set(mod_config.settings) - set(valid)):
+            where = f"modules.{mod_name}.settings"
+            notices.append(
+                f"Unknown setting '{key}' in {where}: ignored. Valid: {', '.join(valid)}."
+                if valid
+                else f"Unknown setting '{key}' in {where}: ignored ({mod_name} has no settings)."
+            )
+    return notices
+
+
 def create_server(config: AppConfig) -> MCPServer:
     """Create and configure the MCP server.
 
     This sets up the MCP server instance and registers tools based on
     module configuration and permission tiers.
     """
+    for notice in config_notices(config):
+        logger.warning("%s", notice)
     # Populate template variables in the instructions so Claude can
     # distinguish between multiple NAS connections.
     conn = config.connection
@@ -656,8 +686,7 @@ def create_server(config: AppConfig) -> MCPServer:
             logger.debug("Module '%s' is disabled, skipping", mod_name)
             continue
         module = _MODULE_REGISTRY.get(mod_name)
-        if module is None:
-            logger.warning("Unknown module '%s' — skipping.", mod_name)
+        if module is None:  # named by config_notices above
             continue
         tier = PermissionTier(mod_config.permission)
         plan.append(
