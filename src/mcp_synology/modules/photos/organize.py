@@ -442,8 +442,9 @@ def _request_block(req: dict[str, Any]) -> str:
         f"  Limit:     {_limit(int(req.get('filesize_limit') or 0))} · "
         f"{_expiry(int(req.get('expiration') or 0))}",
     ]
-    if req.get("description"):
-        lines.append(f"  Note:      {req['description']}")
+    note = str(req.get("description") or "").strip()
+    if note:
+        lines.append(f"  Note:      {note}")
     if req.get("is_folder_valid") is False:
         lines.append("  Warning:   its folder no longer exists, so uploads fail.")
     return "\n".join(lines)

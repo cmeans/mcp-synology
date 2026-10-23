@@ -650,7 +650,8 @@ async def _item_block(ph: Photos, item: dict[str, Any], v7: bool) -> str:
         ("Taken", taken(item) + (" (still indexing)" if is_indexing(item) else "")),
         ("Size", " · ".join(size)),
         ("Rating", rating),
-        ("Description", str(add.get("description") or "—")),
+        # Stripped: some cameras pad EXIF ImageDescription with spaces (#362).
+        ("Description", str(add.get("description") or "").strip() or "—"),
         ("Tags", ", ".join(str(t.get("name", "")) for t in add.get("tag") or []) or "—"),
         (
             "People",
