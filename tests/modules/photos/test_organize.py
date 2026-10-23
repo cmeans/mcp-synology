@@ -717,6 +717,29 @@ class TestRequests:
         assert "its link stops working" in gone
 
     @respx.mock
+    @pytest.mark.parametrize(
+        ("description", "note"), [("   ", None), ("  bring snacks ", "bring snacks")]
+    )
+    async def test_note_is_stripped_and_blank_is_left_out(
+        self, description: str, note: str | None
+    ) -> None:
+        """#362: a whitespace-only description isn't shown as an empty Note line."""
+        listed = captured("request-list")
+        updated = json.loads(json.dumps(listed))
+        updated["list"][0]["description"] = description
+        fake = FakePhotos().on(REQ, "list", 1, listed, updated).on(REQ, "update", 1, {})
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await photo_request(
+                client, action="update", request="ZxOc9Ep8q", subject="mcp spec 2"
+            )
+        if note is None:
+            assert "Note:" not in out
+        else:
+            assert f"  Note:      {note}\n" in out + "\n"
+
+    @respx.mock
     async def test_update_expiry_and_missing_folder_warning(self) -> None:
         listed = captured("request-list")
         listed["list"][0]["is_folder_valid"] = False
