@@ -70,6 +70,14 @@ Monitor NAS health and resource utilization. 2 read-only tools:
 - **get_system_info** — model, firmware version, RAM, temperature, uptime (works for all users)
 - **get_resource_usage** — live CPU load, memory usage, disk I/O, network throughput (requires admin account)
 
+`mcp-synology setup` writes only the File Station module. To add System, put it inside the existing `modules:` section (it has no write tools, so no `permission` is needed):
+
+```yaml
+modules:
+  system:
+    enabled: true
+```
+
 ### Download Station
 
 Manage the Download Station queue and settings. 12 tools across two permission tiers:
@@ -154,7 +162,7 @@ modules:
 - **Tags are given by name.** A tag exists only while some item has it, so removing it from every item deletes it.
 - **Deletes** go to the recycle bin of the share that holds the space, when it has one; Photos has no trash of its own. A large copy, move or delete hands off with a `photos:<id>` handle that `photo_task` follows up on.
 - **Favorites and concepts** (things and scenes Photos recognized) need Synology Photos 1.9.1 (DSM 7.2); on 1.3.4 they're refused with `not_supported`.
-- **Local files.** `upload_photos` reads and `download_photos` writes only inside the allowed local folders (by default your Downloads folder); see the Download Station torrent-file notes above for `allowed_local_paths`. `task_timeout` (seconds, default 30, up to 600) sets how long a copy, move or delete waits before handing off.
+- **Local files.** `upload_photos` reads and `download_photos` writes only inside the allowed local folders (by default your Downloads folder); see the Download Station torrent-file notes above for `allowed_local_paths`. `task_timeout` (seconds, default 30, from 1 to 600; under `photos:` → `settings:`) sets how long a copy, move or delete waits before handing off.
 - **Not covered yet:** Shared Space folder sharing, face-level People edits, guest uploads to photo requests, and changing Photos' own settings.
 
 Tested against DSM 7.1 (Synology Photos 1.3.4), DSM 7.2.2, 7.3.2 and 7.4.1 (Synology Photos 1.9.1). See [`docs/specs/photos-module-spec.md`](docs/specs/photos-module-spec.md) for what each tool sends and the DSM behavior behind it.
@@ -245,6 +253,19 @@ Or from the CLI:
 SYNOLOGY_HOST=192.168.1.100 uvx mcp-synology check
 ```
 
+Without a config file, mcp-synology always runs **File Station, read-only**. No environment variable enables another module or the write tools; for those, use a config file (the same variables then override its values). The variables:
+
+| Variable | Sets | Default |
+|---|---|---|
+| `SYNOLOGY_HOST` | `connection.host` (needed for env-only mode) | — |
+| `SYNOLOGY_PORT` | `connection.port` | 5000, or 5001 with HTTPS |
+| `SYNOLOGY_HTTPS` | `connection.https` (`true`, `1` or `yes` for on; anything else is off) | `false` |
+| `SYNOLOGY_USERNAME` | `auth.username` | the keyring |
+| `SYNOLOGY_PASSWORD` | `auth.password` | the keyring |
+| `SYNOLOGY_DEVICE_ID` | `auth.device_id` (2FA device token) | the keyring |
+| `SYNOLOGY_INSTANCE_ID` | `instance_id` (names the keyring entry and state folder) | derived from the host |
+| `SYNOLOGY_LOG_LEVEL` | `logging.level` (`debug`, `info`, `warning`, `error`) | `info` |
+
 ## 2FA Support
 
 mcp-synology fully supports DSM accounts with two-factor authentication. It's auto-detected — you don't need to configure anything special:
@@ -297,6 +318,29 @@ Interactive setup creates a config file for you. For manual configuration or adv
 - `config-minimal.yaml` — simplest possible config
 - `config-power-user.yaml` — HTTPS, custom timeouts, logging, instructions
 - `config-docker.yaml` — environment-variable-driven
+
+The full reference is [`docs/specs/config-schema-spec.md`](docs/specs/config-schema-spec.md). After editing a config, run `mcp-synology check --config <file>`: it reports YAML and validation mistakes, names misspelled settings and modules, then tries to log in.
+
+### Modules and permissions
+
+Each module is enabled under `modules:`, with three possible keys: `enabled`, `permission` and `settings`. Any other key there is an error, so a typo such as `permision` stops the server instead of being ignored.
+
+- **`permission`** is `read` (the default, when it's left out) or `write`. `read` registers the module's READ tools only; `write` adds its WRITE tools. `admin` is also accepted and is the same as `write` today. It doesn't refer to the DSM account: an admin account doesn't need it.
+- **`settings`** holds the module's own options (File Station's are [below](#file-station-settings)). A setting the module doesn't know is ignored with a warning that names the valid ones, so a config written for a newer version still loads.
+- A module that isn't listed isn't loaded. Download Station and Synology Photos are opt-in (see their sections above); System has no write tools.
+
+### Connection and HTTPS
+
+```yaml
+connection:
+  host: 192.168.1.100    # or a hostname
+  https: true            # default false: credentials then cross the network in cleartext
+  port: 5001             # default 5000, or 5001 with https: true
+  verify_ssl: false      # default true; false for DSM's default self-signed certificate
+  timeout: 30            # seconds per request, 1 to 600 (default 30)
+```
+
+Use `https: true` unless the NAS is on a network you trust: with plain HTTP, the login and every request travel unencrypted, and the server logs a note saying so. If DSM uses its own self-signed certificate, set `verify_ssl: false` (the server warns that verification is off), or install a certificate the machine trusts and keep it `true`.
 
 ### Multi-NAS
 
