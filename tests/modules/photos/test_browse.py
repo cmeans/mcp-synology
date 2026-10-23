@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 import pytest
@@ -414,6 +415,18 @@ class TestGetPhoto:
         assert "SeedCam 1" in out
         assert "GPS Latitude Reference" in out
         assert out.endswith("Not found: 999999")
+
+    @respx.mock
+    async def test_whitespace_description_shows_as_none(self) -> None:
+        """Some cameras pad EXIF ImageDescription with spaces, and Photos takes the
+        description from it (0.10.0rc5 live test, a Nikon E3500 photo; #362)."""
+        item = captured("item-get")
+        item["list"][0]["additional"].update(description="                   ")
+        install(_folders(FakePhotos()).on(ITEM, "get", 2, item))
+        client = make_client()
+        async with client:
+            out = await get_photo(client, ids=[12])
+        assert re.search(r"^  Description: +—$", out, re.MULTILINE), out
 
     @respx.mock
     async def test_exif_table_cuts_long_values_and_hides_binary(self) -> None:
