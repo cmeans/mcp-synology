@@ -1347,6 +1347,23 @@ class TestCopyMoveRestorePreCheck:
         assert "/w/locked" in error["message"] and "start" not in calls
 
     @respx.mock
+    async def test_a_failed_destination_check_still_starts_the_copy(
+        self, mock_client: DsmClient
+    ) -> None:
+        """The check only names what getinfo proves; if it can't run, the task decides."""
+        inner, calls = self._dsm(missing=set())
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            if params.get("method") == "getinfo" and params.get("path") == "/w/dst":
+                return httpx.Response(200, json={"success": False, "error": {"code": 401}})
+            return inner(request)  # type: ignore[operator, no-any-return]
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        result = await copy_files(mock_client, paths=["/w/a"], dest_folder="/w/dst")
+        assert "start" in calls and "Copied 1 item(s)" in result
+
+    @respx.mock
     async def test_restore_into_a_missing_given_destination_is_not_found(
         self, mock_client: DsmClient
     ) -> None:
@@ -1595,7 +1612,8 @@ class TestCopyMoveSkippedItems:
         def side_effect(request: httpx.Request) -> httpx.Response:
             if request.url.params.get("method") == "getinfo":
                 getinfo_calls.append(request.url.params["path"])
-                if len(getinfo_calls) > 1:  # the first is the up-front existence check
+                # The first two are the up-front source and destination checks (#344).
+                if len(getinfo_calls) > 2:
                     return httpx.Response(200, json={"success": False, "error": {"code": 401}})
             return inner(request)  # type: ignore[operator, no-any-return]
 
