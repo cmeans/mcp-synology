@@ -14,7 +14,7 @@ release is checked before it ships.
 ## What live tests have found
 
 Each of these passed the unit tests and the vdsm suite, and was found by a model reading
-real output:
+real output. "Found" names the release candidate under test (not a published release):
 
 | Found | Problem | Fixed in |
 |---|---|---|
@@ -29,29 +29,37 @@ real output:
 
 ## Clients tested, and how they differ
 
-Run at least two clients. They differ in ways that change what a test can show.
+Run at least two clients. They differ in ways that change what a test can show. What
+follows is what we observed in the 0.10.0rc5 test; clients change, so check again.
 
-| Client | How it reaches the server | What to know |
+| Client | How it reaches the server | What we observed |
 |---|---|---|
-| **Claude Code** | Starts the server itself (stdio); one server process for the session | Shows the server's instructions to the model. No reply time limit. Fast: after the first call, a read costs one DSM round trip. Good for checking instructions, long operations (`file_task` hand-offs) and parallel calls |
-| **claude.ai, through a local device bridge** (the desktop app) | The app starts the server on the user's machine; claude.ai reaches it through the bridge | **The server's instructions don't reach the model** (shown with blind questions in the 0.10.0rc5 test), so anything the model must know has to be in tool descriptions and replies. Tool titles and annotations are dropped too. A reply is cut off after about 60 s, and the bridge sometimes drops for a minute. Expect a few seconds per call |
-| **An agent on a remote machine calling tools one at a time** (a separate script per call) | Each call starts a fresh server process, logs in, makes one call and exits; here over plain HTTP through a VPN | Nothing kept in memory carries over between calls (caches, session). Every call pays a login, so it's slow (about 20 to 25 s per call in the 0.10.0rc5 test). If the harness doesn't show the model the tool schemas, expect retries on argument names (`path` vs `paths`); those are harness errors, not findings. Plain HTTP shows the server's plain-HTTP warnings |
+| **Claude Code** | Starts the server itself (stdio); one server process for the session | The server's instructions reached the model. No reply time limit. Fast: after the first call, a read cost one DSM round trip. Good for checking instructions, long operations (`file_task` hand-offs) and parallel calls |
+| **claude.ai, through a local device bridge** (the desktop app) | The app starts the server on the user's machine; claude.ai reaches it through the bridge | **The server's instructions didn't reach the model** (shown with blind questions), so anything the model must know has to be in tool descriptions and replies. Tool titles and annotations were dropped too. Replies were cut off after about 60 s, and the bridge dropped once for about a minute. A few seconds per call |
+| **An agent on a remote machine calling tools one at a time** (a separate script per call) | Each call starts a fresh server process, logs in, makes one call and exits; in our setup over plain HTTP through a VPN | Nothing kept in memory carried over between calls (caches, session). Every call paid a login, so it was slow (about 20 to 25 s per call). The harness didn't show the model the tool schemas, so it retried on argument names (`path` vs `paths`); those are harness errors, not findings. Plain HTTP showed the server's plain-HTTP warnings |
 
-In the 0.10.0rc5 test the three ran the same kind of plan in about 8, 12 and 27 minutes.
-None of the difference was the server.
+The three ran the same kind of plan in about 8, 12 and 27 minutes. We saw nothing to
+attribute the difference to the server; per-call overhead explains it.
 
 ## 1. Build the candidate
 
 Test the exact commit you mean to release, and keep it apart from anything in daily use.
 
-1. Pin the commit: `git worktree add --detach <dir> <sha>`, or clone and check it out.
-2. In that copy only, set `version` in `pyproject.toml` to the candidate's (`0.10.0rc5`), so
-   `mcp-synology --version` can tell it from an installed release. Don't commit it.
+1. Pin the commit: `git worktree add --detach <dir> <sha>` (then work in `<dir>`), or clone
+   and check it out.
+2. In that copy only, set `[project].version` in `pyproject.toml` to the candidate's
+   (`0.10.0rc5`), so `mcp-synology --version` can tell it from an installed release. Don't
+   commit it.
 3. `uv build --wheel`, and install the wheel into **its own venv**. Never upgrade a venv that
    something else depends on.
-4. Make a **copy** of each config the clients will use, and point the clients at the
-   candidate's `mcp-synology` with those copies. Restart each client: the server reads its
-   config only at startup.
+4. Make a **copy** of each config the clients will use (the format is in
+   [`config-schema-spec.md`](specs/config-schema-spec.md); [`examples/`](../examples/) has
+   samples). Point each client's MCP server command at the venv's `bin/mcp-synology serve
+   --config <copy>`, and restart the client: the server reads its config only at startup.
+   - **A copy for a different DSM account needs its own `instance_id`** (and `alias`).
+     Credentials are kept in the keyring per `instance_id`, so a copy that keeps the
+     original's shares its credentials, and running `setup` on it replaces the original's.
+     A copy for the same account can keep it.
 5. `mcp-synology check --config <copy>` for each one: "Authentication successful!"
 
 When a module is new to a config, use the top-level `allowed_local_paths`, or give that
@@ -61,8 +69,8 @@ falls back to the Downloads folder, which may not exist on that machine.
 ## 2. Test accounts
 
 One account can't show everything. Use at least an admin, a regular user and a restricted
-user. A read-only connection (`permission: read` for every module) can reuse the regular
-user.
+user. A read-only connection (`permission: read` under `modules.<name>` for every module)
+can reuse the regular user.
 
 **The restricted test account** finds the permission and quota problems. Create it in DSM:
 
@@ -75,17 +83,20 @@ user.
   gives 407, not 105.
 - A **quota** (say 20 GB) on the test share's volume. A copy that runs past it fails with 415
   part-way, and leaves what it wrote.
-- Its password goes into the keyring with `mcp-synology setup --config <its config>`, run
-  in your own terminal, so it never passes through a chat.
+- Its password goes into the keyring with `mcp-synology setup --config <its config>` (a
+  config with its own `instance_id`; see step 4 above). `setup` asks for the username and
+  password; run it in your own terminal, so the password never passes through a chat.
 
-DSM's quota counts the files an account **owns**. To test it, the restricted account has to
-do the writing: copy something big into the test share from another account, then copy it
-again as the restricted account.
+DSM's quota counts the files an account **owns**, so the restricted account has to do the
+writing. Copy a large folder into the test share as another account; then, as the
+restricted account, copy it to another folder in that share. The new files are its own,
+and the copy runs into the quota.
 
 ## 3. Write the plan
 
 A plan is a list of numbered steps, grouped in sections, each saying what to call and with
-what. These rules came from earlier runs:
+what. Whoever runs the release (the maintainer, below) writes the plan and keeps the answer
+key. These rules came from earlier runs:
 
 - **No expected answers in the plan.** Keep them in a separate answer key that testers are
   told not to read. A tester who reads "Expected: …" before acting can't show what the
@@ -119,9 +130,10 @@ what. These rules came from earlier runs:
 - Each tester records **exactly what came back**: tool output quoted, errors in full. It
   marks PASS, FAIL or SURPRISE where it has an opinion; triage decides.
 - Results go somewhere everyone can read: a shared notes store, or a file per tester.
-- Some things can't be tested on every NAS. On a Btrfs volume, a copy within the volume is a
-  clone and finishes in seconds, and a delete into the recycle bin is a move, so neither hands
-  off to `file_task`. A permanent delete of a large folder (from inside `#recycle`) does.
+- Some things can't be tested on every NAS. On our Btrfs volume (DSM 7.1.1), a copy of
+  tens of GiB within the volume finished in seconds (a clone, most likely), and a delete into
+  the recycle bin is a move, so neither handed off to `file_task`. A permanent delete of a
+  large folder (from inside `#recycle`) did.
 
 ## 5. Triage
 
@@ -131,8 +143,8 @@ Compare every step with the answer key, then sort what's left:
 - **SURPRISE that's a product problem:** a reply that misleads the model or the user (a hint
   that names a parameter the tool doesn't have, an error that hides a partial result). Fix
   it now, or file it, and record the decision.
-- **SURPRISE that's DSM's behavior:** document it in the module spec (and in the DSM API
-  notes #270 plans, once they exist).
+- **SURPRISE that's DSM's behavior:** document it in the module's spec under
+  [`docs/specs/`](specs/).
 - **The client or the harness:** not a server issue. Note it here, under the client table,
   if it's new.
 - **Known issues:** list the open ones in the answer key, so they aren't counted again.
