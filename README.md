@@ -340,7 +340,7 @@ connection:
   timeout: 30            # seconds per request, 1 to 600 (default 30)
 ```
 
-Use `https: true` unless the NAS is on a network you trust: with plain HTTP, the login and every request travel unencrypted, and the server logs a note saying so. If DSM uses its own self-signed certificate, set `verify_ssl: false` (the server warns that verification is off), or install a certificate the machine trusts and keep it `true`.
+Use `https: true` unless the NAS is on a network you trust: with plain HTTP, the login and every request travel unencrypted, and the server logs a warning saying so. `setup` writes `https: true` unless you decline. [docs/https.md](docs/https.md) covers DSM's self-signed certificate and how to get a trusted one. If DSM uses its own self-signed certificate, set `verify_ssl: false` (the server warns that verification is off), or install a certificate the machine trusts and keep it `true`.
 
 ### Multi-NAS
 

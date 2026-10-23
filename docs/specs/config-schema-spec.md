@@ -297,8 +297,8 @@ Each key is a module name (e.g., `filestation`, `docker`, `system_info`). The va
 
 **Logging level guidance:**
 - `debug` — detailed operational trace for troubleshooting: every DSM API request/response (passwords masked), credential resolution steps, config discovery, version negotiation, API cache contents, session lifecycle, module registration. Use this when something isn't working.
-- `info` — significant lifecycle events: successful auth, re-auth, security-relevant config notes.
-- `warning` — configuration issues (unknown modules, deprecated settings).
+- `info` — significant lifecycle events: successful auth, re-auth, config notes (e.g. a module disabled).
+- `warning` — configuration issues (plain HTTP, SSL verification off, unknown modules, deprecated settings).
 - `error` — failures that prevent operation.
 
 All modules use `logging.getLogger(__name__)` so log output includes the full module path (e.g., `mcp_synology.core.client`), making it easy to trace messages to source.
@@ -325,7 +325,7 @@ At startup, the config is validated with Pydantic. Validation failures produce c
 ### Warnings (server starts, but user is alerted)
 
 - `auth.password` is present in the config file → warn about a plaintext password, recommend keyring. A password from `SYNOLOGY_PASSWORD` gets an env-var variant of the warning instead. `auth.username` alone isn't a secret and gets no warning: a config username with the password in the keyring is the recommended setup (#167)
-- `connection.https` is `false` → info-level note that credentials are sent in cleartext (acceptable on a trusted LAN, risky otherwise)
+- `connection.https` is `false` → warning that credentials are sent in cleartext (acceptable on a trusted LAN, risky otherwise), linking `docs/https.md` (#374; it was info-level). `mcp-synology setup` writes `https: true` unless the user declines
 - `connection.verify_ssl` is `false` → warn that SSL verification is disabled
 - A module is listed but `enabled: false` → info-level note (helps users remember they disabled something)
 - Unknown keys within `modules.*.settings`, and unknown module names → warn but don't fail (forward-compatible for module updates). The warning names the key and the valid ones; `serve` logs it and `check` prints it (`server.config_notices`, #368). Before #368 nothing warned: an `allowed_local_paths` typo silently left the Downloads default in force

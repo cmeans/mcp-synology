@@ -265,9 +265,10 @@ def _emit_warnings(config: AppConfig) -> None:
     conn = config.connection
     if conn is not None:
         if not conn.https:
-            logger.info(
+            # A WARNING, as the risk warrants; it also survives SYNOLOGY_LOG_LEVEL=warning (#193).
+            logger.warning(
                 "HTTPS is disabled. Credentials will be sent in cleartext. "
-                "Acceptable on a trusted LAN."
+                "Acceptable on a trusted LAN; to turn it on, see https://github.com/cmeans/mcp-synology/blob/main/docs/https.md"
             )
         if conn.https and not conn.verify_ssl:
             logger.warning(
