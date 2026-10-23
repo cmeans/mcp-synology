@@ -322,7 +322,7 @@ def _code_text(code: object) -> str:
     """
     try:
         known = FILESTATION_ERROR_CODES.get(int(code))  # type: ignore[call-overload]
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):  # None, "x", inf
         known = None
     return f"DSM error {code}: {known[0]}" if known else f"DSM error {code}"
 

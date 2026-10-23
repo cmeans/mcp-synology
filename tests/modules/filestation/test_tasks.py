@@ -1447,7 +1447,11 @@ class TestFileTask:
     @respx.mock
     @pytest.mark.parametrize(
         ("code", "shown"),
-        [(None, "DSM error None"), ("x", "DSM error x"), ("415", "DSM error 415: Disk quota")],
+        [
+            (None, "DSM error None"),
+            ("x", "DSM error x"),
+            ("415", "DSM error 415: Disk quota"),
+        ],
     )
     @pytest.mark.parametrize("single", [True, False])
     async def test_file_task_generic_report_takes_any_code(
@@ -1467,6 +1471,14 @@ class TestFileTask:
         )
         text = await file_task(mock_client, records=TaskRecords(), handle="copy:FileStation_C9")
         assert f"/w/big ({shown}" in text
+
+    def test_code_text_takes_values_json_can_carry_but_int_cant(self) -> None:
+        """Python's json reads Infinity and NaN, so a status could hold them."""
+        from mcp_synology.modules.filestation.operations import _code_text
+
+        assert _code_text(float("inf")) == "DSM error inf"
+        assert _code_text(float("nan")) == "DSM error nan"
+        assert _code_text({"code": 1}) == "DSM error {'code': 1}"
 
     @respx.mock
     @pytest.mark.parametrize(
