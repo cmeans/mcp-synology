@@ -53,10 +53,15 @@ code — fix the underlying credential or 2FA state before re-running.
 
 ## permission_denied
 
-**The account authenticated but DSM rejected the operation (DSM error 105).**
+**The account authenticated but DSM rejected the operation (DSM error 105, or File
+Station's 407, "Operation not permitted").**
 
 This is *not* a session issue. mcp-synology specifically does **not** re-authenticate
-on code 105 — that would mask the real problem and risk lockout.
+on code 105 or 407 — that would mask the real problem and risk lockout.
+
+File Station answers 407 for a path this account may not use. On a real NAS (DSM 7.1.1)
+a non-admin service account got it for `list_files /home`, where `list_shares` showed
+`home` on volume `var` with 0 B free; why DSM refused that account its home isn't known.
 
 Common causes:
 

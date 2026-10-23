@@ -398,6 +398,18 @@ class TestListFiles:
         assert body["error"]["code"] == "not_found"
 
     @respx.mock
+    async def test_list_files_407_is_permission_denied(self, mock_client: DsmClient) -> None:
+        """rc5 live test: list_files /home got DSM 407, reported as "Unknown error (code 407)"."""
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 407}}
+        )
+        with pytest.raises(ToolError) as exc_info:
+            await list_files(mock_client, path="/home")
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "permission_denied"
+        assert "Unknown" not in error["message"] and error["suggestion"]
+
+    @respx.mock
     async def test_list_files_requests_what_the_table_shows(self, mock_client: DsmClient) -> None:
         """#149: only Size and Modified are shown, so only size and time are fetched."""
         captured: list[dict[str, str]] = []
