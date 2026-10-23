@@ -19,6 +19,12 @@ class DownloadStationError(SynologyError):
     error_code = ErrorCode.DSM_ERROR
 
 
+class DownloadStationNotFoundError(DownloadStationError):
+    """A destination folder that doesn't exist (403, #334)."""
+
+    error_code = ErrorCode.NOT_FOUND
+
+
 DOWNLOADSTATION_ERROR_CODES: dict[int, tuple[str, str]] = {
     400: (
         "File upload failed",

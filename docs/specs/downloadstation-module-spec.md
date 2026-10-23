@@ -120,7 +120,7 @@ DS-specific codes (`core/downloadstation_errors.py`) are dispatched when the API
 | 400 | File upload failed | Check the .torrent/.nzb is readable and within DSM's size limit |
 | 401 | Max number of tasks reached | Pause or delete finished tasks first |
 | 402 | Destination denied | Check write permission on the destination share |
-| 403 | Destination doesn't exist | Pass it share-relative; a new folder must be created first with File Station's `create_folder`, or by the user in DSM (Download Station doesn't create folders), then retry |
+| 403 | Destination doesn't exist | Reported as `not_found` (#334), with `param: destination` on `create_download`. Pass it share-relative; a new folder must be created first with File Station's `create_folder`, or by the user in DSM (Download Station doesn't create folders), then retry |
 | 404 | Invalid task id | No such task, or another user's; run `list_downloads` |
 | 405 | Invalid task action | Not valid for the task's current state: resuming an active or finished task, or pausing a paused or finished task (per task, in a list that has other valid IDs) |
 | 406 | No default destination | Set one with `set_download_config` |

@@ -1295,6 +1295,29 @@ class TestEditDownload:
             "ask the user to create it in DSM, then retry."
         )
 
+    @respx.mock
+    async def test_create_403_is_not_found_on_the_destination(self, mock_client: DsmClient) -> None:
+        """#334: a missing destination is `not_found` with param destination, so a client
+        branching on the code can tell it from other DSM failures."""
+        _has_default()
+        post_route(TASK2, "create", version=2).respond(json=err(403))
+        with pytest.raises(ToolError) as exc:
+            await create_download(mock_client, uri="magnet:?xt=urn:btih:abc", destination="v/no")
+        envelope = _envelope(exc.value)
+        assert envelope["code"] == "not_found", envelope
+        assert envelope["param"] == "destination" and envelope["value"] == "v/no"
+        assert "Destination doesn't exist" in envelope["message"]
+
+    @respx.mock
+    async def test_v1_create_403_is_not_found_too(self, mock_client: DsmClient) -> None:
+        _has_default()
+        del mock_client.api_cache[TASK2]
+        post_route(TASK, "create", version=1).respond(json=err(403))
+        with pytest.raises(ToolError) as exc:
+            await create_download(mock_client, uri="magnet:?xt=a", destination="nope")
+        envelope = _envelope(exc.value)
+        assert envelope["code"] == "not_found" and envelope["param"] == "destination"
+
     async def test_nas_with_task_v1_only_gets_clear_error(self, mock_client: DsmClient) -> None:
         mock_client.api_cache[TASK] = mock_client.api_cache[TASK].model_copy(
             update={"max_version": 1}

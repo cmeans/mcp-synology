@@ -422,10 +422,13 @@ def error_from_code(code: int, api_name: str = "", errors: object = None) -> Syn
         from mcp_synology.core.downloadstation_errors import (  # noqa: PLC0415
             DOWNLOADSTATION_ERROR_CODES,
             DownloadStationError,
+            DownloadStationNotFoundError,
         )
 
         if code in DOWNLOADSTATION_ERROR_CODES:
             message, suggestion = DOWNLOADSTATION_ERROR_CODES[code]
+            if code == 403:  # "Destination doesn't exist" (#334)
+                return DownloadStationNotFoundError(message, code=code, suggestion=suggestion)
             return DownloadStationError(message, code=code, suggestion=suggestion)
 
     # Auth API codes (400-series for SYNO.API.Auth)
