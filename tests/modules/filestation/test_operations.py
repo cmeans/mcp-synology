@@ -1373,7 +1373,9 @@ class TestCopyMoveRestorePreCheck:
     anything moves (same policy as delete, #162), and name completed items on a later failure."""
 
     @staticmethod
-    def _dsm(missing: set[str], fail_status_for: str | None = None) -> tuple[object, list[str]]:
+    def _dsm(
+        missing: set[str], fail_status_for: str | None = None, denied: frozenset[str] = frozenset()
+    ) -> tuple[object, list[str]]:
         calls: list[str] = []
         started: list[str] = []
 
@@ -1386,6 +1388,8 @@ class TestCopyMoveRestorePreCheck:
                 entry = (
                     {"code": 408, "path": path}
                     if path in missing
+                    else {"code": 407, "path": path}
+                    if path in denied
                     else {"isdir": False, "name": path.rsplit("/", 1)[-1], "path": path}
                 )
                 return httpx.Response(200, json={"success": True, "data": {"files": [entry]}})
@@ -1442,6 +1446,65 @@ class TestCopyMoveRestorePreCheck:
         assert error["code"] == "not_found"
         assert "/video/#recycle/gone.mkv" in error["message"]
         assert "Nothing was restored" in error["message"]
+        assert "start" not in calls, calls
+
+    @respx.mock
+    @pytest.mark.parametrize("op", [copy_files, move_files])
+    async def test_missing_destination_is_not_found(self, mock_client: DsmClient, op: Any) -> None:
+        """#344: DSM answers a missing destination with 1002, "Destination error during
+        copy/move", whose suggestion sends the model looking at permissions."""
+        side_effect, calls = self._dsm(missing={"/w/no-dir"})
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        with pytest.raises(ToolError) as exc_info:
+            await op(mock_client, paths=["/w/a"], dest_folder="/w/no-dir")
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "not_found", error
+        assert "destination folder /w/no-dir doesn't exist" in error["message"]
+        assert "Nothing was" in error["message"]
+        assert error["param"] == "dest_folder" and "create_folder" in error["suggestion"]
+        assert "start" not in calls, calls
+
+    @respx.mock
+    async def test_unreadable_destination_is_permission_denied(
+        self, mock_client: DsmClient
+    ) -> None:
+        side_effect, calls = self._dsm(missing=set(), denied=frozenset({"/w/locked"}))
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        with pytest.raises(ToolError) as exc_info:
+            await copy_files(mock_client, paths=["/w/a"], dest_folder="/w/locked")
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "permission_denied", error
+        assert "/w/locked" in error["message"] and "start" not in calls
+
+    @respx.mock
+    async def test_a_failed_destination_check_still_starts_the_copy(
+        self, mock_client: DsmClient
+    ) -> None:
+        """The check only names what getinfo proves; if it can't run, the task decides."""
+        inner, calls = self._dsm(missing=set())
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            if params.get("method") == "getinfo" and params.get("path") == "/w/dst":
+                return httpx.Response(200, json={"success": False, "error": {"code": 401}})
+            return inner(request)  # type: ignore[operator, no-any-return]
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        result = await copy_files(mock_client, paths=["/w/a"], dest_folder="/w/dst")
+        assert "start" in calls and "Copied 1 item(s)" in result
+
+    @respx.mock
+    async def test_restore_into_a_missing_given_destination_is_not_found(
+        self, mock_client: DsmClient
+    ) -> None:
+        side_effect, calls = self._dsm(missing={"/video/no-dir"})
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        with pytest.raises(ToolError) as exc_info:
+            await restore_from_recycle_bin(
+                mock_client, share="video", paths=["a.mkv"], dest_folder="/video/no-dir"
+            )
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "not_found" and "/video/no-dir" in error["message"]
         assert "start" not in calls, calls
 
     @respx.mock
@@ -1679,7 +1742,8 @@ class TestCopyMoveSkippedItems:
         def side_effect(request: httpx.Request) -> httpx.Response:
             if request.url.params.get("method") == "getinfo":
                 getinfo_calls.append(request.url.params["path"])
-                if len(getinfo_calls) > 1:  # the first is the up-front existence check
+                # The first two are the up-front source and destination checks (#344).
+                if len(getinfo_calls) > 2:
                     return httpx.Response(200, json={"success": False, "error": {"code": 401}})
             return inner(request)  # type: ignore[operator, no-any-return]
 
@@ -2799,6 +2863,11 @@ class TestRestoreRecreatesMissingFolders:
             if api == "SYNO.FileStation.CreateFolder":
                 created.append(params)
                 folder = f"{params['folder_path']}/{json.loads(params['name'])}"
+                # It exists now, with its parents (force_parent); the destination check
+                # reads it (#344).
+                missing.difference_update(
+                    m for m in set(missing) if folder == m or folder.startswith(m + "/")
+                )
                 return httpx.Response(
                     200, json={"success": True, "data": {"folders": [{"path": folder}]}}
                 )
@@ -2851,10 +2920,13 @@ class TestRestoreRecreatesMissingFolders:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
             side_effect=self._responder({"/home/elsewhere"}, created)
         )
-        await restore_from_recycle_bin(
-            mock_client, share="home", paths=["t/sub/a.txt"], dest_folder="/home/elsewhere"
-        )
+        with pytest.raises(ToolError) as exc_info:
+            await restore_from_recycle_bin(
+                mock_client, share="home", paths=["t/sub/a.txt"], dest_folder="/home/elsewhere"
+            )
         assert created == []
+        # A given destination that's missing is named, not created (#344).
+        assert json.loads(str(exc_info.value))["error"]["code"] == "not_found"
 
     @respx.mock
     async def test_a_failed_check_or_create_is_an_error(self, mock_client: DsmClient) -> None:
