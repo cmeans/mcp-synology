@@ -356,6 +356,7 @@ async def list_recycle_bin(
     recycle_bin_status: dict[str, bool] | None = None,
 ) -> str:
     """List contents of a shared folder's recycle bin."""
+    offset = max(0, offset)  # a negative slice would page from the end
     # Normalize share name
     share_name = share.strip("/").split("/")[0]
 

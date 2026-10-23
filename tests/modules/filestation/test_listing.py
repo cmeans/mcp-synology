@@ -760,6 +760,12 @@ class TestRecycleBinSearch:
         assert "Showing 3–3 of 3 matches." in last and "Use offset=" not in last
         past = await list_recycle_bin(mock_client, share="home", pattern="*.txt", offset=5)
         assert "No matches from offset=5: there are 3." in past
+        rest = await list_recycle_bin(mock_client, share="home", pattern="*.txt", offset=1)
+        assert "Showing 2–3 of 3 matches." in rest and "Use offset=" not in rest
+        negative = await list_recycle_bin(
+            mock_client, share="home", pattern="*.txt", limit=1, offset=-1
+        )
+        assert order[0] in negative and "Showing 1–1 of 3 matches." in negative
 
     @respx.mock
     async def test_no_match_says_the_whole_bin_was_searched(self, mock_client: DsmClient) -> None:
