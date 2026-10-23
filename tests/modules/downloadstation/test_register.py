@@ -365,7 +365,7 @@ class TestModuleInfoDescriptions:
         from mcp_synology.modules.downloadstation.helpers import STATUS_GROUPS
 
         named = {
-            "waiting": "waiting",
+            "waiting": "(also waiting, ",  # "waiting" alone also matches "waiting for a file host"
             "downloading": "`downloading`",
             "finishing": "finishing",
             "hash_checking": "hash checking",

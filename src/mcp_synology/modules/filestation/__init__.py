@@ -520,7 +520,7 @@ def register(ctx: RegisterContext) -> None:
                     description=(
                         "Name filter, as in list_files (case-insensitive; `*` and `?`; a bare "
                         "word matches anywhere), applied across the bin, subfolders included "
-                        "(up to 200 folders and 5,000 items)."
+                        "(up to 200 folders and 5,000 items; the reply says when it stops early)."
                     )
                 ),
             ] = None,

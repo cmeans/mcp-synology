@@ -1612,10 +1612,11 @@ class TestInstructionComments:
 # went (Download Station's descriptions -592 net). Facts were not moved into the
 # instructions: claude.ai's desktop app doesn't receive them, and an instructions_file
 # replaces them, so a tool's own text has to carry what the model needs to use it.
-# Raised by #376 to 50,286 (+160): list_downloads' status_filter names every state in its
+# Raised by #376 to 50,322 (+196): list_downloads' status_filter names every state in its
 # groups (finishing, hash checking, waiting for a file host), and list_recycle_bin's
-# description and pattern say the search stops at 200 folders and 5,000 items (#375).
-PAYLOAD_BUDGET_CHARS = 50_286
+# description and pattern say the search stops at 200 folders and 5,000 items, and that the
+# reply says when it stops early (#375).
+PAYLOAD_BUDGET_CHARS = 50_322
 
 
 class TestPayloadBudget:
