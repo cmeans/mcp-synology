@@ -68,11 +68,9 @@ Any parameter accepting file sizes (`size_from`, `size_to`) accepts both raw byt
 
 Synology's recycle bin is implemented as a `#recycle` subfolder within each shared folder. When enabled on a shared folder, deleted files are moved there rather than permanently removed. Restoring files is done by moving them back out of `#recycle`.
 
-**At module initialization:**
-- Query `SYNO.FileStation.Info` / `get` to check NAS-level settings
-- Query `list_share` to identify which shares exist
-- For each share, check if `#recycle` exists (lightweight: attempt `list` on `/<share>/#recycle/` with `limit=1`; DSM's `limit=0` lists everything)
-- Cache recycle bin status per shared folder
+**Probe and cache:**
+- A share's bin is checked on first use (by `delete_files`, `list_recycle_bin`, or `list_shares` for every share): `list` on `/<share>/#recycle/` with `limit=1` (DSM's `limit=0` lists everything). Success means on, 408 means off. Any other answer (105, another DSM error, no answer) can't tell.
+- Only on and off are cached, per session, and the cache is cleared on re-auth. A share that can't be told is checked again next time; meanwhile `delete_files` treats it as on, as before (#255).
 
 **Impact on tools:**
 - `delete_files` response indicates whether the recycle bin caught the deleted files (based on cached status of the target share)
@@ -146,7 +144,7 @@ Example: to list files in the video share, use list_files(path="/video")
 **Design notes:**
 - The footer text teaches the LLM how to use the paths in subsequent tool calls.
 - Volume comes from the first component of `real_path`; Free comes from `volume_status` (`freespace` of `totalspace`, marked `read-only` when `readonly`). A missing field shows `—`, and the per-volume note appears only when some Free value is shown. There is deliberately no per-share size: DSM doesn't send one, and the old Size column read as "0 B" for every share (#151).
-- The "Recycle Bin" column shows enabled/disabled status per share (from the cached startup check).
+- **The "Recycle Bin" column is always shown (#255, #335).** Each share's status comes from the session's recycle-bin cache; a share not in it is checked with the probe described in Recycle Bin Awareness above, 4 at a time, and the tool waits at most 15 s for all of them together, then cancels the rest (`RECYCLE_PROBES_AT_ONCE`, `RECYCLE_COLUMN_TIMEOUT` in `listing.py`), so a busy NAS adds at most 15 s. It reads `enabled` (the probe lists), `disabled` (408) or `couldn't check` (105, another DSM error, no answer, or not done in the 15 s), and a note under the table says what `couldn't check` means. Only `enabled` and `disabled` are cached, so a `couldn't check` share is asked again on the next call; its log WARNING is given once per share per server run, then DEBUG. Before, the column appeared only once `delete_files` or `list_recycle_bin` had touched some share, and showed `unknown` for every other share (0.10.0rc3 live test, seska), and a probe that failed was cached as enabled.
 - No `additional` parameter (#149): the tool always fetches `real_path`, `owner` and `volume_status`, the fields its columns show. It used to accept any field (`perm`, `time`, `mount_point_type`, …) and silently drop the ones it doesn't show.
 
 ---

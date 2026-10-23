@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
 from typing import TYPE_CHECKING, Any
 
+import httpx
 from mcp.server.mcpserver.exceptions import ToolError
 
 from mcp_synology.core.errors import ErrorCode, SynologyError
@@ -23,6 +25,7 @@ from mcp_synology.modules.filestation.helpers import (
     ensure_recycle_status,
     file_type_icon,
     normalize_path,
+    probe_recycle_status,
 )
 
 logger = logging.getLogger(__name__)
@@ -106,6 +109,50 @@ _SHARE_FIELDS = '["real_path","owner","volume_status"]'
 _FILE_FIELDS = '["size","time"]'
 
 
+# list_shares checks every share's recycle bin not yet known (#255, #335), a few at a
+# time, and waits at most RECYCLE_COLUMN_TIMEOUT seconds for all of them together, so a
+# busy NAS adds at most that to the listing; checks still running then are canceled.
+RECYCLE_PROBES_AT_ONCE = 4
+RECYCLE_COLUMN_TIMEOUT = 15.0
+_RECYCLE_LABELS = {True: "enabled", False: "disabled", None: "couldn't check"}
+
+
+async def _recycle_column(
+    client: DsmClient, names: list[str], recycle_status: dict[str, bool]
+) -> dict[str, bool | None]:
+    """Each share's recycle-bin status: cached, else probed; definite answers are cached."""
+    gate = asyncio.Semaphore(RECYCLE_PROBES_AT_ONCE)
+
+    async def probe(name: str) -> bool | None:
+        async with gate:
+            try:
+                return await probe_recycle_status(client, name)
+            except httpx.HTTPError as e:
+                logger.debug("Recycle-bin probe on /%s got no answer (%r).", name, e)
+                return None
+
+    unknown = [n for n in dict.fromkeys(names) if n and n not in recycle_status]
+    tasks = {name: asyncio.ensure_future(probe(name)) for name in unknown}
+    if tasks:
+        try:
+            _done, pending = await asyncio.wait(tasks.values(), timeout=RECYCLE_COLUMN_TIMEOUT)
+        finally:
+            for task in tasks.values():
+                task.cancel()
+        if pending:
+            logger.debug(
+                "Recycle-bin checks still running after %.0f s, canceled: %s",
+                RECYCLE_COLUMN_TIMEOUT,
+                ", ".join(n for n, t in tasks.items() if t in pending),
+            )
+            await asyncio.gather(*pending, return_exceptions=True)
+    for name, task in tasks.items():
+        status = task.result() if task.done() and not task.cancelled() else None
+        if status is not None:
+            recycle_status[name] = status
+    return {n: recycle_status.get(n) for n in names}
+
+
 async def list_shares(
     client: DsmClient,
     *,
@@ -140,8 +187,12 @@ async def list_shares(
         )
 
     headers = ["Name", "Path", "Volume", "Free", "Owner"]
-    if recycle_bin_status:
+    recycle: dict[str, bool | None] = {}
+    if recycle_bin_status is not None:
         headers.append("Recycle Bin")
+        recycle = await _recycle_column(
+            client, [str(share.get("name", "")) for share in shares], recycle_bin_status
+        )
 
     rows: list[list[str]] = []
     shows_free = False
@@ -153,22 +204,20 @@ async def list_shares(
         shows_free = shows_free or free != "—"
         owner = add_info.get("owner", {}).get("user", "—")
         row = [name, path, _volume_name(add_info.get("real_path")), free, owner]
-        if recycle_bin_status:
-            # Distinguish unprobed-yet from observed-disabled. Pre-#37 the
-            # cache was always empty so this column never appeared at all;
-            # post-fix the cache fills lazily as `delete_files` /
-            # `list_recycle_bin` touch shares, so a `list_shares` after
-            # touching only some shares would otherwise render unprobed
-            # shares as "disabled" when their actual state is just unknown.
-            if name in recycle_bin_status:
-                row.append("enabled" if recycle_bin_status[name] else "disabled")
-            else:
-                row.append("unknown")
+        if recycle_bin_status is not None:
+            status = recycle.get(name)
+            row.append(_RECYCLE_LABELS[status])
         rows.append(row)
 
     total = data.get("total", len(shares))
     result = format_table(headers=headers, rows=rows, title=f"Shared Folders on {hostname}")
     result += f"\n\n{total} shared folders found."
+    if None in recycle.values():
+        result += (
+            "\n\nRecycle Bin \"couldn't check\": the NAS didn't answer in time or refused the "
+            "check (for example, this account can't read that share's #recycle), so whether "
+            "files deleted there can be recovered is unknown."
+        )
     if shows_free:
         result += (
             "\n\nFree space is per volume: shares on one volume share it. "

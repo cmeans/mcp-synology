@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import re
 from typing import TYPE_CHECKING
 
 import httpx
@@ -99,58 +101,101 @@ class TestListShares:
         )
         assert "enabled" in result
 
+    @staticmethod
+    def _shares_and_bins(bins: dict[str, object], probed: list[str]) -> None:
+        """Route list_share (one share per key of ``bins``) and each #recycle probe.
+
+        A bin's value is True (lists), an int (that DSM error), "hang" (no answer)
+        or "drop" (the connection drops).
+        """
+
+        async def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            if params.get("method") == "list_share":
+                shares = [
+                    {"name": n, "path": f"/{n}", "isdir": True, "additional": {}} for n in bins
+                ]
+                return httpx.Response(
+                    200, json={"success": True, "data": {"shares": shares, "total": len(bins)}}
+                )
+            name = params["folder_path"].strip('"').split("/")[1]
+            probed.append(name)
+            answer = bins[name]
+            if answer == "hang":
+                await asyncio.sleep(5)
+            if answer == "drop":
+                raise httpx.RemoteProtocolError("Server disconnected without sending a response.")
+            if answer is True:
+                return httpx.Response(
+                    200, json={"success": True, "data": {"files": [], "total": 0}}
+                )
+            return httpx.Response(200, json={"success": False, "error": {"code": answer}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+
+    @staticmethod
+    def _cell(result: str, share: str) -> str:
+        line = next(ln for ln in result.splitlines() if ln.strip().startswith(f"{share} "))
+        return re.split(r"\s{2,}", line.strip())[-1]
+
     @respx.mock
-    async def test_list_shares_renders_unknown_for_unprobed_shares(
+    async def test_list_shares_checks_every_share_not_yet_known(
         self, mock_client: DsmClient
     ) -> None:
-        """F3 regression (#73 round 1): once the cache fills lazily, the
-        Recycle Bin column appears — but shares that haven't been probed
-        must render as "unknown", not falsely as "disabled". Otherwise
-        list_shares is *worse* than pre-#37 (which simply omitted the
-        column when the dict was empty) because partial correctness has
-        the appearance of full correctness.
-        """
-        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
-            json={
-                "success": True,
-                "data": {
-                    "shares": [
-                        {
-                            "name": "video",
-                            "path": "/video",
-                            "isdir": True,
-                            "additional": {"owner": {"user": "admin"}},
-                        },
-                        {
-                            "name": "music",
-                            "path": "/music",
-                            "isdir": True,
-                            "additional": {"owner": {"user": "admin"}},
-                        },
-                        {
-                            "name": "scratch",
-                            "path": "/scratch",
-                            "isdir": True,
-                            "additional": {"owner": {"user": "admin"}},
-                        },
-                    ],
-                    "total": 3,
-                },
-            }
-        )
-        # /video has been probed (enabled); /scratch has been probed (disabled);
-        # /music is NOT in the cache — must render as unknown, not disabled.
+        """#255, #335: the column is always there, and every share gets a real answer."""
+        probed: list[str] = []
+        self._shares_and_bins({"video": True, "music": True, "scratch": 408, "locked": 105}, probed)
+        cache = {"video": True}
+        result = await list_shares(mock_client, recycle_bin_status=cache)
+        assert self._cell(result, "video") == "enabled"
+        assert self._cell(result, "music") == "enabled"
+        assert self._cell(result, "scratch") == "disabled"
+        assert self._cell(result, "locked") == "couldn't check"
+        assert sorted(probed) == ["locked", "music", "scratch"]  # video was cached
+        # Definite answers are kept; "couldn't check" is asked again next time.
+        assert cache == {"video": True, "music": True, "scratch": False}
+        assert 'Recycle Bin "couldn\'t check"' in result
+
+    @respx.mock
+    async def test_list_shares_all_cached_probes_nothing(self, mock_client: DsmClient) -> None:
+        probed: list[str] = []
+        self._shares_and_bins({"video": True, "scratch": 408}, probed)
         result = await list_shares(
-            mock_client,
-            recycle_bin_status={"video": True, "scratch": False},
+            mock_client, recycle_bin_status={"video": True, "scratch": False}
         )
-        # Tabular output — find the per-row recycle-bin cell. Order in shares
-        # is video, music, scratch; the column is the last one in each row.
-        # We can't anchor on column position alone (table renderer pads), so
-        # assert presence of the three distinct values.
-        assert "enabled" in result
-        assert "disabled" in result
-        assert "unknown" in result
+        assert probed == []
+        assert self._cell(result, "scratch") == "disabled"
+        assert "couldn't check" not in result
+
+    @respx.mock
+    async def test_list_shares_slow_probe_is_couldnt_check(
+        self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """#255: a busy NAS doesn't fail or stall list_shares."""
+        monkeypatch.setattr("mcp_synology.modules.filestation.listing.RECYCLE_COLUMN_TIMEOUT", 0.2)
+        probed: list[str] = []
+        self._shares_and_bins({"video": "hang", "music": True, "photo": "drop"}, probed)
+        cache: dict[str, bool] = {}
+        result = await list_shares(mock_client, recycle_bin_status=cache)
+        assert self._cell(result, "video") == "couldn't check"
+        assert self._cell(result, "photo") == "couldn't check"
+        assert self._cell(result, "music") == "enabled"
+        assert cache == {"music": True}
+
+    @respx.mock
+    async def test_list_shares_waits_once_for_all_checks(
+        self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """#255: the column has one deadline, not one per batch of 4 checks."""
+        monkeypatch.setattr("mcp_synology.modules.filestation.listing.RECYCLE_COLUMN_TIMEOUT", 0.3)
+        probed: list[str] = []
+        self._shares_and_bins({f"s{i}": "hang" for i in range(12)}, probed)
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        result = await list_shares(mock_client, recycle_bin_status={})
+        assert loop.time() - started < 0.8  # 3 batches of 0.3 s each would be 0.9+
+        assert all(self._cell(result, f"s{i}") == "couldn't check" for i in range(12))
+        assert len(probed) == 4  # the first batch; the rest never started
 
     @respx.mock
     async def test_list_shares_empty(self, mock_client: DsmClient) -> None:

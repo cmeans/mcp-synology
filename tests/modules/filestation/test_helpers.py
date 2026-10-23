@@ -316,9 +316,10 @@ class TestEnsureRecycleStatus:
         assert recycle_status == {"scratch": False}
 
     @pytest.mark.asyncio
-    async def test_probe_permission_denied_falls_back_to_true_with_warning(
-        self, caplog: pytest.LogCaptureFixture
+    async def test_probe_permission_denied_answers_true_uncached_with_warning(
+        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        monkeypatch.setattr("mcp_synology.modules.filestation.helpers._warned_recycle", set())
         client = AsyncMock()
         client.request.side_effect = SynologyError("permission denied", code=105)
         recycle_status: dict[str, bool] = {}
@@ -327,7 +328,7 @@ class TestEnsureRecycleStatus:
             result = await ensure_recycle_status(client, "admin_only", recycle_status)
 
         assert result is True
-        assert recycle_status == {"admin_only": True}
+        assert recycle_status == {}  # can't tell: checked again next time (#255)
         assert any(
             "Recycle-bin probe on /admin_only" in r.getMessage()
             and "DSM 105 (permission denied)" in r.getMessage()
@@ -336,9 +337,10 @@ class TestEnsureRecycleStatus:
         )
 
     @pytest.mark.asyncio
-    async def test_probe_unknown_error_falls_back_to_true_with_warning(
-        self, caplog: pytest.LogCaptureFixture
+    async def test_probe_unknown_error_answers_true_uncached_with_warning(
+        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        monkeypatch.setattr("mcp_synology.modules.filestation.helpers._warned_recycle", set())
         client = AsyncMock()
         client.request.side_effect = SynologyError("server confused", code=500)
         recycle_status: dict[str, bool] = {}
@@ -347,8 +349,23 @@ class TestEnsureRecycleStatus:
             result = await ensure_recycle_status(client, "weird", recycle_status)
 
         assert result is True
-        assert recycle_status == {"weird": True}
+        assert recycle_status == {}
         assert any("DSM error 500" in r.getMessage() for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_cant_tell_warns_once_per_share(
+        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """#255: an uncached share is probed on every use, so it warns only the first time."""
+        monkeypatch.setattr("mcp_synology.modules.filestation.helpers._warned_recycle", set())
+        client = AsyncMock()
+        client.request.side_effect = SynologyError("permission denied", code=105)
+        with caplog.at_level(logging.DEBUG, logger="mcp_synology.modules.filestation.helpers"):
+            for _ in range(3):
+                await ensure_recycle_status(client, "locked", {})
+        probes = [r for r in caplog.records if "Recycle-bin probe on /locked" in r.getMessage()]
+        assert [r.levelno for r in probes] == [logging.WARNING, logging.DEBUG, logging.DEBUG]
+        assert client.request.await_count == 3
 
     @pytest.mark.asyncio
     async def test_memoization_second_call_skips_probe(self) -> None:
