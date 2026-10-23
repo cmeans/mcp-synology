@@ -1565,7 +1565,9 @@ class TestInstructionComments:
 # Raised by #352 to 31,239 (+365): list_files' and list_recycle_bin's descriptions say
 # DSM sorts folders and files separately; list_recycle_bin's also says a pattern
 # searches the whole bin and what Modified and ctime mean there (#333).
-PAYLOAD_BUDGET_CHARS = 31_239
+# Raised by #356 to 31,302 (+63): photo_share_link's description says setting a
+# password or an expiry needs public view or download (#348).
+PAYLOAD_BUDGET_CHARS = 31_302
 
 
 class TestPayloadBudget:

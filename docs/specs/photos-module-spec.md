@@ -523,7 +523,8 @@ Album 9: Trip 2024 · normal · 2 item(s) · 2024-07-04 – 2024-07-06 · not sh
 > Share a Synology Photos album by link, change its link settings, or stop sharing. action: share
 > (returns the link), update or stop. public: none, view or download; password (empty string
 > removes it); expires (YYYY-MM-DD: end of that day UTC; a date-time with offset; or never);
-> users/groups with view, download or upload roles. Personal space albums only.
+> setting a password or an expiry needs public view or download; users/groups with view, download
+> or upload roles. Personal space albums only.
 
 **Parameters:**
 
@@ -532,8 +533,8 @@ Album 9: Trip 2024 · normal · 2 item(s) · 2024-07-04 – 2024-07-06 · not sh
 | `action` | `str` | **Yes** | — | `share`, `update` or `stop`. |
 | `album` | `str` | **Yes** | — | Album ID or unique name. |
 | `public` | `str` | No | — | `none`, `view` or `download` (DSM privacy `private` / `public-view` / `public-download`). |
-| `password` | `str` | No | — | Set; `""` removes. |
-| `expires` | `str` | No | — | `YYYY-MM-DD` (end of that day UTC), an ISO 8601 date-time with an offset or `Z` (that instant; without an offset it's refused, since it names no instant), or `never` (`0`). The expiration is a real UTC instant (see Formatting). A value at or before 1970-01-01 is refused: 0 is DSM's `never`, and DSM's handling of an earlier instant isn't known. |
+| `password` | `str` | No | — | Set; `""` removes. Setting a password needs public `view` or `download` after the call, or it's refused: Photos drops a password on a link with no public access (#348). |
+| `expires` | `str` | No | — | `YYYY-MM-DD` (end of that day UTC), an ISO 8601 date-time with an offset or `Z` (that instant; without an offset it's refused, since it names no instant), or `never` (`0`). The expiration is a real UTC instant (see Formatting). A value at or before 1970-01-01 is refused: 0 is DSM's `never`, and DSM's handling of an earlier instant isn't known. An expiry other than `never` needs public `view` or `download` after the call, or it's refused: Photos drops an expiry on a link with no public access (#348). |
 | `members` | `list[dict]` | No | — | `{name, type: user|group, role: view|download|upload|none}`; `none` removes. Names resolved with `list_user_group`. |
 
 **Annotations:** `destructiveHint=true`: `stop` and `update` replace the link's settings (an old password or public access is gone).
@@ -554,6 +555,7 @@ Album 9 "Trip 2024" is shared.
 - `update`'s `permission` entries: public `{action: "update", role: "view"|"download", member: {type: "public"}}` or `{action: "delete", member: {type: "public"}}`; members `{action, role, member: {type, id}}`.
 - Over plain HTTP the web client RSA/AES-wraps `password` (`encryption: ["password"]`); over HTTPS it's sent as is. The tool sends it as is in the POST body and, on an HTTP connection, says the password crossed the network unencrypted (#193).
 - `Album.get` with `additional: ["sharing_info"]` reads the current state (`privacy_type`, `enable_password`, `expiration`, `is_expired`, `sharing_link`).
+- **A password or an expiry needs public access (#348).** On a link with public `none`, members-only links included, Photos answers `update` with success and drops `password` and `expiration` (`enable_password` stays false, `expiration` 0); turning public access off (`public: none`) clears both, and turning it back on doesn't restore them. Setting public access and the expiry in the same call works. Verified on vdsm DSM 7.1 (Photos 1.3.4), 7.2.2, 7.3.2 and 7.4.1 (Photos 1.9.1). So the tool refuses a password or an expiry (not `""` or `never`) when the link's public access after the call would be `none` (a fresh `share` starts at `none`), with `invalid_parameter` and the suggestion to pass `public=view` or `download` with it. Turning public access off says what it cleared: `Note: turning public access off also cleared the link's expiry and password (Photos does this); set them again together with public.`, read from the link before and after the call.
 - Shared Space folder links (`SYNO.FotoTeam.Sharing.FolderPermission`) are out of scope for now (open item 3).
 
 ---

@@ -419,6 +419,110 @@ class TestShareLink:
         assert _error(exc)["code"] == "not_found"
         assert not fake.of(SHARE)
 
+    @staticmethod
+    def _shared(**sharing: Any) -> dict[str, Any]:
+        """The captured shared album (public view, password, expiry) with ``sharing`` set."""
+        shared = captured("album-get-shared")
+        shared["list"][0]["additional"]["sharing_info"].update(sharing)
+        return shared  # type: ignore[no-any-return]
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        ("kwargs", "param", "message"),
+        [
+            ({"expires": "2030-03-17"}, "expires", "expires needs public access"),
+            ({"password": "pw"}, "password", "password needs public access"),
+            (
+                {"password": "pw", "expires": "never", "public": "none"},
+                "password",
+                "password needs public access",
+            ),
+            (
+                {"password": "pw", "expires": "2030-03-17"},
+                "password",
+                "password and expires need public access: Photos drops them",
+            ),
+        ],
+    )
+    @pytest.mark.parametrize("privacy", ["private", "public-view"])
+    async def test_password_or_expiry_without_public_access_is_refused(
+        self, kwargs: dict[str, Any], param: str, message: str, privacy: str
+    ) -> None:
+        """#348: Photos answers success and drops them on a link with public none.
+
+        On a public link they're refused only with public=none in the same call.
+        """
+        if privacy == "public-view" and kwargs.get("public") != "none":
+            kwargs = {**kwargs, "public": "none"}
+        fake = FakePhotos().on(ALBUM, "get", 1, self._shared(privacy_type=privacy))
+        install(fake)
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await photo_share_link(client, action="update", album="4", **kwargs)
+        err = _error(exc)
+        assert err["param"] == param
+        assert message in err["message"]
+        assert "public=view" in err["suggestion"]
+        assert not fake.of(SHARE)
+
+    @respx.mock
+    async def test_share_with_expiry_but_no_public_shares_nothing(self) -> None:
+        """A fresh share starts at public none; the refusal comes before set_shared."""
+        fake = FakePhotos().on(ALBUM, "get", 1, _album())
+        install(fake)
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await photo_share_link(client, action="share", album="4", expires="2030-03-17")
+        assert _error(exc)["param"] == "expires"
+        assert not fake.of(SHARE)
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        ("privacy", "kwargs"),
+        [
+            ("private", {"password": "", "expires": "never"}),  # removing is fine
+            ("private", {"public": "view", "expires": "2030-03-17", "password": "pw"}),
+            ("public-view", {"expires": "2030-03-17"}),  # the link already has public
+        ],
+    )
+    async def test_allowed_with_public_access_or_when_removing(
+        self, privacy: str, kwargs: dict[str, Any]
+    ) -> None:
+        fake = FakePhotos().on(ALBUM, "get", 1, self._shared(privacy_type=privacy))
+        fake.on(SHARE, "update", 1, {})
+        install(fake)
+        client = make_client()
+        async with client:
+            await photo_share_link(client, action="update", album="4", **kwargs)
+        assert fake.one(SHARE, "update")
+
+    @respx.mock
+    async def test_public_off_says_what_photos_cleared(self) -> None:
+        """#348: turning public access off clears the expiry and the password."""
+        before = self._shared()  # public view, password, expiry
+        after = self._shared(privacy_type="private", enable_password=False, expiration=0)
+        fake = FakePhotos().on(ALBUM, "get", 1, before, after)
+        fake.on(SHARE, "update", 1, {})
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await photo_share_link(client, action="update", album="4", public="none")
+        assert "turning public access off also cleared the link's expiry and password" in out
+
+    @respx.mock
+    async def test_public_off_without_settings_has_no_note(self) -> None:
+        before = self._shared(enable_password=False, expiration=0)
+        after = self._shared(privacy_type="private", enable_password=False, expiration=0)
+        fake = FakePhotos().on(ALBUM, "get", 1, before, after)
+        fake.on(SHARE, "update", 1, {})
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await photo_share_link(client, action="update", album="4", public="none")
+        assert "cleared" not in out
+
     @pytest.mark.parametrize(
         ("kwargs", "param"),
         [

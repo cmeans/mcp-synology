@@ -93,14 +93,34 @@ def normalize_destination(destination: str, *, operation: str, param: str = "des
     return relative
 
 
-def format_transfer_progress(downloaded: int, total: int) -> str:
+def task_size_unknown(total: int, downloaded: int, status: object) -> bool:
+    """Whether a task's size of 0 means DSM doesn't know the size yet (#345).
+
+    DSM reports 0 while the size is unknown, e.g. an HTTP download whose server sends
+    no size (seen on DSM 7.1.1 at 70.1 MiB downloaded). Only a finished (or seeding)
+    task with nothing downloaded is taken to be a real 0-byte download.
+    """
+    if total > 0:
+        return False
+    return downloaded > 0 or status not in STATUS_GROUPS["finished"]
+
+
+def format_task_size(total: int, downloaded: int, status: object) -> str:
+    """Render a task's size, or ``unknown`` when DSM's 0 means it isn't known (#345)."""
+    return "unknown" if task_size_unknown(total, downloaded, status) else format_size(total)
+
+
+def format_transfer_progress(downloaded: int, total: int, *, size_unknown: bool = False) -> str:
     """Render ``<downloaded> / <total> (<percent>%)``.
 
     When ``total == 0`` percent is shown as an em dash. When DSM reports
     ``downloaded > total`` (occasionally happens with seed-after-finish),
-    percent is clamped to 100.
+    percent is clamped to 100. With ``size_unknown`` (see ``task_size_unknown``)
+    it renders ``<downloaded> downloaded (size unknown)`` instead.
     """
     down_str = format_size(downloaded)
+    if size_unknown:
+        return f"{down_str} downloaded (size unknown)"
     total_str = format_size(total)
     if total <= 0:
         return f"{down_str} / {total_str} (—)"

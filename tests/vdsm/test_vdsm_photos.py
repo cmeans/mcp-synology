@@ -500,6 +500,18 @@ async def test_albums_and_share_links(photos: DsmClient) -> None:
             )
             assert "expires 2035-01-01 04:59:59 UTC" in out, out
             link = re.search(r"Link:\s+(\S+)", out).group(1)  # type: ignore[union-attr]
+            # #348: turning public access off clears the expiry and the password, and
+            # Photos would drop a new expiry on a link with public none, so it's refused.
+            out = await photo_share_link(photos, action="update", album=name, public="none")
+            assert "Public:    none · password: no · expires never" in out, out
+            assert "also cleared the link's expiry and password" in out, out
+            with pytest.raises(ToolError) as exc:
+                await photo_share_link(photos, action="update", album=name, expires="2035-01-01")
+            assert _error(exc)["param"] == "expires"
+            out = await photo_share_link(
+                photos, action="update", album=name, public="view", expires="2035-01-01"
+            )
+            assert "Public:    view · password: no · expires 2035-01-01 23:59:59 UTC" in out, out
             await photo_share_link(photos, action="stop", album=name)
             again = await photo_share_link(photos, action="share", album=name)
             # Same link, settings reset (verified while implementing #258).
