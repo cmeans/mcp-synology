@@ -784,7 +784,7 @@ Follow up on, list, or stop a delete, copy, move or restore that was handed off 
 | 402 | System too busy | "The NAS is too busy to process this request." | Wait and retry. |
 | 408 | No such file/directory | "Path not found: '{path}'." | Use `list_files` or `search_files` to find the correct path. |
 | 414 | File already exists | "A file already exists at the destination." | Use `overwrite=true` to replace. |
-| 415 | Disk quota exceeded | "Disk quota exceeded." | Free space or contact NAS administrator. |
+| 415 | Disk quota exceeded | "Disk quota exceeded." (reported as `disk_full`, like 416) | The account's or the shared folder's quota is full: free space within it, or have the administrator raise it. A copy or move that hits it part-way leaves what it wrote at the destination, and its status says `processed_size: 0` (seska DSM 7.1.1: 18 GiB left), so the error names the destination. |
 | 416 | No space left | "No space left on the target volume." | Free space on the NAS. |
 | 418 | Illegal name or path | "Invalid file/folder name or path." | Avoid characters: `/ \\ : * ? " < > \|` |
 | 419 | Illegal file name | "Invalid file name." | Avoid characters: `/ \\ : * ? " < > \|` |

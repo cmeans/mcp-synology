@@ -301,7 +301,12 @@ FILESTATION_ERROR_CODES: dict[int, tuple[str, str]] = {
     402: ("System too busy", "The NAS is too busy. Wait and retry."),
     408: ("No such file or directory", "Use list_files or search_files to find the correct path."),
     414: ("File already exists", "Use overwrite=true to replace existing files."),
-    415: ("Disk quota exceeded", "Free space or contact NAS administrator."),
+    415: (
+        "Disk quota exceeded",
+        "This account's quota on that volume, or the shared folder's quota, is full. Free "
+        "space within it, or ask the NAS administrator to raise the quota (DSM > Control "
+        "Panel > User & Group, or Shared Folder).",
+    ),
     416: ("No space left on device", "Free space on the NAS."),
     418: (
         "Illegal name or path",
@@ -425,7 +430,7 @@ def error_from_code(code: int, api_name: str = "", errors: object = None) -> Syn
             return PathNotFoundError(message, code=code, suggestion=suggestion)
         if code == 414:
             return SynologyFileExistsError(message, code=code, suggestion=suggestion)
-        if code == 416:
+        if code in (415, 416):  # quota full or volume full: both are out of space
             return DiskFullError(message, code=code, suggestion=suggestion)
         if code in (418, 419):
             return IllegalNameError(message, code=code, suggestion=suggestion)

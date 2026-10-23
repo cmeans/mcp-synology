@@ -289,6 +289,12 @@ _Storage and resources_
 Maps to DSM error 416 (volume full) and 415 (quota exceeded). For
 `download_file`, this also covers local ENOSPC.
 
+A copy or move that runs out of space part-way leaves what it already wrote at the
+destination, and DSM doesn't report how much: a copy stopped by a 20 GB quota left
+18 GiB there while DSM's task status said nothing had been processed (DSM 7.1.1). So
+the error names the destination ("Part of it may already be in …"); check it before
+trying again, and delete the partial copy if you don't want it.
+
 Fix:
 
 1. Check NAS storage: **Storage Manager → Storage** in DSM. Free space, expand

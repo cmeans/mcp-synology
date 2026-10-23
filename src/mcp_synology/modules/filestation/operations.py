@@ -7,7 +7,12 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from mcp_synology.core.errors import ErrorCode, SynologyError, error_from_code
+from mcp_synology.core.errors import (
+    FILESTATION_ERROR_CODES,
+    ErrorCode,
+    SynologyError,
+    error_from_code,
+)
 from mcp_synology.core.formatting import (
     error_response,
     format_size,
@@ -308,6 +313,33 @@ async def _copy_move_one_path(
     return _copy_move_result(result.status, path, operation, done)
 
 
+# Codes a CopyMove task fails with before it has written anything: the source is gone,
+# the destination file exists (overwrite=false) or the destination folder is missing.
+_NOTHING_COPIED = frozenset({408, 414, 1002})
+
+
+def _code_text(code: int) -> str:
+    """``DSM error 415: Disk quota exceeded``, or just the code when it isn't known."""
+    known = FILESTATION_ERROR_CODES.get(code)
+    return f"DSM error {code}: {known[0]}" if known else f"DSM error {code}"
+
+
+def _partial_note(status: dict[str, Any], codes: list[int], operation: str) -> str:
+    """Say where a copy that failed part-way may have left part of it.
+
+    DSM doesn't report how much it wrote before failing: a copy stopped by a quota left
+    18 GiB at the destination while its status said `processed_size: 0` (seska, DSM 7.1.1).
+    """
+    dest = status.get("dest_folder_path")
+    if not dest or all(code in _NOTHING_COPIED for code in codes):
+        return ""
+    past = _PAST_TENSE.get(operation, "processed")
+    return (
+        f". Part of it may already be in {dest}: DSM doesn't say how much was {past} "
+        "before it stopped, so check there before trying again"
+    )
+
+
 def _copy_move_result(
     status: dict[str, Any], path: str, operation: str, done: list[str] | None = None
 ) -> tuple[int, bool]:
@@ -319,7 +351,8 @@ def _copy_move_result(
         mapped = error_from_code(err_code, "SYNO.FileStation.CopyMove")
         error_response(
             mapped.error_code,
-            f"{operation} files failed: DSM error code {err_code} on path: {err_path}"
+            f"{operation} files failed: {_code_text(err_code)} on path: {err_path}"
+            + _partial_note(status, [err_code], operation)
             + _already_done(operation, done),
             retryable=mapped.retryable,
             suggestion=(
@@ -341,7 +374,8 @@ def _copy_move_result(
         error_response(
             mapped.error_code,
             f"{operation} files failed: "
-            + "; ".join(f"{p} (DSM error {code})" for p, code in failed)
+            + "; ".join(f"{p} ({_code_text(code)})" for p, code in failed)
+            + _partial_note(status, [code for _, code in failed], operation)
             + _already_done(operation, done),
             retryable=mapped.retryable,
             param="paths",

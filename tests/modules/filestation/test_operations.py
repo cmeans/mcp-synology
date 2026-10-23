@@ -1132,6 +1132,74 @@ class TestCopyMoveMissingSource:
         assert "/writable/gone" in body["error"]["message"]
 
 
+class TestCopyMoveFailsPartWay:
+    """A copy that fails part-way names the error and says where a partial copy may be.
+
+    Status captured on seska (DSM 7.1.1, 2026-10-23, 0.10.0rc5 live test): a non-admin
+    account with a 20 GB quota copying a 51.6 GiB folder. DSM stopped at 18.0 GiB (77
+    files at the destination) and its status said nothing had been processed:
+    {"dest_folder_path": "/Test-Resources/mcp-quota2", "errors": [{"code": 415, "path":
+     "/Test-Resources/mcp-quota-src2/Avatar"}], "finished": true, "found_file_num": 0,
+     "processed_size": 0, "status": "FAIL", "total": 0, ...}
+    """
+
+    @staticmethod
+    def _dsm(code: int) -> object:
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            method = dict(request.url.params).get("method", "")
+            if method == "start":
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "c1"}})
+            if method == "status":
+                data = {
+                    "dest_folder_path": "/writable/dst",
+                    "errors": [{"code": code, "path": "/writable/big"}],
+                    "finished": True,
+                    "found_dir_num": 0,
+                    "found_file_num": 0,
+                    "found_file_size": 0,
+                    "path": "",
+                    "processed_size": 0,
+                    "progress": 1,
+                    "status": "FAIL",
+                    "total": 0,
+                }
+                return httpx.Response(200, json={"success": True, "data": data})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        return side_effect
+
+    @respx.mock
+    async def test_quota_names_the_error_and_the_partial_copy(self, mock_client: DsmClient) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm(415))
+        with pytest.raises(ToolError) as exc_info:
+            await copy_files(mock_client, paths=["/writable/big"], dest_folder="/writable/dst")
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "disk_full"
+        assert "/writable/big (DSM error 415: Disk quota exceeded)" in error["message"]
+        assert "Part of it may already be in /writable/dst" in error["message"]
+        assert "quota" in error["suggestion"].lower()
+
+    @respx.mock
+    async def test_move_says_the_same(self, mock_client: DsmClient) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm(416))
+        with pytest.raises(ToolError) as exc_info:
+            await move_files(mock_client, paths=["/writable/big"], dest_folder="/writable/dst")
+        message = json.loads(str(exc_info.value))["error"]["message"]
+        assert "(DSM error 416: No space left on device)" in message
+        assert "Part of it may already be in /writable/dst" in message
+
+    @respx.mock
+    async def test_no_partial_note_when_nothing_could_be_copied(
+        self, mock_client: DsmClient
+    ) -> None:
+        """408 (source gone): DSM copies nothing, so there's no partial copy to mention."""
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm(408))
+        with pytest.raises(ToolError) as exc_info:
+            await copy_files(mock_client, paths=["/writable/big"], dest_folder="/writable/dst")
+        message = json.loads(str(exc_info.value))["error"]["message"]
+        assert "No such file or directory" in message and "Part of it" not in message
+
+
 class TestCopyMoveRestorePreCheck:
     """Tier 1 review: refuse the whole copy/move/restore if any source is missing, before
     anything moves (same policy as delete, #162), and name completed items on a later failure."""
