@@ -516,7 +516,8 @@ async def _search_recycle_bin(
         return int(add.get("time", {}).get(key, 0))
 
     found.sort(key=sort_value, reverse=sort_direction == "desc")
-    shown = found[offset : offset + limit]
+    # limit 0 or less lists every match, as DSM's limit=0 lists a whole folder.
+    shown = found[offset : offset + limit] if limit > 0 else found[offset:]
     title = (
         f'Matches for "{pattern}" in {recycle_path} ({len(found)} found in '
         f"{folders} folder(s), subfolders included)"
@@ -539,7 +540,7 @@ async def _search_recycle_bin(
         headers=["Type", "Path in bin", "Size", "Modified"], rows=rows, title=title
     )
     notes = [fallback] if fallback else []
-    if found and not shown:
+    if found and offset >= len(found):
         notes.append(f"No matches from offset={offset}: there are {len(found)}.")
     elif len(found) > len(shown):
         end = offset + len(shown)

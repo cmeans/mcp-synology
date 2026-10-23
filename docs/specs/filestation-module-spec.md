@@ -358,7 +358,7 @@ List contents of a shared folder's recycle bin.
 | `pattern` | `str` | No | `None` | Name filter, matched as `list_files` matches it (case-insensitive; `*`/`?`; a bare word matches anywhere; commas for alternatives), but **across the whole bin, subfolders included** (#333). |
 | `sort_by` | `str` | No | `"mtime"` | Sort field. `mtime` is the file's own modified time, kept when it went into the bin, **not** the deletion time. `ctime` (alias `changed`) changes when the file is moved into the bin, so it's the closest to a deletion time, but any later metadata change updates it too. |
 | `sort_direction` | `str` | No | `"desc"` | Sort direction. Default: descending. |
-| `limit` | `int` | No | `100` | Max items to return. |
+| `limit` | `int` | No | `100` | Max items to return. `0` returns them all, as DSM's `limit=0` does; with `pattern`, so does any value below 0. |
 | `offset` | `int` | No | `0` | Items to skip, for the next page: the reply's "Use offset=N to see more" names it. With `pattern`, it skips that many matches. |
 
 **Response shape:**

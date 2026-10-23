@@ -766,6 +766,15 @@ class TestRecycleBinSearch:
             mock_client, share="home", pattern="*.txt", limit=1, offset=-1
         )
         assert order[0] in negative and "Showing 1–1 of 3 matches." in negative
+        # limit 0 or less lists every match, as DSM's limit=0 lists everything (QA r1).
+        for limit in (0, -1):
+            out = await list_recycle_bin(mock_client, share="home", pattern="*.txt", limit=limit)
+            assert all(name in out for name in order), (limit, out)
+            assert "Showing" not in out and "No matches" not in out, (limit, out)
+        rest_all = await list_recycle_bin(
+            mock_client, share="home", pattern="*.txt", limit=0, offset=1
+        )
+        assert order[0] not in rest_all and "Showing 2–3 of 3 matches." in rest_all
 
     @respx.mock
     async def test_no_match_says_the_whole_bin_was_searched(self, mock_client: DsmClient) -> None:
