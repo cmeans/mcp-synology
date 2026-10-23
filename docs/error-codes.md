@@ -53,10 +53,15 @@ code — fix the underlying credential or 2FA state before re-running.
 
 ## permission_denied
 
-**The account authenticated but DSM rejected the operation (DSM error 105).**
+**The account authenticated but DSM rejected the operation (DSM error 105, or File
+Station's 407, "Operation not permitted").**
 
 This is *not* a session issue. mcp-synology specifically does **not** re-authenticate
-on code 105 — that would mask the real problem and risk lockout.
+on code 105 or 407 — that would mask the real problem and risk lockout.
+
+File Station answers 407 for a path this account may not use. On a real NAS (DSM 7.1.1)
+a non-admin service account got it for `list_files /home`, where `list_shares` showed
+`home` on volume `var` with 0 B free; why DSM refused that account its home isn't known.
 
 Common causes:
 
@@ -289,6 +294,12 @@ _Storage and resources_
 Maps to DSM error 416 (volume full) and 415 (quota exceeded). For
 `download_file`, this also covers local ENOSPC.
 
+A copy or move that runs out of space part-way leaves what it already wrote at the
+destination, and DSM doesn't report how much: a copy stopped by a 20 GB quota left
+18 GiB there while DSM's task status said nothing had been processed (DSM 7.1.1). So
+the error names the destination ("Part of it may already be in …"); check it before
+trying again, and delete the partial copy if you don't want it.
+
 Fix:
 
 1. Check NAS storage: **Storage Manager → Storage** in DSM. Free space, expand
@@ -297,8 +308,10 @@ Fix:
    Quota**. Quotas can fill long before the underlying volume does, and the
    error looks the same.
 3. For local downloads: `df -h` on the destination filesystem.
-4. After freeing space, the operation is safe to retry — `disk_full` is marked
-   `retryable=true` in the error envelope.
+4. After freeing space, the operation can be retried (`disk_full` is marked
+   `retryable=true`), but first delete what a failed copy or move left at the
+   destination, or retry with `overwrite=true`: with `overwrite=false` the retry skips
+   files already there, a half-written one included.
 
 ## timeout
 

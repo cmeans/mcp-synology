@@ -1071,7 +1071,8 @@ class TestFileTask:
         records = TaskRecords()
         text = await file_task(mock_client, records=records, handle="delete:FileStation_D9")
         assert text.startswith("Delete finished: 200,400 items processed.")
-        assert "/s/a/x (DSM error 408)" in text
+        assert "/s/a/x (DSM error 408: No such file or directory)" in text
+        assert "Part of it" not in text  # a delete leaves nothing to find
         rec = records.get(Handle("delete", "FileStation_D9"))
         assert rec is not None
         assert rec.final_status == finished
@@ -1439,8 +1440,45 @@ class TestFileTask:
         )
         text = await file_task(mock_client, records=TaskRecords(), handle="copy:FileStation_C9")
         assert text.startswith("Copy finished: 2 KiB processed.")
-        assert "/s/b/x (DSM error 1002)" in text
+        assert "/s/b/x (DSM error 1002: Destination error during copy/move)" in text
+        assert "Part of it may already be in" in text  # no record: the note errs toward saying it
         assert "skipped" in text
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        ("code", "shown"),
+        [
+            (None, "DSM error None"),
+            ("x", "DSM error x"),
+            ("415", "DSM error 415: Disk quota"),
+        ],
+    )
+    @pytest.mark.parametrize("single", [True, False])
+    async def test_file_task_generic_report_takes_any_code(
+        self, mock_client: DsmClient, code: Any, shown: str, single: bool
+    ) -> None:
+        """No record: the report must survive whatever DSM puts in the code (QA r1 on #366)."""
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        failure: dict[str, Any] = (
+            {"error": {"code": code}, "path": "/w/big"}
+            if single
+            else {"errors": [{"code": code, "path": "/w/big"}]}
+        )
+        finished = {**MOVE_FINISHED, **failure}
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=_router({"status": _ok(finished)})
+        )
+        text = await file_task(mock_client, records=TaskRecords(), handle="copy:FileStation_C9")
+        assert f"/w/big ({shown}" in text
+
+    def test_code_text_takes_values_json_can_carry_but_int_cant(self) -> None:
+        """Python's json reads Infinity and NaN, so a status could hold them."""
+        from mcp_synology.modules.filestation.operations import _code_text
+
+        assert _code_text(float("inf")) == "DSM error inf"
+        assert _code_text(float("nan")) == "DSM error nan"
+        assert _code_text({"code": 1}) == "DSM error {'code': 1}"
 
     @respx.mock
     @pytest.mark.parametrize(

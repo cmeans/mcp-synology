@@ -398,6 +398,18 @@ class TestListFiles:
         assert body["error"]["code"] == "not_found"
 
     @respx.mock
+    async def test_list_files_407_is_permission_denied(self, mock_client: DsmClient) -> None:
+        """rc5 live test: list_files /home got DSM 407, reported as "Unknown error (code 407)"."""
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 407}}
+        )
+        with pytest.raises(ToolError) as exc_info:
+            await list_files(mock_client, path="/home")
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "permission_denied"
+        assert "Unknown" not in error["message"] and error["suggestion"]
+
+    @respx.mock
     async def test_list_files_requests_what_the_table_shows(self, mock_client: DsmClient) -> None:
         """#149: only Size and Modified are shown, so only size and time are fetched."""
         captured: list[dict[str, str]] = []
@@ -439,6 +451,29 @@ class TestListRecycleBin:
         )
         result = await list_recycle_bin(mock_client, share="video")
         assert "old_file.mkv" in result
+
+    @respx.mock
+    async def test_offset_follows_the_more_hint(self, mock_client: DsmClient) -> None:
+        """The "Use offset=N" hint names a parameter the tool has (rc5 live test: it didn't)."""
+        sent: list[str] = []
+
+        def responder(request: httpx.Request) -> httpx.Response:
+            offset = int(request.url.params.get("offset", "0"))
+            sent.append(str(offset))
+            names = [f"f{i}.txt" for i in range(9)][offset : offset + 5]
+            files = [
+                {"name": n, "isdir": False, "additional": {"size": 1, "time": {"mtime": 1}}}
+                for n in names
+            ]
+            return httpx.Response(200, json={"success": True, "data": {"files": files, "total": 9}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=responder)
+        first = await list_recycle_bin(mock_client, share="home", limit=5)
+        assert "Use offset=5 to see more." in first
+        second = await list_recycle_bin(mock_client, share="home", limit=5, offset=5)
+        assert sent == ["0", "5"]
+        assert "f5.txt" in second and "f0.txt" not in second
+        assert "Use offset=" not in second
 
     @respx.mock
     async def test_recycle_bin_disabled(self, mock_client: DsmClient) -> None:
@@ -720,7 +755,38 @@ class TestRecycleBinSearch:
     async def test_limit_says_how_many_matched(self, mock_client: DsmClient) -> None:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_bin_responder(_TREE))
         out = await list_recycle_bin(mock_client, share="home", pattern="*.txt", limit=1)
-        assert "(3 found" in out and "Showing 1 of 3 matches (limit=1)." in out
+        assert "(3 found" in out and "Showing 1–1 of 3 matches. Use offset=1 to see more." in out
+
+    @respx.mock
+    async def test_offset_pages_the_matches(self, mock_client: DsmClient) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_bin_responder(_TREE))
+        whole = await list_recycle_bin(mock_client, share="home", pattern="*.txt")
+        order = [n for n in ("AB2-upper.TXT", "b2.txt", "a1.txt") if n in whole]
+        order.sort(key=whole.index)
+        page2 = await list_recycle_bin(
+            mock_client, share="home", pattern="*.txt", limit=1, offset=1
+        )
+        assert order[1] in page2 and order[0] not in page2 and order[2] not in page2
+        assert "Showing 2–2 of 3 matches. Use offset=2 to see more." in page2
+        last = await list_recycle_bin(mock_client, share="home", pattern="*.txt", limit=1, offset=2)
+        assert "Showing 3–3 of 3 matches." in last and "Use offset=" not in last
+        past = await list_recycle_bin(mock_client, share="home", pattern="*.txt", offset=5)
+        assert "No matches from offset=5: there are 3." in past
+        rest = await list_recycle_bin(mock_client, share="home", pattern="*.txt", offset=1)
+        assert "Showing 2–3 of 3 matches." in rest and "Use offset=" not in rest
+        negative = await list_recycle_bin(
+            mock_client, share="home", pattern="*.txt", limit=1, offset=-1
+        )
+        assert order[0] in negative and "Showing 1–1 of 3 matches." in negative
+        # limit 0 or less lists every match, as DSM's limit=0 lists everything (QA r1).
+        for limit in (0, -1):
+            out = await list_recycle_bin(mock_client, share="home", pattern="*.txt", limit=limit)
+            assert all(name in out for name in order), (limit, out)
+            assert "Showing" not in out and "No matches" not in out, (limit, out)
+        rest_all = await list_recycle_bin(
+            mock_client, share="home", pattern="*.txt", limit=0, offset=1
+        )
+        assert order[0] not in rest_all and "Showing 2–3 of 3 matches." in rest_all
 
     @respx.mock
     async def test_no_match_says_the_whole_bin_was_searched(self, mock_client: DsmClient) -> None:

@@ -107,7 +107,8 @@ class SessionExpiredError(SynologyError):
 
 
 class SynologyPermissionError(SynologyError):
-    """Permission denied (code 105). NOT a session issue — never re-auth on this."""
+    """Permission denied (code 105, or File Station's 407). NOT a session issue — never
+    re-auth on this."""
 
     error_code = ErrorCode.PERMISSION_DENIED
 
@@ -299,9 +300,21 @@ FILESTATION_ERROR_CODES: dict[int, tuple[str, str]] = {
     400: ("Invalid parameter", "Check path format and parameter values."),
     401: ("Unknown error", "An unknown file operation error occurred. Retry or check NAS logs."),
     402: ("System too busy", "The NAS is too busy. Wait and retry."),
+    407: (
+        "Operation not permitted",
+        "This DSM account may not do that on this path, for example a folder it can't "
+        "read. Check the folder's permissions in DSM > Control Panel > Shared Folder, "
+        "or use an account with access.",
+    ),
     408: ("No such file or directory", "Use list_files or search_files to find the correct path."),
     414: ("File already exists", "Use overwrite=true to replace existing files."),
-    415: ("Disk quota exceeded", "Free space or contact NAS administrator."),
+    415: (
+        "Disk quota exceeded",
+        "This account's quota on that volume, or the shared folder's quota, is full. Free "
+        "space within it, or ask the NAS administrator to raise the quota (DSM > Control "
+        "Panel > User & Group, or Shared Folder). Before retrying a copy or move, delete "
+        "what it left at the destination, or retry with overwrite=true.",
+    ),
     416: ("No space left on device", "Free space on the NAS."),
     418: (
         "Illegal name or path",
@@ -421,11 +434,13 @@ def error_from_code(code: int, api_name: str = "", errors: object = None) -> Syn
     # File Station codes (400-series for SYNO.FileStation.*)
     if "FileStation" in api_name and code in FILESTATION_ERROR_CODES:
         message, suggestion = FILESTATION_ERROR_CODES[code]
+        if code == 407:  # a refusal, like 105: never re-auth on it
+            return SynologyPermissionError(message, code=code, suggestion=suggestion)
         if code == 408:
             return PathNotFoundError(message, code=code, suggestion=suggestion)
         if code == 414:
             return SynologyFileExistsError(message, code=code, suggestion=suggestion)
-        if code == 416:
+        if code in (415, 416):  # quota full or volume full: both are out of space
             return DiskFullError(message, code=code, suggestion=suggestion)
         if code in (418, 419):
             return IllegalNameError(message, code=code, suggestion=suggestion)
