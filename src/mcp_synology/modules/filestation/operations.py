@@ -255,6 +255,49 @@ async def _refuse_missing_sources(
         )
 
 
+async def _refuse_missing_destination(client: DsmClient, operation: str, dest: str) -> None:
+    """Refuse before anything starts if the destination folder is missing or refused (#344).
+
+    DSM answers a copy or move into a missing folder with 1002, "Destination error during
+    copy/move", whose suggestion points at permissions. getinfo tells the cases apart: 408
+    is `not_found`, 407 `permission_denied`. Any other answer, or no answer, leaves it to
+    the task, as before.
+    """
+    try:
+        found = await find_missing_paths(client, [dest])
+    except SynologyError as e:
+        logger.debug(
+            "%s: destination check for %s failed (%s); starting anyway", operation, dest, e
+        )
+        return
+    codes = {code for _, code in found}
+    nothing = f"Nothing was {_PAST_TENSE.get(operation, 'processed')}."
+    if 408 in codes:
+        error_response(
+            ErrorCode.NOT_FOUND,
+            f"{operation} files refused: the destination folder {dest} doesn't exist. {nothing}",
+            retryable=False,
+            param="dest_folder",
+            value=dest,
+            suggestion=(
+                "Create it first with create_folder, or check the path with list_files, then retry."
+            ),
+        )
+    if 407 in codes:
+        error_response(
+            ErrorCode.PERMISSION_DENIED,
+            f"{operation} files refused: no permission to use the destination folder {dest}."
+            f" {nothing}",
+            retryable=False,
+            param="dest_folder",
+            value=dest,
+            suggestion=(
+                "Pick a folder this DSM account can write to, or have its permissions "
+                "changed in DSM."
+            ),
+        )
+
+
 async def _copy_move_one_path(
     client: DsmClient,
     path: str,
@@ -549,6 +592,7 @@ async def _copy_move(
 
     if check_sources:
         await _refuse_missing_sources(client, operation, normalized, paths)
+    await _refuse_missing_destination(client, operation, dest)
 
     total_processed = 0
     done = list(already_done or [])

@@ -613,6 +613,7 @@ Copy files or folders to a destination.
 
 **Design notes:**
 - **Long operations (#245):** hands off after the capped wait instead of stopping (see "Async Operations"); the reply's handle works with `file_task`.
+- **The destination is checked before anything starts (#344).** DSM answers a copy or move into a folder that doesn't exist with 1002, "Destination error during copy/move", whose suggestion points at permissions (0.10.0rc4 and rc5 live tests, seska DSM 7.1.1). So `getinfo` on the destination comes first: 408 is `not_found` ("the destination folder … doesn't exist. Nothing was copied.", `param: dest_folder`, suggesting `create_folder`), and 407, a share the account has no rights to, is `permission_denied`. Any other answer, or none, leaves it to the task. The same check covers `move_files` and a restore with `dest_folder`. A folder refused by a Deny ACL inside a share the account can use still gets DSM's 1002, because `getinfo` reads the folder's entry from its parent (seska, a restricted test account); with missing folders caught first, 1002's suggestion (write permission, ownership) fits what's left.
 
 ---
 
