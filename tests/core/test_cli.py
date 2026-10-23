@@ -859,6 +859,42 @@ class TestCheckCommand:
 
         assert "My Server" in result.output
 
+    def test_check_prints_config_notices(self, tmp_path: Path) -> None:
+        """check names misspelled settings and modules, not only serve's log."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "schema_version: 1\n"
+            "connection:\n"
+            "  host: 192.168.1.100\n"
+            "modules:\n"
+            "  filestation:\n"
+            "    enabled: true\n"
+            "    settings:\n"
+            "      allowed_local_path: [/tmp]\n"
+            "  downloadstaton:\n"
+            "    enabled: true\n"
+        )
+        runner = CliRunner()
+        with patch("mcp_synology.cli.check.asyncio.run", return_value=None):
+            result = runner.invoke(main, ["check", "-c", str(config_file)])
+        assert "Warning: Unknown setting 'allowed_local_path'" in result.output
+        assert "Warning: Unknown module 'downloadstaton'" in result.output
+
+    def test_check_refuses_a_misspelled_module_key(self, tmp_path: Path) -> None:
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "schema_version: 1\n"
+            "connection:\n"
+            "  host: 192.168.1.100\n"
+            "modules:\n"
+            "  filestation:\n"
+            "    permision: write\n"
+        )
+        runner = CliRunner()
+        result = runner.invoke(main, ["check", "-c", str(config_file)])
+        assert result.exit_code == 1
+        assert "modules.filestation.permision" in result.output
+
 
 class TestEnvVarMode:
     def test_serve_env_var_mode(self) -> None:
