@@ -1567,7 +1567,9 @@ class TestInstructionComments:
 # searches the whole bin and what Modified and ctime mean there (#333).
 # Raised by #356 to 31,302 (+63): photo_share_link's description says setting a
 # password or an expiry needs public view or download (#348).
-PAYLOAD_BUDGET_CHARS = 31_302
+# Raised by #364 to 31,347 (+45): list_recycle_bin's offset parameter, which its
+# "Use offset=N to see more" hint names.
+PAYLOAD_BUDGET_CHARS = 31_347
 
 
 class TestPayloadBudget:

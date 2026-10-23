@@ -53,6 +53,19 @@ async def test_unreadable_path_is_permission_denied(nas_client: Any) -> None:
     assert "no permission to read /homes/admin" in error["message"]
 
 
+async def test_listing_an_unreadable_path_is_permission_denied(nas_client: Any) -> None:
+    """DSM answers 407 to listing a folder this user can't read (#365): a permission
+    refusal, not "Unknown error (code 407)" (0.10.0rc5 live test on seska)."""
+    from mcp_synology.modules.filestation.listing import list_files
+
+    with pytest.raises(ToolError) as exc:
+        await list_files(nas_client[0], path="/homes/admin")
+    error = json.loads(str(exc.value))["error"]
+    assert error["code"] == "permission_denied", error
+    assert "DSM error 407" in error["message"] and "Unknown" not in error["message"]
+    assert error["suggestion"]
+
+
 async def test_unreadable_path_without_the_check(
     nas_client: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:

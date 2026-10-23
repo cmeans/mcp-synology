@@ -64,6 +64,21 @@ class TestErrorFromCode:
             err = error_from_code(code, api_name="SYNO.FileStation.Rename")
             assert isinstance(err, IllegalNameError)
 
+    def test_filestation_407_is_permission_denied(self) -> None:
+        """File Station 407 (operation not permitted) is a permission refusal, not an
+        unknown error (rc5 live test: list_files /home got DSM 407).
+        """
+        err = error_from_code(407, api_name="SYNO.FileStation.List")
+        assert isinstance(err, SynologyPermissionError)
+        assert err.error_code == ErrorCode.PERMISSION_DENIED
+        assert err.code == 407
+        assert "Unknown" not in str(err) and err.suggestion
+
+    def test_auth_407_is_not_filestation(self) -> None:
+        """Auth API 407 stays the lockout, not File Station's permission refusal."""
+        err = error_from_code(407, api_name="SYNO.API.Auth")
+        assert "login attempts" in str(err)
+
     def test_auth_402_is_not_filestation(self) -> None:
         """Auth API code 402 must NOT map to FileStation 'System too busy'."""
         err = error_from_code(402, api_name="SYNO.API.Auth")
