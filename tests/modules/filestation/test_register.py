@@ -238,6 +238,23 @@ class TestFilestationToolInvocation:
         for field in ("real_path", "size", "owner", "time", "perm", "type", "mount_point_type"):
             assert field in description
 
+    async def test_list_recycle_bin_says_its_search_is_capped(self) -> None:
+        """#375: "the whole bin is searched" let a model say a file isn't in the bin after
+        a search that stopped at the walk's caps. The description and `pattern` name them,
+        from the constants, so the two can't drift apart."""
+        from mcp_synology.modules.filestation.listing import (
+            _WALK_MAX_ENTRIES,
+            _WALK_MAX_FOLDERS,
+        )
+
+        server, _manager, ctx = _make_ctx()
+        register(ctx)
+        tool = {t.name: t for t in await server.list_tools()}["list_recycle_bin"]
+        pattern = tool.input_schema["properties"]["pattern"]["description"]
+        for text in (tool.description or "", pattern):
+            assert f"{_WALK_MAX_FOLDERS} folders and {_WALK_MAX_ENTRIES:,} items" in text, text
+            assert "whole bin" not in text
+
     async def test_list_recycle_bin_invocation(self, monkeypatch: pytest.MonkeyPatch) -> None:
         server, _manager, ctx = _make_ctx()
         mock = self._capture_call(
