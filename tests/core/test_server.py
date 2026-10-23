@@ -26,6 +26,7 @@ from mcp_synology.server import (
     SharedClientManager,
     _compact_schema,
     _strip_html_comments,
+    config_notices,
     create_server,
 )
 from tests.conftest import BASE_URL, make_test_config
@@ -66,6 +67,40 @@ class TestCreateServer:
         )
         server = create_server(config)
         assert server is not None
+
+    def test_config_notices_name_unknown_settings_and_modules(self) -> None:
+        """Typos in settings and module names are named (the spec's promised warnings)."""
+        config = make_test_config(
+            modules={
+                "filestation": {
+                    "enabled": True,
+                    "settings": {"allowed_local_path": ["/tmp"], "delete_timeout": 60},
+                },
+                "system": {"enabled": False, "settings": {"anything": 1}},
+                "downloadstaton": {"enabled": True},
+            }
+        )
+        notices = config_notices(config)
+        assert len(notices) == 3, notices
+        fs = next(n for n in notices if "allowed_local_path'" in n)
+        assert "modules.filestation.settings" in fs and "allowed_local_paths" in fs
+        assert "delete_timeout" not in fs.split("Valid")[0]  # a real setting isn't flagged
+        assert any("modules.system.settings" in n and "has no settings" in n for n in notices)
+        assert any("Unknown module 'downloadstaton'" in n and "photos" in n for n in notices)
+
+    def test_config_notices_quiet_for_a_clean_config(self) -> None:
+        config = make_test_config(
+            modules={"filestation": {"enabled": True, "settings": {"delete_timeout": 60}}}
+        )
+        assert config_notices(config) == []
+
+    def test_create_server_logs_the_notices(self, caplog: pytest.LogCaptureFixture) -> None:
+        config = make_test_config(
+            modules={"filestation": {"enabled": True, "settings": {"delete_timout": 60}}}
+        )
+        with caplog.at_level(logging.WARNING, logger="mcp_synology.server"):
+            create_server(config)
+        assert any("delete_timout" in r.getMessage() for r in caplog.records)
 
     def test_server_uses_display_name_for_hostname(self) -> None:
         """Server should use config.display_name, not raw host."""

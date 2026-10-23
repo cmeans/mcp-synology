@@ -328,7 +328,8 @@ At startup, the config is validated with Pydantic. Validation failures produce c
 - `connection.https` is `false` → info-level note that credentials are sent in cleartext (acceptable on a trusted LAN, risky otherwise)
 - `connection.verify_ssl` is `false` → warn that SSL verification is disabled
 - A module is listed but `enabled: false` → info-level note (helps users remember they disabled something)
-- Unknown keys within `modules.*.settings` → warn but don't fail (forward-compatible for module updates)
+- Unknown keys within `modules.*.settings`, and unknown module names → warn but don't fail (forward-compatible for module updates). The warning names the key and the valid ones; `serve` logs it and `check` prints it (`server.config_notices`, #368). Before #368 nothing warned: an `allowed_local_paths` typo silently left the Downloads default in force
+- Unknown keys directly under `modules.<name>` (anything but `enabled`, `permission`, `settings`) → **error** (#368): there's no forward-compatibility case, and a dropped `permision: write` silently left the module read-only
 
 ### Soft Defaults
 
@@ -519,7 +520,7 @@ SYNOLOGY_DEVICE_ID=AbCdEf123456
 
 **Decision: Strict at top level, lenient within module settings.**
 
-Unknown top-level keys are errors (catches typos like `conection` or `moduels`). Unknown keys within `modules.*.settings` are warnings (allows modules to evolve their settings without the core schema needing updates).
+Unknown top-level keys are errors (catches typos like `conection` or `moduels`), and so are unknown keys directly under `modules.<name>` (`permision`). Unknown keys within `modules.*.settings`, and unknown module names, are warnings (allows modules to evolve their settings without the core schema needing updates).
 
 ### 2. Config File is Read-Only from Server Perspective
 
@@ -580,7 +581,7 @@ If `settings_schema` is provided:
 If `settings_schema` is `None`:
 - The core passes `modules.*.settings` as a `dict[str, Any]`
 - The module is responsible for its own validation (or lack thereof)
-- Unknown keys produce warnings but not errors
+- Any key there produces a warning ("<module> has no settings"), but not an error
 
 This gives mature modules (like File Station) full type safety while letting experimental or third-party modules iterate quickly without fighting the schema.
 
