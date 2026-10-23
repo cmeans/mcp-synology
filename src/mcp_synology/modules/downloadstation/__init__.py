@@ -184,7 +184,7 @@ MODULE_INFO = ModuleInfo(
             name="set_download_config",
             description=(
                 "Set Download Station global configuration. All parameters are "
-                "optional — only fields you pass get updated. The rate fields require a "
+                "optional: only the fields you pass are updated. The rate fields require a "
                 "Download Station "
                 "manager/admin account: DSM silently ignores them from other accounts, so "
                 "the tool refuses them. Any user can set `default_destination`: DSM "
@@ -197,8 +197,9 @@ MODULE_INFO = ModuleInfo(
         ToolInfo(
             name="set_schedule",
             description=(
-                "Set the Download Station schedule. All parameters optional — only what "
-                "you pass gets updated. `enabled` / `emule_enabled` toggle whether the "
+                "Set the Download Station schedule; get_schedule shows the current one. All "
+                "parameters are optional: only what you pass is updated. `enabled` / "
+                "`emule_enabled` toggle whether the "
                 "schedule applies (DSM lets any Download Station user toggle this NAS-wide "
                 "flag). `schedule_plan` is in the NAS's local hours, and `download_rate` / "
                 "`upload_rate` are the limited speed. The plan and rates need a Download "
@@ -343,8 +344,8 @@ def register(ctx: RegisterContext) -> None:
                 str | None,
                 Field(
                     description=(
-                        "One or more source URIs, comma-separated: HTTP, HTTPS, FTP or "
-                        "magnet links. Pass this or `torrent_file_path`, not both."
+                        "One or more source URIs, comma-separated: HTTP, HTTPS, FTP, magnet "
+                        "and others. Pass this or `torrent_file_path`, not both."
                     )
                 ),
             ] = None,

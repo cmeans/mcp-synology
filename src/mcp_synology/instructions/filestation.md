@@ -26,7 +26,8 @@ CHOOSING THE RIGHT TOOL:
 
 BROWSING vs SEARCHING:
 - list_files shows one directory level. Its pattern parameter supports glob filtering (e.g., "*.mkv")
-- search_files searches recursively. Its pattern is a keyword/substring match (NOT glob).
+- search_files searches recursively. Its pattern is a keyword (matched anywhere in a name)
+  unless it has `*` or `?`, which make it a wildcard pattern.
   Use the extension parameter for file type filtering (e.g., extension="mkv")
 - search_files is slower — prefer list_files + get_dir_size when you know the path
 
