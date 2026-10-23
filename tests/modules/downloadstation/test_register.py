@@ -41,6 +41,15 @@ def _make_ctx(
     return server, manager, ctx
 
 
+async def served_text(name: str) -> str:
+    """A tool's description plus its parameters' schema descriptions, as served (#247)."""
+    server, _, ctx = _make_ctx()
+    register(ctx)
+    tool = next(t for t in await server.list_tools() if t.name == name)
+    params = tool.input_schema.get("properties", {}).values()
+    return " ".join([tool.description or "", *(p.get("description", "") for p in params)])
+
+
 class TestDownloadstationModuleRegister:
     def test_module_info_declares_required_dsm_task_api(self) -> None:
         api_names = {req.api_name for req in MODULE_INFO.required_apis}
@@ -336,12 +345,13 @@ class TestModuleInfoDescriptions:
         assert "your default destination" in desc
         assert "set_download_config" in desc
 
-    def test_schedule_tools_describe_verified_plan_format(self) -> None:
+    async def test_schedule_tools_describe_verified_plan_format(self) -> None:
+        # set_schedule's plan format lives in its schedule_plan parameter (#247).
         for name in ("get_schedule", "set_schedule"):
-            desc = self._desc(name)
-            assert "full speed" in desc and "limited" in desc, name
-        set_desc = self._desc("set_schedule")
-        assert "Sun" in set_desc and "download_rate" in set_desc
+            text = await served_text(name)
+            assert "full speed" in text and "limited" in text, name
+        set_text = await served_text("set_schedule")
+        assert "Sunday" in set_text and "download_rate" in set_text
 
     def test_create_download_mentions_returned_ids(self) -> None:
         assert "task IDs" in self._desc("create_download")

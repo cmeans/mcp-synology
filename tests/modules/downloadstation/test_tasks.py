@@ -1153,14 +1153,15 @@ class TestDeleteDownload:
         assert "moved into" not in result
         assert "check the destination" in result
 
-    def test_tool_description_does_not_promise_a_move(self) -> None:
-        from mcp_synology.modules.downloadstation import MODULE_INFO
+    async def test_tool_description_does_not_promise_a_move(self) -> None:
+        from tests.modules.downloadstation.test_register import served_text
 
-        tool = next(t for t in MODULE_INFO.tools if t.name == "delete_download")
-        assert "moves" not in tool.description
-        assert "force_complete" in tool.description
-        # #130: DSM refuses force_complete on finished tasks (they stay listed).
-        assert "refuses `force_complete` on finished tasks" in tool.description
+        text = await served_text("delete_download")
+        assert "moves" not in text
+        assert "force_complete" in text
+        # #130: DSM refuses force_complete on finished tasks (they stay listed); the
+        # parameter's own description says so (#247).
+        assert "Leave false (default) for finished tasks: DSM refuses them" in text
 
     @respx.mock
     async def test_per_task_error_rendered(self, mock_client: DsmClient) -> None:

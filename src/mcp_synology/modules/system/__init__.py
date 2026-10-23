@@ -29,7 +29,8 @@ MODULE_INFO = ModuleInfo(
             description=(
                 "Get NAS hardware and software info: model, firmware, CPU, RAM, "
                 "temperature, uptime. Use this to identify the NAS and check its "
-                "basic health."
+                "basic health. For live CPU, memory, disk and network load, use "
+                "get_resource_usage."
             ),
             permission_tier=PermissionTier.READ,
         ),
@@ -38,7 +39,8 @@ MODULE_INFO = ModuleInfo(
             description=(
                 "Get live resource utilization: CPU load, memory usage, disk I/O, "
                 "and network throughput. Use this to check if the NAS is under "
-                "heavy load before starting expensive work on it."
+                "heavy load before starting expensive work on it. For the model, firmware, "
+                "temperature and uptime, use get_system_info."
             ),
             permission_tier=PermissionTier.READ,
         ),

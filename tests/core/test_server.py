@@ -1604,7 +1604,15 @@ class TestInstructionComments:
 # password or an expiry needs public view or download (#348).
 # Raised by #364 to 31,347 (+45): list_recycle_bin's offset parameter, which its
 # "Use offset=N to see more" hint names.
-PAYLOAD_BUDGET_CHARS = 31_347
+# Raised by #373 (#247) to 50,126 (+18,779, +60%; maintainer-approved): every tool parameter
+# gets a schema description, 182 of them where only file_task's 2 had one (~14,500
+# characters of text, ~3,500 of `"description"` keys), and Glama's lowest-scoring File
+# Station descriptions were rewritten (list_recycle_bin, list_files, create_folder,
+# delete_files, restore_from_recycle_bin). Prose that only repeated a tool's own schema
+# went (Download Station's descriptions -592 net). Facts were not moved into the
+# instructions: claude.ai's desktop app doesn't receive them, and an instructions_file
+# replaces them, so a tool's own text has to carry what the model needs to use it.
+PAYLOAD_BUDGET_CHARS = 50_126
 
 
 class TestPayloadBudget:
@@ -1623,6 +1631,21 @@ class TestPayloadBudget:
             f"(+{size - PAYLOAD_BUDGET_CHARS}). If the growth is intended, raise "
             "PAYLOAD_BUDGET_CHARS in this PR."
         )
+
+
+class TestParameterDescriptions:
+    """Every tool parameter tells the model what it is (#247): the description is the
+    only place a model learns a parameter's format, values and default meaning."""
+
+    async def test_every_parameter_has_a_description(self) -> None:
+        tools, _ = await _served(create_server(make_test_config(modules=ALL_MODULES)))
+        missing = [
+            f"{tool.name}.{name}"
+            for tool in tools
+            for name, schema in tool.input_schema.get("properties", {}).items()
+            if not str(schema.get("description", "")).strip()
+        ]
+        assert not missing, f"parameters without a description: {missing}"
 
 
 class TestLocalPathsNotice:

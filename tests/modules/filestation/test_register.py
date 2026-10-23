@@ -228,13 +228,13 @@ class TestFilestationToolInvocation:
         assert "additional" in tools["get_file_info"].input_schema["properties"]
 
     async def test_get_file_info_description_names_additional(self) -> None:
-        """QA on #146: the client sees only the tool description, not the handler's
-        docstring, so the description itself has to name `additional` and its values."""
+        """QA on #146: the client sees only what's served, not the handler's docstring,
+        so `additional`'s schema description has to name its values (#247 moved them
+        there from the tool description)."""
         server, _manager, ctx = _make_ctx()
         register(ctx)
         tools = {t.name: t for t in await server.list_tools()}
-        description = tools["get_file_info"].description or ""
-        assert "additional" in description
+        description = tools["get_file_info"].input_schema["properties"]["additional"]["description"]
         for field in ("real_path", "size", "owner", "time", "perm", "type", "mount_point_type"):
             assert field in description
 
