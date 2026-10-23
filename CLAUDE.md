@@ -49,7 +49,7 @@ uv run pytest -n auto --cov=mcp_synology   # Tests with coverage
 ## Key Conventions
 
 ### Stack & Dependencies
-- **MCP SDK:** `mcp.server.mcpserver.MCPServer` from the official `mcp` package (2.x; 1.x called it `mcp.server.fastmcp.FastMCP`) — NOT the standalone `fastmcp` by PrefectHQ. `server.py`'s `_SynologyServer` overrides only the documented `list_tools()` (schema compaction, #163) and `call_tool()` (keeps the message of a non-`ToolError` exception, which 2.x would hide, #114). Don't reach into private SDK attributes
+- **MCP SDK:** `mcp.server.mcpserver.MCPServer` from the official `mcp` package (2.x; 1.x called it `mcp.server.fastmcp.FastMCP`) — NOT the standalone `fastmcp` by PrefectHQ. `server.py`'s `_SynologyServer` overrides only the documented `list_tools()` (schema compaction, #163), `call_tool()` (keeps the message of a non-`ToolError` exception, which 2.x would hide, #114) and `add_tool()` (every tool is unstructured: the SDK would give each `-> str` tool a `{"result": string}` `outputSchema` and send each reply twice, as `content` and `structuredContent`, #377). Don't reach into private SDK attributes
 - **HTTP:** `httpx` (async only) for all NAS communication, `respx` for mocking in tests
 - **Config:** `pyyaml` — always `yaml.safe_load()`, never `yaml.load()`
 - **Credentials:** `keyring` (OS-native backends)

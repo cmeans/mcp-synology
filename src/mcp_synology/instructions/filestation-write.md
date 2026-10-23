@@ -1,9 +1,6 @@
 <!-- File Station's guidance for its WRITE tools: sent after filestation.md when the
-filestation module has permission: write or admin (#318). -->
-UPLOADING:
-- upload_file: Upload a local file to the NAS (local path + NAS destination folder)
-It doesn't overwrite an existing file by default — use overwrite=true when intended.
-
+filestation module has permission: write or admin (#318). What a single tool's own
+description already says isn't repeated here (#377). -->
 MOVING AND ORGANIZING FILES:
 When a user asks to move or organize files:
 1. Use search_files to find matching files. Use exclude_pattern to filter out
@@ -11,10 +8,6 @@ When a user asks to move or organize files:
 2. Present the results with a count and confirm with the user before proceeding.
 3. Use move_files or copy_files with the confirmed paths.
 Always search first and confirm before destructive operations.
-
-RESTORING DELETED FILES:
-restore_from_recycle_bin recovers files that list_recycle_bin shows. Deleting anything
-inside a recycle bin is permanent.
 
 LONG OPERATIONS:
 A large delete, copy, move or restore can outlast one reply. The tool then hands it off:

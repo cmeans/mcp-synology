@@ -64,7 +64,12 @@ def _served(config_path: Path) -> tuple[list[dict[str, Any]], str]:
     server = create_server(load_config(str(config_path)))
     tools = asyncio.run(server.list_tools())
     served = [
-        {"name": t.name, "description": t.description or "", "input_schema": t.input_schema}
+        {
+            "name": t.name,
+            "description": t.description or "",
+            "input_schema": t.input_schema,
+            "output_schema": t.output_schema,
+        }
         for t in tools
     ]
     return served, server.instructions or ""
@@ -72,7 +77,12 @@ def _served(config_path: Path) -> tuple[list[dict[str, Any]], str]:
 
 def measure_size(config_path: Path) -> dict[str, int]:
     tools, instructions = _served(config_path)
-    schemas = sum(len(json.dumps(t["input_schema"])) for t in tools)
+    # Output schemas count too: each tool once carried one the budget didn't see (#377).
+    schemas = sum(
+        len(json.dumps(t["input_schema"]))
+        + (len(json.dumps(t["output_schema"])) if t["output_schema"] else 0)
+        for t in tools
+    )
     descriptions = sum(len(t["description"]) for t in tools)
     return {
         "tools": len(tools),
