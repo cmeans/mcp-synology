@@ -208,7 +208,8 @@ def format_schedule_grid(plan: str) -> str:
     lines = [hour_header]
     for day_idx, name in enumerate(_DAY_NAMES):
         day_slice = plan[day_idx * 24 : (day_idx + 1) * 24].ljust(24, "?")
-        cells = " ".join(_CELL_GLYPHS.get(ch, "?") for ch in day_slice)
+        # Two spaces between cells: each cell sits under its 2-digit hour label.
+        cells = "  ".join(_CELL_GLYPHS.get(ch, "?") for ch in day_slice)
         lines.append(f"{name}  {cells}")
 
     lines.append("")
