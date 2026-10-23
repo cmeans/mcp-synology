@@ -8,9 +8,11 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp_synology.modules.downloadstation.helpers import (
     format_eta,
     format_speed,
+    format_task_size,
     format_task_status,
     format_transfer_progress,
     normalize_destination,
+    task_size_unknown,
 )
 
 
@@ -198,6 +200,35 @@ class TestFormatTransferProgress:
     def test_total_smaller_than_downloaded_clamps_to_100(self) -> None:
         out = format_transfer_progress(downloaded=2000, total=1000)
         assert "(100%)" in out
+
+    def test_size_unknown(self) -> None:
+        out = format_transfer_progress(downloaded=1024 * 1024, total=0, size_unknown=True)
+        assert out == "1 MiB downloaded (size unknown)"
+
+
+class TestTaskSizeUnknown:
+    """#345: DSM reports size 0 while it doesn't know a task's size."""
+
+    @pytest.mark.parametrize(
+        ("total", "downloaded", "status", "unknown"),
+        [
+            (0, 5, "downloading", True),  # bytes in, no size: the HTTP case seen live
+            (0, 5, "finished", True),  # bytes in can't be a 0-byte download
+            (0, 0, "waiting", True),  # not started, nothing known yet
+            (0, 0, "finished", False),  # a real empty download
+            (0, 0, "seeding", False),
+            (100, 5, "downloading", False),  # DSM knows the size
+        ],
+    )
+    def test_size_0_is_unknown_unless_finished_and_empty(
+        self, total: int, downloaded: int, status: str, unknown: bool
+    ) -> None:
+        assert task_size_unknown(total, downloaded, status) is unknown
+
+    def test_format_task_size(self) -> None:
+        assert format_task_size(0, 5, "downloading") == "unknown"
+        assert format_task_size(0, 0, "finished") == "0 B"
+        assert format_task_size(1024, 5, "downloading") == "1 KiB"
 
 
 class TestFormatSpeed:

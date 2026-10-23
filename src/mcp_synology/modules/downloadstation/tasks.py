@@ -24,10 +24,12 @@ from mcp_synology.modules.downloadstation.helpers import (
     ds_is_manager,
     format_eta,
     format_speed,
+    format_task_size,
     format_task_status,
     format_transfer_progress,
     normalize_destination,
     task_error_detail,
+    task_size_unknown,
 )
 
 logger = logging.getLogger(__name__)
@@ -218,14 +220,15 @@ async def list_downloads(
         size_down = int(transfer.get("size_downloaded", 0))
         speed_down = int(transfer.get("speed_download", 0))
         speed_up = int(transfer.get("speed_upload", 0))
+        size_unknown = task_size_unknown(size_total, size_down, t.get("status"))
         rows.append(
             [
                 t.get("id", "—"),
                 _title(t),
                 t.get("type", "—"),
                 format_task_status(t.get("status"), task_error_detail(t)),
-                format_size(size_total),
-                format_transfer_progress(size_down, size_total),
+                "unknown" if size_unknown else format_size(size_total),
+                format_transfer_progress(size_down, size_total, size_unknown=size_unknown),
                 format_speed(speed_down),
                 format_speed(speed_up),
                 format_eta(size_down, size_total, speed_down),
@@ -336,6 +339,10 @@ async def get_download_info(
             value=task_id,
         )
     task = tasks[0]
+    add = task.get("additional", {}) or {}
+    transfer = add.get("transfer", {}) or {}
+    size_total = int(task.get("size", 0))
+    size_down = int(transfer.get("size_downloaded", 0))
 
     sections: list[str] = []
 
@@ -345,11 +352,9 @@ async def get_download_info(
         ("Title", _title(task)),
         ("Type", task.get("type", "—")),
         ("Status", format_task_status(task.get("status"), task_error_detail(task))),
-        ("Size", format_size(int(task.get("size", 0)))),
+        ("Size", format_task_size(size_total, size_down, task.get("status"))),
     ]
     sections.append(format_key_value(header_pairs, title="Task"))
-
-    add = task.get("additional", {}) or {}
 
     # Detail block
     detail = add.get("detail", {}) or {}
@@ -365,13 +370,14 @@ async def get_download_info(
         sections.append(format_key_value(detail_pairs, title="Detail"))
 
     # Transfer block
-    transfer = add.get("transfer", {}) or {}
     if transfer:
-        size_total = int(task.get("size", 0))
-        size_down = int(transfer.get("size_downloaded", 0))
         size_up = int(transfer.get("size_uploaded", 0))
+        size_unknown = task_size_unknown(size_total, size_down, task.get("status"))
         transfer_pairs = [
-            ("Downloaded", format_transfer_progress(size_down, size_total)),
+            (
+                "Downloaded",
+                format_transfer_progress(size_down, size_total, size_unknown=size_unknown),
+            ),
             ("Uploaded", format_size(size_up)),
             ("Speed (down)", format_speed(int(transfer.get("speed_download", 0)))),
             ("Speed (up)", format_speed(int(transfer.get("speed_upload", 0)))),
