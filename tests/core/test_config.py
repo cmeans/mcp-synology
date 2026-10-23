@@ -203,7 +203,7 @@ class TestCredentialWarnings:
     def test_plain_http_is_a_warning(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """#193: credentials in cleartext is a WARNING, so client logs show it."""
+        """#193: credentials in cleartext is a WARNING (it was INFO)."""
         raw = _minimal_raw()
         raw["connection"] = {"host": "192.168.1.100", "https": False}
         path = tmp_path / "config.yaml"
@@ -213,6 +213,17 @@ class TestCredentialWarnings:
         record = next(r for r in caplog.records if "HTTPS is disabled" in r.getMessage())
         assert record.levelno == logging.WARNING
         assert "docs/https.md" in record.getMessage()
+
+    def test_https_config_has_no_plain_http_warning(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        raw = _minimal_raw()
+        raw["connection"] = {"host": "192.168.1.100", "https": True}
+        path = tmp_path / "config.yaml"
+        path.write_text(yaml.safe_dump(raw))
+        caplog.set_level(logging.DEBUG, logger="mcp_synology.core.config")
+        load_config(str(path))
+        assert "HTTPS is disabled" not in caplog.text
 
     def test_password_in_file_warns(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
         caplog.set_level(logging.WARNING, logger="mcp_synology.core.config")

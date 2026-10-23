@@ -35,8 +35,9 @@ trade; the server logs a warning while verification is off.
 3. Point `host` at that name, not the IP address, so the certificate matches.
 4. Make the name resolve to the NAS's **local** address on your network, so traffic stays
    local: a local DNS record (a router or Pi-hole entry), or a hosts-file line on the
-   machine running mcp-synology. If you use Tailscale with MagicDNS, its resolver can
-   override your local DNS; add split DNS for that domain, or a hosts-file line.
+   machine running mcp-synology. If you use Tailscale with its "Override local DNS"
+   setting on, its resolver replaces your local DNS; add split DNS for that domain, or a
+   hosts-file line.
 
 Check Synology's current documentation for how DSM validates the certificate request; the
 details depend on your DSM version and setup. If validation needs the NAS reachable from

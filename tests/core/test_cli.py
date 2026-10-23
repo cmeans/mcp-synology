@@ -365,8 +365,8 @@ class TestSetupInteractive:
     def test_interactive_setup_defaults_to_https(
         self, tmp_path: Path, answer: str, https: bool
     ) -> None:
-        """#193: pressing Enter at "Use HTTPS?" picks HTTPS (port 5001, derived); choosing
-        plain HTTP says what that exposes."""
+        """#193: pressing Enter at "Use HTTPS?" picks HTTPS, and only then is the
+        certificate question explained; choosing plain HTTP says what that exposes."""
         runner = CliRunner()
         config_dir = tmp_path / "config"
         clean_env = {k: v for k, v in os.environ.items() if not k.startswith("SYNOLOGY_")}
@@ -392,8 +392,11 @@ class TestSetupInteractive:
         assert "Use HTTPS? [Y/n]" in result.output
         if https:
             assert "self-signed" in result.output  # the verify question is explained
+            assert "cross the network unencrypted" not in result.output
         else:
             assert "cross the network unencrypted" in result.output
+            assert "docs/https.md" in result.output
+            assert "self-signed" not in result.output
 
     def test_interactive_setup_keyring_failure(self, tmp_path: Path) -> None:
         """When keyring fails, show env var instructions and return."""
