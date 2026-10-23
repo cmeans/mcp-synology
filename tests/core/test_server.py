@@ -84,7 +84,7 @@ class TestCreateServer:
         assert len(notices) == 3, notices
         fs = next(n for n in notices if "allowed_local_path'" in n)
         assert "modules.filestation.settings" in fs and "allowed_local_paths" in fs
-        assert "delete_timeout" not in fs.split("Valid")[0]  # a real setting isn't flagged
+        assert not any("'delete_timeout'" in n for n in notices)  # a real setting isn't flagged
         assert any("modules.system.settings" in n and "has no settings" in n for n in notices)
         assert any("Unknown module 'downloadstaton'" in n and "photos" in n for n in notices)
 
