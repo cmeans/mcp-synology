@@ -80,6 +80,10 @@ default — run locally with:
 uv run pytest -m integration -v --log-cli-level=INFO
 ```
 
+**Live tests** drive a release candidate on a real NAS through AI clients, to check what a
+model does with the tools' text. [`docs/live-testing.md`](docs/live-testing.md) is the
+run-book: building a candidate, test accounts, writing a plan and triaging the results.
+
 Requires **Python 3.11+**.
 
 Architecture overview, design specs, and module conventions live in
