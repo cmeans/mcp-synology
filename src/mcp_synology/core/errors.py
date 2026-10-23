@@ -107,7 +107,8 @@ class SessionExpiredError(SynologyError):
 
 
 class SynologyPermissionError(SynologyError):
-    """Permission denied (code 105). NOT a session issue — never re-auth on this."""
+    """Permission denied (code 105, or File Station's 407). NOT a session issue — never
+    re-auth on this."""
 
     error_code = ErrorCode.PERMISSION_DENIED
 
