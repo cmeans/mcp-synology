@@ -659,7 +659,7 @@ class TestListRecycleBin:
         assert recycle_status == {"video": True}
 
 
-# -- #333: the whole bin is searched for a pattern; DSM's sort grouping is explained --
+# -- #333: a pattern searches the bin's subfolders, up to the walk's caps; DSM's sort grouping --
 
 _BIN = "/home/#recycle"
 

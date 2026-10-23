@@ -359,6 +359,30 @@ class TestModuleInfoDescriptions:
     def test_edit_download_mentions_version_requirement(self) -> None:
         assert "newer Download Station" in self._desc("edit_download")
 
+    async def test_status_filter_names_every_state_in_its_groups(self) -> None:
+        """#375: `downloading` left out finishing and waiting for a file host. Every
+        state in STATUS_GROUPS is named, and a new state fails here until it is."""
+        from mcp_synology.modules.downloadstation.helpers import STATUS_GROUPS
+
+        named = {
+            "waiting": "(also waiting, ",  # "waiting" alone also matches "waiting for a file host"
+            "downloading": "`downloading`",
+            "finishing": "finishing",
+            "hash_checking": "hash checking",
+            "filehosting_waiting": "waiting for a file host",
+            "extracting": "extracting",
+            "finished": "`finished`",
+            "seeding": "seeding",
+        }
+        grouped = STATUS_GROUPS["downloading"] | STATUS_GROUPS["finished"]
+        assert grouped == set(named), grouped ^ set(named)
+        server, _, ctx = _make_ctx()
+        register(ctx)
+        tool = next(t for t in await server.list_tools() if t.name == "list_downloads")
+        description = tool.input_schema["properties"]["status_filter"]["description"]
+        for state, phrase in named.items():
+            assert phrase in description, state
+
     def test_list_downloads_describes_paging_and_whole_queue_filter(self) -> None:
         """#140: the assistant must know the footer carries the true total."""
         desc = self._desc("list_downloads")
