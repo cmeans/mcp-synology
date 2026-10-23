@@ -74,7 +74,8 @@ Hardware and software identity and basic health.
 
 **Tool description (LLM-facing):**
 > Get NAS hardware and software info: model, firmware, CPU, RAM, temperature, uptime. Use this to
-> identify the NAS and check its basic health.
+> identify the NAS and check its basic health. For live CPU, memory, disk and network load, use
+> get_resource_usage.
 
 **Parameters:** None.
 
@@ -110,7 +111,8 @@ Live utilization, for deciding whether the NAS is busy before an expensive opera
 
 **Tool description (LLM-facing):**
 > Get live resource utilization: CPU load, memory usage, disk I/O, and network throughput. Use this to
-> check if the NAS is under heavy load before starting expensive work on it.
+> check if the NAS is under heavy load before starting expensive work on it. For the model, firmware,
+> temperature and uptime, use get_system_info.
 
 **Parameters:** None.
 

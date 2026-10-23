@@ -1153,14 +1153,15 @@ class TestDeleteDownload:
         assert "moved into" not in result
         assert "check the destination" in result
 
-    def test_tool_description_does_not_promise_a_move(self) -> None:
-        from mcp_synology.modules.downloadstation import MODULE_INFO
+    async def test_tool_description_does_not_promise_a_move(self) -> None:
+        from tests.modules.downloadstation.test_register import served_text
 
-        tool = next(t for t in MODULE_INFO.tools if t.name == "delete_download")
-        assert "moves" not in tool.description
-        assert "force_complete" in tool.description
-        # #130: DSM refuses force_complete on finished tasks (they stay listed).
-        assert "refuses `force_complete` on finished tasks" in tool.description
+        text = await served_text("delete_download")
+        assert "moves" not in text
+        assert "force_complete" in text
+        # #130: DSM refuses force_complete on finished tasks (they stay listed); the
+        # parameter's own description says so (#247).
+        assert "Leave false (default) for finished tasks: DSM refuses them" in text
 
     @respx.mock
     async def test_per_task_error_rendered(self, mock_client: DsmClient) -> None:
@@ -1293,6 +1294,29 @@ class TestEditDownload:
             "form, '/video/TV/New show'; needs File Station write permission) or, without that, "
             "ask the user to create it in DSM, then retry."
         )
+
+    @respx.mock
+    async def test_create_403_is_not_found_on_the_destination(self, mock_client: DsmClient) -> None:
+        """#334: a missing destination is `not_found` with param destination, so a client
+        branching on the code can tell it from other DSM failures."""
+        _has_default()
+        post_route(TASK2, "create", version=2).respond(json=err(403))
+        with pytest.raises(ToolError) as exc:
+            await create_download(mock_client, uri="magnet:?xt=urn:btih:abc", destination="v/no")
+        envelope = _envelope(exc.value)
+        assert envelope["code"] == "not_found", envelope
+        assert envelope["param"] == "destination" and envelope["value"] == "v/no"
+        assert "Destination doesn't exist" in envelope["message"]
+
+    @respx.mock
+    async def test_v1_create_403_is_not_found_too(self, mock_client: DsmClient) -> None:
+        _has_default()
+        del mock_client.api_cache[TASK2]
+        post_route(TASK, "create", version=1).respond(json=err(403))
+        with pytest.raises(ToolError) as exc:
+            await create_download(mock_client, uri="magnet:?xt=a", destination="nope")
+        envelope = _envelope(exc.value)
+        assert envelope["code"] == "not_found" and envelope["param"] == "destination"
 
     async def test_nas_with_task_v1_only_gets_clear_error(self, mock_client: DsmClient) -> None:
         mock_client.api_cache[TASK] = mock_client.api_cache[TASK].model_copy(

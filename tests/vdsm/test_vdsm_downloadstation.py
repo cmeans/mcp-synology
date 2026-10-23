@@ -474,6 +474,9 @@ class TestVdsmDownloadStationTasks:
         with pytest.raises(ToolError) as exc:
             await create_download(client, uri=_FAKE_MAGNET, destination=f"writable/{folder}")
         error = _error(exc.value)
+        # DSM's 403 "Destination doesn't exist" is not_found on the destination (#334).
+        assert error["code"] == "not_found", error
+        assert error["param"] == "destination", error
         assert "DSM error 403" in error["message"], error
         assert "create it first with File Station's create_folder" in error["suggestion"]
         try:

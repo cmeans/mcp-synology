@@ -120,7 +120,7 @@ DS-specific codes (`core/downloadstation_errors.py`) are dispatched when the API
 | 400 | File upload failed | Check the .torrent/.nzb is readable and within DSM's size limit |
 | 401 | Max number of tasks reached | Pause or delete finished tasks first |
 | 402 | Destination denied | Check write permission on the destination share |
-| 403 | Destination doesn't exist | Pass it share-relative; a new folder must be created first with File Station's `create_folder`, or by the user in DSM (Download Station doesn't create folders), then retry |
+| 403 | Destination doesn't exist | Reported as `not_found` (#334), with `param: destination` on `create_download`. Pass it share-relative; a new folder must be created first with File Station's `create_folder`, or by the user in DSM (Download Station doesn't create folders), then retry |
 | 404 | Invalid task id | No such task, or another user's; run `list_downloads` |
 | 405 | Invalid task action | Not valid for the task's current state: resuming an active or finished task, or pausing a paused or finished task (per task, in a list that has other valid IDs) |
 | 406 | No default destination | Set one with `set_download_config` |
@@ -144,22 +144,20 @@ List the queue, paged, with the true total.
 **DSM API:** `SYNO.DownloadStation.Task` / `list` v1 (`additional=detail,transfer`); `SYNO.DownloadStation2.Task` / `list` v2 for the total
 
 **Tool description (LLM-facing):**
-> List download tasks in the Download Station queue. Filter by status
-> (downloading/finished/paused/error/all). Returns a table with id, title, type (bt/http/ftp/nzb),
-> status, size, progress%, download and upload speed, ETA, and completion time. Paged with
-> offset/limit (default 25); the footer gives the true total and the next offset. sort_by: queue
-> (default, oldest first), created or completed (newest first; e.g. sort_by=completed, limit=1 gives
-> the most recently finished task). A status filter or sort covers the whole queue, not just one page.
-> Accounts that are not Download Station managers see only their own tasks (the output says so), so an
-> empty list does not mean the NAS is idle.
+> List download tasks in the Download Station queue. Returns a table with id, title, type
+> (bt/http/ftp/nzb), status, size, progress%, download and upload speed, ETA, and completion time.
+> Paged (25 by default); the footer gives the true total and the next offset. A status filter or
+> sort covers the whole queue, not just one page: sort_by=completed with limit=1 gives the most
+> recently finished task. Accounts that are not Download Station managers see only their own tasks
+> (the output says so), so an empty list does not mean the NAS is idle.
 
 **Parameters:**
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `status_filter` | `str` | No | `"all"` | `all`, `downloading`, `finished`, `paused` or `error` (see Statuses). |
+| `status_filter` | `str` | No | `"all"` | `all`, `downloading` (also waiting, checking or extracting), `finished` (also seeding), `paused` or `error` (see Statuses). |
 | `sort_by` | `str` | No | `"queue"` | `queue` (DSM order: creation order, oldest first), `created` or `completed` (newest first; tasks that never completed sort last). |
-| `offset` | `int` | No | `0` | First task to show (0-based) within the filtered and sorted list. Must be 0 or more; a negative offset is rejected locally with `invalid_parameter` (#141). |
+| `offset` | `int` | No | `0` | First task to show (0-based) within the filtered and sorted list. Must be 0 or more; a negative offset is rejected locally with `invalid_parameter` (#141). The footer gives the next offset. |
 | `limit` | `int` | No | `25` | Page size. Must be 1 or more, checked locally (#141). |
 
 **Response shape:**
@@ -200,7 +198,8 @@ Everything about one task.
 **Tool description (LLM-facing):**
 > Get detailed information for a specific download task: detail (status, destination, URI), transfer
 > (size downloaded/uploaded, speed, peers), files (per-file selection for BT), trackers (BT only),
-> peers (BT only). Use list_downloads first to find the task_id.
+> peers (BT only). Use list_downloads first to find the task_id. For totals across all tasks, use
+> get_download_stats; for settings, use get_download_config.
 
 **Parameters:**
 
@@ -348,24 +347,23 @@ Create tasks from URIs, or from a local .torrent / .nzb file.
 **DSM API:** `SYNO.DownloadStation2.Task` / `create` v2 (form POST for URIs, multipart for files); v1 `SYNO.DownloadStation.Task` / `create` (form POST) as the fallback and for credentials
 
 **Tool description (LLM-facing):**
-> Create one or more download tasks. Pass a comma-separated list of URIs (HTTP, FTP, magnet, etc.) via
-> `uri` OR pass a local path to a .torrent / .nzb file via `torrent_file_path`. `destination` must be
-> an existing folder, share-relative (DS doesn't create folders; make a new one first with File
-> Station's `create_folder`, or ask the user to create it in DSM). Omit it to use your default
-> destination (a non-manager who has none must set it first with `set_download_config`, because DS
-> won't start their tasks until then). `username` / `password` may
-> be supplied for protected URLs (not for torrent files). Returns the new task IDs when DSM provides
-> them (not for URLs with `username` / `password`); long magnet links and URI lists are supported.
+> Create one or more download tasks, from URIs or from a local .torrent / .nzb file. `destination`
+> must be an existing folder, share-relative (DS doesn't create folders; make a new one first with
+> File Station's `create_folder` when File Station write is enabled, or ask the user to create it in
+> DSM). Omit it to use your default destination (a non-manager who has none must set it first with
+> `set_download_config`, because DS won't start their tasks until then). Returns the new task IDs
+> when DSM provides them (not for URLs with `username` / `password`); long magnet links and URI
+> lists are supported.
 
 **Parameters:**
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `uri` | `str` | One of `uri` / `torrent_file_path` | — | Comma-separated URIs: HTTP, HTTPS, FTP, magnet, etc. |
-| `torrent_file_path` | `str` | One of `uri` / `torrent_file_path` | — | Local path to a `.torrent` or `.nzb` file (uploaded from this machine). |
-| `destination` | `str` | No | the user's default | Share-relative destination folder. |
-| `username` | `str` | No | — | Credentials for a protected URL (not for files). |
-| `password` | `str` | No | — | As above. |
+| `uri` | `str` | One of `uri` / `torrent_file_path` | — | Comma-separated URIs: HTTP, HTTPS, FTP, magnet, etc. Not together with `torrent_file_path`. |
+| `torrent_file_path` | `str` | One of `uri` / `torrent_file_path` | — | Local path to a `.torrent` or `.nzb` file (uploaded from this machine), inside the allowed local folders. |
+| `destination` | `str` | No | the user's default | Share-relative destination folder (`video/Torrents`); it must already exist. |
+| `username` | `str` | No | — | User name for a protected URL (not for torrent files). |
+| `password` | `str` | No | — | Password for a protected URL (not for torrent files). |
 
 **Response shape:** `Created 2 download task(s): dbid_4011, dbid_4012.`, or, when DSM returns no IDs: `Created download task(s) for 2 URI(s); DSM did not return task IDs — use list_downloads to find them.`, followed by any destination note.
 
@@ -395,19 +393,17 @@ Remove tasks.
 **DSM API:** `SYNO.DownloadStation.Task` / `delete` v1
 
 **Tool description (LLM-facing):**
-> Remove one or more download tasks. `task_ids` is a list. A deleted task can't be restored (its
-> source URL is gone with it), so name the tasks and confirm with the user before deleting. Files from
-> finished tasks are always kept. For unfinished tasks the partial data is discarded (irreversible).
-> `force_complete` asks DSM to keep the incomplete file in the destination instead, but DSM has been
-> seen to discard it anyway, so don't rely on it to preserve partial data. DSM refuses
-> `force_complete` on finished tasks (error 405; the task stays listed), so leave it false for those.
+> Remove one or more download tasks. A deleted task can't be restored (its source URL is gone with
+> it), so name the tasks and confirm with the user before deleting. Files from finished tasks are
+> always kept. For unfinished tasks the partial data is discarded (irreversible); don't rely on
+> `force_complete` to keep it.
 
 **Parameters:**
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `task_ids` | `list[str]` | **Yes** | — | Task IDs to remove. |
-| `force_complete` | `bool` | No | `false` | Passed through to DSM; see below. |
+| `task_ids` | `list[str]` | **Yes** | — | Task IDs to remove, from `list_downloads`. |
+| `force_complete` | `bool` | No | `false` | Asks DSM to keep an unfinished task's partial file; passed through to DSM, which may discard it anyway and refuses it on finished tasks. See below. |
 
 **Response shape:** a per-task table (`ok`, `not found (no such task, or not yours)`, or `error N`) under a title such as `Delete download — 1 of 2 task(s) removed; completed files kept; partial data of unfinished tasks discarded`. When nothing was removed, the title says `0 of N task(s) removed; nothing was deleted`. With `force_complete=true`, the unfinished part reads `force_complete requested, but DSM may still discard partial data; check the destination`.
 
@@ -427,15 +423,15 @@ Remove tasks.
 **DSM API:** `SYNO.DownloadStation.Task` / `pause` v1
 
 **Tool description (LLM-facing):**
-> Pause one or more download tasks. `task_ids` is a list. An already-paused or finished task is
-> refused for that id (error 405), while the others are paused. If none of the ids can be paused, the
-> whole call fails with invalid_parameter.
+> Pause one or more download tasks. An already-paused or finished task is refused for that id (error
+> 405), while the others are paused. If none of the ids can be paused, the whole call fails with
+> invalid_parameter.
 
 **Parameters:**
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `task_ids` | `list[str]` | **Yes** | — | Task IDs to pause. |
+| `task_ids` | `list[str]` | **Yes** | — | Task IDs to pause, from `list_downloads`. |
 
 **Response shape:** a per-task table under `Pause download — N task(s)`, plus the not-found hint when needed.
 
@@ -450,14 +446,15 @@ Remove tasks.
 **DSM API:** `SYNO.DownloadStation.Task` / `resume` v1
 
 **Tool description (LLM-facing):**
-> Resume one or more paused download tasks. `task_ids` is a list. An active or finished task is
-> refused for that id (error 405), while the others are resumed.
+> Resume one or more paused download tasks. An active or finished task is refused for that id (error
+> 405), while the others are resumed. list_downloads with status_filter=`paused` finds the paused
+> tasks.
 
 **Parameters:**
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `task_ids` | `list[str]` | **Yes** | — | Task IDs to resume. |
+| `task_ids` | `list[str]` | **Yes** | — | IDs of paused tasks to resume, from `list_downloads`. |
 
 **Response shape:** a per-task table under `Resume download — N task(s)`, plus the not-found hint when needed.
 
@@ -474,15 +471,16 @@ Remove tasks.
 **DSM API:** `SYNO.DownloadStation.Task` / `edit`, pinned to **exactly v2**
 
 **Tool description (LLM-facing):**
-> Edit task parameters. `task_ids` is a list. Currently supports `destination` (change the task's
-> output share). Requires a newer Download Station (Task API v2); older versions get a clear error.
+> Edit task parameters. Currently supports `destination` (change the task's output share). Requires
+> a newer Download Station (Task API v2); older versions get a clear error. This changes only the
+> listed tasks; for global settings, use set_download_config.
 
 **Parameters:**
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `task_ids` | `list[str]` | **Yes** | — | Task IDs to edit. |
-| `destination` | `str` | **Yes** | — | New share-relative destination (the only editable field). |
+| `task_ids` | `list[str]` | **Yes** | — | Task IDs to edit, from `list_downloads`. |
+| `destination` | `str` | **Yes** | — | New share-relative destination (the only editable field); the folder must already exist. |
 
 **Response shape:** a per-task table under `Edit download — N task(s), destination=<dest>`.
 
@@ -499,21 +497,21 @@ Remove tasks.
 **DSM API:** `SYNO.DownloadStation.Info` / `setserverconfig` v1
 
 **Tool description (LLM-facing):**
-> Set Download Station global configuration. All parameters are optional — only fields you pass get
-> updated. Rates are KB/s; 0 means unlimited. Pass `default_destination` to change DS's default
-> destination share. The rate fields require a Download Station manager/admin account: DSM silently
-> ignores them from other accounts, so the tool refuses them. Any user can set `default_destination`:
-> DSM applies it per user, and DS won't start a non-manager's tasks until it is set.
+> Set Download Station global configuration. All parameters are optional: only the fields you pass
+> are updated. The rate fields require a Download Station manager/admin account: DSM silently
+> ignores them from other accounts, so the tool refuses them. Any user can set
+> `default_destination`: DSM applies it per user, and DS won't start a non-manager's tasks until it
+> is set.
 
 **Parameters:**
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `bt_max_download` | `int` | No | — | KB/s; 0 = unlimited. Manager only. |
+| `bt_max_download` | `int` | No | — | NAS-wide BitTorrent download limit, KB/s; 0 = unlimited. Manager only. |
 | `bt_max_upload` | `int` | No | — | As above. |
 | `emule_max_download` | `int` | No | — | As above. |
 | `emule_max_upload` | `int` | No | — | As above. |
-| `default_destination` | `str` | No | — | Default destination share. Applied **per user**. |
+| `default_destination` | `str` | No | — | Default destination share, used when `create_download` gets none. Applied **per user**. |
 
 **Response shape:** the fields sent, under `Set download config — N field(s) updated`. For a non-manager, the title adds `(your own default destination, not the NAS-wide one)`.
 
@@ -532,23 +530,21 @@ Remove tasks.
 **DSM API:** `SYNO.DownloadStation2.Settings.Scheduler` / `set` v1 (plan and rates); `SYNO.DownloadStation.Schedule` / `setconfig` v1 (flags)
 
 **Tool description (LLM-facing):**
-> Set the Download Station schedule. All parameters optional — only what you pass gets updated.
-> `enabled` / `emule_enabled` toggle whether the schedule applies (DSM lets any Download Station user
-> toggle this NAS-wide flag). `schedule_plan` is a 168-character string, 24 chars per day, Sun first
-> through Sat, in the NAS's local hours; each char is '0' no download, '1' full speed, '2' limited.
-> `download_rate` /
-> `upload_rate` set the limited speed in KB/s (0 = unlimited). The plan and rates need a Download
-> Station manager/admin account; if that write is refused, nothing is applied.
+> Set the Download Station schedule; get_schedule shows the current one. All parameters are
+> optional: only what you pass is updated. `enabled` / `emule_enabled` toggle whether the schedule
+> applies (DSM lets any Download Station user toggle this NAS-wide flag). `schedule_plan` is in the
+> NAS's local hours, and `download_rate` / `upload_rate` are the limited speed. The plan and rates
+> need a Download Station manager/admin account; if that write is refused, nothing is applied.
 
 **Parameters:**
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
 | `enabled` | `bool` | No | — | Whether the schedule applies (NAS-wide; any DS user). |
-| `emule_enabled` | `bool` | No | — | The same, for eMule. |
-| `schedule_plan` | `str` | No | — | 168 characters of `0`/`1`/`2`, Sunday first, 24 per day. |
-| `download_rate` | `int` | No | — | Limited download speed, KB/s (0 = unlimited). |
-| `upload_rate` | `int` | No | — | Limited upload speed, KB/s. |
+| `emule_enabled` | `bool` | No | — | The same, for the eMule schedule. |
+| `schedule_plan` | `str` | No | — | 168 characters of `0`/`1`/`2`, Sunday 00:00 first, 24 per day, NAS local time. |
+| `download_rate` | `int` | No | — | Limited download speed (hours marked `2`), KB/s (0 = unlimited). |
+| `upload_rate` | `int` | No | — | Limited upload speed (hours marked `2`), KB/s (0 = unlimited). |
 
 **Response shape:** the fields applied, under `Set download schedule — N field(s) updated`. The plan is shown as `<set to 168-char plan>`, not echoed back.
 

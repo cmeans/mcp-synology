@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NoReturn
 
 from mcp_synology.core.errors import ApiNotFoundError, ErrorCode, SynologyError
 from mcp_synology.core.formatting import (
@@ -454,6 +454,21 @@ async def get_download_info(
 _DS2_NOT_AVAILABLE_CODES = frozenset({102, 103, 104})
 
 
+def _create_failed(operation: str, e: SynologyError, destination: str | None) -> NoReturn:
+    """Raise a failed create as a structured error; a missing destination names it (#334)."""
+    if e.code == 403:  # "Destination doesn't exist": not_found, from error_from_code
+        error_response(
+            e.error_code,
+            f"{operation} failed (DSM error 403): {e}",
+            retryable=False,
+            param="destination",
+            value=destination,
+            suggestion=e.suggestion,
+            help_url=e.help_url,
+        )
+    synology_error_response(operation, e)
+
+
 def _created_message(task_ids: list[str], n_uris: int) -> str:
     if task_ids:
         return f"Created {len(task_ids)} download task(s): {', '.join(task_ids)}."
@@ -629,7 +644,7 @@ async def create_download(
                 destination=destination,
             )
         except SynologyError as e:
-            synology_error_response(f"Create download ({path.name})", e)
+            _create_failed(f"Create download ({path.name})", e, destination)
         task_ids = [str(t) for t in data.get("task_id", [])]
         return f"{_created_message(task_ids, 1)} Source: file {path.name}.{note}"
 
@@ -665,7 +680,7 @@ async def create_download(
                 )
             except SynologyError as e:
                 if e.code not in _DS2_NOT_AVAILABLE_CODES:
-                    synology_error_response("Create download", e)
+                    _create_failed("Create download", e, destination)
                 logger.debug("DS2 Task.create answered %s; using v1 Task.create", e.code)
             else:
                 task_ids = [str(t) for t in data.get("task_id", [])]
@@ -681,7 +696,7 @@ async def create_download(
     try:
         await client.request_form_post("SYNO.DownloadStation.Task", "create", 1, v1_params)
     except SynologyError as e:
-        synology_error_response("Create download", e)
+        _create_failed("Create download", e, destination)
     return _created_message([], len(uris)) + note
 
 
