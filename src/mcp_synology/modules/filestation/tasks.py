@@ -707,17 +707,16 @@ def _generic_final(handle: Handle, status: dict[str, Any]) -> str:
     )
 
     lines = [f"{handle.kind.capitalize()} finished: {done}."]
-    failed: list[tuple[str, int]] = []
+    # Codes kept as DSM sent them: this report has to survive any status (QA r1 on #366).
+    failed: list[tuple[str, object]] = []
     error = status.get("error")
     if error:
         code = error.get("code", 0) if isinstance(error, dict) else error
-        failed.append((str(status.get("path") or "task"), int(code)))
+        failed.append((str(status.get("path") or "task"), code))
     errors = status.get("errors")
     if isinstance(errors, list):
         failed.extend(
-            (str(e.get("path") or "item"), int(e.get("code", 0)))
-            for e in errors
-            if isinstance(e, dict)
+            (str(e.get("path") or "item"), e.get("code", 0)) for e in errors if isinstance(e, dict)
         )
     if failed:
         text = "; ".join(f"{p} ({_code_text(c)})" for p, c in failed)

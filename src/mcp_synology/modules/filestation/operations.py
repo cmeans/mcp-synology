@@ -41,6 +41,8 @@ from mcp_synology.modules.filestation.tasks import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from mcp_synology.core.client import DsmClient
 
 logger = logging.getLogger(__name__)
@@ -313,15 +315,21 @@ async def _copy_move_one_path(
     return _copy_move_result(result.status, path, operation, done, dest=dest)
 
 
-def _code_text(code: int) -> str:
-    """``DSM error 415: Disk quota exceeded``, or just the code when it isn't known."""
-    known = FILESTATION_ERROR_CODES.get(code)
+def _code_text(code: object) -> str:
+    """``DSM error 415: Disk quota exceeded``, or just the code when it isn't known.
+
+    Takes whatever a status holds: a code that isn't a number is shown as it is.
+    """
+    try:
+        known = FILESTATION_ERROR_CODES.get(int(code))  # type: ignore[call-overload]
+    except (TypeError, ValueError):
+        known = None
     return f"DSM error {code}: {known[0]}" if known else f"DSM error {code}"
 
 
 def _partial_note(
     status: dict[str, Any],
-    failed: list[tuple[str, int]],
+    failed: Sequence[tuple[str, object]],
     operation: str,
     source: str | None,
     dest: str | None,

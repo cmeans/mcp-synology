@@ -1446,6 +1446,30 @@ class TestFileTask:
 
     @respx.mock
     @pytest.mark.parametrize(
+        ("code", "shown"),
+        [(None, "DSM error None"), ("x", "DSM error x"), ("415", "DSM error 415: Disk quota")],
+    )
+    @pytest.mark.parametrize("single", [True, False])
+    async def test_file_task_generic_report_takes_any_code(
+        self, mock_client: DsmClient, code: Any, shown: str, single: bool
+    ) -> None:
+        """No record: the report must survive whatever DSM puts in the code (QA r1 on #366)."""
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        failure: dict[str, Any] = (
+            {"error": {"code": code}, "path": "/w/big"}
+            if single
+            else {"errors": [{"code": code, "path": "/w/big"}]}
+        )
+        finished = {**MOVE_FINISHED, **failure}
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=_router({"status": _ok(finished)})
+        )
+        text = await file_task(mock_client, records=TaskRecords(), handle="copy:FileStation_C9")
+        assert f"/w/big ({shown}" in text
+
+    @respx.mock
+    @pytest.mark.parametrize(
         ("method", "action"), [("status", "status"), ("stop", "stop"), ("list", "status")]
     )
     async def test_file_task_other_dsm_errors_raise(
