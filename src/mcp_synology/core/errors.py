@@ -355,6 +355,10 @@ FILESTATION_ERROR_CODES: dict[int, tuple[str, str]] = {
         "Unsupported target filesystem",
         "The destination filesystem does not support this operation.",
     ),
+    1200: (
+        "The path may not exist, or the new name may already be taken in that folder",
+        "Check both with list_files, then retry.",
+    ),
     1800: ("Disk quota exceeded during upload", "Free space or contact NAS administrator."),
     1801: ("No permission to upload", "Check DSM shared folder write permissions."),
     1802: ("Upload error", "Check the destination path and disk space."),

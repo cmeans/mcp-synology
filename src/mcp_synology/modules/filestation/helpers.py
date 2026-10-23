@@ -458,6 +458,24 @@ async def find_missing_paths(client: DsmClient, paths: list[str]) -> list[tuple[
     return missing
 
 
+async def path_exists(client: DsmClient, path: str) -> bool | None:
+    """One ``getinfo``: True when DSM shows the path, False when it answers 408 for it.
+
+    None when the answer shows neither (no entry, or another code such as 407). A failed
+    request raises for the caller to handle.
+    """
+    version = min(2, client.negotiate_version("SYNO.FileStation.List", max_version=2))
+    data = await client.request(
+        "SYNO.FileStation.List", "getinfo", version=version, params={"path": path}
+    )
+    for entry in data.get("files", []):
+        if entry.get("code") == 408:
+            return False
+        if isinstance(entry.get("isdir"), bool):
+            return True
+    return None
+
+
 async def paths_isdir(client: DsmClient, paths: list[str]) -> dict[str, bool]:
     """Return ``{path: isdir}`` for each path whose type ``getinfo`` reports.
 
