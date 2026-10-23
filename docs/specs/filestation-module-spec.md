@@ -359,6 +359,7 @@ List contents of a shared folder's recycle bin.
 | `sort_by` | `str` | No | `"mtime"` | Sort field. `mtime` is the file's own modified time, kept when it went into the bin, **not** the deletion time. `ctime` (alias `changed`) changes when the file is moved into the bin, so it's the closest to a deletion time, but any later metadata change updates it too. |
 | `sort_direction` | `str` | No | `"desc"` | Sort direction. Default: descending. |
 | `limit` | `int` | No | `100` | Max items to return. |
+| `offset` | `int` | No | `0` | Items to skip, for the next page: the reply's "Use offset=N to see more" names it. With `pattern`, it skips that many matches. |
 
 **Response shape:**
 
