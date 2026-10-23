@@ -351,10 +351,12 @@ async def list_recycle_bin(
     sort_by: str = "mtime",
     sort_direction: str = "desc",
     limit: int = 100,
+    offset: int = 0,
     file_type_indicator: str = "emoji",
     recycle_bin_status: dict[str, bool] | None = None,
 ) -> str:
     """List contents of a shared folder's recycle bin."""
+    offset = max(0, offset)  # a negative slice would page from the end
     # Normalize share name
     share_name = share.strip("/").split("/")[0]
 
@@ -379,6 +381,7 @@ async def list_recycle_bin(
                 sort_by=sort_by,
                 sort_direction=sort_direction,
                 limit=limit,
+                offset=offset,
                 file_type_indicator=file_type_indicator,
             )
             if recycle_bin_status is not None:
@@ -393,6 +396,7 @@ async def list_recycle_bin(
             sort_by=sort_by,
             sort_direction=sort_direction,
             limit=limit,
+            offset=offset,
             hide_recycle=False,
             file_type_indicator=file_type_indicator,
         )
@@ -439,6 +443,7 @@ async def _search_recycle_bin(
     sort_by: str,
     sort_direction: str,
     limit: int,
+    offset: int,
     file_type_indicator: str,
 ) -> str:
     """Find ``pattern`` anywhere in a recycle bin: subfolders included, paths in the bin.
@@ -462,12 +467,12 @@ async def _search_recycle_bin(
             break
         folders += 1
         folder = f"{recycle_path}/{folder_rel}" if folder_rel else recycle_path
-        offset = 0
+        listed = 0
         while True:
             params = {
                 "folder_path": folder,
                 "additional": _FILE_FIELDS,
-                "offset": str(offset),
+                "offset": str(listed),
                 "limit": str(_WALK_PAGE),
             }
             try:
@@ -489,8 +494,8 @@ async def _search_recycle_bin(
                     found.append((rel, f))
                 if f.get("isdir"):
                     queue.append(rel)
-            offset += len(page)
-            if stopped or not page or offset >= int(data.get("total", 0)):
+            listed += len(page)
+            if stopped or not page or listed >= int(data.get("total", 0)):
                 break
 
     resolved = _resolve_sort_by(sort_by)
@@ -511,7 +516,8 @@ async def _search_recycle_bin(
         return int(add.get("time", {}).get(key, 0))
 
     found.sort(key=sort_value, reverse=sort_direction == "desc")
-    shown = found[:limit]
+    # limit 0 or less lists every match, as DSM's limit=0 lists a whole folder.
+    shown = found[offset : offset + limit] if limit > 0 else found[offset:]
     title = (
         f'Matches for "{pattern}" in {recycle_path} ({len(found)} found in '
         f"{folders} folder(s), subfolders included)"
@@ -534,8 +540,12 @@ async def _search_recycle_bin(
         headers=["Type", "Path in bin", "Size", "Modified"], rows=rows, title=title
     )
     notes = [fallback] if fallback else []
-    if len(found) > len(shown):
-        notes.append(f"Showing {len(shown)} of {len(found)} matches (limit={limit}).")
+    if found and offset >= len(found):
+        notes.append(f"No matches from offset={offset}: there are {len(found)}.")
+    elif len(found) > len(shown):
+        end = offset + len(shown)
+        more = f" Use offset={end} to see more." if end < len(found) else ""
+        notes.append(f"Showing {offset + 1}–{end} of {len(found)} matches.{more}")
     if found:
         notes.append("Paths are relative to the recycle bin, as a restore takes them.")
     if unreadable:

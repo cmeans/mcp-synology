@@ -458,6 +458,7 @@ def register(ctx: RegisterContext) -> None:
             sort_by: str = "mtime",
             sort_direction: str = "desc",
             limit: int = 100,
+            offset: int = 0,
         ) -> str:
             client = await _fs_client()
             [share] = await ensure_known_shares(client, [share], known_shares)
@@ -469,6 +470,7 @@ def register(ctx: RegisterContext) -> None:
                     sort_by=sort_by,
                     sort_direction=sort_direction,
                     limit=limit,
+                    offset=offset,
                     file_type_indicator=indicator,
                     recycle_bin_status=recycle_status,
                 )
