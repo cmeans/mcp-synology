@@ -346,11 +346,6 @@ FILESTATION_ERROR_CODES: dict[int, tuple[str, str]] = {
         "and file ownership allows the operation. "
         "Files owned by other users (e.g., service accounts) may require admin access.",
     ),
-    1200: (
-        "Failed to rename",
-        "DSM gives this both when the path doesn't exist and when the new name is already "
-        "taken in that folder. Check both with list_files, then retry.",
-    ),
     1100: (
         "Insufficient filesystem permissions",
         "The DSM user does not have write access to this shared folder. "
@@ -359,6 +354,11 @@ FILESTATION_ERROR_CODES: dict[int, tuple[str, str]] = {
     1101: (
         "Unsupported target filesystem",
         "The destination filesystem does not support this operation.",
+    ),
+    1200: (
+        "Failed to rename",
+        "DSM gives this both when the path doesn't exist and when the new name is already "
+        "taken in that folder. Check both with list_files, then retry.",
     ),
     1800: ("Disk quota exceeded during upload", "Free space or contact NAS administrator."),
     1801: ("No permission to upload", "Check DSM shared folder write permissions."),

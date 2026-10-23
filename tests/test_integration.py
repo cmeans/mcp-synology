@@ -1670,13 +1670,15 @@ class TestErrorHandling:
             await delete_files(client, paths=[base])
 
     async def test_rename_invalid_path(self, nas_client: Any) -> None:
-        """Rename a non-existent path should raise ToolError."""
+        """A path in a share that doesn't exist: DSM's 1200 again, reported as not_found
+        because getinfo answers 408 for it (#188)."""
         client, _, _, _ = _unpack(nas_client)
         with pytest.raises(ToolError) as exc_info:
             await rename(client, path="/zzz_nonexistent_999/fake.txt", new_name="new_name")
-        body = json.loads(str(exc_info.value))
-        assert body["status"] == "error"
         logger.info("rename invalid path raised ToolError: %s", exc_info.value)
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "not_found", error
+        assert "/zzz_nonexistent_999/fake.txt doesn't exist" in error["message"]
 
 
 # ---------------------------------------------------------------------------

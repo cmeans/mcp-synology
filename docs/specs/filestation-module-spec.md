@@ -559,7 +559,7 @@ Rename a file or folder.
 
 **Annotations:** defaults (`destructiveHint=false`). It has no `overwrite` option, and DSM refuses an existing target name (error 1200, both names left intact; verified on DSM 7.1 and 7.2.2), so it never replaces anything (#183).
 
-**DSM's 1200 is told apart (#188).** DSM answers 1200, "Failed to rename", both for a name already taken in that folder and for a source that doesn't exist (vdsm DSM 7.1 and 7.2.2). After a 1200, `getinfo` on the source and on the new path says which: a missing source is `not_found` ("… doesn't exist on the NAS", `param: path`), and a taken name `already_exists` ("… already exists. Rename doesn't replace an existing file or folder.", `param: new_name`). If neither shows, or the check fails, the 1200 is reported with its table message, which names both causes. The check runs only after a failure, so a rename that works costs nothing extra.
+**DSM's 1200 is told apart (#188).** DSM answers 1200, "Failed to rename", both for a name already taken in that folder and for a source that doesn't exist (vdsm DSM 7.1, 7.2.2, 7.3.2 and 7.4.1). After a 1200, `getinfo` says which, and only on positive evidence: a source it reports missing (408) is `not_found` ("… doesn't exist on the NAS", `param: path`), and when it shows both the source and the new path exist, `already_exists` ("… already exists. Rename doesn't replace an existing file or folder.", `param: new_name`). Anything else is reported as the 1200 with its table message, which names both causes: a reply with no entry, another code such as 407, a rename to the item's own name, or a check that fails (a DSM error or no answer at all; logged at WARNING). The check runs only after a failure, so a rename that works costs nothing extra.
 
 **DSM API:** `SYNO.FileStation.Rename` / `rename`
 
@@ -794,6 +794,7 @@ Follow up on, list, or stop a delete, copy, move or restore that was handed off 
 | 419 | Illegal file name | "Invalid file name." | Avoid characters: `/ \\ : * ? " < > \|` |
 | 421 | Device or resource busy | "The file is in use by another process." | Wait and retry. |
 | 599 | No such task | "Background task not found (may have already completed)." | — |
+| 1200 | Failed to rename | "Failed to rename" (from `rename`, told apart into `not_found` or `already_exists` by `getinfo` when it can, #188) | The path may not exist, or the new name may already be taken in that folder: check both with `list_files`, then retry. |
 
 ---
 

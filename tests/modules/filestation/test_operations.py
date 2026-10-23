@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock
 
@@ -181,9 +182,11 @@ class TestRename:
         assert body["error"]["code"] == "invalid_parameter"
 
     @staticmethod
-    def _rename_1200(existing: set[str]) -> object:
+    def _rename_1200(getinfo: dict[str, str]) -> object:
         """DSM answers 1200 both for a missing source and for a name already taken
-        (vdsm 7.1 and 7.2.2, #188); getinfo says which paths exist."""
+        (vdsm 7.1, 7.2.2, 7.3.2 and 7.4.1, #188); getinfo says which. `getinfo` maps a
+        path to its answer: "file", "folder", "missing" (408), "denied" (407), "empty"
+        (no entry), "dsm_error" (a failed request) or "transport" (no answer)."""
 
         def side_effect(request: httpx.Request) -> httpx.Response:
             params = dict(request.url.params)
@@ -191,35 +194,79 @@ class TestRename:
                 return httpx.Response(200, json={"success": False, "error": {"code": 1200}})
             if params.get("method") == "getinfo":
                 path = params["path"]
-                entry = (
-                    {"path": path, "name": path}
-                    if path in existing
-                    else {"code": 408, "path": path}
-                )
-                return httpx.Response(200, json={"success": True, "data": {"files": [entry]}})
+                kind = getinfo[path]
+                if kind == "transport":
+                    raise httpx.ConnectError("connection refused")
+                if kind == "dsm_error":
+                    return httpx.Response(200, json={"success": False, "error": {"code": 401}})
+                entry: dict[str, Any] = {
+                    "file": {"path": path, "name": path, "isdir": False},
+                    "folder": {"path": path, "name": path, "isdir": True},
+                    "missing": {"code": 408, "path": path},
+                    "denied": {"code": 407, "path": path},
+                    "empty": {},
+                }[kind]
+                files = [entry] if entry else []
+                return httpx.Response(200, json={"success": True, "data": {"files": files}})
             return httpx.Response(200, json={"success": True, "data": {}})
 
         return side_effect
 
     @respx.mock
     @pytest.mark.parametrize(
-        ("existing", "code", "says"),
+        ("source", "target", "code", "says"),
         [
-            (set(), "not_found", "/video/a doesn't exist on the NAS"),
-            ({"/video/a", "/video/b"}, "already_exists", "/video/b already exists"),
-            ({"/video/a"}, "filestation_error", "Failed to rename"),
+            ("missing", "missing", "not_found", "/video/a doesn't exist on the NAS"),
+            # A missing source is reported even when the target check would fail.
+            ("missing", "transport", "not_found", "/video/a doesn't exist on the NAS"),
+            ("file", "file", "already_exists", "/video/b already exists"),
+            ("folder", "folder", "already_exists", "/video/b already exists"),
+            ("file", "missing", "filestation_error", "Failed to rename"),
+            # Without positive evidence the new path exists, nothing is claimed.
+            ("file", "empty", "filestation_error", "Failed to rename"),
+            ("file", "denied", "filestation_error", "Failed to rename"),
+            ("denied", "file", "filestation_error", "Failed to rename"),
+            # A failed check still reports DSM's 1200, never the check's own error.
+            ("dsm_error", "file", "filestation_error", "Failed to rename"),
+            ("file", "dsm_error", "filestation_error", "Failed to rename"),
+            ("transport", "file", "filestation_error", "Failed to rename"),
+            ("file", "transport", "filestation_error", "Failed to rename"),
         ],
     )
     async def test_rename_1200_says_why(
-        self, mock_client: DsmClient, existing: set[str], code: str, says: str
+        self, mock_client: DsmClient, source: str, target: str, code: str, says: str
     ) -> None:
-        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._rename_1200(existing))
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._rename_1200({"/video/a": source, "/video/b": target})
+        )
         with pytest.raises(ToolError) as exc_info:
             await rename(mock_client, path="/video/a", new_name="b")
         error = json.loads(str(exc_info.value))["error"]
         assert error["code"] == code, error
         assert says in error["message"] and "1200" in error["message"]
         assert "Unknown error" not in error["message"] and error["suggestion"]
+
+    @respx.mock
+    async def test_rename_1200_to_its_own_name_claims_nothing(self, mock_client: DsmClient) -> None:
+        """The source is the "existing" target, so it's not reported as already taken."""
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._rename_1200({"/video/a": "file"})
+        )
+        with pytest.raises(ToolError) as exc_info:
+            await rename(mock_client, path="/video/a", new_name="a")
+        assert json.loads(str(exc_info.value))["error"]["code"] == "filestation_error"
+
+    @respx.mock
+    async def test_rename_1200_failed_check_is_logged(
+        self, mock_client: DsmClient, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._rename_1200({"/video/a": "transport", "/video/b": "file"})
+        )
+        with caplog.at_level(logging.WARNING), pytest.raises(ToolError):
+            await rename(mock_client, path="/video/a", new_name="b")
+        record = next(r for r in caplog.records if "rename /video/a" in r.getMessage())
+        assert record.levelno == logging.WARNING and record.exc_info
 
 
 class TestCopyFiles:

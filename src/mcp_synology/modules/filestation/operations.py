@@ -97,17 +97,25 @@ async def _explain_rename_1200(client: DsmClient, path: str, new_name: str) -> N
     """Say which of DSM's two causes a rename's 1200 was, when getinfo can tell (#188).
 
     DSM answers 1200 ("Failed to rename") both for a source that doesn't exist and for a
-    name already taken in that folder (vdsm DSM 7.1 and 7.2.2). A missing source is
-    `not_found`; a taken name `already_exists` (rename never replaces, #183). Otherwise
-    this returns, and the caller reports the 1200 with its table message.
+    name already taken in that folder (vdsm DSM 7.1, 7.2.2, 7.3.2 and 7.4.1). A source
+    getinfo reports missing (408) is `not_found`; when getinfo shows both the source and
+    the new path exist, `already_exists` (rename never replaces, #183). Anything else,
+    including a failed check, returns, and the caller reports the 1200 with its table
+    message.
     """
     target = f"{path.rsplit('/', 1)[0]}/{new_name}"
     try:
-        found = await find_missing_paths(client, [path, target])
-    except SynologyError:
+        source_exists = path in await paths_isdir(client, [path])
+        source_missing = not source_exists and any(
+            code == 408 for _, code in await find_missing_paths(client, [path])
+        )
+        # Renaming to its own name: the "existing" target would be the source itself.
+        taken = source_exists and target != path and target in await paths_isdir(client, [target])
+    except Exception:
+        # Only a diagnostic: whatever it hits, DSM's own 1200 is still the answer.
+        logger.warning("Couldn't check why DSM refused to rename %s (1200)", path, exc_info=True)
         return
-    missing = {p for p, code in found if code == 408}
-    if path in missing:
+    if source_missing:
         error_response(
             ErrorCode.NOT_FOUND,
             f"Rename failed (DSM error 1200): {path} doesn't exist on the NAS.",
@@ -116,7 +124,7 @@ async def _explain_rename_1200(client: DsmClient, path: str, new_name: str) -> N
             value=path,
             suggestion="Check the path with list_files or search_files, then retry.",
         )
-    if target not in missing and not any(p == target for p, _ in found):
+    if taken:
         error_response(
             ErrorCode.ALREADY_EXISTS,
             f"Rename failed (DSM error 1200): {target} already exists. Rename doesn't "
