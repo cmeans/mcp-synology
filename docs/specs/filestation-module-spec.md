@@ -559,6 +559,8 @@ Rename a file or folder.
 
 **Annotations:** defaults (`destructiveHint=false`). It has no `overwrite` option, and DSM refuses an existing target name (error 1200, both names left intact; verified on DSM 7.1 and 7.2.2), so it never replaces anything (#183).
 
+**DSM's 1200 is told apart (#188).** DSM answers 1200, "Failed to rename", both for a name already taken in that folder and for a source that doesn't exist (vdsm DSM 7.1 and 7.2.2). After a 1200, `getinfo` on the source and on the new path says which: a missing source is `not_found` ("… doesn't exist on the NAS", `param: path`), and a taken name `already_exists` ("… already exists. Rename doesn't replace an existing file or folder.", `param: new_name`). If neither shows, or the check fails, the 1200 is reported with its table message, which names both causes. The check runs only after a failure, so a rename that works costs nothing extra.
+
 **DSM API:** `SYNO.FileStation.Rename` / `rename`
 
 **Tool description (LLM-facing):**

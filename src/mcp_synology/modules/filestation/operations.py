@@ -93,6 +93,41 @@ async def create_folder(
     return "\n".join(lines)
 
 
+async def _explain_rename_1200(client: DsmClient, path: str, new_name: str) -> None:
+    """Say which of DSM's two causes a rename's 1200 was, when getinfo can tell (#188).
+
+    DSM answers 1200 ("Failed to rename") both for a source that doesn't exist and for a
+    name already taken in that folder (vdsm DSM 7.1 and 7.2.2). A missing source is
+    `not_found`; a taken name `already_exists` (rename never replaces, #183). Otherwise
+    this returns, and the caller reports the 1200 with its table message.
+    """
+    target = f"{path.rsplit('/', 1)[0]}/{new_name}"
+    try:
+        found = await find_missing_paths(client, [path, target])
+    except SynologyError:
+        return
+    missing = {p for p, code in found if code == 408}
+    if path in missing:
+        error_response(
+            ErrorCode.NOT_FOUND,
+            f"Rename failed (DSM error 1200): {path} doesn't exist on the NAS.",
+            retryable=False,
+            param="path",
+            value=path,
+            suggestion="Check the path with list_files or search_files, then retry.",
+        )
+    if target not in missing and not any(p == target for p, _ in found):
+        error_response(
+            ErrorCode.ALREADY_EXISTS,
+            f"Rename failed (DSM error 1200): {target} already exists. Rename doesn't "
+            "replace an existing file or folder.",
+            retryable=False,
+            param="new_name",
+            value=new_name,
+            suggestion="Pick another name, or move or delete the existing one first.",
+        )
+
+
 async def rename(
     client: DsmClient,
     *,
@@ -123,6 +158,8 @@ async def rename(
             },
         )
     except SynologyError as e:
+        if e.code == 1200:
+            await _explain_rename_1200(client, normalized, new_name)
         synology_error_response("Rename", e)
 
     files = data.get("files", [])

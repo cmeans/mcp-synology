@@ -180,6 +180,47 @@ class TestRename:
         assert body["status"] == "error"
         assert body["error"]["code"] == "invalid_parameter"
 
+    @staticmethod
+    def _rename_1200(existing: set[str]) -> object:
+        """DSM answers 1200 both for a missing source and for a name already taken
+        (vdsm 7.1 and 7.2.2, #188); getinfo says which paths exist."""
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            if params.get("method") == "rename":
+                return httpx.Response(200, json={"success": False, "error": {"code": 1200}})
+            if params.get("method") == "getinfo":
+                path = params["path"]
+                entry = (
+                    {"path": path, "name": path}
+                    if path in existing
+                    else {"code": 408, "path": path}
+                )
+                return httpx.Response(200, json={"success": True, "data": {"files": [entry]}})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        return side_effect
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        ("existing", "code", "says"),
+        [
+            (set(), "not_found", "/video/a doesn't exist on the NAS"),
+            ({"/video/a", "/video/b"}, "already_exists", "/video/b already exists"),
+            ({"/video/a"}, "filestation_error", "Failed to rename"),
+        ],
+    )
+    async def test_rename_1200_says_why(
+        self, mock_client: DsmClient, existing: set[str], code: str, says: str
+    ) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._rename_1200(existing))
+        with pytest.raises(ToolError) as exc_info:
+            await rename(mock_client, path="/video/a", new_name="b")
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == code, error
+        assert says in error["message"] and "1200" in error["message"]
+        assert "Unknown error" not in error["message"] and error["suggestion"]
+
 
 class TestCopyFiles:
     @respx.mock

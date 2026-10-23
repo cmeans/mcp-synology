@@ -346,6 +346,11 @@ FILESTATION_ERROR_CODES: dict[int, tuple[str, str]] = {
         "and file ownership allows the operation. "
         "Files owned by other users (e.g., service accounts) may require admin access.",
     ),
+    1200: (
+        "Failed to rename",
+        "DSM gives this both when the path doesn't exist and when the new name is already "
+        "taken in that folder. Check both with list_files, then retry.",
+    ),
     1100: (
         "Insufficient filesystem permissions",
         "The DSM user does not have write access to this shared folder. "
