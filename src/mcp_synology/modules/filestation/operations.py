@@ -310,12 +310,7 @@ async def _copy_move_one_path(
         # Left running on the NAS, not stopped (#245): the caller gets a handle.
         stall = result.error if result.outcome == "stalled" else None
         return Handoff(Handle(_KIND[operation], taskid), result.status, stall)
-    return _copy_move_result(result.status, path, operation, done)
-
-
-# Codes a CopyMove task fails with before it has written anything: the source is gone,
-# the destination file exists (overwrite=false) or the destination folder is missing.
-_NOTHING_COPIED = frozenset({408, 414, 1002})
+    return _copy_move_result(result.status, path, operation, done, dest=dest)
 
 
 def _code_text(code: int) -> str:
@@ -324,35 +319,54 @@ def _code_text(code: int) -> str:
     return f"DSM error {code}: {known[0]}" if known else f"DSM error {code}"
 
 
-def _partial_note(status: dict[str, Any], codes: list[int], operation: str) -> str:
-    """Say where a copy that failed part-way may have left part of it.
+def _partial_note(
+    status: dict[str, Any],
+    failed: list[tuple[str, int]],
+    operation: str,
+    source: str | None,
+    dest: str | None,
+) -> str:
+    """Say where a copy, move or restore that failed part-way may have left part of it.
 
     DSM doesn't report how much it wrote before failing: a copy stopped by a quota left
     18 GiB at the destination while its status said `processed_size: 0` (seska, DSM 7.1.1).
+    Left out only when the source itself was gone (408 on that path), since nothing can
+    have been written then; any other failure, a 408 deeper in a folder included, may
+    follow partial writes.
     """
-    dest = status.get("dest_folder_path")
-    if not dest or all(code in _NOTHING_COPIED for code in codes):
+    dest = status.get("dest_folder_path") or dest
+    if not dest or (source and all(c == 408 and p == source for p, c in failed)):
         return ""
     past = _PAST_TENSE.get(operation, "processed")
+    gone = (
+        ", and some of the source items may already be gone"
+        if operation in ("Move", "Restore")
+        else ""
+    )
     return (
-        f". Part of it may already be in {dest}: DSM doesn't say how much was {past} "
-        "before it stopped, so check there before trying again"
+        f". Part of it may already be in {dest}{gone}: DSM doesn't say how much was "
+        f"{past} before it stopped, so check there before trying again"
     )
 
 
 def _copy_move_result(
-    status: dict[str, Any], path: str, operation: str, done: list[str] | None = None
+    status: dict[str, Any],
+    path: str,
+    operation: str,
+    done: list[str] | None = None,
+    *,
+    dest: str | None = None,
 ) -> tuple[int, bool]:
     """``(processed bytes, skipped)`` from a finished CopyMove status; ToolError on failure."""
     if "error" in status:
         err = status["error"]
         err_code = err.get("code", 0) if isinstance(err, dict) else err
-        err_path = status.get("path", path)
+        err_path = status.get("path") or path
         mapped = error_from_code(err_code, "SYNO.FileStation.CopyMove")
         error_response(
             mapped.error_code,
             f"{operation} files failed: {_code_text(err_code)} on path: {err_path}"
-            + _partial_note(status, [err_code], operation)
+            + _partial_note(status, [(err_path, err_code)], operation, path, dest)
             + _already_done(operation, done),
             retryable=mapped.retryable,
             suggestion=(
@@ -375,7 +389,7 @@ def _copy_move_result(
             mapped.error_code,
             f"{operation} files failed: "
             + "; ".join(f"{p} ({_code_text(code)})" for p, code in failed)
-            + _partial_note(status, [code for _, code in failed], operation)
+            + _partial_note(status, failed, operation, path, dest)
             + _already_done(operation, done),
             retryable=mapped.retryable,
             param="paths",

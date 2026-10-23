@@ -305,7 +305,8 @@ FILESTATION_ERROR_CODES: dict[int, tuple[str, str]] = {
         "Disk quota exceeded",
         "This account's quota on that volume, or the shared folder's quota, is full. Free "
         "space within it, or ask the NAS administrator to raise the quota (DSM > Control "
-        "Panel > User & Group, or Shared Folder).",
+        "Panel > User & Group, or Shared Folder). Before retrying a copy or move, delete "
+        "what it left at the destination, or retry with overwrite=true.",
     ),
     416: ("No space left on device", "Free space on the NAS."),
     418: (

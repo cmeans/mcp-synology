@@ -303,8 +303,10 @@ Fix:
    Quota**. Quotas can fill long before the underlying volume does, and the
    error looks the same.
 3. For local downloads: `df -h` on the destination filesystem.
-4. After freeing space, the operation is safe to retry — `disk_full` is marked
-   `retryable=true` in the error envelope.
+4. After freeing space, the operation can be retried (`disk_full` is marked
+   `retryable=true`), but first delete what a failed copy or move left at the
+   destination, or retry with `overwrite=true`: with `overwrite=false` the retry skips
+   files already there, a half-written one included.
 
 ## timeout
 

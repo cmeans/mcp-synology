@@ -1071,7 +1071,8 @@ class TestFileTask:
         records = TaskRecords()
         text = await file_task(mock_client, records=records, handle="delete:FileStation_D9")
         assert text.startswith("Delete finished: 200,400 items processed.")
-        assert "/s/a/x (DSM error 408)" in text
+        assert "/s/a/x (DSM error 408: No such file or directory)" in text
+        assert "Part of it" not in text  # a delete leaves nothing to find
         rec = records.get(Handle("delete", "FileStation_D9"))
         assert rec is not None
         assert rec.final_status == finished
@@ -1439,7 +1440,8 @@ class TestFileTask:
         )
         text = await file_task(mock_client, records=TaskRecords(), handle="copy:FileStation_C9")
         assert text.startswith("Copy finished: 2 KiB processed.")
-        assert "/s/b/x (DSM error 1002)" in text
+        assert "/s/b/x (DSM error 1002: Destination error during copy/move)" in text
+        assert "Part of it may already be in" in text  # no record: the note errs toward saying it
         assert "skipped" in text
 
     @respx.mock

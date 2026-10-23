@@ -680,7 +680,7 @@ async def _final_text(
             return await _delete_summary(client, record.paths, record.recycle)
         if record.dest is not None:
             operation = handle.kind.capitalize()
-            size, skipped = _copy_move_result(status, path, operation)
+            size, skipped = _copy_move_result(status, path, operation, dest=record.dest)
             text = await _copy_move_summary(
                 client,
                 record.paths,
@@ -701,21 +701,30 @@ def _generic_final(handle: Handle, status: dict[str, Any]) -> str:
         done = f"{int(status.get('processed_num') or 0):,} items processed"
     else:
         done = f"{format_size(int(status.get('processed_size') or 0))} processed"
+    from mcp_synology.modules.filestation.operations import (  # local: operations imports tasks
+        _code_text,
+        _partial_note,
+    )
+
     lines = [f"{handle.kind.capitalize()} finished: {done}."]
-    failed: list[str] = []
+    failed: list[tuple[str, int]] = []
     error = status.get("error")
     if error:
         code = error.get("code", 0) if isinstance(error, dict) else error
-        failed.append(f"{status.get('path') or 'task'} (DSM error {code})")
+        failed.append((str(status.get("path") or "task"), int(code)))
     errors = status.get("errors")
     if isinstance(errors, list):
         failed.extend(
-            f"{e.get('path') or 'item'} (DSM error {e.get('code', 0)})"
+            (str(e.get("path") or "item"), int(e.get("code", 0)))
             for e in errors
             if isinstance(e, dict)
         )
     if failed:
-        lines.append("DSM reported errors: " + "; ".join(failed) + ".")
+        text = "; ".join(f"{p} ({_code_text(c)})" for p, c in failed)
+        if handle.kind != "delete":
+            # No record of the source here, so a 408 can't be told apart: say it anyway.
+            text += _partial_note(status, failed, handle.kind.capitalize(), None, None)
+        lines.append("DSM reported errors: " + text + ".")
     skip = status.get("skipstatus")
     skip_value = skip.get("status") if isinstance(skip, dict) else skip
     if skip_value not in (None, "", "none"):
