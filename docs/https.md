@@ -2,7 +2,7 @@
 
 With plain HTTP, mcp-synology's login (your DSM password) and every request after it, the
 session included, cross the network unencrypted. Anyone who can watch that network can
-read them. DSM already serves HTTPS on port 5001, so turning it on costs nothing.
+read them. DSM already serves HTTPS on port 5001, so turning it on costs nothing but a decision about the certificate (below).
 `mcp-synology setup` picks HTTPS unless you say otherwise, and the server logs a warning
 while HTTPS is off.
 
@@ -35,11 +35,13 @@ trade; the server logs a warning while verification is off.
 3. Point `host` at that name, not the IP address, so the certificate matches.
 4. Make the name resolve to the NAS's **local** address on your network, so traffic stays
    local: a local DNS record (a router or Pi-hole entry), or a hosts-file line on the
-   machine running mcp-synology. If you use Tailscale with MagicDNS, its resolver
-   bypasses your local DNS, so add split DNS for that domain or a hosts-file line.
+   machine running mcp-synology. If you use Tailscale with MagicDNS, its resolver can
+   override your local DNS; add split DNS for that domain, or a hosts-file line.
 
 Check Synology's current documentation for how DSM validates the certificate request; the
-details depend on your DSM version and setup.
+details depend on your DSM version and setup. If validation needs the NAS reachable from
+the internet, that's DSM's Let's Encrypt process, separate from mcp-synology, which never
+needs it.
 
 **Never port-forward 5001 (or 5000) from the internet to the NAS** to make any of this
 work. mcp-synology runs on your machine and only needs to reach the NAS on your own network
@@ -51,5 +53,5 @@ work. mcp-synology runs on your machine and only needs to reach the NAS on your 
 verify fails there, with the reason. Without HTTPS, the server's log says:
 
 ```
-HTTPS is disabled. Credentials will be sent in cleartext. Acceptable on a trusted LAN; to turn it on, see docs/https.md.
+HTTPS is disabled. Credentials will be sent in cleartext. Acceptable on a trusted LAN; to turn it on, see https://github.com/cmeans/mcp-synology/blob/main/docs/https.md
 ```

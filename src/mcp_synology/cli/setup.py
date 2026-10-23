@@ -100,7 +100,7 @@ def _setup_interactive(verbose: bool) -> None:
         click.echo(
             click.style(
                 "  Plain HTTP: your DSM password and session cross the network unencrypted. "
-                "Fine on a network you trust; see docs/https.md to switch later.",
+                "Fine on a network you trust. To switch later: https://github.com/cmeans/mcp-synology/blob/main/docs/https.md",
                 fg="yellow",
             )
         )

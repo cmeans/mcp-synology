@@ -262,7 +262,7 @@ def _emit_warnings(config: AppConfig) -> None:
             # A WARNING so client logs show it (#193).
             logger.warning(
                 "HTTPS is disabled. Credentials will be sent in cleartext. "
-                "Acceptable on a trusted LAN; to turn it on, see docs/https.md."
+                "Acceptable on a trusted LAN; to turn it on, see https://github.com/cmeans/mcp-synology/blob/main/docs/https.md"
             )
         if conn.https and not conn.verify_ssl:
             logger.warning(
