@@ -94,7 +94,16 @@ def _setup_interactive(verbose: bool) -> None:
 
     # Prompt for connection details
     host = click.prompt("NAS host (IP or hostname)")
-    use_https = click.confirm("Use HTTPS?", default=False)
+    # HTTPS by default (#193): DSM serves it on 5001 out of the box.
+    use_https = click.confirm("Use HTTPS?", default=True)
+    if not use_https:
+        click.echo(
+            click.style(
+                "  Plain HTTP: your DSM password and session cross the network unencrypted. "
+                "Fine on a network you trust. To switch later: https://github.com/cmeans/mcp-synology/blob/main/docs/https.md",
+                fg="yellow",
+            )
+        )
     permission = click.prompt(
         "File Station permission",
         type=click.Choice(["read", "write"]),
@@ -114,6 +123,11 @@ def _setup_interactive(verbose: bool) -> None:
     conn: dict[str, Any] = {"host": host}
     if use_https:
         conn["https"] = True
+        click.echo(
+            "  DSM's own certificate is self-signed, so verification fails unless you've "
+            "installed a trusted one.\n  Without verification the connection is still "
+            "encrypted, but not protected against a machine impersonating the NAS."
+        )
         conn["verify_ssl"] = click.confirm("Verify SSL certificate?", default=False)
 
     config_dict: dict[str, Any] = {
