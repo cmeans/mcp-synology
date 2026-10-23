@@ -1634,8 +1634,8 @@ class TestErrorHandling:
         self, nas_client: Any, tmp_path: Path
     ) -> None:
         """#183: rename has no overwrite option, so it stays non-destructive only if DSM
-        refuses an existing target name instead of replacing it. DSM answers 1200 (#188
-        tracks the message) for a folder onto a folder and a file onto a file."""
+        refuses an existing target name instead of replacing it. DSM answers 1200 for a
+        folder onto a folder and a file onto a file, reported as already_exists (#188)."""
         client, _, config, paths = _unpack(nas_client)
         _skip_unless_write(config)
         base = f"{paths['writable_folder'].rstrip('/')}/mcp_rename_clash"
@@ -1649,7 +1649,16 @@ class TestErrorHandling:
             for src, new_name in (("a", "b"), ("x.txt", "y.txt")):
                 with pytest.raises(ToolError) as exc_info:
                     await rename(client, path=f"{base}/{src}", new_name=new_name)
-                assert "1200" in json.loads(str(exc_info.value))["error"]["message"], src
+                error = json.loads(str(exc_info.value))["error"]
+                assert error["code"] == "already_exists", (src, error)
+                assert f"{base}/{new_name} already exists" in error["message"], src
+
+            # A source that doesn't exist, in a folder that does: DSM's same 1200 (#188).
+            with pytest.raises(ToolError) as exc_info:
+                await rename(client, path=f"{base}/no-such-file.txt", new_name="z.txt")
+            error = json.loads(str(exc_info.value))["error"]
+            assert error["code"] == "not_found", error
+            assert f"{base}/no-such-file.txt doesn't exist" in error["message"]
 
             # Both folders, and what's inside each, are untouched.
             await get_file_info(client, paths=[f"{base}/a/keep_a"])
@@ -1661,13 +1670,15 @@ class TestErrorHandling:
             await delete_files(client, paths=[base])
 
     async def test_rename_invalid_path(self, nas_client: Any) -> None:
-        """Rename a non-existent path should raise ToolError."""
+        """A path in a share that doesn't exist: DSM's 1200 again, reported as not_found
+        because getinfo answers 408 for it (#188)."""
         client, _, _, _ = _unpack(nas_client)
         with pytest.raises(ToolError) as exc_info:
             await rename(client, path="/zzz_nonexistent_999/fake.txt", new_name="new_name")
-        body = json.loads(str(exc_info.value))
-        assert body["status"] == "error"
         logger.info("rename invalid path raised ToolError: %s", exc_info.value)
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "not_found", error
+        assert "/zzz_nonexistent_999/fake.txt doesn't exist" in error["message"]
 
 
 # ---------------------------------------------------------------------------
