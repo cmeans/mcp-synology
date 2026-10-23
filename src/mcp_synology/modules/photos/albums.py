@@ -429,6 +429,37 @@ async def photo_share_link(
             )
         passphrase = str(info.get("passphrase") or target.get("passphrase") or "")
         is_shared = bool(target.get("shared"))
+        if action == "update" and (not is_shared or not passphrase):
+            invalid(
+                op,
+                f"album {album_id} isn't shared.",
+                param="action",
+                value=action,
+                suggestion="Use action=share first.",
+            )
+        # Photos keeps a password or an expiry only on a link with public access: with
+        # public "none" (members only included) it answers success and drops them, and
+        # turning public access off clears them (#348). A fresh share starts with public
+        # access off. Checked before set_shared, so a refused share changes nothing.
+        # A share of an album that's already shared is also taken to start at none: whether
+        # set_shared then keeps the old settings isn't verified, and refusing is the safe side.
+        current = "none" if action == "share" else _public_of(info)
+        needs_public = [
+            name
+            for name, given in (("password", bool(password)), ("expires", bool(expiration)))
+            if given
+        ]
+        if needs_public and (public if public is not None else current) == "none":
+            both = len(needs_public) == 2
+            invalid(
+                op,
+                f"{' and '.join(needs_public)} need{'' if both else 's'} public access: "
+                f"Photos drops {'them' if both else 'it'} on a link with public none, "
+                "members only included.",
+                param=needs_public[0],
+                value=expires if needs_public[0] == "expires" else None,
+                suggestion="Pass public=view or public=download too.",
+            )
         if action == "share":
             data = await ph.call(
                 "Sharing.Passphrase",
@@ -437,14 +468,6 @@ async def photo_share_link(
                 personal=True,
             )
             passphrase = str(data.get("passphrase", passphrase))
-        elif not is_shared or not passphrase:
-            invalid(
-                op,
-                f"album {album_id} isn't shared.",
-                param="action",
-                value=action,
-                suggestion="Use action=share first.",
-            )
         update: dict[str, Any] = {"passphrase": passphrase}
         if password is not None:
             update["password"] = password
@@ -457,6 +480,19 @@ async def photo_share_link(
             await ph.call("Sharing.Passphrase", "update", update, personal=True)
         now = await _album_now(ph, album_id)
         lines.append(_share_block(now))
+        if public == "none" and current != "none":
+            after = (now.get("additional") or {}).get("sharing_info") or {}
+            cleared = [
+                name
+                for name, key in (("expiry", "expiration"), ("password", "enable_password"))
+                if info.get(key) and not after.get(key)
+            ]
+            if cleared:
+                lines.append(
+                    f"  Note: turning public access off also cleared the link's "
+                    f"{' and '.join(cleared)} (Photos does this); set them again together "
+                    "with public."
+                )
         if password and ph.client._base_url.startswith("http://"):
             lines.append(
                 "  Note: this connection is plain HTTP, so the password crossed the network "
@@ -500,12 +536,17 @@ async def _permission(
     return entries
 
 
-def _share_block(album: dict[str, Any]) -> str:
-    info = (album.get("additional") or {}).get("sharing_info") or {}
+def _public_of(info: dict[str, Any]) -> str:
+    """The link's public access as the tool names it (``none``, ``view``, ``download``)."""
     privacy = str(info.get("privacy_type") or "private")
-    public = {"private": "none", "public-view": "view", "public-download": "download"}.get(
+    return {"private": "none", "public-view": "view", "public-download": "download"}.get(
         privacy, privacy
     )
+
+
+def _share_block(album: dict[str, Any]) -> str:
+    info = (album.get("additional") or {}).get("sharing_info") or {}
+    public = _public_of(info)
     expiration = int(info.get("expiration") or 0)
     expires = "expires never" if not expiration else f"expires {format_timestamp(expiration)}"
     if info.get("is_expired"):
