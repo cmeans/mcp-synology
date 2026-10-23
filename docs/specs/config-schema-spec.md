@@ -325,7 +325,7 @@ At startup, the config is validated with Pydantic. Validation failures produce c
 ### Warnings (server starts, but user is alerted)
 
 - `auth.password` is present in the config file → warn about a plaintext password, recommend keyring. A password from `SYNOLOGY_PASSWORD` gets an env-var variant of the warning instead. `auth.username` alone isn't a secret and gets no warning: a config username with the password in the keyring is the recommended setup (#167)
-- `connection.https` is `false` → warning that credentials are sent in cleartext (acceptable on a trusted LAN, risky otherwise), linking `docs/https.md` (#373; it was info-level). `mcp-synology setup` writes `https: true` unless the user declines
+- `connection.https` is `false` → warning that credentials are sent in cleartext (acceptable on a trusted LAN, risky otherwise), linking `docs/https.md` (#374; it was info-level). `mcp-synology setup` writes `https: true` unless the user declines
 - `connection.verify_ssl` is `false` → warn that SSL verification is disabled
 - A module is listed but `enabled: false` → info-level note (helps users remember they disabled something)
 - Unknown keys within `modules.*.settings`, and unknown module names → warn but don't fail (forward-compatible for module updates). The warning names the key and the valid ones; `serve` logs it and `check` prints it (`server.config_notices`, #368). Before #368 nothing warned: an `allowed_local_paths` typo silently left the Downloads default in force
