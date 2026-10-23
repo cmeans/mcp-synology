@@ -1625,6 +1625,21 @@ class TestPayloadBudget:
         )
 
 
+class TestParameterDescriptions:
+    """Every tool parameter tells the model what it is (#247): the description is the
+    only place a model learns a parameter's format, values and default meaning."""
+
+    async def test_every_parameter_has_a_description(self) -> None:
+        tools, _ = await _served(create_server(make_test_config(modules=ALL_MODULES)))
+        missing = [
+            f"{tool.name}.{name}"
+            for tool in tools
+            for name, schema in tool.input_schema.get("properties", {}).items()
+            if not str(schema.get("description", "")).strip()
+        ]
+        assert not missing, f"parameters without a description: {missing}"
+
+
 class TestLocalPathsNotice:
     """The model is told which local folders upload_file/download_file may use, so it
     picks a path that works instead of discovering the limit from a refusal."""

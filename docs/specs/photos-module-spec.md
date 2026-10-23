@@ -233,13 +233,11 @@ Browse or search items.
 **DSM API:** one of `Browse.Item list` v2 (a single folder, album, person, tag or place), `Browse.Item list_with_filter` v2 (date range, type, rating, favorite, or combinations), `Search.Search list_item` v1 (keyword); the total from the matching `count` / `count_with_filter` / `count_item`
 
 **Tool description (LLM-facing):**
-> List photos and videos in Synology Photos, newest first by default. Narrow by folder, person and
-> tag, plus date range (start_date/end_date, YYYY-MM-DD), type (photo/video), min_rating or favorite
-> (Photos 1.9.1+); or list one album, place or concept (1.9.1+) on its own; or search by keyword
-> (filename and tags). Returns id, filename, taken time, type, size and folder; paged with
-> offset/limit (default 50) with the total. space: personal (default) or shared. Use the ids with
-> the other Photos tools, such as get_photo and download_photos. For files outside Photos, use
-> File Station's list_files when that module is enabled.
+> List or search photos and videos in Synology Photos, newest first by default, with the total.
+> folder, person and tag combine with the date, type, rating and favorite filters; album, place,
+> concept and keyword each work alone. Each row has the item's id, filename, taken time, type, size
+> and folder; pass the ids to get_photo for full details or to download_photos to save the files.
+> For files outside Photos, use File Station's list_files when that module is enabled.
 
 **Parameters:**
 
@@ -250,17 +248,17 @@ Browse or search items.
 | `album` | `str` | No | — | Album ID or unique name (personal only). Can't be combined with other filters. |
 | `person` | `str` | No | — | Person ID or unique name. |
 | `place` | `int` | No | — | Place ID from `list_photo_collections(type="place")`. Can't be combined with other filters. |
-| `tag` | `str` | No | — | Tag name. |
+| `tag` | `str` | No | — | Tag name (any case). |
 | `keyword` | `str` | No | — | Search text. Can't be combined with other filters. |
 | `start_date` | `str` | No | — | `YYYY-MM-DD`, inclusive: the taken time's own date (Photos' times carry no zone). |
 | `end_date` | `str` | No | — | `YYYY-MM-DD`, inclusive: the taken time's own date. |
 | `type` | `str` | No | `"all"` | `all`, `photo` or `video`. |
 | `min_rating` | `int` | No | — | 1–5. |
-| `favorite` | `bool` | No | — | Only favorites. Photos 1.9.1+; on 1.3.4, `not_supported`. |
+| `favorite` | `bool` | No | — | `true`: only favorites (`false` doesn't filter). Photos 1.9.1+; on 1.3.4, `not_supported`. |
 | `concept` | `int` | No | — | Concept ID from `list_photo_collections(type="concept")`. Photos 1.9.1+. Can't be combined with other filters. |
 | `sort_by` | `str` | No | `"taken"` | `taken`, `filename`, `size` or `type` (DSM `takentime`, `filename`, `filesize`, `item_type`). |
 | `sort_direction` | `str` | No | `"desc"` | `asc` or `desc`. |
-| `offset` | `int` | No | `0` | |
+| `offset` | `int` | No | `0` | Entries to skip, for the next page. |
 | `limit` | `int` | No | `50` | 1–500. |
 
 **Response shape:**
@@ -300,11 +298,9 @@ Albums, people, tags, places and folders.
 **DSM API:** by `type`: `Browse.Album list` v2 (+ `Sharing.Misc list_shared_with_me_album` v2 for `shared_with_me`), `Browse.Person list` v1, `Browse.GeneralTag list` v1, `Browse.Geocoding list` v1, `Browse.Concept list` v2 (1.9.1), `Browse.Folder list` v2; totals from each API's `count`
 
 **Tool description (LLM-facing):**
-> List Synology Photos collections with their ids and item counts. type: album (yours, with sharing
-> status), shared_with_me (albums others shared with you), person (people from face recognition;
-> include_hidden for hidden ones), tag, place, concept (things and scenes Photos recognized; 1.9.1+),
-> or folder (subfolders of parent, default the space root). name filters by substring. Paged with offset/limit (default 100). space: personal (default)
-> or shared; albums are personal only.
+> List one type of Synology Photos collection with ids and item counts: albums, albums shared with
+> you, people, tags, places, concepts or folders. Use it to find the ids and names that list_photos
+> filters by. Paged; name narrows the list by substring.
 
 **Parameters:**
 
@@ -315,8 +311,8 @@ Albums, people, tags, places and folders.
 | `name` | `str` | No | — | Case-insensitive substring; applied client-side over all pages. |
 | `parent` | `str` | No | — | `folder` only: parent folder ID or path (default the root). |
 | `include_hidden` | `bool` | No | `false` | `person` and `concept`: `show_hidden` (for people also `show_more`, which adds people with few photos). |
-| `offset` | `int` | No | `0` | |
-| `limit` | `int` | No | `100` | |
+| `offset` | `int` | No | `0` | Entries to skip, for the next page. |
+| `limit` | `int` | No | `100` | 1–1000. |
 
 **Response shape:** a table per type. Albums: id, name, type (`normal`/`condition`), items, shared (privacy type), date range. People: id, name (`(unnamed)` for `""`), items, hidden. Tags: id, name, items. Places: id, name, country, items. Folders: id, path, shared. Concepts: id, name, items, hidden. Every table ends with `N <type>(s) total; showing a–b.`
 
@@ -338,15 +334,16 @@ One or more items in full.
 
 **Tool description (LLM-facing):**
 > Get full details for Synology Photos items by id: filename, folder, taken time, size, resolution,
-> rating, favorite (1.9.1+), description, tags, people, GPS location and address, camera details and the full EXIF
-> table (exif=true). Up to 20 ids. space: personal (default) or shared.
+> rating, favorite (Photos 1.9.1+), description, tags, people, GPS location and address, and camera
+> details, plus the full EXIF table with exif=true. Use it when list_photos' one-line rows aren't
+> enough. IDs that don't exist are listed as not found.
 
 **Parameters:**
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `ids` | `list[int]` | **Yes** | — | Item IDs from `list_photos`. |
-| `space` | `str` | No | `"personal"` | |
+| `ids` | `list[int]` | **Yes** | — | Item IDs from `list_photos`; 1–20. |
+| `space` | `str` | No | `"personal"` | `personal` or `shared`. |
 | `exif` | `bool` | No | `false` | Adds `get_exif`'s full key/value list (one call per item). |
 
 **Response shape:** one block per item, then a line per ID not found.
@@ -388,20 +385,20 @@ Originals or thumbnails to a local folder.
 **DSM API:** `Download download` v1 (`item_id: [id]`, `force_download: true`) for originals; `Thumbnail get` v2 (`id` = the thumbnail's `unit_id`, `cache_key`, `type: "unit"`, `size`) for previews
 
 **Tool description (LLM-facing):**
-> Download Synology Photos items to a local folder by id: the original file, or a JPEG preview
-> (size xl ~1280px, m ~320px, sm ~240px). Only writes inside the allowed local folders, and never
-> overwrites unless overwrite=true. Up to 50 ids. space: personal (default) or shared. For files
-> outside Photos, use File Station's download_file when that module is enabled.
+> Download Synology Photos items by id to a folder on this machine: the original files or JPEG
+> previews, one file per item, named after the original. Only writes inside the allowed local
+> folders, and never replaces an existing file unless overwrite=true. For files outside Photos, use
+> File Station's download_file when that module is enabled.
 
 **Parameters:**
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `ids` | `list[int]` | **Yes** | — | |
-| `dest_folder` | `str` | No | — | Local folder, inside the allowed local folders (#257). Default: the allowed folder, when there's exactly one (Photos has no `default_download_dir`). |
+| `ids` | `list[int]` | **Yes** | — | Item IDs from `list_photos`; 1–50. |
+| `dest_folder` | `str` | No | — | An existing local folder, inside the allowed local folders (#257). Default: the allowed folder, when there's exactly one (Photos has no `default_download_dir`). |
 | `size` | `str` | No | `"original"` | `original`, `xl`, `m` or `sm`. |
-| `space` | `str` | No | `"personal"` | |
-| `overwrite` | `bool` | No | `false` | |
+| `space` | `str` | No | `"personal"` | `personal` or `shared`. |
+| `overwrite` | `bool` | No | `false` | Replace a local file with the same name; otherwise that item is skipped and the reply says so. |
 
 **Annotations:** READ tier (it only reads the NAS), but `readOnlyHint=false`, `destructiveHint=true`, as `download_file`: it writes, and with `overwrite=true` replaces, files on this machine.
 
@@ -433,18 +430,17 @@ Downloaded 2 of 3 item(s) to /home/user/Downloads (original, personal space)
 **DSM API:** `Upload.Item upload_to_folder` v1 (multipart: `file`, `duplicate`, `name`, `mtime`, `target_folder_id`); optional `NormalAlbum add_item` v1
 
 **Tool description (LLM-facing):**
-> Upload local photos or videos into a Synology Photos folder (default the space root). on_duplicate:
-> rename (default, keeps both) or skip. Optionally add them to an existing album (create it first
-> with photo_album). Only reads files inside the allowed local folders. Photos indexes new items over
-> the next seconds to minutes. space: personal (default) or shared.
+> Upload photos or videos from this machine into a Synology Photos folder, optionally adding them to
+> an existing album. Only reads files inside the allowed local folders. Photos indexes new items
+> over the next seconds to minutes; until then their taken dates and previews may be missing.
 
 **Parameters:**
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `local_paths` | `list[str]` | **Yes** | — | Files, inside the allowed local folders. |
+| `local_paths` | `list[str]` | **Yes** | — | 1–50 files (not folders), inside the allowed local folders. |
 | `folder` | `str` | No | `"/"` | Folder ID or path in the space; must exist. |
-| `space` | `str` | No | `"personal"` | |
+| `space` | `str` | No | `"personal"` | `personal` or `shared`. |
 | `on_duplicate` | `str` | No | `"rename"` | `rename` or `skip` (DSM `duplicate`: `rename` / `ignore`). |
 | `album` | `str` | No | — | Album ID or unique name to add the uploads to (personal only). It must already exist; a missing one is `not_found` before any file is uploaded. |
 
@@ -478,10 +474,10 @@ Photos indexes new items over the next seconds to minutes; taken dates and previ
 **DSM API:** `NormalAlbum create|add_item|delete_item|copy` v1; `Album set_name|set_cover` v1; `ConditionAlbum create|set_condition` v2 (+ `peek_item_count` v2)
 
 **Tool description (LLM-facing):**
-> Create or change a Synology Photos album. action: create (optionally with item ids), rename, add
-> or remove items (the photos stay in their folders), set_cover, copy, create_smart or set_condition
-> (a smart album that fills itself from folder, people, tags, places, dates, type and rating
-> conditions). Personal space albums only. To delete albums use delete_photo_albums.
+> Create or change a Synology Photos album: create one (normal, or smart: filled automatically from
+> a condition), rename it, add or remove items, set its cover, copy it, or replace a smart album's
+> condition. The photos themselves never move. Personal space albums only. To delete albums use
+> delete_photo_albums; to share one, photo_share_link.
 
 **Parameters:**
 
@@ -490,7 +486,7 @@ Photos indexes new items over the next seconds to minutes; taken dates and previ
 | `action` | `str` | **Yes** | — | `create`, `rename`, `add`, `remove`, `set_cover`, `copy`, `create_smart` or `set_condition`. |
 | `album` | `str` | No | — | Album ID or unique name (all actions except `create`/`create_smart`). |
 | `name` | `str` | No | — | New name (`create`, `create_smart`, `rename`, `copy`). |
-| `ids` | `list[int]` | No | — | Items (`create`, `add`, `remove`); one for `set_cover`. |
+| `ids` | `list[int]` | No | — | Personal space items from `list_photos` (`create`, `add`, `remove`); exactly one for `set_cover`. |
 | `condition` | `dict` | No | — | `create_smart` / `set_condition`; see design notes. |
 
 **Annotations:** `destructiveHint=true`: `remove`, `rename` and `set_condition` replace what the album held, and annotations can't depend on `action` (#183).
@@ -520,22 +516,21 @@ Album 9: Trip 2024 · normal · 2 item(s) · 2024-07-04 – 2024-07-06 · not sh
 **DSM API:** `Sharing.Passphrase set_shared` v1 (`policy: "album"`, `album_id`, `enabled`), `update` v1 (`passphrase`, `password`, `expiration`, `permission`), `get_permission` v1; `Sharing.Misc list_user_group` v1
 
 **Tool description (LLM-facing):**
-> Share a Synology Photos album by link, change its link settings, or stop sharing. action: share
-> (returns the link), update or stop. public: none, view or download; password (empty string
-> removes it); expires (YYYY-MM-DD: end of that day UTC; a date-time with offset; or never);
-> setting a password or an expiry needs public view or download; users/groups with view, download
-> or upload roles. Personal space albums only.
+> Share a Synology Photos album by link, change the link's public access, password, expiry and
+> members, or stop sharing. A password or an expiry needs public view or download: Photos drops them
+> on a link without public access, so they're refused there. Stopping keeps the link, and sharing
+> again brings it back with its settings reset. Personal space albums only.
 
 **Parameters:**
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `action` | `str` | **Yes** | — | `share`, `update` or `stop`. |
+| `action` | `str` | **Yes** | — | `share` (public access starts at `none` unless `public` is given), `update` (an album already shared) or `stop` (takes no settings). |
 | `album` | `str` | **Yes** | — | Album ID or unique name. |
-| `public` | `str` | No | — | `none`, `view` or `download` (DSM privacy `private` / `public-view` / `public-download`). |
+| `public` | `str` | No | — | `none`, `view` or `download` (DSM privacy `private` / `public-view` / `public-download`). `none` also clears the password and expiry (#348). |
 | `password` | `str` | No | — | Set; `""` removes. Setting a password needs public `view` or `download` after the call, or it's refused: Photos drops a password on a link with no public access (#348). |
 | `expires` | `str` | No | — | `YYYY-MM-DD` (end of that day UTC), an ISO 8601 date-time with an offset or `Z` (that instant; without an offset it's refused, since it names no instant), or `never` (`0`). The expiration is a real UTC instant (see Formatting). A value at or before 1970-01-01 is refused: 0 is DSM's `never`, and DSM's handling of an earlier instant isn't known. An expiry other than `never` needs public `view` or `download` after the call, or it's refused: Photos drops an expiry on a link with no public access (#348). |
-| `members` | `list[dict]` | No | — | `{name, type: user|group, role: view|download|upload|none}`; `none` removes. Names resolved with `list_user_group`. |
+| `members` | `list[dict]` | No | — | `{name, type: user|group, role: view|download|upload|none}` (`type` default `user`, `role` default `view`); `none` removes. Names resolved with `list_user_group`. |
 
 **Annotations:** `destructiveHint=true`: `stop` and `update` replace the link's settings (an old password or public access is gone).
 
@@ -567,11 +562,10 @@ Album 9 "Trip 2024" is shared.
 **DSM API:** `Browse.Folder create` v1 (`target_id`, `name`), `rename` v1 (`id`, `name`), `set_cover` v2 (`id`, `id_item: [..]`; verified on both, `qa1_folder-set-cover`)
 
 **Tool description (LLM-facing):**
-> Create or rename a folder in Synology Photos, or set its cover photo. action: create (name inside
-> parent, default the space root), rename or set_cover. space: personal (default) or shared. To copy
-> or move folders use copy_photos / move_photos; to delete, delete_photo_folders. For folders
-> outside Photos, use File Station's create_folder and rename when File Station write is enabled,
-> or ask the user to do it in DSM.
+> Create or rename a folder in Synology Photos, or set its cover photo. A name the parent folder
+> already has is refused. To copy or move folders use copy_photos / move_photos; to delete,
+> delete_photo_folders. For folders outside Photos, use File Station's create_folder and rename when
+> File Station write is enabled, or ask the user to do it in DSM.
 
 **Parameters:**
 
@@ -579,10 +573,10 @@ Album 9 "Trip 2024" is shared.
 |------|------|----------|---------|-------------|
 | `action` | `str` | **Yes** | — | `create`, `rename` or `set_cover`. |
 | `folder` | `str` | No | — | Folder ID or path (`rename`, `set_cover`). |
-| `parent` | `str` | No | `"/"` | `create` only. |
+| `parent` | `str` | No | `"/"` | `create` only: parent folder ID or path. |
 | `name` | `str` | No | — | New leaf name (`create`, `rename`). |
 | `item_id` | `int` | No | — | `set_cover`. |
-| `space` | `str` | No | `"personal"` | |
+| `space` | `str` | No | `"personal"` | `personal` or `shared`. |
 
 **Annotations:** `destructiveHint=true`, `idempotentHint=true`: `rename` and `set_cover` replace the previous name or cover (as `edit_person`). Photos also refuses a name taken in the parent (641, `already_exists`; verified on both), but a rename still replaces the folder's old name.
 
@@ -599,10 +593,10 @@ Album 9 "Trip 2024" is shared.
 **DSM API:** `BackgroundTask.File copy` v1 (`target_folder_id`, `item_id: [..]`, `folder_id: [..]`, `action`); `BackgroundTask.Info get_status` v1
 
 **Tool description (LLM-facing):**
-> Copy Synology Photos items and/or folders into another folder of the same or the other space.
-> on_conflict: skip (default) or overwrite. Waits up to task_timeout seconds; a longer copy keeps
-> running on the NAS and the reply gives a handle for photo_task. Overwrite replaces files at the
-> destination.
+> Copy Synology Photos items and/or whole folders into another folder, in the same space or the
+> other one. Waits up to the configured task timeout (30 s by default); a longer copy keeps running
+> on the NAS and the reply gives a handle for photo_task. With on_conflict=overwrite it replaces
+> files at the destination.
 
 **Parameters:**
 
@@ -638,9 +632,10 @@ Still running at `task_timeout`: `Still copying on the NAS (2 of 9 processed). H
 **DSM API:** `BackgroundTask.File move` v1; `BackgroundTask.Info get_status` v1
 
 **Tool description (LLM-facing):**
-> Move Synology Photos items and/or folders into another folder of the same or the other space.
-> on_conflict: skip (default) or overwrite. Waits up to task_timeout seconds; a longer move keeps
-> running on the NAS and the reply gives a handle for photo_task. Overwrite replaces files at the
+> Move Synology Photos items and/or whole folders into another folder of the same space, or from the
+> personal space into Shared Space (Photos can't move out of Shared Space: copy, then delete). Waits
+> up to the configured task timeout (30 s by default); a longer move keeps running on the NAS and
+> the reply gives a handle for photo_task. With on_conflict=overwrite it replaces files at the
 > destination.
 
 **Parameters:** (as `copy_photos`)
@@ -650,7 +645,7 @@ Still running at `task_timeout`: `Still copying on the NAS (2 of 9 processed). H
 | `ids` | `list[int]` | No | — | |
 | `folders` | `list[str]` | No | — | |
 | `destination` | `str` | **Yes** | — | |
-| `space` | `str` | No | `"personal"` | |
+| `space` | `str` | No | `"personal"` | `personal` or `shared`. |
 | `dest_space` | `str` | No | — | |
 | `on_conflict` | `str` | No | `"skip"` | |
 
@@ -693,20 +688,19 @@ Still running at `task_timeout`: `Still copying on the NAS (2 of 9 processed). H
 **DSM API:** `Browse.GeneralTag list|create` v1; `Browse.Item add_tag|remove_tag|get_tag` v1 (`id: [..]`, `tag: [..]`)
 
 **Tool description (LLM-facing):**
-> Add or remove tags on Synology Photos items. Tags are given by name; add creates missing tags.
-> Photos writes tags into the original files and re-indexes them, so file dates and sizes change.
-> A tag disappears once no item has it, so to delete a tag remove it from every item that has it
-> (list_photos tag=...); to rename, add the new name to those items, then remove the old one. space:
-> personal (default) or shared.
+> Add or remove tags on Synology Photos items. Photos writes tags into the original files and
+> re-indexes them, so file dates and sizes change. A tag disappears once no item has it, so to
+> delete a tag remove it from every item that has it (list_photos tag=...); to rename, add the new
+> name to those items, then remove the old one.
 
 **Parameters:**
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `action` | `str` | **Yes** | — | `add` or `remove`. |
+| `action` | `str` | **Yes** | — | `add` (creates missing tags) or `remove`. |
 | `ids` | `list[int]` | **Yes** | — | Items. |
-| `tags` | `list[str]` | **Yes** | — | Tag names. |
-| `space` | `str` | No | `"personal"` | |
+| `tags` | `list[str]` | **Yes** | — | Tag names; an exact match wins, else a unique case-insensitive one (several are refused). |
+| `space` | `str` | No | `"personal"` | `personal` or `shared`. |
 
 **Annotations:** `destructiveHint=true`: `remove` takes tags off items (and a tag with no items left disappears).
 
@@ -730,23 +724,22 @@ Photos rewrites tagged files, so their dates and sizes change.
 **DSM API:** `Browse.Item set` v2 (`id: [..]` + `rating` | `description` | `time` | `shift_time` | `rotate_action`); 1.9.1: `Browse.Item set_favorite` v7 (`id: [..]`, `favorite`)
 
 **Tool description (LLM-facing):**
-> Edit Synology Photos items: rating (0-5, 0 clears), description, taken time (set to a local
-> date-time, no zone: an offset is ignored; or shift by hours), rotate (left or right), favorite
-> (Photos 1.9.1+). Applies to every id given.
-> Photos writes these into the original files, so file dates and sizes change. Location can't be
-> edited. space: personal (default) or shared.
+> Edit Synology Photos items: rating, description, taken time (set or shift), rotation and favorite
+> (Photos 1.9.1+). Pass only the fields to change; they apply to every id given. Photos writes these
+> into the original files, so file dates and sizes change. Location can't be edited; for tags use
+> tag_photos.
 
 **Parameters:**
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `ids` | `list[int]` | **Yes** | — | |
-| `space` | `str` | No | `"personal"` | |
+| `ids` | `list[int]` | **Yes** | — | Item IDs from `list_photos`. |
+| `space` | `str` | No | `"personal"` | `personal` or `shared`. |
 | `rating` | `int` | No | — | 0–5; outside that, DSM answers 120 (`reason: condition`, verified). |
 | `description` | `str` | No | — | `""` clears. |
 | `taken_time` | `str` | No | — | ISO 8601 date-time → `time`, as the wall-clock time it names: an offset is dropped, not converted (`10:00+02:00` is stored as 10:00), since Photos keeps no zone. |
-| `shift_hours` | `float` | No | — | → `shift_time` (seconds). |
-| `rotate` | `str` | No | — | `left` (`counter_clockwise`, verified) or `right` (`clockwise`, verified on both). |
+| `shift_hours` | `float` | No | — | → `shift_time` (seconds). Relative: a repeat shifts again. |
+| `rotate` | `str` | No | — | `left` (`counter_clockwise`, verified) or `right` (`clockwise`, verified on both). Relative: a repeat rotates again. |
 | `favorite` | `bool` | No | — | 1.9.1+ (verified set and unset). On 1.3.4, `not_supported`. |
 
 **Annotations:** `destructiveHint=true`: each field replaces the previous value (a description or taken time is lost). Not `idempotentHint`: `shift_hours` and `rotate` are relative, so repeating the call (a client's retry after a timeout, say) shifts the time or rotates again.
@@ -771,9 +764,9 @@ Photos rewrites edited files, so their dates and sizes change.
 **DSM API:** `Browse.Person set` v1 (`id`, `name`), `show` v1 (`id: [..]`, `show`), `set_cover` v1 (`id`, `photo_id`)
 
 **Tool description (LLM-facing):**
-> Change a person (face-recognition group) in Synology Photos: rename (empty name clears it), hide,
-> unhide, or set_cover to one of their photos. Use list_photo_collections type=person for ids. To
-> merge people use merge_people. space: personal (default) or shared.
+> Change one person (a face-recognition group) in Synology Photos: rename them, hide or unhide them
+> in the people list, or set their cover photo. To combine groups that are the same person, use
+> merge_people.
 
 **Parameters:**
 
@@ -781,9 +774,9 @@ Photos rewrites edited files, so their dates and sizes change.
 |------|------|----------|---------|-------------|
 | `action` | `str` | **Yes** | — | `rename`, `hide`, `unhide` or `set_cover`. |
 | `person` | `str` | **Yes** | — | Person ID or unique name. |
-| `name` | `str` | No | — | `rename`. |
+| `name` | `str` | No | — | `rename`; `""` clears it. |
 | `item_id` | `int` | No | — | `set_cover`: a photo of that person. |
-| `space` | `str` | No | `"personal"` | |
+| `space` | `str` | No | `"personal"` | `personal` or `shared`. |
 
 **Annotations:** `destructiveHint=true`, `idempotentHint=true`: `rename` and `set_cover` replace the previous name or cover.
 
@@ -804,10 +797,9 @@ Photos rewrites edited files, so their dates and sizes change.
 **DSM API:** `PhotoRequest create|list|update|delete` v1; `Sharing.Passphrase get_photo_request_info` v1
 
 **Tool description (LLM-facing):**
-> Manage Synology Photos photo requests: links that let others upload into one of your folders.
-> action: create (subject, folder, optional description, size limit in MiB, expires: YYYY-MM-DD
-> for the end of that day UTC, a date-time with offset, or never), list, update or delete.
-> Returns the request link.
+> Manage Synology Photos photo requests: links that let anyone with the link upload files into one
+> of your Photos folders. action: create (returns the link), list (every request with its passphrase
+> and link), update, or delete (its link stops working).
 
 **Parameters:**
 
@@ -815,12 +807,12 @@ Photos rewrites edited files, so their dates and sizes change.
 |------|------|----------|---------|-------------|
 | `action` | `str` | **Yes** | — | `create`, `list`, `update` or `delete`. |
 | `request` | `str` | No | — | The request's passphrase (from `list`) for `update`/`delete`. |
-| `subject` | `str` | No | — | |
-| `description` | `str` | No | — | |
-| `folder` | `str` | No | — | Destination path (`folder_home_path`). |
-| `space` | `str` | No | `"personal"` | `library`: `personal_space` / `shared_space`. |
-| `max_file_mib` | `int` | No | — | `filesize_limit` in bytes; `0` none. |
-| `expires` | `str` | No | — | As for `photo_share_link`: `YYYY-MM-DD` (end of that day UTC), a date-time with an offset or `Z`, or `never`. |
+| `subject` | `str` | No | — | Required for `create`. |
+| `description` | `str` | No | — | Optional note. |
+| `folder` | `str` | No | — | Destination path (`folder_home_path`), not an ID; it must exist. Required for `create`. |
+| `space` | `str` | No | `"personal"` | Library of `folder` (`library`: `personal_space` / `shared_space`); used only with `folder`. |
+| `max_file_mib` | `int` | No | — | `filesize_limit` in bytes; `0` none (`create`'s default). |
+| `expires` | `str` | No | — | As for `photo_share_link`: `YYYY-MM-DD` (end of that day UTC), a date-time with an offset or `Z`, or `never` (`create`'s default). |
 
 **Annotations:** `destructiveHint=true`: `delete` removes a request whose link others may hold, and `update` replaces its settings.
 
@@ -845,8 +837,10 @@ Photo request "mcp spec" → /Trips/2024 (personal space)
 **DSM API:** `Browse.Person merge` v2 (`target_id`, `merged_id: [..]`, `name`)
 
 **Tool description (LLM-facing):**
-> Merge people (face-recognition groups) in Synology Photos into one person, keeping the target's
-> id and the given name. This can't be undone. space: personal (default) or shared.
+> Merge people (face-recognition groups) in Synology Photos that are the same person: every person
+> in merge joins target, which keeps its id, and the merged people are gone. If any person isn't
+> found, nothing is merged. This can't be undone, so confirm with the user first. To rename or hide
+> one person, use edit_person.
 
 **Parameters:**
 
@@ -855,7 +849,7 @@ Photo request "mcp spec" → /Trips/2024 (personal space)
 | `target` | `str` | **Yes** | — | Person ID or unique name to keep. |
 | `merge` | `list[str]` | **Yes** | — | Person IDs or unique names merged into the target. |
 | `name` | `str` | No | — | Name after the merge; default the target's. |
-| `space` | `str` | No | `"personal"` | |
+| `space` | `str` | No | `"personal"` | `personal` or `shared`. |
 
 **Annotations:** `destructiveHint=true` (irreversible).
 
@@ -873,16 +867,16 @@ Photo request "mcp spec" → /Trips/2024 (personal space)
 
 **Tool description (LLM-facing):**
 > Delete Synology Photos items (the files themselves) by id. They go to the recycle bin of the share
-> that holds the space if it has one, otherwise they're gone. A large delete keeps running on the NAS
-> and the reply gives a handle for photo_task. Confirm with the user first.
-> space: personal (default) or shared. To only take items out of an album, use photo_album remove.
+> that holds the space if it has one, otherwise they're gone. A large delete keeps running on the
+> NAS and the reply gives a handle for photo_task. Confirm with the user first. To only take items
+> out of an album, use photo_album remove.
 
 **Parameters:**
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `ids` | `list[int]` | **Yes** | — | |
-| `space` | `str` | No | `"personal"` | |
+| `ids` | `list[int]` | **Yes** | — | Item IDs from `list_photos`. |
+| `space` | `str` | No | `"personal"` | `personal` or `shared`. |
 
 **Annotations:** `destructiveHint=true`.
 
@@ -900,16 +894,16 @@ Photo request "mcp spec" → /Trips/2024 (personal space)
 
 **Tool description (LLM-facing):**
 > Delete folders in Synology Photos with everything in them (files and subfolders). They go to the
-> recycle bin of the share that holds the space if it has one, otherwise they're gone. A large delete
-> keeps running on the NAS and the reply gives a handle for photo_task. Confirm with the user first.
-> space: personal (default) or shared.
+> recycle bin of the share that holds the space if it has one, otherwise they're gone. A large
+> delete keeps running on the NAS and the reply gives a handle for photo_task. Confirm with the user
+> first.
 
 **Parameters:**
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
 | `folders` | `list[str]` | **Yes** | — | Folder IDs or paths. The space root is refused locally. |
-| `space` | `str` | No | `"personal"` | |
+| `space` | `str` | No | `"personal"` | `personal` or `shared`. |
 
 **Annotations:** `destructiveHint=true`.
 
@@ -926,14 +920,16 @@ Photo request "mcp spec" → /Trips/2024 (personal space)
 **DSM API:** `Browse.Album delete` v1 (`id: [..]`)
 
 **Tool description (LLM-facing):**
-> Delete Synology Photos albums (normal or smart) and their share links. The photos themselves stay.
-> Confirm with the user first.
+> Delete Synology Photos albums (normal or smart) and their share links. The photos in them stay
+> where they are, but the albums' selections, conditions and links can't be recovered. Confirm with
+> the user first. To only take items out of an album, use photo_album action=remove; to delete the
+> photos themselves, delete_photos.
 
 **Parameters:**
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `albums` | `list[str]` | **Yes** | — | Album IDs or unique names. |
+| `albums` | `list[str]` | **Yes** | — | Album IDs or unique names; a name several albums share is refused and nothing is deleted. |
 
 **Annotations:** `destructiveHint=true`.
 

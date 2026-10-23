@@ -112,7 +112,10 @@ List all shared folders (top-level mount points) on the NAS.
 **DSM API:** `SYNO.FileStation.List` / `list_share`
 
 **Tool description (LLM-facing):**
-> List all shared folders on the NAS. This is the starting point for file navigation — call this first to discover available paths. Shows each share's volume and that volume's free space (shared by every share on it); for how much space a share uses, call get_dir_size.
+> List all shared folders on the NAS: the top-level folders every file path starts with (`/video`).
+> Call this first to discover paths. Shows each share's volume, that volume's free space (shared by
+> every share on it) and whether its recycle bin is on; for how much space a share uses, call
+> get_dir_size.
 
 **Parameters:**
 
@@ -158,9 +161,11 @@ List files and folders within a given directory path.
 **DSM API:** `SYNO.FileStation.List` / `list`
 
 **Tool description (LLM-facing):**
-> List files and folders in a directory. Supports glob pattern filtering, file type filtering,
-> sorting, and pagination. DSM sorts folders and files separately: ascending lists folders first,
-> descending files first.
+> List the files and folders directly inside one folder (one level; subfolders' contents aren't
+> listed). To find files anywhere below a folder by name, extension, size or date, use search_files.
+> Folders show no size; for a folder's total, use get_dir_size. DSM sorts folders and files
+> separately: ascending lists folders first, descending files first. A long listing is paged, and
+> the reply says which offset is next.
 
 **Parameters:**
 
@@ -172,7 +177,7 @@ List files and folders within a given directory path.
 | `sort_by` | `str` | No | `"name"` | Sort field. Options: `name`, `size`, `user`, `mtime`, `crtime`, `atime`, `ctime`, `type`; aliases `modified`, `date`, `time` (mtime), `created` (crtime), `accessed` (atime), `changed` (ctime), `owner` (user). |
 | `sort_direction` | `str` | No | `"asc"` | Sort direction: `asc` or `desc`. |
 | `offset` | `int` | No | `0` | Starting index for pagination. |
-| `limit` | `int` | No | `200` | Max items to return (API max: 5000). |
+| `limit` | `int` | No | `200` | Max items to return (API max: 5000). `0` returns them all, as DSM's `limit=0` does. |
 
 **Response shape:**
 
@@ -210,7 +215,9 @@ Get detailed metadata for one or more specific files or folders.
 **DSM API:** `SYNO.FileStation.List` / `getinfo`
 
 **Tool description (LLM-facing):**
-> Get detailed metadata for specific files or folders: size, owner, timestamps, permissions, and real path. `additional` optionally picks the DSM fields to fetch: real_path, size, owner, time, perm, type (the file's extension type) and mount_point_type (shown only for a mount point). Default: real_path, size, owner, time, perm. Unknown values are rejected.
+> Get detailed metadata for files or folders whose paths you know: size, owner, timestamps,
+> permissions and real path on the volume. To see what's in a folder, use list_files; for a folder's
+> total size, use get_dir_size. A path that doesn't exist is reported as not found.
 
 **Parameters:**
 
@@ -256,28 +263,26 @@ Search for files by name, type, size, or modification date within a given scope.
 **DSM API:** `SYNO.FileStation.Search` (start → list → stop → clean)
 
 **Tool description (LLM-facing):**
-> Search recursively for files by keyword, extension, size, or modification date. The pattern
-> parameter is a keyword/substring match on filenames (not glob). Use extension for file type
-> filtering (e.g., extension="mkv"). Accepts human-readable sizes like "500MiB". mtime_from / mtime_to
-> accept ISO 8601 ("2026-04-01T12:00:00+00:00"), a calendar date ("YYYY-MM-DD"), or Unix epoch
-> seconds; naive dates are treated as UTC. mtime_from is inclusive and mtime_to exclusive, to the
-> second. For directory contents or sizes, use list_files or get_dir_size instead.
+> Search a folder and everything below it for files and folders by name, extension, size or modified
+> date. For what's in one known folder, use list_files; for how much space a folder uses, use
+> get_dir_size, not a search. With no filter, it returns everything under the folder, up to `limit`.
+> A search that runs out of time returns what it found so far and says so.
 
 **Parameters:**
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
 | `folder_path` | `str` | **Yes** | — | Root folder to search within (e.g., `/video`). |
-| `pattern` | `str` | No | `None` | Filename glob pattern (e.g., `*.mkv`, `*Severance*`). |
+| `pattern` | `str` | No | `None` | Name to look for. A bare word is wrapped as `*word*`, so it matches anywhere in the name (`Severance` finds `Severance.S02E10.mkv`); with `*` or `?` it's sent as a wildcard pattern as is. A pure extension pattern (`*.mkv`) is sent as `extension` instead. |
 | `extension` | `str` | No | `None` | File extension filter (e.g., `mkv`, `srt`). Without the dot. |
 | `filetype` | `str` | No | `"all"` | Filter: `all`, `file`, `dir`. |
 | `size_from` | `str \| int` | No | `None` | Minimum file size. Accepts bytes (int) or human-readable (`"500MiB"`, `"2GiB"`; `"500MB"` means the same). |
 | `size_to` | `str \| int` | No | `None` | Maximum file size. Same format as `size_from`. |
 | `mtime_from` | `str` | No | `None` | Modified at or after this time (ISO 8601, `YYYY-MM-DD` or epoch seconds). Inclusive, in whole seconds: a file modified at exactly this time matches, and one at T+0.9 s counts as T, so it doesn't match `mtime_from=T+1` (DSM 7.2.2 and 7.3.2, #306). |
 | `mtime_to` | `str` | No | `None` | Modified before this time. **Exclusive**: a file modified at exactly this time doesn't match (DSM 7.2.2 and 7.3.2, #306). |
-| `exclude_pattern` | `str` | No | `None` | Glob pattern to exclude from results (e.g., `*.torrent`). Applied client-side after DSM returns results. |
-| `recursive` | `bool` | No | `true` | Search subdirectories. |
-| `limit` | `int` | No | `500` | Max results to return. |
+| `exclude_pattern` | `str` | No | `None` | Glob pattern to exclude from results (e.g., `*.torrent`), case-insensitive. Applied client-side to the (at most `limit`) results DSM returns, so a reply can hold fewer than `limit`. |
+| `recursive` | `bool` | No | `true` | Search subdirectories; `false` searches only `folder_path` itself. |
+| `limit` | `int` | No | `500` | Max results to return. When DSM found more, the reply says so. |
 
 **Response shape:**
 
@@ -298,7 +303,7 @@ Search results in /video (pattern: *Severance*, excluding: *.torrent)
 - **How often DSM loses a task** (DSM 7.2.2 and 7.3.2, #306): 0 of 20 back-to-back searches with the task ID quoted, against 15 and 13 of 20 with it unquoted. That's the #121 cause, and why the tool quotes it.
 - `exclude_pattern` is applied **client-side** because the Synology Search API doesn't support exclusion natively. The response notes how many items were filtered out for transparency.
 - If 0 results, suggest broadening the pattern or checking the folder path.
-- Timeout: 60 seconds. If hit, return partial results with a note.
+- Timeout: `search_timeout` (default `async_timeout`, 120 s). If hit, return the results found so far with a note saying the search timed out.
 
 ---
 
@@ -311,10 +316,11 @@ Calculate the total size of a directory (recursive).
 **DSM API:** `SYNO.FileStation.DirSize` (start → status → stop)
 
 **Tool description (LLM-facing):**
-> Calculate the total size of a directory, including all files and subdirectories. Returns total size,
-> file count, and directory count. This is the best tool for answering 'how much space does X use'
-> questions. Counts only what this DSM user can read: a subfolder it can't read is left out without
-> notice.
+> Calculate the total size of a folder, including everything below it: total size, file count and
+> folder count. This is the tool for 'how much space does X use' questions. Counts only what this
+> DSM user can read: a subfolder it can't read is left out without notice. A very large tree can
+> take minutes, and the call gives up after a timeout (120 s unless the server is configured
+> otherwise).
 
 **Parameters:**
 
@@ -345,10 +351,11 @@ List contents of a shared folder's recycle bin.
 **DSM API:** `SYNO.FileStation.List` / `list` (targeting `/<share>/#recycle/`)
 
 **Tool description (LLM-facing):**
-> List the contents of a shared folder's recycle bin: its recently deleted files. With pattern, it
-> searches the whole bin, subfolders included, and shows paths in the bin. Modified is the file's
-> own time, not when it was deleted; sort_by=ctime is the closest to deletion time. Without pattern,
-> DSM sorts folders and files separately, as in list_files.
+> List what's in one shared folder's recycle bin: the files and folders deleted from that share.
+> list_shares shows which shares have a bin; for files that weren't deleted, use list_files. Without
+> pattern, only the bin's top level is listed, and DSM sorts folders and files separately, as in
+> list_files. With pattern, the whole bin is searched and each match shows its path in the bin.
+> Modified is the file's own time, not when it was deleted.
 
 **Parameters:**
 
@@ -404,18 +411,18 @@ Download a NAS file, or a folder as a ZIP of it, to a local directory on this ma
 **DSM API:** `SYNO.FileStation.Download` / `download` (GET, binary response)
 
 **Tool description (LLM-facing):**
-> Download a NAS file to a local directory on this machine. Provide the NAS file path; a folder
-> downloads as a ZIP of it, saved as <folder>.zip (not a whole shared folder). dest_folder is optional
-> if default_download_dir is configured. Does not overwrite existing local files by default.
+> Download a NAS file to a folder on this machine (where this server runs). A folder downloads as a
+> ZIP of it, saved as `<folder>.zip`; a whole shared folder can't be downloaded. An existing local
+> file is not replaced unless `overwrite` is true.
 
 **Parameters:**
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
 | `path` | `str` | **Yes** | — | NAS file or folder path to download. A share's top level (`/video`) is refused (`invalid_parameter`). |
-| `dest_folder` | `str` | No | `default_download_dir` | Local directory to save the file to. With neither set, `invalid_parameter` (`param: dest_folder`) before any NAS request (#194). |
+| `dest_folder` | `str` | No | `default_download_dir` | Local directory to save the file to, inside the allowed local folders (see Local path confinement). With neither set, `invalid_parameter` (`param: dest_folder`) before any NAS request (#194). |
 | `filename` | `str` | No | `None` | Rename on download (defaults to the NAS filename, or `<folder>.zip` for a folder; a given `filename` is used as is). Must be a plain file name: no `/` or `\`, not `.` or `..`, no NUL, no drive (`D:x`); otherwise `invalid_parameter` before the NAS is contacted. The same rule applies to a name taken from the NAS path. |
-| `overwrite` | `bool` | No | `false` | Replace existing local file (for a folder, the `.zip`). |
+| `overwrite` | `bool` | No | `false` | Replace existing local file (for a folder, the `.zip`). With `false`, an existing name is `already_exists` and the local file is kept. |
 
 **Response shape:**
 
@@ -451,18 +458,18 @@ Upload a local file from this machine to a NAS folder.
 **DSM API:** `SYNO.FileStation.Upload` / `upload` (POST multipart — one of the exceptions to the GET-only rule, with Download Station `Task.create` (#123) and the `SYNO.API.Auth` login (#235); see CLAUDE.md)
 
 **Tool description (LLM-facing):**
-> Upload a local file from this machine to a NAS folder. Provide the local file path. dest_folder is
-> optional if default_upload_dir is configured. Does not overwrite existing NAS files by default.
+> Upload one file from this machine (where this server runs) to a NAS folder; a local folder can't
+> be uploaded. An existing NAS file of the same name is not replaced unless `overwrite` is true.
 
 **Parameters:**
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `local_path` | `str` | **Yes** | — | Local file path on this machine. |
+| `local_path` | `str` | **Yes** | — | Local file path on this machine, inside the allowed local folders (see Local path confinement). A folder is refused (`not_found`: only a file uploads). |
 | `dest_folder` | `str` | No | `default_upload_dir` | NAS destination folder. With neither set, `invalid_parameter` (`param: dest_folder`) before any NAS request (#194). |
 | `filename` | `str` | No | `None` | Rename on upload (defaults to the local filename). |
-| `overwrite` | `bool` | No | `false` | Replace existing NAS file. |
-| `create_parents` | `bool` | No | `true` | Create missing parent directories on the NAS. |
+| `overwrite` | `bool` | No | `false` | Replace existing NAS file. With `false`, an existing name is `already_exists` and the NAS file is kept (see #195 below). |
+| `create_parents` | `bool` | No | `true` | Create `dest_folder` and missing parent directories on the NAS. With `false`, `dest_folder` must already exist. |
 
 **Response shape:**
 
@@ -491,17 +498,21 @@ Restore files from a shared folder's recycle bin.
 **DSM API:** `SYNO.FileStation.CopyMove` / `start` (moving from `#recycle` back out)
 
 **Tool description (LLM-facing):**
-> Restore deleted files from a shared folder's recycle bin to their original location or a specified
-> destination.
+> Restore deleted files or folders from one shared folder's recycle bin. Check what's there first
+> with list_recycle_bin: every path must be in that share's bin, or nothing is restored. Without
+> `dest_folder`, each item goes back to its original folder, which is re-created if it's gone. An
+> item already at the destination is skipped and stays in the bin, unless `overwrite=true`, which
+> replaces the existing one. A long restore keeps running on the NAS and returns a handle for
+> file_task.
 
 **Parameters:**
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `share` | `str` | **Yes** | — | Shared folder name (e.g., `video`). |
-| `paths` | `list[str]` | **Yes** | — | Paths within the recycle bin to restore (relative to `#recycle`, or full paths). |
-| `dest_folder` | `str` | No | `None` | Destination folder. If omitted, restores to original location (inferred from `#recycle` directory structure). |
-| `overwrite` | `bool` | No | `false` | Overwrite if a file already exists at the restore destination. |
+| `share` | `str` | **Yes** | — | Shared folder name (e.g., `video`) or path (`/video`). |
+| `paths` | `list[str]` | **Yes** | — | Paths within the recycle bin to restore: relative to `#recycle`, as `list_recycle_bin` shows them (`Shows/Ep1.mkv`), starting with `#recycle/`, or full (`/video/#recycle/Shows/Ep1.mkv`). Any path not in the bin refuses the whole call before anything moves. |
+| `dest_folder` | `str` | No | `None` | Destination folder; it must exist, and every item goes there flat. If omitted, restores to original location (inferred from `#recycle` directory structure), re-creating it if it's gone. |
+| `overwrite` | `bool` | No | `false` | Overwrite if a file already exists at the restore destination. With `false`, it's skipped and stays in the bin. |
 
 **Response shape:**
 
@@ -532,15 +543,16 @@ Create one or more new folders.
 **DSM API:** `SYNO.FileStation.CreateFolder` / `create`
 
 **Tool description (LLM-facing):**
-> Create one or more new folders. Creates parent directories automatically by default. Idempotent —
-> creating an existing folder succeeds.
+> Create one or more folders, each given as a full path starting with its shared folder (`/video/TV
+> Shows/New Show`). By default (`force_parent=true`), missing folders above it are created too, and
+> a folder that already exists is not an error.
 
 **Parameters:**
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
 | `paths` | `list[str]` | **Yes** | — | Full paths of folders to create (e.g., `["/video/TV Shows/New Show/Season 1"]`). |
-| `force_parent` | `bool` | No | `true` | Create parent directories if they don't exist. |
+| `force_parent` | `bool` | No | `true` | Create parent directories if they don't exist. With `false`, each parent must already exist. |
 
 **Response shape:**
 
@@ -562,15 +574,15 @@ Rename a file or folder.
 **DSM API:** `SYNO.FileStation.Rename` / `rename`
 
 **Tool description (LLM-facing):**
-> Rename a file or folder. Provide the full current path and the new name (just the name, not a full
-> path).
+> Rename a file or folder in place. If the new name is already taken in that folder, DSM refuses and
+> nothing is replaced. To move something to another folder, use move_files.
 
 **Parameters:**
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
 | `path` | `str` | **Yes** | — | Full path to the file or folder to rename. |
-| `new_name` | `str` | **Yes** | — | New name (filename/folder name only, not a full path). |
+| `new_name` | `str` | **Yes** | — | New name (filename/folder name only, not a full path; a `/` is refused with `invalid_parameter`). A name already taken in the folder is refused by DSM (1200) and nothing is replaced. |
 
 **Response shape:**
 
@@ -592,8 +604,11 @@ Copy files or folders to a destination.
 **DSM API:** `SYNO.FileStation.CopyMove` / `start` (with `remove_src=false`)
 
 **Tool description (LLM-facing):**
-> Copy files or folders to a destination folder. Source files remain in place. Set overwrite=true to
-> replace existing files.
+> Copy files or folders into a destination folder; a folder is copied with everything in it, and the
+> sources stay in place. To move instead, use move_files. `dest_folder` must already exist; it isn't
+> created. With `overwrite=false` (default), items already at the destination are skipped and
+> listed, and the rest are copied. If any source is missing, nothing is copied. A long copy keeps
+> running on the NAS and returns a handle for file_task.
 
 **Parameters:**
 
@@ -601,7 +616,7 @@ Copy files or folders to a destination.
 |------|------|----------|---------|-------------|
 | `paths` | `list[str]` | **Yes** | — | Source file/folder paths to copy. |
 | `dest_folder` | `str` | **Yes** | — | Destination folder path (must exist). |
-| `overwrite` | `bool` | No | `false` | Overwrite existing files at destination. |
+| `overwrite` | `bool` | No | `false` | Overwrite existing files at destination. With `false`, items already there are skipped and listed (see Async Operations). |
 
 **Response shape:**
 
@@ -627,8 +642,11 @@ Move files or folders to a new location. **Source files are removed after succes
 **DSM API:** `SYNO.FileStation.CopyMove` / `start` (with `remove_src=true`)
 
 **Tool description (LLM-facing):**
-> Move files or folders to a new location. Source files are REMOVED after transfer. Set overwrite=true
-> to replace existing files.
+> Move files or folders into a destination folder; a folder moves with everything in it, and the
+> sources are removed. To keep the sources, use copy_files. `dest_folder` must already exist; it
+> isn't created. With `overwrite=false` (default), items already at the destination are skipped,
+> listed and left at the source. If any source is missing, nothing is moved. A long move keeps
+> running on the NAS and returns a handle for file_task.
 
 **Parameters:**
 
@@ -636,7 +654,7 @@ Move files or folders to a new location. **Source files are removed after succes
 |------|------|----------|---------|-------------|
 | `paths` | `list[str]` | **Yes** | — | Source file/folder paths to move. |
 | `dest_folder` | `str` | **Yes** | — | Destination folder path (must exist). |
-| `overwrite` | `bool` | No | `false` | Overwrite existing files at destination. |
+| `overwrite` | `bool` | No | `false` | Overwrite existing files at destination. With `false`, items already there are skipped and listed (see Async Operations). |
 
 **Response shape:**
 
@@ -664,15 +682,19 @@ Delete files or folders.
 **DSM API:** `SYNO.FileStation.Delete` / `start` (async) or `delete` (sync)
 
 **Tool description (LLM-facing):**
-> Delete files or folders. If the share has a recycle bin, files can be recovered. Otherwise deletion
-> is permanent, as is deleting inside /<share>/#recycle.
+> Delete files or folders. A folder is deleted with everything in it (`recursive`, default true). On
+> a share with a recycle bin, deleted items go to the bin: list_recycle_bin shows them and
+> restore_from_recycle_bin brings them back. Without a bin, and for anything inside a bin
+> (`/<share>/#recycle`), deletion is permanent. Paths are exact, not wildcard patterns, and if any
+> path is missing nothing is deleted. A long delete keeps running on the NAS and returns a handle
+> for file_task.
 
 **Parameters:**
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `paths` | `list[str]` | **Yes** | — | File/folder paths to delete. |
-| `recursive` | `bool` | No | `true` | Delete non-empty folders recursively. |
+| `paths` | `list[str]` | **Yes** | — | File/folder paths to delete. Exact paths: wildcards aren't expanded, and a missing path refuses the whole call. |
+| `recursive` | `bool` | No | `true` | Delete non-empty folders recursively. With `false`, a folder that isn't empty is refused and left in place. |
 
 **Response shape (recycle bin enabled):**
 

@@ -96,80 +96,76 @@ MODULE_INFO = ModuleInfo(
         ToolInfo(
             name="list_shares",
             description=(
-                "List all shared folders on the NAS. This is the starting point for "
-                "file navigation — call this first to discover available paths. Shows "
-                "each share's volume and that volume's free space (shared by every share "
-                "on it); for how much space a share uses, call get_dir_size."
+                "List all shared folders on the NAS: the top-level folders every file path starts"
+                " with (`/video`). Call this first to discover paths. Shows each share's volume, "
+                "that volume's free space (shared by every share on it) and whether its recycle "
+                "bin is on; for how much space a share uses, call get_dir_size."
             ),
             permission_tier=PermissionTier.READ,
         ),
         ToolInfo(
             name="list_files",
             description=(
-                "List files and folders in a directory. Supports glob pattern filtering, "
-                "file type filtering, sorting, and pagination. DSM sorts folders and files "
-                "separately: ascending lists folders first, descending files first."
+                "List the files and folders directly inside one folder (one level; subfolders' "
+                "contents aren't listed). To find files anywhere below a folder by name, "
+                "extension, size or date, use search_files. Folders show no size; for a folder's "
+                "total, use get_dir_size. DSM sorts folders and files separately: ascending lists"
+                " folders first, descending files first. A long listing is paged, and the reply "
+                "says which offset is next."
             ),
             permission_tier=PermissionTier.READ,
         ),
         ToolInfo(
             name="list_recycle_bin",
             description=(
-                "List the contents of a shared folder's recycle bin: its recently deleted files. "
-                "With pattern, it searches the whole bin, subfolders included, and shows paths "
-                "in the bin. Modified is the file's own time, not when it was deleted; "
-                "sort_by=ctime is the closest to deletion time. Without pattern, DSM sorts "
-                "folders and files separately, as in list_files."
+                "List what's in one shared folder's recycle bin: the files and folders deleted "
+                "from that share. list_shares shows which shares have a bin; for files that "
+                "weren't deleted, use list_files. Without pattern, only the bin's top level is "
+                "listed, and DSM sorts folders and files separately, as in list_files. With "
+                "pattern, the whole bin is searched and each match shows its path in the bin. "
+                "Modified is the file's own time, not when it was deleted."
             ),
             permission_tier=PermissionTier.READ,
         ),
         ToolInfo(
             name="search_files",
             description=(
-                "Search recursively for files by keyword, extension, size, or "
-                "modification date. The pattern parameter is a keyword/substring "
-                "match on filenames (not glob). "
-                'Use extension for file type filtering (e.g., extension="mkv"). '
-                'Accepts human-readable sizes like "500MiB". '
-                'mtime_from / mtime_to accept ISO 8601 ("2026-04-01T12:00:00+00:00"), '
-                'a calendar date ("YYYY-MM-DD"), or Unix epoch seconds; naive dates '
-                "are treated as UTC. mtime_from is inclusive and mtime_to exclusive, to "
-                "the second. "
-                "For directory contents or sizes, use list_files or get_dir_size instead."
+                "Search a folder and everything below it for files and folders by name, "
+                "extension, size or modified date. For what's in one known folder, use "
+                "list_files; for how much space a folder uses, use get_dir_size, not a search. "
+                "With no filter, it returns everything under the folder, up to `limit`. A search "
+                "that runs out of time returns what it found so far and says so."
             ),
             permission_tier=PermissionTier.READ,
         ),
         ToolInfo(
             name="get_file_info",
             description=(
-                "Get detailed metadata for specific files or folders: size, owner, "
-                "timestamps, permissions, and real path. `additional` optionally picks "
-                "the DSM fields to fetch: real_path, size, owner, time, perm, type (the "
-                "file's extension type) and mount_point_type (shown only for a mount "
-                "point). Default: real_path, size, owner, time, perm. Unknown values "
-                "are rejected."
+                "Get detailed metadata for files or folders whose paths you know: size, owner, "
+                "timestamps, permissions and real path on the volume. To see what's in a folder, "
+                "use list_files; for a folder's total size, use get_dir_size. A path that doesn't"
+                " exist is reported as not found."
             ),
             permission_tier=PermissionTier.READ,
         ),
         ToolInfo(
             name="get_dir_size",
             description=(
-                "Calculate the total size of a directory, including all files and "
-                "subdirectories. Returns total size, file count, and directory count. "
-                "This is the best tool for answering 'how much space does X use' questions. "
-                "Counts only what this DSM user can read: a subfolder it can't read is left "
-                "out without notice."
+                "Calculate the total size of a folder, including everything below it: total size,"
+                " file count and folder count. This is the tool for 'how much space does X use' "
+                "questions. Counts only what this DSM user can read: a subfolder it can't read is"
+                " left out without notice. A very large tree can take minutes, and the call gives"
+                " up after a timeout (120 s unless the server is configured otherwise)."
             ),
             permission_tier=PermissionTier.READ,
         ),
         ToolInfo(
             name="download_file",
             description=(
-                "Download a NAS file to a local directory on this machine. "
-                "Provide the NAS file path; a folder downloads as a ZIP of it, saved as "
-                "<folder>.zip (not a whole shared folder). dest_folder is optional if "
-                "default_download_dir is configured. "
-                "Does not overwrite existing local files by default."
+                "Download a NAS file to a folder on this machine (where this server runs). A "
+                "folder downloads as a ZIP of it, saved as `<folder>.zip`; a whole shared folder "
+                "can't be downloaded. An existing local file is not replaced unless `overwrite` "
+                "is true."
             ),
             permission_tier=PermissionTier.READ,
             annotations=_ANNO_LOCAL_WRITE,
@@ -178,8 +174,10 @@ MODULE_INFO = ModuleInfo(
         ToolInfo(
             name="create_folder",
             description=(
-                "Create one or more new folders. Creates parent directories automatically "
-                "by default. Idempotent — creating an existing folder succeeds."
+                "Create one or more folders, each given as a full path starting with its shared "
+                "folder (`/video/TV Shows/New Show`). By default (`force_parent=true`), missing "
+                "folders above it are created too, and a folder that already exists is not an "
+                "error."
             ),
             permission_tier=PermissionTier.WRITE,
             annotations=_ANNO_IDEMPOTENT,
@@ -187,16 +185,21 @@ MODULE_INFO = ModuleInfo(
         ToolInfo(
             name="rename",
             description=(
-                "Rename a file or folder. Provide the full current path and the new name "
-                "(just the name, not a full path)."
+                "Rename a file or folder in place. If the new name is already taken in that "
+                "folder, DSM refuses and nothing is replaced. To move something to another "
+                "folder, use move_files."
             ),
             permission_tier=PermissionTier.WRITE,
         ),
         ToolInfo(
             name="copy_files",
             description=(
-                "Copy files or folders to a destination folder. Source files remain in "
-                "place. Set overwrite=true to replace existing files."
+                "Copy files or folders into a destination folder; a folder is copied with "
+                "everything in it, and the sources stay in place. To move instead, use "
+                "move_files. `dest_folder` must already exist; it isn't created. With "
+                "`overwrite=false` (default), items already at the destination are skipped and "
+                "listed, and the rest are copied. If any source is missing, nothing is copied. A "
+                "long copy keeps running on the NAS and returns a handle for file_task."
             ),
             permission_tier=PermissionTier.WRITE,
             annotations=_ANNO_DESTRUCTIVE,
@@ -204,8 +207,12 @@ MODULE_INFO = ModuleInfo(
         ToolInfo(
             name="move_files",
             description=(
-                "Move files or folders to a new location. Source files are REMOVED after "
-                "transfer. Set overwrite=true to replace existing files."
+                "Move files or folders into a destination folder; a folder moves with everything "
+                "in it, and the sources are removed. To keep the sources, use copy_files. "
+                "`dest_folder` must already exist; it isn't created. With `overwrite=false` "
+                "(default), items already at the destination are skipped, listed and left at the "
+                "source. If any source is missing, nothing is moved. A long move keeps running on"
+                " the NAS and returns a handle for file_task."
             ),
             permission_tier=PermissionTier.WRITE,
             annotations=_ANNO_DESTRUCTIVE,
@@ -213,9 +220,13 @@ MODULE_INFO = ModuleInfo(
         ToolInfo(
             name="delete_files",
             description=(
-                "Delete files or folders. If the share has a recycle bin, files can be "
-                "recovered. Otherwise deletion is permanent, as is deleting inside "
-                "/<share>/#recycle."
+                "Delete files or folders. A folder is deleted with everything in it (`recursive`,"
+                " default true). On a share with a recycle bin, deleted items go to the bin: "
+                "list_recycle_bin shows them and restore_from_recycle_bin brings them back. "
+                "Without a bin, and for anything inside a bin (`/<share>/#recycle`), deletion is "
+                "permanent. Paths are exact, not wildcard patterns, and if any path is missing "
+                "nothing is deleted. A long delete keeps running on the NAS and returns a handle "
+                "for file_task."
             ),
             permission_tier=PermissionTier.WRITE,
             annotations=_ANNO_DESTRUCTIVE,
@@ -223,10 +234,9 @@ MODULE_INFO = ModuleInfo(
         ToolInfo(
             name="upload_file",
             description=(
-                "Upload a local file from this machine to a NAS folder. "
-                "Provide the local file path. dest_folder is optional if "
-                "default_upload_dir is configured. "
-                "Does not overwrite existing NAS files by default."
+                "Upload one file from this machine (where this server runs) to a NAS folder; a "
+                "local folder can't be uploaded. An existing NAS file of the same name is not "
+                "replaced unless `overwrite` is true."
             ),
             permission_tier=PermissionTier.WRITE,
             annotations=_ANNO_DESTRUCTIVE,
@@ -234,8 +244,13 @@ MODULE_INFO = ModuleInfo(
         ToolInfo(
             name="restore_from_recycle_bin",
             description=(
-                "Restore deleted files from a shared folder's recycle bin to their "
-                "original location or a specified destination."
+                "Restore deleted files or folders from one shared folder's recycle bin. Check "
+                "what's there first with list_recycle_bin: every path must be in that share's "
+                "bin, or nothing is restored. Without `dest_folder`, each item goes back to its "
+                "original folder, which is re-created if it's gone. An item already at the "
+                "destination is skipped and stays in the bin, unless `overwrite=true`, which "
+                "replaces the existing one. A long restore keeps running on the NAS and returns a"
+                " handle for file_task."
             ),
             permission_tier=PermissionTier.WRITE,
             annotations=_ANNO_DESTRUCTIVE,
@@ -397,8 +412,16 @@ def register(ctx: RegisterContext) -> None:
             annotations=_tool_annos["list_shares"],
         )
         async def tool_list_shares(
-            sort_by: str = "name",
-            sort_direction: str = "asc",
+            sort_by: Annotated[
+                str,
+                Field(
+                    description=(
+                        "`name` (default), `user` (the owner), `mtime` (modified) or `crtime` "
+                        "(created)."
+                    )
+                ),
+            ] = "name",
+            sort_direction: Annotated[str, Field(description="`asc` (default) or `desc`.")] = "asc",
         ) -> str:
             client = await _fs_client()
             return _reply(
@@ -420,13 +443,40 @@ def register(ctx: RegisterContext) -> None:
             annotations=_tool_annos["list_files"],
         )
         async def tool_list_files(
-            path: str,
-            pattern: str | None = None,
-            filetype: str = "all",
-            sort_by: str = "name",
-            sort_direction: str = "asc",
-            offset: int = 0,
-            limit: int = 200,
+            path: Annotated[
+                str,
+                Field(description="The folder to list (`/video/TV Shows`)."),
+            ],
+            pattern: Annotated[
+                str | None,
+                Field(
+                    description=(
+                        "Name filter, case-insensitive: a bare word matches anywhere in the name; "
+                        "with `*` or `?` the whole name must match (`*.mkv`); commas separate "
+                        "alternatives (`*.mkv,*.mp4`)."
+                    )
+                ),
+            ] = None,
+            filetype: Annotated[
+                str, Field(description="`all` (default), `file` or `dir`.")
+            ] = "all",
+            sort_by: Annotated[
+                str,
+                Field(
+                    description=(
+                        "`name` (default), `size`, `mtime` (modified), `crtime` (created), `atime` "
+                        "(accessed), `ctime` (changed), `user` (the owner) or `type`."
+                    )
+                ),
+            ] = "name",
+            sort_direction: Annotated[str, Field(description="`asc` (default) or `desc`.")] = "asc",
+            offset: Annotated[
+                int,
+                Field(description="Items to skip; a reply with more says which offset is next."),
+            ] = 0,
+            limit: Annotated[
+                int, Field(description="Most items to return; `0` returns them all.")
+            ] = 200,
         ) -> str:
             client = await _fs_client()
             [path] = await ensure_known_shares(client, [path], known_shares)
@@ -453,12 +503,44 @@ def register(ctx: RegisterContext) -> None:
             annotations=_tool_annos["list_recycle_bin"],
         )
         async def tool_list_recycle_bin(
-            share: str,
-            pattern: str | None = None,
-            sort_by: str = "mtime",
-            sort_direction: str = "desc",
-            limit: int = 100,
-            offset: int = 0,
+            share: Annotated[
+                str,
+                Field(
+                    description=(
+                        "The shared folder whose bin to list, as a name (`video`) or path "
+                        "(`/video`)."
+                    )
+                ),
+            ],
+            pattern: Annotated[
+                str | None,
+                Field(
+                    description=(
+                        "Name filter, as in list_files (case-insensitive; `*` and `?`; a bare "
+                        "word matches anywhere), applied across the whole bin, subfolders "
+                        "included."
+                    )
+                ),
+            ] = None,
+            sort_by: Annotated[
+                str,
+                Field(
+                    description=(
+                        "`mtime` (default: the file's own modified time), `ctime` (closest to "
+                        "when it was deleted), `name`, `size`, `crtime` or `atime`."
+                    )
+                ),
+            ] = "mtime",
+            sort_direction: Annotated[
+                str, Field(description="`desc` (default) or `asc`.")
+            ] = "desc",
+            limit: Annotated[
+                int, Field(description="Most items to return; `0` returns them all.")
+            ] = 100,
+            offset: Annotated[
+                int,
+                Field(description="Items to skip; a reply with more says which offset is next."),
+            ] = 0,
         ) -> str:
             client = await _fs_client()
             [share] = await ensure_known_shares(client, [share], known_shares)
@@ -484,17 +566,79 @@ def register(ctx: RegisterContext) -> None:
             annotations=_tool_annos["search_files"],
         )
         async def tool_search_files(
-            folder_path: str,
-            pattern: str | None = None,
-            extension: str | None = None,
-            filetype: str = "all",
-            size_from: str | None = None,
-            size_to: str | None = None,
-            mtime_from: str | None = None,
-            mtime_to: str | None = None,
-            exclude_pattern: str | None = None,
-            recursive: bool = True,
-            limit: int = 500,
+            folder_path: Annotated[
+                str,
+                Field(description="The folder to search (`/video`)."),
+            ],
+            pattern: Annotated[
+                str | None,
+                Field(
+                    description=(
+                        "Name to look for: a bare word matches anywhere in the name (`Severance` "
+                        "finds `Severance.S02E10.mkv`); with `*` or `?` it's a wildcard pattern. "
+                        '`*.mkv` is treated as `extension="mkv"`.'
+                    )
+                ),
+            ] = None,
+            extension: Annotated[
+                str | None, Field(description="File extension, without the dot (`mkv`).")
+            ] = None,
+            filetype: Annotated[
+                str, Field(description="`all` (default: files and folders), `file` or `dir`.")
+            ] = "all",
+            size_from: Annotated[
+                str | None,
+                Field(
+                    description=(
+                        "Smallest size to match, in bytes or with a unit (`500MiB`, `2GiB`)."
+                    )
+                ),
+            ] = None,
+            size_to: Annotated[
+                str | None,
+                Field(description="Largest size to match, in the same format as `size_from`."),
+            ] = None,
+            mtime_from: Annotated[
+                str | None,
+                Field(
+                    description=(
+                        "Modified at or after this time: ISO 8601 (`2026-04-01T12:00:00+00:00`), a "
+                        "date (`2026-04-01`) or Unix epoch seconds; a time with no zone is UTC."
+                    )
+                ),
+            ] = None,
+            mtime_to: Annotated[
+                str | None,
+                Field(
+                    description=(
+                        "Modified before this time (a file modified at exactly this time doesn't "
+                        "match), in the same formats as `mtime_from`."
+                    )
+                ),
+            ] = None,
+            exclude_pattern: Annotated[
+                str | None,
+                Field(
+                    description=(
+                        "Wildcard pattern for names to leave out (`*.torrent`), case-insensitive. "
+                        "Applied to the results DSM returns, so a reply can hold fewer than "
+                        "`limit`."
+                    )
+                ),
+            ] = None,
+            recursive: Annotated[
+                bool,
+                Field(
+                    description=(
+                        "Search subfolders too (default true); `false` searches only `folder_path` "
+                        "itself."
+                    )
+                ),
+            ] = True,
+            limit: Annotated[
+                int,
+                Field(description="Most results to return; the reply says when there are more."),
+            ] = 500,
         ) -> str:
             client = await _fs_client()
             [folder_path] = await ensure_known_shares(client, [folder_path], known_shares)
@@ -525,7 +669,22 @@ def register(ctx: RegisterContext) -> None:
             description=_desc("get_file_info"),
             annotations=_tool_annos["get_file_info"],
         )
-        async def tool_get_file_info(paths: list[str], additional: list[str] | None = None) -> str:
+        async def tool_get_file_info(
+            paths: Annotated[
+                list[str],
+                Field(description="One or more full paths (`/video/Movies/Dune.mkv`)."),
+            ],
+            additional: Annotated[
+                list[str] | None,
+                Field(
+                    description=(
+                        "Fields to fetch: `real_path`, `size`, `owner`, `time`, `perm`, `type` "
+                        "(DSM's extension type) and `mount_point_type` (shown only for a mount "
+                        "point). Default: the first five. Unknown values are rejected."
+                    )
+                ),
+            ] = None,
+        ) -> str:
             client = await _fs_client()
             paths = await ensure_known_shares(client, paths, known_shares)
             return _reply(await get_file_info(client, paths=paths, additional=additional))
@@ -537,7 +696,12 @@ def register(ctx: RegisterContext) -> None:
             description=_desc("get_dir_size"),
             annotations=_tool_annos["get_dir_size"],
         )
-        async def tool_get_dir_size(path: str) -> str:
+        async def tool_get_dir_size(
+            path: Annotated[
+                str,
+                Field(description="The folder to measure (`/video/TV Shows`)."),
+            ],
+        ) -> str:
             client = await _fs_client()
             [path] = await ensure_known_shares(client, [path], known_shares)
             result = await get_dir_size(client, path=path, timeout=dir_size_timeout)
@@ -552,10 +716,37 @@ def register(ctx: RegisterContext) -> None:
         )
         async def tool_download_file(
             ctx: Context,
-            path: str,
-            dest_folder: str | None = None,
-            filename: str | None = None,
-            overwrite: bool = False,
+            path: Annotated[
+                str,
+                Field(description="The NAS file or folder (`/video/Movies/Dune.mkv`)."),
+            ],
+            dest_folder: Annotated[
+                str | None,
+                Field(
+                    description=(
+                        "Local folder to save into, inside the allowed local folders the server "
+                        "instructions list. Optional when a default download folder is configured."
+                    )
+                ),
+            ] = None,
+            filename: Annotated[
+                str | None,
+                Field(
+                    description=(
+                        "Name to save as, a plain file name with no folders (default: the NAS "
+                        "name, or `<folder>.zip` for a folder)."
+                    )
+                ),
+            ] = None,
+            overwrite: Annotated[
+                bool,
+                Field(
+                    description=(
+                        "Replace a local file of the same name (default false: the call fails and "
+                        "the local file is kept)."
+                    )
+                ),
+            ] = False,
         ) -> str:
             effective_dest = dest_folder or default_download_dir
             if not effective_dest:
@@ -601,8 +792,23 @@ def register(ctx: RegisterContext) -> None:
             annotations=_tool_annos["create_folder"],
         )
         async def tool_create_folder(
-            paths: list[str],
-            force_parent: bool = True,
+            paths: Annotated[
+                list[str],
+                Field(
+                    description=(
+                        'Full paths of the folders to create (`["/video/TV Shows/New Show"]`).'
+                    )
+                ),
+            ],
+            force_parent: Annotated[
+                bool,
+                Field(
+                    description=(
+                        "Create missing parent folders too (default true); with `false`, each "
+                        "parent must already exist."
+                    )
+                ),
+            ] = True,
         ) -> str:
             client = await _fs_client()
             paths = await ensure_known_shares(client, paths, known_shares)
@@ -616,7 +822,15 @@ def register(ctx: RegisterContext) -> None:
             description=_desc("rename"),
             annotations=_tool_annos["rename"],
         )
-        async def tool_rename(path: str, new_name: str) -> str:
+        async def tool_rename(
+            path: Annotated[
+                str,
+                Field(description="The file or folder to rename (`/video/TV Shows/Severence`)."),
+            ],
+            new_name: Annotated[
+                str, Field(description="The new name only, not a path (`Severance`).")
+            ],
+        ) -> str:
             client = await _fs_client()
             [path] = await ensure_known_shares(client, [path], known_shares)
             return _reply(await rename(client, path=path, new_name=new_name))
@@ -630,9 +844,22 @@ def register(ctx: RegisterContext) -> None:
         )
         async def tool_copy_files(
             ctx: Context,
-            paths: list[str],
-            dest_folder: str,
-            overwrite: bool = False,
+            paths: Annotated[
+                list[str],
+                Field(description="Files or folders to copy (`/video/Downloads/clip.mkv`)."),
+            ],
+            dest_folder: Annotated[
+                str, Field(description="The existing folder to copy into (`/video/Archive`).")
+            ],
+            overwrite: Annotated[
+                bool,
+                Field(
+                    description=(
+                        "Replace items already at the destination (default false: they're skipped "
+                        "and listed)."
+                    )
+                ),
+            ] = False,
         ) -> str:
             client = await _fs_client()
             *paths, dest_folder = await ensure_known_shares(
@@ -659,9 +886,22 @@ def register(ctx: RegisterContext) -> None:
         )
         async def tool_move_files(
             ctx: Context,
-            paths: list[str],
-            dest_folder: str,
-            overwrite: bool = False,
+            paths: Annotated[
+                list[str],
+                Field(description="Files or folders to move (`/video/Downloads/clip.mkv`)."),
+            ],
+            dest_folder: Annotated[
+                str, Field(description="The existing folder to move into (`/video/Archive`).")
+            ],
+            overwrite: Annotated[
+                bool,
+                Field(
+                    description=(
+                        "Replace items already at the destination (default false: they're skipped "
+                        "and listed)."
+                    )
+                ),
+            ] = False,
         ) -> str:
             client = await _fs_client()
             *paths, dest_folder = await ensure_known_shares(
@@ -688,8 +928,24 @@ def register(ctx: RegisterContext) -> None:
         )
         async def tool_delete_files(
             ctx: Context,
-            paths: list[str],
-            recursive: bool = True,
+            paths: Annotated[
+                list[str],
+                Field(
+                    description=(
+                        "Exact paths of the files or folders to delete "
+                        "(`/video/Downloads/old.mkv`); wildcards aren't expanded."
+                    )
+                ),
+            ],
+            recursive: Annotated[
+                bool,
+                Field(
+                    description=(
+                        "Delete a folder with everything in it (default true); with `false`, a "
+                        "folder that isn't empty is refused and kept."
+                    )
+                ),
+            ] = True,
         ) -> str:
             client = await _fs_client()
             paths = await ensure_known_shares(client, paths, known_shares)
@@ -714,11 +970,46 @@ def register(ctx: RegisterContext) -> None:
         )
         async def tool_upload_file(
             ctx: Context,
-            local_path: str,
-            dest_folder: str | None = None,
-            filename: str | None = None,
-            overwrite: bool = False,
-            create_parents: bool = True,
+            local_path: Annotated[
+                str,
+                Field(
+                    description=(
+                        "The file on this machine, inside the allowed local folders the server "
+                        "instructions list."
+                    )
+                ),
+            ],
+            dest_folder: Annotated[
+                str | None,
+                Field(
+                    description=(
+                        "NAS folder to upload into (`/video/Uploads`). Optional when a default "
+                        "upload folder is configured."
+                    )
+                ),
+            ] = None,
+            filename: Annotated[
+                str | None,
+                Field(description="Name for the file on the NAS (default: the local file's name)."),
+            ] = None,
+            overwrite: Annotated[
+                bool,
+                Field(
+                    description=(
+                        "Replace a NAS file of the same name (default false: the call fails and "
+                        "the NAS file is kept)."
+                    )
+                ),
+            ] = False,
+            create_parents: Annotated[
+                bool,
+                Field(
+                    description=(
+                        "Create `dest_folder` and any missing folders above it (default true); "
+                        "with `false`, `dest_folder` must already exist."
+                    )
+                ),
+            ] = True,
         ) -> str:
             effective_dest = dest_folder or default_upload_dir
             if not effective_dest:
@@ -764,10 +1055,43 @@ def register(ctx: RegisterContext) -> None:
         )
         async def tool_restore_from_recycle_bin(
             ctx: Context,
-            share: str,
-            paths: list[str],
-            dest_folder: str | None = None,
-            overwrite: bool = False,
+            share: Annotated[
+                str,
+                Field(
+                    description=(
+                        "The shared folder whose bin holds the items, as a name (`video`) or path "
+                        "(`/video`)."
+                    )
+                ),
+            ],
+            paths: Annotated[
+                list[str],
+                Field(
+                    description=(
+                        "Items to restore, as paths in the bin the way list_recycle_bin shows them "
+                        "(`Shows/Ep1.mkv`); full paths such as `/video/#recycle/Shows/Ep1.mkv` "
+                        "work too."
+                    )
+                ),
+            ],
+            dest_folder: Annotated[
+                str | None,
+                Field(
+                    description=(
+                        "An existing folder to restore everything into, flat (default: each "
+                        "item's original folder)."
+                    )
+                ),
+            ] = None,
+            overwrite: Annotated[
+                bool,
+                Field(
+                    description=(
+                        "Replace an item already at the destination (default false: it's skipped "
+                        "and stays in the bin)."
+                    )
+                ),
+            ] = False,
         ) -> str:
             client = await _fs_client()
             share, *dest = await ensure_known_shares(

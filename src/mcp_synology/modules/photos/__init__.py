@@ -6,7 +6,7 @@ switched on once every tool in ``docs/specs/photos-module-spec.md`` is in.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Annotated, Any
 
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field, field_validator
@@ -88,28 +88,22 @@ MODULE_INFO = ModuleInfo(
         ToolInfo(
             name="list_photos",
             description=(
-                "List photos and videos in Synology Photos, newest first by default. Narrow by "
-                "folder, person and tag, plus date range (start_date/end_date, YYYY-MM-DD), "
-                "type (photo/video), min_rating or favorite (Photos 1.9.1+); or list one album,"
-                " place or concept (1.9.1+) on its own; or search by keyword (filename and "
-                "tags). Returns id, filename, taken time, type, size and folder; paged with "
-                "offset/limit (default 50) with the total. space: personal (default) or shared."
-                " Use the ids with the other Photos tools, such as get_photo and "
-                "download_photos. For files outside Photos, use File Station's list_files "
-                "when that module is enabled."
+                "List or search photos and videos in Synology Photos, newest first by default, "
+                "with the total. folder, person and tag combine with the date, type, rating and "
+                "favorite filters; album, place, concept and keyword each work alone. Each row "
+                "has the item's id, filename, taken time, type, size and folder; pass the ids to "
+                "get_photo for full details or to download_photos to save the files. For files "
+                "outside Photos, use File Station's list_files when that module is enabled."
             ),
             permission_tier=PermissionTier.READ,
         ),
         ToolInfo(
             name="list_photo_collections",
             description=(
-                "List Synology Photos collections with their ids and item counts. type: "
-                "album (yours, with sharing status), shared_with_me (albums others shared "
-                "with you), person (people from face recognition; include_hidden for hidden "
-                "ones), tag, place, concept (things and scenes Photos recognized; 1.9.1+), "
-                "or folder (subfolders of parent, default the space root). name filters by "
-                "substring. Paged with offset/limit (default 100). space: personal "
-                "(default) or shared; albums are personal only."
+                "List one type of Synology Photos collection with ids and item counts: albums, "
+                "albums shared with you, people, tags, places, concepts or folders. Use it to "
+                "find the ids and names that list_photos filters by. Paged; name narrows the "
+                "list by substring."
             ),
             permission_tier=PermissionTier.READ,
         ),
@@ -117,21 +111,21 @@ MODULE_INFO = ModuleInfo(
             name="get_photo",
             description=(
                 "Get full details for Synology Photos items by id: filename, folder, taken "
-                "time, size, resolution, rating, favorite (1.9.1+), description, tags, "
-                "people, GPS location and address, camera details and the full EXIF table "
-                "(exif=true). Up to 20 ids. space: personal (default) or shared."
+                "time, size, resolution, rating, favorite (Photos 1.9.1+), description, tags, "
+                "people, GPS location and address, and camera details, plus the full EXIF "
+                "table with exif=true. Use it when list_photos' one-line rows aren't enough. "
+                "IDs that don't exist are listed as not found."
             ),
             permission_tier=PermissionTier.READ,
         ),
         ToolInfo(
             name="download_photos",
             description=(
-                "Download Synology Photos items to a local folder by id: the original file, "
-                "or a JPEG preview (size xl ~1280px, m ~320px, sm ~240px). Only writes "
-                "inside the allowed local folders, and never overwrites unless "
-                "overwrite=true. Up to 50 ids. space: personal (default) or shared. For "
-                "files outside Photos, use File Station's download_file when that module is "
-                "enabled."
+                "Download Synology Photos items by id to a folder on this machine: the original "
+                "files or JPEG previews, one file per item, named after the original. Only "
+                "writes inside the allowed local folders, and never replaces an existing file "
+                "unless overwrite=true. For files outside Photos, use File Station's "
+                "download_file when that module is enabled."
             ),
             permission_tier=PermissionTier.READ,
             annotations=_ANNO_LOCAL_WRITE,
@@ -140,11 +134,11 @@ MODULE_INFO = ModuleInfo(
         ToolInfo(
             name="photo_album",
             description=(
-                "Create or change a Synology Photos album. action: create (optionally with item"
-                " ids), rename, add or remove items (the photos stay in their folders), "
-                "set_cover, copy, create_smart or set_condition (a smart album that fills "
-                "itself from folder, people, tags, places, dates, type and rating conditions). "
-                "Personal space albums only. To delete albums use delete_photo_albums."
+                "Create or change a Synology Photos album: create one (normal, or smart: filled "
+                "automatically from a condition), rename it, add or remove items, set its "
+                "cover, copy it, or replace a smart album's condition. The photos themselves "
+                "never move. Personal space albums only. To delete albums use "
+                "delete_photo_albums; to share one, photo_share_link."
             ),
             permission_tier=PermissionTier.WRITE,
             annotations=_ANNO_DESTRUCTIVE,
@@ -152,12 +146,11 @@ MODULE_INFO = ModuleInfo(
         ToolInfo(
             name="photo_share_link",
             description=(
-                "Share a Synology Photos album by link, change its link settings, or stop "
-                "sharing. action: share (returns the link), update or stop. public: none, view "
-                "or download; password (empty string removes it); expires (YYYY-MM-DD: end of "
-                "that day UTC; a date-time with offset; or never); setting a password or an "
-                "expiry needs public view or download; users/groups with view, download or "
-                "upload roles. Personal space albums only."
+                "Share a Synology Photos album by link, change the link's public access, "
+                "password, expiry and members, or stop sharing. A password or an expiry needs "
+                "public view or download: Photos drops them on a link without public access, so "
+                "they're refused there. Stopping keeps the link, and sharing again brings it "
+                "back with its settings reset. Personal space albums only."
             ),
             permission_tier=PermissionTier.WRITE,
             annotations=_ANNO_DESTRUCTIVE,
@@ -165,12 +158,11 @@ MODULE_INFO = ModuleInfo(
         ToolInfo(
             name="photo_folder",
             description=(
-                "Create or rename a folder in Synology Photos, or set its cover photo. action: "
-                "create (name inside parent, default the space root), rename or set_cover. "
-                "space: personal (default) or shared. To copy or move folders use copy_photos /"
-                " move_photos; to delete, delete_photo_folders. For folders outside Photos, use"
-                " File Station's create_folder and rename when File Station write is enabled,"
-                " or ask the user to do it in DSM."
+                "Create or rename a folder in Synology Photos, or set its cover photo. A name "
+                "the parent folder already has is refused. To copy or move folders use "
+                "copy_photos / move_photos; to delete, delete_photo_folders. For folders "
+                "outside Photos, use File Station's create_folder and rename when File Station "
+                "write is enabled, or ask the user to do it in DSM."
             ),
             permission_tier=PermissionTier.WRITE,
             annotations=_ANNO_DESTRUCTIVE_IDEMPOTENT,
@@ -179,12 +171,11 @@ MODULE_INFO = ModuleInfo(
         ToolInfo(
             name="tag_photos",
             description=(
-                "Add or remove tags on Synology Photos items. Tags are given by name; add "
-                "creates missing tags. Photos writes tags into the original files and re-"
-                "indexes them, so file dates and sizes change. A tag disappears once no item "
-                "has it, so to delete a tag remove it from every item that has it (list_photos "
-                "tag=...); to rename, add the new name to those items, then remove the old one."
-                " space: personal (default) or shared."
+                "Add or remove tags on Synology Photos items. Photos writes tags into the "
+                "original files and re-indexes them, so file dates and sizes change. A tag "
+                "disappears once no item has it, so to delete a tag remove it from every item "
+                "that has it (list_photos tag=...); to rename, add the new name to those items, "
+                "then remove the old one."
             ),
             permission_tier=PermissionTier.WRITE,
             annotations=_ANNO_DESTRUCTIVE,
@@ -192,12 +183,10 @@ MODULE_INFO = ModuleInfo(
         ToolInfo(
             name="edit_photo",
             description=(
-                "Edit Synology Photos items: rating (0-5, 0 clears), description, taken time "
-                "(set to a local date-time, no zone: an offset is ignored; or shift by hours), "
-                "rotate (left or right), favorite "
-                "(Photos 1.9.1+). Applies to every id given. Photos writes these into the "
-                "original files, so file dates and sizes change. Location can't be edited. "
-                "space: personal (default) or shared."
+                "Edit Synology Photos items: rating, description, taken time (set or shift), "
+                "rotation and favorite (Photos 1.9.1+). Pass only the fields to change; they "
+                "apply to every id given. Photos writes these into the original files, so file "
+                "dates and sizes change. Location can't be edited; for tags use tag_photos."
             ),
             permission_tier=PermissionTier.WRITE,
             annotations=_ANNO_DESTRUCTIVE,
@@ -205,10 +194,9 @@ MODULE_INFO = ModuleInfo(
         ToolInfo(
             name="edit_person",
             description=(
-                "Change a person (face-recognition group) in Synology Photos: rename (empty "
-                "name clears it), hide, unhide, or set_cover to one of their photos. Use "
-                "list_photo_collections type=person for ids. To merge people use merge_people. "
-                "space: personal (default) or shared."
+                "Change one person (a face-recognition group) in Synology Photos: rename them, "
+                "hide or unhide them in the people list, or set their cover photo. To combine "
+                "groups that are the same person, use merge_people."
             ),
             permission_tier=PermissionTier.WRITE,
             annotations=_ANNO_DESTRUCTIVE_IDEMPOTENT,
@@ -216,10 +204,10 @@ MODULE_INFO = ModuleInfo(
         ToolInfo(
             name="photo_request",
             description=(
-                "Manage Synology Photos photo requests: links that let others upload into one "
-                "of your folders. action: create (subject, folder, optional description, size "
-                "limit in MiB, expires: YYYY-MM-DD for the end of that day UTC, a date-time "
-                "with offset, or never), list, update or delete. Returns the request link."
+                "Manage Synology Photos photo requests: links that let anyone with the link "
+                "upload files into one of your Photos folders. action: create (returns the "
+                "link), list (every request with its passphrase and link), update, or delete "
+                "(its link stops working)."
             ),
             permission_tier=PermissionTier.WRITE,
             annotations=_ANNO_DESTRUCTIVE,
@@ -227,9 +215,11 @@ MODULE_INFO = ModuleInfo(
         ToolInfo(
             name="merge_people",
             description=(
-                "Merge people (face-recognition groups) in Synology Photos into one person, "
-                "keeping the target's id and the given name. This can't be undone. space: "
-                "personal (default) or shared."
+                "Merge people (face-recognition groups) in Synology Photos that are the same "
+                "person: every person in merge joins target, which keeps its id, and the merged "
+                "people are gone. If any person isn't found, nothing is merged. This can't be "
+                "undone, so confirm with the user first. To rename or hide one person, use "
+                "edit_person."
             ),
             permission_tier=PermissionTier.WRITE,
             annotations=_ANNO_DESTRUCTIVE,
@@ -238,7 +228,10 @@ MODULE_INFO = ModuleInfo(
             name="delete_photo_albums",
             description=(
                 "Delete Synology Photos albums (normal or smart) and their share links. The "
-                "photos themselves stay. Confirm with the user first."
+                "photos in them stay where they are, but the albums' selections, conditions and "
+                "links can't be recovered. Confirm with the user first. To only take items out "
+                "of an album, use photo_album action=remove; to delete the photos themselves, "
+                "delete_photos."
             ),
             permission_tier=PermissionTier.WRITE,
             annotations=_ANNO_DESTRUCTIVE,
@@ -246,12 +239,10 @@ MODULE_INFO = ModuleInfo(
         ToolInfo(
             name="upload_photos",
             description=(
-                "Upload local photos or videos into a Synology Photos folder (default the space"
-                " root). on_duplicate: rename (default, keeps both) or skip. Optionally add "
-                "them to an existing album (create it first with photo_album). Only reads "
-                "files inside the allowed local folders. Photos "
-                "indexes new items over the next seconds to minutes. space: personal (default) "
-                "or shared."
+                "Upload photos or videos from this machine into a Synology Photos folder, "
+                "optionally adding them to an existing album. Only reads files inside the "
+                "allowed local folders. Photos indexes new items over the next seconds to "
+                "minutes; until then their taken dates and previews may be missing."
             ),
             permission_tier=PermissionTier.WRITE,
             title="Photos: Upload",
@@ -259,10 +250,11 @@ MODULE_INFO = ModuleInfo(
         ToolInfo(
             name="copy_photos",
             description=(
-                "Copy Synology Photos items and/or folders into another folder of the same or "
-                "the other space. on_conflict: skip (default) or overwrite. Waits up to "
-                "task_timeout seconds; a longer copy keeps running on the NAS and the reply "
-                "gives a handle for photo_task. Overwrite replaces files at the destination."
+                "Copy Synology Photos items and/or whole folders into another folder, in the "
+                "same space or the other one. Waits up to the configured task timeout (30 s by "
+                "default); a longer copy keeps running on the NAS and the reply gives a handle "
+                "for photo_task. With on_conflict=overwrite it replaces files at the "
+                "destination."
             ),
             permission_tier=PermissionTier.WRITE,
             annotations=_ANNO_DESTRUCTIVE,
@@ -271,10 +263,12 @@ MODULE_INFO = ModuleInfo(
         ToolInfo(
             name="move_photos",
             description=(
-                "Move Synology Photos items and/or folders into another folder of the same or "
-                "the other space. on_conflict: skip (default) or overwrite. Waits up to "
-                "task_timeout seconds; a longer move keeps running on the NAS and the reply "
-                "gives a handle for photo_task. Overwrite replaces files at the destination."
+                "Move Synology Photos items and/or whole folders into another folder of the "
+                "same space, or from the personal space into Shared Space (Photos can't move "
+                "out of Shared Space: copy, then delete). Waits up to the configured task "
+                "timeout (30 s by default); a longer move keeps running on the NAS and the "
+                "reply gives a handle for photo_task. With on_conflict=overwrite it replaces "
+                "files at the destination."
             ),
             permission_tier=PermissionTier.WRITE,
             annotations=_ANNO_DESTRUCTIVE,
@@ -297,8 +291,8 @@ MODULE_INFO = ModuleInfo(
                 "Delete Synology Photos items (the files themselves) by id. They go to the "
                 "recycle bin of the share that holds the space if it has one, otherwise they're"
                 " gone. A large delete keeps running on the NAS and the reply gives a handle "
-                "for photo_task. Confirm with the user first. space: personal (default) or "
-                "shared. To only take items out of an album, use photo_album remove."
+                "for photo_task. Confirm with the user first. To only take items out of an "
+                "album, use photo_album remove."
             ),
             permission_tier=PermissionTier.WRITE,
             annotations=_ANNO_DESTRUCTIVE,
@@ -310,8 +304,7 @@ MODULE_INFO = ModuleInfo(
                 "Delete folders in Synology Photos with everything in them (files and "
                 "subfolders). They go to the recycle bin of the share that holds the space if "
                 "it has one, otherwise they're gone. A large delete keeps running on the NAS "
-                "and the reply gives a handle for photo_task. Confirm with the user first. "
-                "space: personal (default) or shared."
+                "and the reply gives a handle for photo_task. Confirm with the user first."
             ),
             permission_tier=PermissionTier.WRITE,
             annotations=_ANNO_DESTRUCTIVE,
@@ -320,6 +313,19 @@ MODULE_INFO = ModuleInfo(
     ],
     settings_schema=PhotosSettings,
 )
+
+
+# Parameter descriptions used by several tools (#247).
+_SPACE = "`personal` (default) or `shared` (Shared Space). IDs belong to one space."
+_ITEM_IDS = "Item IDs from list_photos."
+_ALBUM = "Album ID (list_photo_collections type=album) or unique name."
+_PERSON = "Person ID (list_photo_collections type=person) or unique name."
+_FOLDER = "Folder ID (list_photo_collections type=folder) or path, such as `/Trips/2024`."
+_EXPIRES = (
+    "`YYYY-MM-DD` (end of that day, UTC), a date-time with offset "
+    "(`2026-12-31T18:00-05:00`) or `never`"
+)
+_OFFSET = "Entries to skip, for the next page."
 
 
 def register(ctx: RegisterContext) -> None:
@@ -350,23 +356,76 @@ def register(ctx: RegisterContext) -> None:
 
         @server.tool(**_tool("list_photos"))  # type: ignore[arg-type]
         async def tool_list_photos(
-            space: str = "personal",
-            folder: str | None = None,
-            album: str | None = None,
-            person: str | None = None,
-            place: int | None = None,
-            tag: str | None = None,
-            keyword: str | None = None,
-            start_date: str | None = None,
-            end_date: str | None = None,
-            type: str = "all",  # noqa: A002 - the documented parameter name
-            min_rating: int | None = None,
-            favorite: bool | None = None,
-            concept: int | None = None,
-            sort_by: str = "taken",
-            sort_direction: str = "desc",
-            offset: int = 0,
-            limit: int = 50,
+            space: Annotated[str, Field(description=(_SPACE))] = "personal",
+            folder: Annotated[
+                str | None,
+                Field(
+                    description=(f"Only items directly in this folder, not subfolders. {_FOLDER}")
+                ),
+            ] = None,
+            album: Annotated[
+                str | None, Field(description=(f"One album only (personal space). {_ALBUM}"))
+            ] = None,
+            person: Annotated[
+                str | None, Field(description=(f"Only items showing this person. {_PERSON}"))
+            ] = None,
+            place: Annotated[
+                int | None,
+                Field(
+                    description=(
+                        "One place only: a place ID from list_photo_collections type=place."
+                    )
+                ),
+            ] = None,
+            tag: Annotated[
+                str | None, Field(description=("Only items with this tag name."))
+            ] = None,
+            keyword: Annotated[
+                str | None,
+                Field(
+                    description=(
+                        "Search filenames and tag names; works alone, in search order (no sorting)."
+                    )
+                ),
+            ] = None,
+            start_date: Annotated[
+                str | None,
+                Field(
+                    description=(
+                        "Taken on or after this date, `YYYY-MM-DD` (the photo's local time)."
+                    )
+                ),
+            ] = None,
+            end_date: Annotated[
+                str | None, Field(description=("Taken on or before this date, `YYYY-MM-DD`."))
+            ] = None,
+            type: Annotated[  # noqa: A002 - the documented parameter name
+                str, Field(description=("`all` (default), `photo` or `video`."))
+            ] = "all",
+            min_rating: Annotated[int | None, Field(description=("Minimum rating, 1-5."))] = None,
+            favorite: Annotated[
+                bool | None,
+                Field(
+                    description=("`true`: favorites only (Photos 1.9.1+). `false` doesn't filter.")
+                ),
+            ] = None,
+            concept: Annotated[
+                int | None,
+                Field(
+                    description=(
+                        "One concept only (a thing or scene Photos recognized): an ID from "
+                        "list_photo_collections type=concept. Photos 1.9.1+."
+                    )
+                ),
+            ] = None,
+            sort_by: Annotated[
+                str, Field(description=("`taken` (default), `filename`, `size` or `type`."))
+            ] = ("taken"),
+            sort_direction: Annotated[
+                str, Field(description=("`desc` (default) or `asc`."))
+            ] = "desc",
+            offset: Annotated[int, Field(description=(_OFFSET))] = 0,
+            limit: Annotated[int, Field(description=("Most items to return, 1-500."))] = 50,
         ) -> str:
             client = await manager.get_client()
             return await list_photos(
@@ -394,13 +453,44 @@ def register(ctx: RegisterContext) -> None:
 
         @server.tool(**_tool("list_photo_collections"))  # type: ignore[arg-type]
         async def tool_list_photo_collections(
-            type: str,  # noqa: A002 - the documented parameter name
-            space: str = "personal",
-            name: str | None = None,
-            parent: str | None = None,
-            include_hidden: bool = False,
-            offset: int = 0,
-            limit: int = 100,
+            type: Annotated[  # noqa: A002 - the documented parameter name
+                str,
+                Field(
+                    description=(
+                        "`album` (yours, with sharing status), `shared_with_me` (albums others "
+                        "shared with you), `person` (face recognition), `tag`, `place`, `concept` "
+                        "(things and scenes Photos recognized; 1.9.1+) or `folder` (subfolders of "
+                        "`parent`)."
+                    )
+                ),
+            ],
+            space: Annotated[
+                str, Field(description=(f"{_SPACE} Albums are always personal."))
+            ] = "personal",
+            name: Annotated[
+                str | None,
+                Field(
+                    description=("Only names containing this text, any case (folders: the path).")
+                ),
+            ] = None,
+            parent: Annotated[
+                str | None,
+                Field(
+                    description=(
+                        "`type=folder`: the folder ID or path to list (default the space root)."
+                    )
+                ),
+            ] = None,
+            include_hidden: Annotated[
+                bool,
+                Field(
+                    description=(
+                        "`person`, `concept`: include hidden ones (and people with few photos)."
+                    )
+                ),
+            ] = False,
+            offset: Annotated[int, Field(description=(_OFFSET))] = 0,
+            limit: Annotated[int, Field(description=("Most entries to return, 1-1000."))] = 100,
         ) -> str:
             client = await manager.get_client()
             return await list_photo_collections(
@@ -418,7 +508,11 @@ def register(ctx: RegisterContext) -> None:
 
         @server.tool(**_tool("get_photo"))  # type: ignore[arg-type]
         async def tool_get_photo(
-            ids: list[int], space: str = "personal", exif: bool = False
+            ids: Annotated[list[int], Field(description=("1-20 item IDs from list_photos."))],
+            space: Annotated[str, Field(description=(_SPACE))] = "personal",
+            exif: Annotated[
+                bool, Field(description=("Also show each item's full EXIF table."))
+            ] = False,
         ) -> str:
             client = await manager.get_client()
             return await get_photo(client, ids=ids, space=space, exif=exif)
@@ -427,11 +521,34 @@ def register(ctx: RegisterContext) -> None:
 
         @server.tool(**_tool("download_photos"))  # type: ignore[arg-type]
         async def tool_download_photos(
-            ids: list[int],
-            dest_folder: str | None = None,
-            size: str = "original",
-            space: str = "personal",
-            overwrite: bool = False,
+            ids: Annotated[list[int], Field(description=("1-50 item IDs from list_photos."))],
+            dest_folder: Annotated[
+                str | None,
+                Field(
+                    description=(
+                        "An existing local folder inside the allowed local folders; default the "
+                        "allowed folder, when there's only one."
+                    )
+                ),
+            ] = None,
+            size: Annotated[
+                str,
+                Field(
+                    description=(
+                        "`original` (default), or a JPEG preview saved as `<name>_<size>.jpg`: "
+                        "`xl` (~1280 px), `m` (~320 px) or `sm` (~240 px)."
+                    )
+                ),
+            ] = "original",
+            space: Annotated[str, Field(description=(_SPACE))] = "personal",
+            overwrite: Annotated[
+                bool,
+                Field(
+                    description=(
+                        "Replace a local file with the same name; otherwise that item is skipped."
+                    )
+                ),
+            ] = False,
         ) -> str:
             client = await manager.get_client()
             return await download_photos(
@@ -448,11 +565,46 @@ def register(ctx: RegisterContext) -> None:
 
         @server.tool(**_tool("photo_album"))  # type: ignore[arg-type]
         async def tool_photo_album(
-            action: str,
-            album: str | None = None,
-            name: str | None = None,
-            ids: list[int] | None = None,
-            condition: dict[str, Any] | None = None,
+            action: Annotated[
+                str,
+                Field(
+                    description=(
+                        "`create` (`name`, optional `ids`), `create_smart` (`name`, `condition`), "
+                        "`rename` (`name`), `add` / `remove` (`ids`; normal albums), `set_cover` "
+                        "(one id in `ids`), `copy` (a new normal album `name` with the same items) "
+                        "or `set_condition` (replaces a smart album's)."
+                    )
+                ),
+            ],
+            album: Annotated[
+                str | None, Field(description=(f"The album to change; not for creates. {_ALBUM}"))
+            ] = (None),
+            name: Annotated[
+                str | None,
+                Field(
+                    description=("Album name for `create`, `create_smart`, `rename` and `copy`.")
+                ),
+            ] = None,
+            ids: Annotated[
+                list[int] | None,
+                Field(
+                    description=(
+                        "Personal space item IDs from list_photos; exactly one for `set_cover`."
+                    )
+                ),
+            ] = None,
+            condition: Annotated[
+                dict[str, Any] | None,
+                Field(
+                    description=(
+                        "At least one of `folders` (IDs or paths), `people` (IDs or names), `tags` "
+                        "(names), `places` (place IDs), `start_date` / `end_date` (`YYYY-MM-DD`), "
+                        "`type` (`all`, `photo`, `video`), `ratings` (list of 0-5), `keywords`; "
+                        "`people_match`, `tags_match`, `keywords_match`: `any` (default) or `all`. "
+                        'Example: `{"tags": ["beach"], "start_date": "2024-01-01"}`.'
+                    )
+                ),
+            ] = None,
         ) -> str:
             from mcp_synology.modules.photos.albums import photo_album
 
@@ -465,12 +617,53 @@ def register(ctx: RegisterContext) -> None:
 
         @server.tool(**_tool("photo_share_link"))  # type: ignore[arg-type]
         async def tool_photo_share_link(
-            action: str,
-            album: str,
-            public: str | None = None,
-            password: str | None = None,
-            expires: str | None = None,
-            members: list[dict[str, Any]] | None = None,
+            action: Annotated[
+                str,
+                Field(
+                    description=(
+                        "`share` (turns the link on, public access `none` unless given; returns "
+                        "the link), `update` (an album already shared) or `stop` (turns it off; "
+                        "no settings)."
+                    )
+                ),
+            ],
+            album: Annotated[str, Field(description=(_ALBUM))],
+            public: Annotated[
+                str | None,
+                Field(
+                    description=(
+                        "What anyone with the link can do: `none` (invited members only), `view` "
+                        "or `download`. `none` also clears the password and expiry."
+                    )
+                ),
+            ] = None,
+            password: Annotated[
+                str | None,
+                Field(
+                    description=(
+                        'Link password; `""` removes it. Needs public `view` or `download`.'
+                    )
+                ),
+            ] = None,
+            expires: Annotated[
+                str | None,
+                Field(
+                    description=(
+                        f"Link expiry: {_EXPIRES}. Except `never`, needs public `view` or "
+                        "`download`."
+                    )
+                ),
+            ] = None,
+            members: Annotated[
+                list[dict[str, Any]] | None,
+                Field(
+                    description=(
+                        'DSM users or groups, each `{"name": ..., "type": "user" (default) or '
+                        '"group", "role": "view" (default), "download", "upload" or "none" '
+                        "(removes)}`."
+                    )
+                ),
+            ] = None,
         ) -> str:
             from mcp_synology.modules.photos.albums import photo_share_link
 
@@ -489,12 +682,34 @@ def register(ctx: RegisterContext) -> None:
 
         @server.tool(**_tool("photo_folder"))  # type: ignore[arg-type]
         async def tool_photo_folder(
-            action: str,
-            folder: str | None = None,
-            parent: str = "/",
-            name: str | None = None,
-            item_id: int | None = None,
-            space: str = "personal",
+            action: Annotated[
+                str,
+                Field(
+                    description=(
+                        "`create` (`name` inside `parent`), `rename` (`folder` to `name`) or "
+                        "`set_cover` (`folder`, `item_id`)."
+                    )
+                ),
+            ],
+            folder: Annotated[
+                str | None,
+                Field(description=(f"For `rename` and `set_cover`; not the space root. {_FOLDER}")),
+            ] = None,
+            parent: Annotated[
+                str,
+                Field(
+                    description=(
+                        "`create`: the parent folder's ID or path (default `/`, the space root)."
+                    )
+                ),
+            ] = "/",
+            name: Annotated[
+                str | None, Field(description=("One folder name, without `/`."))
+            ] = None,
+            item_id: Annotated[
+                int | None, Field(description=("`set_cover`: an item ID from list_photos."))
+            ] = None,
+            space: Annotated[str, Field(description=(_SPACE))] = "personal",
         ) -> str:
             from mcp_synology.modules.photos.organize import photo_folder
 
@@ -513,7 +728,14 @@ def register(ctx: RegisterContext) -> None:
 
         @server.tool(**_tool("tag_photos"))  # type: ignore[arg-type]
         async def tool_tag_photos(
-            action: str, ids: list[int], tags: list[str], space: str = "personal"
+            action: Annotated[
+                str, Field(description=("`add` (creates tags that don't exist) or `remove`."))
+            ],
+            ids: Annotated[list[int], Field(description=(_ITEM_IDS))],
+            tags: Annotated[
+                list[str], Field(description=('Tag names, any case, such as `["beach", "2024"]`.'))
+            ],
+            space: Annotated[str, Field(description=(_SPACE))] = "personal",
         ) -> str:
             from mcp_synology.modules.photos.organize import tag_photos
 
@@ -524,14 +746,38 @@ def register(ctx: RegisterContext) -> None:
 
         @server.tool(**_tool("edit_photo"))  # type: ignore[arg-type]
         async def tool_edit_photo(
-            ids: list[int],
-            space: str = "personal",
-            rating: int | None = None,
-            description: str | None = None,
-            taken_time: str | None = None,
-            shift_hours: float | None = None,
-            rotate: str | None = None,
-            favorite: bool | None = None,
+            ids: Annotated[list[int], Field(description=(_ITEM_IDS))],
+            space: Annotated[str, Field(description=(_SPACE))] = "personal",
+            rating: Annotated[
+                int | None, Field(description=("0-5; `0` clears the rating."))
+            ] = None,
+            description: Annotated[
+                str | None, Field(description=('New description; `""` clears it.'))
+            ] = None,
+            taken_time: Annotated[
+                str | None,
+                Field(
+                    description=(
+                        "Local date-time such as `2024-07-04T19:30:00`; an offset is dropped, not "
+                        "converted. Not with `shift_hours`."
+                    )
+                ),
+            ] = None,
+            shift_hours: Annotated[
+                float | None,
+                Field(
+                    description=(
+                        "Shifts the taken time by hours (`-6`, `1.5`); a repeat shifts again."
+                    )
+                ),
+            ] = None,
+            rotate: Annotated[
+                str | None, Field(description=("`left` or `right`; a repeat rotates again."))
+            ] = None,
+            favorite: Annotated[
+                bool | None,
+                Field(description=("`true` marks favorite, `false` unmarks (Photos 1.9.1+).")),
+            ] = None,
         ) -> str:
             from mcp_synology.modules.photos.organize import edit_photo
 
@@ -552,11 +798,23 @@ def register(ctx: RegisterContext) -> None:
 
         @server.tool(**_tool("edit_person"))  # type: ignore[arg-type]
         async def tool_edit_person(
-            action: str,
-            person: str,
-            name: str | None = None,
-            item_id: int | None = None,
-            space: str = "personal",
+            action: Annotated[
+                str,
+                Field(
+                    description=("`rename` (`name`), `hide`, `unhide` or `set_cover` (`item_id`).")
+                ),
+            ],
+            person: Annotated[
+                str, Field(description=(f"{_PERSON} Hidden ones need include_hidden=true there."))
+            ],
+            name: Annotated[
+                str | None, Field(description=('The new name; `""` makes them unnamed.'))
+            ] = None,
+            item_id: Annotated[
+                int | None,
+                Field(description=("An item ID from list_photos of a photo showing this person.")),
+            ] = None,
+            space: Annotated[str, Field(description=(_SPACE))] = "personal",
         ) -> str:
             from mcp_synology.modules.photos.organize import edit_person
 
@@ -569,14 +827,46 @@ def register(ctx: RegisterContext) -> None:
 
         @server.tool(**_tool("photo_request"))  # type: ignore[arg-type]
         async def tool_photo_request(
-            action: str,
-            request: str | None = None,
-            subject: str | None = None,
-            description: str | None = None,
-            folder: str | None = None,
-            space: str = "personal",
-            max_file_mib: int | None = None,
-            expires: str | None = None,
+            action: Annotated[
+                str,
+                Field(
+                    description=(
+                        "`create` (`subject`, `folder`), `list`, `update` (the fields given) or "
+                        "`delete`."
+                    )
+                ),
+            ],
+            request: Annotated[
+                str | None,
+                Field(
+                    description=("`update`, `delete`: the request's passphrase from action=list.")
+                ),
+            ] = None,
+            subject: Annotated[
+                str | None, Field(description=("The subject; required for `create`."))
+            ] = None,
+            description: Annotated[str | None, Field(description=("An optional note."))] = None,
+            folder: Annotated[
+                str | None,
+                Field(
+                    description=(
+                        "The existing folder uploads go into, as a path in `space` such as "
+                        "`/Inbox`; required for `create`."
+                    )
+                ),
+            ] = None,
+            space: Annotated[
+                str, Field(description=("Library of `folder`: `personal` (default) or `shared`."))
+            ] = "personal",
+            max_file_mib: Annotated[
+                int | None,
+                Field(
+                    description=("Largest file accepted, in MiB; `0` (create's default): no limit.")
+                ),
+            ] = None,
+            expires: Annotated[
+                str | None, Field(description=(f"Link expiry: {_EXPIRES} (create's default)."))
+            ] = None,
         ) -> str:
             from mcp_synology.modules.photos.organize import photo_request
 
@@ -597,7 +887,15 @@ def register(ctx: RegisterContext) -> None:
 
         @server.tool(**_tool("merge_people"))  # type: ignore[arg-type]
         async def tool_merge_people(
-            target: str, merge: list[str], name: str | None = None, space: str = "personal"
+            target: Annotated[str, Field(description=(f"The person to keep. {_PERSON}"))],
+            merge: Annotated[
+                list[str],
+                Field(description=("The people merged into `target`, as IDs or unique names.")),
+            ],
+            name: Annotated[
+                str | None, Field(description=("The name after the merge; default the target's."))
+            ] = None,
+            space: Annotated[str, Field(description=(_SPACE))] = "personal",
         ) -> str:
             from mcp_synology.modules.photos.organize import merge_people
 
@@ -607,7 +905,17 @@ def register(ctx: RegisterContext) -> None:
     if "delete_photo_albums" in ctx.allowed_tools:
 
         @server.tool(**_tool("delete_photo_albums"))  # type: ignore[arg-type]
-        async def tool_delete_photo_albums(albums: list[str]) -> str:
+        async def tool_delete_photo_albums(
+            albums: Annotated[
+                list[str],
+                Field(
+                    description=(
+                        "Album IDs (list_photo_collections type=album) or unique names; a name "
+                        "several albums share deletes nothing."
+                    )
+                ),
+            ],
+        ) -> str:
             from mcp_synology.modules.photos.albums import delete_photo_albums
 
             client = await manager.get_client()
@@ -617,11 +925,35 @@ def register(ctx: RegisterContext) -> None:
 
         @server.tool(**_tool("upload_photos"))  # type: ignore[arg-type]
         async def tool_upload_photos(
-            local_paths: list[str],
-            folder: str = "/",
-            space: str = "personal",
-            on_duplicate: str = "rename",
-            album: str | None = None,
+            local_paths: Annotated[
+                list[str],
+                Field(
+                    description=(
+                        "1-50 local files inside the allowed local folders, such as "
+                        "`~/Pictures/a.jpg`."
+                    )
+                ),
+            ],
+            folder: Annotated[
+                str,
+                Field(
+                    description=("The existing folder's ID or path (default `/`, the space root).")
+                ),
+            ] = "/",
+            space: Annotated[str, Field(description=(_SPACE))] = "personal",
+            on_duplicate: Annotated[
+                str,
+                Field(
+                    description=(
+                        "A file with that name already there: `rename` (default) keeps both, "
+                        "`skip` uploads nothing."
+                    )
+                ),
+            ] = "rename",
+            album: Annotated[
+                str | None,
+                Field(description=(f"An existing album to add them to (personal space). {_ALBUM}")),
+            ] = None,
         ) -> str:
             from mcp_synology.modules.photos.transfer import upload_photos
 
@@ -643,12 +975,53 @@ def register(ctx: RegisterContext) -> None:
 
         def _make(operation: str) -> Any:
             async def tool_copy_or_move(
-                destination: str,
-                ids: list[int] | None = None,
-                folders: list[str] | None = None,
-                space: str = "personal",
-                dest_space: str | None = None,
-                on_conflict: str = "skip",
+                destination: Annotated[
+                    str,
+                    Field(
+                        description=("The existing target folder's ID or path, in `dest_space`.")
+                    ),
+                ],
+                ids: Annotated[
+                    list[int] | None,
+                    Field(
+                        description=(
+                            "Item IDs from list_photos, in `space`. Pass `ids`, `folders` or both."
+                        )
+                    ),
+                ] = None,
+                folders: Annotated[
+                    list[str] | None,
+                    Field(
+                        description=(
+                            "Folder IDs or paths, with everything in them; not the space root."
+                        )
+                    ),
+                ] = None,
+                space: Annotated[
+                    str,
+                    Field(
+                        description=(
+                            "Source space: `personal` (default) or `shared` (Shared Space)."
+                        )
+                    ),
+                ] = "personal",
+                dest_space: Annotated[
+                    str | None,
+                    Field(
+                        description=(
+                            "Space of `destination`, if not `space`: `personal` or `shared`."
+                        )
+                    ),
+                ] = None,
+                on_conflict: Annotated[
+                    str,
+                    Field(
+                        description=(
+                            "A file with that name already at the destination: `skip` (default) or "
+                            "`overwrite` (replaces it)."
+                        )
+                    ),
+                ] = "skip",
             ) -> str:
                 from mcp_synology.modules.photos.tasks import copy_or_move
 
@@ -672,7 +1045,26 @@ def register(ctx: RegisterContext) -> None:
     if "photo_task" in ctx.allowed_tools:
 
         @server.tool(**_tool("photo_task"))  # type: ignore[arg-type]
-        async def tool_photo_task(handle: str | None = None, action: str = "status") -> str:
+        async def tool_photo_task(
+            handle: Annotated[
+                str | None,
+                Field(
+                    description=(
+                        "The handle a reply gave, such as `photos:14`; omit to list the tasks."
+                    )
+                ),
+            ] = None,
+            action: Annotated[
+                str,
+                Field(
+                    description=(
+                        "`status` (default; progress, or the task list), `stop` (needs `handle`; "
+                        "what's done stays done) or `clear` (removes every finished task from the "
+                        "list)."
+                    )
+                ),
+            ] = "status",
+        ) -> str:
             from mcp_synology.modules.photos.tasks import photo_task
 
             client = await manager.get_client()
@@ -681,7 +1073,10 @@ def register(ctx: RegisterContext) -> None:
     if "delete_photos" in ctx.allowed_tools:
 
         @server.tool(**_tool("delete_photos"))  # type: ignore[arg-type]
-        async def tool_delete_photos(ids: list[int], space: str = "personal") -> str:
+        async def tool_delete_photos(
+            ids: Annotated[list[int], Field(description=(_ITEM_IDS))],
+            space: Annotated[str, Field(description=(_SPACE))] = "personal",
+        ) -> str:
             from mcp_synology.modules.photos.tasks import delete_photos
 
             client = await manager.get_client()
@@ -690,7 +1085,10 @@ def register(ctx: RegisterContext) -> None:
     if "delete_photo_folders" in ctx.allowed_tools:
 
         @server.tool(**_tool("delete_photo_folders"))  # type: ignore[arg-type]
-        async def tool_delete_photo_folders(folders: list[str], space: str = "personal") -> str:
+        async def tool_delete_photo_folders(
+            folders: Annotated[list[str], Field(description=(f"Not the space root. {_FOLDER}"))],
+            space: Annotated[str, Field(description=(_SPACE))] = "personal",
+        ) -> str:
             from mcp_synology.modules.photos.tasks import delete_photo_folders
 
             client = await manager.get_client()
