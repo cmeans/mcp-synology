@@ -186,7 +186,8 @@ class TestRename:
         """DSM answers 1200 both for a missing source and for a name already taken
         (vdsm 7.1, 7.2.2, 7.3.2 and 7.4.1, #188); getinfo says which. `getinfo` maps a
         path to its answer: "file", "folder", "missing" (408), "denied" (407), "empty"
-        (no entry), "dsm_error" (a failed request) or "transport" (no answer)."""
+        (no entry), "dsm_error" (a failed request) or "transport" (no answer). A path
+        not in `getinfo` answers "file", so a check that shouldn't run would show."""
 
         def side_effect(request: httpx.Request) -> httpx.Response:
             params = dict(request.url.params)
@@ -194,7 +195,7 @@ class TestRename:
                 return httpx.Response(200, json={"success": False, "error": {"code": 1200}})
             if params.get("method") == "getinfo":
                 path = params["path"]
-                kind = getinfo[path]
+                kind = getinfo.get(path, "file")
                 if kind == "transport":
                     raise httpx.ConnectError("connection refused")
                 if kind == "dsm_error":
@@ -221,16 +222,16 @@ class TestRename:
             ("missing", "transport", "not_found", "/video/a doesn't exist on the NAS"),
             ("file", "file", "already_exists", "/video/b already exists"),
             ("folder", "folder", "already_exists", "/video/b already exists"),
-            ("file", "missing", "filestation_error", "Failed to rename"),
+            ("file", "missing", "filestation_error", "may already be taken"),
             # Without positive evidence the new path exists, nothing is claimed.
-            ("file", "empty", "filestation_error", "Failed to rename"),
-            ("file", "denied", "filestation_error", "Failed to rename"),
-            ("denied", "file", "filestation_error", "Failed to rename"),
+            ("file", "empty", "filestation_error", "may already be taken"),
+            ("file", "denied", "filestation_error", "may already be taken"),
+            ("denied", "file", "filestation_error", "may already be taken"),
             # A failed check still reports DSM's 1200, never the check's own error.
-            ("dsm_error", "file", "filestation_error", "Failed to rename"),
-            ("file", "dsm_error", "filestation_error", "Failed to rename"),
-            ("transport", "file", "filestation_error", "Failed to rename"),
-            ("file", "transport", "filestation_error", "Failed to rename"),
+            ("dsm_error", "file", "filestation_error", "may already be taken"),
+            ("file", "dsm_error", "filestation_error", "may already be taken"),
+            ("transport", "file", "filestation_error", "may already be taken"),
+            ("file", "transport", "filestation_error", "may already be taken"),
         ],
     )
     async def test_rename_1200_says_why(
@@ -245,16 +246,57 @@ class TestRename:
         assert error["code"] == code, error
         assert says in error["message"] and "1200" in error["message"]
         assert "Unknown error" not in error["message"] and error["suggestion"]
+        if code == "not_found":
+            assert (error["param"], error["value"]) == ("path", "/video/a"), error
+        if code == "already_exists":
+            assert (error["param"], error["value"]) == ("new_name", "b"), error
+        if code in ("not_found", "already_exists"):
+            assert error["retryable"] is False, error
 
     @respx.mock
-    async def test_rename_1200_to_its_own_name_claims_nothing(self, mock_client: DsmClient) -> None:
-        """The source is the "existing" target, so it's not reported as already taken."""
+    @pytest.mark.parametrize(
+        ("path", "new_name"),
+        [
+            ("/video/a", "a"),  # its own name: the "existing" new path is the source
+            ("/video/a", "."),  # a folder, not an entry in it
+            ("/video/a", ".."),
+            ("/video", "music"),  # a share root: no parent folder to look in
+        ],
+    )
+    async def test_rename_1200_claims_no_taken_name_it_cant_know(
+        self, mock_client: DsmClient, path: str, new_name: str
+    ) -> None:
+        """getinfo answers "file" for every path here, yet nothing is called taken."""
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._rename_1200({}))
+        with pytest.raises(ToolError) as exc_info:
+            await rename(mock_client, path=path, new_name=new_name)
+        assert json.loads(str(exc_info.value))["error"]["code"] == "filestation_error"
+
+    @respx.mock
+    async def test_rename_1200_missing_source_keeps_the_callers_path(
+        self, mock_client: DsmClient
+    ) -> None:
+        """Like the other tools' not_found: the caller's own path, and the wildcard hint."""
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
-            side_effect=self._rename_1200({"/video/a": "file"})
+            side_effect=self._rename_1200({"/video/*.txt": "missing"})
         )
         with pytest.raises(ToolError) as exc_info:
-            await rename(mock_client, path="/video/a", new_name="a")
-        assert json.loads(str(exc_info.value))["error"]["code"] == "filestation_error"
+            await rename(mock_client, path="video/*.txt", new_name="b")
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "not_found" and error["value"] == "video/*.txt", error
+        assert "Paths are literal, not wildcard patterns" in error["suggestion"]
+
+    @respx.mock
+    async def test_rename_1200_missing_source_takes_one_getinfo(
+        self, mock_client: DsmClient
+    ) -> None:
+        route = respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._rename_1200({"/video/a": "missing"})
+        )
+        with pytest.raises(ToolError):
+            await rename(mock_client, path="/video/a", new_name="b")
+        methods = [dict(c.request.url.params)["method"] for c in route.calls]
+        assert methods == ["rename", "getinfo"]
 
     @respx.mock
     async def test_rename_1200_failed_check_is_logged(

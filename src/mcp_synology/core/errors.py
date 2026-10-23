@@ -356,9 +356,8 @@ FILESTATION_ERROR_CODES: dict[int, tuple[str, str]] = {
         "The destination filesystem does not support this operation.",
     ),
     1200: (
-        "Failed to rename",
-        "DSM gives this both when the path doesn't exist and when the new name is already "
-        "taken in that folder. Check both with list_files, then retry.",
+        "The path may not exist, or the new name may already be taken in that folder",
+        "Check both with list_files, then retry.",
     ),
     1800: ("Disk quota exceeded during upload", "Free space or contact NAS administrator."),
     1801: ("No permission to upload", "Check DSM shared folder write permissions."),
