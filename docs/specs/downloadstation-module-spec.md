@@ -320,9 +320,9 @@ Download Station schedule
   Limited upload rate:     unlimited
 
      00 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20 21 22 23
-Sun  # # # # # # # # # # # # # # # # # # # # # # # #
+Sun  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #
 ...
-Sat  # # # # # # # # # # # # # # # # # # # # # # # #
+Sat  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #
 
 Legend: # = full speed   ~ = limited (alt speed)   . = no download
 Hours are the NAS's local time.

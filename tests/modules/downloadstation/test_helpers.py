@@ -39,6 +39,20 @@ class TestFormatScheduleGrid:
         assert sun.count("~") == 24
         assert "~" not in mon and mon.count(".") == 24
 
+    def test_each_cell_sits_under_its_hour(self) -> None:
+        """Each hour's cell is in the column of its label's first digit (rc5 live test:
+        the cells drifted left of the labels from hour 01, so hour 23 sat under 11/12).
+        """
+        from mcp_synology.modules.downloadstation.helpers import format_schedule_grid
+
+        # Sunday: only hour h is limited, for every h in turn (one plan per hour).
+        for hour in range(24):
+            day = "".join("2" if h == hour else "0" for h in range(24))
+            lines = format_schedule_grid(day + "0" * 144).splitlines()
+            header = lines[0]
+            sun = next(ln for ln in lines if ln.startswith("Sun"))
+            assert sun.index("~") == header.index(f"{hour:02d}")
+
     def test_legend_matches_dsm_wording(self) -> None:
         from mcp_synology.modules.downloadstation.helpers import format_schedule_grid
 
