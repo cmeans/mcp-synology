@@ -399,8 +399,7 @@ class TestListFiles:
 
     @respx.mock
     async def test_list_files_407_is_permission_denied(self, mock_client: DsmClient) -> None:
-        """rc5 live test: list_files /home as an account with no home folder got DSM 407,
-        reported as "Unknown error (code 407)"."""
+        """rc5 live test: list_files /home got DSM 407, reported as "Unknown error (code 407)"."""
         respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
             json={"success": False, "error": {"code": 407}}
         )

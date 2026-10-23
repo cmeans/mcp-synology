@@ -66,7 +66,7 @@ class TestErrorFromCode:
 
     def test_filestation_407_is_permission_denied(self) -> None:
         """File Station 407 (operation not permitted) is a permission refusal, not an
-        unknown error (rc5 live test: list_files /home as an account with no home folder).
+        unknown error (rc5 live test: list_files /home got DSM 407).
         """
         err = error_from_code(407, api_name="SYNO.FileStation.List")
         assert isinstance(err, SynologyPermissionError)
