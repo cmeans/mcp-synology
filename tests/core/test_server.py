@@ -1604,7 +1604,15 @@ class TestInstructionComments:
 # password or an expiry needs public view or download (#348).
 # Raised by #364 to 31,347 (+45): list_recycle_bin's offset parameter, which its
 # "Use offset=N to see more" hint names.
-PAYLOAD_BUDGET_CHARS = 31_347
+# Raised by #373 (#247) to 49,965 (+18,618, +59%; maintainer-approved): every tool parameter
+# gets a schema description, 182 of them where only file_task's 2 had one (~14,600
+# characters of text, ~2,000 of `"description"` keys), and Glama's lowest-scoring File
+# Station descriptions were rewritten (list_recycle_bin, list_files, create_folder,
+# delete_files, restore_from_recycle_bin). Prose that only repeated a tool's own schema
+# went (Download Station -908). Facts were not moved into the instructions: claude.ai's
+# desktop app doesn't receive them, and an instructions_file replaces them, so a tool's
+# own text has to carry what the model needs to use it.
+PAYLOAD_BUDGET_CHARS = 49_965
 
 
 class TestPayloadBudget:
