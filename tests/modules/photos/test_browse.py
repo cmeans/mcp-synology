@@ -417,7 +417,7 @@ class TestGetPhoto:
         assert out.endswith("Not found: 999999")
 
     @respx.mock
-    async def test_whitespace_description_shows_as_none(self) -> None:
+    async def test_whitespace_description_shows_as_dash(self) -> None:
         """Some cameras pad EXIF ImageDescription with spaces, and Photos takes the
         description from it (0.10.0rc5 live test, a Nikon E3500 photo; #362)."""
         item = captured("item-get")
