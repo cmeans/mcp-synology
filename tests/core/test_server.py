@@ -26,6 +26,7 @@ from mcp_synology.server import (
     SharedClientManager,
     _compact_schema,
     _strip_html_comments,
+    _SynologyServer,
     config_notices,
     create_server,
 )
@@ -145,10 +146,10 @@ class TestMcpInstructions:
 
     def test_filestation_file_holds_its_sections(self) -> None:
         text = _MODULE_INSTRUCTIONS["filestation"]
-        for section in ("PATH FORMAT", "RECYCLE BIN", "DOWNLOADING", "list_shares"):
+        for section in ("PATH FORMAT", "DOWNLOADING", "list_shares"):
             assert section in text
         write = _MODULE_WRITE_INSTRUCTIONS["filestation"]
-        for section in ("UPLOADING", "MOVING AND ORGANIZING", "LONG OPERATIONS", "file_task"):
+        for section in ("MOVING AND ORGANIZING", "LONG OPERATIONS", "file_task"):
             assert section in write
 
 
@@ -156,8 +157,9 @@ def _instructions(**modules: dict[str, Any]) -> str:
     return create_server(make_test_config(modules=modules)).instructions or ""
 
 
-_FS_SECTIONS = ("FILE STATION", "PATH FORMAT", "list_shares", "RECYCLE BIN", "download_file")
-_FS_WRITE_SECTIONS = ("UPLOADING", "MOVING AND ORGANIZING", "LONG OPERATIONS", "file_task")
+# What each tool says about itself stays in its own description (#375).
+_FS_SECTIONS = ("FILE STATION", "PATH FORMAT", "list_shares", "DOWNLOADING")
+_FS_WRITE_SECTIONS = ("MOVING AND ORGANIZING", "LONG OPERATIONS", "file_task")
 
 
 def _guidance(text: str) -> str:
@@ -215,7 +217,7 @@ class TestInstructionsPerModule:
         for section in _FS_WRITE_SECTIONS:
             assert section in text, section
         # After File Station's shared sections.
-        assert text.index("RECYCLE BIN") < text.index("UPLOADING")
+        assert text.index("DOWNLOADING") < text.index("MOVING AND ORGANIZING")
 
     @pytest.mark.parametrize("module", ["filestation", "photos"])
     def test_read_only_guidance_names_no_write_tools(self, module: str) -> None:
@@ -1612,7 +1614,13 @@ class TestInstructionComments:
 # went (Download Station -908). Facts were not moved into the instructions: claude.ai's
 # desktop app doesn't receive them, and an instructions_file replaces them, so a tool's
 # own text has to carry what the model needs to use it.
-PAYLOAD_BUDGET_CHARS = 49_965
+# Lowered by #375 to 48,047 (-1,918; and outputSchema is now counted): tools are registered
+# as unstructured, so none has the SDK's generated {"result": string} outputSchema (6,937
+# characters on the wire that this budget didn't count) and each reply is sent once, not
+# again as structuredContent. filestation.md and filestation-write.md keep only what no
+# single tool says (path format, the default download folder, organizing files, long
+# operations); the rest is in the tools' own descriptions since #247.
+PAYLOAD_BUDGET_CHARS = 48_047
 
 
 class TestPayloadBudget:
@@ -1624,13 +1632,49 @@ class TestPayloadBudget:
         monkeypatch.setenv("HOME", "/fake/home")
         monkeypatch.setenv("USERPROFILE", "/fake/home")
         tools, instructions = await _served(create_server(make_test_config(modules=ALL_MODULES)))
-        size = sum(len(json.dumps(t.input_schema)) + len(t.description or "") for t in tools)
+        size = sum(
+            len(json.dumps(t.input_schema))
+            + len(t.description or "")
+            + (len(json.dumps(t.output_schema)) if t.output_schema else 0)
+            for t in tools
+        )
         size += len(instructions)
         assert size <= PAYLOAD_BUDGET_CHARS, (
             f"served payload is {size} chars, budget {PAYLOAD_BUDGET_CHARS} "
             f"(+{size - PAYLOAD_BUDGET_CHARS}). If the growth is intended, raise "
             "PAYLOAD_BUDGET_CHARS in this PR."
         )
+
+
+class TestTextOnlyResults:
+    """Tools are unstructured (#375): no outputSchema in the list, each reply sent once."""
+
+    async def test_no_served_tool_has_an_output_schema(self) -> None:
+        tools, _ = await _served(create_server(make_test_config(modules=ALL_MODULES)))
+        with_schema = [t.name for t in tools if t.output_schema]
+        assert not with_schema, f"tools with an outputSchema: {with_schema}"
+
+    async def test_a_text_reply_is_sent_once(self) -> None:
+        server = _SynologyServer("t")
+
+        @server.tool(name="echo")
+        async def echo(text: str) -> str:
+            return f"you said {text}"
+
+        async with Client(server) as client:
+            result = await client.call_tool("echo", {"text": "hi"})
+        assert [c.text for c in result.content] == ["you said hi"]  # type: ignore[union-attr]
+        assert result.structured_content is None
+
+    async def test_an_explicit_structured_tool_stays_structured(self) -> None:
+        server = _SynologyServer("t")
+
+        @server.tool(name="echo", structured_output=True)
+        async def echo(text: str) -> str:
+            return text
+
+        tools, _ = await _served(server)
+        assert tools[0].output_schema is not None
 
 
 class TestParameterDescriptions:

@@ -35,7 +35,7 @@ if TYPE_CHECKING:
     from types import ModuleType
 
     from mcp.server.mcpserver import Context
-    from mcp.types import CallToolResult, InputRequiredResult
+    from mcp.types import CallToolResult, InputRequiredResult, ToolAnnotations
     from mcp.types import Tool as MCPTool
 
     from mcp_synology.core.config import AppConfig, ModuleConfig
@@ -228,11 +228,42 @@ def _compact_schema(node: Any) -> Any:
 
 
 class _SynologyServer(MCPServer):
-    """MCPServer with compacted tool schemas and error details kept (#114).
+    """MCPServer with compacted tool schemas, text-only results and error details kept.
 
     mcp 2.x documents ``list_tools()`` and ``call_tool()`` as what the protocol handlers
-    call, so these overrides take effect without touching SDK internals.
+    call, and ``add_tool()`` as what the ``tool()`` decorator calls, so these overrides
+    take effect without touching SDK internals.
     """
+
+    def add_tool(
+        self,
+        fn: Callable[..., Any],
+        name: str | None = None,
+        title: str | None = None,
+        description: str | None = None,
+        annotations: ToolAnnotations | None = None,
+        icons: list[Icon] | None = None,
+        meta: dict[str, Any] | None = None,
+        structured_output: bool | None = None,
+    ) -> None:
+        """Register every tool as unstructured (#375).
+
+        Every tool returns text written for the model. Left to auto-detect, the SDK
+        treats ``-> str`` as structured: it gives each tool an ``outputSchema`` of
+        ``{"result": string}`` (about 7,000 characters across the tool list) and sends
+        each reply twice, as ``content`` and again as ``structuredContent``. Only an
+        explicit ``structured_output=True`` keeps it.
+        """
+        super().add_tool(
+            fn,
+            name=name,
+            title=title,
+            description=description,
+            annotations=annotations,
+            icons=icons,
+            meta=meta,
+            structured_output=structured_output is True,
+        )
 
     async def list_tools(self) -> list[MCPTool]:
         """Serve each tool's input schema compacted (#163)."""
