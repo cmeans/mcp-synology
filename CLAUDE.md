@@ -72,8 +72,8 @@ uv run pytest -n auto --cov=mcp_synology   # Tests with coverage
 ### Logging
 - Every module uses `logging.getLogger(__name__)` — log output includes the full module path for traceability
 - **DEBUG**: detailed operational trace — every DSM request/response (passwords masked), credential resolution steps, config discovery, version negotiation, API cache contents, session lifecycle, module registration
-- **INFO**: significant lifecycle events only — successful auth, re-auth, security config notes
-- **WARNING/ERROR**: configuration issues, failures
+- **INFO**: significant lifecycle events only — successful auth, re-auth, config notes (e.g. a module disabled)
+- **WARNING/ERROR**: configuration issues (including plain HTTP and SSL verification off), failures
 - **Enabling debug logging** depends on the subcommand:
   - For `serve` (launched by Claude Desktop, no interactive flag available): set `SYNOLOGY_LOG_LEVEL=debug` env var OR `logging.level: debug` in the instance config
   - For `setup` / `check` (interactive CLI): pass `-v` / `--verbose`, or use either of the above

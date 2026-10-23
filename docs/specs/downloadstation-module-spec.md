@@ -155,7 +155,7 @@ List the queue, paged, with the true total.
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `status_filter` | `str` | No | `"all"` | `all`, `downloading` (also waiting, checking or extracting), `finished` (also seeding), `paused` or `error` (see Statuses). |
+| `status_filter` | `str` | No | `"all"` | `all`, `downloading` (also waiting, finishing, hash checking, waiting for a file host, or extracting), `finished` (also seeding), `paused` or `error` (see Statuses). |
 | `sort_by` | `str` | No | `"queue"` | `queue` (DSM order: creation order, oldest first), `created` or `completed` (newest first; tasks that never completed sort last). |
 | `offset` | `int` | No | `0` | First task to show (0-based) within the filtered and sorted list. Must be 0 or more; a negative offset is rejected locally with `invalid_parameter` (#141). The footer gives the next offset. |
 | `limit` | `int` | No | `25` | Page size. Must be 1 or more, checked locally (#141). |

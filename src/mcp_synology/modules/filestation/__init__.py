@@ -122,7 +122,9 @@ MODULE_INFO = ModuleInfo(
                 "from that share. list_shares shows which shares have a bin; for files that "
                 "weren't deleted, use list_files. Without pattern, only the bin's top level is "
                 "listed, and DSM sorts folders and files separately, as in list_files. With "
-                "pattern, the whole bin is searched and each match shows its path in the bin. "
+                "pattern, the bin is searched, subfolders included (up to 200 folders and 5,000 "
+                "items; the reply says when it stops early), and each match shows its path in "
+                "the bin. "
                 "Modified is the file's own time, not when it was deleted."
             ),
             permission_tier=PermissionTier.READ,
@@ -517,8 +519,8 @@ def register(ctx: RegisterContext) -> None:
                 Field(
                     description=(
                         "Name filter, as in list_files (case-insensitive; `*` and `?`; a bare "
-                        "word matches anywhere), applied across the whole bin, subfolders "
-                        "included."
+                        "word matches anywhere), applied across the bin, subfolders included "
+                        "(up to 200 folders and 5,000 items; the reply says when it stops early)."
                     )
                 ),
             ] = None,

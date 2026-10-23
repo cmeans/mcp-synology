@@ -1614,13 +1614,17 @@ class TestInstructionComments:
 # went (Download Station's descriptions -592 net). Facts were not moved into the
 # instructions: claude.ai's desktop app doesn't receive them, and an instructions_file
 # replaces them, so a tool's own text has to carry what the model needs to use it.
-# Lowered by #377 to 48,249 (-1,877; and outputSchema is now counted): tools are registered
+# Raised by #376 to 50,322 (+196): list_downloads' status_filter names every state in its
+# groups (finishing, hash checking, waiting for a file host), and list_recycle_bin's
+# description and pattern say the search stops at 200 folders and 5,000 items, and that the
+# reply says when it stops early (#375).
+# Lowered by #377 to 48,445 (-1,877; and outputSchema is now counted): tools are registered
 # as unstructured, so none has the SDK's generated {"result": string} outputSchema (6,937
 # characters on the wire that this budget didn't count) and each reply is sent once, not
 # again as structuredContent. filestation.md and filestation-write.md keep only what no
 # single tool says (path format, the default download folder, the #recycle folder,
 # organizing files, long operations); the rest is in the tools' own descriptions since #247.
-PAYLOAD_BUDGET_CHARS = 48_249
+PAYLOAD_BUDGET_CHARS = 48_445
 
 
 class TestPayloadBudget:

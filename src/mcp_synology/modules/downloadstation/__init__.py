@@ -255,8 +255,9 @@ def register(ctx: RegisterContext) -> None:
                 str,
                 Field(
                     description=(
-                        "`all` (default), `downloading` (also waiting, checking or "
-                        "extracting), `finished` (also seeding), `paused` or `error`."
+                        "`all` (default), `downloading` (also waiting, finishing, hash "
+                        "checking, waiting for a file host, or extracting), `finished` (also "
+                        "seeding), `paused` or `error`."
                     )
                 ),
             ] = "all",
