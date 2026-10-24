@@ -211,7 +211,7 @@ async def get_system_info(client: DsmClient) -> str:
     # Explicit None-checks: 0 is a valid reading, not a missing one.
     ram = dsm["ram"] if dsm.get("ram") is not None else core.get("ram_size")
     if ram:
-        pairs.append(("RAM", f"{ram} MiB"))
+        pairs.append(("RAM", f"{int(ram):,} MiB"))
 
     temp = dsm["temperature"] if dsm.get("temperature") is not None else core.get("sys_temp")
     temp_warn = any(

@@ -75,7 +75,7 @@ def album_line(album: dict[str, Any]) -> str:
     """``Album 9: Trip 2024 · normal · 2 item(s) · 2024-07-04 – 2024-07-06 · not shared``."""
     return (
         f"Album {album['id']}: {album.get('name', '')} · {album.get('type', 'normal')} · "
-        f"{album.get('item_count', 0)} item(s) · {_span(album)} · {_shared(album)}"
+        f"{int(album.get('item_count') or 0):,} item(s) · {_span(album)} · {_shared(album)}"
     )
 
 
@@ -168,7 +168,7 @@ async def _photo_album(
             )
             created = data["album"]
             lines.append(f'Created smart album "{name}" (id {created["id"]}).')
-            lines.append(f"Matches {count.get('count', 0)} item(s) now.")
+            lines.append(f"Matches {int(count.get('count', 0)):,} item(s) now.")
         if same:
             others = ", ".join(str(a["id"]) for a in same)
             lines.append(
@@ -251,7 +251,7 @@ async def _photo_album(
             personal=True,
         )
         lines.append(f"Album {album_id}'s condition is replaced.")
-        lines.append(f"Matches {count.get('count', 0)} item(s) now.")
+        lines.append(f"Matches {int(count.get('count', 0)):,} item(s) now.")
     return "\n".join([*lines, album_line(await _album_now(ph, album_id))])
 
 

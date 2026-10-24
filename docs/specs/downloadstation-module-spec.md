@@ -170,7 +170,7 @@ Download Station queue (all)
   dbid_2554  Mrs Biggs  (2012) 720p   bt    seeding  4.2 GiB  4.2 GiB / 4.2 GiB (100%)  —     —           —    2025-09-27 13:23:43 UTC
   dbid_4010  Cleddau Series 2 (2026)  bt    seeding  6.5 GiB  6.5 GiB / 6.5 GiB (100%)  —     100.9 KiB/s  —    2025-10-11 20:01:33 UTC
 
-1214 task(s) total; showing 1–2. Pass offset=2 for the next page.
+1,214 task(s) total; showing 1–2. Pass offset=2 for the next page.
 ```
 
 The heading adds `; newest completed first` (or `created`) for a sort, and `; your tasks only` for a non-manager. An offset past the end shows the heading, `No items to display.` (no column headers) and `N task(s) total; offset X is past the end.`

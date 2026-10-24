@@ -441,7 +441,7 @@ async def _collections(
             [
                 str(e["id"]),
                 str(e.get("name") or "(unnamed)"),
-                str(e.get("item_count", 0)),
+                _items(e),
                 "no" if e.get("show", True) else "yes",
             ]
             for e in entries
@@ -449,9 +449,7 @@ async def _collections(
     elif kind == "tag":
         entries = await ph.walk("Browse.GeneralTag")
         heading, headers = "Tags", ["ID", "Name", "Items"]
-        rows = [
-            [str(e["id"]), str(e.get("name", "")), str(e.get("item_count", 0))] for e in entries
-        ]
+        rows = [[str(e["id"]), str(e.get("name", "")), _items(e)] for e in entries]
     elif kind == "place":
         entries = await ph.walk("Browse.Geocoding")
         heading, headers = "Places", ["ID", "Name", "Country", "Items"]
@@ -460,7 +458,7 @@ async def _collections(
                 str(e["id"]),
                 str(e.get("name", "")),
                 str(e.get("country", "")),
-                str(e.get("item_count", 0)),
+                _items(e),
             ]
             for e in entries
         ]
@@ -471,7 +469,7 @@ async def _collections(
             [
                 str(e["id"]),
                 str(e.get("name", "")),
-                str(e.get("item_count", 0)),
+                _items(e),
                 "no" if e.get("visibility", True) not in (False, "hidden") else "yes",
             ]
             for e in entries
@@ -516,6 +514,11 @@ async def _collections(
     return f"{format_table(headers, shown, title=title)}\n\n{footer}"
 
 
+def _items(entry: dict[str, Any]) -> str:
+    """A collection's item count, with thousands separated."""
+    return f"{int(entry.get('item_count') or 0):,}"
+
+
 def _privacy(info: dict[str, Any] | None, shared: bool = False) -> str:
     """The Shared column: the link's privacy, ``private link`` for a shared album that
     only invited members can open, or ``no``."""
@@ -552,7 +555,7 @@ def _album_row(e: dict[str, Any]) -> list[str]:
         str(e["id"]),
         str(e.get("name", "")),
         str(e.get("type", "")),
-        str(e.get("item_count", 0)),
+        _items(e),
         _privacy(info, bool(e.get("shared"))),
         _span(e),
     ]
@@ -565,7 +568,7 @@ def _shared_row(e: dict[str, Any]) -> list[str]:
         str(e["id"]),
         str(e.get("name", "")),
         str(owner),
-        str(e.get("item_count", 0)),
+        _items(e),
         str(info.get("privacy_type") or "—"),
         _span(e),
     ]
@@ -723,7 +726,7 @@ def _exif_value(value: str) -> str:
     value = value.replace("\r\n", " ").translate({ord("\r"): " ", ord("\n"): " ", ord("\t"): " "})
     if any(c == "\ufffd" or c < " " or "\x7f" <= c <= "\x9f" for c in value):
         unit = "character" if len(value) == 1 else "characters"
-        return f"(binary data, {len(value)} {unit}; not shown)"
+        return f"(binary data, {len(value):,} {unit}; not shown)"
     if len(value) > _EXIF_VALUE_MAX:
         return f"{value[:_EXIF_VALUE_MAX]}… ({len(value):,} characters)"
     return value

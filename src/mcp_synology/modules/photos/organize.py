@@ -321,7 +321,7 @@ def person_line(person: dict[str, Any]) -> str:
     shown = "visible" if person.get("show", True) else "hidden"
     return (
         f"Person {person['id']}: {person.get('name') or '(unnamed)'} "
-        f"({person.get('item_count', 0)} items, {shown}{cover})."
+        f"({int(person.get('item_count') or 0):,} items, {shown}{cover})."
     )
 
 
@@ -408,9 +408,11 @@ async def merge_people(
             version=2,
         )
         now = await _person_now(ph, keep_id)
+        items = now.get("item_count")
+        count = f"{int(items):,}" if items is not None else "?"
         return (
             f"Merged {len(merged)} people into person {keep_id} "
-            f'"{now.get("name") or "(unnamed)"}" (now {now.get("item_count", "?")} items).'
+            f'"{now.get("name") or "(unnamed)"}" (now {count} items).'
         )
     except SynologyError as e:
         synology_error_response(op, e)

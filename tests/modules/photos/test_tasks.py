@@ -435,7 +435,7 @@ class TestDeletes:
     @respx.mock
     async def test_delete_folders(self) -> None:
         fake = FakePhotos().on(FOLDER, "get", 2, captured("folder-get-by-name"))
-        fake.on(ITEM, "count", 1, {"count": 4})
+        fake.on(ITEM, "count", 1, {"count": 4321})
         fake.on(FILE, "delete", 1, captured("fav191_bg-delete"))
         fake.on(INFO, "get_status", 1, captured("fav191_bg-delete-status"))
         fake.on("SYNO.Foto.Setting.Admin", "get", 1, captured("qa1_setting-admin-get"))
@@ -444,7 +444,7 @@ class TestDeletes:
         async with client:
             out = await delete_photo_folders(client, folders=["/mcp-spec-capture"])
         assert fake.one(FILE, "delete").params == {"item_id": [], "folder_id": [10]}
-        assert out.startswith("Deleted /mcp-spec-capture (4 item(s) directly in it)")
+        assert out.startswith("Deleted /mcp-spec-capture (4,321 item(s) directly in it)")
 
     @respx.mock
     async def test_delete_root_refused(self) -> None:
@@ -542,6 +542,18 @@ class TestPhotoTask:
             cleared = await photo_task(client, action="clear")
         assert "photos:1" in table and "copy" in table
         assert cleared == f"Removed {len(listed['list'])} finished task(s) from the list."
+
+    @respx.mock
+    async def test_list_separates_thousands(self) -> None:
+        listed = captured("bg-list-user-task")
+        listed["list"][0].update(completion=1500, total=12000)
+        fake = FakePhotos().on(INFO, "list_user_task", 1, listed)
+        fake.on(FOLDER, "get", 2, _DEST)
+        install(fake)
+        client = make_client()
+        async with client:
+            table = await photo_task(client)
+        assert "1,500/12,000" in table
 
     @respx.mock
     @pytest.mark.parametrize(
@@ -870,3 +882,10 @@ class TestCoverage:
             out = await photo_task(client, handle="photos:5")
         assert out.startswith("photos:5 delete: processing, 1 of 2 processed")
         assert "running" not in out
+
+
+def test_progress_counts_separate_thousands() -> None:
+    status = {"total": 12_000, "completion": 1_500, "skip": 1_200, "overwrite": 0, "error": 1_001}
+    assert tasks._counts(status) == (
+        "1,500 of 12,000 processed, 1,200 skipped (already there), 0 overwritten, 1,001 failed"
+    )

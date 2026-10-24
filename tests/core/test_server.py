@@ -1647,7 +1647,10 @@ class TestInstructionComments:
 # (every field DSM sends, the NAS's local time and code page included) and what only an
 # administrator gets; get_resource_usage says it needs one; edit_photo's description says
 # one of only spaces shows as "—".
-PAYLOAD_BUDGET_CHARS = 49_094
+# Raised by #401 to 49,151 (+57): get_system_info's description says the network-card
+# flag comes only from DSM 7.2.2 and later and redundant power only on models that report
+# it (the DS1618+ on DSM 7.1.1 sends neither; 0.10.0rc7 answer key).
+PAYLOAD_BUDGET_CHARS = 49_151
 
 
 class TestPayloadBudget:

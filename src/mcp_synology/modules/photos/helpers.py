@@ -642,11 +642,11 @@ def parse_expires(operation: str, value: str) -> int:
 def page_footer(total: int | None, offset: int, shown: int, noun: str = "item(s)") -> str:
     """``N item(s) total; showing a–b.`` plus the next offset when there's more."""
     if total is None:
-        line = f"Showing {offset + 1}–{offset + shown}." if shown else ""
+        line = f"Showing {offset + 1:,}–{offset + shown:,}." if shown else ""
         return line + (f" Pass offset={offset + shown} for the next page." if shown else "")
     if shown == 0:
-        return f"{total} {noun} total."
-    line = f"{total} {noun} total; showing {offset + 1}–{offset + shown}."
+        return f"{total:,} {noun} total."
+    line = f"{total:,} {noun} total; showing {offset + 1:,}–{offset + shown:,}."
     if offset + shown < total:
         line += f" Pass offset={offset + shown} for the next page."
     return line

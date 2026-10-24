@@ -210,7 +210,7 @@ async def list_downloads(
     if not tasks:
         result = format_table(headers=headers, rows=[], title=heading)
         if offset > 0 and total > 0:
-            result += f"\n\n{total} task(s) total; offset {offset} is past the end."
+            result += f"\n\n{total:,} task(s) total; offset {offset:,} is past the end."
         return result
 
     rows: list[list[str]] = []
@@ -238,7 +238,7 @@ async def list_downloads(
 
     last = offset + len(rows)
     result = format_table(headers=headers, rows=rows, title=heading)
-    result += f"\n\n{total} task(s) total; showing {offset + 1}–{last}."
+    result += f"\n\n{total:,} task(s) total; showing {offset + 1:,}–{last:,}."
     if last < total:
         result += f" Pass offset={last} for the next page."
     return result

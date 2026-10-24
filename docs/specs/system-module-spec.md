@@ -89,10 +89,11 @@ Hardware and software identity and basic health.
 > Get everything DSM reports about the NAS. Every account gets the model, serial number, DSM
 > version, RAM, uptime, the NAS's local time and its code page, and the temperature where the NAS
 > has a sensor. A DSM administrator account also gets the CPU, time zone with the current UTC
-> offset, NTP server, firmware date, DSM's update-ready, crash and network-card flags, redundant
-> power and eSATA, and attached devices; any other account gets a line saying so. Use this to
-> identify the NAS, check its basic health or tell the time on it. For live CPU, memory, disk and
-> network load, use get_resource_usage.
+> offset, NTP server, firmware date, DSM's update-ready and crash flags, eSATA and attached
+> devices, the network-card flag on DSM 7.2.2 and later, and redundant power on models that report
+> it; any other account gets a line saying so. Use this to identify the NAS, check its basic
+> health or tell the time on it. For live CPU, memory, disk and network load, use
+> get_resource_usage.
 
 **Parameters:** None.
 
@@ -105,7 +106,7 @@ System Info
   Serial number:                   1830PDN000000
   DSM version:                     DSM 7.1.1-42962 Update 9, firmware date 2025/07/29
   CPU:                             INTEL Atom C3538 (4 cores @ 2100 MHz)
-  RAM:                             4096 MiB
+  RAM:                             4,096 MiB
   Temperature:                     50°C
   Uptime:                          135d 4h 15m
   System time:                     Fri Oct 23 23:00:45 2026 (NAS local time)
@@ -128,7 +129,7 @@ System Info
   Model:                      VirtualDSM
   Serial number:              0000000000000
   DSM version:                DSM 7.4.1-90080
-  RAM:                        2048 MiB
+  RAM:                        2,048 MiB
   Uptime:                     < 1m
   System time:                Sat Oct 24 06:19:03 2026 (NAS local time)
   Time zone:                  not available to this account (needs a DSM administrator)

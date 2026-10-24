@@ -121,7 +121,7 @@ class TestGetResourceUsage:
             }
         )
         result = await get_resource_usage(mock_client)
-        assert "1024 MiB cached" in result
+        assert "1,024 MiB cached" in result
         assert "Swap in" in result
         assert "25 pages/s" in result
 
