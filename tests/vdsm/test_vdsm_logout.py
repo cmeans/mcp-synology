@@ -35,8 +35,10 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.vdsm
 
 _SITECUSTOMIZE = """
+import asyncio
 import os
 from mcp_synology.core import auth as _auth
+from mcp_synology.core import client as _client
 
 _login = _auth.AuthManager.login
 
@@ -49,6 +51,20 @@ async def login(self):
 
 
 _auth.AuthManager.login = login
+
+_request = _client.DsmClient.request
+
+
+async def request(self, api, method, *args, **kwargs):
+    # Holds the search open, so the signal comes while the call is still running.
+    hold = os.environ.get("MCP_TEST_HOLD_FILE")
+    if hold and api == "SYNO.FileStation.Search" and method == "list":
+        open(hold, "w").close()
+        await asyncio.sleep(60)
+    return await _request(self, api, method, *args, **kwargs)
+
+
+_client.DsmClient.request = request
 """
 
 _EXIT_TIMEOUT = 15
@@ -97,6 +113,7 @@ async def test_serve_logs_out_when_it_exits(
     _write_config(cfg_file, config)
     (tmp_path / "sitecustomize.py").write_text(_SITECUSTOMIZE)
     sid_file = tmp_path / "sid"
+    hold_file = tmp_path / "hold"
     # No SYNOLOGY_* from the developer's shell: they override the config file, and could
     # point the server at a real NAS.
     env = {k: v for k, v in os.environ.items() if not k.startswith("SYNOLOGY_")}
@@ -105,6 +122,8 @@ async def test_serve_logs_out_when_it_exits(
         "MCP_TEST_SID_FILE": str(sid_file),
         "SYNOLOGY_LOG_LEVEL": "debug",
     }
+    if how == "sigterm-in-call":
+        env["MCP_TEST_HOLD_FILE"] = str(hold_file)
     log = tmp_path / "serve.log"
     serve = Path(sys.executable).with_name("mcp-synology")
     with log.open("w") as errlog:
@@ -156,8 +175,9 @@ async def test_serve_logs_out_when_it_exits(
         assert await _session_alive(base_url, sid) == (True, None), "probe can't see the session"
 
         if how == "sigterm-in-call":
-            # A call still running when the signal comes (QA round 1): the logout must
-            # run anyway, shielded from the cancellation that unwinds the call.
+            # A call still running when the signal comes (QA rounds 1 and 2): the hook
+            # holds its Search `list`, so the signal can't land after the reply. The
+            # logout must run anyway, shielded from the cancellation that unwinds the call.
             share = paths["existing_share"]
             send(
                 {
@@ -168,7 +188,10 @@ async def test_serve_logs_out_when_it_exits(
                 }
             )
             await proc.stdin.drain()
-            await asyncio.sleep(1)
+            deadline = time.monotonic() + 60
+            while not hold_file.exists():
+                assert time.monotonic() < deadline, "the search never reached Search/list"
+                await asyncio.sleep(0.05)
         started = time.monotonic()
         if how == "eof":
             proc.stdin.close()
@@ -176,6 +199,7 @@ async def test_serve_logs_out_when_it_exits(
             proc.send_signal(signal.SIGINT if how == "sigint" else signal.SIGTERM)
         code = await asyncio.wait_for(proc.wait(), _EXIT_TIMEOUT)
         took = time.monotonic() - started
+        rest = (await proc.stdout.read()).decode()
     finally:
         if proc.returncode is None:
             proc.kill()
@@ -189,6 +213,13 @@ async def test_serve_logs_out_when_it_exits(
     }[how]
     assert code == expected, (code, log.read_text()[-2000:])
     assert took < 6, took  # logout bounded by LOGOUT_TIMEOUT (5 s)
-    assert "Logout successful" in log.read_text(), log.read_text()[-2000:]
+    text = log.read_text()
+    assert "Logout successful" in text, text[-2000:]
+    if how == "sigterm-in-call":
+        replies = [json.loads(line) for line in rest.splitlines() if line.strip()]
+        assert not any(r.get("id") == 2 for r in replies), replies  # canceled, never answered
+        # The canceled search still stops and cleans its NAS task (#391).
+        for step in ("stop", "clean"):
+            assert f"SYNO.FileStation.Search/{step} — success" in text, text[-2000:]
     alive, err = await _session_alive(base_url, sid)
     assert not alive and err == 119, (alive, err)
