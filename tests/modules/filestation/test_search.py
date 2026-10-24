@@ -60,6 +60,32 @@ class TestSearchFiles:
         assert "1 results found" in result
 
     @respx.mock
+    async def test_footer_counts_have_thousands_separators(self, mock_client: DsmClient) -> None:
+        """Every count in the footer is formatted alike (#390)."""
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            if params.get("method") == "start":
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "s-1"}})
+            if params.get("method") == "list":
+                files = [
+                    {
+                        "name": f"f{i}.txt",
+                        "path": f"/video/f{i}.txt",
+                        "isdir": False,
+                        "additional": {"size": 1, "time": {"mtime": 1710000000}},
+                    }
+                    for i in range(1200)
+                ]
+                data = {"files": files, "finished": True, "total": 1500}
+                return httpx.Response(200, json={"success": True, "data": data})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        result = await search_files(mock_client, folder_path="/video", pattern="f", limit=1200)
+        assert "1,200 results found (showing 1,200 of 1,500 — increase limit" in result
+
+    @respx.mock
     async def test_search_with_exclude_pattern(self, mock_client: DsmClient) -> None:
         call_count = 0
 

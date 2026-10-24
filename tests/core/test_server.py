@@ -1640,7 +1640,14 @@ class TestInstructionComments:
 # again as structuredContent. filestation.md and filestation-write.md keep only what no
 # single tool says (path format, the default download folder, the #recycle folder,
 # organizing files, long operations); the rest is in the tools' own descriptions since #247.
-PAYLOAD_BUDGET_CHARS = 48_445
+# Raised by #390 to 49,094 (+649): the five local-path parameters (download_file,
+# upload_file, create_download, download_photos, upload_photos) name the allowed folders
+# themselves instead of pointing to the instructions, which claude.ai never receives
+# (0.10.0rc6 live test); get_system_info's description lists everything it returns now
+# (every field DSM sends, the NAS's local time and code page included) and what only an
+# administrator gets; get_resource_usage says it needs one; edit_photo's description says
+# one of only spaces shows as "—".
+PAYLOAD_BUDGET_CHARS = 49_094
 
 
 class TestPayloadBudget:
@@ -1710,6 +1717,49 @@ class TestParameterDescriptions:
             if not str(schema.get("description", "")).strip()
         ]
         assert not missing, f"parameters without a description: {missing}"
+
+    async def test_local_path_parameters_name_the_allowed_folders(self, tmp_path: Path) -> None:
+        """claude.ai never receives the instructions' LOCAL PATHS (0.10.0rc5 and rc6 live
+        tests), so each parameter that takes a local path names the folders itself."""
+        shared = tmp_path / "shared"
+        config = make_test_config(modules=ALL_MODULES, allowed_local_paths=[str(shared)])
+        tools, _ = await _served(create_server(config))
+        params = {
+            ("download_file", "dest_folder"),
+            ("upload_file", "local_path"),
+            ("create_download", "torrent_file_path"),
+            ("download_photos", "dest_folder"),
+            ("upload_photos", "local_paths"),
+        }
+        described = {
+            (t.name, name): str(schema.get("description", ""))
+            for t in tools
+            for name, schema in t.input_schema.get("properties", {}).items()
+            if (t.name, name) in params
+        }
+        assert set(described) == params
+        missing = [p for p, text in described.items() if str(shared.resolve()) not in text]
+        assert not missing, f"descriptions that don't name the allowed folder: {missing}"
+
+    async def test_edit_photo_says_whitespace_reads_as_none(self) -> None:
+        """get_photo shows a description of only spaces as "—" (#370); edit_photo says so,
+        since Muse found it surprising in the 0.10.0rc6 live test."""
+        tools, _ = await _served(create_server(make_test_config(modules=ALL_MODULES)))
+        edit = next(t for t in tools if t.name == "edit_photo")
+        text = edit.input_schema["properties"]["description"]["description"]
+        assert "only spaces" in text and "—" in text
+
+    async def test_no_description_relies_on_the_instructions(self) -> None:
+        """A tool's own text carries what the model needs (#247): some clients drop the
+        instructions, so no description sends the model to them."""
+        tools, _ = await _served(create_server(make_test_config(modules=ALL_MODULES)))
+        texts = [(t.name, t.description or "") for t in tools] + [
+            (f"{t.name}.{name}", str(schema.get("description", "")))
+            for t in tools
+            for name, schema in t.input_schema.get("properties", {}).items()
+        ]
+        pointing = [name for name, text in texts if "instructions" in text.lower()]
+        assert not pointing, f"descriptions that point to the server instructions: {pointing}"
 
 
 class TestLocalPathsNotice:

@@ -21,15 +21,22 @@ MODULE_INFO = ModuleInfo(
     required_apis=[
         ApiRequirement(api_name="SYNO.DSM.Info", min_version=1),
         ApiRequirement(api_name="SYNO.Core.System", min_version=1, optional=True),
+        ApiRequirement(api_name="SYNO.Core.Region.NTP", min_version=1, optional=True),
+        ApiRequirement(api_name="SYNO.Core.System.Status", min_version=1, optional=True),
         ApiRequirement(api_name="SYNO.Core.System.Utilization", min_version=1, optional=True),
     ],
     tools=[
         ToolInfo(
             name="get_system_info",
             description=(
-                "Get NAS hardware and software info: model, firmware, CPU, RAM, "
-                "temperature, uptime. Use this to identify the NAS and check its "
-                "basic health. For live CPU, memory, disk and network load, use "
+                "Get everything DSM reports about the NAS. Every account gets the model, serial "
+                "number, DSM version, RAM, uptime, the NAS's local time and its code page, and "
+                "the temperature where the NAS has a sensor. A DSM administrator account also "
+                "gets the CPU, time zone with the current UTC offset, NTP server, firmware "
+                "date, DSM's update-ready, crash and network-card flags, "
+                "redundant power and eSATA, and attached devices; any other account gets a line "
+                "saying so. Use this to identify the NAS, check its basic health or tell the "
+                "time on it. For live CPU, memory, disk and network load, use "
                 "get_resource_usage."
             ),
             permission_tier=PermissionTier.READ,
@@ -38,7 +45,8 @@ MODULE_INFO = ModuleInfo(
             name="get_resource_usage",
             description=(
                 "Get live resource utilization: CPU load, memory usage, disk I/O, "
-                "and network throughput. Use this to check if the NAS is under "
+                "and network throughput. Needs a DSM administrator account; any other "
+                "account gets permission_denied. Use this to check if the NAS is under "
                 "heavy load before starting expensive work on it. For the model, firmware, "
                 "temperature and uptime, use get_system_info."
             ),

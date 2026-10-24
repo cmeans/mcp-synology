@@ -1,0 +1,62 @@
+{
+ "SYNO.Core.Region.NTP": {
+  "date": "2026/10/23",
+  "enable_ntp": "ntp",
+  "hour": 23,
+  "minute": 0,
+  "now": "Fri Oct 23 23:00:47 2026\n",
+  "second": 47,
+  "server": "time.google.com",
+  "timestamp": 1792814447,
+  "timezone": "Central"
+ },
+ "SYNO.Core.System": {
+  "cpu_clock_speed": 2100,
+  "cpu_cores": "4",
+  "cpu_family": "Atom",
+  "cpu_series": "C3538",
+  "cpu_vendor": "INTEL",
+  "enabled_ntp": true,
+  "external_pci_slot_info": [
+   {
+    "Occupied": "no",
+    "Recognized": "no",
+    "cardName": "-",
+    "slot": "1"
+   }
+  ],
+  "firmware_date": "2025/07/29",
+  "firmware_ver": "DSM 7.1.1-42962 Update 9",
+  "model": "DS1618+",
+  "ntp_server": "time.google.com",
+  "ram_size": 4096,
+  "sata_dev": [],
+  "serial": "1830PDN000000",
+  "support_esata": "yes",
+  "sys_temp": 50,
+  "sys_tempwarn": false,
+  "systempwarn": false,
+  "temperature_warning": false,
+  "time": "2026-10-23 23:00:46",
+  "time_zone": "Central",
+  "time_zone_desc": "(GMT-06:00) Central Time (US & Canada)",
+  "up_time": "3244:15:30",
+  "usb_dev": []
+ },
+ "SYNO.Core.System.Status": {
+  "is_system_crashed": false,
+  "upgrade_ready": false
+ },
+ "SYNO.DSM.Info": {
+  "codepage": "enu",
+  "model": "DS1618+",
+  "ram": 4096,
+  "serial": "1830PDN000000",
+  "temperature": 50,
+  "temperature_warn": false,
+  "time": "Fri Oct 23 23:00:45 2026",
+  "uptime": 11679330,
+  "version": "42962",
+  "version_string": "DSM 7.1.1-42962 Update 9"
+ }
+}

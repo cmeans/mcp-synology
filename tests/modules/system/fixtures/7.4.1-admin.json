@@ -1,0 +1,53 @@
+{
+ "SYNO.Core.Region.NTP": {
+  "date": "2026/10/24",
+  "enable_ntp": "ntp",
+  "hour": 6,
+  "minute": 19,
+  "now": "Sat Oct 24 06:19:02 2026\n",
+  "second": 2,
+  "server": "time.google.com",
+  "timestamp": 1792815542,
+  "timezone": "Amsterdam"
+ },
+ "SYNO.Core.System": {
+  "cpu_clock_speed": 3992,
+  "cpu_cores": "2",
+  "cpu_family": "",
+  "cpu_series": "",
+  "cpu_vendor": "AMD Ryzen 9 7940HS",
+  "enabled_ntp": true,
+  "external_pci_slot_info": [],
+  "firmware_date": "2026/07/22",
+  "firmware_ver": "DSM 7.4.1-90080",
+  "model": "VirtualDSM",
+  "ntp_server": "time.google.com",
+  "ram_size": 2048,
+  "rp1": 1,
+  "rp2": 1,
+  "sata_dev": [],
+  "serial": "0000000000000",
+  "support_esata": "no",
+  "support_rp": true,
+  "time": "2026-10-24 06:19:02",
+  "time_zone": "Amsterdam",
+  "time_zone_desc": "(GMT+01:00) Amsterdam, Berlin, Rome, Stockholm, Vienna",
+  "up_time": "0:0:26",
+  "usb_dev": []
+ },
+ "SYNO.Core.System.Status": {
+  "ext_nic_is_incompatible": false,
+  "is_system_crashed": false,
+  "upgrade_ready": false
+ },
+ "SYNO.DSM.Info": {
+  "codepage": "enu",
+  "model": "VirtualDSM",
+  "ram": 2048,
+  "serial": "0000000000000",
+  "time": "Sat Oct 24 06:19:02 2026",
+  "uptime": 26,
+  "version": "90080",
+  "version_string": "DSM 7.4.1-90080"
+ }
+}

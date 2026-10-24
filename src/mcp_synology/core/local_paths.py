@@ -156,6 +156,16 @@ def allowed_local_roots(
     return roots
 
 
+def roots_for_description(roots: list[Path]) -> str:
+    """The allowed folders, as a local-path parameter's description names them.
+
+    Some clients never pass the server's instructions to the model (claude.ai through the
+    desktop app, in the 0.10.0rc5 and rc6 live tests), so a parameter that takes a local
+    path names the folders itself instead of pointing to the instructions' LOCAL PATHS.
+    """
+    return "one of the allowed local folders (" + ", ".join(str(r) for r in roots) + ")"
+
+
 def outside_allowed_roots(path: str | Path, roots: list[Path]) -> Path | None:
     """Return the resolved ``path`` if it's outside every root, else ``None``.
 

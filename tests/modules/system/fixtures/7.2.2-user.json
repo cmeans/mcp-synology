@@ -1,0 +1,21 @@
+{
+ "SYNO.Core.Region.NTP": {
+  "error": 105
+ },
+ "SYNO.Core.System": {
+  "error": 1006
+ },
+ "SYNO.Core.System.Status": {
+  "error": 105
+ },
+ "SYNO.DSM.Info": {
+  "codepage": "enu",
+  "model": "VirtualDSM",
+  "ram": 2048,
+  "serial": "0000000000000",
+  "time": "Sat Oct 24 04:14:43 2026",
+  "uptime": 27,
+  "version": "72806",
+  "version_string": "DSM 7.2.2-72806"
+ }
+}

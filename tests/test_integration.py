@@ -1691,12 +1691,12 @@ class TestSystemInfo:
     """Test system info tool (works for all users via SYNO.DSM.Info)."""
 
     async def test_get_system_info(self, nas_client: Any) -> None:
-        """Should return model, firmware, uptime; temperature only on physical hardware."""
+        """Should return model, DSM version, uptime; temperature only on physical hardware."""
         client, _, _, _ = _unpack(nas_client)
         result = await get_system_info(client)
         logger.info("get_system_info:\n%s", result)
         assert "Model" in result
-        assert "Firmware" in result
+        assert "DSM version" in result
         assert "Uptime" in result
         # Virtual DSM has no hardware temp sensor — temperature is optional
         if "VirtualDSM" not in result:

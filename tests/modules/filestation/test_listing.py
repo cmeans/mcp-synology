@@ -469,11 +469,40 @@ class TestListRecycleBin:
 
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=responder)
         first = await list_recycle_bin(mock_client, share="home", limit=5)
-        assert "Use offset=5 to see more." in first
+        assert "Showing 1–5 of 9 items. Use offset=5 to see more." in first
         second = await list_recycle_bin(mock_client, share="home", limit=5, offset=5)
         assert sent == ["0", "5"]
         assert "f5.txt" in second and "f0.txt" not in second
         assert "Use offset=" not in second
+        # A later page gives its range, not just its count (rc6 live test: page 2 of 5
+        # said "Showing 2 of 5 items"), as the pattern listing does.
+        assert "Showing 6–9 of 9 items." in second
+
+    @respx.mock
+    async def test_footer_counts_have_thousands_separators(self, mock_client: DsmClient) -> None:
+        """Every number in the footer is formatted alike, not just the total."""
+
+        def responder(request: httpx.Request) -> httpx.Response:
+            offset = int(request.url.params.get("offset", "0"))
+            limit = int(request.url.params.get("limit", "0"))
+            files = [
+                {
+                    "name": f"f{i}.txt",
+                    "isdir": False,
+                    "additional": {"size": 1, "time": {"mtime": 1}},
+                }
+                for i in range(offset, min(offset + limit, 1500))
+            ]
+            return httpx.Response(
+                200, json={"success": True, "data": {"files": files, "total": 1500}}
+            )
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=responder)
+        whole = await list_recycle_bin(mock_client, share="home", limit=2000)
+        assert whole.endswith("1,500 of 1,500 items.")
+        assert "(1,500 items)" in whole  # the title too
+        last = await list_recycle_bin(mock_client, share="home", limit=1000, offset=1000)
+        assert last.endswith("Showing 1,001–1,500 of 1,500 items.")
 
     @respx.mock
     async def test_recycle_bin_disabled(self, mock_client: DsmClient) -> None:
@@ -710,6 +739,16 @@ def _bin_responder(
 
 
 class TestRecycleBinSearch:
+    @respx.mock
+    async def test_match_footer_has_thousands_separators(self, mock_client: DsmClient) -> None:
+        """Like list_files' footer (#390): every count in the line is formatted alike."""
+        tree = {_BIN: [_entry(f"{_BIN}/f{i:04d}.txt") for i in range(1500)]}
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_bin_responder(tree))
+        out = await list_recycle_bin(
+            mock_client, share="home", pattern="f*", limit=200, offset=1000
+        )
+        assert "Showing 1,001–1,200 of 1,500 matches. Use offset=1200 to see more." in out
+
     @respx.mock
     async def test_pattern_finds_a_file_in_a_subfolder(self, mock_client: DsmClient) -> None:
         """The rc3 case: b2* missed mcp-rc3/photos-zip/b2.txt at the bin's top level."""

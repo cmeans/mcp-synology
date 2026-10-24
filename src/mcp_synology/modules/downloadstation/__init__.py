@@ -5,14 +5,21 @@ get_download_config, get_schedule. WRITE tools: task create/delete/pause/
 resume/edit, set_download_config, set_schedule. BT search + RSS are planned.
 """
 
-from __future__ import annotations
+# No `from __future__ import annotations` here: a few parameter descriptions name this
+# config's allowed local folders, known only inside register(), and the SDK reads the
+# Annotated[..., Field(description=...)] metadata, so it must be built when each
+# handler is defined (rc6 live test; see core.local_paths.roots_for_description).
 
 from typing import TYPE_CHECKING, Annotated
 
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field, field_validator
 
-from mcp_synology.core.local_paths import allowed_local_roots, check_local_path_entries
+from mcp_synology.core.local_paths import (
+    allowed_local_roots,
+    check_local_path_entries,
+    roots_for_description,
+)
 from mcp_synology.modules import (
     ApiRequirement,
     ModuleInfo,
@@ -214,7 +221,7 @@ MODULE_INFO = ModuleInfo(
 )
 
 
-def register(ctx: RegisterContext) -> None:
+def register(ctx: "RegisterContext") -> None:
     """Register Download Station tools with the MCP server."""
     from mcp_synology.modules.downloadstation.config import (
         get_download_config,
@@ -354,8 +361,9 @@ def register(ctx: RegisterContext) -> None:
                 str | None,
                 Field(
                     description=(
-                        "Path on this machine to a `.torrent` or `.nzb` file, inside the "
-                        "allowed local folders. Pass this or `uri`, not both."
+                        "Path on this machine to a `.torrent` or `.nzb` file, inside "
+                        f"{roots_for_description(local_roots)}, or below it. Pass this or `uri`, "
+                        "not both."
                     )
                 ),
             ] = None,
