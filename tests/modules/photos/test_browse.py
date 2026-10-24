@@ -545,3 +545,11 @@ def test_collection_item_counts_separate_thousands() -> None:
     assert _items({"item_count": 12_345}) == "12,345"
     assert _items({"item_count": None}) == "0"
     assert _items({}) == "0"
+
+
+def test_collection_limit_refusal_separates_thousands() -> None:
+    from mcp_synology.modules.photos.browse import _check_paging
+
+    with pytest.raises(ToolError) as exc:
+        _check_paging("List photo collections", 0, 5_000, 1_000)
+    assert json.loads(str(exc.value))["error"]["message"].endswith("limit must be 1–1,000.")

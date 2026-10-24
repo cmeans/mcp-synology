@@ -86,7 +86,7 @@ async def create_folder(
             synology_error_response("Create folder", e)
         folders.extend(data.get("folders", []))
 
-    lines = [format_status(f"Created {len(folders)} folder(s):")]
+    lines = [format_status(f"Created {len(folders):,} folder(s):")]
     for f in folders:
         path = f.get("path", "")
         lines.append(f"  \U0001f4c1 {path}")
@@ -540,17 +540,17 @@ async def _skip_report(
 
     parts = []
     if files:
-        parts.append(f"{len(files)} skipped")
+        parts.append(f"{len(files):,} skipped")
     if folders:
-        parts.append(f"{len(folders)} folder{'s' if len(folders) > 1 else ''} with items skipped")
+        parts.append(f"{len(folders):,} folder{'s' if len(folders) > 1 else ''} with items skipped")
     if unknown:
-        parts.append(f"{len(unknown)} skipped in whole or in part")
+        parts.append(f"{len(unknown):,} skipped in whole or in part")
     # "In full" only when a folder may have been partly done: "0 of 1" alone would claim
     # nothing went through (QA R1 on #175).
     in_full = " in full" if folders or unknown else ""
     lines = [
         format_status(
-            f"{verb} {len(ok)} of {len(normalized)} item(s){in_full} to {dest}/; "
+            f"{verb} {len(ok):,} of {len(normalized):,} item(s){in_full} to {dest}/; "
             f"{', '.join(parts)} (already at the destination, overwrite=false):",
             success=False,
         )
@@ -721,7 +721,7 @@ async def _copy_move_summary(
         return p.split("/")[-1]
 
     if not skipped_paths:
-        lines = [format_status(f"{verb} {len(normalized)} item(s) to {dest}/:")]
+        lines = [format_status(f"{verb} {len(normalized):,} item(s) to {dest}/:")]
         lines.extend(f"  {name(p)}" for p in normalized)
     else:
         lines = await _skip_report(client, verb, dest, normalized, ok, skipped_paths, remove_src)
@@ -1025,7 +1025,7 @@ async def _delete_summary(
     has_recycle = bool(shares_with_recycle or shares_unknown)
     verb = "Deleted" if has_recycle else "Permanently deleted"
 
-    lines = [format_status(f"{verb} {len(normalized)} item(s):")]
+    lines = [format_status(f"{verb} {len(normalized):,} item(s):")]
     lines.extend(f"  {p}" for p in normalized)
 
     lines.extend(
@@ -1158,8 +1158,8 @@ async def restore_from_recycle_bin(
             results.insert(
                 0,
                 format_status(
-                    f"Restored {len(results) - len(partial)} of {len(results)} item(s) from "
-                    f"/{share_name} recycle bin; {len(partial)} with skips "
+                    f"Restored {len(results) - len(partial):,} of {len(results):,} item(s) from "
+                    f"/{share_name} recycle bin; {len(partial):,} with skips "
                     "(already at the destination, overwrite=false; details below):",
                     success=False,
                 ),

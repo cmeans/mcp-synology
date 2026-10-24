@@ -322,9 +322,9 @@ async def copy_or_move(
 def _what(items: int, folders: int) -> str:
     parts = []
     if items:
-        parts.append(f"{items} item(s)")
+        parts.append(f"{items:,} item(s)")
     if folders:
-        parts.append(f"{folders} folder(s)")
+        parts.append(f"{folders:,} folder(s)")
     return " and ".join(parts)
 
 
@@ -374,7 +374,7 @@ async def delete_photos(
         ph = Photos(client, sp, op)
         found, missing = await ph.items(ids)
         lines = (
-            await _run_delete(ph, list(found), [], timeout, f"{len(found)} item(s)")
+            await _run_delete(ph, list(found), [], timeout, f"{len(found):,} item(s)")
             if found
             else ["Nothing deleted: none of the ids exist."]
         )

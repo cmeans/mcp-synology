@@ -146,7 +146,7 @@ async def tag_photos(
             if tag_ids:
                 verb = "Added tags" if action == "add" else "Removed tags"
                 where = "to" if action == "add" else "from"
-                lines.append(f"{verb} {shown} {where} {len(found)} item(s) ({space_label(sp)}).")
+                lines.append(f"{verb} {shown} {where} {len(found):,} item(s) ({space_label(sp)}).")
             if unknown:
                 lines.append(
                     f"  No item has the tag(s) {', '.join(unknown)}, so there was nothing to "
@@ -280,7 +280,7 @@ async def edit_photo(
                     ),
                     before=(
                         f"The other changes ({', '.join(done)}) were already made to all "
-                        f"{len(found)} item(s)"
+                        f"{len(found):,} item(s)"
                         + (f" except those DSM rejected ({refused})." if rejected else ".")
                         if done
                         else ""
@@ -288,7 +288,7 @@ async def edit_photo(
                     step="Favorite",
                 )
                 done.append("favorite" if favorite else "not favorite")
-            lines.append(f"Edited {len(found)} item(s) ({space_label(sp)}): {', '.join(done)}.")
+            lines.append(f"Edited {len(found):,} item(s) ({space_label(sp)}): {', '.join(done)}.")
             if rejected:
                 lines.append(f"  Rejected by DSM: {rejected_text(rejected)} (error_list)")
         else:
@@ -411,7 +411,7 @@ async def merge_people(
         items = now.get("item_count")
         count = f"{int(items):,}" if items is not None else "?"
         return (
-            f"Merged {len(merged)} people into person {keep_id} "
+            f"Merged {len(merged):,} people into person {keep_id} "
             f'"{now.get("name") or "(unnamed)"}" (now {count} items).'
         )
     except SynologyError as e:

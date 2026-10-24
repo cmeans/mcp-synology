@@ -394,3 +394,17 @@ class TestPlaceNode:
 )
 def test_id_list_collapses_runs(ids: list[int], shown: str) -> None:
     assert id_list(ids) == shown
+
+
+def test_id_limit_refusals_name_what_and_separate_thousands() -> None:
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    from mcp_synology.modules.photos.helpers import check_ids
+
+    for param, noun in (("ids", "ids"), ("folders", "folders")):
+        try:
+            check_ids("Copy photos", list(range(1_001)), param=param)
+        except ToolError as e:
+            assert f"at most 1,000 {noun} per call." in str(e)
+        else:
+            raise AssertionError("1,001 ids accepted")

@@ -86,7 +86,7 @@ async def download_photos(
     if not ids:
         invalid(op, "pass at least one id.", param="ids", value=ids)
     if len(ids) > _MAX_DOWNLOAD:
-        invalid(op, f"at most {_MAX_DOWNLOAD} ids per call.", param="ids", value=len(ids))
+        invalid(op, f"at most {_MAX_DOWNLOAD:,} ids per call.", param="ids", value=len(ids))
     if dest_folder is None:
         if not allowed_roots or len(allowed_roots) != 1:
             invalid(
@@ -154,7 +154,9 @@ async def download_photos(
             done += 1
             lines.append(f"  {item_id}  {name}  {result}")
     what = "original" if size == "original" else f"{size} preview"
-    head = f"Downloaded {done} of {len(unique)} item(s) to {local_dir} ({what}, {space_label(sp)})"
+    head = (
+        f"Downloaded {done:,} of {len(unique):,} item(s) to {local_dir} ({what}, {space_label(sp)})"
+    )
     return "\n".join([head, *lines])
 
 
@@ -266,7 +268,7 @@ async def upload_photos(
     if len(local_paths) > _MAX_UPLOAD:
         invalid(
             op,
-            f"at most {_MAX_UPLOAD} files per call.",
+            f"at most {_MAX_UPLOAD:,} files per call.",
             param="local_paths",
             value=len(local_paths),
         )
@@ -381,9 +383,9 @@ async def upload_photos(
             logger.debug("Couldn't read the renamed items' names: %s", type(e).__name__)
     width = max(len(r[0]) for r in rows)
     # A skipped duplicate is already there, not uploaded: count it apart.
-    head = f"Uploaded {len(uploaded) - skipped} of {len(files)} file(s)"
+    head = f"Uploaded {len(uploaded) - skipped:,} of {len(files):,} file(s)"
     if skipped:
-        head += f" ({skipped} skipped, already there)"
+        head += f" ({skipped:,} skipped, already there)"
     lines = [f"{head} to {target.get('name')} ({space_label(sp)})"]
     lines += [f"  {name:<{width}}  {state:<8} {note}" for name, state, note in rows]
     if target_album is not None and uploaded:
@@ -394,7 +396,7 @@ async def upload_photos(
                 {"id": int(target_album["id"]), "item": uploaded},
                 personal=True,
             )
-            lines.append(f'Added {len(uploaded)} item(s) to album "{target_album.get("name")}".')
+            lines.append(f'Added {len(uploaded):,} item(s) to album "{target_album.get("name")}".')
         except SynologyError as e:
             lines.append(f'Couldn\'t add them to album "{target_album.get("name")}": {e}')
         except httpx.TransportError as e:

@@ -42,7 +42,7 @@ def _check_paging(operation: str, offset: int, limit: int, max_limit: int = _MAX
     if offset < 0:
         invalid(operation, "offset can't be negative.", param="offset", value=offset)
     if not 1 <= limit <= max_limit:
-        invalid(operation, f"limit must be 1–{max_limit}.", param="limit", value=limit)
+        invalid(operation, f"limit must be 1–{max_limit:,}.", param="limit", value=limit)
 
 
 def _order(sort_by: str, direction: str) -> str:
@@ -602,7 +602,7 @@ async def get_photo(
     if not ids:
         invalid(op, "pass at least one id.", param="ids", value=ids)
     if len(ids) > _MAX_GET:
-        invalid(op, f"at most {_MAX_GET} ids per call.", param="ids", value=len(ids))
+        invalid(op, f"at most {_MAX_GET:,} ids per call.", param="ids", value=len(ids))
     try:
         ph = Photos(client, sp, op)
         v7 = ph.has("Browse.Item", V7)

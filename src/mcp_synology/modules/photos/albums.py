@@ -146,7 +146,9 @@ async def _photo_album(
                 params["item"] = list(found)
             data = await ph.call("Browse.NormalAlbum", "create", params, personal=True)
             created = data["album"]
-            lines.append(f'Created album "{name}" (id {created["id"]}) with {len(found)} item(s).')
+            lines.append(
+                f'Created album "{name}" (id {created["id"]}) with {len(found):,} item(s).'
+            )
             lines += _rejected(data)
             if missing:
                 lines.append(ph.missing_note(missing))
@@ -207,7 +209,7 @@ async def _photo_album(
             )
             verb = "Added" if action == "add" else "Removed"
             where = "to" if action == "add" else "from"
-            lines.append(f"{verb} {len(found)} item(s) {where} album {album_id}.")
+            lines.append(f"{verb} {len(found):,} item(s) {where} album {album_id}.")
             if action == "remove":
                 lines.append("  The photos themselves stay in their folders.")
             lines += _rejected(data)
@@ -597,7 +599,7 @@ async def delete_photo_albums(client: DsmClient, *, albums: list[str]) -> str:
                 listed = ", ".join(str(m["id"]) for m in matches)
                 invalid(
                     op,
-                    f"{len(matches)} albums are named {text!r} (ids {listed}); "
+                    f"{len(matches):,} albums are named {text!r} (ids {listed}); "
                     "nothing was deleted.",
                     param="albums",
                     value=text,
@@ -612,7 +614,7 @@ async def delete_photo_albums(client: DsmClient, *, albums: list[str]) -> str:
         if found:
             named = ", ".join(f'{i} "{n}"' for i, n in found.items())
             lines.append(
-                f"Deleted {len(found)} album(s): {named}; their photos stay where they are."
+                f"Deleted {len(found):,} album(s): {named}; their photos stay where they are."
             )
         else:
             lines.append("No albums deleted.")

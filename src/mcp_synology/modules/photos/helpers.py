@@ -308,7 +308,7 @@ class Photos:
         listed = ", ".join(f"{m['id']} ({m.get('name', '')})" for m in matches[:10])
         invalid(
             self.operation,
-            f"{len(matches)} {kind}s are named {value!r}: {listed}.",
+            f"{len(matches):,} {kind}s are named {value!r}: {listed}.",
             param=param,
             value=value,
             suggestion=f"Pass the {kind}'s ID instead.",
@@ -407,7 +407,7 @@ class Photos:
                 listed = ", ".join(f"{m['id']} ({m.get('name', '')})" for m in matches[:10])
                 invalid(
                     self.operation,
-                    f"{len(matches)} tags match {name!r} ignoring case: {listed}.",
+                    f"{len(matches):,} tags match {name!r} ignoring case: {listed}.",
                     param=param,
                     value=name,
                     suggestion="Pass the tag's exact name.",
@@ -490,7 +490,7 @@ async def in_batches(
                 changed = [i for i in done if str(i) not in refused]
                 if changed:
                     parts.append(
-                        f"{phrase('Already changed')} {len(changed)} of {len(ids)} item(s): "
+                        f"{phrase('Already changed')} {len(changed):,} of {len(ids):,} item(s): "
                         f"{_ids(changed)}."
                     )
                 if rejected:
@@ -556,7 +556,8 @@ def check_ids(
     if not ids:
         invalid(operation, f"pass at least one id in {param}.", param=param, value=ids)
     if len(ids) > limit:
-        invalid(operation, f"at most {limit} ids per call.", param=param, value=len(ids))
+        noun = "folders" if param == "folders" else "ids"
+        invalid(operation, f"at most {limit:,} {noun} per call.", param=param, value=len(ids))
 
 
 def photo_time(seconds: float) -> str:
