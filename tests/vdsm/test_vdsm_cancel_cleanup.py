@@ -80,7 +80,7 @@ async def test_canceled_search_is_stopped_and_cleaned(
     reply = await task_request(client, "SYNO.FileStation.Search", "list", seen[0], version=2)
     # A cleaned task has no results left. DSM usually answers a bare {"finished": true};
     # DSM 7.1 seconds after boot answered {"files": [], "finished": true, "total": 0}
-    # (CI, #390). A task left uncleaned still lists what it found.
+    # (CI, #390). A task left uncleaned lists whatever it had found.
     assert not reply.get("files"), reply
 
 
