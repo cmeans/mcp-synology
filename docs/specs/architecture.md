@@ -291,6 +291,14 @@ DSM supports multiple concurrent named sessions per account via the `session` pa
 
 This ensures the MCP server doesn't kick out DSM web UI sessions, Home Assistant, or other integrations using the same account with their own session names.
 
+#### Logout on Shutdown
+
+`serve` logs out of DSM when its run ends: on stdin EOF, and on SIGTERM or SIGINT.
+- **Where it runs:** the logout is in the server's `lifespan` teardown (`SharedClientManager.aclose`), while the event loop and the HTTP client are still alive.
+- **Limits:** it's shielded from cancellation and bounded by `LOGOUT_TIMEOUT` (5 s). A failure or timeout is logged as a WARNING; the session then stays open until DSM's own session timeout.
+- **Signals:** SIGTERM and SIGINT raise `SystemExit`, so the loop unwinds through that teardown. `serve` then leaves with `os._exit`, because the stdio reader thread is still blocked on stdin and joining it at interpreter exit would hang.
+- **Why not atexit (#402):** the logout used to run at atexit. By then asyncio can't resolve a host ("cannot schedule new futures after interpreter shutdown"), so it never completed, and every exit left its session open.
+
 #### Transparent Re-authentication
 
 When a module makes an API call and the DSM client receives a session error, re-auth happens transparently:

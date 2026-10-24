@@ -571,88 +571,103 @@ class TestSharedClientManagerLifecycle:
             await manager.get_client()
         assert manager._bg_task is None
 
-    def test_install_cleanup_handlers_registers_atexit_and_signals(self) -> None:
-        config = make_test_config()
-        manager = SharedClientManager(config)
-        with (
-            patch("atexit.register") as atexit_register,
-            patch("signal.signal") as signal_signal,
-        ):
-            manager.install_cleanup_handlers()
-        atexit_register.assert_called_once_with(manager._cleanup_session)
-        # Two signal handlers: SIGTERM, SIGINT
-        assert signal_signal.call_count == 2
-
-    def test_signal_handler_calls_cleanup_and_raises_systemexit(self) -> None:
-        """Trigger the inner signal handler closure to walk lines 130-132."""
+    def test_install_signal_handlers_registers_sigterm_and_sigint(self) -> None:
+        """No atexit handler any more: it ran after the loop ended and the logout never
+        completed (#402). Signals raise SystemExit so the lifespan teardown logs out."""
         import signal as signal_mod
 
-        config = make_test_config()
-        manager = SharedClientManager(config)
-        captured_handlers: dict[int, object] = {}
-
-        def _capture(signum: int, handler: object) -> None:
-            captured_handlers[signum] = handler
-
+        manager = SharedClientManager(make_test_config())
+        captured: dict[int, Any] = {}
         with (
-            patch("atexit.register"),
-            patch("signal.signal", side_effect=_capture),
+            patch("atexit.register") as atexit_register,
+            patch("signal.signal", side_effect=lambda n, h: captured.__setitem__(n, h)),
         ):
-            manager.install_cleanup_handlers()
-
-        sigterm_handler = captured_handlers[signal_mod.SIGTERM]
-        with patch.object(manager, "_cleanup_session") as cleanup, pytest.raises(SystemExit) as exc:
-            sigterm_handler(signal_mod.SIGTERM, None)  # type: ignore[operator]
-        cleanup.assert_called_once()
+            manager.install_signal_handlers()
+        atexit_register.assert_not_called()
+        assert set(captured) == {signal_mod.SIGTERM, signal_mod.SIGINT}
+        with pytest.raises(SystemExit) as exc:
+            captured[signal_mod.SIGTERM](signal_mod.SIGTERM, None)
         assert exc.value.code == 128 + int(signal_mod.SIGTERM)
 
-    def test_cleanup_session_returns_early_when_no_auth(self) -> None:
-        config = make_test_config()
-        manager = SharedClientManager(config)
-        # _auth is None by default
-        manager._cleanup_session()  # should not raise
-        assert manager._auth is None
-
-    def test_cleanup_session_no_running_loop_runs_logout(self) -> None:
-        """When there's no event loop, _cleanup_session falls back to asyncio.run."""
-        config = make_test_config()
-        manager = SharedClientManager(config)
+    def _manager_with_session(self) -> SharedClientManager:
+        manager = SharedClientManager(make_test_config())
         manager._auth = MagicMock()
         manager._auth.logout = AsyncMock()
         manager._client = MagicMock()
         manager._client.__aexit__ = AsyncMock()
+        return manager
 
-        # Patch asyncio.get_running_loop to raise (no loop) so we hit the fallback
-        with patch("asyncio.get_running_loop", side_effect=RuntimeError("no loop")):
-            manager._cleanup_session()
-        manager._auth.logout.assert_awaited_once()
-        manager._client.__aexit__.assert_awaited_once()
+    async def test_aclose_logs_out_and_closes_the_client(self) -> None:
+        manager = self._manager_with_session()
+        auth, client = manager._auth, manager._client
+        await manager.aclose()
+        auth.logout.assert_awaited_once()  # type: ignore[union-attr]
+        client.__aexit__.assert_awaited_once()  # type: ignore[union-attr]
+        assert manager._auth is None and manager._client is None
+        await manager.aclose()  # a second call does nothing
+        auth.logout.assert_awaited_once()  # type: ignore[union-attr]
 
-    async def test_cleanup_session_with_running_loop_creates_task(self) -> None:
-        config = make_test_config()
-        manager = SharedClientManager(config)
-        manager._auth = MagicMock()
-        manager._auth.logout = AsyncMock()
-        manager._client = MagicMock()
-        manager._client.__aexit__ = AsyncMock()
+    async def test_aclose_without_a_session_does_nothing(self) -> None:
+        manager = SharedClientManager(make_test_config())
+        await manager.aclose()
+        assert manager._auth is None and manager._client is None
 
-        # Inside an async test, asyncio.get_running_loop() works → creates a task
-        manager._cleanup_session()
-        assert manager._cleanup_task is not None
-        await manager._cleanup_task
-        manager._auth.logout.assert_awaited_once()
+    async def test_aclose_logs_a_failed_logout_and_still_closes(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        manager = self._manager_with_session()
+        client = manager._client
+        manager._auth.logout = AsyncMock(side_effect=httpx.ConnectError("gone"))  # type: ignore[union-attr]
+        with caplog.at_level(logging.WARNING, logger="mcp_synology.server"):
+            await manager.aclose()
+        assert "Couldn't log out of DSM on shutdown (ConnectError: gone)" in caplog.text
+        client.__aexit__.assert_awaited_once()  # type: ignore[union-attr]
 
-    def test_cleanup_session_swallows_logout_errors(self) -> None:
-        """Logout failures during shutdown must not raise — best effort."""
-        config = make_test_config()
-        manager = SharedClientManager(config)
-        manager._auth = MagicMock()
-        manager._auth.logout = AsyncMock(side_effect=RuntimeError("server died"))
-        manager._client = MagicMock()
-        manager._client.__aexit__ = AsyncMock(side_effect=RuntimeError("client dead"))
+    async def test_aclose_gives_up_on_a_logout_that_doesnt_answer(
+        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import anyio
 
-        with patch("asyncio.get_running_loop", side_effect=RuntimeError("no loop")):
-            manager._cleanup_session()  # must not raise
+        import mcp_synology.server as server_mod
+
+        monkeypatch.setattr(server_mod, "LOGOUT_TIMEOUT", 0.05)
+        manager = self._manager_with_session()
+        client = manager._client
+
+        async def hang() -> None:
+            await anyio.sleep(10)
+
+        manager._auth.logout = hang  # type: ignore[union-attr,method-assign]
+        with caplog.at_level(logging.WARNING, logger="mcp_synology.server"):
+            await manager.aclose()
+        assert "DSM didn't answer the logout within 0.05 s on shutdown" in caplog.text
+        client.__aexit__.assert_awaited_once()  # type: ignore[union-attr]
+
+    async def test_aclose_still_logs_out_when_the_run_is_cancelled(self) -> None:
+        """SIGTERM unwinds the loop by cancelling: the logout is shielded."""
+        import anyio
+
+        manager = self._manager_with_session()
+        auth = manager._auth
+        done = anyio.Event()
+
+        async def slow_logout() -> None:
+            await anyio.sleep(0.05)
+            done.set()
+
+        auth.logout = slow_logout  # type: ignore[union-attr,method-assign]
+        with anyio.CancelScope() as scope:
+            scope.cancel()
+            await manager.aclose()
+        assert done.is_set()
+
+    async def test_server_lifespan_closes_the_manager_when_the_run_ends(self) -> None:
+        """The logout runs in the server's lifespan teardown, inside the live loop (#402)."""
+        with patch.object(SharedClientManager, "aclose", new_callable=AsyncMock) as aclose:
+            server = create_server(make_test_config())
+            async with Client(server):
+                aclose.assert_not_awaited()
+        aclose.assert_awaited_once()
 
     async def test_bg_update_check_with_newer_version(self) -> None:
         config = make_test_config(check_for_updates=True)

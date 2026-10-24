@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 import asyncio
-import atexit
 import base64
 import logging
 import platform
 import re
 import signal
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, NoReturn
 
+import anyio
 import httpx
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError, UnexpectedToolError
@@ -31,7 +32,7 @@ from mcp_synology.modules import photos as _photos_mod
 from mcp_synology.modules import system as _system_mod
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import AsyncIterator, Callable, Mapping
     from types import ModuleType
 
     from mcp.server.mcpserver import Context
@@ -43,6 +44,9 @@ if TYPE_CHECKING:
     _ModulePlan = list[tuple[str, ModuleType, ModuleConfig, set[str]]]
 
 logger = logging.getLogger(__name__)
+
+# How long shutdown waits for DSM to answer the logout (#402).
+LOGOUT_TIMEOUT = 5.0
 
 
 def _load_instruction(name: str) -> str:
@@ -376,7 +380,6 @@ class SharedClientManager:
         self._server_state: ServerState = ServerState()
         self._update_notice: str | None = None
         self._bg_task: asyncio.Task[None] | None = None
-        self._cleanup_task: asyncio.Task[None] | None = None
         # Re-auth callbacks queued by modules during sync `register()` — flushed
         # to the AuthManager once it's lazily created in `get_client`. Modules
         # use `subscribe_on_reauth` to register cache invalidators (see #37).
@@ -443,38 +446,50 @@ class SharedClientManager:
             self._update_notice = None
         return result + notice
 
-    def install_cleanup_handlers(self) -> None:
-        """Register atexit and signal handlers for graceful session cleanup."""
-        atexit.register(self._cleanup_session)
+    def install_signal_handlers(self) -> None:
+        """Turn SIGTERM and SIGINT into SystemExit, so the event loop unwinds through the
+        server's lifespan, whose teardown logs out of DSM (``aclose``)."""
 
         def _signal_handler(signum: int, _frame: object) -> None:
-            logger.debug("Received signal %d, cleaning up session", signum)
-            self._cleanup_session()
+            logger.debug("Received signal %d, shutting down", signum)
             raise SystemExit(128 + signum)
 
         signal.signal(signal.SIGTERM, _signal_handler)
         signal.signal(signal.SIGINT, _signal_handler)
 
-    def _cleanup_session(self) -> None:
-        """Best-effort session logout on shutdown."""
-        if self._auth is None:
-            return
+    async def aclose(self) -> None:
+        """Log out of DSM and close the HTTP client, from the running event loop (#402).
 
-        async def _logout() -> None:
-            try:
-                if self._auth is not None:
-                    await self._auth.logout()
-                if self._client is not None:
-                    await self._client.__aexit__(None, None, None)
-            except Exception:
-                pass  # Best effort — process is exiting
-
-        try:
-            loop = asyncio.get_running_loop()
-            self._cleanup_task = loop.create_task(_logout())
-        except RuntimeError:
-            # No running loop — create one for cleanup
-            asyncio.run(_logout())
+        Called from the server's lifespan teardown. It used to run at atexit, where
+        asyncio can no longer resolve a host ("cannot schedule new futures after
+        interpreter shutdown"), so the logout never completed and each exit left its DSM
+        session open until DSM's own timeout. Shielded so a cancelled run still logs out,
+        and bounded by ``LOGOUT_TIMEOUT`` so a NAS that doesn't answer can't hold up exit.
+        """
+        auth, client = self._auth, self._client
+        self._auth = self._client = None
+        if self._bg_task is not None and not self._bg_task.done():
+            self._bg_task.cancel()
+        with anyio.CancelScope(shield=True):
+            if auth is not None:
+                with anyio.move_on_after(LOGOUT_TIMEOUT) as scope:
+                    try:
+                        await auth.logout()
+                    except Exception as e:  # noqa: BLE001 - logged; exit must go on
+                        logger.warning(
+                            "Couldn't log out of DSM on shutdown (%s: %s); the session "
+                            "stays open until DSM's session timeout.",
+                            type(e).__name__,
+                            e,
+                        )
+                if scope.cancelled_caught:
+                    logger.warning(
+                        "DSM didn't answer the logout within %g s on shutdown; the session "
+                        "stays open until DSM's session timeout.",
+                        LOGOUT_TIMEOUT,
+                    )
+            if client is not None:
+                await client.__aexit__(None, None, None)
 
     async def _bg_update_check(self) -> None:
         """Background update check — appends notice on first tool result.
@@ -798,17 +813,25 @@ def create_server(config: AppConfig) -> MCPServer:
             local_machine = _strip_html_comments(_LOCAL_MACHINE_INSTRUCTIONS).strip()
             instructions += "\n\n" + _fill_template(local_machine, template_vars) + local_paths
 
+    manager = SharedClientManager(config)
+    manager.install_signal_handlers()
+
+    @asynccontextmanager
+    async def _lifespan(_server: MCPServer[Any]) -> AsyncIterator[None]:
+        try:
+            yield None
+        finally:
+            await manager.aclose()
+
     server = _SynologyServer(
         server_name,
         instructions=instructions,
         icons=_load_icons(),
         version=__version__,
+        lifespan=_lifespan,
     )
 
     logger.debug("Creating MCP server")
-
-    manager = SharedClientManager(config)
-    manager.install_cleanup_handlers()
 
     for mod_name, module, mod_config, allowed_tools in plan:
         module_info = module.MODULE_INFO

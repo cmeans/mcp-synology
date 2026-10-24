@@ -92,6 +92,40 @@ class TestCli:
         assert "Error:" in result.output
         assert "Traceback" not in result.output
 
+    def test_serve_exits_at_once_after_a_signal(self, tmp_path: Path) -> None:
+        """After SIGTERM/SIGINT the lifespan has logged out, but the stdio reader thread
+        is still blocked on stdin, so serve leaves with os._exit instead of joining it at
+        interpreter exit, which hung forever (#402)."""
+        config_file = tmp_path / "c.yaml"
+        config_file.write_text(
+            "schema_version: 1\ninstance_id: t\nconnection: {host: 1.2.3.4}\n"
+            "modules: {filestation: {enabled: true}}\n"
+        )
+        server = MagicMock()
+        server.run.side_effect = SystemExit(143)
+        with (
+            patch("mcp_synology.server.create_server", return_value=server),
+            patch("mcp_synology.cli.main.os._exit") as os_exit,
+        ):
+            CliRunner().invoke(main, ["serve", "-c", str(config_file)])
+        server.run.assert_called_once_with(transport="stdio")
+        os_exit.assert_called_once_with(143)
+
+    def test_serve_returns_normally_on_stdin_eof(self, tmp_path: Path) -> None:
+        config_file = tmp_path / "c.yaml"
+        config_file.write_text(
+            "schema_version: 1\ninstance_id: t\nconnection: {host: 1.2.3.4}\n"
+            "modules: {filestation: {enabled: true}}\n"
+        )
+        server = MagicMock()
+        with (
+            patch("mcp_synology.server.create_server", return_value=server),
+            patch("mcp_synology.cli.main.os._exit") as os_exit,
+        ):
+            result = CliRunner().invoke(main, ["serve", "-c", str(config_file)])
+        assert result.exit_code == 0, result.output
+        os_exit.assert_not_called()
+
     def test_setup_malformed_yaml_clean_error(self, tmp_path: Path) -> None:
         """setup with a malformed YAML config should exit 1 with a clean Error: line."""
         config_file = tmp_path / "malformed.yaml"
