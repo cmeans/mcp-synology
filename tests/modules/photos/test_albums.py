@@ -9,7 +9,12 @@ import pytest
 import respx
 from mcp.server.mcpserver.exceptions import ToolError
 
-from mcp_synology.modules.photos.albums import delete_photo_albums, photo_album, photo_share_link
+from mcp_synology.modules.photos.albums import (
+    album_line,
+    delete_photo_albums,
+    photo_album,
+    photo_share_link,
+)
 from tests.modules.photos.dsm import FakePhotos, captured, install, make_client
 
 ALBUM = "SYNO.Foto.Browse.Album"
@@ -57,7 +62,7 @@ class TestCreate:
         fake.on("SYNO.Foto.UserInfo", "me", 1, captured("userinfo-me"))
         fake.on("SYNO.Foto.Browse.Folder", "get", 2, captured("folder-get-by-name"))
         fake.on("SYNO.Foto.Browse.GeneralTag", "list", 1, captured("tag-list"))
-        fake.on(COND, "peek_item_count", 2, {"count": 4})
+        fake.on(COND, "peek_item_count", 2, {"count": 1234})
         fake.on(COND, "create", 2, captured("condalbum-create"))
         fake.on(ALBUM, "get", 1, _album(id=7, type="condition", name="mcp-spec-smart"))
         install(fake)
@@ -90,7 +95,7 @@ class TestCreate:
             "keyword_policy": "or",
         }
         assert fake.one(COND, "peek_item_count").params["condition"] == cond
-        assert "Matches 4 item(s) now." in out
+        assert "Matches 1,234 item(s) now." in out
 
     @respx.mock
     async def test_place_condition_uses_the_filter_tree_node(self) -> None:
@@ -208,7 +213,7 @@ class TestChange:
         fake = self._fake(type="condition")
         fake.on("SYNO.Foto.UserInfo", "me", 1, captured("userinfo-me"))
         fake.on("SYNO.Foto.Browse.Person", "list", 1, {"list": [{"id": 7, "name": "Alice"}]})
-        fake.on(COND, "peek_item_count", 2, {"count": 3})
+        fake.on(COND, "peek_item_count", 2, {"count": 3456})
         fake.on(COND, "set_condition", 2, {})
         install(fake)
         client = make_client()
@@ -234,7 +239,7 @@ class TestChange:
         }
         assert fake.one(COND, "set_condition").params == {"id": 4, "condition": cond}
         assert fake.one(COND, "peek_item_count").params["condition"] == cond
-        assert "Album 4's condition is replaced.\nMatches 3 item(s) now." in out
+        assert "Album 4's condition is replaced.\nMatches 3,456 item(s) now." in out
 
     @respx.mock
     async def test_unknown_tag_in_condition(self) -> None:
@@ -614,3 +619,8 @@ class TestDsmErrors:
             with pytest.raises(ToolError) as exc:
                 await call(client)
         assert "160" in _error(exc)["message"]
+
+
+def test_album_line_separates_thousands() -> None:
+    line = album_line({"id": 9, "name": "Trip", "type": "normal", "item_count": 12_345})
+    assert "· 12,345 item(s) ·" in line

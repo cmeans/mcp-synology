@@ -156,7 +156,8 @@ async def get_file_info(
         modified = format_timestamp(mtime) if mtime else "—"
         rows.append([name, path, ftype, size, modified])
 
-    return format_table(headers=headers, rows=rows, title=f"File Info ({len(files)} items)") + notes
+    title = f"File Info ({len(files):,} items)"
+    return format_table(headers=headers, rows=rows, title=title) + notes
 
 
 def _format_single_info(file_data: dict[str, Any]) -> str:

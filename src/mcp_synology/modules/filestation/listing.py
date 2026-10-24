@@ -211,7 +211,7 @@ async def list_shares(
 
     total = data.get("total", len(shares))
     result = format_table(headers=headers, rows=rows, title=f"Shared Folders on {hostname}")
-    result += f"\n\n{total} shared folders found."
+    result += f"\n\n{total:,} shared folders found."
     if None in recycle.values():
         result += (
             "\n\nRecycle Bin \"couldn't check\": the NAS didn't answer in time or refused the "
@@ -524,8 +524,8 @@ async def _search_recycle_bin(
     # limit 0 or less lists every match, as DSM's limit=0 lists a whole folder.
     shown = found[offset : offset + limit] if limit > 0 else found[offset:]
     title = (
-        f'Matches for "{pattern}" in {recycle_path} ({len(found)} found in '
-        f"{folders} folder(s), subfolders included)"
+        f'Matches for "{pattern}" in {recycle_path} ({len(found):,} found in '
+        f"{folders:,} folder(s), subfolders included)"
     )
     rows = []
     for rel, f in shown:
@@ -558,7 +558,7 @@ async def _search_recycle_bin(
         notes.append(f"Not searched (couldn't be listed): {', '.join(unreadable[:5])}{more}.")
     if stopped:
         notes.append(
-            f"Stopped after {folders} folder(s) and {entries} item(s), so there may be more "
+            f"Stopped after {folders:,} folder(s) and {entries:,} item(s), so there may be more "
             f"matches: narrow the pattern, or list a subfolder with list_files on "
             f"{recycle_path}/<folder>."
         )

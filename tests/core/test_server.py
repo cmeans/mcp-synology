@@ -1647,7 +1647,12 @@ class TestInstructionComments:
 # (every field DSM sends, the NAS's local time and code page included) and what only an
 # administrator gets; get_resource_usage says it needs one; edit_photo's description says
 # one of only spaces shows as "—".
-PAYLOAD_BUDGET_CHARS = 49_094
+# Raised by #401 to 49,314 (+220): get_system_info's description says the network-card
+# flag comes only from DSM 7.2.2 and later and redundant power only on models that report
+# it (the DS1618+ on DSM 7.1.1 sends neither; 0.10.0rc7 answer key). +163 in QA round 1:
+# the Photos `ids` and `folders` parameters state their 1,000-per-call limit, which only
+# the error used to give; list_photo_collections' limit reads 1-1,000.
+PAYLOAD_BUDGET_CHARS = 49_314
 
 
 class TestPayloadBudget:
@@ -1740,6 +1745,31 @@ class TestParameterDescriptions:
         assert set(described) == params
         missing = [p for p, text in described.items() if str(shared.resolve()) not in text]
         assert not missing, f"descriptions that don't name the allowed folder: {missing}"
+
+    async def test_photos_id_lists_state_their_limit(self) -> None:
+        """check_ids refuses more than 1,000 IDs or folders (#401, QA round 1): each
+        parameter it checks says so, so the model doesn't learn it from the error."""
+        tools, _ = await _served(create_server(make_test_config(modules=ALL_MODULES)))
+        params = {
+            ("tag_photos", "ids"),
+            ("edit_photo", "ids"),
+            ("delete_photos", "ids"),
+            ("photo_album", "ids"),
+            ("copy_photos", "ids"),
+            ("copy_photos", "folders"),
+            ("move_photos", "ids"),
+            ("move_photos", "folders"),
+            ("delete_photo_folders", "folders"),
+        }
+        described = {
+            (t.name, name): str(schema.get("description", ""))
+            for t in tools
+            for name, schema in t.input_schema.get("properties", {}).items()
+            if (t.name, name) in params
+        }
+        assert set(described) == params
+        missing = [p for p, text in described.items() if "1,000" not in text]
+        assert not missing, f"descriptions that don't state the 1,000 limit: {missing}"
 
     async def test_edit_photo_says_whitespace_reads_as_none(self) -> None:
         """get_photo shows a description of only spaces as "—" (#370); edit_photo says so,

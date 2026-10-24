@@ -324,7 +324,7 @@ MODULE_INFO = ModuleInfo(
 
 # Parameter descriptions used by several tools (#247).
 _SPACE = "`personal` (default) or `shared` (Shared Space). IDs belong to one space."
-_ITEM_IDS = "Item IDs from list_photos."
+_ITEM_IDS = "Item IDs from list_photos, at most 1,000 per call."
 _ALBUM = "Album ID (list_photo_collections type=album) or unique name."
 _PERSON = "Person ID (list_photo_collections type=person) or unique name."
 _FOLDER = "Folder ID (list_photo_collections type=folder) or path, such as `/Trips/2024`."
@@ -497,7 +497,7 @@ def register(ctx: "RegisterContext") -> None:
                 ),
             ] = False,
             offset: Annotated[int, Field(description=(_OFFSET))] = 0,
-            limit: Annotated[int, Field(description=("Most entries to return, 1-1000."))] = 100,
+            limit: Annotated[int, Field(description=("Most entries to return, 1-1,000."))] = 100,
         ) -> str:
             client = await manager.get_client()
             return await list_photo_collections(
@@ -596,7 +596,8 @@ def register(ctx: "RegisterContext") -> None:
                 list[int] | None,
                 Field(
                     description=(
-                        "Personal space item IDs from list_photos; exactly one for `set_cover`."
+                        "Personal space item IDs from list_photos, at most 1,000; exactly one "
+                        "for `set_cover`."
                     )
                 ),
             ] = None,
@@ -1003,7 +1004,8 @@ def register(ctx: "RegisterContext") -> None:
                     list[int] | None,
                     Field(
                         description=(
-                            "Item IDs from list_photos, in `space`. Pass `ids`, `folders` or both."
+                            "Item IDs from list_photos, in `space`, at most 1,000. Pass `ids`, "
+                            "`folders` or both."
                         )
                     ),
                 ] = None,
@@ -1011,7 +1013,8 @@ def register(ctx: "RegisterContext") -> None:
                     list[str] | None,
                     Field(
                         description=(
-                            "Folder IDs or paths, with everything in them; not the space root."
+                            "Folder IDs or paths, with everything in them; not the space root. "
+                            "At most 1,000."
                         )
                     ),
                 ] = None,
@@ -1104,7 +1107,10 @@ def register(ctx: "RegisterContext") -> None:
 
         @server.tool(**_tool("delete_photo_folders"))  # type: ignore[arg-type]
         async def tool_delete_photo_folders(
-            folders: Annotated[list[str], Field(description=(f"Not the space root. {_FOLDER}"))],
+            folders: Annotated[
+                list[str],
+                Field(description=(f"Not the space root; at most 1,000. {_FOLDER}")),
+            ],
             space: Annotated[str, Field(description=(_SPACE))] = "personal",
         ) -> str:
             from mcp_synology.modules.photos.tasks import delete_photo_folders

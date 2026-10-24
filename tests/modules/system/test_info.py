@@ -75,7 +75,7 @@ class TestGetSystemInfo:
         assert "Intel Celeron J4125" in result
         assert "4 cores" in result
         assert "2000 MHz" in result
-        assert "8192 MiB" in result
+        assert "8,192 MiB" in result
         assert "42°C" in result
         # The whole row, not a substring (CodeQL read `"<host>" in s` as a URL check).
         assert ["NTP:", "pool.ntp.org"] in [line.split() for line in result.splitlines()]

@@ -14,6 +14,7 @@ from mcp_synology.modules.photos.organize import (
     edit_person,
     edit_photo,
     merge_people,
+    person_line,
     photo_folder,
     photo_request,
     tag_photos,
@@ -834,3 +835,9 @@ class TestDsmErrors:
             with pytest.raises(ToolError) as exc:
                 await call(client)
         assert "160" in _error(exc)["message"]
+
+
+def test_person_line_separates_thousands() -> None:
+    assert person_line({"id": 12, "name": "Jo", "item_count": 1_234}) == (
+        "Person 12: Jo (1,234 items, visible)."
+    )

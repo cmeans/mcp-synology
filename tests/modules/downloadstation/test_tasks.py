@@ -211,7 +211,7 @@ class TestListDownloadsPaging:
         ds2 = _ds2_total(1214)
         result = await list_downloads(mock_client, limit=2)
         assert ds2.called
-        assert "1214 task(s) total; showing 1–2." in result
+        assert "1,214 task(s) total; showing 1–2." in result
         assert "offset=2" in result
 
     @respx.mock

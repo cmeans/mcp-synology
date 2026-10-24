@@ -33,11 +33,11 @@ MODULE_INFO = ModuleInfo(
                 "number, DSM version, RAM, uptime, the NAS's local time and its code page, and "
                 "the temperature where the NAS has a sensor. A DSM administrator account also "
                 "gets the CPU, time zone with the current UTC offset, NTP server, firmware "
-                "date, DSM's update-ready, crash and network-card flags, "
-                "redundant power and eSATA, and attached devices; any other account gets a line "
-                "saying so. Use this to identify the NAS, check its basic health or tell the "
-                "time on it. For live CPU, memory, disk and network load, use "
-                "get_resource_usage."
+                "date, DSM's update-ready and crash flags, eSATA and attached devices, the "
+                "network-card flag on DSM 7.2.2 and later, and redundant power on models that "
+                "report it; any other account gets a line saying so. Use this to identify the "
+                "NAS, check its basic health or tell the time on it. For live CPU, memory, disk "
+                "and network load, use get_resource_usage."
             ),
             permission_tier=PermissionTier.READ,
         ),

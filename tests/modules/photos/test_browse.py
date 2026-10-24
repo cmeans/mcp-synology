@@ -13,6 +13,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp_synology.modules.photos.browse import (
     _camera,
     _exif_value,
+    _items,
     get_photo,
     list_photo_collections,
     list_photos,
@@ -472,6 +473,7 @@ class TestGetPhoto:
             ("\x17", "(binary data, 1 character; not shown)"),
             ("x\x85y", "(binary data, 3 characters; not shown)"),
             ("\x1ey", "(binary data, 2 characters; not shown)"),
+            ("\x00" * 1_200, "(binary data, 1,200 characters; not shown)"),
         ],
     )
     def test_exif_value(self, value: str, shown: str) -> None:
@@ -537,3 +539,17 @@ def test_privacy_column() -> None:
     assert _privacy({"privacy_type": "public-view"}) == "public-view"
     assert _privacy({"privacy_type": "private"}, shared=True) == "private link"
     assert _privacy(None) == "no"
+
+
+def test_collection_item_counts_separate_thousands() -> None:
+    assert _items({"item_count": 12_345}) == "12,345"
+    assert _items({"item_count": None}) == "0"
+    assert _items({}) == "0"
+
+
+def test_collection_limit_refusal_separates_thousands() -> None:
+    from mcp_synology.modules.photos.browse import _check_paging
+
+    with pytest.raises(ToolError) as exc:
+        _check_paging("List photo collections", 0, 5_000, 1_000)
+    assert json.loads(str(exc.value))["error"]["message"].endswith("limit must be 1–1,000.")

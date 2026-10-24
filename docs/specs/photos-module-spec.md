@@ -312,7 +312,7 @@ Albums, people, tags, places and folders.
 | `parent` | `str` | No | — | `folder` only: parent folder ID or path (default the root). |
 | `include_hidden` | `bool` | No | `false` | `person` and `concept`: `show_hidden` (for people also `show_more`, which adds people with few photos). |
 | `offset` | `int` | No | `0` | Entries to skip, for the next page. |
-| `limit` | `int` | No | `100` | 1–1000. |
+| `limit` | `int` | No | `100` | 1–1,000. |
 
 **Response shape:** a table per type. Albums: id, name, type (`normal`/`condition`), items, shared (privacy type), date range. People: id, name (`(unnamed)` for `""`), items, hidden. Tags: id, name, items. Places: id, name, country, items. Folders: id, path, shared. Concepts: id, name, items, hidden. Every table ends with `N <type>(s) total; showing a–b.`
 
@@ -486,7 +486,7 @@ Photos indexes new items over the next seconds to minutes; taken dates and previ
 | `action` | `str` | **Yes** | — | `create`, `rename`, `add`, `remove`, `set_cover`, `copy`, `create_smart` or `set_condition`. |
 | `album` | `str` | No | — | Album ID or unique name (all actions except `create`/`create_smart`). |
 | `name` | `str` | No | — | New name (`create`, `create_smart`, `rename`, `copy`). |
-| `ids` | `list[int]` | No | — | Personal space items from `list_photos` (`create`, `add`, `remove`); exactly one for `set_cover`. |
+| `ids` | `list[int]` | No | — | Personal space items from `list_photos` (`create`, `add`, `remove`); exactly one for `set_cover`. At most 1,000 per call. |
 | `condition` | `dict` | No | — | `create_smart` / `set_condition`; see design notes. |
 
 **Annotations:** `destructiveHint=true`: `remove`, `rename` and `set_condition` replace what the album held, and annotations can't depend on `action` (#183).
@@ -602,8 +602,8 @@ Album 9 "Trip 2024" is shared.
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `ids` | `list[int]` | No | — | Items. At least one of `ids` / `folders`. |
-| `folders` | `list[str]` | No | — | Folder IDs or paths. |
+| `ids` | `list[int]` | No | — | Items. At least one of `ids` / `folders`. At most 1,000 per call. |
+| `folders` | `list[str]` | No | — | Folder IDs or paths. At most 1,000 per call. |
 | `destination` | `str` | **Yes** | — | Folder ID or path. |
 | `space` | `str` | No | `"personal"` | Space of the source and of `destination` unless `dest_space` says otherwise. |
 | `dest_space` | `str` | No | — | `personal` or `shared`; cross-space copies are allowed (web client). |
@@ -698,7 +698,7 @@ Still running at `task_timeout`: `Still copying on the NAS (2 of 9 processed). H
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
 | `action` | `str` | **Yes** | — | `add` (creates missing tags) or `remove`. |
-| `ids` | `list[int]` | **Yes** | — | Items. |
+| `ids` | `list[int]` | **Yes** | — | Items. At most 1,000 per call. |
 | `tags` | `list[str]` | **Yes** | — | Tag names; an exact match wins, else a unique case-insensitive one (several are refused). |
 | `space` | `str` | No | `"personal"` | `personal` or `shared`. |
 
@@ -733,7 +733,7 @@ Photos rewrites tagged files, so their dates and sizes change.
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `ids` | `list[int]` | **Yes** | — | Item IDs from `list_photos`. |
+| `ids` | `list[int]` | **Yes** | — | Item IDs from `list_photos`. At most 1,000 per call. |
 | `space` | `str` | No | `"personal"` | `personal` or `shared`. |
 | `rating` | `int` | No | — | 0–5; outside that, DSM answers 120 (`reason: condition`, verified). |
 | `description` | `str` | No | — | `""` clears. One of only spaces is shown as `—`, like none (#370); the parameter description says so since the 0.10.0rc6 live test. |
@@ -875,7 +875,7 @@ Photo request "mcp spec" → /Trips/2024 (personal space)
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `ids` | `list[int]` | **Yes** | — | Item IDs from `list_photos`. |
+| `ids` | `list[int]` | **Yes** | — | Item IDs from `list_photos`. At most 1,000 per call. |
 | `space` | `str` | No | `"personal"` | `personal` or `shared`. |
 
 **Annotations:** `destructiveHint=true`.
@@ -902,7 +902,7 @@ Photo request "mcp spec" → /Trips/2024 (personal space)
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `folders` | `list[str]` | **Yes** | — | Folder IDs or paths. The space root is refused locally. |
+| `folders` | `list[str]` | **Yes** | — | Folder IDs or paths. The space root is refused locally. At most 1,000 per call. |
 | `space` | `str` | No | `"personal"` | `personal` or `shared`. |
 
 **Annotations:** `destructiveHint=true`.

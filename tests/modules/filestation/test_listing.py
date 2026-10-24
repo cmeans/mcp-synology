@@ -748,6 +748,22 @@ class TestRecycleBinSearch:
             mock_client, share="home", pattern="f*", limit=200, offset=1000
         )
         assert "Showing 1,001–1,200 of 1,500 matches. Use offset=1200 to see more." in out
+        # The title in the same reply counts alike (#401).
+        assert 'Matches for "f*" in /home/#recycle (1,500 found in 1 folder(s)' in out
+
+    @respx.mock
+    async def test_stop_note_has_thousands_separators(
+        self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from mcp_synology.modules.filestation import listing
+
+        monkeypatch.setattr(listing, "_WALK_MAX_ENTRIES", 1500)
+        root = [_entry(f"{_BIN}/f{i:04d}.txt") for i in range(1499)]
+        tree = {_BIN: [*root, _entry(f"{_BIN}/unopened", isdir=True)]}
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_bin_responder(tree))
+        out = await list_recycle_bin(mock_client, share="home", pattern="f*", limit=5)
+        assert "(1,499 found in 1 folder(s)" in out
+        assert "Stopped after 1 folder(s) and 1,500 item(s)" in out
 
     @respx.mock
     async def test_pattern_finds_a_file_in_a_subfolder(self, mock_client: DsmClient) -> None:

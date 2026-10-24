@@ -75,7 +75,7 @@ def album_line(album: dict[str, Any]) -> str:
     """``Album 9: Trip 2024 · normal · 2 item(s) · 2024-07-04 – 2024-07-06 · not shared``."""
     return (
         f"Album {album['id']}: {album.get('name', '')} · {album.get('type', 'normal')} · "
-        f"{album.get('item_count', 0)} item(s) · {_span(album)} · {_shared(album)}"
+        f"{int(album.get('item_count') or 0):,} item(s) · {_span(album)} · {_shared(album)}"
     )
 
 
@@ -146,7 +146,9 @@ async def _photo_album(
                 params["item"] = list(found)
             data = await ph.call("Browse.NormalAlbum", "create", params, personal=True)
             created = data["album"]
-            lines.append(f'Created album "{name}" (id {created["id"]}) with {len(found)} item(s).')
+            lines.append(
+                f'Created album "{name}" (id {created["id"]}) with {len(found):,} item(s).'
+            )
             lines += _rejected(data)
             if missing:
                 lines.append(ph.missing_note(missing))
@@ -168,7 +170,7 @@ async def _photo_album(
             )
             created = data["album"]
             lines.append(f'Created smart album "{name}" (id {created["id"]}).')
-            lines.append(f"Matches {count.get('count', 0)} item(s) now.")
+            lines.append(f"Matches {int(count.get('count', 0)):,} item(s) now.")
         if same:
             others = ", ".join(str(a["id"]) for a in same)
             lines.append(
@@ -207,7 +209,7 @@ async def _photo_album(
             )
             verb = "Added" if action == "add" else "Removed"
             where = "to" if action == "add" else "from"
-            lines.append(f"{verb} {len(found)} item(s) {where} album {album_id}.")
+            lines.append(f"{verb} {len(found):,} item(s) {where} album {album_id}.")
             if action == "remove":
                 lines.append("  The photos themselves stay in their folders.")
             lines += _rejected(data)
@@ -251,7 +253,7 @@ async def _photo_album(
             personal=True,
         )
         lines.append(f"Album {album_id}'s condition is replaced.")
-        lines.append(f"Matches {count.get('count', 0)} item(s) now.")
+        lines.append(f"Matches {int(count.get('count', 0)):,} item(s) now.")
     return "\n".join([*lines, album_line(await _album_now(ph, album_id))])
 
 
@@ -597,7 +599,7 @@ async def delete_photo_albums(client: DsmClient, *, albums: list[str]) -> str:
                 listed = ", ".join(str(m["id"]) for m in matches)
                 invalid(
                     op,
-                    f"{len(matches)} albums are named {text!r} (ids {listed}); "
+                    f"{len(matches):,} albums are named {text!r} (ids {listed}); "
                     "nothing was deleted.",
                     param="albums",
                     value=text,
@@ -612,7 +614,7 @@ async def delete_photo_albums(client: DsmClient, *, albums: list[str]) -> str:
         if found:
             named = ", ".join(f'{i} "{n}"' for i, n in found.items())
             lines.append(
-                f"Deleted {len(found)} album(s): {named}; their photos stay where they are."
+                f"Deleted {len(found):,} album(s): {named}; their photos stay where they are."
             )
         else:
             lines.append("No albums deleted.")

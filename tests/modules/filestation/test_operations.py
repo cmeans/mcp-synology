@@ -2956,3 +2956,44 @@ class TestRestoreRecreatesMissingFolders:
         with pytest.raises(ToolError, match="Restore files"):
             await restore_from_recycle_bin(mock_client, share="home", paths=["t/sub/a.txt"])
         assert tried == ["/home/t"]  # the create was tried once, and its error stands
+
+
+async def test_skip_report_separates_thousands(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A copy of more than 1,000 paths counts like every other reply (#401)."""
+    from mcp_synology.modules.filestation import operations
+
+    async def no_types(client: object, paths: list[str]) -> dict[str, bool]:
+        return {}
+
+    monkeypatch.setattr(operations, "paths_isdir", no_types)
+    normalized = [f"/video/f{i}.mkv" for i in range(1_200)]
+    skipped = normalized[:100]
+    ok = normalized[100:]
+    lines = await operations._skip_report(
+        None,  # type: ignore[arg-type]
+        "Copied",
+        "/video/dest",
+        normalized,
+        ok,
+        skipped,
+        False,
+    )
+    assert "Copied 1,100 of 1,200 item(s) in full to /video/dest/; 100 skipped" in lines[0]
+
+
+class TestCountsSeparateThousands:
+    """Copy and delete replies over 1,000 paths count like every other reply (#401)."""
+
+    @respx.mock
+    async def test_copy(self, mock_client: DsmClient) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_async_task_side_effect())
+        paths = [f"/video/Downloads/f{i}.mkv" for i in range(1_200)]
+        result = await copy_files(mock_client, paths=paths, dest_folder="/video/Archive")
+        assert result.startswith("[+] Copied 1,200 item(s) to /video/Archive/:")
+
+    @respx.mock
+    async def test_delete(self, mock_client: DsmClient) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_async_task_side_effect())
+        paths = [f"/video/Downloads/f{i}.mkv" for i in range(1_200)]
+        result = await delete_files(mock_client, paths=paths, recycle_bin_status={"video": True})
+        assert result.startswith("[+] Deleted 1,200 item(s):")

@@ -174,14 +174,14 @@ async def _poll(
 def _progress(status: dict[str, Any]) -> str:
     total = int(status.get("total") or 0)
     done = int(status.get("completion") or 0)
-    return f"{done} of {total} processed"
+    return f"{done:,} of {total:,} processed"
 
 
 def _counts(status: dict[str, Any]) -> str:
     skip, over = int(status.get("skip") or 0), int(status.get("overwrite") or 0)
     errors = int(status.get("error") or 0)
-    text = f"{_progress(status)}, {skip} skipped (already there), {over} overwritten"
-    return text + (f", {errors} failed" if errors else "")
+    text = f"{_progress(status)}, {skip:,} skipped (already there), {over:,} overwritten"
+    return text + (f", {errors:,} failed" if errors else "")
 
 
 def _finished_line(operation: str, what: str, where: str, status: dict[str, Any]) -> str:
@@ -322,9 +322,9 @@ async def copy_or_move(
 def _what(items: int, folders: int) -> str:
     parts = []
     if items:
-        parts.append(f"{items} item(s)")
+        parts.append(f"{items:,} item(s)")
     if folders:
-        parts.append(f"{folders} folder(s)")
+        parts.append(f"{folders:,} folder(s)")
     return " and ".join(parts)
 
 
@@ -374,7 +374,7 @@ async def delete_photos(
         ph = Photos(client, sp, op)
         found, missing = await ph.items(ids)
         lines = (
-            await _run_delete(ph, list(found), [], timeout, f"{len(found)} item(s)")
+            await _run_delete(ph, list(found), [], timeout, f"{len(found):,} item(s)")
             if found
             else ["Nothing deleted: none of the ids exist."]
         )
@@ -407,7 +407,7 @@ async def delete_photo_folders(
         described = []
         for folder_id, path in resolved.items():
             count = await ph.call("Browse.Item", "count", {"folder_id": folder_id})
-            described.append(f"{path} ({count.get('count', 0)} item(s) directly in it)")
+            described.append(f"{path} ({int(count.get('count') or 0):,} item(s) directly in it)")
         what = ", ".join(described)
         return "\n".join(await _run_delete(ph, [], list(resolved), timeout, what))
     except SynologyError as e:
@@ -534,7 +534,7 @@ async def photo_task(
                         str(t.get("operation", "")),
                         target.removeprefix(" to ") or "—",
                         str(t.get("status", "")),
-                        f"{t.get('completion', 0)}/{t.get('total', 0)}",
+                        f"{int(t.get('completion') or 0):,}/{int(t.get('total') or 0):,}",
                         format_timestamp(int(t["create_time"]) / 1000)
                         if t.get("create_time")
                         else "—",

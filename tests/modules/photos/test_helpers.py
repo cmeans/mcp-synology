@@ -97,6 +97,15 @@ class TestBasics:
         assert page_footer(7, 5, 2) == "7 item(s) total; showing 6–7."
         assert page_footer(7, 10, 0) == "7 item(s) total."
 
+    def test_page_footer_separates_thousands(self) -> None:
+        assert page_footer(12_345, 1_000, 200) == (
+            "12,345 item(s) total; showing 1,001–1,200. Pass offset=1200 for the next page."
+        )
+        assert page_footer(12_345, 20_000, 0) == "12,345 item(s) total."
+        assert page_footer(None, 1_000, 5) == (
+            "Showing 1,001–1,005. Pass offset=1005 for the next page."
+        )
+
     def test_is_indexing(self) -> None:
         assert is_indexing({"additional": {"resolution": {"width": 0, "height": 0}}})
         assert not is_indexing({"additional": {"resolution": {"width": 4, "height": 3}}})
@@ -385,3 +394,17 @@ class TestPlaceNode:
 )
 def test_id_list_collapses_runs(ids: list[int], shown: str) -> None:
     assert id_list(ids) == shown
+
+
+def test_id_limit_refusals_name_what_and_separate_thousands() -> None:
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    from mcp_synology.modules.photos.helpers import check_ids
+
+    for param, noun in (("ids", "ids"), ("folders", "folders")):
+        try:
+            check_ids("Copy photos", list(range(1_001)), param=param)
+        except ToolError as e:
+            assert f"at most 1,000 {noun} per call." in str(e)
+        else:
+            raise AssertionError("1,001 ids accepted")

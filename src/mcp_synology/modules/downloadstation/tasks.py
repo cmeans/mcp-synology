@@ -88,7 +88,7 @@ def _not_found_hint(errors: list[int]) -> str:
     if not missing:
         return ""
     return "\n\n" + format_status(
-        f"{missing} task(s) not found: no such task, or it belongs to another user. "
+        f"{missing:,} task(s) not found: no such task, or it belongs to another user. "
         + _NOT_FOUND_SUGGESTION,
         success=False,
     )
@@ -210,7 +210,7 @@ async def list_downloads(
     if not tasks:
         result = format_table(headers=headers, rows=[], title=heading)
         if offset > 0 and total > 0:
-            result += f"\n\n{total} task(s) total; offset {offset} is past the end."
+            result += f"\n\n{total:,} task(s) total; offset {offset:,} is past the end."
         return result
 
     rows: list[list[str]] = []
@@ -238,7 +238,7 @@ async def list_downloads(
 
     last = offset + len(rows)
     result = format_table(headers=headers, rows=rows, title=heading)
-    result += f"\n\n{total} task(s) total; showing {offset + 1}–{last}."
+    result += f"\n\n{total:,} task(s) total; showing {offset + 1:,}–{last:,}."
     if last < total:
         result += f" Pass offset={last} for the next page."
     return result
@@ -471,9 +471,9 @@ def _create_failed(operation: str, e: SynologyError, destination: str | None) ->
 
 def _created_message(task_ids: list[str], n_uris: int) -> str:
     if task_ids:
-        return f"Created {len(task_ids)} download task(s): {', '.join(task_ids)}."
+        return f"Created {len(task_ids):,} download task(s): {', '.join(task_ids)}."
     return (
-        f"Created download task(s) for {n_uris} URI(s); DSM did not return task IDs "
+        f"Created download task(s) for {n_uris:,} URI(s); DSM did not return task IDs "
         "— use list_downloads to find them."
     )
 
@@ -752,12 +752,12 @@ async def delete_download(
         else "partial data of unfinished tasks discarded"
     )
     if results and len(errors) == len(results):
-        title = f"Delete download — 0 of {len(task_ids)} task(s) removed; nothing was deleted"
+        title = f"Delete download — 0 of {len(task_ids):,} task(s) removed; nothing was deleted"
     else:
         removed = (
-            f"{len(results) - len(errors)} of {len(task_ids)} task(s) removed"
+            f"{len(results) - len(errors):,} of {len(task_ids):,} task(s) removed"
             if results
-            else f"{len(task_ids)} task(s) removed"
+            else f"{len(task_ids):,} task(s) removed"
         )
         title = f"Delete download — {removed}; completed files kept; {unfinished}"
     table = format_table(headers=["Task ID", "Result"], rows=rows, title=title) + _not_found_hint(
@@ -827,7 +827,7 @@ async def _task_state_change(
     return format_table(
         headers=["Task ID", "Result"],
         rows=rows,
-        title=f"{operation_label} — {len(task_ids)} task(s)",
+        title=f"{operation_label} — {len(task_ids):,} task(s)",
     ) + _not_found_hint(errors)
 
 
@@ -933,5 +933,5 @@ async def edit_download(
     return format_table(
         headers=["Task ID", "Result"],
         rows=rows,
-        title=f"Edit download — {len(task_ids)} task(s), destination={destination}",
+        title=f"Edit download — {len(task_ids):,} task(s), destination={destination}",
     ) + _not_found_hint(errors)
