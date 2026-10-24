@@ -28,10 +28,10 @@
 
 ### Changed
 
-- **Local-path parameters name the allowed folders; `get_system_info` says the CPU needs an admin; later listing pages give their range** (#386), from the 0.10.0rc6 live test:
+- **Local-path parameters name the allowed folders; `get_system_info` says the CPU needs an admin; paged listings give their range** (#390) — from the 0.10.0rc6 live test:
   - `download_file`'s `dest_folder`, `upload_file`'s `local_path`, `create_download`'s `torrent_file_path`, `download_photos`' `dest_folder` and `upload_photos`' `local_paths` name this config's allowed local folders in their own descriptions. claude.ai, through the desktop app, never receives the server's instructions, where the folders were listed. The three modules drop `from __future__ import annotations`, so these descriptions use pydantic's documented `Annotated[..., Field(description=...)]` form directly. A test fails if any description points to the instructions.
   - `get_system_info`'s description says the CPU is shown only for a DSM administrator account (it comes from `SYNO.Core.System`, which is admin-only); claude.ai on a non-admin connection found it missing. `edit_photo`'s `description` says one of only spaces shows as `—`, like none.
-  - `list_files` and `list_recycle_bin` give a later page's range: "Showing 3–4 of 5 items", not "Showing 2 of 5 items", as the recycle-bin pattern listing already did.
+  - `list_files` and `list_recycle_bin` give the range of every truncated or offset page ("Showing 3–4 of 5 items", not "Showing 2 of 5 items"), as the recycle-bin pattern listing does, and every count in the footer has a thousands separator ("1,500 of 1,500 items").
   - `docs/live-testing.md` and `docs/live-test-template.md`: cleanup starts only after every tester is done, and a SURPRISE counts against the round; each one is a behavior or a documentation failure that gets a fix, an issue or a recorded decision. The run-book's findings table gains the rc6 rows.
   - Also: a comment on why `call_tool` re-raises `UnexpectedToolError` against the SDK's docstring, and CLAUDE.md names the right function for the Upload version pin.
 - **Bump uv group: certifi 2026.2.25→2026.10.19** (#378)

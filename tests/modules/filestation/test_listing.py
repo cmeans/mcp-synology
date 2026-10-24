@@ -479,6 +479,31 @@ class TestListRecycleBin:
         assert "Showing 6–9 of 9 items." in second
 
     @respx.mock
+    async def test_footer_counts_have_thousands_separators(self, mock_client: DsmClient) -> None:
+        """Every number in the footer is formatted alike, not just the total."""
+
+        def responder(request: httpx.Request) -> httpx.Response:
+            offset = int(request.url.params.get("offset", "0"))
+            limit = int(request.url.params.get("limit", "0"))
+            files = [
+                {
+                    "name": f"f{i}.txt",
+                    "isdir": False,
+                    "additional": {"size": 1, "time": {"mtime": 1}},
+                }
+                for i in range(offset, min(offset + limit, 1500))
+            ]
+            return httpx.Response(
+                200, json={"success": True, "data": {"files": files, "total": 1500}}
+            )
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=responder)
+        whole = await list_recycle_bin(mock_client, share="home", limit=2000)
+        assert whole.endswith("1,500 of 1,500 items.")
+        last = await list_recycle_bin(mock_client, share="home", limit=1000, offset=1000)
+        assert last.endswith("Showing 1,001–1,500 of 1,500 items.")
+
+    @respx.mock
     async def test_recycle_bin_disabled(self, mock_client: DsmClient) -> None:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_no_bin)
         result = await list_recycle_bin(

@@ -730,7 +730,7 @@ def register(ctx: "RegisterContext") -> None:
                 str | None,
                 Field(
                     description=(
-                        f"Local folder to save into, inside {local_folders} or below them. "
+                        f"Local folder to save into: {local_folders}, or a folder below it. "
                         "Optional when a default download folder is configured."
                     )
                 ),
@@ -979,7 +979,7 @@ def register(ctx: "RegisterContext") -> None:
             local_path: Annotated[
                 str,
                 Field(
-                    description=(f"The file on this machine, inside {local_folders} or below them.")
+                    description=(f"The file on this machine, inside {local_folders}, or below it.")
                 ),
             ],
             dest_folder: Annotated[

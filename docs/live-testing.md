@@ -26,9 +26,9 @@ real output. "Found" names the release candidate under test (not a published rel
 | 0.10.0rc5 | `list_recycle_bin` said "Use offset=N to see more" but had no `offset` | #364 |
 | 0.10.0rc5 | File Station's 407 (a permission refusal) read as "Unknown error" | #365 |
 | 0.10.0rc5 | A copy stopped by a quota gave a bare code, and didn't say it had left 18 GiB at the destination | #366 |
-| 0.10.0rc6 | Five local-path parameters sent the model to the server instructions for the allowed folders, which claude.ai never receives | #386 |
-| 0.10.0rc6 | `get_system_info` promised the CPU, which only an administrator account gets | #386 |
-| 0.10.0rc6 | A later page of a listing said "Showing 2 of 5 items" without saying which two | #386 |
+| 0.10.0rc6 | Five local-path parameters sent the model to the server instructions for the allowed folders, which claude.ai never receives | #390 |
+| 0.10.0rc6 | `get_system_info` promised the CPU, which only an administrator account gets | #390 |
+| 0.10.0rc6 | A later page of a listing said "Showing 2 of 5 items" without saying which two | #390 |
 
 ## Clients tested, and how they differ
 

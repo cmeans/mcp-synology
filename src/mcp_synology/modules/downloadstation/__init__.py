@@ -362,7 +362,8 @@ def register(ctx: "RegisterContext") -> None:
                 Field(
                     description=(
                         "Path on this machine to a `.torrent` or `.nzb` file, inside "
-                        f"{roots_for_description(local_roots)}. Pass this or `uri`, not both."
+                        f"{roots_for_description(local_roots)}, or below it. Pass this or `uri`, "
+                        "not both."
                     )
                 ),
             ] = None,

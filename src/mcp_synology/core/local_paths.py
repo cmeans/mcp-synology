@@ -163,7 +163,7 @@ def roots_for_description(roots: list[Path]) -> str:
     desktop app, in the 0.10.0rc5 and rc6 live tests), so a parameter that takes a local
     path names the folders itself instead of pointing to the instructions' LOCAL PATHS.
     """
-    return "the allowed local folders (" + ", ".join(str(r) for r in roots) + ")"
+    return "one of the allowed local folders (" + ", ".join(str(r) for r in roots) + ")"
 
 
 def outside_allowed_roots(path: str | Path, roots: list[Path]) -> Path | None:

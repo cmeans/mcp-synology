@@ -533,8 +533,8 @@ def register(ctx: "RegisterContext") -> None:
                 str | None,
                 Field(
                     description=(
-                        f"An existing local folder inside {roots_for_description(local_roots)}; "
-                        "default the allowed folder, when there's only one."
+                        f"An existing local folder: {roots_for_description(local_roots)}, or "
+                        "one below it; default the allowed folder, when there's only one."
                     )
                 ),
             ] = None,
@@ -942,8 +942,8 @@ def register(ctx: "RegisterContext") -> None:
                 list[str],
                 Field(
                     description=(
-                        f"1-50 local files inside {roots_for_description(local_roots)}, such as "
-                        "`~/Pictures/a.jpg`."
+                        f"1-50 local files inside {roots_for_description(local_roots)}, or below "
+                        "it."
                     )
                 ),
             ],
