@@ -165,16 +165,21 @@ model can work out on its own.
 
 ### Size each step to the client
 
-> **5a** `create_download` `<a public test file of known size, about 100 MB>`. Right away,
-> `list_downloads` and `get_download_info` on it. Quote the size and progress lines.
+> Setup: `create_folder <scratch>/ds`.
+>
+> **5a** `create_download` `<a public test file of known size, about 100 MB>` with
+> `destination` `<scratch without the leading slash>/ds`. Right away, `list_downloads` and
+> `get_download_info` on it. Quote the size and progress lines.
 >
 > **5b** About 30 s later, `get_download_info` again. Quote the size and progress lines.
 
 Each step is one or two calls that return in seconds, so a client with a 60-second reply
 limit can run it; to watch longer, add more steps like 5b rather than one step that polls.
 A file of known size makes a wrong size obvious: an earlier round found that a download
-whose server never sent a size showed as `0 B` (#355), and this step checks the fix. An operation that takes minutes, such as a large copy handing off
-to `file_task`, goes in a section for a client without the limit.
+whose server never sent a size showed as `0 B` (#355), and this step checks the fix. The
+destination keeps the file in the tester's scratch, where cleanup finds it; without one, it
+goes to the account's default destination (or is refused if there's none). An operation that takes minutes, such as a
+large copy handing off to `file_task`, goes in a section for a client without the limit.
 
 ## Answer key
 
@@ -186,7 +191,8 @@ wrong expectation:
 - **9e** `get_dir_size` of the missing path: an error with code `not_found` naming the path,
   not a size (`filestation/metadata.py`, #332).
 - **0a** Names the withheld write tools for each module and `permission: write`, and any
-  module that isn't enabled, with how to add it; doesn't say the server can't do it. A model
+  module that isn't enabled, with how to enable it (add it under `modules:`, or set
+  `enabled: true` if it's listed but off); doesn't say the server can't do it. A model
   without the instructions guesses.
 - Known issues, not to count again: #<N> (<one line>).
 ```
