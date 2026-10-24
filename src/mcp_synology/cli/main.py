@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import os
 import sys
 
 import click
@@ -129,7 +131,17 @@ def serve(config: str | None) -> None:
     _configure_logging(app_config.logging.level, app_config.logging.file)
 
     server = create_server(app_config)
-    server.run(transport="stdio")
+    try:
+        server.run(transport="stdio")
+    except SystemExit as e:
+        # SIGTERM or SIGINT ended the run (install_signal_handlers). The lifespan has
+        # already logged out of DSM, but the stdio reader thread is still blocked on
+        # stdin, and joining it at interpreter exit would hang forever (#402). Flush
+        # the logs and leave without joining it.
+        if e.code is not None and not isinstance(e.code, int):
+            click.echo(str(e.code), err=True)
+        logging.shutdown()
+        os._exit(0 if e.code is None else e.code if isinstance(e.code, int) else 1)
 
 
 # Import and attach subcommands — avoids circular imports since

@@ -487,6 +487,12 @@ class DsmClient:
         )
         return negotiated
 
+    def _reauth_allowed(self, api: str) -> bool:
+        """A session error may log in again and retry, except on SYNO.API.Auth itself: a
+        logout that meets an expired session would otherwise log in again just to log
+        out, and on shutdown that new session could be left open (#402)."""
+        return self._re_auth_callback is not None and api != "SYNO.API.Auth"
+
     async def request(
         self,
         api: str,
@@ -614,7 +620,7 @@ class DsmClient:
         )
 
         # Transparent re-auth on session errors (one retry)
-        if code in _SESSION_ERROR_CODES and not _is_retry and self._re_auth_callback:
+        if code in _SESSION_ERROR_CODES and not _is_retry and self._reauth_allowed(api):
             logger.info("Session error %d on %s/%s, attempting re-auth.", code, api, method)
             await self._re_authenticate(code, api)
             return await self.request(
@@ -687,7 +693,7 @@ class DsmClient:
         code = body.get("error", {}).get("code", 0)
         logger.debug("DSM response: %s/%s — error code %d", api, method, code)
 
-        if code in _SESSION_ERROR_CODES and not _is_retry and self._re_auth_callback:
+        if code in _SESSION_ERROR_CODES and not _is_retry and self._reauth_allowed(api):
             logger.info("Session error %d on %s/%s, attempting re-auth.", code, api, method)
             await self._re_authenticate(code, api)
             return await self.request_form_post(api, method, version, params, _is_retry=True)

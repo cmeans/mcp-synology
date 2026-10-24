@@ -902,7 +902,9 @@ class TestRequestPostForm:
 
         client.set_re_auth_callback(reauth)
         async with client:
-            data = await client.request("SYNO.API.Auth", "login", version=6, post_form=True)
+            data = await client.request(
+                "SYNO.FileStation.List", "list_share", version=2, post_form=True
+            )
         assert data == {"ok": 1}
         assert route.call_count == 2
         assert not route.calls.last.request.url.params
@@ -1719,3 +1721,31 @@ class TestErrorDetail:
                 await client.request("SYNO.Foto.Browse.Item", "set", 2, {}, post_form=True)
         assert "s3cr3t" not in caplog.text
         assert "error code 120: rating" in caplog.text
+
+
+class TestNoReauthOnAuthApi:
+    """A session error on SYNO.API.Auth never re-logs in, on either request path: a
+    logout that met an expired session would log in again just to log out (#402)."""
+
+    @respx.mock
+    @pytest.mark.parametrize("form_post", [False, True])
+    async def test_auth_api_session_error_does_not_reauth(self, form_post: bool) -> None:
+        client = make_client(make_api_cache())
+        client.sid = "expired"
+        reply = {"success": False, "error": {"code": 119}}
+        get = respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(json=reply)
+        post = respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(json=reply)
+        reauths: list[int] = []
+
+        async def reauth() -> None:
+            reauths.append(1)
+
+        client.set_re_auth_callback(reauth)
+        async with client:
+            with pytest.raises(SynologyError):
+                if form_post:
+                    await client.request_form_post("SYNO.API.Auth", "logout", 6, {})
+                else:
+                    await client.request("SYNO.API.Auth", "logout", version=6)
+        assert not reauths
+        assert (post if form_post else get).call_count == 1
