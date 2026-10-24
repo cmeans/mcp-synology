@@ -623,6 +623,47 @@ class TestSharedClientManagerLifecycle:
         assert "Couldn't log out of DSM on shutdown (ConnectError: gone)" in caplog.text
         client.__aexit__.assert_awaited_once()  # type: ignore[union-attr]
 
+    async def test_aclose_warns_on_a_dsm_error_reply(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A DSM error or a proxy's page on logout warns too, through the real AuthManager:
+        logout(raise_errors=True) lets it reach aclose instead of a DEBUG line."""
+        import respx
+
+        from mcp_synology.core.auth import AuthManager
+        from tests.conftest import BASE_URL, make_api_cache, make_client
+
+        manager = SharedClientManager(make_test_config())
+        client = make_client(make_api_cache())
+        await client.__aenter__()
+        client.sid = "s"
+        manager._client = client
+        manager._auth = AuthManager(make_test_config(), client)
+        with (
+            respx.mock as mock,
+            caplog.at_level(logging.WARNING, logger="mcp_synology.server"),
+        ):
+            mock.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+                json={"success": False, "error": {"code": 105}}
+            )
+            await manager.aclose()
+        assert "Couldn't log out of DSM on shutdown" in caplog.text
+
+    async def test_aclose_cancels_the_update_check(self) -> None:
+        import asyncio
+
+        import anyio
+
+        manager = self._manager_with_session()
+
+        async def forever() -> None:
+            await anyio.sleep(60)
+
+        manager._bg_task = asyncio.create_task(forever())
+        await manager.aclose()
+        await asyncio.sleep(0)
+        assert manager._bg_task.cancelled()
+
     async def test_aclose_gives_up_on_a_logout_that_doesnt_answer(
         self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -634,7 +675,7 @@ class TestSharedClientManagerLifecycle:
         manager = self._manager_with_session()
         client = manager._client
 
-        async def hang() -> None:
+        async def hang(**_: Any) -> None:
             await anyio.sleep(10)
 
         manager._auth.logout = hang  # type: ignore[union-attr,method-assign]
@@ -651,7 +692,7 @@ class TestSharedClientManagerLifecycle:
         auth = manager._auth
         done = anyio.Event()
 
-        async def slow_logout() -> None:
+        async def slow_logout(**_: Any) -> None:
             await anyio.sleep(0.05)
             done.set()
 

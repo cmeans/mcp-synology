@@ -111,6 +111,25 @@ class TestCli:
         server.run.assert_called_once_with(transport="stdio")
         os_exit.assert_called_once_with(143)
 
+    @pytest.mark.parametrize(("code", "exit_code", "printed"), [(None, 0, ""), ("bye", 1, "bye")])
+    def test_serve_exit_codes_follow_python(
+        self, tmp_path: Path, code: object, exit_code: int, printed: str
+    ) -> None:
+        config_file = tmp_path / "c.yaml"
+        config_file.write_text(
+            "schema_version: 1\ninstance_id: t\nconnection: {host: 1.2.3.4}\n"
+            "modules: {filestation: {enabled: true}}\n"
+        )
+        server = MagicMock()
+        server.run.side_effect = SystemExit(code)
+        with (
+            patch("mcp_synology.server.create_server", return_value=server),
+            patch("mcp_synology.cli.main.os._exit") as os_exit,
+        ):
+            result = CliRunner().invoke(main, ["serve", "-c", str(config_file)])
+        os_exit.assert_called_once_with(exit_code)
+        assert printed in result.output
+
     def test_serve_returns_normally_on_stdin_eof(self, tmp_path: Path) -> None:
         config_file = tmp_path / "c.yaml"
         config_file.write_text(

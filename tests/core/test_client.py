@@ -887,6 +887,27 @@ class TestRequestPostForm:
         assert safe == {"passphrase": "***", "password": "***", "album_id": 4}
 
     @respx.mock
+    async def test_auth_api_session_error_does_not_reauth(self) -> None:
+        """A logout that meets an expired session must not log in again just to log out:
+        on shutdown that new session would be left open (#402)."""
+        client = make_client(make_api_cache())
+        client.sid = "expired"
+        route = respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 119}}
+        )
+        reauths: list[int] = []
+
+        async def reauth() -> None:
+            reauths.append(1)
+
+        client.set_re_auth_callback(reauth)
+        async with client:
+            with pytest.raises(SynologyError):
+                await client.request("SYNO.API.Auth", "logout", version=6)
+        assert not reauths
+        assert route.call_count == 1
+
+    @respx.mock
     async def test_session_retry_stays_post(self) -> None:
         client = make_client(make_api_cache())
         client.sid = "old"
@@ -902,7 +923,9 @@ class TestRequestPostForm:
 
         client.set_re_auth_callback(reauth)
         async with client:
-            data = await client.request("SYNO.API.Auth", "login", version=6, post_form=True)
+            data = await client.request(
+                "SYNO.FileStation.List", "list_share", version=2, post_form=True
+            )
         assert data == {"ok": 1}
         assert route.call_count == 2
         assert not route.calls.last.request.url.params

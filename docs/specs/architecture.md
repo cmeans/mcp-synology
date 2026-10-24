@@ -295,7 +295,8 @@ This ensures the MCP server doesn't kick out DSM web UI sessions, Home Assistant
 
 `serve` logs out of DSM when its run ends: on stdin EOF, and on SIGTERM or SIGINT.
 - **Where it runs:** the logout is in the server's `lifespan` teardown (`SharedClientManager.aclose`), while the event loop and the HTTP client are still alive.
-- **Limits:** it's shielded from cancellation and bounded by `LOGOUT_TIMEOUT` (5 s). A failure or timeout is logged as a WARNING; the session then stays open until DSM's own session timeout.
+- **Limits:** it's shielded from cancellation and bounded by `LOGOUT_TIMEOUT` (5 s). Any failure is logged as a WARNING, including a DSM error reply, which `AuthManager.logout(raise_errors=True)` passes up, and a timeout. The session then stays open until DSM's own session timeout.
+- **No re-login on `SYNO.API.Auth`:** a session error (106/107/119) on login or logout doesn't trigger the client's re-login and retry. Otherwise a logout that met an expired session would log in again just to log out, and could leave that new session open if the 5 s limit cut in.
 - **Signals:** SIGTERM and SIGINT raise `SystemExit`, so the loop unwinds through that teardown. `serve` then leaves with `os._exit`, because the stdio reader thread is still blocked on stdin and joining it at interpreter exit would hang.
 - **Why not atexit (#402):** the logout used to run at atexit. By then asyncio can't resolve a host ("cannot schedule new futures after interpreter shutdown"), so it never completed, and every exit left its session open.
 

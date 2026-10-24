@@ -261,8 +261,12 @@ class AuthManager:
         logger.info("Authenticated as '%s' (session: %s)", username, self._session_name)
         return sid
 
-    async def logout(self) -> None:
-        """Log out the current session."""
+    async def logout(self, *, raise_errors: bool = False) -> None:
+        """Log out the current session.
+
+        A DSM error is logged at DEBUG and swallowed (the session may already be
+        expired), unless ``raise_errors`` is set: shutdown uses that to warn (#402).
+        """
         if not self._client.sid:
             return
 
@@ -276,6 +280,8 @@ class AuthManager:
             )
             logger.debug("Logout successful")
         except SynologyError:
+            if raise_errors:
+                raise
             logger.debug("Logout failed (session may already be expired).")
         finally:
             self._client.sid = None

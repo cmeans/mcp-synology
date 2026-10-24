@@ -138,8 +138,10 @@ def serve(config: str | None) -> None:
         # already logged out of DSM, but the stdio reader thread is still blocked on
         # stdin, and joining it at interpreter exit would hang forever (#402). Flush
         # the logs and leave without joining it.
+        if e.code is not None and not isinstance(e.code, int):
+            click.echo(str(e.code), err=True)
         logging.shutdown()
-        os._exit(e.code if isinstance(e.code, int) else 1)
+        os._exit(0 if e.code is None else e.code if isinstance(e.code, int) else 1)
 
 
 # Import and attach subcommands — avoids circular imports since

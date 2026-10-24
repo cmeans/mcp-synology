@@ -474,7 +474,7 @@ class SharedClientManager:
             if auth is not None:
                 with anyio.move_on_after(LOGOUT_TIMEOUT) as scope:
                     try:
-                        await auth.logout()
+                        await auth.logout(raise_errors=True)
                     except Exception as e:  # noqa: BLE001 - logged; exit must go on
                         logger.warning(
                             "Couldn't log out of DSM on shutdown (%s: %s); the session "
