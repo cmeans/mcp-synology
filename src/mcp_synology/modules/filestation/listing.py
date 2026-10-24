@@ -546,11 +546,11 @@ async def _search_recycle_bin(
     )
     notes = [fallback] if fallback else []
     if found and offset >= len(found):
-        notes.append(f"No matches from offset={offset}: there are {len(found)}.")
+        notes.append(f"No matches from offset={offset}: there are {len(found):,}.")
     elif len(found) > len(shown):
         end = offset + len(shown)
         more = f" Use offset={end} to see more." if end < len(found) else ""
-        notes.append(f"Showing {offset + 1}–{end} of {len(found)} matches.{more}")
+        notes.append(f"Showing {offset + 1:,}–{end:,} of {len(found):,} matches.{more}")
     if found:
         notes.append("Paths are relative to the recycle bin, as a restore takes them.")
     if unreadable:

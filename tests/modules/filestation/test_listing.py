@@ -739,6 +739,16 @@ def _bin_responder(
 
 class TestRecycleBinSearch:
     @respx.mock
+    async def test_match_footer_has_thousands_separators(self, mock_client: DsmClient) -> None:
+        """Like list_files' footer (#390): every count in the line is formatted alike."""
+        tree = {_BIN: [_entry(f"{_BIN}/f{i:04d}.txt") for i in range(1500)]}
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_bin_responder(tree))
+        out = await list_recycle_bin(
+            mock_client, share="home", pattern="f*", limit=200, offset=1000
+        )
+        assert "Showing 1,001–1,200 of 1,500 matches. Use offset=1200 to see more." in out
+
+    @respx.mock
     async def test_pattern_finds_a_file_in_a_subfolder(self, mock_client: DsmClient) -> None:
         """The rc3 case: b2* missed mcp-rc3/photos-zip/b2.txt at the bin's top level."""
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_bin_responder(_TREE))

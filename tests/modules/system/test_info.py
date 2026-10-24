@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -168,39 +169,6 @@ class TestGetSystemInfo:
         assert body["error"]["retryable"] is True
 
     @respx.mock
-    async def test_unrecognized_fields_produce_no_pairs(self, mock_client: DsmClient) -> None:
-        """Sources return non-empty dicts but with fields we don't extract.
-
-        This is the SECOND ``if not pairs: error_response(...)`` branch —
-        distinct from the empty-dict case above. The dicts are truthy so
-        the first branch is skipped, but since none of the expected
-        fields (model, version_string, ram, cpu_series, etc.) are
-        populated, ``pairs`` stays empty and the late-branch
-        ``unavailable`` fires at the bottom of the function.
-        """
-        _install_system_apis(mock_client)
-        responses = {
-            "SYNO.DSM.Info": {
-                "success": True,
-                "data": {"some_unknown_field": "value", "another_unknown": 42},
-            },
-            "SYNO.Core.System": {
-                "success": True,
-                "data": {"yet_another_field": "also unknown"},
-            },
-        }
-        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
-            side_effect=lambda req: _mock_response(req, responses)
-        )
-
-        with pytest.raises(ToolError) as exc_info:
-            await get_system_info(mock_client)
-        body = json.loads(str(exc_info.value))
-        assert body["error"]["code"] == "unavailable"
-        assert body["error"]["retryable"] is True
-        assert "No system information returned" in body["error"]["message"]
-
-    @respx.mock
     async def test_uptime_formatting(self, mock_client: DsmClient) -> None:
         """Uptime seconds should be formatted as days/hours/minutes."""
         _install_system_apis(mock_client)
@@ -238,3 +206,123 @@ class TestGetSystemInfo:
 
         result = await get_system_info(mock_client)
         assert "< 1m" in result
+
+
+# --- Captured replies (fixtures/README.md) -----------------------------------------------
+
+_FIXTURES = Path(__file__).parent / "fixtures"
+_SOURCES = (
+    "SYNO.DSM.Info",
+    "SYNO.Core.System",
+    "SYNO.Core.Region.NTP",
+    "SYNO.Core.System.Status",
+)
+
+
+def _serve_capture(client: DsmClient, name: str) -> list[str]:
+    """Answer every system API from a captured reply; returns the APIs called."""
+    for api in _SOURCES:
+        client._api_cache[api] = ApiInfoEntry(path="entry.cgi", min_version=1, max_version=3)
+    capture = json.loads((_FIXTURES / name).read_text())
+    called: list[str] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        api = dict(request.url.params).get("api", "")
+        called.append(api)
+        data = capture[api]
+        if "error" in data and len(data) == 1:
+            return httpx.Response(200, json={"success": False, "error": {"code": data["error"]}})
+        return httpx.Response(200, json={"success": True, "data": data})
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=respond)
+    return called
+
+
+def _rows(result: str) -> dict[str, str]:
+    rows = {}
+    for line in result.splitlines():
+        key, sep, value = line.strip().partition(":")
+        if sep and value.startswith("  "):
+            rows[key] = value.strip()
+    return rows
+
+
+_ZONES = {
+    "7.1": "Central Time (US & Canada), currently UTC-05:00",
+    "7.2.2": "Greenwich Mean Time (GMT), currently UTC+00:00",
+    "7.3.2": "Bombay, Calcutta, Madras, New Delhi, Colombo, currently UTC+05:30",
+    "7.4.1": "Amsterdam, Berlin, Rome, Stockholm, Vienna, currently UTC+02:00",
+}
+
+
+class TestEverythingDsmSends:
+    """Every field DSM sends is shown (maintainer, 2026-10-23), serial number included."""
+
+    @pytest.mark.parametrize("version", sorted(_ZONES))
+    @respx.mock
+    async def test_admin_sees_every_source(self, mock_client: DsmClient, version: str) -> None:
+        _serve_capture(mock_client, f"{version}-admin.json")
+        rows = _rows(await get_system_info(mock_client))
+        assert rows["Model"] == "VirtualDSM"
+        assert rows["Serial number"] == "0000000000000"
+        # VirtualDSM puts the whole CPU name in cpu_vendor; family and series are empty.
+        assert rows["CPU"] == "AMD Ryzen 9 7940HS (2 cores @ 3992 MHz)"
+        # The zone and the offset in force now, from Region.NTP's exact timestamp: each
+        # vdsm image runs in its own zone (tests/vdsm/config.py:DSM_TIMEZONES).
+        assert rows["Time zone"] == _ZONES[version]
+        assert rows["NTP"] == "time.google.com"
+        assert rows["Code page"] == "enu"
+        assert rows["DSM update"] == "none ready to install"
+        assert rows["System crash flag"] == "no"
+        assert rows["Redundant power"] == "supported: yes (rp1: 1, rp2: 1)"
+        assert rows["eSATA"] == "no"
+        assert rows["USB devices"] == "none"
+        assert rows["SATA devices"] == "none"
+        assert rows["PCIe slots"] == "none"
+        assert ", firmware date " in rows["DSM version"]
+        assert "Needs a DSM administrator" not in rows
+
+    @pytest.mark.parametrize("version", sorted(_ZONES))
+    @respx.mock
+    async def test_other_accounts_are_told_plainly(
+        self, mock_client: DsmClient, version: str
+    ) -> None:
+        called = _serve_capture(mock_client, f"{version}-user.json")
+        rows = _rows(await get_system_info(mock_client))
+        assert rows["Serial number"] == "0000000000000"
+        assert rows["DSM version"].startswith(f"DSM {version}")
+        assert rows["Code page"] == "enu"
+        assert rows["Time zone"] == "not available to this account (needs a DSM administrator)"
+        assert rows["Needs a DSM administrator"].startswith("CPU, NTP server, firmware date")
+        assert "CPU" not in rows
+        # Core.System's refusal means the other two admin-only APIs aren't tried.
+        assert "SYNO.Core.Region.NTP" not in called
+        assert "SYNO.Core.System.Status" not in called
+
+    @respx.mock
+    async def test_a_real_nas_splits_the_cpu_name(self, mock_client: DsmClient) -> None:
+        _serve_capture(mock_client, "ds1618-7.1.1-admin.json")
+        rows = _rows(await get_system_info(mock_client))
+        assert rows["CPU"] == "INTEL Atom C3538 (4 cores @ 2100 MHz)"
+        assert rows["DSM version"] == "DSM 7.1.1-42962 Update 9, firmware date 2025/07/29"
+        # time_zone_desc says GMT-06:00 (standard time); the NAS was on daylight time.
+        assert rows["Time zone"] == "Central Time (US & Canada), currently UTC-05:00"
+        assert rows["PCIe slots"] == "slot 1: empty"
+        assert rows["eSATA"] == "yes"
+        assert rows["Temperature"] == "50°C"
+
+    @respx.mock
+    async def test_a_field_we_dont_know_is_shown_under_its_name(
+        self, mock_client: DsmClient
+    ) -> None:
+        _install_system_apis(mock_client)
+        responses = {
+            "SYNO.DSM.Info": {"success": True, "data": {"model": "DS920+", "new_field": "x1"}},
+            "SYNO.Core.System": {"success": True, "data": {"other_new": 7}},
+        }
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=lambda req: _mock_response(req, responses)
+        )
+        rows = _rows(await get_system_info(mock_client))
+        assert rows["new_field"] == "x1"
+        assert rows["other_new"] == "7"

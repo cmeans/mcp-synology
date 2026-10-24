@@ -200,7 +200,7 @@ DSM sorts folders and files separately; folders come first.
 - `📁` for directories, `📄` for generic files, `🎬` for video files. Configurable fallback to text markers (`[DIR]`/`[FILE]`).
 - Directories show `—` for size (use `get_dir_size` for directory sizes).
 - Trailing `/` on directory names for visual distinction.
-- Footer: `N of N items.` when everything fits; `"Showing 1–200 of 1,432 items. Use offset=200 to see more."` when truncated; `"Showing 1401–1432 of 1,432 items."` on a last page reached with `offset`. The range, not just the count, says where a page is (0.10.0rc6 live test), as `list_recycle_bin`'s pattern listing already did.
+- Footer: `N of N items.` when everything fits; `"Showing 1–200 of 1,432 items. Use offset=200 to see more."` when truncated; `"Showing 1,401–1,432 of 1,432 items."` on a last page reached with `offset`. The range, not just the count, says where a page is (0.10.0rc6 live test), as `list_recycle_bin`'s pattern listing already did.
 - `#recycle` folders are **hidden by default**. They appear only via `list_recycle_bin` or direct path access.
 - **DSM sorts by type first (#333):** ascending puts every folder before the files, descending puts the files first, and each group is sorted on its own (measured for `name`, `size`, `mtime` and `ctime` on DSM 7.1 and 7.3.2, and on seska's 7.1.1). A listing that mixes the two says so after the table: `DSM sorts folders and files separately; folders come first.` (`files` for descending). Without it, a listing sorted by date looked unsorted where the groups meet (0.10.0rc3 live test).
 

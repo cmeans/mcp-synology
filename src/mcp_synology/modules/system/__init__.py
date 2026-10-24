@@ -21,16 +21,21 @@ MODULE_INFO = ModuleInfo(
     required_apis=[
         ApiRequirement(api_name="SYNO.DSM.Info", min_version=1),
         ApiRequirement(api_name="SYNO.Core.System", min_version=1, optional=True),
+        ApiRequirement(api_name="SYNO.Core.Region.NTP", min_version=1, optional=True),
+        ApiRequirement(api_name="SYNO.Core.System.Status", min_version=1, optional=True),
         ApiRequirement(api_name="SYNO.Core.System.Utilization", min_version=1, optional=True),
     ],
     tools=[
         ToolInfo(
             name="get_system_info",
             description=(
-                "Get NAS hardware and software info: model, firmware, RAM, temperature, "
-                "uptime, and for a DSM administrator account also the CPU. Use this to "
-                "identify the NAS and check its "
-                "basic health. For live CPU, memory, disk and network load, use "
+                "Get everything DSM reports about the NAS. Every account gets the model, "
+                "serial number, DSM version, RAM, temperature, uptime and the NAS's local "
+                "time. A DSM administrator account also gets the CPU, time zone with the "
+                "current UTC offset, NTP server, firmware date, whether a DSM update is "
+                "ready to install, and attached devices; any other account gets a line "
+                "saying so. Use this to identify the NAS, check its basic health or tell "
+                "the time on it. For live CPU, memory, disk and network load, use "
                 "get_resource_usage."
             ),
             permission_tier=PermissionTier.READ,
