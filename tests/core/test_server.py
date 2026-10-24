@@ -408,6 +408,22 @@ class TestCreateServerInstructionPaths:
         builtin_idx = instructions.index("PATH FORMAT")
         assert custom_idx < builtin_idx
 
+    def test_custom_instructions_keep_literal_braces(self) -> None:
+        """Only the documented variables are filled in: other braces are text. With
+        str.format_map, this config made create_server raise KeyError and serve fail."""
+        config = make_test_config(
+            custom_instructions='Reply as JSON like {"a": 1}; {unknown} stays; NAS {host}:{port}.'
+        )
+        instructions = create_server(config).instructions or ""
+        assert 'Reply as JSON like {"a": 1}; {unknown} stays; NAS nas:5000.' in instructions
+
+    def test_instructions_file_keeps_literal_braces(self, tmp_path: Path) -> None:
+        instructions_file = tmp_path / "custom.md"
+        instructions_file.write_text("Use {display_name}; a set is {1, 2}; {{ stays }}.")
+        config = make_test_config(instructions_file=str(instructions_file))
+        instructions = create_server(config).instructions or ""
+        assert instructions.startswith("Use test; a set is {1, 2}; {{ stays }}.")
+
     def test_instructions_file_loaded(self, tmp_path: Path) -> None:
         instructions_file = tmp_path / "custom.md"
         instructions_file.write_text("FULLY REPLACED INSTRUCTIONS for {display_name}")

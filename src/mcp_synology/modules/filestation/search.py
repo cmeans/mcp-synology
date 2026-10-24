@@ -7,6 +7,8 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any
 
+import anyio
+
 from mcp_synology.core.errors import ErrorCode, SynologyError
 from mcp_synology.core.formatting import (
     error_response,
@@ -161,8 +163,12 @@ async def search_files(
             await asyncio.sleep(poll_interval)
     finally:
         # Always clean up the task to avoid orphaned processes on the NAS.
-        # Orphaned search tasks consume CPU indefinitely.
-        await _cleanup_search_task(client, taskid, search_version, logger)
+        # Orphaned search tasks consume CPU indefinitely. Shielded: the MCP SDK cancels a
+        # call through a level-triggered anyio scope, which would cancel the stop and clean
+        # requests again at their first await and leave the task running (as tasks.py
+        # shields a Delete or CopyMove stop).
+        with anyio.CancelScope(shield=True):
+            await _cleanup_search_task(client, taskid, search_version, logger)
 
     if poll_error:
         synology_error_response("Search files", poll_error)
