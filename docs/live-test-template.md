@@ -178,8 +178,9 @@ limit can run it; to watch longer, add more steps like 5b rather than one step t
 A file of known size makes a wrong size obvious: an earlier round found that a download
 whose server never sent a size showed as `0 B` (#355), and this step checks the fix. The
 destination keeps the file in the tester's scratch, where cleanup finds it; without one, it
-goes to the account's default destination (or is refused if there's none). An operation that takes minutes, such as a
-large copy handing off to `file_task`, goes in a section for a client without the limit.
+goes to the account's default destination (or is refused if there's none). An operation
+that takes minutes, such as a large copy handing off to `file_task`, goes in a section for a
+client without the limit.
 
 ## Answer key
 
