@@ -655,3 +655,47 @@ class TestGetDirSizeUnansweredStatus:
             "/homes/cmeans (ReadTimeout)."
         )
         assert err["suggestion"].startswith("Try a subdirectory")
+
+
+class TestGetDirSizeCancellation:
+    @respx.mock
+    async def test_canceled_dir_size_still_stops(
+        self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A canceled get_dir_size still stops its DirSize task (see search_files)."""
+        import asyncio
+
+        import anyio
+
+        import mcp_synology.modules.filestation.metadata as metadata
+
+        calls: list[str] = []
+        blocked = asyncio.Event()
+
+        async def side_effect(request: httpx.Request) -> httpx.Response:
+            method = dict(request.url.params).get("method", "")
+            calls.append(method)
+            if method == "stop":
+                await anyio.sleep(0)  # a checkpoint: re-canceled here unless shielded
+                calls.append("stop-done")
+            data: dict[str, object] = {"taskid": "ds-1"} if method == "start" else {}
+            if method == "status":
+                data = {"finished": False}
+            return httpx.Response(200, json={"success": True, "data": data})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+
+        async def blocked_sleep(seconds: float) -> None:
+            blocked.set()
+            await anyio.sleep_forever()
+
+        monkeypatch.setattr(metadata.asyncio, "sleep", blocked_sleep)
+        async with anyio.create_task_group() as tg:
+
+            async def run() -> None:
+                await get_dir_size(mock_client, path="/video/TV")
+
+            tg.start_soon(run)
+            await blocked.wait()
+            tg.cancel_scope.cancel()
+        assert "stop-done" in calls

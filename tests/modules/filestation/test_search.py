@@ -350,3 +350,49 @@ class TestSearchFiles:
 
         await search_files(mock_client, folder_path="/video")
         assert captured_list.get("additional") == '["size","time"]'
+
+
+class TestSearchCancellation:
+    @respx.mock
+    async def test_canceled_search_still_stops_and_cleans(
+        self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The MCP SDK cancels a call through a level-triggered anyio scope: without the
+        shield, stop/clean are canceled at their first await and the task is orphaned."""
+        import asyncio
+
+        import anyio
+
+        import mcp_synology.modules.filestation.search as search
+
+        calls: list[str] = []
+        blocked = asyncio.Event()
+
+        async def side_effect(request: httpx.Request) -> httpx.Response:
+            method = dict(request.url.params).get("method", "")
+            calls.append(method)
+            if method in ("stop", "clean"):
+                await anyio.sleep(0)  # a checkpoint: re-canceled here unless shielded
+                calls.append(f"{method}-done")
+            data: dict[str, object] = {"taskid": "s-1"} if method == "start" else {}
+            if method == "list":
+                data = {"finished": False, "total": 0, "files": []}
+            return httpx.Response(200, json={"success": True, "data": data})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+
+        async def blocked_sleep(seconds: float) -> None:
+            blocked.set()
+            await anyio.sleep_forever()
+
+        monkeypatch.setattr(search.asyncio, "sleep", blocked_sleep)
+        async with anyio.create_task_group() as tg:
+
+            async def run() -> None:
+                await search_files(mock_client, folder_path="/video", pattern="x")
+
+            tg.start_soon(run)
+            await blocked.wait()
+            tg.cancel_scope.cancel()
+        assert "stop-done" in calls
+        assert "clean-done" in calls
