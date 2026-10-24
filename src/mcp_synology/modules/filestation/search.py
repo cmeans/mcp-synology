@@ -225,11 +225,11 @@ async def search_files(
 
     result = format_table(headers=headers, rows=rows, title=title)
     total = list_data.get("total", len(all_files))
-    result += f"\n\n{len(all_files)} results found"
+    result += f"\n\n{len(all_files):,} results found"
     if total > limit:
-        result += f" (showing {limit} of {total} — increase limit to see more)"
+        result += f" (showing {limit:,} of {total:,} — increase limit to see more)"
     if excluded_count > 0:
-        result += f" ({excluded_count} excluded by filter)"
+        result += f" ({excluded_count:,} excluded by filter)"
     result += "."
     if not finished:
         result += " (search timed out — partial results shown)"

@@ -360,7 +360,7 @@ Create tasks from URIs, or from a local .torrent / .nzb file.
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
 | `uri` | `str` | One of `uri` / `torrent_file_path` | — | Comma-separated URIs: HTTP, HTTPS, FTP, magnet, etc. Not together with `torrent_file_path`. |
-| `torrent_file_path` | `str` | One of `uri` / `torrent_file_path` | — | Local path to a `.torrent` or `.nzb` file (uploaded from this machine), inside the allowed local folders. |
+| `torrent_file_path` | `str` | One of `uri` / `torrent_file_path` | — | Local path to a `.torrent` or `.nzb` file (uploaded from this machine), inside the allowed local folders, which its description names (`roots_for_description`). |
 | `destination` | `str` | No | the user's default | Share-relative destination folder (`video/Torrents`); it must already exist. |
 | `username` | `str` | No | — | User name for a protected URL (not for torrent files). |
 | `password` | `str` | No | — | Password for a protected URL (not for torrent files). |

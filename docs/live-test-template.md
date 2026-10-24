@@ -33,7 +33,7 @@ NAS scratch path.
   happen.
 - For every step, record **exactly what came back**: quote the tool output, and for an error
   its whole text. Mark it PASS, FAIL or SURPRISE only where you have an opinion; triage
-  decides.
+  decides. A SURPRISE counts against the round, not as a pass.
 - Run the steps in order. Don't skip a step because an earlier one failed: record the
   failure and go on.
 - Touch only your own scratch items. **Ask the maintainer before deleting anything**,
@@ -87,7 +87,7 @@ files `a.txt`, `b.txt` and `c.txt` (a few lines each) in your local scratch fold
 - **<N>d** `delete_files <scratch>/f1/b2.txt`, then `restore_from_recycle_bin` it.
 - **<N>e** `get_dir_size <scratch>`, and `get_dir_size <scratch>/no-such-dir`.
 
-## <N+1>. Cleanup (everyone, last, with the maintainer's OK)
+## <N+1>. Cleanup (everyone, only after every tester is done, with the maintainer's OK)
 
 1. List what you'll delete: your NAS scratch folder, your Photos folders and album, your
    Download Station tasks, your local scratch folder.

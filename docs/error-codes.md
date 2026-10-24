@@ -66,7 +66,8 @@ a non-admin service account got it for `list_files /home`, where `list_shares` s
 Common causes:
 
 - The DSM user is not in the `administrators` group, and the operation requires
-  admin (e.g., `get_resource_usage`, `get_system_info`).
+  admin (e.g., `get_resource_usage`). `get_system_info` never refuses a non-admin: it
+  shows the fields every account gets and says which need an administrator.
 - The shared folder ACL excludes this user.
 - The user has read-only access to a folder being written to.
 - The user is restricted to certain shares and the request targets a different one.

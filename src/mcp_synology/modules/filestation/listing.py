@@ -298,15 +298,20 @@ async def list_files(
         rows.append([icon, display_name, size, modified])
 
     shown = len(files)
-    title = f"Contents of {normalized} ({total} items)"
+    title = f"Contents of {normalized} ({total:,} items)"
     result = format_table(headers=headers, rows=rows, title=title)
     result += _sort_note(files, sort_by, sort_direction)
 
+    # The range, not just the count, so a later page says where it is: "Showing 3–4 of
+    # 5", as the recycle-bin pattern listing does (0.10.0rc6 live test).
     next_offset = offset + shown
+    page = f"{offset + 1:,}–{next_offset:,}"
     if next_offset < total:
-        result += f"\n\nShowing {shown} of {total:,} items. Use offset={next_offset} to see more."
+        result += f"\n\nShowing {page} of {total:,} items. Use offset={next_offset} to see more."
+    elif shown > 0 and offset > 0:
+        result += f"\n\nShowing {page} of {total:,} items."
     elif shown > 0:
-        result += f"\n\n{shown} of {total} items."
+        result += f"\n\n{shown:,} of {total:,} items."
 
     return result
 
@@ -541,11 +546,11 @@ async def _search_recycle_bin(
     )
     notes = [fallback] if fallback else []
     if found and offset >= len(found):
-        notes.append(f"No matches from offset={offset}: there are {len(found)}.")
+        notes.append(f"No matches from offset={offset}: there are {len(found):,}.")
     elif len(found) > len(shown):
         end = offset + len(shown)
         more = f" Use offset={end} to see more." if end < len(found) else ""
-        notes.append(f"Showing {offset + 1}–{end} of {len(found)} matches.{more}")
+        notes.append(f"Showing {offset + 1:,}–{end:,} of {len(found):,} matches.{more}")
     if found:
         notes.append("Paths are relative to the recycle bin, as a restore takes them.")
     if unreadable:

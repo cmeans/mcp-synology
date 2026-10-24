@@ -26,6 +26,9 @@ real output. "Found" names the release candidate under test (not a published rel
 | 0.10.0rc5 | `list_recycle_bin` said "Use offset=N to see more" but had no `offset` | #364 |
 | 0.10.0rc5 | File Station's 407 (a permission refusal) read as "Unknown error" | #365 |
 | 0.10.0rc5 | A copy stopped by a quota gave a bare code, and didn't say it had left 18 GiB at the destination | #366 |
+| 0.10.0rc6 | Five local-path parameters sent the model to the server instructions for the allowed folders, which claude.ai never receives | #390 |
+| 0.10.0rc6 | `get_system_info` promised the CPU, which only an administrator account gets | #390 |
+| 0.10.0rc6 | A later page of a listing said "Showing 2 of 5 items" without saying which two | #390 |
 
 ## Clients tested, and how they differ
 
@@ -117,8 +120,10 @@ earlier rounds and the answer key's format. These rules came from earlier runs:
   store may redact it, and the tester then uses the redacted text.
 - **Give every key a config needs.** A tester that patches its own config to get past a step
   hides a setup gap.
-- **Cleanup is the last section**, and deletes only after the maintainer's OK. Leave recycle
-  bins alone unless asked.
+- **Cleanup is the last section.** It starts only when every tester is done or stopped, even
+  for items only one tester used: a delete can change shared state, such as a recycle bin,
+  that another tester is reading (it did in the 0.10.0rc6 test). It deletes only after the
+  maintainer's OK. Leave recycle bins alone unless asked.
 - **Cover what changed since the last candidate**, then a short regression pass: list,
   search, upload, download (a file, and a folder as `.zip`), rename, copy, move, delete,
   restore, `get_dir_size` on a missing path.
@@ -129,7 +134,8 @@ earlier rounds and the answer key's format. These rules came from earlier runs:
   where they share state: deleting into a recycle bin another tester is about to search
   changes that tester's results.
 - Each tester records **exactly what came back**: tool output quoted, errors in full. It
-  marks PASS, FAIL or SURPRISE where it has an opinion; triage decides.
+  marks PASS, FAIL or SURPRISE where it has an opinion; triage decides. A SURPRISE counts
+  against the round, not as a pass: report a round as "N pass, M fail, K surprises".
 - Results go somewhere everyone can read: a shared notes store, or a file per tester.
 - Some things can't be tested on every NAS. On our Btrfs volume (DSM 7.1.1), a copy of
   tens of GiB within the volume finished in seconds (a clone, most likely), and a delete into
@@ -141,11 +147,17 @@ earlier rounds and the answer key's format. These rules came from earlier runs:
 Compare every step with the answer key, then sort what's left:
 
 - **FAIL:** the server did the wrong thing. Fix it before the release.
-- **SURPRISE that's a product problem:** a reply that misleads the model or the user (a hint
-  that names a parameter the tool doesn't have, an error that hides a partial result). Fix
-  it now, or file it, and record the decision.
-- **SURPRISE that's DSM's behavior:** document it in the module's spec under
-  [`docs/specs/`](specs/).
+- **Every SURPRISE means the behavior or its documentation failed**, so each one gets a fix,
+  an issue or a recorded decision. "By design" is an answer only when the tool's own text
+  says so; when it doesn't, that's a documentation fix. Sort each one:
+  - **Behavior:** a reply that misleads the model or the user (a hint that names a parameter
+    the tool doesn't have, an error that hides a partial result). Fix it now, or file it.
+  - **Documentation:** the tool did what the code means, but its description, its
+    parameters' descriptions or its reply didn't say so. Fix the text. Check too whether the
+    tester read the tool's documentation at all; if it didn't, that's also a client or
+    harness finding.
+  - **DSM's behavior:** document it in the module's spec under [`docs/specs/`](specs/), and
+    in the tool's own text when the model needs to know it.
 - **The client or the harness:** not a server issue. Note it here, under the client table,
   if it's new.
 - **Known issues:** list the open ones in the answer key, so they aren't counted again.
