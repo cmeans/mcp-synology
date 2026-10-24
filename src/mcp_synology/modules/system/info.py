@@ -269,11 +269,13 @@ async def get_system_info(client: DsmClient) -> str:
             pairs.append(("Incompatible network card", _yes_no(status["ext_nic_is_incompatible"])))
 
     if "support_rp" in core or "rp1" in core or "rp2" in core:
+        # rp1/rp2 are shown as DSM sends them: seen only on VirtualDSM (1 and 1, with no
+        # power supplies at all), so what they mean is unverified. Don't let the reply
+        # read as "both power supplies are fine".
         supported = _yes_no(core.get("support_rp"))
-        psus = ", ".join(f"{k}: {core[k]}" for k in ("rp1", "rp2") if k in core)
-        pairs.append(
-            ("Redundant power", f"supported: {supported}" + (f" ({psus})" if psus else ""))
-        )
+        raw = [f"{k} {core[k]}" for k in ("rp1", "rp2") if k in core]
+        note = f"; DSM's raw values {', '.join(raw)} (meaning not documented)" if raw else ""
+        pairs.append(("Redundant power", f"supported: {supported}{note}"))
     if "support_esata" in core:
         pairs.append(("eSATA", _yes_no(core["support_esata"])))
     if "usb_dev" in core:

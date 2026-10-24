@@ -33,7 +33,7 @@ Captured on vdsm (DSM 7.1, 7.2.2, 7.3.2, 7.4.1) as admin and as the non-admin te
 | API | Who can call it | Used for |
 |---|---|---|
 | `SYNO.DSM.Info` / `getinfo` | Any DSM user | Model, serial number, DSM version string and build, RAM, temperature (with its warning flag), uptime (seconds), system time, code page |
-| `SYNO.Core.System` / `info` (v1) | Admins (others get 1006) | CPU vendor, family, series, cores and clock; NTP on/off and server; time zone (`time_zone`, `time_zone_desc`); firmware date; redundant power (`support_rp`, `rp1`, `rp2`); eSATA; USB, SATA and PCIe devices. Also a fallback for model, serial, firmware, RAM, temperature (with three more warning flags) and uptime (`h:m:s`) |
+| `SYNO.Core.System` / `info` (v1) | Admins (others get 1006) | CPU vendor, family, series, cores and clock; NTP on/off and server; time zone (`time_zone`, `time_zone_desc`); firmware date; redundant power (`support_rp`, and `rp1`, `rp2`: raw values, see below); eSATA; USB, SATA and PCIe devices. Also a fallback for model, serial, firmware, RAM, temperature (with three more warning flags) and uptime (`h:m:s`) |
 | `SYNO.Core.Region.NTP` / `get` (v1) | Admins (others get 105) | The NAS clock as fields plus an exact `timestamp`, the zone name and NTP server |
 | `SYNO.Core.System.Status` / `get` (v1) | Admins (others get 105) | `upgrade_ready`, `is_system_crashed`, and from DSM 7.2.2 `ext_nic_is_incompatible` |
 | `SYNO.Core.System.Utilization` / `get` | Admins (others get 105) | Live CPU, memory, network and disk I/O (`get_resource_usage`) |
@@ -44,6 +44,7 @@ Captured on vdsm (DSM 7.1, 7.2.2, 7.3.2, 7.4.1) as admin and as the non-admin te
 - **Time zone:** `time_zone_desc` without its `(GMT±hh:mm)` prefix (plus `time_zone` when the description doesn't contain it), then the offset in force now: the difference between `Region.NTP`'s clock fields and its `timestamp`, rounded to 15 minutes. The prefix is the zone's *standard* offset: the DS1618+ said `GMT-06:00` while on daylight time (UTC-05:00). The vdsm images give UTC-05:00 (Central, daylight time), +00:00, +05:30 and +02:00 (Amsterdam, summer time).
 - **Other accounts:** `Time zone: not available to this account (needs a DSM administrator)`, and a `Needs a DSM administrator` row naming the admin-only details. The tool doesn't estimate the zone from the clock (maintainer decision, 2026-10-23: say it plainly).
 - **Serial number** is shown (it was left out before 0.10.0).
+- **Redundant power:** `support_rp` as `supported: yes/no`. `rp1` and `rp2` are shown as DSM's raw values, marked `(meaning not documented)`. They've been seen only on VirtualDSM, which answers `1` and `1` with no power supplies at all, and the DS1618+ (one power supply) sends neither, so whether they're power-supply states, counts or something else is unverified. The reply mustn't read as "both power supplies are fine" until a NAS with redundant power confirms what they mean.
 
 The description listed only some of this until the 0.10.0rc6 live test and its QA round: claude.ai on a non-admin connection found the promised CPU line missing, and nothing tied "what time is it on the NAS?" to this tool.
 

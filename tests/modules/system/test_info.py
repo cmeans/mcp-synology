@@ -274,7 +274,9 @@ class TestEverythingDsmSends:
         assert rows["Code page"] == "enu"
         assert rows["DSM update"] == "none ready to install"
         assert rows["System crash flag"] == "no"
-        assert rows["Redundant power"] == "supported: yes (rp1: 1, rp2: 1)"
+        assert rows["Redundant power"] == (
+            "supported: yes; DSM's raw values rp1 1, rp2 1 (meaning not documented)"
+        )
         assert rows["eSATA"] == "no"
         assert rows["USB devices"] == "none"
         assert rows["SATA devices"] == "none"
