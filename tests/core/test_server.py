@@ -1624,12 +1624,13 @@ class TestInstructionComments:
 # again as structuredContent. filestation.md and filestation-write.md keep only what no
 # single tool says (path format, the default download folder, the #recycle folder,
 # organizing files, long operations); the rest is in the tools' own descriptions since #247.
-# Raised by #390 to 48,672 (+227): the five local-path parameters (download_file,
+# Raised by #390 to 48,749 (+304): the five local-path parameters (download_file,
 # upload_file, create_download, download_photos, upload_photos) name the allowed folders
 # themselves instead of pointing to the instructions, which claude.ai never receives
-# (0.10.0rc6 live test); get_system_info says the CPU needs an administrator account;
-# edit_photo's description says one of only spaces shows as "—".
-PAYLOAD_BUDGET_CHARS = 48_672
+# (0.10.0rc6 live test); get_system_info says the CPU needs an administrator account, and
+# get_resource_usage that it needs one at all; edit_photo's description says one of only
+# spaces shows as "—".
+PAYLOAD_BUDGET_CHARS = 48_749
 
 
 class TestPayloadBudget:

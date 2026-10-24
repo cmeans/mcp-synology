@@ -39,7 +39,8 @@ MODULE_INFO = ModuleInfo(
             name="get_resource_usage",
             description=(
                 "Get live resource utilization: CPU load, memory usage, disk I/O, "
-                "and network throughput. Use this to check if the NAS is under "
+                "and network throughput. Needs a DSM administrator account; any other "
+                "account gets permission_denied. Use this to check if the NAS is under "
                 "heavy load before starting expensive work on it. For the model, firmware, "
                 "temperature and uptime, use get_system_info."
             ),

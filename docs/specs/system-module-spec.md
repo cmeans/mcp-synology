@@ -114,9 +114,14 @@ Live utilization, for deciding whether the NAS is busy before an expensive opera
 **DSM API:** `SYNO.Core.System.Utilization` / `get` (admin)
 
 **Tool description (LLM-facing):**
-> Get live resource utilization: CPU load, memory usage, disk I/O, and network throughput. Use this to
-> check if the NAS is under heavy load before starting expensive work on it. For the model, firmware,
-> temperature and uptime, use get_system_info.
+> Get live resource utilization: CPU load, memory usage, disk I/O, and network throughput. Needs a
+> DSM administrator account; any other account gets permission_denied. Use this to check if the NAS
+> is under heavy load before starting expensive work on it. For the model, firmware, temperature and
+> uptime, use get_system_info.
+
+The admin requirement was missing from the description until the same 0.10.0rc6 class sweep that
+found `get_system_info`'s CPU line: a non-admin connection's model had no way to know the call
+would be refused.
 
 **Parameters:** None.
 
