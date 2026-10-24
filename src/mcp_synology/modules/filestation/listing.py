@@ -302,11 +302,16 @@ async def list_files(
     result = format_table(headers=headers, rows=rows, title=title)
     result += _sort_note(files, sort_by, sort_direction)
 
+    # The range, not just the count, so a later page says where it is: "Showing 3–4 of
+    # 5", as the recycle-bin pattern listing does (0.10.0rc6 live test).
     next_offset = offset + shown
+    page = f"{offset + 1}–{next_offset}"
     if next_offset < total:
-        result += f"\n\nShowing {shown} of {total:,} items. Use offset={next_offset} to see more."
+        result += f"\n\nShowing {page} of {total:,} items. Use offset={next_offset} to see more."
+    elif shown > 0 and offset > 0:
+        result += f"\n\nShowing {page} of {total:,} items."
     elif shown > 0:
-        result += f"\n\n{shown} of {total} items."
+        result += f"\n\n{shown} of {total:,} items."
 
     return result
 

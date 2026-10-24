@@ -4,14 +4,21 @@ Not yet in the server's module registry: the module ships in parts (#258), and i
 switched on once every tool in ``docs/specs/photos-module-spec.md`` is in.
 """
 
-from __future__ import annotations
+# No `from __future__ import annotations` here: a few parameter descriptions name this
+# config's allowed local folders, known only inside register(), and the SDK reads the
+# Annotated[..., Field(description=...)] metadata, so it must be built when each
+# handler is defined (rc6 live test; see core.local_paths.roots_for_description).
 
 from typing import TYPE_CHECKING, Annotated, Any
 
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field, field_validator
 
-from mcp_synology.core.local_paths import allowed_local_roots, check_local_path_entries
+from mcp_synology.core.local_paths import (
+    allowed_local_roots,
+    check_local_path_entries,
+    roots_for_description,
+)
 from mcp_synology.modules import (
     ApiRequirement,
     ModuleInfo,
@@ -328,7 +335,7 @@ _EXPIRES = (
 _OFFSET = "Entries to skip, for the next page."
 
 
-def register(ctx: RegisterContext) -> None:
+def register(ctx: "RegisterContext") -> None:
     """Register Photos tools with the MCP server."""
     from mcp_synology.modules.photos.browse import get_photo, list_photo_collections, list_photos
     from mcp_synology.modules.photos.transfer import download_photos
@@ -526,8 +533,8 @@ def register(ctx: RegisterContext) -> None:
                 str | None,
                 Field(
                     description=(
-                        "An existing local folder inside the allowed local folders; default the "
-                        "allowed folder, when there's only one."
+                        f"An existing local folder inside {roots_for_description(local_roots)}; "
+                        "default the allowed folder, when there's only one."
                     )
                 ),
             ] = None,
@@ -752,7 +759,13 @@ def register(ctx: RegisterContext) -> None:
                 int | None, Field(description=("0-5; `0` clears the rating."))
             ] = None,
             description: Annotated[
-                str | None, Field(description=('New description; `""` clears it.'))
+                str | None,
+                Field(
+                    description=(
+                        'New description; `""` clears it, and one of only spaces shows as `—`, '
+                        "like none."
+                    )
+                ),
             ] = None,
             taken_time: Annotated[
                 str | None,
@@ -929,7 +942,7 @@ def register(ctx: RegisterContext) -> None:
                 list[str],
                 Field(
                     description=(
-                        "1-50 local files inside the allowed local folders, such as "
+                        f"1-50 local files inside {roots_for_description(local_roots)}, such as "
                         "`~/Pictures/a.jpg`."
                     )
                 ),

@@ -313,6 +313,10 @@ class _SynologyServer(MCPServer):
                     raise ToolError(f"{prefix}{structured}") from cause
             # Never an empty message: httpx-style errors stringify to '' (#237).
             text = redact_urls(str(cause)) if cause is not None else ""
+            # Deliberately against UnexpectedToolError's docstring ("the SDK raises this
+            # itself... you never raise it"): re-raising it with the message restored keeps
+            # the SDK's ERROR-level log with the traceback, which a plain ToolError (logged
+            # at INFO) would lose (#114).
             raise UnexpectedToolError(f"{prefix}{text or type(cause).__name__}") from cause
 
 

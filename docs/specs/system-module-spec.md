@@ -73,9 +73,13 @@ Hardware and software identity and basic health.
 **DSM API:** `SYNO.DSM.Info` / `getinfo`, plus `SYNO.Core.System` / `info` v1 when available
 
 **Tool description (LLM-facing):**
-> Get NAS hardware and software info: model, firmware, CPU, RAM, temperature, uptime. Use this to
-> identify the NAS and check its basic health. For live CPU, memory, disk and network load, use
-> get_resource_usage.
+> Get NAS hardware and software info: model, firmware, RAM, temperature, uptime, and for a DSM
+> administrator account also the CPU. Use this to identify the NAS and check its basic health. For
+> live CPU, memory, disk and network load, use get_resource_usage.
+
+The CPU (and NTP) come from `SYNO.Core.System`, which only an administrator may call, so a
+non-admin account's reply has no CPU line. The description said "CPU" unconditionally until the
+0.10.0rc6 live test, where claude.ai on a non-admin connection found the line missing.
 
 **Parameters:** None.
 

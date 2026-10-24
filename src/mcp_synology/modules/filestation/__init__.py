@@ -1,6 +1,9 @@
 """File Station module: MODULE_INFO, register(), FileStationSettings."""
 
-from __future__ import annotations
+# No `from __future__ import annotations` here: a few parameter descriptions name this
+# config's allowed local folders, known only inside register(), and the SDK reads the
+# Annotated[..., Field(description=...)] metadata, so it must be built when each
+# handler is defined (rc6 live test; see core.local_paths.roots_for_description).
 
 import logging
 from pathlib import Path
@@ -278,7 +281,7 @@ MODULE_INFO = ModuleInfo(
 )
 
 
-def register(ctx: RegisterContext) -> None:
+def register(ctx: "RegisterContext") -> None:
     """Register File Station tools with the MCP server."""
     from mcp_synology.core import local_paths
     from mcp_synology.core.errors import ErrorCode
@@ -333,6 +336,7 @@ def register(ctx: RegisterContext) -> None:
         shared_paths=ctx.allowed_local_paths,
         module="filestation",
     )
+    local_folders = local_paths.roots_for_description(allowed_roots)
     search_poll_interval = settings.search_poll_interval
     hide_recycle = settings.hide_recycle_in_listings
 
@@ -375,7 +379,7 @@ def register(ctx: RegisterContext) -> None:
         "note": None,
     }
 
-    async def _fs_client() -> DsmClient:
+    async def _fs_client() -> "DsmClient":
         """The DSM client; the first success also runs running-task discovery."""
         client = await manager.get_client()
         if discovery["pending"]:
@@ -726,8 +730,8 @@ def register(ctx: RegisterContext) -> None:
                 str | None,
                 Field(
                     description=(
-                        "Local folder to save into, inside the allowed local folders the server "
-                        "instructions list. Optional when a default download folder is configured."
+                        f"Local folder to save into, inside {local_folders} or below them. "
+                        "Optional when a default download folder is configured."
                     )
                 ),
             ] = None,
@@ -975,10 +979,7 @@ def register(ctx: RegisterContext) -> None:
             local_path: Annotated[
                 str,
                 Field(
-                    description=(
-                        "The file on this machine, inside the allowed local folders the server "
-                        "instructions list."
-                    )
+                    description=(f"The file on this machine, inside {local_folders} or below them.")
                 ),
             ],
             dest_folder: Annotated[

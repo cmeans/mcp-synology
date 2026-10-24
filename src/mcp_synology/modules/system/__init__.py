@@ -27,8 +27,9 @@ MODULE_INFO = ModuleInfo(
         ToolInfo(
             name="get_system_info",
             description=(
-                "Get NAS hardware and software info: model, firmware, CPU, RAM, "
-                "temperature, uptime. Use this to identify the NAS and check its "
+                "Get NAS hardware and software info: model, firmware, RAM, temperature, "
+                "uptime, and for a DSM administrator account also the CPU. Use this to "
+                "identify the NAS and check its "
                 "basic health. For live CPU, memory, disk and network load, use "
                 "get_resource_usage."
             ),

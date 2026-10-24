@@ -469,11 +469,14 @@ class TestListRecycleBin:
 
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=responder)
         first = await list_recycle_bin(mock_client, share="home", limit=5)
-        assert "Use offset=5 to see more." in first
+        assert "Showing 1–5 of 9 items. Use offset=5 to see more." in first
         second = await list_recycle_bin(mock_client, share="home", limit=5, offset=5)
         assert sent == ["0", "5"]
         assert "f5.txt" in second and "f0.txt" not in second
         assert "Use offset=" not in second
+        # A later page gives its range, not just its count (rc6 live test: page 2 of 5
+        # said "Showing 2 of 5 items"), as the pattern listing does.
+        assert "Showing 6–9 of 9 items." in second
 
     @respx.mock
     async def test_recycle_bin_disabled(self, mock_client: DsmClient) -> None:

@@ -395,7 +395,7 @@ Originals or thumbnails to a local folder.
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
 | `ids` | `list[int]` | **Yes** | — | Item IDs from `list_photos`; 1–50. |
-| `dest_folder` | `str` | No | — | An existing local folder, inside the allowed local folders (#257). Default: the allowed folder, when there's exactly one (Photos has no `default_download_dir`). |
+| `dest_folder` | `str` | No | — | An existing local folder, inside the allowed local folders (#257), which its description names. Default: the allowed folder, when there's exactly one (Photos has no `default_download_dir`). |
 | `size` | `str` | No | `"original"` | `original`, `xl`, `m` or `sm`. |
 | `space` | `str` | No | `"personal"` | `personal` or `shared`. |
 | `overwrite` | `bool` | No | `false` | Replace a local file with the same name; otherwise that item is skipped and the reply says so. |
@@ -438,7 +438,7 @@ Downloaded 2 of 3 item(s) to /home/user/Downloads (original, personal space)
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `local_paths` | `list[str]` | **Yes** | — | 1–50 files (not folders), inside the allowed local folders. |
+| `local_paths` | `list[str]` | **Yes** | — | 1–50 files (not folders), inside the allowed local folders, which its description names. |
 | `folder` | `str` | No | `"/"` | Folder ID or path in the space; must exist. |
 | `space` | `str` | No | `"personal"` | `personal` or `shared`. |
 | `on_duplicate` | `str` | No | `"rename"` | `rename` or `skip` (DSM `duplicate`: `rename` / `ignore`). |
@@ -736,7 +736,7 @@ Photos rewrites tagged files, so their dates and sizes change.
 | `ids` | `list[int]` | **Yes** | — | Item IDs from `list_photos`. |
 | `space` | `str` | No | `"personal"` | `personal` or `shared`. |
 | `rating` | `int` | No | — | 0–5; outside that, DSM answers 120 (`reason: condition`, verified). |
-| `description` | `str` | No | — | `""` clears. |
+| `description` | `str` | No | — | `""` clears. One of only spaces is shown as `—`, like none (#370); the parameter description says so since the 0.10.0rc6 live test. |
 | `taken_time` | `str` | No | — | ISO 8601 date-time → `time`, as the wall-clock time it names: an offset is dropped, not converted (`10:00+02:00` is stored as 10:00), since Photos keeps no zone. |
 | `shift_hours` | `float` | No | — | → `shift_time` (seconds). Relative: a repeat shifts again. |
 | `rotate` | `str` | No | — | `left` (`counter_clockwise`, verified) or `right` (`clockwise`, verified on both). Relative: a repeat rotates again. |
