@@ -339,7 +339,7 @@ def _fill_template(text: str, template_vars: Mapping[str, str | None]) -> str:
 
     def fill(m: re.Match[str]) -> str:
         name = m.group(1)
-        # str() as format_map did: an unset display_name still reads "None", not "".
+        # str() as format_map did: a value typed Optional (instance_id) reads "None", not "".
         return str(template_vars[name]) if name in template_vars else m.group(0)
 
     return _TEMPLATE_VAR.sub(fill, text)
