@@ -7,6 +7,7 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any, NoReturn
 
+import anyio
 import httpx
 
 from mcp_synology.core.errors import ErrorCode, SynologyError, error_from_code
@@ -368,7 +369,9 @@ async def get_dir_size(
 
             await asyncio.sleep(interval)
     finally:
-        await _stop_dirsize_task(client, taskid)
+        # Shielded, so a canceled call still stops the task: see search_files.
+        with anyio.CancelScope(shield=True):
+            await _stop_dirsize_task(client, taskid)
 
     if poll_error:
         synology_error_response("Get directory size", poll_error)

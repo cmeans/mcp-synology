@@ -31,7 +31,7 @@ from mcp_synology.modules import photos as _photos_mod
 from mcp_synology.modules import system as _system_mod
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
     from types import ModuleType
 
     from mcp.server.mcpserver import Context
@@ -326,15 +326,34 @@ _HTML_COMMENT = re.compile(
 )
 
 
+_TEMPLATE_VAR = re.compile(r"\{([a-z_]+)\}")
+
+
+def _fill_template(text: str, template_vars: Mapping[str, str | None]) -> str:
+    """Replace the documented ``{name}`` template variables and nothing else.
+
+    ``str.format_map`` read every brace as a field, so a custom instruction such as
+    ``Use JSON like {"a": 1}`` raised ``KeyError`` and ``serve`` failed to start. Any
+    other brace, including an unknown ``{name}``, is left as written.
+    """
+
+    def fill(m: re.Match[str]) -> str:
+        name = m.group(1)
+        # str() as format_map did: an unset display_name still reads "None", not "".
+        return str(template_vars[name]) if name in template_vars else m.group(0)
+
+    return _TEMPLATE_VAR.sub(fill, text)
+
+
 def _strip_html_comments(text: str) -> str:
     """Remove ``<!-- ... -->`` blocks from instruction text.
 
     A comment on a line of its own is removed with that line; elsewhere only the comment
     is removed, so it never joins the lines around it.
 
-    Comments are notes for whoever edits the file. Stripping happens before
-    ``format_map``, so a comment's ``{placeholders}`` are never filled in and sent to the
-    model, and can't raise ``KeyError``. An unclosed ``<!--`` is left as written (#163).
+    Comments are notes for whoever edits the file. Stripping happens before the template
+    variables are filled in (``_fill_template``), so a comment's ``{placeholders}`` are
+    never filled in and sent to the model. An unclosed ``<!--`` is left as written (#163).
     """
     return _HTML_COMMENT.sub("", text)
 
@@ -764,7 +783,7 @@ def create_server(config: AppConfig) -> MCPServer:
     else:
         instructions = builtin
 
-    instructions = instructions.format_map(template_vars)
+    instructions = _fill_template(instructions, template_vars)
 
     if replacement is None:
         # A full replacement file is the user's own; everything else gets the notices.
@@ -773,7 +792,7 @@ def create_server(config: AppConfig) -> MCPServer:
         local_paths = _local_paths_notice(config, plan)
         if local_paths:
             local_machine = _strip_html_comments(_LOCAL_MACHINE_INSTRUCTIONS).strip()
-            instructions += "\n\n" + local_machine.format_map(template_vars) + local_paths
+            instructions += "\n\n" + _fill_template(local_machine, template_vars) + local_paths
 
     server = _SynologyServer(
         server_name,
