@@ -1645,8 +1645,8 @@ class TestInstructionComments:
 # themselves instead of pointing to the instructions, which claude.ai never receives
 # (0.10.0rc6 live test); get_system_info's description lists everything it returns now
 # (every field DSM sends, the NAS's local time and code page included) and what only an
-# administrator gets; get_resource_usage says it needs one; edit_photo's description says one of only
-# spaces shows as "—".
+# administrator gets; get_resource_usage says it needs one; edit_photo's description says
+# one of only spaces shows as "—".
 PAYLOAD_BUDGET_CHARS = 49_116
 
 
