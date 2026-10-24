@@ -96,7 +96,8 @@ and the copy runs into the quota.
 
 A plan is a list of numbered steps, grouped in sections, each saying what to call and with
 what. Whoever runs the release (the maintainer, below) writes the plan and keeps the answer
-key. These rules came from earlier runs:
+key. Start from [the template](live-test-template.md), which also has example steps from
+earlier rounds and the answer key's format. These rules came from earlier runs:
 
 - **No expected answers in the plan.** Keep them in a separate answer key that testers are
   told not to read. A tester who reads "Expected: …" before acting can't show what the
