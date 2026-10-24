@@ -272,12 +272,12 @@ class TestEverythingDsmSends:
         assert rows["Time zone"] == _ZONES[version]
         assert rows["NTP"] == "time.google.com"
         assert rows["Code page"] == "enu"
-        assert rows["DSM update"] == "none ready to install"
-        assert rows["System crash flag"] == "no"
+        assert rows["Update ready (upgrade_ready)"] == "no"
+        assert rows["Crash flag (is_system_crashed)"] == "no"
         assert rows["Redundant power"] == (
-            "supported: yes; DSM's raw values rp1 1, rp2 1 (meaning not documented)"
+            "DSM's raw values support_rp yes, rp1 1, rp2 1 (meaning not documented)"
         )
-        assert rows["eSATA"] == "no"
+        assert rows["eSATA port"] == "no"
         assert rows["USB devices"] == "none"
         assert rows["SATA devices"] == "none"
         assert rows["PCIe slots"] == "none"
@@ -296,6 +296,7 @@ class TestEverythingDsmSends:
         assert rows["Code page"] == "enu"
         assert rows["Time zone"] == "not available to this account (needs a DSM administrator)"
         assert rows["Needs a DSM administrator"].startswith("CPU, NTP server, firmware date")
+        assert "update-ready" in rows["Needs a DSM administrator"]
         assert "CPU" not in rows
         # Core.System's refusal means the other two admin-only APIs aren't tried.
         assert "SYNO.Core.Region.NTP" not in called
@@ -310,7 +311,8 @@ class TestEverythingDsmSends:
         # time_zone_desc says GMT-06:00 (standard time); the NAS was on daylight time.
         assert rows["Time zone"] == "Central Time (US & Canada), currently UTC-05:00"
         assert rows["PCIe slots"] == "slot 1: empty"
-        assert rows["eSATA"] == "yes"
+        assert rows["eSATA port"] == "yes"
+        assert "Redundant power" not in rows  # a single-PSU DS1618+ sends no rp fields
         assert rows["Temperature"] == "50°C"
 
     @respx.mock

@@ -68,7 +68,15 @@ async def test_admin_gets_cpu_and_the_current_offset(
     assert rows["NTP"]
     assert rows["Time zone"].endswith(f", currently {_nas_offset(vdsm_container, dsm_version)}")
     assert "Needs a DSM administrator" not in rows
-    for key in ("DSM update", "System crash flag", "USB devices", "SATA devices", "PCIe slots"):
+    for key in (
+        "Update ready (upgrade_ready)",
+        "Crash flag (is_system_crashed)",
+        "Redundant power",
+        "eSATA port",
+        "USB devices",
+        "SATA devices",
+        "PCIe slots",
+    ):
         assert key in rows, (key, rows)
 
 

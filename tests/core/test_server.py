@@ -1640,14 +1640,14 @@ class TestInstructionComments:
 # again as structuredContent. filestation.md and filestation-write.md keep only what no
 # single tool says (path format, the default download folder, the #recycle folder,
 # organizing files, long operations); the rest is in the tools' own descriptions since #247.
-# Raised by #390 to 49,116 (+671): the five local-path parameters (download_file,
+# Raised by #390 to 49,094 (+649): the five local-path parameters (download_file,
 # upload_file, create_download, download_photos, upload_photos) name the allowed folders
 # themselves instead of pointing to the instructions, which claude.ai never receives
 # (0.10.0rc6 live test); get_system_info's description lists everything it returns now
 # (every field DSM sends, the NAS's local time and code page included) and what only an
 # administrator gets; get_resource_usage says it needs one; edit_photo's description says
 # one of only spaces shows as "—".
-PAYLOAD_BUDGET_CHARS = 49_116
+PAYLOAD_BUDGET_CHARS = 49_094
 
 
 class TestPayloadBudget:

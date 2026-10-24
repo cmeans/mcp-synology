@@ -33,7 +33,7 @@ Captured on vdsm (DSM 7.1, 7.2.2, 7.3.2, 7.4.1) as admin and as the non-admin te
 | API | Who can call it | Used for |
 |---|---|---|
 | `SYNO.DSM.Info` / `getinfo` | Any DSM user | Model, serial number, DSM version string and build, RAM, temperature (with its warning flag), uptime (seconds), system time, code page |
-| `SYNO.Core.System` / `info` (v1) | Admins (others get 1006) | CPU vendor, family, series, cores and clock; NTP on/off and server; time zone (`time_zone`, `time_zone_desc`); firmware date; redundant power (`support_rp`, and `rp1`, `rp2`: raw values, see below); eSATA; USB, SATA and PCIe devices. Also a fallback for model, serial, firmware, RAM, temperature (with three more warning flags) and uptime (`h:m:s`) |
+| `SYNO.Core.System` / `info` (v1) | Admins (others get 1006) | CPU vendor, family, series, cores and clock; NTP on/off and server; time zone (`time_zone`, `time_zone_desc`); firmware date; redundant power (`support_rp`, `rp1`, `rp2`: raw values, see below); eSATA port (`support_esata`); USB, SATA and PCIe devices. Also a fallback for model, serial, firmware, RAM, temperature (with three more warning flags) and uptime (`h:m:s`) |
 | `SYNO.Core.Region.NTP` / `get` (v1) | Admins (others get 105) | The NAS clock as fields plus an exact `timestamp`, the zone name and NTP server |
 | `SYNO.Core.System.Status` / `get` (v1) | Admins (others get 105) | `upgrade_ready`, `is_system_crashed`, and from DSM 7.2.2 `ext_nic_is_incompatible` |
 | `SYNO.Core.System.Utilization` / `get` | Admins (others get 105) | Live CPU, memory, network and disk I/O (`get_resource_usage`) |
@@ -44,7 +44,8 @@ Captured on vdsm (DSM 7.1, 7.2.2, 7.3.2, 7.4.1) as admin and as the non-admin te
 - **Time zone:** `time_zone_desc` without its `(GMT±hh:mm)` prefix (plus `time_zone` when the description doesn't contain it), then the offset in force now: the difference between `Region.NTP`'s clock fields and its `timestamp`, rounded to 15 minutes. The prefix is the zone's *standard* offset: the DS1618+ said `GMT-06:00` while on daylight time (UTC-05:00). The vdsm images give UTC-05:00 (Central, daylight time), +00:00, +05:30 and +02:00 (Amsterdam, summer time).
 - **Other accounts:** `Time zone: not available to this account (needs a DSM administrator)`, and a `Needs a DSM administrator` row naming the admin-only details. The tool doesn't estimate the zone from the clock (maintainer decision, 2026-10-23: say it plainly).
 - **Serial number** is shown (it was left out before 0.10.0).
-- **Redundant power:** `support_rp` as `supported: yes/no`. `rp1` and `rp2` are shown as DSM's raw values, marked `(meaning not documented)`. They've been seen only on VirtualDSM, which answers `1` and `1` with no power supplies at all, and the DS1618+ (one power supply) sends neither, so whether they're power-supply states, counts or something else is unverified. The reply mustn't read as "both power supplies are fine" until a NAS with redundant power confirms what they mean.
+- **Redundant power:** `support_rp`, `rp1` and `rp2` are shown as DSM's raw values, marked `(meaning not documented)`. They've been seen only on VirtualDSM, which answers `support_rp` true, `rp1` 1 and `rp2` 1 with no power supplies at all, and the DS1618+ (one power supply) sends none of the three. So whether "supported" or the two values describe real power supplies is unverified, and the reply mustn't read as "redundant power, both fine" until a NAS with redundant power confirms what they mean.
+- **Named after DSM's fields:** `Update ready (upgrade_ready)`, `Crash flag (is_system_crashed)` and `Incompatible-NIC flag (ext_nic_is_incompatible)`. Their meanings are inferred from the field names only, and none has been seen true, so each label names its field. `upgrade_ready` may mean a downloaded update is staged, not that one is available: the DS1618+ on DSM 7.1.1 Update 9 answered false. `eSATA port` is `support_esata` (whether the model has the port, not an attached device).
 
 The description listed only some of this until the 0.10.0rc6 live test and its QA round: claude.ai on a non-admin connection found the promised CPU line missing, and nothing tied "what time is it on the NAS?" to this tool.
 
@@ -88,10 +89,10 @@ Hardware and software identity and basic health.
 > Get everything DSM reports about the NAS. Every account gets the model, serial number, DSM
 > version, RAM, uptime, the NAS's local time and its code page, and the temperature where the NAS
 > has a sensor. A DSM administrator account also gets the CPU, time zone with the current UTC
-> offset, NTP server, firmware date, whether a DSM update is ready to install, crash and
-> network-card flags, redundant power and eSATA, and attached devices; any other account gets a line
-> saying so. Use this to identify the NAS, check its basic health or tell the time on it. For live
-> CPU, memory, disk and network load, use get_resource_usage.
+> offset, NTP server, firmware date, DSM's update-ready, crash and network-card flags, redundant
+> power and eSATA, and attached devices; any other account gets a line saying so. Use this to
+> identify the NAS, check its basic health or tell the time on it. For live CPU, memory, disk and
+> network load, use get_resource_usage.
 
 **Parameters:** None.
 
@@ -99,31 +100,31 @@ Hardware and software identity and basic health.
 
 ```
 System Info
-=====================================
-  Model:              DS1618+
-  Serial number:      1830PDN000000
-  DSM version:        DSM 7.1.1-42962 Update 9, firmware date 2025/07/29
-  CPU:                INTEL Atom C3538 (4 cores @ 2100 MHz)
-  RAM:                4096 MiB
-  Temperature:        50°C
-  Uptime:             135d 4h 15m
-  System time:        Fri Oct 23 23:00:45 2026 (NAS local time)
-  Time zone:          Central Time (US & Canada), currently UTC-05:00
-  NTP:                time.google.com
-  Code page:          enu
-  DSM update:         none ready to install
-  System crash flag:  no
-  eSATA:              yes
-  USB devices:        none
-  SATA devices:       none
-  PCIe slots:         slot 1: empty
+==================================================
+  Model:                           DS1618+
+  Serial number:                   1830PDN000000
+  DSM version:                     DSM 7.1.1-42962 Update 9, firmware date 2025/07/29
+  CPU:                             INTEL Atom C3538 (4 cores @ 2100 MHz)
+  RAM:                             4096 MiB
+  Temperature:                     50°C
+  Uptime:                          135d 4h 15m
+  System time:                     Fri Oct 23 23:00:45 2026 (NAS local time)
+  Time zone:                       Central Time (US & Canada), currently UTC-05:00
+  NTP:                             time.google.com
+  Code page:                       enu
+  Update ready (upgrade_ready):    no
+  Crash flag (is_system_crashed):  no
+  eSATA port:                      yes
+  USB devices:                     none
+  SATA devices:                    none
+  PCIe slots:                      slot 1: empty
 ```
 
 The same tool for an account that isn't an administrator (vdsm, DSM 7.4.1; VirtualDSM has no temperature sensor):
 
 ```
 System Info
-=================================
+=============================================
   Model:                      VirtualDSM
   Serial number:              0000000000000
   DSM version:                DSM 7.4.1-90080
@@ -132,7 +133,7 @@ System Info
   System time:                Sat Oct 24 06:19:03 2026 (NAS local time)
   Time zone:                  not available to this account (needs a DSM administrator)
   Code page:                  enu
-  Needs a DSM administrator:  CPU, NTP server, firmware date, DSM update status, crash and network-card flags, redundant power, eSATA, and attached USB, SATA and PCIe devices
+  Needs a DSM administrator:  CPU, NTP server, firmware date, update-ready, crash and network-card flags, redundant power, eSATA, and attached USB, SATA and PCIe devices
 ```
 
 When `SYNO.Core.System` fails for another reason (an HTTP error, or the API isn't listed), the time zone says `unavailable: SYNO.Core.System didn't answer` and an `Unavailable` row names the same details: only DSM's refusals (105, 1006) mean "needs an administrator".

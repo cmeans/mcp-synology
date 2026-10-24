@@ -52,7 +52,7 @@ _NTP_KEYS = {
 _STATUS_KEYS = {"ext_nic_is_incompatible", "is_system_crashed", "upgrade_ready"}
 
 _ADMIN_ONLY = (
-    "CPU, NTP server, firmware date, DSM update status, crash and network-card flags, "
+    "CPU, NTP server, firmware date, update-ready, crash and network-card flags, "
     "redundant power, eSATA, and attached USB, SATA and PCIe devices"
 )
 # DSM's answers to an account that isn't an administrator: 1006 from Core.System, 105
@@ -259,25 +259,30 @@ async def get_system_info(client: DsmClient) -> str:
     if dsm.get("codepage"):
         pairs.append(("Code page", str(dsm["codepage"])))
 
-    if status:
-        if "upgrade_ready" in status:
-            ready = _yes_no(status["upgrade_ready"]) == "yes"
-            pairs.append(("DSM update", "ready to install" if ready else "none ready to install"))
-        if "is_system_crashed" in status:
-            pairs.append(("System crash flag", _yes_no(status["is_system_crashed"])))
-        if "ext_nic_is_incompatible" in status:
-            pairs.append(("Incompatible network card", _yes_no(status["ext_nic_is_incompatible"])))
+    # These three are named after DSM's own fields and never seen true, so the label
+    # names the field rather than claiming a meaning DSM doesn't document.
+    for key, label in (
+        ("upgrade_ready", "Update ready"),
+        ("is_system_crashed", "Crash flag"),
+        ("ext_nic_is_incompatible", "Incompatible-NIC flag"),
+    ):
+        if key in status:
+            pairs.append((f"{label} ({key})", _yes_no(status[key])))
 
     if "support_rp" in core or "rp1" in core or "rp2" in core:
-        # rp1/rp2 are shown as DSM sends them: seen only on VirtualDSM (1 and 1, with no
-        # power supplies at all), so what they mean is unverified. Don't let the reply
-        # read as "both power supplies are fine".
-        supported = _yes_no(core.get("support_rp"))
-        raw = [f"{k} {core[k]}" for k in ("rp1", "rp2") if k in core]
-        note = f"; DSM's raw values {', '.join(raw)} (meaning not documented)" if raw else ""
-        pairs.append(("Redundant power", f"supported: {supported}{note}"))
+        # Shown as DSM sends them: seen only on VirtualDSM (support_rp true, rp1 1, rp2 1,
+        # with no power supplies at all), and the DS1618+ sends none of the three, so what
+        # they mean is unverified. The reply mustn't read as "redundant power, both fine".
+        raw = [
+            f"{k} {_yes_no(core[k]) if k == 'support_rp' else core[k]}"
+            for k in ("support_rp", "rp1", "rp2")
+            if k in core
+        ]
+        pairs.append(
+            ("Redundant power", f"DSM's raw values {', '.join(raw)} (meaning not documented)")
+        )
     if "support_esata" in core:
-        pairs.append(("eSATA", _yes_no(core["support_esata"])))
+        pairs.append(("eSATA port", _yes_no(core["support_esata"])))
     if "usb_dev" in core:
         pairs.append(("USB devices", _devices(core["usb_dev"])))
     if "sata_dev" in core:
