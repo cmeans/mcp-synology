@@ -38,6 +38,11 @@ NAS scratch path.
   failure and go on.
 - Touch only your own scratch items. **Ask the maintainer before deleting anything**,
   including at cleanup.
+- Only [A] changes NAS-wide settings (Download Station config and schedule), and restores
+  them at cleanup.
+- Use your config as given. If a step needs a key it doesn't have, record that and go on;
+  don't patch it.
+- Where a step needs a password, use any throwaway one.
 - <Per-client notes, e.g. "[A]: replies are cut off after about 60 s; every step is sized to
   finish well under that. If one is cut off, record that and go on.">
 
@@ -70,11 +75,15 @@ Setup: <what to create first, in your scratch>.
 
 ## <N>. [A][B] Quick regression
 
+Setup: `create_folder <scratch>`, then inside it the folders `f1` and `f2`. Create the local
+files `a.txt`, `b.txt` and `c.txt` (a few lines each) in your local scratch folder, and
+`upload_file` all three into `<scratch>`. Quote the upload replies.
+
 - **<N>a** `rename <scratch>/b.txt` to `b2.txt`. `copy_files <scratch>/b2.txt` into
   `<scratch>/f1`. `move_files <scratch>/c.txt` into `<scratch>/f2`. `list_files` each folder.
 - **<N>b** `search_files` in `<scratch>` for `b2`, then with `extension="txt"`.
 - **<N>c** `download_file <scratch>/f1/b2.txt` to your local scratch folder, then the folder
-  `<scratch>/f2` to the same place. List what landed locally.
+  `<scratch>/f2` to the same place (it arrives as a `.zip`). List what landed locally.
 - **<N>d** `delete_files <scratch>/f1/b2.txt`, then `restore_from_recycle_bin` it.
 - **<N>e** `get_dir_size <scratch>`, and `get_dir_size <scratch>/no-such-dir`.
 
@@ -83,15 +92,15 @@ Setup: <what to create first, in your scratch>.
 1. List what you'll delete: your NAS scratch folder, your Photos folders and album, your
    Download Station tasks, your local scratch folder.
 2. Ask the maintainer.
-3. Delete.
+3. Delete. [A]: restore the Download Station config and schedule you changed.
 4. Leave the recycle bins alone unless the maintainer says otherwise.
 5. Record what you removed.
 ````
 
 ## Example steps
 
-Each of these came from a real plan (scratch names generalized), and each found something or
-proved something the unit and vdsm tests couldn't.
+Each of these came from a real plan (scratch names generalized, steps renumbered), and each
+found or proved something the unit and vdsm tests couldn't.
 
 ### Test the instructions by behavior, not by asking about them
 
@@ -102,8 +111,10 @@ The server's instructions list the tools a connection withholds and the config k
 enables them. A model that received them answers with the tool names and
 `permission: write`; one that didn't says the server can't do it, or guesses. Asking "what do
 your instructions say?" instead invites the model to make something up, or to quote text it
-has only from the plan. This question showed that one client never received the instructions
-at all, which is why everything a model must know now lives in the tool descriptions too.
+has only from the plan. Questions like this showed that one client never received the
+instructions at all. So each tool's description now says what that tool needs, and the
+instructions keep only what no tool can say, such as which tools a connection withholds.
+That's why the question is still worth asking.
 
 ### One step, one change
 
@@ -112,15 +123,15 @@ at all, which is why everything a model must know now lives in the tool descript
 >
 > **1b** `list_shares` again. Quote it.
 
-The bug (#358) appeared only on a connection's first call, before anything had filled a
-cache: the Recycle Bin column was missing. A plan that calls `list_files` first never sees
-it. Saying exactly when to call the tool, and calling it twice, makes the step test the one
-thing that changed.
+Before #358, the Recycle Bin column appeared only after `delete_files` or `list_recycle_bin`
+had checked a share, and then said `unknown` for every other share. A plan that deletes
+something or lists a bin first never sees the missing column. Calling `list_shares` before
+anything else, then again, tests the one thing that changed.
 
 ### Build on what an earlier step returned
 
-> 1. Create `<scratch>/rb2`, upload `lone.txt` into it, `delete_files <scratch>/rb2/lone.txt`,
->    then `delete_files <scratch>/rb2`.
+> Setup: create `<scratch>/rb2`, upload `lone.txt` into it, `delete_files
+> <scratch>/rb2/lone.txt`, then `delete_files <scratch>/rb2`.
 >
 > **4b** `list_recycle_bin` on your scratch share with `pattern="*.txt"`. Quote it.
 >
@@ -157,12 +168,12 @@ model can work out on its own.
 > **5a** `create_download` `<a public test file of known size, about 100 MB>`. Right away,
 > `list_downloads` and `get_download_info` on it. Quote the size and progress lines.
 >
-> **5b** Repeat `get_download_info` about every 15 s until it's finished, or for 2 minutes.
-> Quote each size/progress line.
+> **5b** About 30 s later, `get_download_info` again. Quote the size and progress lines.
 
-Each call returns in a few seconds, so a client with a 60-second reply limit can run it,
-and a file of known size makes a wrong size obvious: this found that a size DSM doesn't know
-yet showed as `0 B` (#355). An operation that takes minutes, such as a large copy handing off
+Each step is one or two calls that return in seconds, so a client with a 60-second reply
+limit can run it; to watch longer, add more steps like 5b rather than one step that polls.
+A file of known size makes a wrong size obvious: an earlier round found that a download
+whose server never sent a size showed as `0 B` (#355), and this step checks the fix. An operation that takes minutes, such as a large copy handing off
 to `file_task`, goes in a section for a client without the limit.
 
 ## Answer key
@@ -174,7 +185,8 @@ wrong expectation:
 ```markdown
 - **9e** `get_dir_size` of the missing path: an error with code `not_found` naming the path,
   not a size (`filestation/metadata.py`, #332).
-- **0a** Names the withheld write tools for each module and `permission: write`; doesn't say
-  the server can't do it. A model without the instructions guesses.
+- **0a** Names the withheld write tools for each module and `permission: write`, and any
+  module that isn't enabled, with how to add it; doesn't say the server can't do it. A model
+  without the instructions guesses.
 - Known issues, not to count again: #<N> (<one line>).
 ```
