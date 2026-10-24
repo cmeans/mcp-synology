@@ -4,9 +4,9 @@ The MCP SDK cancels a call through a level-triggered anyio scope. Without a shie
 cleanup's stop and clean requests were canceled at their first await, so a canceled call
 left its Search or DirSize task running on the NAS. Each test starts a real task and
 cancels the call while its first poll is in flight, so the task exists on DSM and its
-result has not been read. Then it asks DSM about the task: an unknown (cleaned) Search task
-answers ``list`` with a bare ``{"finished": true}``, and an unknown (stopped) DirSize task
-answers ``status`` with error 599.
+result has not been read. Each checks that DSM answered the cleanup's requests (stop, and
+clean for Search) despite the cancellation, then asks DSM about the task: a cleaned Search
+task lists no results, and a stopped DirSize task answers ``status`` with error 599.
 
 Run with: uv run pytest -m vdsm -v tests/vdsm/test_vdsm_cancel_cleanup.py
 """
@@ -26,13 +26,15 @@ pytestmark = pytest.mark.vdsm
 
 async def _cancel_during_first_poll(
     module: Any, poll_method: str, run: Any, monkeypatch: pytest.MonkeyPatch
-) -> list[str]:
+) -> tuple[list[str], list[str]]:
     """Run ``run()``, hold its first ``poll_method`` request, and cancel it like the SDK.
 
-    Returns the task IDs the call used. The held poll never reaches DSM, so the task is
-    still there for the cleanup to stop, however fast DSM would have finished it.
+    Returns the task IDs the call used, and the methods DSM answered (a reply or a DSM
+    error, not a cancellation). The held poll never reaches DSM, so the task is still
+    there for the cleanup to stop, however fast DSM would have finished it.
     """
     seen: list[str] = []
+    answered: list[str] = []
     polling = asyncio.Event()
     real = module.task_request
 
@@ -41,7 +43,13 @@ async def _cancel_during_first_poll(
         if method == poll_method and not polling.is_set():
             polling.set()
             await anyio.sleep_forever()
-        return await real(client, api, method, taskid, **kwargs)
+        try:
+            result = await real(client, api, method, taskid, **kwargs)
+        except SynologyError:
+            answered.append(method)
+            raise
+        answered.append(method)
+        return result
 
     monkeypatch.setattr(module, "task_request", spy)
     with anyio.fail_after(120):
@@ -51,7 +59,7 @@ async def _cancel_during_first_poll(
             tg.cancel_scope.cancel()
     monkeypatch.setattr(module, "task_request", real)
     assert seen, "the call never polled its task"
-    return seen
+    return seen, answered
 
 
 async def test_canceled_search_is_stopped_and_cleaned(
@@ -65,10 +73,15 @@ async def test_canceled_search_is_stopped_and_cleaned(
     async def run() -> None:
         await search.search_files(client, folder_path="/testshare", pattern="*")
 
-    seen = await _cancel_during_first_poll(search, "list", run, monkeypatch)
+    seen, answered = await _cancel_during_first_poll(search, "list", run, monkeypatch)
+    # The cleanup ran to the end despite the cancellation: without the shield, the stop
+    # request is canceled at its first await and neither is answered.
+    assert "stop" in answered and "clean" in answered, answered
     reply = await task_request(client, "SYNO.FileStation.Search", "list", seen[0], version=2)
-    # A task that wasn't cleaned (running or finished) answers with total and files.
-    assert "total" not in reply and "files" not in reply, reply
+    # A cleaned task has no results left. DSM usually answers a bare {"finished": true};
+    # DSM 7.1 seconds after boot answered {"files": [], "finished": true, "total": 0}
+    # (CI, #390). A task left uncleaned still lists what it found.
+    assert not reply.get("files"), reply
 
 
 async def test_canceled_dir_size_is_stopped(
@@ -82,7 +95,8 @@ async def test_canceled_dir_size_is_stopped(
     async def run() -> None:
         await metadata.get_dir_size(client, path="/testshare")
 
-    seen = await _cancel_during_first_poll(metadata, "status", run, monkeypatch)
+    seen, answered = await _cancel_during_first_poll(metadata, "status", run, monkeypatch)
+    assert "stop" in answered, answered
     with pytest.raises(SynologyError) as exc:
         await task_request(client, "SYNO.FileStation.DirSize", "status", seen[0])
     assert exc.value.code == 599
