@@ -52,23 +52,31 @@ _NTP_KEYS = {
 _STATUS_KEYS = {"ext_nic_is_incompatible", "is_system_crashed", "upgrade_ready"}
 
 _ADMIN_ONLY = (
-    "CPU, NTP server, firmware date, DSM update status, redundant power, eSATA, and "
-    "attached USB, SATA and PCIe devices"
+    "CPU, NTP server, firmware date, DSM update status, crash and network-card flags, "
+    "redundant power, eSATA, and attached USB, SATA and PCIe devices"
 )
+# DSM's answers to an account that isn't an administrator: 1006 from Core.System, 105
+# from Region.NTP and System.Status (vdsm DSM 7.1, 7.2.2, 7.3.2 and 7.4.1).
+_REFUSED = {105, 1006}
+_PCI_KEYS = {"Occupied", "Recognized", "cardName", "slot"}
 
 
 async def _fetch(
     client: DsmClient, api: str, method: str, version: int | None = None
-) -> dict[str, Any]:
-    """One source's reply, or {} when the API is missing or refuses this account."""
+) -> tuple[dict[str, Any], bool]:
+    """One source's reply ({} when it has none), and whether DSM refused this account.
+
+    Only a refusal (105, 1006) means "needs an administrator": a proxy error or a
+    missing API is something else, and the reply mustn't send the user to an admin.
+    """
     if api not in client._api_cache:
-        return {}
+        return {}, False
     try:
         data = await client.request(api, method, version=version)
     except SynologyError as e:
         logger.debug("%s/%s failed (may require admin): %s", api, method, e)
-        return {}
-    return data if isinstance(data, dict) else {}
+        return {}, e.code in _REFUSED
+    return (data if isinstance(data, dict) else {}), False
 
 
 def _yes_no(value: Any) -> str:
@@ -130,10 +138,14 @@ def _pci_slots(items: Any) -> str:
             shown.append(str(slot))
             continue
         occupied = _yes_no(slot.get("Occupied")) == "yes"
-        card = slot.get("cardName") or "unknown card"
+        card = str(slot.get("cardName") or "").strip()
+        card = card if card not in ("", "-") else "unknown card"  # DSM sends "-" for none
         state = card if occupied else "empty"
         if occupied and _yes_no(slot.get("Recognized")) == "no":
             state += " (not recognized)"
+        extra = ", ".join(f"{k}: {v}" for k, v in slot.items() if k not in _PCI_KEYS)
+        if extra:
+            state += f" ({extra})"
         shown.append(f"slot {slot.get('slot', '?')}: {state}")
     return "; ".join(shown)
 
@@ -147,11 +159,14 @@ async def get_system_info(client: DsmClient) -> str:
     firmware date, update status and devices; for anyone else the reply says plainly
     that those need an administrator.
     """
-    dsm = await _fetch(client, "SYNO.DSM.Info", "getinfo")
-    core = await _fetch(client, "SYNO.Core.System", "info", version=1)
+    dsm, _ = await _fetch(client, "SYNO.DSM.Info", "getinfo")
+    core, core_refused = await _fetch(client, "SYNO.Core.System", "info", version=1)
     # Only an admin gets Core.System; don't spend two more refused requests otherwise.
-    ntp = await _fetch(client, "SYNO.Core.Region.NTP", "get", version=1) if core else {}
-    status = await _fetch(client, "SYNO.Core.System.Status", "get", version=1) if core else {}
+    ntp: dict[str, Any] = {}
+    status: dict[str, Any] = {}
+    if core:
+        ntp, _ = await _fetch(client, "SYNO.Core.Region.NTP", "get", version=1)
+        status, _ = await _fetch(client, "SYNO.Core.System.Status", "get", version=1)
 
     if not dsm and not core:
         error_response(
@@ -231,8 +246,10 @@ async def get_system_info(client: DsmClient) -> str:
             zone += f" ({name})"
         offset = _utc_offset(ntp)
         pairs.append(("Time zone", zone + (f", currently {offset}" if offset else "")))
-    else:
+    elif core_refused:
         pairs.append(("Time zone", "not available to this account (needs a DSM administrator)"))
+    elif not core:
+        pairs.append(("Time zone", "unavailable: SYNO.Core.System didn't answer"))
 
     if core or ntp:
         ntp_on = core.get("enabled_ntp", ntp.get("enable_ntp") == "ntp")
@@ -276,7 +293,9 @@ async def get_system_info(client: DsmClient) -> str:
         for key in sorted(set(source) - known):
             pairs.append((key, str(source[key])))
 
-    if not core:
+    if core_refused:
         pairs.append(("Needs a DSM administrator", _ADMIN_ONLY))
+    elif not core:
+        pairs.append(("Unavailable", f"{_ADMIN_ONLY}: SYNO.Core.System didn't answer"))
 
     return format_key_value(pairs, title="System Info")

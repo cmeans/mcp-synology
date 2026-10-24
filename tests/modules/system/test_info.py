@@ -326,3 +326,95 @@ class TestEverythingDsmSends:
         rows = _rows(await get_system_info(mock_client))
         assert rows["new_field"] == "x1"
         assert rows["other_new"] == "7"
+
+
+class TestHelpers:
+    @pytest.mark.parametrize(
+        ("text", "seconds"),
+        [("0:0:24", 24), ("3244:15:30", 11679330), ("1:2", None), ("a:b:c", None), ("", None)],
+    )
+    def test_uptime_from_hms(self, text: str, seconds: int | None) -> None:
+        from mcp_synology.modules.system.info import _uptime_from_hms
+
+        assert _uptime_from_hms(text) == seconds
+
+    @pytest.mark.parametrize(
+        ("local", "offset"),
+        [
+            ("2026/10/24 00:30:00", "UTC-03:30"),  # Newfoundland, across midnight
+            ("2026/10/24 09:45:00", "UTC+05:45"),  # Nepal
+            ("2026/10/24 18:00:00", "UTC+14:00"),  # Kiribati
+            ("2026/10/23 23:30:00", "UTC-04:30"),  # previous day on the NAS
+        ],
+    )
+    def test_utc_offset_any_zone_and_date(self, local: str, offset: str) -> None:
+        from mcp_synology.modules.system.info import _utc_offset
+
+        date, clock = local.split()
+        hour, minute, second = clock.split(":")
+        # 2026-10-24 04:00:00 UTC
+        ntp = {"date": date, "hour": hour, "minute": minute, "second": second}
+        assert _utc_offset({**ntp, "timestamp": 1792814400}) == offset
+
+    def test_utc_offset_without_the_fields_is_none(self) -> None:
+        from mcp_synology.modules.system.info import _utc_offset
+
+        assert _utc_offset({}) is None
+        assert (
+            _utc_offset({"date": "x", "hour": 1, "minute": 2, "second": 3, "timestamp": 0}) is None
+        )
+
+    def test_devices_and_slots(self) -> None:
+        from mcp_synology.modules.system.info import _devices, _pci_slots
+
+        assert _devices([]) == "none"
+        assert _devices([{"vendor": "SanDisk", "product": "USB Disk"}, "sdq"]) == (
+            "vendor: SanDisk, product: USB Disk; sdq"
+        )
+        assert _devices("odd") == "odd"
+        slots = [
+            {"Occupied": "no", "Recognized": "no", "cardName": "-", "slot": "1"},
+            {"Occupied": "yes", "Recognized": "yes", "cardName": "E10G18-T1", "slot": "2"},
+            {"Occupied": "yes", "Recognized": "no", "cardName": "-", "slot": "3", "lanes": 4},
+            "odd",
+        ]
+        assert _pci_slots(slots) == (
+            "slot 1: empty; slot 2: E10G18-T1; "
+            "slot 3: unknown card (not recognized) (lanes: 4); odd"
+        )
+        assert _pci_slots([]) == "none"
+
+
+class TestWhenCoreSystemFailsOtherwise:
+    @respx.mock
+    async def test_a_server_error_isnt_called_a_permission_problem(
+        self, mock_client: DsmClient
+    ) -> None:
+        """Only DSM's refusal (105, 1006) means "needs an administrator"."""
+        _install_system_apis(mock_client)
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            if dict(request.url.params).get("api") == "SYNO.Core.System":
+                return httpx.Response(200, json={"success": False, "error": {"code": 102}})
+            data = {"model": "DS920+", "version_string": "DSM 7.2-64570", "version": "64561"}
+            return httpx.Response(200, json={"success": True, "data": data})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=respond)
+        rows = _rows(await get_system_info(mock_client))
+        assert rows["Time zone"] == "unavailable: SYNO.Core.System didn't answer"
+        assert rows["Unavailable"].endswith(": SYNO.Core.System didn't answer")
+        assert "Needs a DSM administrator" not in rows
+        # The build is added when the version string doesn't already carry it.
+        assert rows["DSM version"] == "DSM 7.2-64570 (build 64561)"
+
+    @respx.mock
+    async def test_uptime_from_core_system(self, mock_client: DsmClient) -> None:
+        _install_system_apis(mock_client)
+        responses = {
+            "SYNO.DSM.Info": {"success": True, "data": {"model": "DS920+"}},
+            "SYNO.Core.System": {"success": True, "data": {"up_time": "26:00:00"}},
+        }
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=lambda req: _mock_response(req, responses)
+        )
+        assert _rows(await get_system_info(mock_client))["Uptime"] == "1d 2h"

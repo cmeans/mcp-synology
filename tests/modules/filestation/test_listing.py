@@ -500,6 +500,7 @@ class TestListRecycleBin:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=responder)
         whole = await list_recycle_bin(mock_client, share="home", limit=2000)
         assert whole.endswith("1,500 of 1,500 items.")
+        assert "(1,500 items)" in whole  # the title too
         last = await list_recycle_bin(mock_client, share="home", limit=1000, offset=1000)
         assert last.endswith("Showing 1,001–1,500 of 1,500 items.")
 

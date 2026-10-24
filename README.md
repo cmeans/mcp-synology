@@ -67,7 +67,7 @@ Browse, search, transfer, and manage files on your NAS. 15 tools across two perm
 
 Monitor NAS health and resource utilization. 2 read-only tools:
 
-- **get_system_info** — everything DSM reports: model, serial number, DSM version, RAM, temperature, uptime and the NAS's local time for every account; for an admin account also the CPU, time zone and current UTC offset, NTP server, firmware date, whether an update is ready, and attached devices
+- **get_system_info** — everything DSM reports: model, serial number, DSM version, RAM, uptime, the NAS's local time and code page for every account, and the temperature where the NAS has a sensor; for an admin account also the CPU, time zone and current UTC offset, NTP server, firmware date, whether an update is ready, and attached devices
 - **get_resource_usage** — live CPU load, memory usage, disk I/O, network throughput (requires admin account)
 
 `mcp-synology setup` writes only the File Station module. To add System, put it inside the existing `modules:` section (it has no write tools, so no `permission` is needed):

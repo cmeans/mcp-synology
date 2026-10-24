@@ -51,7 +51,7 @@ The description listed only some of this until the 0.10.0rc6 live test and its Q
 
 ### Formatting
 
-Both tools return one `format_key_value` block. Absent fields are left out rather than shown as empty. Units:
+Both tools return one `format_key_value` block. A field DSM didn't send is left out, except `get_system_info`'s Time zone and device rows, which say `not available`, `unavailable` or `none`. Units:
 
 - RAM in MiB.
 - Temperature in °C. `⚠ WARNING` is appended when DSM's `temperature_warn` is set. A reading of 0 °C is shown, not treated as missing.
@@ -81,36 +81,64 @@ Hardware and software identity and basic health.
 
 **Permission tier:** READ
 
-**DSM API:** `SYNO.DSM.Info` / `getinfo`, plus `SYNO.Core.System` / `info` v1 when available
+**DSM API:** `SYNO.DSM.Info` / `getinfo`; for an administrator also `SYNO.Core.System` / `info` v1, `SYNO.Core.Region.NTP` / `get` v1 and `SYNO.Core.System.Status` / `get` v1 (see Sources, by privilege)
 
 **Tool description (LLM-facing):**
 > Get everything DSM reports about the NAS. Every account gets the model, serial number, DSM
-> version, RAM, temperature, uptime and the NAS's local time. A DSM administrator account also gets
-> the CPU, time zone with the current UTC offset, NTP server, firmware date, whether a DSM update is
-> ready to install, and attached devices; any other account gets a line saying so. Use this to
-> identify the NAS, check its basic health or tell the time on it. For live CPU, memory, disk and
-> network load, use get_resource_usage.
+> version, RAM, uptime, the NAS's local time and its code page, and the temperature where the NAS
+> has a sensor. A DSM administrator account also gets the CPU, time zone with the current UTC
+> offset, NTP server, firmware date, whether a DSM update is ready to install, crash and
+> network-card flags, redundant power and eSATA, and attached devices; any other account gets a line
+> saying so. Use this to identify the NAS, check its basic health or tell the time on it. For live
+> CPU, memory, disk and network load, use get_resource_usage.
 
 **Parameters:** None.
 
-**Response shape** (admin account; a non-admin sees the same block without `CPU` and `NTP`):
+**Response shape**, an administrator on a DS1618+ (DSM 7.1.1; serial replaced):
 
 ```
 System Info
-===============================
-  Model:        DS1618+
-  Firmware:     DSM 7.1.1-42962 Update 9
-  CPU:          C3538 (4 cores) @ 2100 MHz
-  RAM:          4096 MiB
-  Temperature:  49°C
-  Uptime:       123d 3h 9m
-  System time:  Sun Oct 11 21:54:52 2026 (NAS local time)
-  NTP:          time.google.com
+=====================================
+  Model:              DS1618+
+  Serial number:      1830PDN000000
+  DSM version:        DSM 7.1.1-42962 Update 9, firmware date 2025/07/29
+  CPU:                INTEL Atom C3538 (4 cores @ 2100 MHz)
+  RAM:                4096 MiB
+  Temperature:        50°C
+  Uptime:             135d 4h 15m
+  System time:        Fri Oct 23 23:00:45 2026 (NAS local time)
+  Time zone:          Central Time (US & Canada), currently UTC-05:00
+  NTP:                time.google.com
+  Code page:          enu
+  DSM update:         none ready to install
+  System crash flag:  no
+  eSATA:              yes
+  USB devices:        none
+  SATA devices:       none
+  PCIe slots:         slot 1: empty
 ```
+
+The same tool for an account that isn't an administrator (vdsm, DSM 7.4.1; VirtualDSM has no temperature sensor):
+
+```
+System Info
+=================================
+  Model:                      VirtualDSM
+  Serial number:              0000000000000
+  DSM version:                DSM 7.4.1-90080
+  RAM:                        2048 MiB
+  Uptime:                     < 1m
+  System time:                Sat Oct 24 06:19:03 2026 (NAS local time)
+  Time zone:                  not available to this account (needs a DSM administrator)
+  Code page:                  enu
+  Needs a DSM administrator:  CPU, NTP server, firmware date, DSM update status, crash and network-card flags, redundant power, eSATA, and attached USB, SATA and PCIe devices
+```
+
+When `SYNO.Core.System` fails for another reason (an HTTP error, or the API isn't listed), the time zone says `unavailable: SYNO.Core.System didn't answer` and an `Unavailable` row names the same details: only DSM's refusals (105, 1006) mean "needs an administrator".
 
 **Design notes:**
 - Field precedence: `DSM.Info` first, then `Core.System`. Temperature tells a missing value from 0°C with explicit `None` checks. RAM and uptime are shown only when nonzero.
-- `NTP` appears only when NTP is enabled and a server is set.
+- `NTP` is the server when NTP is on, and `off` when it isn't (administrator only).
 - `System time` is DSM's string as sent: the NAS's current local time, with no zone (seska, DSM 7.1.1: `Wed Oct 21 15:47:18 2026` at 20:47 UTC, NAS in CDT; `SYNO.DSM.Info` has no zone field). So it's labeled `(NAS local time)`.
 
 ---

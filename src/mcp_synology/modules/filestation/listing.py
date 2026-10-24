@@ -298,7 +298,7 @@ async def list_files(
         rows.append([icon, display_name, size, modified])
 
     shown = len(files)
-    title = f"Contents of {normalized} ({total} items)"
+    title = f"Contents of {normalized} ({total:,} items)"
     result = format_table(headers=headers, rows=rows, title=title)
     result += _sort_note(files, sort_by, sort_direction)
 
