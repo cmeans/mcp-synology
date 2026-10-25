@@ -554,7 +554,7 @@ async def _search_recycle_bin(
     if found:
         notes.append("Paths are relative to the recycle bin, as a restore takes them.")
     if unreadable:
-        more = f" and {len(unreadable) - 5} more" if len(unreadable) > 5 else ""
+        more = f" and {len(unreadable) - 5:,} more" if len(unreadable) > 5 else ""
         notes.append(f"Not searched (couldn't be listed): {', '.join(unreadable[:5])}{more}.")
     if stopped:
         notes.append(

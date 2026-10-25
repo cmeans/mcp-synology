@@ -361,8 +361,8 @@ async def get_dir_size(
                 result = format_key_value(
                     [
                         ("Total size", format_size(total_size)),
-                        ("Files", str(num_file)),
-                        ("Directories", str(num_dir)),
+                        ("Files", f"{num_file:,}"),
+                        ("Directories", f"{num_dir:,}"),
                     ],
                     title=f"Directory Size: {normalized}",
                 )
