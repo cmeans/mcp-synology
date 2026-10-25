@@ -290,6 +290,25 @@ class TestGetDirSize:
         assert "12" in result
 
     @respx.mock
+    async def test_dir_size_counts_have_thousands_separators(self, mock_client: DsmClient) -> None:
+        """Counts of 1,000 or more get separators, like every other count (rc8 live test)."""
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            method = dict(request.url.params).get("method")
+            if method == "start":
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "ds-1"}})
+            if method == "status":
+                data = {"finished": True, "total_size": 1, "num_file": 10341, "num_dir": 1206}
+                return httpx.Response(200, json={"success": True, "data": data})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+
+        result = await get_dir_size(mock_client, path="/photo")
+        assert "10,341" in result
+        assert "1,206" in result
+
+    @respx.mock
     async def test_dir_size_start_error(self, mock_client: DsmClient) -> None:
         """DSM error on the start call should propagate as a structured error."""
         respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
