@@ -7,6 +7,7 @@ import errno
 import json
 import logging
 import os
+import time
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import TYPE_CHECKING, Any
 
@@ -238,6 +239,10 @@ async def _upload_one(
 
 
 _MAX_UPLOAD = 50
+# The most upload_photos keeps starting files for, whatever task_timeout says (#416 QA):
+# Claude Desktop stops waiting for a tool call after about 60 s, and the file in progress
+# at the limit still finishes.
+UPLOAD_BUDGET_CAP = 45.0
 _DUPLICATE = {"rename": "rename", "skip": "ignore"}
 _ACTIONS = {"new": "new", "rename": "renamed", "ignore": "skipped"}
 
@@ -251,8 +256,16 @@ async def upload_photos(
     on_duplicate: str = "rename",
     album: str | None = None,
     allowed_roots: list[Path] | None = None,
+    budget: float = 30.0,
 ) -> str:
-    """Upload local files into a Photos folder (spec: upload_photos), one request each."""
+    """Upload local files into a Photos folder (spec: upload_photos), one request each.
+
+    No new file is started once ``budget`` seconds (``task_timeout``, at most
+    ``UPLOAD_BUDGET_CAP``) have passed, so the reply arrives before a client's tool-call
+    timeout (about 60 s on Claude Desktop; #416). The files not tried are listed by
+    path, to pass to a second call.
+    """
+    budget = min(budget, UPLOAD_BUDGET_CAP)
     op = "Upload photos"
     sp = check_space(op, space)
     if on_duplicate not in _DUPLICATE:
@@ -313,7 +326,13 @@ async def upload_photos(
     uploaded: list[int] = []  # stored or already there: what an album gets
     renamed: list[int] = []
     skipped = 0
+    left: list[str] = []  # local_paths not tried because the time ran out
+    start = time.monotonic()
     for n, path in enumerate(files):
+        if n and time.monotonic() - start >= budget:
+            left = local_paths[n:]
+            rows += [(rest.name, "not tried", "") for rest in files[n:]]
+            break
         try:
             fields = {
                 "duplicate": _DUPLICATE[on_duplicate],
@@ -409,4 +428,17 @@ async def upload_photos(
             "Photos indexes new items over the next seconds to minutes; taken dates and "
             "previews appear then."
         )
+    if left:
+        why = (
+            "resending the others makes renamed copies"
+            if on_duplicate == "rename"
+            else "the others would only be skipped as already there"
+        )
+        lines.append(
+            f"Started no new file after {budget:g} s (the task timeout, at most "
+            f"{UPLOAD_BUDGET_CAP:g} s) so the reply isn't cut off; {len(left):,} file(s) "
+            "not tried. To continue, call upload_photos again with the same folder, space, "
+            f"album and on_duplicate, and only these local_paths ({why}):"
+        )
+        lines += [f"  {value}" for value in left]
     return "\n".join(lines)

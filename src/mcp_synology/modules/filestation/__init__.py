@@ -270,7 +270,8 @@ MODULE_INFO = ModuleInfo(
                 'still has it; `action="stop"` stops it, and the operation may then be partly '
                 "done. Without a handle: lists this user's running operations, which is "
                 "useful in a new chat or after a restart. Handles only work for the same "
-                "NAS user."
+                "NAS user. Don't poll in a loop: check when the user asks, or before doing "
+                "something that depends on the result."
             ),
             permission_tier=PermissionTier.WRITE,
             # Worst case (#183): action="stop" can leave a move or delete half done.

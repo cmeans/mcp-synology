@@ -776,7 +776,8 @@ Follow up on, list, or stop a delete, copy, move or restore that was handed off 
 > working after the reply. With a handle: `action="status"` shows progress, or the final result
 > if DSM still has it; `action="stop"` stops it, and the operation may then be partly done. Without a
 > handle: lists this user's running operations, which is useful in a new chat or after a restart.
-> Handles only work for the same NAS user.
+> Handles only work for the same NAS user. Don't poll in a loop: check when the user asks, or before
+> doing something that depends on the result.
 
 **Parameters:**
 

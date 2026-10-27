@@ -54,7 +54,8 @@ class PhotosSettings(BaseModel):
 
     # Seconds copy_photos, move_photos and the deletes wait before handing a task off
     # with a photos:<id> handle (default 30, cap 600), as File Station's
-    # copy_move_timeout (#245).
+    # copy_move_timeout (#245). upload_photos starts no new file after it, or after
+    # 45 s if it's longer, to stay under clients' tool-call timeouts (#416).
     task_timeout: int = Field(default=30, ge=1, le=600)
 
     @field_validator("allowed_local_paths")
@@ -248,8 +249,11 @@ MODULE_INFO = ModuleInfo(
             description=(
                 "Upload photos or videos from this machine into a Synology Photos folder, "
                 "optionally adding them to an existing album. Only reads files inside the "
-                "allowed local folders. Photos indexes new items over the next seconds to "
-                "minutes; until then their taken dates and previews may be missing."
+                "allowed local folders. Starts no new file after the configured task timeout "
+                "(30 s by default, at most 45 s) and lists the files not tried, to pass to "
+                "another call. "
+                "Photos indexes new items over the next seconds to minutes; until then their "
+                "taken dates and previews may be missing."
             ),
             permission_tier=PermissionTier.WRITE,
             title="Photos: Upload",
@@ -287,7 +291,9 @@ MODULE_INFO = ModuleInfo(
                 "Follow up on a Synology Photos copy, move or delete that is still running. "
                 "With a handle (photos:<id>): action=status shows progress; action=stop stops "
                 "it (it may then be partly done). Without a handle: lists this user's copy, "
-                "move and delete tasks. action=clear removes finished tasks from that list."
+                "move and delete tasks. action=clear removes finished tasks from that list. "
+                "Don't poll in a loop: check when the user asks, or before doing something "
+                "that depends on the result."
             ),
             permission_tier=PermissionTier.WRITE,
             annotations=_ANNO_DESTRUCTIVE,
@@ -986,6 +992,7 @@ def register(ctx: "RegisterContext") -> None:
                 on_duplicate=on_duplicate,
                 album=album,
                 allowed_roots=local_roots,
+                budget=settings.task_timeout,
             )
 
     for operation in ("copy", "move"):

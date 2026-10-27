@@ -1708,12 +1708,16 @@ class TestInstructionComments:
 # it (the DS1618+ on DSM 7.1.1 sends neither; 0.10.0rc7 answer key). +163 in QA round 1:
 # the Photos `ids` and `folders` parameters state their 1,000-per-call limit, which only
 # the error used to give; list_photo_collections' limit reads 1-1,000.
-# Raised by #418 to 49,537 (+223): pause_download says a finished task is
+# Raised by #417 to 49,659 (+345): upload_photos' description says it starts no new file
+# after the task timeout (at most 45 s) and lists the files not tried (#416), and
+# file_task's and photo_task's say not to poll in a loop, guidance that lived only in the
+# instructions, which a client in the 0.10.0rc9 live test never received (#382).
+# Raised by #418 to 49,882 (+223): pause_download says a finished task is
 # reported as "not paused: already finished" instead of promising error 405 (Download
 # Station 3.9.5 accepts the pause), edit_download says a finished task's file isn't moved,
 # and download_photos' size says the preview sizes are the short side, never larger than
 # the original (0.10.0rc9 live test).
-PAYLOAD_BUDGET_CHARS = 49_537
+PAYLOAD_BUDGET_CHARS = 49_882
 
 
 class TestPayloadBudget:
