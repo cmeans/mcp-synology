@@ -1708,11 +1708,11 @@ class TestInstructionComments:
 # it (the DS1618+ on DSM 7.1.1 sends neither; 0.10.0rc7 answer key). +163 in QA round 1:
 # the Photos `ids` and `folders` parameters state their 1,000-per-call limit, which only
 # the error used to give; list_photo_collections' limit reads 1-1,000.
-# Raised by #417 to 49,645 (+331): upload_photos' description says it starts no new file
-# after the task timeout and lists the files not tried (#416), and file_task's and
-# photo_task's say not to poll in a loop, guidance that lived only in the instructions,
-# which a client in the 0.10.0rc9 live test never received (#382).
-PAYLOAD_BUDGET_CHARS = 49_645
+# Raised by #417 to 49,659 (+345): upload_photos' description says it starts no new file
+# after the task timeout (at most 45 s) and lists the files not tried (#416), and
+# file_task's and photo_task's say not to poll in a loop, guidance that lived only in the
+# instructions, which a client in the 0.10.0rc9 live test never received (#382).
+PAYLOAD_BUDGET_CHARS = 49_659
 
 
 class TestPayloadBudget:

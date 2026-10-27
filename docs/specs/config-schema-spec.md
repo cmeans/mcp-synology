@@ -286,7 +286,7 @@ Each key is a module name (e.g., `filestation`, `docker`, `system_info`). The va
 | Key | Type | Required | Default | Description |
 |-----|------|----------|---------|-------------|
 | `allowed_local_paths` | `list[str]` | No | the user's Downloads folder (unless the top-level `allowed_local_paths` is set) | Local folders `upload_photos` may read from and `download_photos` may write to, added to the top-level list when that's set (#257, #258). Same entry rules and checks as File Station's. |
-| `task_timeout` | `int` | No | `30` | Seconds `copy_photos`, `move_photos`, `delete_photos` and `delete_photo_folders` wait before handing a still-running task off with a `photos:<id>` handle for `photo_task` (1–600). `upload_photos` starts no new file after it and lists the files not tried (#416). |
+| `task_timeout` | `int` | No | `30` | Seconds `copy_photos`, `move_photos`, `delete_photos` and `delete_photo_folders` wait before handing a still-running task off with a `photos:<id>` handle for `photo_task` (1–600). `upload_photos` starts no new file after it, or after 45 s if it's longer, so a large value for long copies doesn't make uploads outlast a client's tool-call timeout (about 60 s on Claude Desktop), and lists the files not tried (#416). |
 
 ### `logging` Object
 

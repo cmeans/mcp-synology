@@ -54,7 +54,8 @@ class PhotosSettings(BaseModel):
 
     # Seconds copy_photos, move_photos and the deletes wait before handing a task off
     # with a photos:<id> handle (default 30, cap 600), as File Station's
-    # copy_move_timeout (#245); upload_photos starts no new file after it (#416).
+    # copy_move_timeout (#245). upload_photos starts no new file after it, or after
+    # 45 s if it's longer, to stay under clients' tool-call timeouts (#416).
     task_timeout: int = Field(default=30, ge=1, le=600)
 
     @field_validator("allowed_local_paths")
@@ -249,7 +250,8 @@ MODULE_INFO = ModuleInfo(
                 "Upload photos or videos from this machine into a Synology Photos folder, "
                 "optionally adding them to an existing album. Only reads files inside the "
                 "allowed local folders. Starts no new file after the configured task timeout "
-                "(30 s by default) and lists the files not tried, to pass to another call. "
+                "(30 s by default, at most 45 s) and lists the files not tried, to pass to "
+                "another call. "
                 "Photos indexes new items over the next seconds to minutes; until then their "
                 "taken dates and previews may be missing."
             ),

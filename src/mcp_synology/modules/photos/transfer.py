@@ -239,6 +239,10 @@ async def _upload_one(
 
 
 _MAX_UPLOAD = 50
+# The most upload_photos keeps starting files for, whatever task_timeout says (#416 QA):
+# Claude Desktop stops waiting for a tool call after about 60 s, and the file in progress
+# at the limit still finishes.
+UPLOAD_BUDGET_CAP = 45.0
 _DUPLICATE = {"rename": "rename", "skip": "ignore"}
 _ACTIONS = {"new": "new", "rename": "renamed", "ignore": "skipped"}
 
@@ -256,10 +260,12 @@ async def upload_photos(
 ) -> str:
     """Upload local files into a Photos folder (spec: upload_photos), one request each.
 
-    No new file is started once ``budget`` seconds (``task_timeout``) have passed, so
-    the reply arrives before a client's tool-call timeout (about 60 s on Claude Desktop;
-    #416). The files not tried are listed by path, to pass to a second call.
+    No new file is started once ``budget`` seconds (``task_timeout``, at most
+    ``UPLOAD_BUDGET_CAP``) have passed, so the reply arrives before a client's tool-call
+    timeout (about 60 s on Claude Desktop; #416). The files not tried are listed by
+    path, to pass to a second call.
     """
+    budget = min(budget, UPLOAD_BUDGET_CAP)
     op = "Upload photos"
     sp = check_space(op, space)
     if on_duplicate not in _DUPLICATE:
@@ -423,11 +429,16 @@ async def upload_photos(
             "previews appear then."
         )
     if left:
+        why = (
+            "resending the others makes renamed copies"
+            if on_duplicate == "rename"
+            else "the others would only be skipped as already there"
+        )
         lines.append(
-            f"Stopped after {budget:g} s (the task timeout) so the reply isn't cut off; "
-            f"{len(left):,} file(s) not tried. To continue, call upload_photos again with "
-            "the same folder, space, album and on_duplicate, and only these local_paths "
-            "(resending the others makes renamed copies):"
+            f"Started no new file after {budget:g} s (the task timeout, at most "
+            f"{UPLOAD_BUDGET_CAP:g} s) so the reply isn't cut off; {len(left):,} file(s) "
+            "not tried. To continue, call upload_photos again with the same folder, space, "
+            f"album and on_duplicate, and only these local_paths ({why}):"
         )
         lines += [f"  {value}" for value in left]
     return "\n".join(lines)
