@@ -274,7 +274,7 @@ Photos in /Trips/2024 (personal space; newest first)
 2 item(s) total; showing 1–2.
 ```
 
-The heading names the source (folder path, album, person, tag, place, concept or `search "<keyword>"`) and the filters. A full page ends with `Pass offset=N for the next page.`; an offset past the end shows `No items to display.` and the total. A row still being indexed has `(indexing)` after its taken time.
+The heading names the source (folder path, album, person, tag, place, concept or `search "<keyword>"`) and the filters. A full page ends with `Pass offset=N for the next page.`; an offset past the end shows `No items to display.` and the total. A row still being indexed shows `— (indexing)` instead of a taken time (#415: until indexing, `time` is the file's modification time as a real instant, which reads as UTC, and then becomes the local taken time; on a US Central NAS the two were 5 h apart, unlabeled), and `get_photo` shows `Taken: — (not known yet: still indexing)`.
 
 **Design notes:**
 - **Which call.** Verified on both versions (#258 implementation):
@@ -285,7 +285,7 @@ The heading names the source (folder path, album, person, tag, place, concept or
   - **`concept`** (1.9.1): `Item.list` v7 with `concept_id`, total from `Browse.Concept get`'s `item_count`; combining is refused locally (no concept filter key). **Unverified:** no capture has a concept (vdsm forms none without a GPU), so `Concept get`'s reply shape and `list_photo_collections`' `visibility` values come from the web client. Without a `get` result the footer gives no total, never the page length.
 - `keyword` uses `Search.Search list_item` and `count_item`, in DSM's order (`sort_by` is ignored there). It matches filename substrings and tag names (verified on 7.1: `beach` found `beach-sunset.jpg`, and a tag's name found its three items). New uploads appear in search only after Photos indexes them. Description matching comes from the web client.
 - `Item.list` runs at v2 because v1 rejects `rating` in `additional` (120, `reason: condition`, verified on both); v7 on 1.9.1 when `favorite` or `concept` is involved.
-- Rows show `taken` from `time`; an item still being indexed shows its upload time (see Indexing lag).
+- Rows show `taken` from `time`; an item still being indexed shows `— (indexing)` instead, since its `time` is still the upload's modification time (see Indexing lag).
 
 ---
 
@@ -396,7 +396,7 @@ Originals or thumbnails to a local folder.
 |------|------|----------|---------|-------------|
 | `ids` | `list[int]` | **Yes** | — | Item IDs from `list_photos`; 1–50. |
 | `dest_folder` | `str` | No | — | An existing local folder, inside the allowed local folders (#257), which its description names. Default: the allowed folder, when there's exactly one (Photos has no `default_download_dir`). |
-| `size` | `str` | No | `"original"` | `original`, `xl`, `m` or `sm`. |
+| `size` | `str` | No | `"original"` | `original`, `xl`, `m` or `sm`: JPEG previews 1280, 320 and 240 px on the short side, never larger than the original (measured on DSM 7.1.1: a 3923×2634 photo gave 1907×1280, 477×320 and 358×240; a 1228×1818 one's `xl` stayed 1228×1818). The description used to say `~1280px`, `~320px` and `~240px` without naming the side, so a 320×240 `sm` read as wrong (#415). |
 | `space` | `str` | No | `"personal"` | `personal` or `shared`. |
 | `overwrite` | `bool` | No | `false` | Replace a local file with the same name; otherwise that item is skipped and the reply says so. |
 
@@ -431,8 +431,11 @@ Downloaded 2 of 3 item(s) to /home/user/Downloads (original, personal space)
 
 **Tool description (LLM-facing):**
 > Upload photos or videos from this machine into a Synology Photos folder, optionally adding them to
-> an existing album. Only reads files inside the allowed local folders. Photos indexes new items
-> over the next seconds to minutes; until then their taken dates and previews may be missing.
+> an existing album. Only reads files inside the allowed local folders. Starts no new file after the
+> configured task timeout (30 s by default, at most 45 s) and lists the files not tried, to pass to
+> another call.
+> Photos indexes new items over the next seconds to minutes; until then their taken dates and
+> previews may be missing.
 
 **Parameters:**
 
@@ -463,6 +466,15 @@ Photos indexes new items over the next seconds to minutes; taken dates and previ
 - Unsupported file types fail with **620**, a missing folder with **621** (verified).
 - **Retry:** an upload that fails with any other code is retried once after 2 s, as the web client does (its retry count is 1; it doesn't retry 604, 605, 620 or 622). vdsm answered **623** to some uploads right after boot, and the retry went through. 621 and the setup and permission codes (105, 160, 602, 801, 803) aren't retried either.
 - A file name that's valid JSON (`2024`) is still sent JSON-quoted.
+- **Time limit (#416):** no new file is started once `task_timeout` (default 30 s) has passed, or 45 s if `task_timeout` is longer (`UPLOAD_BUDGET_CAP`: `task_timeout` goes up to 600 for long copies, which would bring the stall back), counting from the first upload, so the reply reaches the client before its tool-call timeout (Claude Desktop gives up after about 60 s and sends no cancel; in the 0.10.0rc9 live test a 50-file batch took 133 s on a real NAS, and a retry would have made 50 renamed copies). The files left are `not tried` rows, and the reply ends with their local paths, as given, to pass to another call:
+
+  ```
+  Started no new file after 30 s (the task timeout, at most 45 s) so the reply isn't cut off; 38 file(s) not tried. To continue, call upload_photos again with the same folder, space, album and on_duplicate, and only these local_paths (resending the others makes renamed copies):
+    /home/u/Downloads/trip/IMG_0013.jpg
+    …
+  ```
+
+  With `on_duplicate=skip` the parenthesis reads `(the others would only be skipped as already there)`. The number is the limit, not the time taken: the file in progress at the limit finishes, so the call runs a little past it, and a single large file can still outlast a client's timeout. The files that were stored still go into the album.
 - **DSM not answering** (a timeout or dropped connection), or a reverse proxy's 502/504 or login page (#282), on one upload stops the call, as `download_photos` does: that file's row is `unknown` ("… it may or may not have been stored", since the POST may have landed, and a retry with `rename` could make a copy), and the files after it are `not tried`. A refused connection never sent the file, and a 4xx is the proxy (or DSM) refusing it, so those rows are `failed` and the next file is tried: a 413 (nginx's body-size limit) adds "The file may be over the proxy's upload size limit.", and after a 429 (rate limited) the rest are `not tried`. A 3xx (a proxy's redirect to its login page) stops the call like a login page. The rows so far are kept, and the files that were stored still go into the album. A DSM error code, a file that can't be read (including one removed after the checks) or a reply without an ID stays on its own row, and the rest go on. If the renamed items' names, or the album add, get no answer, the uploads stand: the names are left out, or a line says the album add got no answer.
 
 ---
@@ -665,6 +677,8 @@ Still running at `task_timeout`: `Still copying on the NAS (2 of 9 processed). H
 > Follow up on a Synology Photos copy, move or delete that is still running. With a handle (photos:<id>):
 > action=status shows progress; action=stop stops it (it may then be partly done). Without a handle:
 > lists this user's copy, move and delete tasks. action=clear removes finished tasks from that list.
+> Don't poll in a loop: check when the user asks, or before doing something that depends on the
+> result.
 
 **Parameters:**
 

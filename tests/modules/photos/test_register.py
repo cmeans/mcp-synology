@@ -133,3 +133,19 @@ async def test_handlers_reach_the_client(tmp_path) -> None:  # type: ignore[no-u
     ]:
         with pytest.raises(ToolError):
             await tools[name].fn(**args)
+
+
+async def test_upload_budget_is_the_task_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#416: upload_photos stops starting files after the configured task_timeout."""
+    from mcp_synology.modules.photos import transfer
+
+    seen: dict[str, object] = {}
+
+    async def fake_upload(_client: object, **kwargs: object) -> str:
+        seen.update(kwargs)
+        return "ok"
+
+    monkeypatch.setattr(transfer, "upload_photos", fake_upload)
+    tools = _registered(settings={"task_timeout": 45})
+    assert await tools["upload_photos"].fn(local_paths=["/x.jpg"]) == "ok"
+    assert seen["budget"] == 45

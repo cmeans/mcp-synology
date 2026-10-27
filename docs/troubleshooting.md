@@ -232,14 +232,15 @@ cleared, another DSM user started it, or the handle is mistyped.
 **What to do:** check the result directly: `list_photos` on the destination folder, or the
 source for a move or delete.
 
-### A new upload shows the file's modification time, `0×0`, or `(indexing)`, and search can't find it
+### A new upload shows `— (indexing)` or `0×0`, and search can't find it
 
-**Why:** an upload returns its ID at once, but Photos indexes it afterwards: until then the taken
-time is the file's modification time, the resolution is `0×0`, and search doesn't include it
+**Why:** an upload returns its ID at once, but Photos indexes it afterwards: until then Photos
+has only the file's modification time, the resolution is `0×0`, and search doesn't include it
 (Photos spec, "Indexing lag").
 
 **What to do:** wait; Photos indexes new items over seconds to minutes. Rows still being indexed
-show `(indexing)` after the taken time.
+show `— (indexing)` instead of a taken time, and `get_photo` says `not known yet: still
+indexing`.
 
 ### `download_photos` says a preview "isn't generated yet"
 
