@@ -342,8 +342,9 @@ async def _not_enabled(
     Only a ``definite`` answer (the share's own setting) says the bin is off; a missing
     ``#recycle`` alone doesn't (#409).
 
-    DSM answers 408 for ``/<share>/#recycle`` both when the bin is off and when the share
-    isn't there: a typo, or ``/Home`` for the home service, which only answers as ``home``.
+    DSM answers 408 for ``/<share>/#recycle`` whenever the folder is missing (the bin off,
+    or on with nothing deleted into it yet) and also when the share isn't there: a typo, or
+    ``/Home`` for the home service, which only answers as ``home``.
     Without this check, a restorable file read as "cannot be recovered".
     """
     try:
@@ -440,14 +441,16 @@ async def list_recycle_bin(
         )
     except ToolError as e:
         # list_files converts SynologyError to ToolError with a JSON envelope.
-        # DSM error 408 = "No such file or directory" — the #recycle folder
-        # doesn't exist when the recycle bin is disabled on this share.
+        # DSM error 408 = "No such file or directory": there's no #recycle folder. That
+        # doesn't mean the bin is off: DSM creates the folder at the share's creation and
+        # at the first delete into the bin, so it's also missing when nothing has been
+        # deleted into a bin that's on, or after #recycle itself was deleted (#409).
         try:
             body = json.loads(str(e))
             if body.get("error", {}).get("code") == "not_found":
                 logger.debug("Recycle bin path %s not found", recycle_path)
-                # Self-correct: cache may have said enabled (or been empty);
-                # the live DSM call just contradicted it.
+                # A cached "on" is dropped, not flipped to off (#409): the next call
+                # checks again, and finds the folder once a delete has re-created it.
                 if recycle_bin_status is not None:
                     correct_recycle_status_from_observation(
                         share_name, observed_enabled=False, recycle_status=recycle_bin_status
@@ -486,8 +489,9 @@ async def _search_recycle_bin(
 ) -> str:
     """Find ``pattern`` anywhere in a recycle bin: subfolders included, paths in the bin.
 
-    A missing bin raises the ``not_found`` ToolError ``list_files`` would, so the caller
-    reports "not enabled" the same way.
+    A missing ``#recycle`` raises the ``not_found`` ToolError ``list_files`` would, so the
+    caller answers it the same way: "has no recycle bin folder", or "not enabled" only when
+    the share's setting says the bin is off (#409).
     """
     matches = dsm_pattern_matcher(pattern)
     found: list[tuple[str, dict[str, Any]]] = []

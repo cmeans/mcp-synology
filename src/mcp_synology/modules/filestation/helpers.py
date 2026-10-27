@@ -390,7 +390,8 @@ async def _share_recycle_setting(client: DsmClient, share_name: str) -> bool | N
 
 
 async def probe_recycle_status(client: DsmClient, share_name: str) -> tuple[bool | None, bool]:
-    """Probe `/{share_name}/#recycle`: (True on, False off, None can't tell; definite).
+    """Probe `/{share_name}/#recycle`: (True on, False off or no bin folder, None can't
+    tell; definite).
 
     ``definite`` says whether the answer may be cached. A missing ``#recycle`` that
     the share's own setting can't explain is ``(False, False)``: no bin folder yet.
