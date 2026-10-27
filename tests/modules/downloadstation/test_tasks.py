@@ -1393,7 +1393,7 @@ class TestEditDownload:
         task = {
             "id": "dbid_1",
             "status": "downloading",
-            "additional": {"detail": {"destination": "Run/DS2"}},
+            "additional": {"detail": {"destination": "Run/ds2"}},
         }
         info = get_route(TASK, "getinfo", version=1).respond(json=ok({"tasks": [task]}))
         result = await edit_download(
@@ -1401,7 +1401,27 @@ class TestEditDownload:
         )
         assert dict(info.calls.last.request.url.params)["id"] == "dbid_1"
         rows = [ln.split() for ln in result.splitlines() if ln.strip().startswith("dbid_")]
-        assert rows == [["dbid_2", "ok"], ["dbid_1", "ok"]]  # case doesn't matter
+        assert rows == [["dbid_2", "ok"], ["dbid_1", "ok"]]  # the share name's case doesn't matter
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        ("now", "status", "result"),
+        [
+            # A subfolder differing only in case is another folder (QA on #418, vdsm).
+            ("video/Movies", "finished", "not changed: finished"),
+            ("video/Movies", "downloading", "not changed: destination is still video/Movies"),
+            # The share name matches in any case: DSM stores it as typed.
+            ("VIDEO/movies", "downloading", "ok"),
+        ],
+    )
+    async def test_destination_case(
+        self, mock_client: DsmClient, now: str, status: str, result: str
+    ) -> None:
+        get_route(TASK, "edit", version=2).respond(json=ok({}))
+        task = {"id": "dbid_1", "status": status, "additional": {"detail": {"destination": now}}}
+        get_route(TASK, "getinfo", version=1).respond(json=ok({"tasks": [task]}))
+        out = await edit_download(mock_client, task_ids=["dbid_1"], destination="video/movies")
+        assert re.search(rf"dbid_1 +{re.escape(result)}", out), out
 
     @respx.mock
     async def test_unreported_task_unreadable_keeps_the_reported_rows(

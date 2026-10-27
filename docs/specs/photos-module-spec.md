@@ -285,7 +285,7 @@ The heading names the source (folder path, album, person, tag, place, concept or
   - **`concept`** (1.9.1): `Item.list` v7 with `concept_id`, total from `Browse.Concept get`'s `item_count`; combining is refused locally (no concept filter key). **Unverified:** no capture has a concept (vdsm forms none without a GPU), so `Concept get`'s reply shape and `list_photo_collections`' `visibility` values come from the web client. Without a `get` result the footer gives no total, never the page length.
 - `keyword` uses `Search.Search list_item` and `count_item`, in DSM's order (`sort_by` is ignored there). It matches filename substrings and tag names (verified on 7.1: `beach` found `beach-sunset.jpg`, and a tag's name found its three items). New uploads appear in search only after Photos indexes them. Description matching comes from the web client.
 - `Item.list` runs at v2 because v1 rejects `rating` in `additional` (120, `reason: condition`, verified on both); v7 on 1.9.1 when `favorite` or `concept` is involved.
-- Rows show `taken` from `time`; an item still being indexed shows its upload time (see Indexing lag).
+- Rows show `taken` from `time`; an item still being indexed shows `— (indexing)` instead, since its `time` is still the upload's modification time (see Indexing lag).
 
 ---
 

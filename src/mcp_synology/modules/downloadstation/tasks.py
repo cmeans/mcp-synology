@@ -1003,12 +1003,23 @@ async def edit_download(
     )
 
 
+def _same_destination(a: str, b: str) -> bool:
+    """Whether two share-relative destinations name the same folder.
+
+    DSM takes a share name in any case and stores it as typed, but folder names below it
+    are case-sensitive (vdsm: ``QaCase418`` and ``qacase418`` are two folders; QA on #418).
+    """
+    share_a, _, rest_a = a.strip("/").partition("/")
+    share_b, _, rest_b = b.strip("/").partition("/")
+    return share_a.casefold() == share_b.casefold() and rest_a == rest_b
+
+
 def _edit_result(task: dict[str, Any] | None, destination: str) -> str:
     """One task's edit result, from the task read back after an edit with no results."""
     if task is None:
         return _NOT_FOUND_RESULT
     now = str(((task.get("additional") or {}).get("detail") or {}).get("destination", ""))
-    if now.strip("/").casefold() == destination.strip("/").casefold():
+    if _same_destination(now, destination):
         return "ok"
     if task.get("status") == "finished":
         return "not changed: finished (Download Station doesn't move a finished task's file)"
