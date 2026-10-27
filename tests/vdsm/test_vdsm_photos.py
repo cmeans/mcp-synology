@@ -567,6 +567,32 @@ async def test_upload_duplicates_and_unsupported(photos: DsmClient, tmp_path: Pa
         assert "skipped" in out and "(already there)" in out
 
 
+async def test_upload_continues_with_the_paths_not_tried(photos: DsmClient, tmp_path: Path) -> None:
+    """#416 (QA on #417): past the time limit the reply lists the files not tried. A
+    second call with only those makes no renamed copies, and with skip every file is
+    already there exactly once."""
+    async with seeded(photos, []) as (path, _ids):
+        jpeg = (SEED / "beach-sunset.jpg").read_bytes()
+        paths = []
+        for n in range(10):
+            local = tmp_path / f"t416-{n:02}.jpg"
+            local.write_bytes(jpeg + f"t416-{n}".encode())  # after EOI: distinct files
+            paths.append(str(local))
+        # budget=0: the first file always starts, and no other does.
+        out = await upload_photos(
+            photos, local_paths=paths, folder=path, allowed_roots=[tmp_path], budget=0
+        )
+        assert out.startswith("Uploaded 1 of 10 file(s)"), out
+        listed = [ln.strip() for ln in out.splitlines() if ln.startswith("  /")]
+        assert listed == paths[1:], out
+        out = await upload_photos(photos, local_paths=listed, folder=path, allowed_roots=[tmp_path])
+        assert out.startswith("Uploaded 9 of 9 file(s)") and "renamed" not in out, out
+        out = await upload_photos(
+            photos, local_paths=paths, folder=path, on_duplicate="skip", allowed_roots=[tmp_path]
+        )
+        assert out.startswith("Uploaded 0 of 10 file(s) (10 skipped, already there)"), out
+
+
 async def test_copy_move_delete(photos: DsmClient) -> None:
     async with seeded(photos, JPEGS) as (src, ids), seeded(photos, []) as (dst, _):
         out = await copy_or_move(

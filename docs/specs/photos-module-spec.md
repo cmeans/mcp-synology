@@ -431,8 +431,11 @@ Downloaded 2 of 3 item(s) to /home/user/Downloads (original, personal space)
 
 **Tool description (LLM-facing):**
 > Upload photos or videos from this machine into a Synology Photos folder, optionally adding them to
-> an existing album. Only reads files inside the allowed local folders. Photos indexes new items
-> over the next seconds to minutes; until then their taken dates and previews may be missing.
+> an existing album. Only reads files inside the allowed local folders. Starts no new file after the
+> configured task timeout (30 s by default, at most 45 s) and lists the files not tried, to pass to
+> another call.
+> Photos indexes new items over the next seconds to minutes; until then their taken dates and
+> previews may be missing.
 
 **Parameters:**
 
@@ -463,6 +466,15 @@ Photos indexes new items over the next seconds to minutes; taken dates and previ
 - Unsupported file types fail with **620**, a missing folder with **621** (verified).
 - **Retry:** an upload that fails with any other code is retried once after 2 s, as the web client does (its retry count is 1; it doesn't retry 604, 605, 620 or 622). vdsm answered **623** to some uploads right after boot, and the retry went through. 621 and the setup and permission codes (105, 160, 602, 801, 803) aren't retried either.
 - A file name that's valid JSON (`2024`) is still sent JSON-quoted.
+- **Time limit (#416):** no new file is started once `task_timeout` (default 30 s) has passed, or 45 s if `task_timeout` is longer (`UPLOAD_BUDGET_CAP`: `task_timeout` goes up to 600 for long copies, which would bring the stall back), counting from the first upload, so the reply reaches the client before its tool-call timeout (Claude Desktop gives up after about 60 s and sends no cancel; in the 0.10.0rc9 live test a 50-file batch took 133 s on a real NAS, and a retry would have made 50 renamed copies). The files left are `not tried` rows, and the reply ends with their local paths, as given, to pass to another call:
+
+  ```
+  Started no new file after 30 s (the task timeout, at most 45 s) so the reply isn't cut off; 38 file(s) not tried. To continue, call upload_photos again with the same folder, space, album and on_duplicate, and only these local_paths (resending the others makes renamed copies):
+    /home/u/Downloads/trip/IMG_0013.jpg
+    …
+  ```
+
+  With `on_duplicate=skip` the parenthesis reads `(the others would only be skipped as already there)`. The number is the limit, not the time taken: the file in progress at the limit finishes, so the call runs a little past it, and a single large file can still outlast a client's timeout. The files that were stored still go into the album.
 - **DSM not answering** (a timeout or dropped connection), or a reverse proxy's 502/504 or login page (#282), on one upload stops the call, as `download_photos` does: that file's row is `unknown` ("… it may or may not have been stored", since the POST may have landed, and a retry with `rename` could make a copy), and the files after it are `not tried`. A refused connection never sent the file, and a 4xx is the proxy (or DSM) refusing it, so those rows are `failed` and the next file is tried: a 413 (nginx's body-size limit) adds "The file may be over the proxy's upload size limit.", and after a 429 (rate limited) the rest are `not tried`. A 3xx (a proxy's redirect to its login page) stops the call like a login page. The rows so far are kept, and the files that were stored still go into the album. A DSM error code, a file that can't be read (including one removed after the checks) or a reply without an ID stays on its own row, and the rest go on. If the renamed items' names, or the album add, get no answer, the uploads stand: the names are left out, or a line says the album add got no answer.
 
 ---
@@ -665,6 +677,8 @@ Still running at `task_timeout`: `Still copying on the NAS (2 of 9 processed). H
 > Follow up on a Synology Photos copy, move or delete that is still running. With a handle (photos:<id>):
 > action=status shows progress; action=stop stops it (it may then be partly done). Without a handle:
 > lists this user's copy, move and delete tasks. action=clear removes finished tasks from that list.
+> Don't poll in a loop: check when the user asks, or before doing something that depends on the
+> result.
 
 **Parameters:**
 

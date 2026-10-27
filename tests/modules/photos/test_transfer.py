@@ -596,6 +596,130 @@ class TestUpload:
         assert "Couldn't read the renamed items' names: ReadTimeout" in caplog.text
 
     @respx.mock
+    async def test_time_limit_stops_starting_files_and_lists_the_rest(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """#416: a 50-file batch took 133 s and Claude Desktop gave up at ~60 s. Past the
+        budget no new file starts; the reply names the rest by path for another call."""
+        from mcp_synology.modules.photos import transfer
+
+        names = ("a.jpg", "b.jpg", "c.jpg", "d.jpg")
+        for name in names:
+            (tmp_path / name).write_bytes(b"x")
+        clock = [100.0]
+        monkeypatch.setattr(transfer.time, "monotonic", lambda: clock[0])
+        fake = FakePhotos().on("SYNO.Foto.Browse.Folder", "get", 2, captured("folder-get-root"))
+        fake.on("SYNO.Foto.Browse.Album", "get", 1, captured("album-get"))
+        fake.on("SYNO.Foto.Browse.NormalAlbum", "add_item", 1, {"error_list": []})
+        ids = iter([41, 42])
+
+        def multipart(_r: httpx.Request) -> httpx.Response:
+            clock[0] += 20  # each upload takes 20 s
+            return httpx.Response(
+                200, json={"success": True, "data": {"action": "new", "id": next(ids)}}
+            )
+
+        fake.multipart = multipart
+        install(fake)
+        client = make_client()
+        paths = [str(tmp_path / n) for n in names]
+        async with client:
+            out = await upload_photos(
+                client, local_paths=paths, album="4", allowed_roots=[tmp_path], budget=30
+            )
+        lines = out.splitlines()
+        # a.jpg ends at 20 s, under the limit, so b.jpg starts; at 40 s c.jpg doesn't.
+        assert lines[0] == "Uploaded 2 of 4 file(s) to / (personal space)"
+        assert [line.split()[:2] for line in lines[1:3]] == [["a.jpg", "new"], ["b.jpg", "new"]]
+        assert [line.rstrip() for line in lines[3:5]] == [
+            "  c.jpg  not tried",
+            "  d.jpg  not tried",
+        ]
+        assert fake.one("SYNO.Foto.Browse.NormalAlbum", "add_item").params == {
+            "id": 4,
+            "item": [41, 42],
+        }
+        assert lines[-3] == (
+            "Started no new file after 30 s (the task timeout, at most 45 s) so the reply "
+            "isn't cut off; 2 file(s) not tried. To continue, call upload_photos again with "
+            "the same folder, space, album and on_duplicate, and only these local_paths "
+            "(resending the others makes renamed copies):"
+        )
+        assert lines[-2:] == [f"  {paths[2]}", f"  {paths[3]}"]
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        ("budget", "on_duplicate", "uploaded", "footer"),
+        [
+            # task_timeout goes up to 600, but uploads stop starting files at 45 s (QA on
+            # #417): 0, 20 and 40 s start, 60 s doesn't.
+            (600, "rename", 3, "after 45 s (the task timeout, at most 45 s)"),
+            # With skip, resending a tried file only skips it (vdsm, QA on #417).
+            (30, "skip", 2, "(the others would only be skipped as already there):"),
+        ],
+    )
+    async def test_budget_cap_and_skip_footer(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        budget: float,
+        on_duplicate: str,
+        uploaded: int,
+        footer: str,
+    ) -> None:
+        from mcp_synology.modules.photos import transfer
+
+        names = [f"{n}.jpg" for n in "abcde"]
+        for name in names:
+            (tmp_path / name).write_bytes(b"x")
+        clock = [0.0]
+        monkeypatch.setattr(transfer.time, "monotonic", lambda: clock[0])
+        fake = FakePhotos().on("SYNO.Foto.Browse.Folder", "get", 2, captured("folder-get-root"))
+        ids = iter(range(41, 50))
+
+        def multipart(_r: httpx.Request) -> httpx.Response:
+            clock[0] += 20
+            data = {"action": "new", "id": next(ids)}
+            return httpx.Response(200, json={"success": True, "data": data})
+
+        fake.multipart = multipart
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await upload_photos(
+                client,
+                local_paths=[str(tmp_path / n) for n in names],
+                on_duplicate=on_duplicate,
+                allowed_roots=[tmp_path],
+                budget=budget,
+            )
+        assert out.startswith(f"Uploaded {uploaded} of 5 file(s)"), out
+        assert footer in out, out
+        assert ("renamed copies" in out) is (on_duplicate == "rename")
+
+    @respx.mock
+    async def test_first_file_always_starts(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The limit only stops new files: with budget=0 the first is still uploaded."""
+        from mcp_synology.modules.photos import transfer
+
+        (tmp_path / "a.jpg").write_bytes(b"x")
+        monkeypatch.setattr(transfer.time, "monotonic", lambda: 0.0)
+        fake = FakePhotos().on("SYNO.Foto.Browse.Folder", "get", 2, captured("folder-get-root"))
+        fake.multipart = lambda _r: httpx.Response(
+            200, json={"success": True, "data": {"action": "new", "id": 41}}
+        )
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await upload_photos(
+                client, local_paths=[str(tmp_path / "a.jpg")], allowed_roots=[tmp_path], budget=0
+            )
+        assert out.startswith("Uploaded 1 of 1 file(s)")
+        assert "Stopped after" not in out
+
+    @respx.mock
     async def test_skip_and_album(self, tmp_path: Path) -> None:
         (tmp_path / "a.jpg").write_bytes(b"x")
         fake = FakePhotos().on("SYNO.Foto.Browse.Folder", "get", 2, captured("folder-get-root"))
