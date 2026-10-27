@@ -52,7 +52,7 @@
 
 ### Fixed
 
-- **`pause_download` and `edit_download` say what happened to a finished task; Photos previews and indexing times are described correctly** (#PRNUM, closes #412, #413; #415 items 9–10) — from the 0.10.0rc9 live test on a real NAS (DSM 7.1.1, Download Station 3.9.5):
+- **`pause_download` and `edit_download` say what happened to a finished task; Photos previews and indexing times are described correctly** (#418, closes #412, #413; #415 items 9–10) — from the 0.10.0rc9 live test on a real NAS (DSM 7.1.1, Download Station 3.9.5):
   - `pause_download` of a finished task got a per-task `ok` from Download Station while the task stayed finished, and the description promised error 405. The tasks DSM answers `ok` for are now read back, and a finished one says `not paused: already finished`; the description no longer promises 405 for it (#413).
   - `edit_download` of a finished task got success with no per-task result and changed nothing, so the reply was an empty table (`No items to display.`). The tasks are now read back, and each row says `ok`, `not changed: finished (Download Station doesn't move a finished task's file)`, `not changed: destination is still …` or not found; if they can't be read back, the reply says DSM gave no per-task result and to check with `get_download_info`. The description says a finished task's file isn't moved (#412).
   - `download_photos`' `size` said `~1280px`, `~320px` and `~240px` without naming the side, so a 320×240 `sm` preview read as wrong. Measured on DSM 7.1.1, each is the short side, and an original smaller than that isn't enlarged; the description now says so (#415 item 9).

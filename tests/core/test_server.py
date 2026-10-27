@@ -1708,7 +1708,7 @@ class TestInstructionComments:
 # it (the DS1618+ on DSM 7.1.1 sends neither; 0.10.0rc7 answer key). +163 in QA round 1:
 # the Photos `ids` and `folders` parameters state their 1,000-per-call limit, which only
 # the error used to give; list_photo_collections' limit reads 1-1,000.
-# Raised by the #412/#413/#415 PR to 49,537 (+223): pause_download says a finished task is
+# Raised by #418 to 49,537 (+223): pause_download says a finished task is
 # reported as "not paused: already finished" instead of promising error 405 (Download
 # Station 3.9.5 accepts the pause), edit_download says a finished task's file isn't moved,
 # and download_photos' size says the preview sizes are the short side, never larger than
