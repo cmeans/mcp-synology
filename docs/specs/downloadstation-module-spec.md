@@ -423,9 +423,10 @@ Remove tasks.
 **DSM API:** `SYNO.DownloadStation.Task` / `pause` v1
 
 **Tool description (LLM-facing):**
-> Pause one or more download tasks. An already-paused or finished task is refused for that id (error
-> 405), while the others are paused. If none of the ids can be paused, the whole call fails with
-> invalid_parameter.
+> Pause one or more download tasks. An already-paused task is refused for that id (error 405), while
+> the others are paused; a finished task is reported as `not paused: already finished` (Download
+> Station may accept the pause and change nothing). If none of the ids can be paused, the whole call
+> fails with invalid_parameter.
 
 **Parameters:**
 
@@ -435,7 +436,7 @@ Remove tasks.
 
 **Response shape:** a per-task table under `Pause download — N task(s)`, plus the not-found hint when needed.
 
-**Design notes:** pause is the one method that fails the **whole call** with 101 when no ID can be paused. That covers a missing ID, another user's task, and the caller's own finished or already-paused task (probed on DSM 7.1 and 7.2.2), so it becomes `invalid_parameter` naming the IDs and all three causes, not `not_found`. Within a mixed list, an already-paused or finished task is refused **per task** with 405 while the others are paused; the whole-call 101 happens only when nothing in the call is pausable (QA on #153, DSM 7.1 and 7.2.2).
+**Design notes:** pause is the one method that fails the **whole call** with 101 when no ID can be paused. That covers a missing ID, another user's task, and the caller's own finished or already-paused task (probed on DSM 7.1 and 7.2.2), so it becomes `invalid_parameter` naming the IDs and all three causes, not `not_found`. Within a mixed list, an already-paused or finished task is refused **per task** with 405 while the others are paused; the whole-call 101 happens only when nothing in the call is pausable (QA on #153, DSM 7.1 and 7.2.2). **Download Station 3.9.5 (DSM 7.1.1, a real DS1618+) answers a finished task's pause with a per-task `ok`, and the task stays finished** (0.10.0rc9 live test, #413; resume of the same task got 405). So after a pause, the tasks DSM answered `ok` for are read back (`Task getinfo` v1, `additional=detail`), and a finished one's row says `not paused: already finished`. If the read-back fails (a DSM error or no answer), DSM's rows stand. Resume reads nothing back.
 
 ---
 
@@ -473,7 +474,8 @@ Remove tasks.
 **Tool description (LLM-facing):**
 > Edit task parameters. Currently supports `destination` (change the task's output share). Requires
 > a newer Download Station (Task API v2); older versions get a clear error. This changes only the
-> listed tasks; for global settings, use set_download_config.
+> listed tasks; for global settings, use set_download_config. A finished task's file isn't moved: the
+> reply says `not changed` for it.
 
 **Parameters:**
 
@@ -484,7 +486,7 @@ Remove tasks.
 
 **Response shape:** a per-task table under `Edit download — N task(s), destination=<dest>`.
 
-**Design notes:** `edit` doesn't exist at v1. A NAS whose `Task` API stops at v1 gets a clear `api_not_found` ("requires a newer Download Station"), not a raw "method does not exist". `destination` is optional in the signature so that omitting it gets a clear validation error. A whole-call DSM 100 is edit's answer to a folder that doesn't exist (see Destinations).
+**Design notes:** `edit` doesn't exist at v1. A NAS whose `Task` API stops at v1 gets a clear `api_not_found` ("requires a newer Download Station"), not a raw "method does not exist". `destination` is optional in the signature so that omitting it gets a clear validation error. A whole-call DSM 100 is edit's answer to a folder that doesn't exist (see Destinations). **An edit of a finished task: success with no per-task result, and nothing changes** (Download Station 3.9.5 on DSM 7.1.1, 0.10.0rc9 live test, #412; the file stays where it was). Any task DSM returns no per-task result for is read back (`Task getinfo` v1, `additional=detail`; when one ID is missing or another user's, `getinfo` fails the whole call with 404, so each ID is then read alone) and its row says `ok` (its destination is now the new one: the share name compared ignoring case, since DSM takes it in any case and stores it as typed, and the folders below it exactly, since they're case-sensitive: on vdsm `QaCase418` and `qacase418` are two folders, QA on #418), `not changed: finished (Download Station doesn't move a finished task's file)`, `not changed: destination is still <dest>`, or not found. If some tasks got rows from DSM and the others can't be read back, those say `no result from DSM; check with get_download_info`. If none got a row and they can't be read back: `[!] Edit download — … : DSM accepted the request but reported no per-task result, and the tasks couldn't be read back. Check each with get_download_info.` On vdsm (unfinished tasks) DSM returns a row per task, which is shown as before.
 
 ---
 

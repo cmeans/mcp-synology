@@ -18,11 +18,10 @@ from mcp_synology.modules.photos.helpers import (
     Photos,
     check_space,
     invalid,
-    is_indexing,
     page_footer,
     parse_date,
     space_label,
-    taken,
+    taken_or_indexing,
 )
 
 if TYPE_CHECKING:
@@ -54,7 +53,7 @@ def _order(sort_by: str, direction: str) -> str:
 async def _rows(ph: Photos, items: list[dict[str, Any]]) -> list[list[str]]:
     rows = []
     for item in items:
-        when = taken(item) + (" (indexing)" if is_indexing(item) else "")
+        when = taken_or_indexing(item)
         folder_id = item.get("folder_id")
         folder = await ph.folder_path(int(folder_id)) if folder_id is not None else "—"
         rows.append(
@@ -650,7 +649,7 @@ async def _item_block(ph: Photos, item: dict[str, Any], v7: bool) -> str:
         rating += f" · favorite: {'yes' if add.get('favorite') else 'no'}"
     pairs = [
         ("Folder", f"{folder} ({space_label(ph.space)})"),
-        ("Taken", taken(item) + (" (still indexing)" if is_indexing(item) else "")),
+        ("Taken", taken_or_indexing(item, "not known yet: still indexing")),
         ("Size", " · ".join(size)),
         ("Rating", rating),
         # Stripped: some cameras pad EXIF ImageDescription with spaces (#362).

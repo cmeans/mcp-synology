@@ -549,7 +549,8 @@ def register(ctx: "RegisterContext") -> None:
                 Field(
                     description=(
                         "`original` (default), or a JPEG preview saved as `<name>_<size>.jpg`: "
-                        "`xl` (~1280 px), `m` (~320 px) or `sm` (~240 px)."
+                        "`xl`, `m` or `sm`: 1280, 320 or 240 px on the short side, never "
+                        "larger than the original."
                     )
                 ),
             ] = "original",
