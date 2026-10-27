@@ -212,7 +212,11 @@ class TestListPhotosRouting:
         client = make_client()
         async with client:
             out = await list_photos(client, folder="10")
-        assert "(indexing)" in out
+        # The file's modification time, read as UTC, isn't shown: indexing replaces it
+        # with the local taken time, 5 h off on a US Central NAS (#415).
+        row = next(ln for ln in out.splitlines() if "(indexing)" in ln)
+        assert "— (indexing)" in row
+        assert not re.search(r"\d{4}-\d\d-\d\d \d\d:", row), row
 
 
 class TestListPhotosRefusals:
@@ -416,6 +420,16 @@ class TestGetPhoto:
         assert "SeedCam 1" in out
         assert "GPS Latitude Reference" in out
         assert out.endswith("Not found: 999999")
+
+    @respx.mock
+    async def test_indexing_item_has_no_taken_time_yet(self) -> None:
+        item = captured("item-get")
+        item["list"][0]["additional"]["resolution"] = {"width": 0, "height": 0}
+        install(_folders(FakePhotos()).on(ITEM, "get", 2, item))
+        client = make_client()
+        async with client:
+            out = await get_photo(client, ids=[12])
+        assert re.search(r"^  Taken: +— \(not known yet: still indexing\)$", out, re.MULTILINE), out
 
     @respx.mock
     async def test_whitespace_description_shows_as_dash(self) -> None:

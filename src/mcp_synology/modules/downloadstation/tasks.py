@@ -7,6 +7,8 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NoReturn
 
+import httpx
+
 from mcp_synology.core.errors import ApiNotFoundError, ErrorCode, SynologyError
 from mcp_synology.core.formatting import (
     error_response,
@@ -81,6 +83,44 @@ def _per_task_rows(results: list[dict[str, Any]]) -> tuple[list[list[str]], list
         if err:
             errors.append(err)
     return rows, errors
+
+
+async def _read_tasks(client: DsmClient, task_ids: list[str]) -> dict[str, dict[str, Any]] | None:
+    """The tasks as DSM now reports them (with ``detail``), by ID; None if unreadable.
+
+    Used to check what a pause or edit actually did: DS 3.9.5 answers a pause of a
+    finished task with a per-task ``ok`` (#413), and an edit of one with no per-task
+    result at all, changing nothing (#412). ``getinfo`` fails the whole call when one ID
+    is missing or another user's (spec: non-manager semantics), so then each ID is read
+    on its own and the missing ones are left out.
+    """
+
+    async def read(ids: list[str]) -> dict[str, dict[str, Any]]:
+        data = await client.request(
+            "SYNO.DownloadStation.Task",
+            "getinfo",
+            version=1,
+            params={"id": ",".join(ids), "additional": "detail"},
+        )
+        return {str(t.get("id")): t for t in data.get("tasks", []) if isinstance(t, dict)}
+
+    try:
+        try:
+            return await read(task_ids)
+        except SynologyError as e:
+            if e.code not in _TASK_NOT_FOUND_CODES or len(task_ids) == 1:
+                raise
+        found: dict[str, dict[str, Any]] = {}
+        for task_id in task_ids:
+            try:
+                found.update(await read([task_id]))
+            except SynologyError as e:
+                if e.code not in _TASK_NOT_FOUND_CODES:
+                    raise
+        return found
+    except (SynologyError, httpx.HTTPError) as e:
+        logger.debug("Couldn't read tasks %s back: %r", ",".join(task_ids), e)
+        return None
 
 
 def _not_found_hint(errors: list[int]) -> str:
@@ -824,6 +864,13 @@ async def _task_state_change(
 
     results = data if isinstance(data, list) else data.get("results", [])
     rows, errors = _per_task_rows(results)
+    done = [row[0] for row in rows if row[1] == "ok"]
+    if method == "pause" and done:
+        # DS 3.9.5 answers ok for a finished task, which stays finished (#413).
+        tasks = await _read_tasks(client, done)
+        for row in rows:
+            if tasks and (tasks.get(row[0]) or {}).get("status") == "finished":
+                row[1] = "not paused: already finished"
     return format_table(
         headers=["Task ID", "Result"],
         rows=rows,
@@ -930,8 +977,39 @@ async def edit_download(
 
     results = data if isinstance(data, list) else data.get("results", [])
     rows, errors = _per_task_rows(results)
-    return format_table(
-        headers=["Task ID", "Result"],
-        rows=rows,
-        title=f"Edit download — {len(task_ids):,} task(s), destination={destination}",
-    ) + _not_found_hint(errors)
+    title = f"Edit download — {len(task_ids):,} task(s), destination={destination}"
+    unreported = [t for t in dict.fromkeys(task_ids) if t not in {row[0] for row in rows}]
+    if unreported:
+        # DS 3.9.5 answers an edit of a finished task with success and no per-task
+        # result, and changes nothing (#412): read those tasks back to say what happened.
+        tasks = await _read_tasks(client, unreported)
+        if tasks is None and not rows:
+            return format_status(
+                f"{title}: DSM accepted the request but reported no per-task result, and "
+                "the tasks couldn't be read back. Check each with get_download_info.",
+                success=False,
+            )
+        rows += [
+            [
+                task_id,
+                _edit_result(tasks.get(task_id), destination)
+                if tasks is not None
+                else "no result from DSM; check with get_download_info",
+            ]
+            for task_id in unreported
+        ]
+    return format_table(headers=["Task ID", "Result"], rows=rows, title=title) + _not_found_hint(
+        errors
+    )
+
+
+def _edit_result(task: dict[str, Any] | None, destination: str) -> str:
+    """One task's edit result, from the task read back after an edit with no results."""
+    if task is None:
+        return _NOT_FOUND_RESULT
+    now = str(((task.get("additional") or {}).get("detail") or {}).get("destination", ""))
+    if now.strip("/").casefold() == destination.strip("/").casefold():
+        return "ok"
+    if task.get("status") == "finished":
+        return "not changed: finished (Download Station doesn't move a finished task's file)"
+    return f"not changed: destination is still {now or '—'}"

@@ -577,6 +577,16 @@ def taken(item: dict[str, Any]) -> str:
     return photo_time(float(value)) if value else "—"
 
 
+def taken_or_indexing(item: dict[str, Any], mark: str = "indexing") -> str:
+    """The taken time, or ``— (<mark>)`` while the item is still being indexed.
+
+    Until Photos indexes an item, its ``time`` is the file's modification time as a real
+    instant, which reads as UTC here, and indexing replaces it with the taken time in local
+    wall-clock time: on a NAS on US Central the two were 5 h apart, unlabeled (#415).
+    """
+    return f"— ({mark})" if is_indexing(item) else taken(item)
+
+
 def is_indexing(item: dict[str, Any]) -> bool:
     """Metadata not indexed yet: resolution is 0×0 until it is (spec, Indexing lag)."""
     res = (item.get("additional") or {}).get("resolution")

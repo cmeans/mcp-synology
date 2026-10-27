@@ -1218,10 +1218,61 @@ class TestPauseResume:
         self, mock_client: DsmClient
     ) -> None:
         route = get_route(TASK, "pause", version=1).respond(json=captured("task_pause_v1"))
+        info = get_route(TASK, "getinfo", version=1).respond(
+            json=ok({"tasks": [{"id": "dbid_1", "status": "paused"}]})
+        )
         result = await pause_download(mock_client, task_ids=["dbid_1", "dbid_2"])
         assert dict(route.calls.last.request.url.params)["id"] == "dbid_1,dbid_2"
         assert "ok" in result
         assert "error 405" in result  # captured: dbid_2 could not be paused
+        # Only the tasks DSM said ok to are read back.
+        assert dict(info.calls.last.request.url.params)["id"] == "dbid_1"
+
+    @respx.mock
+    async def test_pause_of_a_finished_task_says_so(self, mock_client: DsmClient) -> None:
+        """#413: DS 3.9.5 answered a finished task's pause with a per-task ok, and the
+        task stayed finished. The reply says so instead of ok."""
+        get_route(TASK, "pause", version=1).respond(
+            json=ok([{"error": 0, "id": "dbid_1"}, {"error": 0, "id": "dbid_2"}])
+        )
+        get_route(TASK, "getinfo", version=1).respond(
+            json=ok(
+                {
+                    "tasks": [
+                        {"id": "dbid_1", "status": "finished"},
+                        {"id": "dbid_2", "status": "paused"},
+                    ]
+                }
+            )
+        )
+        result = await pause_download(mock_client, task_ids=["dbid_1", "dbid_2"])
+        rows = {
+            ln.split()[0]: " ".join(ln.split()[1:])
+            for ln in result.splitlines()
+            if ln.strip().startswith("dbid_")
+        }
+        assert rows == {"dbid_1": "not paused: already finished", "dbid_2": "ok"}
+
+    @respx.mock
+    @pytest.mark.parametrize("answer", [err(105), httpx.ReadTimeout("slow")])
+    async def test_pause_read_back_failing_keeps_dsm_rows(
+        self, mock_client: DsmClient, answer: Any
+    ) -> None:
+        get_route(TASK, "pause", version=1).respond(json=ok([{"error": 0, "id": "dbid_1"}]))
+        route = get_route(TASK, "getinfo", version=1)
+        if isinstance(answer, Exception):
+            route.mock(side_effect=answer)
+        else:
+            route.respond(json=answer)
+        result = await pause_download(mock_client, task_ids=["dbid_1"])
+        assert result.splitlines()[-1].split() == ["dbid_1", "ok"]
+
+    @respx.mock
+    async def test_resume_reads_nothing_back(self, mock_client: DsmClient) -> None:
+        get_route(TASK, "resume", version=1).respond(json=ok([{"error": 0, "id": "dbid_1"}]))
+        info = get_route(TASK, "getinfo", version=1)
+        await resume_download(mock_client, task_ids=["dbid_1"])
+        assert not info.called
 
     @respx.mock
     async def test_resume_uses_resume_method(self, mock_client: DsmClient) -> None:
@@ -1258,6 +1309,122 @@ class TestEditDownload:
         route = get_route(TASK, "edit", version=2).respond(json=captured("task_edit_v2"))
         await edit_download(mock_client, task_ids=["dbid_1"], destination="/testshare/")
         assert dict(route.calls.last.request.url.params)["destination"] == "testshare"
+
+    @respx.mock
+    async def test_no_per_task_result_reads_the_tasks_back(self, mock_client: DsmClient) -> None:
+        """#412: DS 3.9.5 answered an edit of a finished task with success and no
+        per-task result, and changed nothing. The tasks are read back to say so."""
+        get_route(TASK, "edit", version=2).respond(json=ok({}))
+
+        def detail(task_id: str, status: str, dest: str) -> dict[str, Any]:
+            return {
+                "id": task_id,
+                "status": status,
+                "additional": {"detail": {"destination": dest}},
+            }
+
+        info = get_route(TASK, "getinfo", version=1).respond(
+            json=ok(
+                {
+                    "tasks": [
+                        detail("dbid_1", "finished", "run/ds"),
+                        detail("dbid_2", "downloading", "run/ds2"),
+                        detail("dbid_3", "paused", "run/ds"),
+                    ]
+                }
+            )
+        )
+        result = await edit_download(
+            mock_client, task_ids=["dbid_1", "dbid_2", "dbid_3", "dbid_9"], destination="run/ds2"
+        )
+        params = dict(info.calls.last.request.url.params)
+        assert params == {
+            "api": TASK,
+            "version": "1",
+            "method": "getinfo",
+            "id": "dbid_1,dbid_2,dbid_3,dbid_9",
+            "additional": "detail",
+        }
+        rows = {
+            ln.split()[0]: " ".join(ln.split()[1:])
+            for ln in result.splitlines()
+            if ln.strip().startswith("dbid_")
+        }
+        assert rows == {
+            "dbid_1": "not changed: finished (Download Station doesn't move a finished "
+            "task's file)",
+            "dbid_2": "ok",
+            "dbid_3": "not changed: destination is still run/ds",
+            "dbid_9": "not found (no such task, or not yours)",
+        }
+        assert "No items to display" not in result
+
+    @respx.mock
+    async def test_read_back_with_a_missing_id_reads_each_alone(
+        self, mock_client: DsmClient
+    ) -> None:
+        """getinfo fails the whole call with 404 when one ID is missing or another
+        user's (non-manager semantics), so each ID is then read on its own."""
+        get_route(TASK, "edit", version=2).respond(json=ok({}))
+
+        def getinfo(request: httpx.Request) -> httpx.Response:
+            ids = dict(request.url.params)["id"]
+            if ids == "dbid_1":
+                task = {"id": "dbid_1", "status": "finished", "additional": {"detail": {}}}
+                return httpx.Response(200, json=ok({"tasks": [task]}))
+            return httpx.Response(200, json=err(404))
+
+        info = get_route(TASK, "getinfo", version=1).mock(side_effect=getinfo)
+        result = await edit_download(
+            mock_client, task_ids=["dbid_1", "dbid_9"], destination="run/ds2"
+        )
+        assert [dict(c.request.url.params)["id"] for c in info.calls] == [
+            "dbid_1,dbid_9",
+            "dbid_1",
+            "dbid_9",
+        ]
+        assert re.search(r"dbid_1 +not changed: finished", result), result
+        assert re.search(r"dbid_9 +not found \(no such task, or not yours\)", result), result
+
+    @respx.mock
+    async def test_tasks_without_a_row_are_read_back(self, mock_client: DsmClient) -> None:
+        """If DSM reports some tasks but not others, the others still get a row."""
+        get_route(TASK, "edit", version=2).respond(json=ok([{"error": 0, "id": "dbid_2"}]))
+        task = {
+            "id": "dbid_1",
+            "status": "downloading",
+            "additional": {"detail": {"destination": "Run/DS2"}},
+        }
+        info = get_route(TASK, "getinfo", version=1).respond(json=ok({"tasks": [task]}))
+        result = await edit_download(
+            mock_client, task_ids=["dbid_1", "dbid_2"], destination="run/ds2"
+        )
+        assert dict(info.calls.last.request.url.params)["id"] == "dbid_1"
+        rows = [ln.split() for ln in result.splitlines() if ln.strip().startswith("dbid_")]
+        assert rows == [["dbid_2", "ok"], ["dbid_1", "ok"]]  # case doesn't matter
+
+    @respx.mock
+    async def test_unreported_task_unreadable_keeps_the_reported_rows(
+        self, mock_client: DsmClient
+    ) -> None:
+        get_route(TASK, "edit", version=2).respond(json=ok([{"error": 0, "id": "dbid_2"}]))
+        get_route(TASK, "getinfo", version=1).respond(json=err(105))
+        result = await edit_download(
+            mock_client, task_ids=["dbid_1", "dbid_2"], destination="run/ds2"
+        )
+        assert re.search(r"dbid_2 +ok", result), result
+        assert re.search(r"dbid_1 +no result from DSM; check with get_download_info", result)
+
+    @respx.mock
+    async def test_no_per_task_result_and_no_read_back(self, mock_client: DsmClient) -> None:
+        get_route(TASK, "edit", version=2).respond(json=ok({}))
+        get_route(TASK, "getinfo", version=1).respond(json=err(105))
+        result = await edit_download(mock_client, task_ids=["dbid_1"], destination="run/ds2")
+        assert result == (
+            "[!] Edit download — 1 task(s), destination=run/ds2: DSM accepted the request but "
+            "reported no per-task result, and the tasks couldn't be read back. Check each with "
+            "get_download_info."
+        )
 
     @respx.mock
     async def test_edit_100_hints_at_the_destination(self, mock_client: DsmClient) -> None:
@@ -1376,6 +1543,7 @@ class TestTaskNotFoundOrNotYours:
         get_route(TASK, "pause", version=1).respond(
             json=ok([{"error": 0, "id": "dbid_1"}, {"error": 404, "id": "dbid_9"}])
         )
+        get_route(TASK, "getinfo", version=1).respond(json=ok({"tasks": []}))
         result = await pause_download(mock_client, task_ids=["dbid_1", "dbid_9"])
         assert self.NOT_FOUND in result
 

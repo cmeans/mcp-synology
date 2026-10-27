@@ -274,7 +274,7 @@ Photos in /Trips/2024 (personal space; newest first)
 2 item(s) total; showing 1–2.
 ```
 
-The heading names the source (folder path, album, person, tag, place, concept or `search "<keyword>"`) and the filters. A full page ends with `Pass offset=N for the next page.`; an offset past the end shows `No items to display.` and the total. A row still being indexed has `(indexing)` after its taken time.
+The heading names the source (folder path, album, person, tag, place, concept or `search "<keyword>"`) and the filters. A full page ends with `Pass offset=N for the next page.`; an offset past the end shows `No items to display.` and the total. A row still being indexed shows `— (indexing)` instead of a taken time (#415: until indexing, `time` is the file's modification time as a real instant, which reads as UTC, and then becomes the local taken time; on a US Central NAS the two were 5 h apart, unlabeled), and `get_photo` shows `Taken: — (not known yet: still indexing)`.
 
 **Design notes:**
 - **Which call.** Verified on both versions (#258 implementation):
@@ -396,7 +396,7 @@ Originals or thumbnails to a local folder.
 |------|------|----------|---------|-------------|
 | `ids` | `list[int]` | **Yes** | — | Item IDs from `list_photos`; 1–50. |
 | `dest_folder` | `str` | No | — | An existing local folder, inside the allowed local folders (#257), which its description names. Default: the allowed folder, when there's exactly one (Photos has no `default_download_dir`). |
-| `size` | `str` | No | `"original"` | `original`, `xl`, `m` or `sm`. |
+| `size` | `str` | No | `"original"` | `original`, `xl`, `m` or `sm`: JPEG previews 1280, 320 and 240 px on the short side, never larger than the original (measured on DSM 7.1.1: a 3923×2634 photo gave 1907×1280, 477×320 and 358×240; a 1228×1818 one's `xl` stayed 1228×1818). The description used to say `~1280px`, `~320px` and `~240px` without naming the side, so a 320×240 `sm` read as wrong (#415). |
 | `space` | `str` | No | `"personal"` | `personal` or `shared`. |
 | `overwrite` | `bool` | No | `false` | Replace a local file with the same name; otherwise that item is skipped and the reply says so. |
 

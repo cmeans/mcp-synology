@@ -160,9 +160,10 @@ MODULE_INFO = ModuleInfo(
             name="pause_download",
             description=(
                 "Pause one or more download tasks. An "
-                "already-paused or finished task is refused for that id (error 405), "
-                "while the others are paused. If none of the ids can be paused, the "
-                "whole call fails with invalid_parameter."
+                "already-paused task is refused for that id (error 405), while the others "
+                "are paused; a finished task is reported as `not paused: already finished` "
+                "(Download Station may accept the pause and change nothing). If none of the "
+                "ids can be paused, the whole call fails with invalid_parameter."
             ),
             permission_tier=PermissionTier.WRITE,
         ),
@@ -182,7 +183,8 @@ MODULE_INFO = ModuleInfo(
                 "Edit task parameters. Currently supports "
                 "`destination` (change the task's output share). Requires a newer "
                 "Download Station (Task API v2); older versions get a clear error. This "
-                "changes only the listed tasks; for global settings, use set_download_config."
+                "changes only the listed tasks; for global settings, use set_download_config. "
+                "A finished task's file isn't moved: the reply says `not changed` for it."
             ),
             permission_tier=PermissionTier.WRITE,
             annotations=_ANNO_DESTRUCTIVE_IDEMPOTENT,
