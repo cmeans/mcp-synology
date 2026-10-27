@@ -1387,6 +1387,25 @@ class TestEditDownload:
         assert re.search(r"dbid_9 +not found \(no such task, or not yours\)", result), result
 
     @respx.mock
+    async def test_read_back_one_id_failing_otherwise_reads_nothing(
+        self, mock_client: DsmClient
+    ) -> None:
+        """In the per-ID fallback, an error other than not-found (here 105) makes the
+        whole read-back unreadable, rather than leaving that task out as missing."""
+        get_route(TASK, "edit", version=2).respond(json=ok({}))
+
+        def getinfo(request: httpx.Request) -> httpx.Response:
+            ids = dict(request.url.params)["id"]
+            return httpx.Response(200, json=err(105 if ids == "dbid_9" else 404))
+
+        get_route(TASK, "getinfo", version=1).mock(side_effect=getinfo)
+        result = await edit_download(
+            mock_client, task_ids=["dbid_1", "dbid_9"], destination="run/ds2"
+        )
+        assert "the tasks couldn't be read back" in result, result
+        assert "not found" not in result, result
+
+    @respx.mock
     async def test_tasks_without_a_row_are_read_back(self, mock_client: DsmClient) -> None:
         """If DSM reports some tasks but not others, the others still get a row."""
         get_route(TASK, "edit", version=2).respond(json=ok([{"error": 0, "id": "dbid_2"}]))
