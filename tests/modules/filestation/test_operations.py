@@ -678,11 +678,11 @@ class TestDeleteFiles:
             recycle_bin_status=recycle_status,
         )
 
+        # Checked after the delete: DSM didn't create #recycle, so nothing went to a bin.
         assert "Permanently deleted" in result
         assert "NOT enabled" in result
-        # Probe result was cached so a subsequent delete in the same share
-        # would not re-probe.
-        assert recycle_status == {"scratch": False}
+        # Not cached (#409): DSM creates #recycle at a later delete if the bin is on.
+        assert recycle_status == {}
 
 
 class TestBackgroundTaskErrors:

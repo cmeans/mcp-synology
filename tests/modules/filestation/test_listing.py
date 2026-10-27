@@ -149,12 +149,58 @@ class TestListShares:
         result = await list_shares(mock_client, recycle_bin_status=cache)
         assert self._cell(result, "video") == "enabled"
         assert self._cell(result, "music") == "enabled"
-        assert self._cell(result, "scratch") == "disabled"
+        # No #recycle, and the share's setting is admin-only: not "disabled" (#409).
+        assert self._cell(result, "scratch") == "none yet"
         assert self._cell(result, "locked") == "couldn't check"
         assert sorted(probed) == ["locked", "music", "scratch"]  # video was cached
-        # Definite answers are kept; "couldn't check" is asked again next time.
-        assert cache == {"video": True, "music": True, "scratch": False}
+        # Definite answers are kept; the others are asked again next time.
+        assert cache == {"video": True, "music": True}
         assert 'Recycle Bin "couldn\'t check"' in result
+        assert 'Recycle Bin "none yet": the share has no #recycle folder' in result
+
+    @respx.mock
+    async def test_an_admin_gets_the_share_setting_for_a_missing_bin_folder(
+        self, mock_client: DsmClient
+    ) -> None:
+        """#409: the share's setting (admin only) says whether a share with no #recycle has
+        its bin on or off: SYNO.Core.Share, or for /home (a new account's home has no
+        #recycle yet) the user home service's; both answers are definite and cached."""
+        from mcp_synology.core.client import ApiInfoEntry
+
+        for api in ("SYNO.Core.Share", "SYNO.Core.User.Home"):
+            mock_client._api_cache[api] = ApiInfoEntry(
+                path="entry.cgi", min_version=1, max_version=1
+            )
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            if params.get("api") == "SYNO.Core.User.Home":
+                return httpx.Response(
+                    200, json={"success": True, "data": {"enable_recycle_bin": True}}
+                )
+            if params.get("api") == "SYNO.Core.Share":
+                # The homes share's own flag is ignored for /home (vdsm: off, home bins on).
+                shares = [
+                    {"name": "homes", "enable_recycle_bin": False},
+                    {"name": "docker", "enable_recycle_bin": False},
+                ]
+                return httpx.Response(200, json={"success": True, "data": {"shares": shares}})
+            if params.get("method") == "list_share":
+                shares = [
+                    {"name": n, "path": f"/{n}", "additional": {}} for n in ("home", "docker")
+                ]
+                return httpx.Response(
+                    200, json={"success": True, "data": {"shares": shares, "total": 2}}
+                )
+            return httpx.Response(200, json={"success": False, "error": {"code": 408}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        cache: dict[str, bool] = {}
+        result = await list_shares(mock_client, recycle_bin_status=cache)
+        assert self._cell(result, "home") == "enabled"
+        assert self._cell(result, "docker") == "disabled"
+        assert cache == {"home": True, "docker": False}
+        assert "none yet" not in result
 
     @respx.mock
     async def test_list_shares_all_cached_probes_nothing(self, mock_client: DsmClient) -> None:
@@ -516,15 +562,12 @@ class TestListRecycleBin:
 
     @respx.mock
     async def test_recycle_bin_not_found_error_408(self, mock_client: DsmClient) -> None:
-        """DSM error 408 on the #recycle path means recycle bin is disabled.
-
-        list_recycle_bin should catch the ToolError and return a friendly
-        message instead of crashing.
-        """
+        """DSM error 408 on the #recycle path: no bin folder, which doesn't prove the bin
+        is off (#409). list_recycle_bin says so instead of crashing."""
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_no_bin)
         result = await list_recycle_bin(mock_client, share="writable")
-        assert "not enabled" in result
-        assert "writable" in result
+        assert result.startswith("/writable has no recycle bin folder (#recycle)")
+        assert "cannot be recovered" not in result
 
     @pytest.mark.parametrize("cached", [True, False])
     @respx.mock
@@ -622,9 +665,10 @@ class TestListRecycleBin:
             recycle_bin_status=recycle_status,
         )
 
-        assert "not enabled" in result
-        # Cache was self-corrected from True to False.
-        assert recycle_status == {"video": False}
+        assert "has no recycle bin folder" in result
+        # The stale True is dropped, not flipped to False: a missing #recycle doesn't prove
+        # the bin is off, and DSM re-creates it at the next delete (#409).
+        assert recycle_status == {}
 
     @respx.mock
     async def test_self_correct_when_observed_enabled_disagrees_with_cache(
@@ -1006,7 +1050,7 @@ class TestRecycleBinSearch:
     async def test_pattern_on_a_share_without_a_bin(self, mock_client: DsmClient) -> None:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_bin_responder({"/home": []}))
         out = await list_recycle_bin(mock_client, share="home", pattern="b2*")
-        assert out == "Recycle bin is not enabled on /home. Deleted files cannot be recovered."
+        assert out.startswith("/home has no recycle bin folder (#recycle), so there's nothing")
 
     @respx.mock
     async def test_without_pattern_only_the_top_level_is_listed(

@@ -114,22 +114,29 @@ _FILE_FIELDS = '["size","time"]'
 # busy NAS adds at most that to the listing; checks still running then are canceled.
 RECYCLE_PROBES_AT_ONCE = 4
 RECYCLE_COLUMN_TIMEOUT = 15.0
-_RECYCLE_LABELS = {True: "enabled", False: "disabled", None: "couldn't check"}
+# "none yet": no #recycle folder, and this account can't read the share's setting (#409).
+_RECYCLE_LABELS = {True: "enabled", False: "disabled", None: "couldn't check", "": "none yet"}
 
 
 async def _recycle_column(
     client: DsmClient, names: list[str], recycle_status: dict[str, bool]
-) -> dict[str, bool | None]:
-    """Each share's recycle-bin status: cached, else probed; definite answers are cached."""
+) -> dict[str, bool | str | None]:
+    """Each share's recycle-bin status: cached, else probed; definite answers are cached.
+
+    A share with no ``#recycle`` folder whose setting this account can't read is ``""``.
+    """
     gate = asyncio.Semaphore(RECYCLE_PROBES_AT_ONCE)
 
-    async def probe(name: str) -> bool | None:
+    async def probe(name: str) -> bool | str | None:
         async with gate:
             try:
-                return await probe_recycle_status(client, name)
+                status, definite = await probe_recycle_status(client, name)
             except httpx.HTTPError as e:
                 logger.debug("Recycle-bin probe on /%s got no answer (%r).", name, e)
                 return None
+            if status is not None and definite:
+                recycle_status[name] = status
+            return "" if status is False and not definite else status
 
     unknown = [n for n in dict.fromkeys(names) if n and n not in recycle_status]
     tasks = {name: asyncio.ensure_future(probe(name)) for name in unknown}
@@ -146,11 +153,11 @@ async def _recycle_column(
                 ", ".join(n for n, t in tasks.items() if t in pending),
             )
             await asyncio.gather(*pending, return_exceptions=True)
-    for name, task in tasks.items():
-        status = task.result() if task.done() and not task.cancelled() else None
-        if status is not None:
-            recycle_status[name] = status
-    return {n: recycle_status.get(n) for n in names}
+    found: dict[str, bool | str | None] = {
+        name: task.result() if task.done() and not task.cancelled() else None
+        for name, task in tasks.items()
+    }
+    return {n: recycle_status[n] if n in recycle_status else found.get(n) for n in names}
 
 
 async def list_shares(
@@ -187,7 +194,7 @@ async def list_shares(
         )
 
     headers = ["Name", "Path", "Volume", "Free", "Owner"]
-    recycle: dict[str, bool | None] = {}
+    recycle: dict[str, bool | str | None] = {}
     if recycle_bin_status is not None:
         headers.append("Recycle Bin")
         recycle = await _recycle_column(
@@ -217,6 +224,13 @@ async def list_shares(
             "\n\nRecycle Bin \"couldn't check\": the NAS didn't answer in time or refused the "
             "check (for example, this account can't read that share's #recycle), so whether "
             "files deleted there can be recovered is unknown."
+        )
+    if "" in recycle.values():
+        result += (
+            '\n\nRecycle Bin "none yet": the share has no #recycle folder, so its bin is off, '
+            "or nothing has been deleted into it yet (DSM creates the folder at the first "
+            "delete); this account can't read the share's setting. After a delete there, "
+            "delete_files says whether the files can be recovered."
         )
     if shows_free:
         result += (
@@ -317,9 +331,16 @@ async def list_files(
 
 
 async def _not_enabled(
-    client: DsmClient, share_name: str, recycle_bin_status: dict[str, bool] | None
+    client: DsmClient,
+    share_name: str,
+    recycle_bin_status: dict[str, bool] | None,
+    *,
+    definite: bool = False,
 ) -> str:
     """Say the share has no bin, once DSM confirms the share itself is there (#353).
+
+    Only a ``definite`` answer (the share's own setting) says the bin is off; a missing
+    ``#recycle`` alone doesn't (#409).
 
     DSM answers 408 for ``/<share>/#recycle`` both when the bin is off and when the share
     isn't there: a typo, or ``/Home`` for the home service, which only answers as ``home``.
@@ -345,7 +366,14 @@ async def _not_enabled(
             value=share_name,
             suggestion="Call list_shares and use a share name as it lists it.",
         )
-    return f"Recycle bin is not enabled on /{share_name}. Deleted files cannot be recovered."
+    if definite:
+        return f"Recycle bin is not enabled on /{share_name}. Deleted files cannot be recovered."
+    return (
+        f"/{share_name} has no recycle bin folder (#recycle), so there's nothing in it to "
+        "list: its bin is off, or nothing has been deleted into it yet (DSM creates the "
+        "folder at the first delete). After a delete there, delete_files says whether the "
+        "files can be recovered."
+    )
 
 
 async def list_recycle_bin(
@@ -371,7 +399,12 @@ async def list_recycle_bin(
     if recycle_bin_status is not None:
         enabled = await ensure_recycle_status(client, share_name, recycle_bin_status)
         if not enabled:
-            return await _not_enabled(client, share_name, recycle_bin_status)
+            return await _not_enabled(
+                client,
+                share_name,
+                recycle_bin_status,
+                definite=recycle_bin_status.get(share_name) is False,
+            )
 
     recycle_path = f"/{share_name}/#recycle"
 

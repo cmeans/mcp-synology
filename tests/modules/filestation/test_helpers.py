@@ -305,15 +305,67 @@ class TestEnsureRecycleStatus:
         )
 
     @pytest.mark.asyncio
-    async def test_probe_dsm_408_caches_false(self) -> None:
+    async def test_missing_bin_folder_is_off_but_not_cached(self) -> None:
+        """#409: no #recycle, and the share's setting is admin-only (105): off for this
+        call, checked again next time, since DSM re-creates #recycle at the next delete."""
         client = AsyncMock()
-        client.request.side_effect = SynologyError("not found", code=408)
+        client.request.side_effect = [
+            SynologyError("not found", code=408),
+            SynologyError("permission denied", code=105),
+        ]
         recycle_status: dict[str, bool] = {}
 
         result = await ensure_recycle_status(client, "scratch", recycle_status)
 
         assert result is False
-        assert recycle_status == {"scratch": False}
+        assert recycle_status == {}
+        assert client.request.await_args_list[1].args == ("SYNO.Core.Share", "list")
+        assert client.request.await_args_list[1].kwargs == {
+            "params": {"shareType": "all", "additional": '["recyclebin"]'}
+        }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("enabled", [True, False])
+    async def test_missing_bin_folder_uses_the_share_setting(self, enabled: bool) -> None:
+        """An admin reads the share's own setting: a definite answer, cached."""
+        client = AsyncMock()
+        shares = {
+            "shares": [
+                {"name": "other", "enable_recycle_bin": not enabled},
+                {"name": "scratch", "enable_recycle_bin": enabled},
+            ]
+        }
+        client.request.side_effect = [SynologyError("not found", code=408), shares]
+        recycle_status: dict[str, bool] = {}
+
+        assert await ensure_recycle_status(client, "scratch", recycle_status) is enabled
+        assert recycle_status == {"scratch": enabled}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("enabled", [True, False])
+    async def test_home_uses_the_user_home_setting(self, enabled: bool) -> None:
+        """/home's bin is the user home service's setting, which the `homes` share's own
+        flag can contradict (vdsm). A new account's home has no #recycle yet."""
+        client = AsyncMock()
+        home = {"enable": True, "enable_recycle_bin": enabled}
+        client.request.side_effect = [SynologyError("not found", code=408), home]
+        recycle_status: dict[str, bool] = {}
+
+        assert await ensure_recycle_status(client, "home", recycle_status) is enabled
+        assert recycle_status == {"home": enabled}
+        assert client.request.await_args_list[1].args == ("SYNO.Core.User.Home", "get")
+
+    @pytest.mark.asyncio
+    async def test_share_not_in_the_setting_list_is_not_cached(self) -> None:
+        client = AsyncMock()
+        client.request.side_effect = [
+            SynologyError("not found", code=408),
+            {"shares": [{"name": "other", "enable_recycle_bin": True}]},
+        ]
+        recycle_status: dict[str, bool] = {}
+
+        assert await ensure_recycle_status(client, "scratch", recycle_status) is False
+        assert recycle_status == {}
 
     @pytest.mark.asyncio
     async def test_probe_permission_denied_answers_true_uncached_with_warning(
@@ -384,16 +436,27 @@ class TestEnsureRecycleStatus:
 class TestCorrectRecycleStatusFromObservation:
     """In-place cache update when DSM behavior contradicts the cached bool."""
 
-    def test_disagreement_flips_cache_and_logs(self, caplog: pytest.LogCaptureFixture) -> None:
+    def test_bin_folder_missing_drops_a_cached_true_and_logs(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """#409: a missing #recycle doesn't prove the bin is off, so the share is checked
+        again on next use instead of being cached as off."""
         recycle_status = {"video": True}
         with caplog.at_level(logging.INFO, logger="mcp_synology.modules.filestation.helpers"):
             correct_recycle_status_from_observation(
                 "video", observed_enabled=False, recycle_status=recycle_status
             )
-        assert recycle_status["video"] is False
+        assert recycle_status == {}
         assert any(
             "Self-correcting recycle-bin cache on /video" in r.getMessage() for r in caplog.records
         )
+
+    def test_bin_folder_seen_turns_a_cached_false_on(self) -> None:
+        recycle_status = {"video": False}
+        correct_recycle_status_from_observation(
+            "video", observed_enabled=True, recycle_status=recycle_status
+        )
+        assert recycle_status == {"video": True}
 
     def test_agreement_is_no_op(self, caplog: pytest.LogCaptureFixture) -> None:
         recycle_status = {"video": True}
@@ -409,12 +472,13 @@ class TestCorrectRecycleStatusFromObservation:
             if r.name == "mcp_synology.modules.filestation.helpers"
         )
 
-    def test_missing_key_sets_default_without_warning(self) -> None:
+    @pytest.mark.parametrize(("observed", "cached"), [(False, {}), (True, {"scratch": True})])
+    def test_missing_key(self, observed: bool, cached: dict[str, bool]) -> None:
         recycle_status: dict[str, bool] = {}
         correct_recycle_status_from_observation(
-            "scratch", observed_enabled=False, recycle_status=recycle_status
+            "scratch", observed_enabled=observed, recycle_status=recycle_status
         )
-        assert recycle_status == {"scratch": False}
+        assert recycle_status == cached
 
 
 class TestWithListedShareName:
