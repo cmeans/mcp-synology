@@ -173,25 +173,67 @@ async def _recycle_column(client: DsmClient) -> tuple[dict[str, str], dict[str, 
     cache: dict[str, bool] = {}
     out = await list_shares(client, recycle_bin_status=cache)
     rows = [ln.split() for ln in out.splitlines() if ln.startswith("  ") and " /" in ln]
-    column = {r[0]: "couldn't check" if r[-1] == "check" else r[-1] for r in rows}
+    labels = {"check": "couldn't check", "yet": "none yet"}
+    column = {r[0]: labels.get(r[-1], r[-1]) for r in rows}
     return column, cache, out
 
 
-async def _every_shares_bin(client: DsmClient) -> None:
+async def _every_shares_bin(client: DsmClient, *, admin: bool) -> None:
     """#255, #335: list_shares checks every share's bin, in a fresh session too.
 
-    The bake's shares have no recycle bin; the user home service has one.
+    The bake's shares have no recycle bin; the user home service has one. Only an admin
+    can read a share's setting, so for anyone else a share with no #recycle folder is
+    "none yet", not "disabled", and isn't cached (#409).
     """
     column, cache, out = await _recycle_column(client)
     assert column.get("home") == "enabled", out
-    assert column.get("testshare") == "disabled", out
-    assert set(column.values()) <= {"enabled", "disabled"}, out
-    assert cache == {name: state == "enabled" for name, state in column.items()}, out
+    off = "disabled" if admin else "none yet"
+    assert column.get("testshare") == off, out
+    assert set(column.values()) <= {"enabled", off}, out
+    known = {n: s == "enabled" for n, s in column.items() if s in ("enabled", "disabled")}
+    assert cache == known, out
 
 
 async def test_list_shares_shows_every_shares_bin(nas_client: Any) -> None:
-    await _every_shares_bin(nas_client[0])
+    await _every_shares_bin(nas_client[0], admin=False)
 
 
 async def test_list_shares_shows_every_shares_bin_admin(admin_client: Any) -> None:
-    await _every_shares_bin(admin_client[0])
+    await _every_shares_bin(admin_client[0], admin=True)
+
+
+async def _bin_folder_deleted(client: DsmClient, tmp_path: Path) -> None:
+    """#409: after /home/#recycle itself is deleted, the bin is still on. The next delete
+    re-creates it, and the same session (one shared cache) says so and lists the file."""
+    top = f"t409-{uuid.uuid4().hex[:8]}"
+    name = f"f-{uuid.uuid4().hex[:6]}.txt"
+    local = tmp_path / name
+    local.write_text("deleted after #recycle was")
+    status: dict[str, bool] = {}
+    try:
+        await create_folder(client, paths=[f"/home/{top}"])
+        await upload_file(
+            client, local_path=str(local), dest_folder=f"/home/{top}", allowed_roots=[tmp_path]
+        )
+        await delete_files(client, paths=["/home/#recycle"], recycle_bin_status=status)
+        out = await list_recycle_bin(client, share="home", recycle_bin_status=status)
+        assert "cannot be recovered" not in out, out
+        out = await delete_files(client, paths=[f"/home/{top}/{name}"], recycle_bin_status=status)
+        assert out.startswith("[+] Deleted"), out  # not "Permanently deleted"
+        assert "Recycle bin is enabled on /home" in out, out
+        found = await list_recycle_bin(
+            client, share="home", pattern=name, recycle_bin_status=status
+        )
+        assert f"{top}/{name}" in found, found
+        column, _cache, shares = await _recycle_column(client)
+        assert column.get("home") == "enabled", shares
+    finally:
+        await _clean(client, top)
+
+
+async def test_bin_folder_deleted_bin_still_on(nas_client: Any, tmp_path: Path) -> None:
+    await _bin_folder_deleted(nas_client[0], tmp_path)
+
+
+async def test_bin_folder_deleted_bin_still_on_admin(admin_client: Any, tmp_path: Path) -> None:
+    await _bin_folder_deleted(admin_client[0], tmp_path)

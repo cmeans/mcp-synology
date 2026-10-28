@@ -337,8 +337,16 @@ def matches_pattern(filename: str, pattern: str) -> bool:
 #
 # Probe: `SYNO.FileStation.List` on `/{share}/#recycle/` with `limit=1`: one entry at
 # most (DSM's `limit=0` means all of them, #353).
-#   - Success                     -> recycle bin enabled  (True), cached
-#   - DSM 408 (path not found)    -> recycle bin disabled (False), cached
+#   - Success                     -> recycle bin enabled (True), cached
+#   - DSM 408 (no `#recycle`)     -> ask the share's own setting (`SYNO.Core.Share list`,
+#       `additional=["recyclebin"]`; for /home, the user home service's,
+#       `SYNO.Core.User.Home get`), which only an administrator can read: its answer is
+#       cached. For anyone else (DSM 105) the answer is False, NOT cached (#409): DSM
+#       creates `#recycle` when the share is created and again at the first delete into
+#       the bin, so a missing folder means the bin is off, or on with nothing deleted into
+#       it yet (a new account's home), or that someone deleted `#recycle` itself. Checked
+#       again on each use, a delete into a bin that's on shows up as soon as DSM re-creates
+#       the folder.
 #   - Anything else (105 permission denied, another DSM error, no answer) -> unknown
 #       (None), NOT cached (#255): the next call probes again. `ensure_recycle_status`
 #       then answers True so `delete_files` stays optimistic about recoverability;
@@ -354,8 +362,40 @@ def _warn_once(share_name: str, message: str, *args: object) -> None:
     logger.log(level, message, *args)
 
 
-async def probe_recycle_status(client: DsmClient, share_name: str) -> bool | None:
-    """Probe `/{share_name}/#recycle`: True on, False off, None when it can't tell."""
+async def _share_recycle_setting(client: DsmClient, share_name: str) -> bool | None:
+    """The share's own recycle-bin setting, or None when this account can't read it.
+
+    Only an administrator can read it (105 for anyone else, seska DSM 7.1.1). The user
+    home folder ``/home`` takes the user home service's setting (``SYNO.Core.User.Home``,
+    Control Panel > User > Advanced): the ``homes`` share's own flag can disagree with it
+    (vdsm: ``homes`` off while every user's home bin is on).
+    """
+    try:
+        if share_name == "home":
+            data = await client.request("SYNO.Core.User.Home", "get")
+            setting = data.get("enable_recycle_bin")
+            return setting if isinstance(setting, bool) else None
+        data = await client.request(
+            "SYNO.Core.Share",
+            "list",
+            params={"shareType": "all", "additional": json.dumps(["recyclebin"])},
+        )
+    except SynologyError as e:
+        logger.debug("Can't read /%s's recycle-bin setting: %s", share_name, e.code or e)
+        return None
+    for share in data.get("shares", []):
+        if share.get("name") == share_name and isinstance(share.get("enable_recycle_bin"), bool):
+            return bool(share["enable_recycle_bin"])
+    return None
+
+
+async def probe_recycle_status(client: DsmClient, share_name: str) -> tuple[bool | None, bool]:
+    """Probe `/{share_name}/#recycle`: (True on, False off or no bin folder, None can't
+    tell; definite).
+
+    ``definite`` says whether the answer may be cached. A missing ``#recycle`` that
+    the share's own setting can't explain is ``(False, False)``: no bin folder yet.
+    """
     try:
         await client.request(
             "SYNO.FileStation.List",
@@ -364,8 +404,16 @@ async def probe_recycle_status(client: DsmClient, share_name: str) -> bool | Non
         )
     except SynologyError as e:
         if e.code == 408:
-            logger.debug("Probed recycle bin on /%s: disabled (#recycle missing)", share_name)
-            return False
+            setting = await _share_recycle_setting(client, share_name)
+            if setting is not None:
+                logger.debug(
+                    "Probed recycle bin on /%s: #recycle missing; the share's setting is %s",
+                    share_name,
+                    "on" if setting else "off",
+                )
+                return setting, True
+            logger.debug("Probed recycle bin on /%s: no #recycle folder yet", share_name)
+            return False, False
         if e.code == 105:
             _warn_once(
                 share_name,
@@ -383,9 +431,9 @@ async def probe_recycle_status(client: DsmClient, share_name: str) -> bool | Non
                 share_name,
                 f"DSM error {e.code}" if e.code is not None else type(e).__name__,
             )
-        return None
+        return None, False
     logger.debug("Probed recycle bin on /%s: enabled", share_name)
-    return True
+    return True, True
 
 
 async def ensure_recycle_status(
@@ -393,18 +441,20 @@ async def ensure_recycle_status(
     share_name: str,
     recycle_status: dict[str, bool],
 ) -> bool:
-    """Return cached recycle-bin status for `share_name`, probing on first call.
+    """Return cached recycle-bin status for `share_name`, probing when it isn't cached.
 
     Caches a definite answer in `recycle_status` in place so later calls skip the
-    probe. A probe that can't tell isn't cached and answers True (the optimistic
-    default that keeps delete-files messaging hopeful), #255.
+    probe. A missing ``#recycle`` that isn't definite answers False uncached (#409),
+    and a probe that can't tell answers True uncached (the optimistic default that
+    keeps delete-files messaging hopeful, #255).
     """
     if share_name in recycle_status:
         return recycle_status[share_name]
-    status = await probe_recycle_status(client, share_name)
+    status, definite = await probe_recycle_status(client, share_name)
     if status is None:
         return True
-    recycle_status[share_name] = status
+    if definite:
+        recycle_status[share_name] = status
     return status
 
 
@@ -415,24 +465,24 @@ def correct_recycle_status_from_observation(
 ) -> None:
     """Update the cache when a tool observes DSM behavior that contradicts it.
 
-    For example, `list_recycle_bin` may catch a DSM 408 ``not_found`` on
-    `/share/#recycle` when the cache says the share has recycle enabled —
-    which means the cache is stale (admin disabled it mid-session). Flip the
-    bit, log it, and let subsequent calls see the corrected state without
-    waiting for re-auth invalidation.
+    Seeing ``/share/#recycle`` list proves the bin is on: cache True. Not finding it
+    (408 from `list_recycle_bin`) proves nothing (#409), so it only drops a cached
+    True, and the next call checks again.
     """
     cached = recycle_status.get(share_name)
-    if cached is None or cached == observed_enabled:
-        # Nothing to correct; let `ensure_recycle_status` populate normally.
-        recycle_status.setdefault(share_name, observed_enabled)
+    if cached == observed_enabled:
         return
-    logger.info(
-        "Self-correcting recycle-bin cache on /%s: cached=%s, observed=%s",
-        share_name,
-        cached,
-        observed_enabled,
-    )
-    recycle_status[share_name] = observed_enabled
+    if cached is not None:
+        logger.info(
+            "Self-correcting recycle-bin cache on /%s: cached=%s, observed=%s",
+            share_name,
+            cached,
+            observed_enabled,
+        )
+    if observed_enabled:
+        recycle_status[share_name] = True
+    else:
+        recycle_status.pop(share_name, None)
 
 
 _WILDCARD_CHARS = ("*", "?")
