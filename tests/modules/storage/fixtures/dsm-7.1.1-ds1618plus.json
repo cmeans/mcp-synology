@@ -62,7 +62,7 @@
         "filesystem": "FAT32",
         "name_id": "sdu1",
         "partition_title": "USB Disk 1 Partition 1",
-        "share_name": "usbshare1",
+        "share_name": "share19",
         "status": "normal",
         "total_size_mb": 29581,
         "used_size_mb": 2
@@ -101,7 +101,7 @@
         "filesystem": "FAT32",
         "name_id": "sdu1",
         "partition_title": "USB Disk 1 Partition 1",
-        "share_name": "usbshare1",
+        "share_name": "share19",
         "status": "normal",
         "total_size_mb": 29581,
         "used_size_mb": 2
@@ -138,7 +138,7 @@
         "filesystem": "FAT32",
         "name_id": "sdu1",
         "partition_title": "USB Disk 1 Partition 1",
-        "share_name": "usbshare1",
+        "share_name": "share19",
         "status": "normal",
         "total_size_mb": 29581,
         "used_size_mb": 2
@@ -205,93 +205,6 @@
    "version": 1
   }
  },
- "admin:SYNO.Core.Share.Snapshot.get_schedule.v1:{\"name\": \"\\\"Test-Resources\\\"\"}": {
-  "reply": {
-   "data": {
-    "enable_snapshot_schedule": false,
-    "schedule": {
-     "date": "2026/10/28",
-     "date_type": 0,
-     "hour": 0,
-     "last_work_hour": 0,
-     "min": 0,
-     "next_trigger_time": "",
-     "repeat": 0,
-     "repeat_hour": 0,
-     "repeat_hour_store_config": null,
-     "repeat_min": 0,
-     "repeat_min_store_config": null,
-     "week_name": "0,1,2,3,4,5,6"
-    },
-    "task_id": -1
-   },
-   "success": true
-  },
-  "request": {
-   "api": "SYNO.Core.Share.Snapshot",
-   "method": "get_schedule",
-   "name": "\"Test-Resources\"",
-   "version": 1
-  }
- },
- "admin:SYNO.Core.Share.Snapshot.get_schedule.v1:{\"name\": \"\\\"docker\\\"\"}": {
-  "reply": {
-   "data": {
-    "enable_snapshot_schedule": false,
-    "schedule": {
-     "date": "2026/10/28",
-     "date_type": 0,
-     "hour": 0,
-     "last_work_hour": 0,
-     "min": 0,
-     "next_trigger_time": "",
-     "repeat": 0,
-     "repeat_hour": 0,
-     "repeat_hour_store_config": null,
-     "repeat_min": 0,
-     "repeat_min_store_config": null,
-     "week_name": "0,1,2,3,4,5,6"
-    },
-    "task_id": -1
-   },
-   "success": true
-  },
-  "request": {
-   "api": "SYNO.Core.Share.Snapshot",
-   "method": "get_schedule",
-   "name": "\"docker\"",
-   "version": 1
-  }
- },
- "admin:SYNO.Core.Share.Snapshot.get_schedule.v1:{\"name\": \"\\\"homes\\\"\"}": {
-  "reply": {
-   "data": {
-    "enable_snapshot_schedule": false,
-    "schedule": {
-     "date": "2026/10/28",
-     "date_type": 0,
-     "hour": 0,
-     "last_work_hour": 0,
-     "min": 0,
-     "next_trigger_time": "",
-     "repeat": 0,
-     "repeat_hour": 0,
-     "repeat_hour_store_config": null,
-     "repeat_min": 0,
-     "repeat_min_store_config": null,
-     "week_name": "0,1,2,3,4,5,6"
-    },
-    "task_id": -1
-   },
-   "success": true
-  },
-  "request": {
-   "api": "SYNO.Core.Share.Snapshot",
-   "method": "get_schedule",
-   "name": "\"homes\"",
-   "version": 1
-  }
- },
  "admin:SYNO.Core.Share.Snapshot.get_schedule.v1:{\"name\": \"\\\"no-such-share\\\"\"}": {
   "reply": {
    "data": {
@@ -321,7 +234,7 @@
    "version": 1
   }
  },
- "admin:SYNO.Core.Share.Snapshot.get_schedule.v1:{\"name\": \"\\\"photo\\\"\"}": {
+ "admin:SYNO.Core.Share.Snapshot.get_schedule.v1:{\"name\": \"\\\"share04\\\"\"}": {
   "reply": {
    "data": {
     "enable_snapshot_schedule": false,
@@ -346,7 +259,94 @@
   "request": {
    "api": "SYNO.Core.Share.Snapshot",
    "method": "get_schedule",
-   "name": "\"photo\"",
+   "name": "\"share04\"",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.get_schedule.v1:{\"name\": \"\\\"share06\\\"\"}": {
+  "reply": {
+   "data": {
+    "enable_snapshot_schedule": false,
+    "schedule": {
+     "date": "2026/10/28",
+     "date_type": 0,
+     "hour": 0,
+     "last_work_hour": 0,
+     "min": 0,
+     "next_trigger_time": "",
+     "repeat": 0,
+     "repeat_hour": 0,
+     "repeat_hour_store_config": null,
+     "repeat_min": 0,
+     "repeat_min_store_config": null,
+     "week_name": "0,1,2,3,4,5,6"
+    },
+    "task_id": -1
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Core.Share.Snapshot",
+   "method": "get_schedule",
+   "name": "\"share06\"",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.get_schedule.v1:{\"name\": \"\\\"share09\\\"\"}": {
+  "reply": {
+   "data": {
+    "enable_snapshot_schedule": false,
+    "schedule": {
+     "date": "2026/10/28",
+     "date_type": 0,
+     "hour": 0,
+     "last_work_hour": 0,
+     "min": 0,
+     "next_trigger_time": "",
+     "repeat": 0,
+     "repeat_hour": 0,
+     "repeat_hour_store_config": null,
+     "repeat_min": 0,
+     "repeat_min_store_config": null,
+     "week_name": "0,1,2,3,4,5,6"
+    },
+    "task_id": -1
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Core.Share.Snapshot",
+   "method": "get_schedule",
+   "name": "\"share09\"",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.get_schedule.v1:{\"name\": \"\\\"share17\\\"\"}": {
+  "reply": {
+   "data": {
+    "enable_snapshot_schedule": false,
+    "schedule": {
+     "date": "2026/10/28",
+     "date_type": 0,
+     "hour": 0,
+     "last_work_hour": 0,
+     "min": 0,
+     "next_trigger_time": "",
+     "repeat": 0,
+     "repeat_hour": 0,
+     "repeat_hour_store_config": null,
+     "repeat_min": 0,
+     "repeat_min_store_config": null,
+     "week_name": "0,1,2,3,4,5,6"
+    },
+    "task_id": -1
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Core.Share.Snapshot",
+   "method": "get_schedule",
+   "name": "\"share17\"",
    "version": 1
   }
  },
@@ -363,7 +363,7 @@
    "version": 1
   }
  },
- "admin:SYNO.Core.Share.Snapshot.get_share_conf.v1:{\"name\": \"\\\"Test-Resources\\\"\"}": {
+ "admin:SYNO.Core.Share.Snapshot.get_share_conf.v1:{\"name\": \"\\\"share04\\\"\"}": {
   "reply": {
    "error": {
     "code": 403
@@ -373,11 +373,11 @@
   "request": {
    "api": "SYNO.Core.Share.Snapshot",
    "method": "get_share_conf",
-   "name": "\"Test-Resources\"",
+   "name": "\"share04\"",
    "version": 1
   }
  },
- "admin:SYNO.Core.Share.Snapshot.get_share_conf.v1:{\"name\": \"\\\"docker\\\"\"}": {
+ "admin:SYNO.Core.Share.Snapshot.get_share_conf.v1:{\"name\": \"\\\"share06\\\"\"}": {
   "reply": {
    "error": {
     "code": 403
@@ -387,11 +387,11 @@
   "request": {
    "api": "SYNO.Core.Share.Snapshot",
    "method": "get_share_conf",
-   "name": "\"docker\"",
+   "name": "\"share06\"",
    "version": 1
   }
  },
- "admin:SYNO.Core.Share.Snapshot.get_share_conf.v1:{\"name\": \"\\\"homes\\\"\"}": {
+ "admin:SYNO.Core.Share.Snapshot.get_share_conf.v1:{\"name\": \"\\\"share09\\\"\"}": {
   "reply": {
    "error": {
     "code": 403
@@ -401,11 +401,11 @@
   "request": {
    "api": "SYNO.Core.Share.Snapshot",
    "method": "get_share_conf",
-   "name": "\"homes\"",
+   "name": "\"share09\"",
    "version": 1
   }
  },
- "admin:SYNO.Core.Share.Snapshot.get_share_conf.v1:{\"name\": \"\\\"photo\\\"\"}": {
+ "admin:SYNO.Core.Share.Snapshot.get_share_conf.v1:{\"name\": \"\\\"share17\\\"\"}": {
   "reply": {
    "error": {
     "code": 403
@@ -415,7 +415,7 @@
   "request": {
    "api": "SYNO.Core.Share.Snapshot",
    "method": "get_share_conf",
-   "name": "\"photo\"",
+   "name": "\"share17\"",
    "version": 1
   }
  },
@@ -432,7 +432,7 @@
    "version": 1
   }
  },
- "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"Backups\\\"\", \"offset\": 0}": {
+ "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"share01\\\"\", \"offset\": 0}": {
   "reply": {
    "data": {
     "snapshots": [],
@@ -445,12 +445,12 @@
    "api": "SYNO.Core.Share.Snapshot",
    "limit": -1,
    "method": "list",
-   "name": "\"Backups\"",
+   "name": "\"share01\"",
    "offset": 0,
    "version": 1
   }
  },
- "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"BitTorrents\\\"\", \"offset\": 0}": {
+ "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"share02\\\"\", \"offset\": 0}": {
   "reply": {
    "data": {
     "snapshots": [],
@@ -463,12 +463,12 @@
    "api": "SYNO.Core.Share.Snapshot",
    "limit": -1,
    "method": "list",
-   "name": "\"BitTorrents\"",
+   "name": "\"share02\"",
    "offset": 0,
    "version": 1
   }
  },
- "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"NetBackup\\\"\", \"offset\": 0}": {
+ "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"share03\\\"\", \"offset\": 0}": {
   "reply": {
    "data": {
     "snapshots": [],
@@ -481,12 +481,12 @@
    "api": "SYNO.Core.Share.Snapshot",
    "limit": -1,
    "method": "list",
-   "name": "\"NetBackup\"",
+   "name": "\"share03\"",
    "offset": 0,
    "version": 1
   }
  },
- "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"Test-Resources\\\"\", \"offset\": 0}": {
+ "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"share04\\\"\", \"offset\": 0}": {
   "reply": {
    "data": {
     "snapshots": [],
@@ -499,12 +499,12 @@
    "api": "SYNO.Core.Share.Snapshot",
    "limit": -1,
    "method": "list",
-   "name": "\"Test-Resources\"",
+   "name": "\"share04\"",
    "offset": 0,
    "version": 1
   }
  },
- "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"awareness-backups\\\"\", \"offset\": 0}": {
+ "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"share05\\\"\", \"offset\": 0}": {
   "reply": {
    "data": {
     "snapshots": [],
@@ -517,12 +517,12 @@
    "api": "SYNO.Core.Share.Snapshot",
    "limit": -1,
    "method": "list",
-   "name": "\"awareness-backups\"",
+   "name": "\"share05\"",
    "offset": 0,
    "version": 1
   }
  },
- "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"docker\\\"\", \"offset\": 0}": {
+ "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"share06\\\"\", \"offset\": 0}": {
   "reply": {
    "data": {
     "snapshots": [],
@@ -535,12 +535,12 @@
    "api": "SYNO.Core.Share.Snapshot",
    "limit": -1,
    "method": "list",
-   "name": "\"docker\"",
+   "name": "\"share06\"",
    "offset": 0,
    "version": 1
   }
  },
- "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"fah\\\"\", \"offset\": 0}": {
+ "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"share07\\\"\", \"offset\": 0}": {
   "reply": {
    "data": {
     "snapshots": [],
@@ -553,12 +553,12 @@
    "api": "SYNO.Core.Share.Snapshot",
    "limit": -1,
    "method": "list",
-   "name": "\"fah\"",
+   "name": "\"share07\"",
    "offset": 0,
    "version": 1
   }
  },
- "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"git\\\"\", \"offset\": 0}": {
+ "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"share08\\\"\", \"offset\": 0}": {
   "reply": {
    "data": {
     "snapshots": [],
@@ -571,12 +571,12 @@
    "api": "SYNO.Core.Share.Snapshot",
    "limit": -1,
    "method": "list",
-   "name": "\"git\"",
+   "name": "\"share08\"",
    "offset": 0,
    "version": 1
   }
  },
- "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"homes\\\"\", \"offset\": 0}": {
+ "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"share09\\\"\", \"offset\": 0}": {
   "reply": {
    "data": {
     "snapshots": [],
@@ -589,12 +589,12 @@
    "api": "SYNO.Core.Share.Snapshot",
    "limit": -1,
    "method": "list",
-   "name": "\"homes\"",
+   "name": "\"share09\"",
    "offset": 0,
    "version": 1
   }
  },
- "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"mcp-synology-test\\\"\", \"offset\": 0}": {
+ "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"share10\\\"\", \"offset\": 0}": {
   "reply": {
    "data": {
     "snapshots": [],
@@ -607,12 +607,12 @@
    "api": "SYNO.Core.Share.Snapshot",
    "limit": -1,
    "method": "list",
-   "name": "\"mcp-synology-test\"",
+   "name": "\"share10\"",
    "offset": 0,
    "version": 1
   }
  },
- "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"misc\\\"\", \"offset\": 0}": {
+ "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"share14\\\"\", \"offset\": 0}": {
   "reply": {
    "data": {
     "snapshots": [],
@@ -625,12 +625,12 @@
    "api": "SYNO.Core.Share.Snapshot",
    "limit": -1,
    "method": "list",
-   "name": "\"misc\"",
+   "name": "\"share14\"",
    "offset": 0,
    "version": 1
   }
  },
- "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"music\\\"\", \"offset\": 0}": {
+ "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"share15\\\"\", \"offset\": 0}": {
   "reply": {
    "data": {
     "snapshots": [],
@@ -643,12 +643,12 @@
    "api": "SYNO.Core.Share.Snapshot",
    "limit": -1,
    "method": "list",
-   "name": "\"music\"",
+   "name": "\"share15\"",
    "offset": 0,
    "version": 1
   }
  },
- "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"owncloud\\\"\", \"offset\": 0}": {
+ "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"share16\\\"\", \"offset\": 0}": {
   "reply": {
    "data": {
     "snapshots": [],
@@ -661,12 +661,12 @@
    "api": "SYNO.Core.Share.Snapshot",
    "limit": -1,
    "method": "list",
-   "name": "\"owncloud\"",
+   "name": "\"share16\"",
    "offset": 0,
    "version": 1
   }
  },
- "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"photo\\\"\", \"offset\": 0}": {
+ "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"share17\\\"\", \"offset\": 0}": {
   "reply": {
    "data": {
     "snapshots": [],
@@ -679,12 +679,12 @@
    "api": "SYNO.Core.Share.Snapshot",
    "limit": -1,
    "method": "list",
-   "name": "\"photo\"",
+   "name": "\"share17\"",
    "offset": 0,
    "version": 1
   }
  },
- "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"surveillance\\\"\", \"offset\": 0}": {
+ "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"share18\\\"\", \"offset\": 0}": {
   "reply": {
    "data": {
     "snapshots": [],
@@ -697,12 +697,12 @@
    "api": "SYNO.Core.Share.Snapshot",
    "limit": -1,
    "method": "list",
-   "name": "\"surveillance\"",
+   "name": "\"share18\"",
    "offset": 0,
    "version": 1
   }
  },
- "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"video\\\"\", \"offset\": 0}": {
+ "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"share20\\\"\", \"offset\": 0}": {
   "reply": {
    "data": {
     "snapshots": [],
@@ -715,12 +715,12 @@
    "api": "SYNO.Core.Share.Snapshot",
    "limit": -1,
    "method": "list",
-   "name": "\"video\"",
+   "name": "\"share20\"",
    "offset": 0,
    "version": 1
   }
  },
- "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"web\\\"\", \"offset\": 0}": {
+ "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"share21\\\"\", \"offset\": 0}": {
   "reply": {
    "data": {
     "snapshots": [],
@@ -733,12 +733,12 @@
    "api": "SYNO.Core.Share.Snapshot",
    "limit": -1,
    "method": "list",
-   "name": "\"web\"",
+   "name": "\"share21\"",
    "offset": 0,
    "version": 1
   }
  },
- "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"web_packages\\\"\", \"offset\": 0}": {
+ "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"share22\\\"\", \"offset\": 0}": {
   "reply": {
    "data": {
     "snapshots": [],
@@ -751,7 +751,7 @@
    "api": "SYNO.Core.Share.Snapshot",
    "limit": -1,
    "method": "list",
-   "name": "\"web_packages\"",
+   "name": "\"share22\"",
    "offset": 0,
    "version": 1
   }
@@ -769,7 +769,7 @@
    "version": 2
   }
  },
- "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"Backups\\\"\", \"offset\": 0}": {
+ "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"share01\\\"\", \"offset\": 0}": {
   "reply": {
    "data": {
     "snapshots": [],
@@ -782,12 +782,12 @@
    "api": "SYNO.Core.Share.Snapshot",
    "limit": -1,
    "method": "list",
-   "name": "\"Backups\"",
+   "name": "\"share01\"",
    "offset": 0,
    "version": 2
   }
  },
- "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"BitTorrents\\\"\", \"offset\": 0}": {
+ "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"share02\\\"\", \"offset\": 0}": {
   "reply": {
    "data": {
     "snapshots": [],
@@ -800,12 +800,12 @@
    "api": "SYNO.Core.Share.Snapshot",
    "limit": -1,
    "method": "list",
-   "name": "\"BitTorrents\"",
+   "name": "\"share02\"",
    "offset": 0,
    "version": 2
   }
  },
- "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"NetBackup\\\"\", \"offset\": 0}": {
+ "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"share03\\\"\", \"offset\": 0}": {
   "reply": {
    "data": {
     "snapshots": [],
@@ -818,12 +818,12 @@
    "api": "SYNO.Core.Share.Snapshot",
    "limit": -1,
    "method": "list",
-   "name": "\"NetBackup\"",
+   "name": "\"share03\"",
    "offset": 0,
    "version": 2
   }
  },
- "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"Test-Resources\\\"\", \"offset\": 0}": {
+ "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"share04\\\"\", \"offset\": 0}": {
   "reply": {
    "data": {
     "snapshots": [],
@@ -836,12 +836,12 @@
    "api": "SYNO.Core.Share.Snapshot",
    "limit": -1,
    "method": "list",
-   "name": "\"Test-Resources\"",
+   "name": "\"share04\"",
    "offset": 0,
    "version": 2
   }
  },
- "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"awareness-backups\\\"\", \"offset\": 0}": {
+ "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"share05\\\"\", \"offset\": 0}": {
   "reply": {
    "data": {
     "snapshots": [],
@@ -854,12 +854,12 @@
    "api": "SYNO.Core.Share.Snapshot",
    "limit": -1,
    "method": "list",
-   "name": "\"awareness-backups\"",
+   "name": "\"share05\"",
    "offset": 0,
    "version": 2
   }
  },
- "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"docker\\\"\", \"offset\": 0}": {
+ "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"share06\\\"\", \"offset\": 0}": {
   "reply": {
    "data": {
     "snapshots": [],
@@ -872,12 +872,12 @@
    "api": "SYNO.Core.Share.Snapshot",
    "limit": -1,
    "method": "list",
-   "name": "\"docker\"",
+   "name": "\"share06\"",
    "offset": 0,
    "version": 2
   }
  },
- "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"fah\\\"\", \"offset\": 0}": {
+ "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"share07\\\"\", \"offset\": 0}": {
   "reply": {
    "data": {
     "snapshots": [],
@@ -890,12 +890,12 @@
    "api": "SYNO.Core.Share.Snapshot",
    "limit": -1,
    "method": "list",
-   "name": "\"fah\"",
+   "name": "\"share07\"",
    "offset": 0,
    "version": 2
   }
  },
- "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"git\\\"\", \"offset\": 0}": {
+ "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"share08\\\"\", \"offset\": 0}": {
   "reply": {
    "data": {
     "snapshots": [],
@@ -908,12 +908,12 @@
    "api": "SYNO.Core.Share.Snapshot",
    "limit": -1,
    "method": "list",
-   "name": "\"git\"",
+   "name": "\"share08\"",
    "offset": 0,
    "version": 2
   }
  },
- "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"homes\\\"\", \"offset\": 0}": {
+ "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"share09\\\"\", \"offset\": 0}": {
   "reply": {
    "data": {
     "snapshots": [],
@@ -926,12 +926,12 @@
    "api": "SYNO.Core.Share.Snapshot",
    "limit": -1,
    "method": "list",
-   "name": "\"homes\"",
+   "name": "\"share09\"",
    "offset": 0,
    "version": 2
   }
  },
- "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"mcp-synology-test\\\"\", \"offset\": 0}": {
+ "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"share10\\\"\", \"offset\": 0}": {
   "reply": {
    "data": {
     "snapshots": [],
@@ -944,12 +944,12 @@
    "api": "SYNO.Core.Share.Snapshot",
    "limit": -1,
    "method": "list",
-   "name": "\"mcp-synology-test\"",
+   "name": "\"share10\"",
    "offset": 0,
    "version": 2
   }
  },
- "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"misc\\\"\", \"offset\": 0}": {
+ "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"share14\\\"\", \"offset\": 0}": {
   "reply": {
    "data": {
     "snapshots": [],
@@ -962,12 +962,12 @@
    "api": "SYNO.Core.Share.Snapshot",
    "limit": -1,
    "method": "list",
-   "name": "\"misc\"",
+   "name": "\"share14\"",
    "offset": 0,
    "version": 2
   }
  },
- "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"music\\\"\", \"offset\": 0}": {
+ "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"share15\\\"\", \"offset\": 0}": {
   "reply": {
    "data": {
     "snapshots": [],
@@ -980,12 +980,12 @@
    "api": "SYNO.Core.Share.Snapshot",
    "limit": -1,
    "method": "list",
-   "name": "\"music\"",
+   "name": "\"share15\"",
    "offset": 0,
    "version": 2
   }
  },
- "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"owncloud\\\"\", \"offset\": 0}": {
+ "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"share16\\\"\", \"offset\": 0}": {
   "reply": {
    "data": {
     "snapshots": [],
@@ -998,12 +998,12 @@
    "api": "SYNO.Core.Share.Snapshot",
    "limit": -1,
    "method": "list",
-   "name": "\"owncloud\"",
+   "name": "\"share16\"",
    "offset": 0,
    "version": 2
   }
  },
- "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"photo\\\"\", \"offset\": 0}": {
+ "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"share17\\\"\", \"offset\": 0}": {
   "reply": {
    "data": {
     "snapshots": [],
@@ -1016,12 +1016,12 @@
    "api": "SYNO.Core.Share.Snapshot",
    "limit": -1,
    "method": "list",
-   "name": "\"photo\"",
+   "name": "\"share17\"",
    "offset": 0,
    "version": 2
   }
  },
- "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"surveillance\\\"\", \"offset\": 0}": {
+ "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"share18\\\"\", \"offset\": 0}": {
   "reply": {
    "data": {
     "snapshots": [],
@@ -1034,12 +1034,12 @@
    "api": "SYNO.Core.Share.Snapshot",
    "limit": -1,
    "method": "list",
-   "name": "\"surveillance\"",
+   "name": "\"share18\"",
    "offset": 0,
    "version": 2
   }
  },
- "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"video\\\"\", \"offset\": 0}": {
+ "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"share20\\\"\", \"offset\": 0}": {
   "reply": {
    "data": {
     "snapshots": [],
@@ -1052,12 +1052,12 @@
    "api": "SYNO.Core.Share.Snapshot",
    "limit": -1,
    "method": "list",
-   "name": "\"video\"",
+   "name": "\"share20\"",
    "offset": 0,
    "version": 2
   }
  },
- "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"web\\\"\", \"offset\": 0}": {
+ "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"share21\\\"\", \"offset\": 0}": {
   "reply": {
    "data": {
     "snapshots": [],
@@ -1070,12 +1070,12 @@
    "api": "SYNO.Core.Share.Snapshot",
    "limit": -1,
    "method": "list",
-   "name": "\"web\"",
+   "name": "\"share21\"",
    "offset": 0,
    "version": 2
   }
  },
- "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"web_packages\\\"\", \"offset\": 0}": {
+ "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"share22\\\"\", \"offset\": 0}": {
   "reply": {
    "data": {
     "snapshots": [],
@@ -1088,7 +1088,7 @@
    "api": "SYNO.Core.Share.Snapshot",
    "limit": -1,
    "method": "list",
-   "name": "\"web_packages\"",
+   "name": "\"share22\"",
    "offset": 0,
    "version": 2
   }
@@ -1110,7 +1110,7 @@
    "version": 2
   }
  },
- "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"{\\\"hide\\\": true, \\\"summary\\\": true, \\\"desc\\\": true, \\\"lock\\\": true, \\\"worm_lock\\\": true, \\\"schedule_snapshot\\\": true}\", \"limit\": -1, \"name\": \"\\\"photo\\\"\", \"offset\": 0}": {
+ "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"{\\\"hide\\\": true, \\\"summary\\\": true, \\\"desc\\\": true, \\\"lock\\\": true, \\\"worm_lock\\\": true, \\\"schedule_snapshot\\\": true}\", \"limit\": -1, \"name\": \"\\\"share17\\\"\", \"offset\": 0}": {
   "reply": {
    "error": {
     "code": 403
@@ -1122,7 +1122,7 @@
    "api": "SYNO.Core.Share.Snapshot",
    "limit": -1,
    "method": "list",
-   "name": "\"photo\"",
+   "name": "\"share17\"",
    "offset": 0,
    "version": 2
   }
@@ -1132,159 +1132,159 @@
    "data": {
     "shares": [
      {
-      "desc": "Backups For MCP Awareness",
+      "desc": "Description 01",
       "is_usb_share": false,
-      "name": "awareness-backups",
-      "uuid": "b7729a22-9056-44fd-bf70-bc17d1fa4b79",
+      "name": "share05",
+      "uuid": "00000000-0000-4000-8000-000000000017",
       "vol_path": "/volume1"
      },
      {
       "desc": "",
       "is_usb_share": false,
-      "name": "Backups",
-      "uuid": "20a9fbd2-d26d-47ac-ab22-b2690f0b8791",
+      "name": "share01",
+      "uuid": "00000000-0000-4000-8000-000000000003",
       "vol_path": "/volume1"
      },
      {
       "desc": "",
       "is_usb_share": false,
-      "name": "BitTorrents",
-      "uuid": "227e07a9-ca51-4749-96d1-2209097752fd",
+      "name": "share02",
+      "uuid": "00000000-0000-4000-8000-000000000005",
       "vol_path": "/volume1"
      },
      {
       "desc": "",
       "is_usb_share": false,
-      "name": "docker",
-      "uuid": "5465e657-6506-4acf-b16d-3c4dd32e9cbd",
+      "name": "share06",
+      "uuid": "00000000-0000-4000-8000-000000000009",
       "vol_path": "/volume1"
      },
      {
-      "desc": "Folding@Home Config & Working Directory",
+      "desc": "Description 03",
       "is_usb_share": false,
-      "name": "fah",
-      "uuid": "0b8b63cd-6f44-48cf-b4a1-65533719f4a5",
+      "name": "share07",
+      "uuid": "00000000-0000-4000-8000-000000000001",
       "vol_path": "/volume1"
      },
      {
       "desc": "",
       "is_usb_share": false,
-      "name": "git",
-      "uuid": "1fb199d2-1cd5-437e-8b6c-65a09da399d9",
+      "name": "share08",
+      "uuid": "00000000-0000-4000-8000-000000000002",
       "vol_path": "/volume1"
      },
      {
-      "desc": "user home",
+      "desc": "Description 08",
       "is_usb_share": false,
-      "name": "homes",
-      "uuid": "518336e2-6bef-498c-a157-1bc8e19a966c",
+      "name": "share09",
+      "uuid": "00000000-0000-4000-8000-000000000008",
       "vol_path": "/volume1"
      },
      {
-      "desc": "mcp-synology live tests. Test only.",
+      "desc": "Description 07",
       "is_usb_share": false,
-      "name": "mcp-synology-test",
-      "uuid": "577f4b13-bd81-4742-841a-c5f2a22efafa",
+      "name": "share10",
+      "uuid": "00000000-0000-4000-8000-000000000011",
       "vol_path": "/volume1"
      },
      {
       "desc": "",
       "is_usb_share": false,
-      "name": "mcp-synology-test-claude-ai",
-      "uuid": "ab429d97-7988-41c7-ac83-c76276a0ab75",
+      "name": "share11",
+      "uuid": "00000000-0000-4000-8000-000000000014",
       "vol_path": "/volume1"
      },
      {
       "desc": "",
       "is_usb_share": false,
-      "name": "mcp-synology-test-claude-code",
-      "uuid": "d3eceeb4-0510-4f65-b38d-451840ba01f4",
+      "name": "share12",
+      "uuid": "00000000-0000-4000-8000-000000000019",
       "vol_path": "/volume1"
      },
      {
       "desc": "",
       "is_usb_share": false,
-      "name": "mcp-synology-test-muse",
-      "uuid": "c5ee14d8-b56f-4790-83ac-94e27a0d4f07",
+      "name": "share13",
+      "uuid": "00000000-0000-4000-8000-000000000018",
       "vol_path": "/volume1"
      },
      {
-      "desc": "Miscellaneous Files",
+      "desc": "Description 05",
       "is_usb_share": false,
-      "name": "misc",
-      "uuid": "aee7b66d-404d-43e2-84e1-5671eee43691",
+      "name": "share14",
+      "uuid": "00000000-0000-4000-8000-000000000015",
       "vol_path": "/volume1"
      },
      {
-      "desc": "System default shared folder",
+      "desc": "Description 06",
       "is_usb_share": false,
-      "name": "music",
-      "uuid": "3ea3ad89-46af-4328-91a9-c04da5f9cd21",
+      "name": "share15",
+      "uuid": "00000000-0000-4000-8000-000000000006",
       "vol_path": "/volume1"
      },
      {
-      "desc": "System default shared folder",
+      "desc": "Description 06",
       "is_usb_share": false,
-      "name": "NetBackup",
-      "uuid": "20b6c6e3-d672-4ea8-b98b-d3b7ac350505",
+      "name": "share03",
+      "uuid": "00000000-0000-4000-8000-000000000004",
       "vol_path": "/volume1"
      },
      {
       "desc": "",
       "is_usb_share": false,
-      "name": "owncloud",
-      "uuid": "4ac5cc49-8a4b-4969-ad74-f9faa1c6fa1e",
+      "name": "share16",
+      "uuid": "00000000-0000-4000-8000-000000000007",
       "vol_path": "/volume1"
      },
      {
-      "desc": "System default shared folder",
+      "desc": "Description 06",
       "is_usb_share": false,
-      "name": "photo",
-      "uuid": "a96d6ae6-dbd7-448b-9498-021fc801a838",
+      "name": "share17",
+      "uuid": "00000000-0000-4000-8000-000000000013",
       "vol_path": "/volume1"
      },
      {
-      "desc": "System default shared folder",
+      "desc": "Description 06",
       "is_usb_share": false,
-      "name": "surveillance",
-      "uuid": "d61b850d-42f5-42fb-bb5e-6db882421e10",
+      "name": "share18",
+      "uuid": "00000000-0000-4000-8000-000000000021",
       "vol_path": "/volume1"
      },
      {
-      "desc": "Files and folders for testing Synology-MCP functionality ",
+      "desc": "Description 02",
       "is_usb_share": false,
-      "name": "Test-Resources",
-      "uuid": "550dcb50-1d6d-45d0-8e8b-2763da8eba49",
+      "name": "share04",
+      "uuid": "00000000-0000-4000-8000-000000000010",
       "vol_path": "/volume1"
      },
      {
-      "desc": "Kingston Technology Company Inc.",
-      "display_vol_name": "usbshare1",
+      "desc": "Description 04",
+      "display_vol_name": "share19",
       "external_dev_type": "USB",
       "is_usb_share": true,
-      "name": "usbshare1",
-      "uuid": "f22de059-1904-446a-8adc-36d2d8c99543",
+      "name": "share19",
+      "uuid": "00000000-0000-4000-8000-000000000022",
       "vol_path": "/volumeUSB1/usbshare"
      },
      {
-      "desc": "System default shared folder",
+      "desc": "Description 06",
       "is_usb_share": false,
-      "name": "video",
-      "uuid": "b768667d-6bd5-4789-82cc-540b8ef8a970",
+      "name": "share20",
+      "uuid": "00000000-0000-4000-8000-000000000016",
       "vol_path": "/volume1"
      },
      {
-      "desc": "System default shared folder",
+      "desc": "Description 06",
       "is_usb_share": false,
-      "name": "web",
-      "uuid": "d4bc4455-a72a-40d4-8011-4aa30cbb560f",
+      "name": "share21",
+      "uuid": "00000000-0000-4000-8000-000000000020",
       "vol_path": "/volume1"
      },
      {
       "desc": "",
       "is_usb_share": false,
-      "name": "web_packages",
-      "uuid": "a6ec6e94-e5f3-4cff-bfa8-61bf61428f5b",
+      "name": "share22",
+      "uuid": "00000000-0000-4000-8000-000000000012",
       "vol_path": "/volume1"
      }
     ],
@@ -1303,213 +1303,213 @@
    "data": {
     "shares": [
      {
-      "desc": "Backups For MCP Awareness",
+      "desc": "Description 01",
       "is_usb_share": false,
-      "name": "awareness-backups",
+      "name": "share05",
       "snapshot_info": {
        "snapshot_count": 0
       },
-      "uuid": "b7729a22-9056-44fd-bf70-bc17d1fa4b79",
+      "uuid": "00000000-0000-4000-8000-000000000017",
       "vol_path": "/volume1"
      },
      {
       "desc": "",
       "is_usb_share": false,
-      "name": "Backups",
+      "name": "share01",
       "snapshot_info": {
        "snapshot_count": 0
       },
-      "uuid": "20a9fbd2-d26d-47ac-ab22-b2690f0b8791",
+      "uuid": "00000000-0000-4000-8000-000000000003",
       "vol_path": "/volume1"
      },
      {
       "desc": "",
       "is_usb_share": false,
-      "name": "BitTorrents",
+      "name": "share02",
       "snapshot_info": {
        "snapshot_count": 0
       },
-      "uuid": "227e07a9-ca51-4749-96d1-2209097752fd",
+      "uuid": "00000000-0000-4000-8000-000000000005",
       "vol_path": "/volume1"
      },
      {
       "desc": "",
       "is_usb_share": false,
-      "name": "docker",
+      "name": "share06",
       "snapshot_info": {
        "snapshot_count": 0
       },
-      "uuid": "5465e657-6506-4acf-b16d-3c4dd32e9cbd",
+      "uuid": "00000000-0000-4000-8000-000000000009",
       "vol_path": "/volume1"
      },
      {
-      "desc": "Folding@Home Config & Working Directory",
+      "desc": "Description 03",
       "is_usb_share": false,
-      "name": "fah",
+      "name": "share07",
       "snapshot_info": {
        "snapshot_count": 0
       },
-      "uuid": "0b8b63cd-6f44-48cf-b4a1-65533719f4a5",
-      "vol_path": "/volume1"
-     },
-     {
-      "desc": "",
-      "is_usb_share": false,
-      "name": "git",
-      "snapshot_info": {
-       "snapshot_count": 0
-      },
-      "uuid": "1fb199d2-1cd5-437e-8b6c-65a09da399d9",
-      "vol_path": "/volume1"
-     },
-     {
-      "desc": "user home",
-      "is_usb_share": false,
-      "name": "homes",
-      "snapshot_info": {
-       "snapshot_count": 0
-      },
-      "uuid": "518336e2-6bef-498c-a157-1bc8e19a966c",
-      "vol_path": "/volume1"
-     },
-     {
-      "desc": "mcp-synology live tests. Test only.",
-      "is_usb_share": false,
-      "name": "mcp-synology-test",
-      "snapshot_info": {
-       "snapshot_count": 0
-      },
-      "uuid": "577f4b13-bd81-4742-841a-c5f2a22efafa",
+      "uuid": "00000000-0000-4000-8000-000000000001",
       "vol_path": "/volume1"
      },
      {
       "desc": "",
       "is_usb_share": false,
-      "name": "mcp-synology-test-claude-ai",
+      "name": "share08",
       "snapshot_info": {
        "snapshot_count": 0
       },
-      "uuid": "ab429d97-7988-41c7-ac83-c76276a0ab75",
+      "uuid": "00000000-0000-4000-8000-000000000002",
+      "vol_path": "/volume1"
+     },
+     {
+      "desc": "Description 08",
+      "is_usb_share": false,
+      "name": "share09",
+      "snapshot_info": {
+       "snapshot_count": 0
+      },
+      "uuid": "00000000-0000-4000-8000-000000000008",
+      "vol_path": "/volume1"
+     },
+     {
+      "desc": "Description 07",
+      "is_usb_share": false,
+      "name": "share10",
+      "snapshot_info": {
+       "snapshot_count": 0
+      },
+      "uuid": "00000000-0000-4000-8000-000000000011",
       "vol_path": "/volume1"
      },
      {
       "desc": "",
       "is_usb_share": false,
-      "name": "mcp-synology-test-claude-code",
+      "name": "share11",
       "snapshot_info": {
        "snapshot_count": 0
       },
-      "uuid": "d3eceeb4-0510-4f65-b38d-451840ba01f4",
+      "uuid": "00000000-0000-4000-8000-000000000014",
       "vol_path": "/volume1"
      },
      {
       "desc": "",
       "is_usb_share": false,
-      "name": "mcp-synology-test-muse",
+      "name": "share12",
       "snapshot_info": {
        "snapshot_count": 0
       },
-      "uuid": "c5ee14d8-b56f-4790-83ac-94e27a0d4f07",
-      "vol_path": "/volume1"
-     },
-     {
-      "desc": "Miscellaneous Files",
-      "is_usb_share": false,
-      "name": "misc",
-      "snapshot_info": {
-       "snapshot_count": 0
-      },
-      "uuid": "aee7b66d-404d-43e2-84e1-5671eee43691",
-      "vol_path": "/volume1"
-     },
-     {
-      "desc": "System default shared folder",
-      "is_usb_share": false,
-      "name": "music",
-      "snapshot_info": {
-       "snapshot_count": 0
-      },
-      "uuid": "3ea3ad89-46af-4328-91a9-c04da5f9cd21",
-      "vol_path": "/volume1"
-     },
-     {
-      "desc": "System default shared folder",
-      "is_usb_share": false,
-      "name": "NetBackup",
-      "snapshot_info": {
-       "snapshot_count": 0
-      },
-      "uuid": "20b6c6e3-d672-4ea8-b98b-d3b7ac350505",
+      "uuid": "00000000-0000-4000-8000-000000000019",
       "vol_path": "/volume1"
      },
      {
       "desc": "",
       "is_usb_share": false,
-      "name": "owncloud",
+      "name": "share13",
       "snapshot_info": {
        "snapshot_count": 0
       },
-      "uuid": "4ac5cc49-8a4b-4969-ad74-f9faa1c6fa1e",
+      "uuid": "00000000-0000-4000-8000-000000000018",
       "vol_path": "/volume1"
      },
      {
-      "desc": "System default shared folder",
+      "desc": "Description 05",
       "is_usb_share": false,
-      "name": "photo",
+      "name": "share14",
       "snapshot_info": {
        "snapshot_count": 0
       },
-      "uuid": "a96d6ae6-dbd7-448b-9498-021fc801a838",
+      "uuid": "00000000-0000-4000-8000-000000000015",
       "vol_path": "/volume1"
      },
      {
-      "desc": "System default shared folder",
+      "desc": "Description 06",
       "is_usb_share": false,
-      "name": "surveillance",
+      "name": "share15",
       "snapshot_info": {
        "snapshot_count": 0
       },
-      "uuid": "d61b850d-42f5-42fb-bb5e-6db882421e10",
+      "uuid": "00000000-0000-4000-8000-000000000006",
       "vol_path": "/volume1"
      },
      {
-      "desc": "Files and folders for testing Synology-MCP functionality ",
+      "desc": "Description 06",
       "is_usb_share": false,
-      "name": "Test-Resources",
+      "name": "share03",
       "snapshot_info": {
        "snapshot_count": 0
       },
-      "uuid": "550dcb50-1d6d-45d0-8e8b-2763da8eba49",
-      "vol_path": "/volume1"
-     },
-     {
-      "desc": "System default shared folder",
-      "is_usb_share": false,
-      "name": "video",
-      "snapshot_info": {
-       "snapshot_count": 0
-      },
-      "uuid": "b768667d-6bd5-4789-82cc-540b8ef8a970",
-      "vol_path": "/volume1"
-     },
-     {
-      "desc": "System default shared folder",
-      "is_usb_share": false,
-      "name": "web",
-      "snapshot_info": {
-       "snapshot_count": 0
-      },
-      "uuid": "d4bc4455-a72a-40d4-8011-4aa30cbb560f",
+      "uuid": "00000000-0000-4000-8000-000000000004",
       "vol_path": "/volume1"
      },
      {
       "desc": "",
       "is_usb_share": false,
-      "name": "web_packages",
+      "name": "share16",
       "snapshot_info": {
        "snapshot_count": 0
       },
-      "uuid": "a6ec6e94-e5f3-4cff-bfa8-61bf61428f5b",
+      "uuid": "00000000-0000-4000-8000-000000000007",
+      "vol_path": "/volume1"
+     },
+     {
+      "desc": "Description 06",
+      "is_usb_share": false,
+      "name": "share17",
+      "snapshot_info": {
+       "snapshot_count": 0
+      },
+      "uuid": "00000000-0000-4000-8000-000000000013",
+      "vol_path": "/volume1"
+     },
+     {
+      "desc": "Description 06",
+      "is_usb_share": false,
+      "name": "share18",
+      "snapshot_info": {
+       "snapshot_count": 0
+      },
+      "uuid": "00000000-0000-4000-8000-000000000021",
+      "vol_path": "/volume1"
+     },
+     {
+      "desc": "Description 02",
+      "is_usb_share": false,
+      "name": "share04",
+      "snapshot_info": {
+       "snapshot_count": 0
+      },
+      "uuid": "00000000-0000-4000-8000-000000000010",
+      "vol_path": "/volume1"
+     },
+     {
+      "desc": "Description 06",
+      "is_usb_share": false,
+      "name": "share20",
+      "snapshot_info": {
+       "snapshot_count": 0
+      },
+      "uuid": "00000000-0000-4000-8000-000000000016",
+      "vol_path": "/volume1"
+     },
+     {
+      "desc": "Description 06",
+      "is_usb_share": false,
+      "name": "share21",
+      "snapshot_info": {
+       "snapshot_count": 0
+      },
+      "uuid": "00000000-0000-4000-8000-000000000020",
+      "vol_path": "/volume1"
+     },
+     {
+      "desc": "",
+      "is_usb_share": false,
+      "name": "share22",
+      "snapshot_info": {
+       "snapshot_count": 0
+      },
+      "uuid": "00000000-0000-4000-8000-000000000012",
       "vol_path": "/volume1"
      }
     ],
@@ -3054,7 +3054,7 @@
  "admin:SYNO.Core.System.SystemHealth.get.v1": {
   "reply": {
    "data": {
-    "hostname": "Seska",
+    "hostname": "NAS01",
     "interfaces": [
      {
       "id": "ovs_eth0",
@@ -3473,19 +3473,6 @@
   "request": {
    "api": "SYNO.Storage.CGI.HddMan",
    "method": "get",
-   "version": 1
-  }
- },
- "admin:SYNO.Storage.CGI.Pool.enum_resource.v1": {
-  "reply": {
-   "error": {
-    "code": 114
-   },
-   "success": false
-  },
-  "request": {
-   "api": "SYNO.Storage.CGI.Pool",
-   "method": "enum_resource",
    "version": 1
   }
  },
@@ -6155,7 +6142,7 @@
       "protect_spaces": [
        "/dev/vg1"
       ],
-      "serial": "4TVTLE7H",
+      "serial": "FAKE0001",
       "size": "14000519643136",
       "status": {
        "raid_path": "",
@@ -6438,7 +6425,7 @@
       "sb_days_left": 0,
       "sb_days_left_critical": false,
       "sb_days_left_warning": false,
-      "serial": "5JWNVVBX",
+      "serial": "FAKE0002",
       "size_total": "14000519643136",
       "slot_id": 1,
       "smart_progress": "",
@@ -6453,7 +6440,7 @@
       "testing_progress": "",
       "testing_type": "idle",
       "tray_status": "join",
-      "ui_serial": "5JWNVVBX",
+      "ui_serial": "FAKE0002",
       "unc": 0,
       "used_by": "reuse_1",
       "vendor": "WDC     ",
@@ -6518,7 +6505,7 @@
       "sb_days_left": 0,
       "sb_days_left_critical": false,
       "sb_days_left_warning": false,
-      "serial": "5JUP9RYY",
+      "serial": "FAKE0003",
       "size_total": "14000519643136",
       "slot_id": 2,
       "smart_progress": "90%",
@@ -6533,7 +6520,7 @@
       "testing_progress": "90%",
       "testing_type": "smart",
       "tray_status": "join",
-      "ui_serial": "5JUP9RYY",
+      "ui_serial": "FAKE0003",
       "unc": 0,
       "used_by": "reuse_1",
       "vendor": "WDC     ",
@@ -6598,7 +6585,7 @@
       "sb_days_left": 0,
       "sb_days_left_critical": false,
       "sb_days_left_warning": false,
-      "serial": "7NJY8ATE",
+      "serial": "FAKE0004",
       "size_total": "14000519643136",
       "slot_id": 3,
       "smart_progress": "",
@@ -6613,7 +6600,7 @@
       "testing_progress": "",
       "testing_type": "idle",
       "tray_status": "join",
-      "ui_serial": "7NJY8ATE",
+      "ui_serial": "FAKE0004",
       "unc": 0,
       "used_by": "reuse_1",
       "vendor": "WDC     ",
@@ -6678,7 +6665,7 @@
       "sb_days_left": 0,
       "sb_days_left_critical": false,
       "sb_days_left_warning": false,
-      "serial": "6YTVGW1U",
+      "serial": "FAKE0005",
       "size_total": "16000900661248",
       "slot_id": 4,
       "smart_progress": "90%",
@@ -6693,7 +6680,7 @@
       "testing_progress": "90%",
       "testing_type": "smart",
       "tray_status": "join",
-      "ui_serial": "6YTVGW1U",
+      "ui_serial": "FAKE0005",
       "unc": 0,
       "used_by": "reuse_1",
       "vendor": "WDC     ",
@@ -6758,7 +6745,7 @@
       "sb_days_left": 0,
       "sb_days_left_critical": false,
       "sb_days_left_warning": false,
-      "serial": "4TVTLE7H",
+      "serial": "FAKE0001",
       "size_total": "14000519643136",
       "slot_id": 5,
       "smart_progress": "",
@@ -6773,7 +6760,7 @@
       "testing_progress": "",
       "testing_type": "idle",
       "tray_status": "not join",
-      "ui_serial": "4TVTLE7H",
+      "ui_serial": "FAKE0001",
       "unc": 0,
       "used_by": "hotspare",
       "vendor": "WDC     ",
@@ -6838,7 +6825,7 @@
       "sb_days_left": 0,
       "sb_days_left_critical": false,
       "sb_days_left_warning": false,
-      "serial": "C56DLT8B042708S",
+      "serial": "FAKE00000000006",
       "size_total": "1000204886016",
       "slot_id": 6,
       "smart_progress": "",
@@ -6853,7 +6840,7 @@
       "testing_progress": "",
       "testing_type": "idle",
       "tray_status": "ssd cache",
-      "ui_serial": "C56DLT8B042708S",
+      "ui_serial": "FAKE00000000006",
       "unc": -1,
       "used_by": "shared_cache_1",
       "vendor": "Samsung ",
@@ -6905,10 +6892,10 @@
       {
        "isInternal": true,
        "isSAS": false,
-       "machineSerial": "39K9MNAH21P6L",
+       "machineSerial": "FAKE000000007",
        "machineStatus": "existed",
        "modelName": "DS1618+",
-       "nameStr": "Seska",
+       "nameStr": "NAS01",
        "order": 0,
        "ports": []
       }
@@ -6918,7 +6905,7 @@
       "raid_cross": true,
       "sysdef": true
      },
-     "unique_key": "04d9970d79"
+     "unique_key": "FAKE000008"
     },
     "missing_pools": [],
     "overview_data": {
@@ -6992,7 +6979,7 @@
     "ssdCaches": [
      {
       "SSDPath": "/dev/shared_cache_vg1/alloc_cache_1",
-      "SSDUUID": "ve2A6W-slwj-rXwE-f9yq-9rzX-gUXh-5wW52o",
+      "SSDUUID": "FAKE00-0000-0000-0000-0000-0000-000003",
       "cacheStatus": "",
       "cache_disks": [],
       "can_assemble": false,
@@ -7143,7 +7130,7 @@
       "summary_status": "normal",
       "task": "none",
       "timebackup": false,
-      "uuid": "ve2A6W-slwj-rXwE-f9yq-9rzX-gUXh-5wW52o",
+      "uuid": "FAKE00-0000-0000-0000-0000-0000-000003",
       "version": 3,
       "version_status": "vol_latest_version",
       "vspace_can_do": {
@@ -7320,7 +7307,7 @@
       ],
       "summary_status": "attention",
       "timebackup": false,
-      "uuid": "XrR6MF-1701-eaBj-Tf3M-HeC3-W0g2-a7LhHc",
+      "uuid": "FAKE00-0000-0000-0000-0000-0000-000001",
       "vspace_can_do": {
        "drbd": {
         "resize": {
@@ -7429,7 +7416,7 @@
       "summary_status": "attention",
       "timebackup": false,
       "used_by_gluster": false,
-      "uuid": "gnd6Gh-tJsO-H4Zu-h5Ub-1alu-WYZu-jbbPBC",
+      "uuid": "FAKE00-0000-0000-0000-0000-0000-000002",
       "vol_attribute": "generic",
       "vol_desc": "Located on Storage Pool 1, RAID 5",
       "vol_path": "/volume1",
@@ -7500,241 +7487,6 @@
   "request": {
    "api": "SYNO.Storage.CGI.TaipeiEnclosure",
    "method": "load",
-   "version": 1
-  }
- },
- "admin:SYNO.Storage.CGI.Volume.enum_resource.v1": {
-  "reply": {
-   "error": {
-    "code": 101
-   },
-   "success": false
-  },
-  "request": {
-   "api": "SYNO.Storage.CGI.Volume",
-   "method": "enum_resource",
-   "version": 1
-  }
- },
- "admin:SYNO.Storage.CGI.Volume.enum_resource.v1:{\"space_id\": \"[\\\"volume_1\\\"]\"}": {
-  "reply": {
-   "data": {
-    "check": {
-     "shares": {
-      "NetBackup": {
-       "hard": [
-        "{\"task\":\"Rsync Service\",\"task_i18n\":\"backup:rsync_service_share_action_warning\"}"
-       ]
-      },
-      "docker": {
-       "hard": [
-        "{\"args\":[\"Docker\"],\"task\":\"docker share delete check\",\"task_i18n\":\"docker:docker_share_delete_feasibility_check\"}"
-       ]
-      },
-      "music": {
-       "hard": [
-        "{\"args\":[\"iTunes Server\"],\"task\":\"Share Occupied By Package\",\"task_i18n\":\"pkgmgr:stop_before_proceed\"}"
-       ]
-      },
-      "surveillance": {
-       "soft": [
-        "{\"args\":[\"Surveillance Station\"],\"task\":\"This share is used by Surveillance Station.\",\"task_i18n\":\"SYNO.SDS.SurveillanceStation:event:delete_using_share_app\"}"
-       ]
-      },
-      "video": {
-       "hard": [
-        "{\"args\":[\"Video Station, iTunes Server\"],\"task\":\"Share Occupied By Package\",\"task_i18n\":\"pkgmgr:stop_before_proceed\"}",
-        "{\"args\":[\"Docker\"],\"task\":\"docker share delete check\",\"task_i18n\":\"docker:docker_share_delete_feasibility_check\"}"
-       ]
-      },
-      "web": {
-       "hard": [
-        "{\"args\":[\"Web Station\"],\"task\":\"Share Occupied By Package\",\"task_i18n\":\"pkgmgr:stop_before_proceed\"}"
-       ]
-      },
-      "web_packages": {
-       "hard": [
-        "{\"args\":[\"Web Station\"],\"task\":\"Share Occupied By Package\",\"task_i18n\":\"pkgmgr:stop_before_proceed\"}"
-       ]
-      }
-     },
-     "volumes": {
-      "/volume1": {
-       "hard": [
-        "{\"args\":[\"Cloud Sync\"],\"task\":\"CloudSync\",\"task_i18n\":\"SYNO.SDS.DSCloudSync.Instance:app:app_vol_del_hard\"}",
-        "{\"args\":[\"Seska - VM Storage 1\"],\"task\":\"Virtual Machine Manager storage: {0}\",\"task_i18n\":\"SYNO.SDS.Virtualization.Application:app:vm_list_volume_delete\"}",
-        "{\"args\":[\"Virtual Machine Manager\"],\"task\":\"Some packages are installed on a volume you want to remove. Please uninstall the following packages first: <b>{0}</b>.\",\"task_i18n\":\"pkgmgr:uninstall_before_proceed\"}"
-       ]
-      }
-     }
-    },
-    "iscsiluns": [],
-    "pkgs": [
-     {
-      "name": "Download Station"
-     },
-     {
-      "name": "Node.js v14"
-     },
-     {
-      "name": "Log Center"
-     },
-     {
-      "name": "Cloud Sync"
-     },
-     {
-      "name": "Node.js v18"
-     },
-     {
-      "name": "Synology Photos"
-     },
-     {
-      "name": "SynoCli Video Drivers"
-     },
-     {
-      "name": "iTunes Server"
-     },
-     {
-      "name": "Media Server"
-     },
-     {
-      "name": "Web Station"
-     },
-     {
-      "name": "Surveillance Video Extension"
-     },
-     {
-      "name": "Advanced Media Extensions"
-     },
-     {
-      "name": "Surveillance Station"
-     },
-     {
-      "name": "Hyper Backup Vault"
-     },
-     {
-      "name": "Apache HTTP Server 2.4"
-     },
-     {
-      "name": "Jellyfin"
-     },
-     {
-      "name": "Python 3.11"
-     },
-     {
-      "name": "Tailscale"
-     },
-     {
-      "name": "FFmpeg 7"
-     },
-     {
-      "name": "Docker"
-     },
-     {
-      "name": "SynoCli Video Driver Tools"
-     },
-     {
-      "name": "Hyper Backup"
-     },
-     {
-      "name": "Virtual Machine Manager"
-     },
-     {
-      "name": "Video Station"
-     },
-     {
-      "name": "Synology Application Service"
-     }
-    ],
-    "services": [],
-    "shares": [
-     {
-      "name": "awareness-backups"
-     },
-     {
-      "name": "Backups"
-     },
-     {
-      "name": "BitTorrents"
-     },
-     {
-      "name": "docker"
-     },
-     {
-      "name": "fah"
-     },
-     {
-      "name": "git"
-     },
-     {
-      "name": "homes"
-     },
-     {
-      "name": "mcp-synology-test"
-     },
-     {
-      "name": "mcp-synology-test-claude-ai"
-     },
-     {
-      "name": "mcp-synology-test-claude-code"
-     },
-     {
-      "name": "mcp-synology-test-muse"
-     },
-     {
-      "name": "misc"
-     },
-     {
-      "name": "music"
-     },
-     {
-      "name": "NetBackup"
-     },
-     {
-      "name": "owncloud"
-     },
-     {
-      "name": "photo"
-     },
-     {
-      "name": "surveillance"
-     },
-     {
-      "name": "Test-Resources"
-     },
-     {
-      "name": "video"
-     },
-     {
-      "name": "web"
-     },
-     {
-      "name": "web_packages"
-     }
-    ]
-   },
-   "success": true
-  },
-  "request": {
-   "api": "SYNO.Storage.CGI.Volume",
-   "method": "enum_resource",
-   "space_id": "[\"volume_1\"]",
-   "version": 1
-  }
- },
- "admin:SYNO.Storage.CGI.Volume.enum_resource.v1:{\"space_id\": [\"volume_1\"]}": {
-  "reply": {
-   "error": {
-    "code": 101
-   },
-   "success": false
-  },
-  "request": {
-   "api": "SYNO.Storage.CGI.Volume",
-   "method": "enum_resource",
-   "space_id": [
-    "volume_1"
-   ],
    "version": 1
   }
  },

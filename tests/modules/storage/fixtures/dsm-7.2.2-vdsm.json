@@ -1159,21 +1159,6 @@
   },
   "transport": "GET"
  },
- "admin:SYNO.Storage.CGI.Pool.enum_resource.v1": {
-  "path": "entry.cgi",
-  "reply": {
-   "error": {
-    "code": 114
-   },
-   "success": false
-  },
-  "request": {
-   "api": "SYNO.Storage.CGI.Pool",
-   "method": "enum_resource",
-   "version": "1"
-  },
-  "transport": "GET"
- },
  "admin:SYNO.Storage.CGI.Pool.get_setting.v1": {
   "path": "entry.cgi",
   "reply": {
@@ -1813,21 +1798,6 @@
   "request": {
    "api": "SYNO.Storage.CGI.TaipeiEnclosure",
    "method": "load",
-   "version": "1"
-  },
-  "transport": "GET"
- },
- "admin:SYNO.Storage.CGI.Volume.enum_resource.v1": {
-  "path": "entry.cgi",
-  "reply": {
-   "error": {
-    "code": 101
-   },
-   "success": false
-  },
-  "request": {
-   "api": "SYNO.Storage.CGI.Volume",
-   "method": "enum_resource",
    "version": "1"
   },
   "transport": "GET"
@@ -3380,21 +3350,6 @@
   },
   "transport": "GET"
  },
- "test:SYNO.Storage.CGI.Pool.enum_resource.v1": {
-  "path": "entry.cgi",
-  "reply": {
-   "error": {
-    "code": 105
-   },
-   "success": false
-  },
-  "request": {
-   "api": "SYNO.Storage.CGI.Pool",
-   "method": "enum_resource",
-   "version": "1"
-  },
-  "transport": "GET"
- },
  "test:SYNO.Storage.CGI.Pool.get_setting.v1": {
   "path": "entry.cgi",
   "reply": {
@@ -3751,21 +3706,6 @@
   "request": {
    "api": "SYNO.Storage.CGI.TaipeiEnclosure",
    "method": "load",
-   "version": "1"
-  },
-  "transport": "GET"
- },
- "test:SYNO.Storage.CGI.Volume.enum_resource.v1": {
-  "path": "entry.cgi",
-  "reply": {
-   "error": {
-    "code": 105
-   },
-   "success": false
-  },
-  "request": {
-   "api": "SYNO.Storage.CGI.Volume",
-   "method": "enum_resource",
    "version": "1"
   },
   "transport": "GET"
