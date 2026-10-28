@@ -92,7 +92,10 @@ DEFAULT_DSM_VERSION: str = "7.2.2"
 #   v7: each DSM version runs in its own fixed timezone (DSM_TIMEZONES, #342).
 #       Before, DSM kept the zone the wizard's browser had, i.e. the bake
 #       host's: US Central for local bakes, UTC for CI's.
-BAKE_VERSION: int = 7
+#   v8: Snapshot Replication (ReplicationService), for share snapshots in the coming
+#       Storage module (#49): its vdsm tests take and list snapshots, as on a real NAS
+#       with the package.
+BAKE_VERSION: int = 8
 
 # The timezone each golden image runs in, as SYNO.Core.Region.NTP names it
 # (listzone). Tests read the NAS's zone rather than assume one; between them

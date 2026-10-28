@@ -115,7 +115,7 @@ The real NAS (DSM 7.1.1) answered every call the 7.1 vdsm did except the `BtrfsD
 
 - The parameter is `name` (the share name, JSON-quoted). Without it the call answers **403** (verified), which is what made Snapshot Replication look missing during the first sweep.
 - A share that doesn't exist answers **402** from `list` (verified), but `get_schedule` **reports success** with a default, disabled schedule for it (verified). So the tool checks the share name against `Core.Share list` first, and never reports a schedule for a share that isn't there.
-- `list` and `create` work with Snapshot Replication installed but its service stopped (vdsm; inferred to need only the package's APIs). vdsm images don't include the package; the vdsm tests that need a snapshot install it at test time or skip (open item 2).
+- `list` and `create` work with Snapshot Replication installed but its service stopped (vdsm; inferred to need only the package's APIs). The vdsm images include the package since bake v8 (open item 2).
 - `get_share_conf` answers 403 even with `name` (real NAS, verified); its parameters aren't known yet. It's not used in phase 1.
 
 ### Unknown IDs
@@ -435,7 +435,7 @@ Each gets a capture on vdsm (where the object exists there) before its spec sect
 ## Remaining Open Items
 
 1. **eSATA devices and expansion units.** The USB shape is captured (a stick on the real NAS, 2026-10-28); no capture has an eSATA device or an expansion unit, so those are shown by their fields' names until one does.
-2. **Snapshot Replication on vdsm.** The golden images don't include it; the captures installed it at runtime (`synopkg install_from_server ReplicationService`, ~seconds). Either bake it in (a bake change: its own maintenance PR, per CLAUDE.md) or install it in a test fixture. Recommendation: bake it, with the next bake change.
+2. **Snapshot Replication on vdsm:** done. Bake v8 installs it (#434), and `tests/vdsm/test_vdsm_bake.py` takes a snapshot on `writable` and checks that `list` v2 shows it while v1 doesn't.
 3. **`SYNO.Storage.CGI.VolumeReduction`** (DSM 7.4.1 only): methods `get_auto_enable_reduction_for_new`, `list_reduction_share` answer 120 without parameters. Capture with parameters before phase 1's implementation; if it reports compression or dedupe savings, `get_volume` shows it on 7.4.1.
 4. **Which fields list tools leave out.** The rule proposed above (UI-only fields only in `get_*`) needs QA's view against the "show every field" rule.
 5. **Payload.** Eleven tools add to the tool payload of a connection that enables the module. Measure with `scripts/measure_tools.py` at implementation; if the budget is tight, `list_external_storage` could fold into `get_storage_overview`.
