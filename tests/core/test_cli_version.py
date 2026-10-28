@@ -192,7 +192,7 @@ class TestUpgradeHint:
         [
             ("uv", "run `uv tool upgrade mcp-synology`, then restart your MCP client"),
             ("pipx", "run `pipx upgrade mcp-synology`, then restart your MCP client"),
-            ("uvx", "quit your MCP client, run `uv cache clean mcp-synology`, then start it again"),
+            ("uvx", "restart your MCP client (uvx checks PyPI again once its cached index"),
         ],
     )
     def test_per_installer(self, installer: str, expected: str) -> None:

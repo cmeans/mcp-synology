@@ -170,12 +170,12 @@ def _upgrade_hint() -> str:
     if installer == "pipx":
         return f"run `pipx upgrade {_PYPI_PACKAGE}`, then restart your MCP client"
     if installer == "uvx":
-        # uvx keeps using the version it cached on its first run (uv's docs, "Tool
-        # versions"), so a restart alone doesn't upgrade it.
+        # uvx re-resolves once its cached copy of PyPI's index is stale (PyPI sends
+        # max-age=600), so a restart usually upgrades it; the cache clean makes sure.
         return (
-            f"quit your MCP client, run `uv cache clean {_PYPI_PACKAGE}`, then start it again "
-            f"(or make the client's command `uvx {_PYPI_PACKAGE}@latest`, which checks for a "
-            "new version on every start)"
+            "restart your MCP client (uvx checks PyPI again once its cached index is over 10 "
+            "minutes old); if it still runs the old version, quit the client, run "
+            f"`uv cache clean {_PYPI_PACKAGE}`, then start it again"
         )
     if _uv_managed_env():
         return (
