@@ -32,11 +32,127 @@
  "admin:SYNO.Core.ExternalDevice.Storage.USB.list.v1": {
   "reply": {
    "data": {
-    "devices": []
+    "devices": [
+     {
+      "dev_id": "sdu",
+      "dev_title": "USB Disk 1"
+     }
+    ]
    },
    "success": true
   },
   "request": {
+   "api": "SYNO.Core.ExternalDevice.Storage.USB",
+   "method": "list",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.ExternalDevice.Storage.USB.list.v1:{\"additional\": \"[\\\"all\\\"]\", \"subtype\": \"\\\"disk\\\"\"}": {
+  "reply": {
+   "data": {
+    "devices": [
+     {
+      "dev_id": "sdu",
+      "dev_title": "USB Disk 1",
+      "dev_type": "usbDisk",
+      "formatable": true,
+      "partitions": [
+       {
+        "dev_fstype": "vfat",
+        "filesystem": "FAT32",
+        "name_id": "sdu1",
+        "partition_title": "USB Disk 1 Partition 1",
+        "share_name": "usbshare1",
+        "status": "normal",
+        "total_size_mb": 29581,
+        "used_size_mb": 2
+       }
+      ],
+      "producer": "Kingston Technology Company Inc.",
+      "product": "USB DISK 3.0",
+      "progress": "",
+      "status": "normal",
+      "total_size_mb": 29604
+     }
+    ]
+   },
+   "success": true
+  },
+  "request": {
+   "additional": "[\"all\"]",
+   "api": "SYNO.Core.ExternalDevice.Storage.USB",
+   "method": "list",
+   "subtype": "\"disk\"",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.ExternalDevice.Storage.USB.list.v1:{\"additional\": \"[\\\"all\\\"]\"}": {
+  "reply": {
+   "data": {
+    "devices": [
+     {
+      "dev_id": "sdu",
+      "dev_title": "USB Disk 1",
+      "dev_type": "usbDisk",
+      "formatable": true,
+      "partitions": [
+       {
+        "dev_fstype": "vfat",
+        "filesystem": "FAT32",
+        "name_id": "sdu1",
+        "partition_title": "USB Disk 1 Partition 1",
+        "share_name": "usbshare1",
+        "status": "normal",
+        "total_size_mb": 29581,
+        "used_size_mb": 2
+       }
+      ],
+      "producer": "Kingston Technology Company Inc.",
+      "product": "USB DISK 3.0",
+      "progress": "",
+      "status": "normal",
+      "total_size_mb": 29604
+     }
+    ]
+   },
+   "success": true
+  },
+  "request": {
+   "additional": "[\"all\"]",
+   "api": "SYNO.Core.ExternalDevice.Storage.USB",
+   "method": "list",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.ExternalDevice.Storage.USB.list.v1:{\"additional\": \"[\\\"dev_type\\\", \\\"product\\\", \\\"status\\\", \\\"partitions\\\"]\"}": {
+  "reply": {
+   "data": {
+    "devices": [
+     {
+      "dev_id": "sdu",
+      "dev_title": "USB Disk 1",
+      "dev_type": "usbDisk",
+      "partitions": [
+       {
+        "dev_fstype": "vfat",
+        "filesystem": "FAT32",
+        "name_id": "sdu1",
+        "partition_title": "USB Disk 1 Partition 1",
+        "share_name": "usbshare1",
+        "status": "normal",
+        "total_size_mb": 29581,
+        "used_size_mb": 2
+       }
+      ],
+      "product": "USB DISK 3.0",
+      "status": "normal"
+     }
+    ]
+   },
+   "success": true
+  },
+  "request": {
+   "additional": "[\"dev_type\", \"product\", \"status\", \"partitions\"]",
    "api": "SYNO.Core.ExternalDevice.Storage.USB",
    "method": "list",
    "version": 1
@@ -1009,6 +1125,177 @@
    "name": "\"photo\"",
    "offset": 0,
    "version": 2
+  }
+ },
+ "admin:SYNO.Core.Share.list.v1": {
+  "reply": {
+   "data": {
+    "shares": [
+     {
+      "desc": "Backups For MCP Awareness",
+      "is_usb_share": false,
+      "name": "awareness-backups",
+      "uuid": "b7729a22-9056-44fd-bf70-bc17d1fa4b79",
+      "vol_path": "/volume1"
+     },
+     {
+      "desc": "",
+      "is_usb_share": false,
+      "name": "Backups",
+      "uuid": "20a9fbd2-d26d-47ac-ab22-b2690f0b8791",
+      "vol_path": "/volume1"
+     },
+     {
+      "desc": "",
+      "is_usb_share": false,
+      "name": "BitTorrents",
+      "uuid": "227e07a9-ca51-4749-96d1-2209097752fd",
+      "vol_path": "/volume1"
+     },
+     {
+      "desc": "",
+      "is_usb_share": false,
+      "name": "docker",
+      "uuid": "5465e657-6506-4acf-b16d-3c4dd32e9cbd",
+      "vol_path": "/volume1"
+     },
+     {
+      "desc": "Folding@Home Config & Working Directory",
+      "is_usb_share": false,
+      "name": "fah",
+      "uuid": "0b8b63cd-6f44-48cf-b4a1-65533719f4a5",
+      "vol_path": "/volume1"
+     },
+     {
+      "desc": "",
+      "is_usb_share": false,
+      "name": "git",
+      "uuid": "1fb199d2-1cd5-437e-8b6c-65a09da399d9",
+      "vol_path": "/volume1"
+     },
+     {
+      "desc": "user home",
+      "is_usb_share": false,
+      "name": "homes",
+      "uuid": "518336e2-6bef-498c-a157-1bc8e19a966c",
+      "vol_path": "/volume1"
+     },
+     {
+      "desc": "mcp-synology live tests. Test only.",
+      "is_usb_share": false,
+      "name": "mcp-synology-test",
+      "uuid": "577f4b13-bd81-4742-841a-c5f2a22efafa",
+      "vol_path": "/volume1"
+     },
+     {
+      "desc": "",
+      "is_usb_share": false,
+      "name": "mcp-synology-test-claude-ai",
+      "uuid": "ab429d97-7988-41c7-ac83-c76276a0ab75",
+      "vol_path": "/volume1"
+     },
+     {
+      "desc": "",
+      "is_usb_share": false,
+      "name": "mcp-synology-test-claude-code",
+      "uuid": "d3eceeb4-0510-4f65-b38d-451840ba01f4",
+      "vol_path": "/volume1"
+     },
+     {
+      "desc": "",
+      "is_usb_share": false,
+      "name": "mcp-synology-test-muse",
+      "uuid": "c5ee14d8-b56f-4790-83ac-94e27a0d4f07",
+      "vol_path": "/volume1"
+     },
+     {
+      "desc": "Miscellaneous Files",
+      "is_usb_share": false,
+      "name": "misc",
+      "uuid": "aee7b66d-404d-43e2-84e1-5671eee43691",
+      "vol_path": "/volume1"
+     },
+     {
+      "desc": "System default shared folder",
+      "is_usb_share": false,
+      "name": "music",
+      "uuid": "3ea3ad89-46af-4328-91a9-c04da5f9cd21",
+      "vol_path": "/volume1"
+     },
+     {
+      "desc": "System default shared folder",
+      "is_usb_share": false,
+      "name": "NetBackup",
+      "uuid": "20b6c6e3-d672-4ea8-b98b-d3b7ac350505",
+      "vol_path": "/volume1"
+     },
+     {
+      "desc": "",
+      "is_usb_share": false,
+      "name": "owncloud",
+      "uuid": "4ac5cc49-8a4b-4969-ad74-f9faa1c6fa1e",
+      "vol_path": "/volume1"
+     },
+     {
+      "desc": "System default shared folder",
+      "is_usb_share": false,
+      "name": "photo",
+      "uuid": "a96d6ae6-dbd7-448b-9498-021fc801a838",
+      "vol_path": "/volume1"
+     },
+     {
+      "desc": "System default shared folder",
+      "is_usb_share": false,
+      "name": "surveillance",
+      "uuid": "d61b850d-42f5-42fb-bb5e-6db882421e10",
+      "vol_path": "/volume1"
+     },
+     {
+      "desc": "Files and folders for testing Synology-MCP functionality ",
+      "is_usb_share": false,
+      "name": "Test-Resources",
+      "uuid": "550dcb50-1d6d-45d0-8e8b-2763da8eba49",
+      "vol_path": "/volume1"
+     },
+     {
+      "desc": "Kingston Technology Company Inc.",
+      "display_vol_name": "usbshare1",
+      "external_dev_type": "USB",
+      "is_usb_share": true,
+      "name": "usbshare1",
+      "uuid": "f22de059-1904-446a-8adc-36d2d8c99543",
+      "vol_path": "/volumeUSB1/usbshare"
+     },
+     {
+      "desc": "System default shared folder",
+      "is_usb_share": false,
+      "name": "video",
+      "uuid": "b768667d-6bd5-4789-82cc-540b8ef8a970",
+      "vol_path": "/volume1"
+     },
+     {
+      "desc": "System default shared folder",
+      "is_usb_share": false,
+      "name": "web",
+      "uuid": "d4bc4455-a72a-40d4-8011-4aa30cbb560f",
+      "vol_path": "/volume1"
+     },
+     {
+      "desc": "",
+      "is_usb_share": false,
+      "name": "web_packages",
+      "uuid": "a6ec6e94-e5f3-4cff-bfa8-61bf61428f5b",
+      "vol_path": "/volume1"
+     }
+    ],
+    "total": 22
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Core.Share",
+   "method": "list",
+   "version": 1
   }
  },
  "admin:SYNO.Core.Share.list.v1:{\"additional\": \"[\\\"vol_path\\\", \\\"enable_snapshot\\\", \\\"snapshot_count\\\"]\"}": {
@@ -6151,7 +6438,7 @@
       "sb_days_left": 0,
       "sb_days_left_critical": false,
       "sb_days_left_warning": false,
-      "serial": "4YTATEAG",
+      "serial": "5JWNVVBX",
       "size_total": "14000519643136",
       "slot_id": 1,
       "smart_progress": "",
@@ -6166,7 +6453,7 @@
       "testing_progress": "",
       "testing_type": "idle",
       "tray_status": "join",
-      "ui_serial": "4YTATEAG",
+      "ui_serial": "5JWNVVBX",
       "unc": 0,
       "used_by": "reuse_1",
       "vendor": "WDC     ",
@@ -6231,7 +6518,7 @@
       "sb_days_left": 0,
       "sb_days_left_critical": false,
       "sb_days_left_warning": false,
-      "serial": "5JWN9VBX",
+      "serial": "5JUP9RYY",
       "size_total": "14000519643136",
       "slot_id": 2,
       "smart_progress": "90%",
@@ -6246,7 +6533,7 @@
       "testing_progress": "90%",
       "testing_type": "smart",
       "tray_status": "join",
-      "ui_serial": "5JWN9VBX",
+      "ui_serial": "5JUP9RYY",
       "unc": 0,
       "used_by": "reuse_1",
       "vendor": "WDC     ",
@@ -6311,7 +6598,7 @@
       "sb_days_left": 0,
       "sb_days_left_critical": false,
       "sb_days_left_warning": false,
-      "serial": "6YTV3WCU",
+      "serial": "7NJY8ATE",
       "size_total": "14000519643136",
       "slot_id": 3,
       "smart_progress": "",
@@ -6326,7 +6613,7 @@
       "testing_progress": "",
       "testing_type": "idle",
       "tray_status": "join",
-      "ui_serial": "6YTV3WCU",
+      "ui_serial": "7NJY8ATE",
       "unc": 0,
       "used_by": "reuse_1",
       "vendor": "WDC     ",
@@ -6391,7 +6678,7 @@
       "sb_days_left": 0,
       "sb_days_left_critical": false,
       "sb_days_left_warning": false,
-      "serial": "5JUPVR7N",
+      "serial": "6YTVGW1U",
       "size_total": "16000900661248",
       "slot_id": 4,
       "smart_progress": "90%",
@@ -6402,11 +6689,11 @@
       "status": "normal",
       "summary_status_category": "processing",
       "summary_status_key": "smart",
-      "temp": 42,
+      "temp": 41,
       "testing_progress": "90%",
       "testing_type": "smart",
       "tray_status": "join",
-      "ui_serial": "5JUPVR7N",
+      "ui_serial": "6YTVGW1U",
       "unc": 0,
       "used_by": "reuse_1",
       "vendor": "WDC     ",
@@ -6562,7 +6849,7 @@
       "status": "normal",
       "summary_status_category": "space",
       "summary_status_key": "normal",
-      "temp": 41,
+      "temp": 42,
       "testing_progress": "",
       "testing_type": "idle",
       "tray_status": "ssd cache",
@@ -6739,8 +7026,8 @@
       "hit_rates": {
        "Current": {
         "data_size": 1,
-        "io_hit": 20501,
-        "io_need_acceleration": 21831,
+        "io_hit": 114222,
+        "io_need_acceleration": 125817,
         "success": true
        },
        "Daily": {
@@ -6837,7 +7124,7 @@
       "show_assemble_btn": false,
       "size": {
        "occupied": "0",
-       "reusable": "999559135232",
+       "reusable": "999509524480",
        "total": "999653638144"
       },
       "skipSeqIO": true,
@@ -7124,7 +7411,7 @@
        "total": "40289542017024",
        "total_device": "41968272932864",
        "total_inode": "0",
-       "used": "38890201681920"
+       "used": "38887869976576"
       },
       "space_status": {
        "detail": "fs_almost_full",

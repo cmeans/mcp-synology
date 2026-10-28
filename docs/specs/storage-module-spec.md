@@ -76,7 +76,7 @@ So a non-admin connection that enables the module gets `permission_denied` from 
 | SSD cache | `load_info`'s `ssdCaches`, `sharedCaches`; `Flashcache shared_cache_config_get {shared_cache}`, `advisor_history_get` | real NAS |
 | Schedules | `Storage get_schedule_plan` (scrubbing), `get_space_reclaim_schedule`, `get_sche_task_list`; `Smart.Scheduler list`; `BtrfsDedupe get_schedule_plan` | all versions + real NAS (dedupe: 121 there) |
 | Settings | `Storage get_resync_speed`, `get_fast_repair_config`, `get_auto_repair_config`; `HddMan get`; `Spare.Conf get`; `Smart get_latest_online_drive_db_info` (7.2.2+) | all versions + real NAS |
-| External | `Core.ExternalDevice.Storage.USB list`, `.eSATA list`, `.EUnit list`, `.Setting get` | all versions (empty lists) + real NAS (empty) |
+| External | `Core.ExternalDevice.Storage.USB list {additional: ["all"]}`, `.eSATA list`, `.EUnit list`, `.Setting get` | all versions (empty lists) + real NAS (a USB stick; no eSATA device or expansion unit) |
 | Snapshots | `Core.Share list`; `Core.Share.Snapshot list` **v2** `{name, additional, offset, limit}`, `get_schedule {name}` | all four vdsm versions with a real snapshot; real NAS (no snapshots) |
 
 ### Request encoding
@@ -197,9 +197,9 @@ Disks
   Drive 1 (sda)   WD141KFGX-68FH9N0   12.7 TiB   38°C   normal   pool 1
   Drive 2 (sdb)   WD142KFGX-68AFPN0   12.7 TiB   41°C   normal   pool 1   extended S.M.A.R.T. test 90%
   Drive 3 (sdc)   WD141KFGX-68FH9N0   12.7 TiB   39°C   normal   pool 1
-  Drive 4 (sdd)   WD161KRYZ-01AGBB0   14.6 TiB   42°C   normal   pool 1   extended S.M.A.R.T. test 90%
+  Drive 4 (sdd)   WD161KRYZ-01AGBB0   14.6 TiB   41°C   normal   pool 1   extended S.M.A.R.T. test 90%
   Drive 5 (sde)   WD142KFGX-68AFPN0   12.7 TiB   39°C   normal   hot spare
-  Drive 6 (sdf)   SSD 870 EVO 1TB   931.5 GiB   41°C   normal   SSD cache 1, 67% life left
+  Drive 6 (sdf)   SSD 870 EVO 1TB   931.5 GiB   42°C   normal   SSD cache 1, 67% life left
 
 SSD caches
   Cache 1 (shared_cache_1)   read-only, 1 SSD   for volume 1   hit rate 83%
@@ -367,7 +367,7 @@ The scrubbing, reclamation and dedupe windows are DSM's 168-character weekly pla
 
 **Permission tier:** READ
 
-**DSM API:** `Core.ExternalDevice.Storage.USB list`, `.eSATA list`, `.EUnit list`
+**DSM API:** `Core.ExternalDevice.Storage.USB list {additional: ["all"]}`, `.eSATA list` (with the same `additional`, to verify), `.EUnit list`
 
 **Tool description (LLM-facing):**
 > List storage attached to the NAS from outside: USB and eSATA drives (name, size, file system,
@@ -376,7 +376,9 @@ The scrubbing, reclamation and dedupe windows are DSM's 168-character weekly pla
 
 **Parameters:** None.
 
-All three lists were empty on every capture (no device attached anywhere). The device shapes are open item 1.
+**USB, verified** on the real NAS with a FAT32 stick: without `additional` the list holds only `dev_id` (`sdu`) and `dev_title` (`USB Disk 1`); with `additional: ["all"]` it adds `dev_type` (`usbDisk`), `producer`, `product`, `status`, `total_size_mb`, `formatable`, `progress` and `partitions`, each with `name_id` (`sdu1`), `partition_title`, `filesystem` (`FAT32`), `dev_fstype` (`vfat`), `share_name` (`usbshare1`, the shared folder DSM created), `status`, `total_size_mb` and `used_size_mb`. Sizes are in MB, inferred to be binary MiB (29,604 MiB is 31.0 GB, which fits a stick sold as 32 GB) and are shown with the shared size formatter. The reply carries no serial number. `Core.System info`'s `usb_dev` (the System module's call, not in these fixtures) showed the same stick at hardware level during the capture, with its vendor and product IDs; an earlier stick appeared in neither, and turned out to be dead (it didn't work in a laptop either).
+
+**eSATA and expansion units:** empty on every capture; `eSATA list` is assumed to take the same `additional` (same API family; to verify), and expansion units are shown by their fields' names until a capture has one (open item 1).
 
 ---
 
@@ -425,7 +427,7 @@ Each gets a capture on vdsm (where the object exists there) before its spec sect
 
 ## Remaining Open Items
 
-1. **External storage device shapes.** No capture has a USB or eSATA device or an expansion unit. A USB stick on the real NAS (maintainer) would give the device shape; until then the tool shows each device's fields by name.
+1. **eSATA devices and expansion units.** The USB shape is captured (a stick on the real NAS, 2026-10-28); no capture has an eSATA device or an expansion unit, so those are shown by their fields' names until one does.
 2. **Snapshot Replication on vdsm.** The golden images don't include it; the captures installed it at runtime (`synopkg install_from_server ReplicationService`, ~seconds). Either bake it in (a bake change: its own maintenance PR, per CLAUDE.md) or install it in a test fixture. Recommendation: bake it, with the next bake change.
 3. **`SYNO.Storage.CGI.VolumeReduction`** (DSM 7.4.1 only): methods `get_auto_enable_reduction_for_new`, `list_reduction_share` answer 120 without parameters. Capture with parameters before phase 1's implementation; if it reports compression or dedupe savings, `get_volume` shows it on 7.4.1.
 4. **Which fields list tools leave out.** The rule proposed above (UI-only fields only in `get_*`) needs QA's view against the "show every field" rule.
