@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -18,8 +19,18 @@ if TYPE_CHECKING:
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "scrub_nas_capture.py"
-# Fixtures captured on the maintainer's own NAS (not vdsm). Add new ones here.
-REAL_NAS_FIXTURES = [ROOT / "tests/modules/storage/fixtures/dsm-7.1.1-ds1618plus.json"]
+# Fixtures captured on the maintainer's own NAS are named *-realnas.json and found by glob.
+REAL_NAS_FIXTURES = sorted(ROOT.glob("tests/**/*-realnas.json"))
+# Real-NAS fixtures from before the scrubber, reviewed by hand; #430 brings them under it.
+LEGACY_REAL_NAS = {
+    "tests/modules/system/fixtures/ds1618-7.1.1-admin.json",
+    "tests/modules/photos/fixtures/dsm-7.1.1-photos-1.3.4-people.json",
+}
+# A real Synology model name (DS1618+, DS220j, RS1221RP+, FS2500, ...); vdsm reports VirtualDSM.
+SYNOLOGY_MODEL = re.compile(
+    r"\b(?:DS|RS|FS|SA|HD|UC|DVA|NVR)\d{3,4}(?:j|play|slim|value|II|xs|RP)?\+?(?![\w+])",
+    re.IGNORECASE,
+)
 
 HOST = "Gizmo"
 UUID_A = "aaaaaaaa-1111-4222-8333-444444444444"
@@ -54,7 +65,10 @@ def _raw() -> dict[str, Any]:
         },
         "admin:SYNO.Core.System.SystemHealth.get.v1": {
             "request": {"api": "SYNO.Core.System.SystemHealth"},
-            "reply": {"success": True, "data": {"hostname": HOST, "ip": "10.1.2.3"}},
+            "reply": {
+                "success": True,
+                "data": {"hostname": HOST, "ip": "10.1.2.3", "tailscale": "100.101.102.103"},
+            },
         },
         "admin:SYNO.Core.ExternalDevice.Storage.USB.list.v1": {
             "request": {"api": "SYNO.Core.ExternalDevice.Storage.USB"},
@@ -84,7 +98,15 @@ def test_scrub_replaces_everything_identifying(sc: ModuleType) -> None:
     raw = _raw()
     out = sc.scrub(raw)
     text = json.dumps(out)
-    for real in ("Holiday Videos", "Trips 2019-2024", HOST, "ZZ99XX11", "abc123def0", "10.1.2.3"):
+    for real in (
+        "Holiday Videos",
+        "Trips 2019-2024",
+        HOST,
+        "ZZ99XX11",
+        "abc123def0",
+        "10.1.2.3",
+        "100.101",
+    ):
         assert real not in text, real
     for real in (UUID_A, UUID_B, LVM, '"homes"', '"usbshare1"'):
         assert real not in text, real
@@ -105,7 +127,7 @@ def test_scrub_uses_one_fake_per_value_in_keys_values_and_paths(sc: ModuleType) 
     assert data["note"] == "NAS01 - VM Storage 1; gizmos are not gizmos"
     assert data["env"]["macs"] == ["FAKE0000000000003"]
     health = out["admin:SYNO.Core.System.SystemHealth.get.v1"]["reply"]["data"]
-    assert health == {"hostname": "NAS01", "ip": "192.0.2.10"}
+    assert health == {"hostname": "NAS01", "ip": "192.0.2.10", "tailscale": "192.0.2.11"}
 
 
 def test_a_description_copied_from_another_field_leaves_that_field(sc: ModuleType) -> None:
@@ -124,6 +146,7 @@ def test_check_reports_what_still_looks_real(sc: ModuleType) -> None:
     assert f"UUID {UUID_A}" in problems
     assert f"LVM UUID {LVM}" in problems
     assert "private IP 10.1.2.3" in problems
+    assert "private IP 100.101.102.103" in problems
     assert "identifier serial=ZZ99XX11" in problems
     assert "identifier unique_key=abc123def0" in problems
     assert "share Holiday Videos" in problems
@@ -141,6 +164,49 @@ def test_main_writes_only_a_clean_file(sc: ModuleType, tmp_path: Path) -> None:
     assert sc.check(json.loads(out.read_text())) == []
 
 
+@pytest.mark.parametrize(
+    ("ip", "private"),
+    [
+        ("100.64.0.1", True),
+        ("100.127.255.255", True),
+        ("100.63.255.255", False),
+        ("100.128.0.1", False),
+        ("192.0.2.10", False),
+        ("8.8.8.8", False),
+    ],
+)
+def test_private_ip_covers_tailscale_cgnat_only(sc: ModuleType, ip: str, private: bool) -> None:
+    assert bool(sc.PRIVATE_IP.search(ip)) is private
+
+
+@pytest.mark.parametrize(
+    "model", ["DS1618+", "DS220j", "DS218play", "DS620slim", "RS1221RP+", "RS3621xs+", "ds920+"]
+)
+def test_model_names_with_suffixes_count_as_real(model: str) -> None:
+    assert SYNOLOGY_MODEL.search(f'"model": "{model}"')
+
+
+@pytest.mark.parametrize("text", ["VirtualDSM", "DSM 7.2.2", "hd1080p", "DS12"])
+def test_other_strings_dont(text: str) -> None:
+    assert not SYNOLOGY_MODEL.search(text)
+
+
+def test_real_nas_fixtures_are_found() -> None:
+    assert REAL_NAS_FIXTURES, "no *-realnas.json fixture found"
+
+
 @pytest.mark.parametrize("path", REAL_NAS_FIXTURES, ids=lambda p: p.name)
 def test_real_nas_fixtures_are_scrubbed(sc: ModuleType, path: Path) -> None:
     assert sc.check(json.loads(path.read_text())) == []
+
+
+def test_every_fixture_from_a_real_nas_is_named_realnas() -> None:
+    """A capture from a real NAS saved without the -realnas name would skip the check above."""
+    unnamed = [
+        str(p.relative_to(ROOT))
+        for p in sorted(ROOT.glob("tests/**/*.json"))
+        if SYNOLOGY_MODEL.search(p.read_text())
+        and not p.name.endswith("-realnas.json")
+        and str(p.relative_to(ROOT)) not in LEGACY_REAL_NAS
+    ]
+    assert unnamed == [], f"name real-NAS fixtures *-realnas.json and scrub them: {unnamed}"

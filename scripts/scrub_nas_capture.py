@@ -15,9 +15,13 @@ recognizable fakes of the same shape (the same fake everywhere a value appears):
   stick's vendor, leaves that field alone);
 - the hostname (from ``SYNO.Core.System.SystemHealth get``, plus ``--hostname``), as a
   whole word in any string, case-insensitively: ``NAS01``;
-- private IPv4 addresses (10/8, 172.16/12, 192.168/16): ``192.0.2.N`` (TEST-NET-1).
+- private IPv4 addresses (10/8, 172.16/12, 192.168/16, and 100.64/10, the carrier-grade
+  NAT range Tailscale uses): ``192.0.2.N`` (TEST-NET-1). IPv6 addresses (ULA ``fd00::/8``,
+  link-local ``fe80::/10``) aren't handled yet; none has appeared in a capture so far.
 
-Run it on every real-NAS capture before writing it under ``tests/``. ``check()`` (used by
+Run it on every real-NAS capture before writing it under ``tests/``, as
+``<name>-realnas.json``: the guard test checks every file named that way, and fails on
+any fixture that names a real Synology model without it. ``check()`` (used by
 ``tests/scripts/test_scrub_nas_capture.py`` on every real-NAS fixture) fails on anything
 that still looks real; given the raw names it also proves none of them is left.
 
@@ -40,7 +44,10 @@ UUID_STD = re.compile(
     r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"
 )
 UUID_LVM = re.compile(r"\b[0-9A-Za-z]{6}(?:-[0-9A-Za-z]{4}){5}-[0-9A-Za-z]{6}\b")
-PRIVATE_IP = re.compile(r"\b(?:10\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])|192\.168)\.\d{1,3}\.\d{1,3}\b")
+PRIVATE_IP = re.compile(
+    r"\b(?:10\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])|192\.168"
+    r"|100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7]))\.\d{1,3}\.\d{1,3}\b"
+)
 ID_KEY = re.compile(r"serial|unique_key|^macs?$|_macs?$|^mac_", re.IGNORECASE)
 LABEL_NAME = re.compile(r'"name": "\\"(.*?)\\""')
 
