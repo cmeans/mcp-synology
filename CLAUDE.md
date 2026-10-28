@@ -29,6 +29,7 @@ Modules are domain-split: `listing.py`, `search.py`, `metadata.py`, `operations.
 - `docs/specs/system-module-spec.md` — the 2 System tools
 - `docs/specs/downloadstation-module-spec.md` — all 12 Download Station tools, the verified DSM behavior behind them (v1 vs DS2, non-manager semantics, paging and totals, secrets in URLs)
 - `docs/specs/photos-module-spec.md` — all 19 Synology Photos tools (#258), written from live captures on DSM 7.1 (Photos 1.3.4), 7.2.2 (Photos 1.9.1) and a real NAS: personal vs Shared Space, per-call transport choices, edits rewriting originals, writes that report success for unknown IDs (every write checks IDs first), the per-version support matrix, and what the implementation's live runs found (which list call honors `sort_by`, place IDs versus filter-tree nodes, cross-space copy through the source space's API)
+- `docs/specs/storage-module-spec.md` — the coming Storage module (#49; phase 1: 11 READ tools, not implemented yet), written from live captures on all four vdsm versions and a real NAS: administrator-only APIs, `load_info` as the single source (the `SYNO.Core.Storage.*` lists answer 101), vdsm's lack of disks and pools, `Share.Snapshot list` needing v2, IDs checked first, 121 as "not supported", the scope and the operations excluded for data-loss risk
 - `docs/specs/config-schema-spec.md` — YAML config structure, validation rules, env var overrides, state file
 
 ## Build & Development Commands

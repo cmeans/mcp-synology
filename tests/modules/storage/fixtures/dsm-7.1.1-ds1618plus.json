@@ -1,0 +1,7600 @@
+{
+ "admin:SYNO.Core.ExternalDevice.Storage.EUnit.list.v1": {
+  "reply": {
+   "data": {
+    "devices": []
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Core.ExternalDevice.Storage.EUnit",
+   "method": "list",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.ExternalDevice.Storage.Setting.get.v1": {
+  "reply": {
+   "data": {
+    "delalloc": false,
+    "forbid_usb": false,
+    "needReboot": false,
+    "setting": false,
+    "support_exfat_mkfs": false
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Core.ExternalDevice.Storage.Setting",
+   "method": "get",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.ExternalDevice.Storage.USB.list.v1": {
+  "reply": {
+   "data": {
+    "devices": []
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Core.ExternalDevice.Storage.USB",
+   "method": "list",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.ExternalDevice.Storage.eSATA.list.v1": {
+  "reply": {
+   "data": {
+    "devices": []
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Core.ExternalDevice.Storage.eSATA",
+   "method": "list",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Region.NTP.get.v1": {
+  "reply": {
+   "data": {
+    "date": "2026/10/28",
+    "enable_ntp": "ntp",
+    "hour": 10,
+    "minute": 16,
+    "now": "Wed Oct 28 10:16:34 2026\n",
+    "second": 34,
+    "server": "time.google.com",
+    "timestamp": 1793200594,
+    "timezone": "Central"
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Core.Region.NTP",
+   "method": "get",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.get_schedule.v1": {
+  "reply": {
+   "error": {
+    "code": 403
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Share.Snapshot",
+   "method": "get_schedule",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.get_schedule.v1:{\"name\": \"\\\"Test-Resources\\\"\"}": {
+  "reply": {
+   "data": {
+    "enable_snapshot_schedule": false,
+    "schedule": {
+     "date": "2026/10/28",
+     "date_type": 0,
+     "hour": 0,
+     "last_work_hour": 0,
+     "min": 0,
+     "next_trigger_time": "",
+     "repeat": 0,
+     "repeat_hour": 0,
+     "repeat_hour_store_config": null,
+     "repeat_min": 0,
+     "repeat_min_store_config": null,
+     "week_name": "0,1,2,3,4,5,6"
+    },
+    "task_id": -1
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Core.Share.Snapshot",
+   "method": "get_schedule",
+   "name": "\"Test-Resources\"",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.get_schedule.v1:{\"name\": \"\\\"docker\\\"\"}": {
+  "reply": {
+   "data": {
+    "enable_snapshot_schedule": false,
+    "schedule": {
+     "date": "2026/10/28",
+     "date_type": 0,
+     "hour": 0,
+     "last_work_hour": 0,
+     "min": 0,
+     "next_trigger_time": "",
+     "repeat": 0,
+     "repeat_hour": 0,
+     "repeat_hour_store_config": null,
+     "repeat_min": 0,
+     "repeat_min_store_config": null,
+     "week_name": "0,1,2,3,4,5,6"
+    },
+    "task_id": -1
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Core.Share.Snapshot",
+   "method": "get_schedule",
+   "name": "\"docker\"",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.get_schedule.v1:{\"name\": \"\\\"homes\\\"\"}": {
+  "reply": {
+   "data": {
+    "enable_snapshot_schedule": false,
+    "schedule": {
+     "date": "2026/10/28",
+     "date_type": 0,
+     "hour": 0,
+     "last_work_hour": 0,
+     "min": 0,
+     "next_trigger_time": "",
+     "repeat": 0,
+     "repeat_hour": 0,
+     "repeat_hour_store_config": null,
+     "repeat_min": 0,
+     "repeat_min_store_config": null,
+     "week_name": "0,1,2,3,4,5,6"
+    },
+    "task_id": -1
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Core.Share.Snapshot",
+   "method": "get_schedule",
+   "name": "\"homes\"",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.get_schedule.v1:{\"name\": \"\\\"no-such-share\\\"\"}": {
+  "reply": {
+   "data": {
+    "enable_snapshot_schedule": false,
+    "schedule": {
+     "date": "2026/10/28",
+     "date_type": 0,
+     "hour": 0,
+     "last_work_hour": 0,
+     "min": 0,
+     "next_trigger_time": "",
+     "repeat": 0,
+     "repeat_hour": 0,
+     "repeat_hour_store_config": null,
+     "repeat_min": 0,
+     "repeat_min_store_config": null,
+     "week_name": "0,1,2,3,4,5,6"
+    },
+    "task_id": -1
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Core.Share.Snapshot",
+   "method": "get_schedule",
+   "name": "\"no-such-share\"",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.get_schedule.v1:{\"name\": \"\\\"photo\\\"\"}": {
+  "reply": {
+   "data": {
+    "enable_snapshot_schedule": false,
+    "schedule": {
+     "date": "2026/10/28",
+     "date_type": 0,
+     "hour": 0,
+     "last_work_hour": 0,
+     "min": 0,
+     "next_trigger_time": "",
+     "repeat": 0,
+     "repeat_hour": 0,
+     "repeat_hour_store_config": null,
+     "repeat_min": 0,
+     "repeat_min_store_config": null,
+     "week_name": "0,1,2,3,4,5,6"
+    },
+    "task_id": -1
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Core.Share.Snapshot",
+   "method": "get_schedule",
+   "name": "\"photo\"",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.get_share_conf.v1": {
+  "reply": {
+   "error": {
+    "code": 403
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Share.Snapshot",
+   "method": "get_share_conf",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.get_share_conf.v1:{\"name\": \"\\\"Test-Resources\\\"\"}": {
+  "reply": {
+   "error": {
+    "code": 403
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Share.Snapshot",
+   "method": "get_share_conf",
+   "name": "\"Test-Resources\"",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.get_share_conf.v1:{\"name\": \"\\\"docker\\\"\"}": {
+  "reply": {
+   "error": {
+    "code": 403
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Share.Snapshot",
+   "method": "get_share_conf",
+   "name": "\"docker\"",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.get_share_conf.v1:{\"name\": \"\\\"homes\\\"\"}": {
+  "reply": {
+   "error": {
+    "code": 403
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Share.Snapshot",
+   "method": "get_share_conf",
+   "name": "\"homes\"",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.get_share_conf.v1:{\"name\": \"\\\"photo\\\"\"}": {
+  "reply": {
+   "error": {
+    "code": 403
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Share.Snapshot",
+   "method": "get_share_conf",
+   "name": "\"photo\"",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.list.v1": {
+  "reply": {
+   "error": {
+    "code": 403
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Share.Snapshot",
+   "method": "list",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"Backups\\\"\", \"offset\": 0}": {
+  "reply": {
+   "data": {
+    "snapshots": [],
+    "total": 0
+   },
+   "success": true
+  },
+  "request": {
+   "additional": "[\"desc\", \"lock\", \"worm_lock\", \"schedule_snapshot\"]",
+   "api": "SYNO.Core.Share.Snapshot",
+   "limit": -1,
+   "method": "list",
+   "name": "\"Backups\"",
+   "offset": 0,
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"BitTorrents\\\"\", \"offset\": 0}": {
+  "reply": {
+   "data": {
+    "snapshots": [],
+    "total": 0
+   },
+   "success": true
+  },
+  "request": {
+   "additional": "[\"desc\", \"lock\", \"worm_lock\", \"schedule_snapshot\"]",
+   "api": "SYNO.Core.Share.Snapshot",
+   "limit": -1,
+   "method": "list",
+   "name": "\"BitTorrents\"",
+   "offset": 0,
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"NetBackup\\\"\", \"offset\": 0}": {
+  "reply": {
+   "data": {
+    "snapshots": [],
+    "total": 0
+   },
+   "success": true
+  },
+  "request": {
+   "additional": "[\"desc\", \"lock\", \"worm_lock\", \"schedule_snapshot\"]",
+   "api": "SYNO.Core.Share.Snapshot",
+   "limit": -1,
+   "method": "list",
+   "name": "\"NetBackup\"",
+   "offset": 0,
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"Test-Resources\\\"\", \"offset\": 0}": {
+  "reply": {
+   "data": {
+    "snapshots": [],
+    "total": 0
+   },
+   "success": true
+  },
+  "request": {
+   "additional": "[\"desc\", \"lock\", \"worm_lock\", \"schedule_snapshot\"]",
+   "api": "SYNO.Core.Share.Snapshot",
+   "limit": -1,
+   "method": "list",
+   "name": "\"Test-Resources\"",
+   "offset": 0,
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"awareness-backups\\\"\", \"offset\": 0}": {
+  "reply": {
+   "data": {
+    "snapshots": [],
+    "total": 0
+   },
+   "success": true
+  },
+  "request": {
+   "additional": "[\"desc\", \"lock\", \"worm_lock\", \"schedule_snapshot\"]",
+   "api": "SYNO.Core.Share.Snapshot",
+   "limit": -1,
+   "method": "list",
+   "name": "\"awareness-backups\"",
+   "offset": 0,
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"docker\\\"\", \"offset\": 0}": {
+  "reply": {
+   "data": {
+    "snapshots": [],
+    "total": 0
+   },
+   "success": true
+  },
+  "request": {
+   "additional": "[\"desc\", \"lock\", \"worm_lock\", \"schedule_snapshot\"]",
+   "api": "SYNO.Core.Share.Snapshot",
+   "limit": -1,
+   "method": "list",
+   "name": "\"docker\"",
+   "offset": 0,
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"fah\\\"\", \"offset\": 0}": {
+  "reply": {
+   "data": {
+    "snapshots": [],
+    "total": 0
+   },
+   "success": true
+  },
+  "request": {
+   "additional": "[\"desc\", \"lock\", \"worm_lock\", \"schedule_snapshot\"]",
+   "api": "SYNO.Core.Share.Snapshot",
+   "limit": -1,
+   "method": "list",
+   "name": "\"fah\"",
+   "offset": 0,
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"git\\\"\", \"offset\": 0}": {
+  "reply": {
+   "data": {
+    "snapshots": [],
+    "total": 0
+   },
+   "success": true
+  },
+  "request": {
+   "additional": "[\"desc\", \"lock\", \"worm_lock\", \"schedule_snapshot\"]",
+   "api": "SYNO.Core.Share.Snapshot",
+   "limit": -1,
+   "method": "list",
+   "name": "\"git\"",
+   "offset": 0,
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"homes\\\"\", \"offset\": 0}": {
+  "reply": {
+   "data": {
+    "snapshots": [],
+    "total": 0
+   },
+   "success": true
+  },
+  "request": {
+   "additional": "[\"desc\", \"lock\", \"worm_lock\", \"schedule_snapshot\"]",
+   "api": "SYNO.Core.Share.Snapshot",
+   "limit": -1,
+   "method": "list",
+   "name": "\"homes\"",
+   "offset": 0,
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"mcp-synology-test\\\"\", \"offset\": 0}": {
+  "reply": {
+   "data": {
+    "snapshots": [],
+    "total": 0
+   },
+   "success": true
+  },
+  "request": {
+   "additional": "[\"desc\", \"lock\", \"worm_lock\", \"schedule_snapshot\"]",
+   "api": "SYNO.Core.Share.Snapshot",
+   "limit": -1,
+   "method": "list",
+   "name": "\"mcp-synology-test\"",
+   "offset": 0,
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"misc\\\"\", \"offset\": 0}": {
+  "reply": {
+   "data": {
+    "snapshots": [],
+    "total": 0
+   },
+   "success": true
+  },
+  "request": {
+   "additional": "[\"desc\", \"lock\", \"worm_lock\", \"schedule_snapshot\"]",
+   "api": "SYNO.Core.Share.Snapshot",
+   "limit": -1,
+   "method": "list",
+   "name": "\"misc\"",
+   "offset": 0,
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"music\\\"\", \"offset\": 0}": {
+  "reply": {
+   "data": {
+    "snapshots": [],
+    "total": 0
+   },
+   "success": true
+  },
+  "request": {
+   "additional": "[\"desc\", \"lock\", \"worm_lock\", \"schedule_snapshot\"]",
+   "api": "SYNO.Core.Share.Snapshot",
+   "limit": -1,
+   "method": "list",
+   "name": "\"music\"",
+   "offset": 0,
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"owncloud\\\"\", \"offset\": 0}": {
+  "reply": {
+   "data": {
+    "snapshots": [],
+    "total": 0
+   },
+   "success": true
+  },
+  "request": {
+   "additional": "[\"desc\", \"lock\", \"worm_lock\", \"schedule_snapshot\"]",
+   "api": "SYNO.Core.Share.Snapshot",
+   "limit": -1,
+   "method": "list",
+   "name": "\"owncloud\"",
+   "offset": 0,
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"photo\\\"\", \"offset\": 0}": {
+  "reply": {
+   "data": {
+    "snapshots": [],
+    "total": 0
+   },
+   "success": true
+  },
+  "request": {
+   "additional": "[\"desc\", \"lock\", \"worm_lock\", \"schedule_snapshot\"]",
+   "api": "SYNO.Core.Share.Snapshot",
+   "limit": -1,
+   "method": "list",
+   "name": "\"photo\"",
+   "offset": 0,
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"surveillance\\\"\", \"offset\": 0}": {
+  "reply": {
+   "data": {
+    "snapshots": [],
+    "total": 0
+   },
+   "success": true
+  },
+  "request": {
+   "additional": "[\"desc\", \"lock\", \"worm_lock\", \"schedule_snapshot\"]",
+   "api": "SYNO.Core.Share.Snapshot",
+   "limit": -1,
+   "method": "list",
+   "name": "\"surveillance\"",
+   "offset": 0,
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"video\\\"\", \"offset\": 0}": {
+  "reply": {
+   "data": {
+    "snapshots": [],
+    "total": 0
+   },
+   "success": true
+  },
+  "request": {
+   "additional": "[\"desc\", \"lock\", \"worm_lock\", \"schedule_snapshot\"]",
+   "api": "SYNO.Core.Share.Snapshot",
+   "limit": -1,
+   "method": "list",
+   "name": "\"video\"",
+   "offset": 0,
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"web\\\"\", \"offset\": 0}": {
+  "reply": {
+   "data": {
+    "snapshots": [],
+    "total": 0
+   },
+   "success": true
+  },
+  "request": {
+   "additional": "[\"desc\", \"lock\", \"worm_lock\", \"schedule_snapshot\"]",
+   "api": "SYNO.Core.Share.Snapshot",
+   "limit": -1,
+   "method": "list",
+   "name": "\"web\"",
+   "offset": 0,
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.list.v1:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"web_packages\\\"\", \"offset\": 0}": {
+  "reply": {
+   "data": {
+    "snapshots": [],
+    "total": 0
+   },
+   "success": true
+  },
+  "request": {
+   "additional": "[\"desc\", \"lock\", \"worm_lock\", \"schedule_snapshot\"]",
+   "api": "SYNO.Core.Share.Snapshot",
+   "limit": -1,
+   "method": "list",
+   "name": "\"web_packages\"",
+   "offset": 0,
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.list.v2": {
+  "reply": {
+   "error": {
+    "code": 403
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Share.Snapshot",
+   "method": "list",
+   "version": 2
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"Backups\\\"\", \"offset\": 0}": {
+  "reply": {
+   "data": {
+    "snapshots": [],
+    "total": 0
+   },
+   "success": true
+  },
+  "request": {
+   "additional": "[\"desc\", \"lock\", \"worm_lock\", \"schedule_snapshot\"]",
+   "api": "SYNO.Core.Share.Snapshot",
+   "limit": -1,
+   "method": "list",
+   "name": "\"Backups\"",
+   "offset": 0,
+   "version": 2
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"BitTorrents\\\"\", \"offset\": 0}": {
+  "reply": {
+   "data": {
+    "snapshots": [],
+    "total": 0
+   },
+   "success": true
+  },
+  "request": {
+   "additional": "[\"desc\", \"lock\", \"worm_lock\", \"schedule_snapshot\"]",
+   "api": "SYNO.Core.Share.Snapshot",
+   "limit": -1,
+   "method": "list",
+   "name": "\"BitTorrents\"",
+   "offset": 0,
+   "version": 2
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"NetBackup\\\"\", \"offset\": 0}": {
+  "reply": {
+   "data": {
+    "snapshots": [],
+    "total": 0
+   },
+   "success": true
+  },
+  "request": {
+   "additional": "[\"desc\", \"lock\", \"worm_lock\", \"schedule_snapshot\"]",
+   "api": "SYNO.Core.Share.Snapshot",
+   "limit": -1,
+   "method": "list",
+   "name": "\"NetBackup\"",
+   "offset": 0,
+   "version": 2
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"Test-Resources\\\"\", \"offset\": 0}": {
+  "reply": {
+   "data": {
+    "snapshots": [],
+    "total": 0
+   },
+   "success": true
+  },
+  "request": {
+   "additional": "[\"desc\", \"lock\", \"worm_lock\", \"schedule_snapshot\"]",
+   "api": "SYNO.Core.Share.Snapshot",
+   "limit": -1,
+   "method": "list",
+   "name": "\"Test-Resources\"",
+   "offset": 0,
+   "version": 2
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"awareness-backups\\\"\", \"offset\": 0}": {
+  "reply": {
+   "data": {
+    "snapshots": [],
+    "total": 0
+   },
+   "success": true
+  },
+  "request": {
+   "additional": "[\"desc\", \"lock\", \"worm_lock\", \"schedule_snapshot\"]",
+   "api": "SYNO.Core.Share.Snapshot",
+   "limit": -1,
+   "method": "list",
+   "name": "\"awareness-backups\"",
+   "offset": 0,
+   "version": 2
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"docker\\\"\", \"offset\": 0}": {
+  "reply": {
+   "data": {
+    "snapshots": [],
+    "total": 0
+   },
+   "success": true
+  },
+  "request": {
+   "additional": "[\"desc\", \"lock\", \"worm_lock\", \"schedule_snapshot\"]",
+   "api": "SYNO.Core.Share.Snapshot",
+   "limit": -1,
+   "method": "list",
+   "name": "\"docker\"",
+   "offset": 0,
+   "version": 2
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"fah\\\"\", \"offset\": 0}": {
+  "reply": {
+   "data": {
+    "snapshots": [],
+    "total": 0
+   },
+   "success": true
+  },
+  "request": {
+   "additional": "[\"desc\", \"lock\", \"worm_lock\", \"schedule_snapshot\"]",
+   "api": "SYNO.Core.Share.Snapshot",
+   "limit": -1,
+   "method": "list",
+   "name": "\"fah\"",
+   "offset": 0,
+   "version": 2
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"git\\\"\", \"offset\": 0}": {
+  "reply": {
+   "data": {
+    "snapshots": [],
+    "total": 0
+   },
+   "success": true
+  },
+  "request": {
+   "additional": "[\"desc\", \"lock\", \"worm_lock\", \"schedule_snapshot\"]",
+   "api": "SYNO.Core.Share.Snapshot",
+   "limit": -1,
+   "method": "list",
+   "name": "\"git\"",
+   "offset": 0,
+   "version": 2
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"homes\\\"\", \"offset\": 0}": {
+  "reply": {
+   "data": {
+    "snapshots": [],
+    "total": 0
+   },
+   "success": true
+  },
+  "request": {
+   "additional": "[\"desc\", \"lock\", \"worm_lock\", \"schedule_snapshot\"]",
+   "api": "SYNO.Core.Share.Snapshot",
+   "limit": -1,
+   "method": "list",
+   "name": "\"homes\"",
+   "offset": 0,
+   "version": 2
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"mcp-synology-test\\\"\", \"offset\": 0}": {
+  "reply": {
+   "data": {
+    "snapshots": [],
+    "total": 0
+   },
+   "success": true
+  },
+  "request": {
+   "additional": "[\"desc\", \"lock\", \"worm_lock\", \"schedule_snapshot\"]",
+   "api": "SYNO.Core.Share.Snapshot",
+   "limit": -1,
+   "method": "list",
+   "name": "\"mcp-synology-test\"",
+   "offset": 0,
+   "version": 2
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"misc\\\"\", \"offset\": 0}": {
+  "reply": {
+   "data": {
+    "snapshots": [],
+    "total": 0
+   },
+   "success": true
+  },
+  "request": {
+   "additional": "[\"desc\", \"lock\", \"worm_lock\", \"schedule_snapshot\"]",
+   "api": "SYNO.Core.Share.Snapshot",
+   "limit": -1,
+   "method": "list",
+   "name": "\"misc\"",
+   "offset": 0,
+   "version": 2
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"music\\\"\", \"offset\": 0}": {
+  "reply": {
+   "data": {
+    "snapshots": [],
+    "total": 0
+   },
+   "success": true
+  },
+  "request": {
+   "additional": "[\"desc\", \"lock\", \"worm_lock\", \"schedule_snapshot\"]",
+   "api": "SYNO.Core.Share.Snapshot",
+   "limit": -1,
+   "method": "list",
+   "name": "\"music\"",
+   "offset": 0,
+   "version": 2
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"owncloud\\\"\", \"offset\": 0}": {
+  "reply": {
+   "data": {
+    "snapshots": [],
+    "total": 0
+   },
+   "success": true
+  },
+  "request": {
+   "additional": "[\"desc\", \"lock\", \"worm_lock\", \"schedule_snapshot\"]",
+   "api": "SYNO.Core.Share.Snapshot",
+   "limit": -1,
+   "method": "list",
+   "name": "\"owncloud\"",
+   "offset": 0,
+   "version": 2
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"photo\\\"\", \"offset\": 0}": {
+  "reply": {
+   "data": {
+    "snapshots": [],
+    "total": 0
+   },
+   "success": true
+  },
+  "request": {
+   "additional": "[\"desc\", \"lock\", \"worm_lock\", \"schedule_snapshot\"]",
+   "api": "SYNO.Core.Share.Snapshot",
+   "limit": -1,
+   "method": "list",
+   "name": "\"photo\"",
+   "offset": 0,
+   "version": 2
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"surveillance\\\"\", \"offset\": 0}": {
+  "reply": {
+   "data": {
+    "snapshots": [],
+    "total": 0
+   },
+   "success": true
+  },
+  "request": {
+   "additional": "[\"desc\", \"lock\", \"worm_lock\", \"schedule_snapshot\"]",
+   "api": "SYNO.Core.Share.Snapshot",
+   "limit": -1,
+   "method": "list",
+   "name": "\"surveillance\"",
+   "offset": 0,
+   "version": 2
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"video\\\"\", \"offset\": 0}": {
+  "reply": {
+   "data": {
+    "snapshots": [],
+    "total": 0
+   },
+   "success": true
+  },
+  "request": {
+   "additional": "[\"desc\", \"lock\", \"worm_lock\", \"schedule_snapshot\"]",
+   "api": "SYNO.Core.Share.Snapshot",
+   "limit": -1,
+   "method": "list",
+   "name": "\"video\"",
+   "offset": 0,
+   "version": 2
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"web\\\"\", \"offset\": 0}": {
+  "reply": {
+   "data": {
+    "snapshots": [],
+    "total": 0
+   },
+   "success": true
+  },
+  "request": {
+   "additional": "[\"desc\", \"lock\", \"worm_lock\", \"schedule_snapshot\"]",
+   "api": "SYNO.Core.Share.Snapshot",
+   "limit": -1,
+   "method": "list",
+   "name": "\"web\"",
+   "offset": 0,
+   "version": 2
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\", \\\"lock\\\", \\\"worm_lock\\\", \\\"schedule_snapshot\\\"]\", \"limit\": -1, \"name\": \"\\\"web_packages\\\"\", \"offset\": 0}": {
+  "reply": {
+   "data": {
+    "snapshots": [],
+    "total": 0
+   },
+   "success": true
+  },
+  "request": {
+   "additional": "[\"desc\", \"lock\", \"worm_lock\", \"schedule_snapshot\"]",
+   "api": "SYNO.Core.Share.Snapshot",
+   "limit": -1,
+   "method": "list",
+   "name": "\"web_packages\"",
+   "offset": 0,
+   "version": 2
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"[\\\"desc\\\"]\", \"limit\": -1, \"name\": \"\\\"no-such-share\\\"\", \"offset\": 0}": {
+  "reply": {
+   "error": {
+    "code": 402
+   },
+   "success": false
+  },
+  "request": {
+   "additional": "[\"desc\"]",
+   "api": "SYNO.Core.Share.Snapshot",
+   "limit": -1,
+   "method": "list",
+   "name": "\"no-such-share\"",
+   "offset": 0,
+   "version": 2
+  }
+ },
+ "admin:SYNO.Core.Share.Snapshot.list.v2:{\"additional\": \"{\\\"hide\\\": true, \\\"summary\\\": true, \\\"desc\\\": true, \\\"lock\\\": true, \\\"worm_lock\\\": true, \\\"schedule_snapshot\\\": true}\", \"limit\": -1, \"name\": \"\\\"photo\\\"\", \"offset\": 0}": {
+  "reply": {
+   "error": {
+    "code": 403
+   },
+   "success": false
+  },
+  "request": {
+   "additional": "{\"hide\": true, \"summary\": true, \"desc\": true, \"lock\": true, \"worm_lock\": true, \"schedule_snapshot\": true}",
+   "api": "SYNO.Core.Share.Snapshot",
+   "limit": -1,
+   "method": "list",
+   "name": "\"photo\"",
+   "offset": 0,
+   "version": 2
+  }
+ },
+ "admin:SYNO.Core.Share.list.v1:{\"additional\": \"[\\\"vol_path\\\", \\\"enable_snapshot\\\", \\\"snapshot_count\\\"]\"}": {
+  "reply": {
+   "data": {
+    "shares": [
+     {
+      "desc": "Backups For MCP Awareness",
+      "is_usb_share": false,
+      "name": "awareness-backups",
+      "snapshot_info": {
+       "snapshot_count": 0
+      },
+      "uuid": "b7729a22-9056-44fd-bf70-bc17d1fa4b79",
+      "vol_path": "/volume1"
+     },
+     {
+      "desc": "",
+      "is_usb_share": false,
+      "name": "Backups",
+      "snapshot_info": {
+       "snapshot_count": 0
+      },
+      "uuid": "20a9fbd2-d26d-47ac-ab22-b2690f0b8791",
+      "vol_path": "/volume1"
+     },
+     {
+      "desc": "",
+      "is_usb_share": false,
+      "name": "BitTorrents",
+      "snapshot_info": {
+       "snapshot_count": 0
+      },
+      "uuid": "227e07a9-ca51-4749-96d1-2209097752fd",
+      "vol_path": "/volume1"
+     },
+     {
+      "desc": "",
+      "is_usb_share": false,
+      "name": "docker",
+      "snapshot_info": {
+       "snapshot_count": 0
+      },
+      "uuid": "5465e657-6506-4acf-b16d-3c4dd32e9cbd",
+      "vol_path": "/volume1"
+     },
+     {
+      "desc": "Folding@Home Config & Working Directory",
+      "is_usb_share": false,
+      "name": "fah",
+      "snapshot_info": {
+       "snapshot_count": 0
+      },
+      "uuid": "0b8b63cd-6f44-48cf-b4a1-65533719f4a5",
+      "vol_path": "/volume1"
+     },
+     {
+      "desc": "",
+      "is_usb_share": false,
+      "name": "git",
+      "snapshot_info": {
+       "snapshot_count": 0
+      },
+      "uuid": "1fb199d2-1cd5-437e-8b6c-65a09da399d9",
+      "vol_path": "/volume1"
+     },
+     {
+      "desc": "user home",
+      "is_usb_share": false,
+      "name": "homes",
+      "snapshot_info": {
+       "snapshot_count": 0
+      },
+      "uuid": "518336e2-6bef-498c-a157-1bc8e19a966c",
+      "vol_path": "/volume1"
+     },
+     {
+      "desc": "mcp-synology live tests. Test only.",
+      "is_usb_share": false,
+      "name": "mcp-synology-test",
+      "snapshot_info": {
+       "snapshot_count": 0
+      },
+      "uuid": "577f4b13-bd81-4742-841a-c5f2a22efafa",
+      "vol_path": "/volume1"
+     },
+     {
+      "desc": "",
+      "is_usb_share": false,
+      "name": "mcp-synology-test-claude-ai",
+      "snapshot_info": {
+       "snapshot_count": 0
+      },
+      "uuid": "ab429d97-7988-41c7-ac83-c76276a0ab75",
+      "vol_path": "/volume1"
+     },
+     {
+      "desc": "",
+      "is_usb_share": false,
+      "name": "mcp-synology-test-claude-code",
+      "snapshot_info": {
+       "snapshot_count": 0
+      },
+      "uuid": "d3eceeb4-0510-4f65-b38d-451840ba01f4",
+      "vol_path": "/volume1"
+     },
+     {
+      "desc": "",
+      "is_usb_share": false,
+      "name": "mcp-synology-test-muse",
+      "snapshot_info": {
+       "snapshot_count": 0
+      },
+      "uuid": "c5ee14d8-b56f-4790-83ac-94e27a0d4f07",
+      "vol_path": "/volume1"
+     },
+     {
+      "desc": "Miscellaneous Files",
+      "is_usb_share": false,
+      "name": "misc",
+      "snapshot_info": {
+       "snapshot_count": 0
+      },
+      "uuid": "aee7b66d-404d-43e2-84e1-5671eee43691",
+      "vol_path": "/volume1"
+     },
+     {
+      "desc": "System default shared folder",
+      "is_usb_share": false,
+      "name": "music",
+      "snapshot_info": {
+       "snapshot_count": 0
+      },
+      "uuid": "3ea3ad89-46af-4328-91a9-c04da5f9cd21",
+      "vol_path": "/volume1"
+     },
+     {
+      "desc": "System default shared folder",
+      "is_usb_share": false,
+      "name": "NetBackup",
+      "snapshot_info": {
+       "snapshot_count": 0
+      },
+      "uuid": "20b6c6e3-d672-4ea8-b98b-d3b7ac350505",
+      "vol_path": "/volume1"
+     },
+     {
+      "desc": "",
+      "is_usb_share": false,
+      "name": "owncloud",
+      "snapshot_info": {
+       "snapshot_count": 0
+      },
+      "uuid": "4ac5cc49-8a4b-4969-ad74-f9faa1c6fa1e",
+      "vol_path": "/volume1"
+     },
+     {
+      "desc": "System default shared folder",
+      "is_usb_share": false,
+      "name": "photo",
+      "snapshot_info": {
+       "snapshot_count": 0
+      },
+      "uuid": "a96d6ae6-dbd7-448b-9498-021fc801a838",
+      "vol_path": "/volume1"
+     },
+     {
+      "desc": "System default shared folder",
+      "is_usb_share": false,
+      "name": "surveillance",
+      "snapshot_info": {
+       "snapshot_count": 0
+      },
+      "uuid": "d61b850d-42f5-42fb-bb5e-6db882421e10",
+      "vol_path": "/volume1"
+     },
+     {
+      "desc": "Files and folders for testing Synology-MCP functionality ",
+      "is_usb_share": false,
+      "name": "Test-Resources",
+      "snapshot_info": {
+       "snapshot_count": 0
+      },
+      "uuid": "550dcb50-1d6d-45d0-8e8b-2763da8eba49",
+      "vol_path": "/volume1"
+     },
+     {
+      "desc": "System default shared folder",
+      "is_usb_share": false,
+      "name": "video",
+      "snapshot_info": {
+       "snapshot_count": 0
+      },
+      "uuid": "b768667d-6bd5-4789-82cc-540b8ef8a970",
+      "vol_path": "/volume1"
+     },
+     {
+      "desc": "System default shared folder",
+      "is_usb_share": false,
+      "name": "web",
+      "snapshot_info": {
+       "snapshot_count": 0
+      },
+      "uuid": "d4bc4455-a72a-40d4-8011-4aa30cbb560f",
+      "vol_path": "/volume1"
+     },
+     {
+      "desc": "",
+      "is_usb_share": false,
+      "name": "web_packages",
+      "snapshot_info": {
+       "snapshot_count": 0
+      },
+      "uuid": "a6ec6e94-e5f3-4cff-bfa8-61bf61428f5b",
+      "vol_path": "/volume1"
+     }
+    ],
+    "total": 21
+   },
+   "success": true
+  },
+  "request": {
+   "additional": "[\"vol_path\", \"enable_snapshot\", \"snapshot_count\"]",
+   "api": "SYNO.Core.Share",
+   "method": "list",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Storage.Disk.FWUpgrade.get_summary.v1": {
+  "reply": {
+   "error": {
+    "code": 114
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk.FWUpgrade",
+   "method": "get_summary",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Storage.Disk.FWUpgrade.list_drive.v1": {
+  "reply": {
+   "data": {
+    "access_network": true,
+    "drives": []
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk.FWUpgrade",
+   "method": "list_drive",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Storage.Disk.disk_config_get.v1": {
+  "reply": {
+   "error": {
+    "code": 103
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "disk_config_get",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Storage.Disk.disk_health_prediction_log_get.v1": {
+  "reply": {
+   "data": {},
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "disk_health_prediction_log_get",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Storage.Disk.disk_test_log_get.v1": {
+  "reply": {
+   "error": {
+    "code": 117
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "disk_test_log_get",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Storage.Disk.disk_test_log_get.v1:{\"device\": \"/dev/sda\", \"limit\": 20, \"offset\": 0, \"sort_by\": \"time\", \"sort_direction\": \"DESC\"}": {
+  "reply": {
+   "data": {
+    "testLog": [
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "quick",
+      "time": "2026/10/28 04:00:02",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "quick",
+      "time": "2026/10/27 04:00:02",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "extend",
+      "time": "2026/10/25 02:00:02",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "quick",
+      "time": "2026/10/24 04:00:02",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "quick",
+      "time": "2026/10/23 04:00:02",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "quick",
+      "time": "2026/10/22 04:00:01",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "quick",
+      "time": "2026/10/21 04:00:01",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "extend",
+      "time": "2026/10/18 02:00:01",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "quick",
+      "time": "2026/10/17 04:00:02",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "quick",
+      "time": "2026/10/16 04:00:01",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "quick",
+      "time": "2026/10/15 04:00:01",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "quick",
+      "time": "2026/10/14 04:00:01",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "quick",
+      "time": "2026/10/13 04:00:01",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "extend",
+      "time": "2026/10/11 02:00:01",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "quick",
+      "time": "2026/10/10 04:00:01",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "quick",
+      "time": "2026/10/09 04:00:01",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "quick",
+      "time": "2026/10/08 04:00:02",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "quick",
+      "time": "2026/10/07 04:00:01",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "quick",
+      "time": "2026/10/06 04:00:01",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "extend",
+      "time": "2026/10/04 02:00:01",
+      "type": "smart"
+     }
+    ],
+    "total": 1247
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "device": "/dev/sda",
+   "limit": 20,
+   "method": "disk_test_log_get",
+   "offset": 0,
+   "sort_by": "time",
+   "sort_direction": "DESC",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Storage.Disk.disk_test_log_get.v1:{\"device\": \"/dev/sde\", \"limit\": 20, \"offset\": 0, \"sort_by\": \"time\", \"sort_direction\": \"DESC\"}": {
+  "reply": {
+   "data": {
+    "testLog": [
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "quick",
+      "time": "2026/10/28 04:00:03",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "quick",
+      "time": "2026/10/27 04:00:02",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "quick",
+      "time": "2026/10/26 04:00:02",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "extend",
+      "time": "2026/10/25 02:00:05",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "quick",
+      "time": "2026/10/24 04:00:03",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "quick",
+      "time": "2026/10/23 04:00:04",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "quick",
+      "time": "2026/10/22 04:00:02",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "quick",
+      "time": "2026/10/21 04:00:02",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "quick",
+      "time": "2026/10/20 04:00:01",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "quick",
+      "time": "2026/10/19 04:00:01",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "extend",
+      "time": "2026/10/18 02:00:03",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "quick",
+      "time": "2026/10/17 04:00:04",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "quick",
+      "time": "2026/10/16 04:00:02",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "quick",
+      "time": "2026/10/15 04:00:02",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "quick",
+      "time": "2026/10/14 04:00:02",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "quick",
+      "time": "2026/10/13 04:00:02",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "quick",
+      "time": "2026/10/12 04:00:02",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "extend",
+      "time": "2026/10/11 02:00:02",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "quick",
+      "time": "2026/10/10 04:00:02",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "quick",
+      "time": "2026/10/09 04:00:02",
+      "type": "smart"
+     }
+    ],
+    "total": 944
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "device": "/dev/sde",
+   "limit": 20,
+   "method": "disk_test_log_get",
+   "offset": 0,
+   "sort_by": "time",
+   "sort_direction": "DESC",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Storage.Disk.disk_test_log_get.v1:{\"device\": \"/dev/sdf\", \"limit\": 20, \"offset\": 0, \"sort_by\": \"time\", \"sort_direction\": \"DESC\"}": {
+  "reply": {
+   "data": {
+    "testLog": [
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "quick",
+      "time": "2026/10/28 04:00:03",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "quick",
+      "time": "2026/10/27 04:00:03",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "quick",
+      "time": "2026/10/26 04:00:02",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "extend",
+      "time": "2026/10/25 02:00:05",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "quick",
+      "time": "2026/10/24 04:00:03",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "quick",
+      "time": "2026/10/23 04:00:04",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "quick",
+      "time": "2026/10/22 04:00:02",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "quick",
+      "time": "2026/10/21 04:00:02",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "quick",
+      "time": "2026/10/20 04:00:01",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "quick",
+      "time": "2026/10/19 04:00:02",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "extend",
+      "time": "2026/10/18 02:00:04",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "quick",
+      "time": "2026/10/17 04:00:04",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "quick",
+      "time": "2026/10/16 04:00:02",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "quick",
+      "time": "2026/10/15 04:00:02",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "quick",
+      "time": "2026/10/14 04:00:02",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "quick",
+      "time": "2026/10/13 04:00:02",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "quick",
+      "time": "2026/10/12 04:00:02",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "extend",
+      "time": "2026/10/11 02:00:02",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "quick",
+      "time": "2026/10/10 04:00:02",
+      "type": "smart"
+     },
+     {
+      "result": "smart_complete",
+      "test_code": "",
+      "test_type": "quick",
+      "time": "2026/10/09 04:00:02",
+      "type": "smart"
+     }
+    ],
+    "total": 1028
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "device": "/dev/sdf",
+   "limit": 20,
+   "method": "disk_test_log_get",
+   "offset": 0,
+   "sort_by": "time",
+   "sort_direction": "DESC",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Storage.Disk.disk_test_log_get.v1:{\"device\": \"/dev/sdz\", \"limit\": 20, \"offset\": 0, \"sort_by\": \"time\", \"sort_direction\": \"DESC\"}": {
+  "reply": {
+   "error": {
+    "code": 101
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "device": "/dev/sdz",
+   "limit": 20,
+   "method": "disk_test_log_get",
+   "offset": 0,
+   "sort_by": "time",
+   "sort_direction": "DESC",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Storage.Disk.disks_info_get.v1": {
+  "reply": {
+   "error": {
+    "code": 121
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "disks_info_get",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Storage.Disk.get_adv_test_log.v1": {
+  "reply": {
+   "error": {
+    "code": 114
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "get_adv_test_log",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Storage.Disk.get_disk_led_status.v1": {
+  "reply": {
+   "error": {
+    "code": 114
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "get_disk_led_status",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Storage.Disk.get_offlinekit_ver.v1": {
+  "reply": {
+   "data": {
+    "ver": -1
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "get_offlinekit_ver",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Storage.Disk.get_performance_test_info.v1": {
+  "reply": {
+   "error": {
+    "code": 114
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "get_performance_test_info",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Storage.Disk.get_performance_test_log.v1": {
+  "reply": {
+   "error": {
+    "code": 101
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "get_performance_test_log",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Storage.Disk.get_performance_test_status.v1": {
+  "reply": {
+   "error": {
+    "code": 114
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "get_performance_test_status",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Storage.Disk.get_performance_test_status.v1:{\"device\": \"/dev/sda\"}": {
+  "reply": {
+   "data": {
+    "fw_upgrading": false,
+    "ihm_testing": false,
+    "is_erasing": false,
+    "smart_testing": false,
+    "status": "done"
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "device": "/dev/sda",
+   "method": "get_performance_test_status",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Storage.Disk.get_performance_test_status.v1:{\"device\": \"/dev/sde\"}": {
+  "reply": {
+   "data": {
+    "fw_upgrading": false,
+    "ihm_testing": false,
+    "is_erasing": false,
+    "smart_testing": false,
+    "status": "done"
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "device": "/dev/sde",
+   "method": "get_performance_test_status",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Storage.Disk.get_performance_test_status.v1:{\"device\": \"/dev/sdf\"}": {
+  "reply": {
+   "data": {
+    "fw_upgrading": false,
+    "ihm_testing": false,
+    "is_erasing": false,
+    "smart_testing": false,
+    "status": "done"
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "device": "/dev/sdf",
+   "method": "get_performance_test_status",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Storage.Disk.get_smart_info.v1": {
+  "reply": {
+   "error": {
+    "code": 114
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "get_smart_info",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Storage.Disk.get_smart_info.v1:{\"device\": \"/dev/sda\"}": {
+  "reply": {
+   "data": {
+    "smartInfo": [
+     {
+      "current": "100",
+      "id": "1",
+      "name": "Raw_Read_Error_Rate",
+      "raw": "0",
+      "status": "OK",
+      "threshold": "001",
+      "worst": "100"
+     },
+     {
+      "current": "138",
+      "id": "2",
+      "name": "Throughput_Performance",
+      "raw": "96",
+      "status": "OK",
+      "threshold": "054",
+      "worst": "138"
+     },
+     {
+      "current": "089",
+      "id": "3",
+      "name": "Spin-up_Time",
+      "raw": "30089740364",
+      "status": "OK",
+      "threshold": "001",
+      "worst": "089"
+     },
+     {
+      "current": "100",
+      "id": "4",
+      "name": "Start/Stop_Count",
+      "raw": "6",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "100"
+     },
+     {
+      "current": "100",
+      "id": "5",
+      "name": "Re-allocated_Sector_Count",
+      "raw": "0",
+      "status": "OK",
+      "threshold": "001",
+      "worst": "100"
+     },
+     {
+      "current": "100",
+      "id": "7",
+      "name": "Seek_Error_Rate",
+      "raw": "0",
+      "status": "OK",
+      "threshold": "001",
+      "worst": "100"
+     },
+     {
+      "current": "133",
+      "id": "8",
+      "name": "Seek_Time_Performance",
+      "raw": "18",
+      "status": "OK",
+      "threshold": "020",
+      "worst": "133"
+     },
+     {
+      "current": "095",
+      "id": "9",
+      "name": "Power-on_Hours_Count",
+      "raw": "35535",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "095"
+     },
+     {
+      "current": "100",
+      "id": "10",
+      "name": "Spin_Retry_Count",
+      "raw": "0",
+      "status": "OK",
+      "threshold": "001",
+      "worst": "100"
+     },
+     {
+      "current": "100",
+      "id": "12",
+      "name": "Drive_Power_Cycle_Count",
+      "raw": "6",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "100"
+     },
+     {
+      "current": "100",
+      "id": "22",
+      "name": "Internal_Environment_Status_(Helium_Status)",
+      "raw": "100",
+      "status": "OK",
+      "threshold": "025",
+      "worst": "100"
+     },
+     {
+      "current": "100",
+      "id": "192",
+      "name": "Power_Off_Retract_Count",
+      "raw": "1270",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "100"
+     },
+     {
+      "current": "100",
+      "id": "193",
+      "name": "Load/Unload_Cycle_Count",
+      "raw": "1270",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "100"
+     },
+     {
+      "current": "057",
+      "id": "194",
+      "name": "Temperature",
+      "raw": "37",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "057"
+     },
+     {
+      "current": "100",
+      "id": "196",
+      "name": "Relocation_Event_Count",
+      "raw": "0",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "100"
+     },
+     {
+      "current": "100",
+      "id": "197",
+      "name": "Current_Pending_Sector_Count",
+      "raw": "0",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "100"
+     },
+     {
+      "current": "100",
+      "id": "198",
+      "name": "Off-Line_Scan_Uncorrectable_Sector_Count",
+      "raw": "0",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "100"
+     },
+     {
+      "current": "100",
+      "id": "199",
+      "name": "Ultra_DMA_CRC_Error_Rate",
+      "raw": "0",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "100"
+     }
+    ]
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "device": "/dev/sda",
+   "method": "get_smart_info",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Storage.Disk.get_smart_info.v1:{\"device\": \"/dev/sde\"}": {
+  "reply": {
+   "data": {
+    "smartInfo": [
+     {
+      "current": "100",
+      "id": "1",
+      "name": "Raw_Read_Error_Rate",
+      "raw": "0",
+      "status": "OK",
+      "threshold": "001",
+      "worst": "100"
+     },
+     {
+      "current": "147",
+      "id": "2",
+      "name": "Throughput_Performance",
+      "raw": "52",
+      "status": "OK",
+      "threshold": "054",
+      "worst": "147"
+     },
+     {
+      "current": "097",
+      "id": "3",
+      "name": "Spin_Up_Time",
+      "raw": "138",
+      "status": "OK",
+      "threshold": "001",
+      "worst": "097"
+     },
+     {
+      "current": "100",
+      "id": "4",
+      "name": "Start_Stop_Count",
+      "raw": "2",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "100"
+     },
+     {
+      "current": "100",
+      "id": "5",
+      "name": "Reallocated_Sector_Ct",
+      "raw": "0",
+      "status": "OK",
+      "threshold": "001",
+      "worst": "100"
+     },
+     {
+      "current": "100",
+      "id": "7",
+      "name": "Seek_Error_Rate",
+      "raw": "0",
+      "status": "OK",
+      "threshold": "001",
+      "worst": "100"
+     },
+     {
+      "current": "140",
+      "id": "8",
+      "name": "Seek_Time_Performance",
+      "raw": "15",
+      "status": "OK",
+      "threshold": "020",
+      "worst": "140"
+     },
+     {
+      "current": "097",
+      "id": "9",
+      "name": "Power_On_Hours",
+      "raw": "22832",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "097"
+     },
+     {
+      "current": "100",
+      "id": "10",
+      "name": "Spin_Retry_Count",
+      "raw": "0",
+      "status": "OK",
+      "threshold": "001",
+      "worst": "100"
+     },
+     {
+      "current": "100",
+      "id": "12",
+      "name": "Power_Cycle_Count",
+      "raw": "2",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "100"
+     },
+     {
+      "current": "100",
+      "id": "22",
+      "name": "Helium_Level",
+      "raw": "6553700",
+      "status": "OK",
+      "threshold": "025",
+      "worst": "100"
+     },
+     {
+      "current": "100",
+      "id": "192",
+      "name": "Power-Off_Retract_Count",
+      "raw": "960",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "100"
+     },
+     {
+      "current": "100",
+      "id": "193",
+      "name": "Load_Cycle_Count",
+      "raw": "960",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "100"
+     },
+     {
+      "current": "055",
+      "id": "194",
+      "name": "Temperature_Celsius",
+      "raw": "39",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "055"
+     },
+     {
+      "current": "100",
+      "id": "196",
+      "name": "Reallocated_Event_Count",
+      "raw": "0",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "100"
+     },
+     {
+      "current": "100",
+      "id": "197",
+      "name": "Current_Pending_Sector",
+      "raw": "0",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "100"
+     },
+     {
+      "current": "100",
+      "id": "198",
+      "name": "Offline_Uncorrectable",
+      "raw": "0",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "100"
+     },
+     {
+      "current": "100",
+      "id": "199",
+      "name": "UDMA_CRC_Error_Count",
+      "raw": "0",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "100"
+     }
+    ]
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "device": "/dev/sde",
+   "method": "get_smart_info",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Storage.Disk.get_smart_info.v1:{\"device\": \"/dev/sdf\"}": {
+  "reply": {
+   "data": {
+    "smartInfo": [
+     {
+      "current": "100",
+      "id": "5",
+      "name": "Reallocated_Sector_Ct",
+      "raw": "0",
+      "status": "OK",
+      "threshold": "010",
+      "worst": "100"
+     },
+     {
+      "current": "095",
+      "id": "9",
+      "name": "Power_On_Hours",
+      "raw": "24881",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "095"
+     },
+     {
+      "current": "099",
+      "id": "12",
+      "name": "Power_Cycle_Count",
+      "raw": "3",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "099"
+     },
+     {
+      "current": "067",
+      "id": "177",
+      "name": "Wear_Leveling_Count",
+      "raw": "594",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "067"
+     },
+     {
+      "current": "100",
+      "id": "179",
+      "name": "Used_Rsvd_Blk_Cnt_Tot",
+      "raw": "0",
+      "status": "OK",
+      "threshold": "010",
+      "worst": "100"
+     },
+     {
+      "current": "100",
+      "id": "181",
+      "name": "Program_Fail_Cnt_Total",
+      "raw": "0",
+      "status": "OK",
+      "threshold": "010",
+      "worst": "100"
+     },
+     {
+      "current": "100",
+      "id": "182",
+      "name": "Erase_Fail_Count_Total",
+      "raw": "0",
+      "status": "OK",
+      "threshold": "010",
+      "worst": "100"
+     },
+     {
+      "current": "100",
+      "id": "183",
+      "name": "Runtime_Bad_Block",
+      "raw": "0",
+      "status": "OK",
+      "threshold": "010",
+      "worst": "100"
+     },
+     {
+      "current": "100",
+      "id": "187",
+      "name": "Uncorrectable_Error_Cnt",
+      "raw": "0",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "100"
+     },
+     {
+      "current": "059",
+      "id": "190",
+      "name": "Airflow_Temperature_Cel",
+      "raw": "41",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "048"
+     },
+     {
+      "current": "200",
+      "id": "195",
+      "name": "ECC_Error_Rate",
+      "raw": "0",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "200"
+     },
+     {
+      "current": "100",
+      "id": "199",
+      "name": "CRC_Error_Count",
+      "raw": "0",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "100"
+     },
+     {
+      "current": "099",
+      "id": "235",
+      "name": "POR_Recovery_Count",
+      "raw": "1",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "099"
+     },
+     {
+      "current": "099",
+      "id": "241",
+      "name": "Total_LBAs_Written",
+      "raw": "161695021409",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "099"
+     },
+     {
+      "current": "100",
+      "id": "252",
+      "name": "Added_Bad_Flash_Blk_Ct",
+      "raw": "0",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "100"
+     }
+    ]
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "device": "/dev/sdf",
+   "method": "get_smart_info",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Storage.Disk.get_smart_test_log.v1": {
+  "reply": {
+   "error": {
+    "code": 114
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "get_smart_test_log",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Storage.Disk.get_smart_test_log.v1:{\"device\": \"/dev/sda\"}": {
+  "reply": {
+   "data": {
+    "extend_last": "2026/10/25 02:00:02",
+    "latest_test_time": "2026/10/28 04:00:02",
+    "quick_last": "2026/10/28 04:00:02",
+    "testInfo": [
+     {
+      "device": "/dev/sda",
+      "extend": "completed",
+      "extendTime": "1644",
+      "extend_error_before": false,
+      "ihm_testing": false,
+      "latest_test_result": "completed",
+      "latest_test_type": 1,
+      "perf_testing": false,
+      "quick": "completed",
+      "quickTime": "   2",
+      "quick_error_before": false,
+      "remain": "",
+      "testing": false
+     }
+    ]
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "device": "/dev/sda",
+   "method": "get_smart_test_log",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Storage.Disk.get_smart_test_log.v1:{\"device\": \"/dev/sde\"}": {
+  "reply": {
+   "data": {
+    "extend_last": "2026/10/25 02:00:05",
+    "latest_test_time": "2026/10/28 04:00:03",
+    "quick_last": "2026/10/28 04:00:03",
+    "testInfo": [
+     {
+      "device": "/dev/sde",
+      "extend": "completed",
+      "extendTime": "1808",
+      "extend_error_before": false,
+      "ihm_testing": false,
+      "latest_test_result": "completed",
+      "latest_test_type": 1,
+      "perf_testing": false,
+      "quick": "completed",
+      "quickTime": "   2",
+      "quick_error_before": false,
+      "remain": "",
+      "testing": false
+     }
+    ]
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "device": "/dev/sde",
+   "method": "get_smart_test_log",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Storage.Disk.get_smart_test_log.v1:{\"device\": \"/dev/sdf\"}": {
+  "reply": {
+   "data": {
+    "extend_last": "2026/10/25 02:00:05",
+    "latest_test_time": "2026/10/28 04:00:03",
+    "quick_last": "2026/10/28 04:00:03",
+    "testInfo": [
+     {
+      "device": "/dev/sdf",
+      "extend": "completed",
+      "extendTime": "  85",
+      "extend_error_before": false,
+      "ihm_testing": false,
+      "latest_test_result": "completed",
+      "latest_test_type": 1,
+      "perf_testing": false,
+      "quick": "completed",
+      "quickTime": "   2",
+      "quick_error_before": false,
+      "remain": "",
+      "testing": false
+     }
+    ]
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "device": "/dev/sdf",
+   "method": "get_smart_test_log",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Storage.Disk.get_smart_test_log.v1:{\"device\": \"/dev/sdz\"}": {
+  "reply": {
+   "error": {
+    "code": 117
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "device": "/dev/sdz",
+   "method": "get_smart_test_log",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Storage.Disk.get_synoblock.v1": {
+  "reply": {
+   "error": {
+    "code": 114
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "get_synoblock",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Storage.Disk.get_wdda_test_result.v1": {
+  "reply": {
+   "error": {
+    "code": 114
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "get_wdda_test_result",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Storage.Disk.list.v1": {
+  "reply": {
+   "error": {
+    "code": 101
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "list",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Storage.Disk.list_detail.v1": {
+  "reply": {
+   "data": {
+    "disks": [
+     {
+      "is_syno_partition": true,
+      "partition_layout_version": 9,
+      "path": "/dev/sda"
+     },
+     {
+      "is_syno_partition": true,
+      "partition_layout_version": 9,
+      "path": "/dev/sdb"
+     },
+     {
+      "is_syno_partition": true,
+      "partition_layout_version": 8,
+      "path": "/dev/sdc"
+     },
+     {
+      "is_syno_partition": true,
+      "partition_layout_version": 9,
+      "path": "/dev/sdd"
+     },
+     {
+      "is_syno_partition": false,
+      "partition_layout_version": 0,
+      "path": "/dev/sde"
+     },
+     {
+      "is_syno_partition": false,
+      "partition_layout_version": 0,
+      "path": "/dev/sdf"
+     }
+    ]
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "list_detail",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Storage.Disk.wcache_get.v1:{\"device\": \"/dev/sda\"}": {
+  "reply": {
+   "data": {
+    "wcache_en": true
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "device": "/dev/sda",
+   "method": "wcache_get",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Storage.Disk.wcache_get.v1:{\"device\": \"/dev/sde\"}": {
+  "reply": {
+   "data": {
+    "wcache_en": true
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "device": "/dev/sde",
+   "method": "wcache_get",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Storage.Disk.wcache_get.v1:{\"device\": \"/dev/sdf\"}": {
+  "reply": {
+   "data": {
+    "wcache_en": false
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "device": "/dev/sdf",
+   "method": "wcache_get",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Storage.Pool.list.v1": {
+  "reply": {
+   "error": {
+    "code": 101
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Pool",
+   "method": "list",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Storage.Volume.conf_get.v1": {
+  "reply": {
+   "error": {
+    "code": 101
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Volume",
+   "method": "conf_get",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Storage.Volume.get.v1": {
+  "reply": {
+   "error": {
+    "code": 101
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Volume",
+   "method": "get",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.Storage.Volume.list.v1": {
+  "reply": {
+   "error": {
+    "code": 101
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Volume",
+   "method": "list",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Core.System.SystemHealth.get.v1": {
+  "reply": {
+   "data": {
+    "hostname": "Seska",
+    "interfaces": [
+     {
+      "id": "ovs_eth0",
+      "ip": "192.0.2.10",
+      "type": "ovseth"
+     },
+     {
+      "id": "ovs_eth1",
+      "ip": "192.0.2.11",
+      "type": "ovseth"
+     },
+     {
+      "id": "ovs_eth2",
+      "ip": "169.254.42.130",
+      "type": "ovseth"
+     },
+     {
+      "id": "ovs_eth3",
+      "ip": "169.254.142.15",
+      "type": "ovseth"
+     }
+    ],
+    "rule": {
+     "description": {
+      "description_format": "{0}",
+      "description_params": [
+       "widget:storage_is_warning"
+      ],
+      "description_use_formatted": false
+     },
+     "id": "storage_is_attention",
+     "priority": 2.2,
+     "type": 1
+    },
+    "uptime": "3351:9:55"
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Core.System.SystemHealth",
+   "method": "get",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.BtrfsDedupe.get_schedule_plan.v1": {
+  "reply": {
+   "error": {
+    "code": 121
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.BtrfsDedupe",
+   "method": "get_schedule_plan",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.BtrfsDedupe.get_status.v1": {
+  "reply": {
+   "error": {
+    "code": 121
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.BtrfsDedupe",
+   "method": "get_status",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.BtrfsDedupe.get_volume_info.v1": {
+  "reply": {
+   "error": {
+    "code": 121
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.BtrfsDedupe",
+   "method": "get_volume_info",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.BtrfsDedupe.get_volume_info.v1:{\"vol_paths\": \"[\\\"/volume1\\\"]\"}": {
+  "reply": {
+   "error": {
+    "code": 121
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.BtrfsDedupe",
+   "method": "get_volume_info",
+   "version": 1,
+   "vol_paths": "[\"/volume1\"]"
+  }
+ },
+ "admin:SYNO.Storage.CGI.BtrfsDedupe.get_volume_info.v1:{\"vol_paths\": [\"/volume1\"]}": {
+  "reply": {
+   "error": {
+    "code": 121
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.BtrfsDedupe",
+   "method": "get_volume_info",
+   "version": 1,
+   "vol_paths": [
+    "/volume1"
+   ]
+  }
+ },
+ "admin:SYNO.Storage.CGI.Cache.Protection.get_config.v1": {
+  "reply": {
+   "error": {
+    "code": 121
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Cache.Protection",
+   "method": "get_config",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Cache.Protection.get_status.v1": {
+  "reply": {
+   "error": {
+    "code": 121
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Cache.Protection",
+   "method": "get_status",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Cache.Protection.get_status_all.v1": {
+  "reply": {
+   "error": {
+    "code": 121
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Cache.Protection",
+   "method": "get_status_all",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Check.is_building.v1": {
+  "reply": {
+   "data": {
+    "isBuilding": false
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Check",
+   "method": "is_building",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Check.is_data_scrubbing.v1": {
+  "reply": {
+   "data": {
+    "isBuilding": false
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Check",
+   "method": "is_data_scrubbing",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Check.should_ask_for_fsck_scan.v1": {
+  "reply": {
+   "data": {},
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Check",
+   "method": "should_ask_for_fsck_scan",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.DualEnclosure.load.v1": {
+  "reply": {
+   "error": {
+    "code": 121
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.DualEnclosure",
+   "method": "load",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Enclosure.exp_fw_fail_get.v1": {
+  "reply": {
+   "error": {
+    "code": 121
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Enclosure",
+   "method": "exp_fw_fail_get",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Enclosure.exp_fw_update_list_get.v1": {
+  "reply": {
+   "error": {
+    "code": 121
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Enclosure",
+   "method": "exp_fw_update_list_get",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Enclosure.exp_fw_update_status_get.v1": {
+  "reply": {
+   "error": {
+    "code": 121
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Enclosure",
+   "method": "exp_fw_update_status_get",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Enclosure.is_exp_connected.v1": {
+  "reply": {
+   "error": {
+    "code": 121
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Enclosure",
+   "method": "is_exp_connected",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Enclosure.load.v1": {
+  "reply": {
+   "error": {
+    "code": 121
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Enclosure",
+   "method": "load",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Enclosure.sha_exp_fw_fail_get.v1": {
+  "reply": {
+   "error": {
+    "code": 121
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Enclosure",
+   "method": "sha_exp_fw_fail_get",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Enclosure.sha_exp_fw_update_list_get.v1": {
+  "reply": {
+   "error": {
+    "code": 121
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Enclosure",
+   "method": "sha_exp_fw_update_list_get",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Enclosure.sha_exp_fw_update_status_get.v1": {
+  "reply": {
+   "error": {
+    "code": 121
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Enclosure",
+   "method": "sha_exp_fw_update_status_get",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Flashcache.advisor_history_get.v1": {
+  "reply": {
+   "data": {
+    "items": [
+     {
+      "completed_time": 1703221423,
+      "execution_time": 1694941,
+      "hot_data_size": 0,
+      "meet_criteria": true,
+      "recommended_size": 1030792151040,
+      "recommended_size_pin_meta": 1511828488192,
+      "suggestion": "meet_criteria",
+      "volume": "volume_1"
+     }
+    ]
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Flashcache",
+   "method": "advisor_history_get",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Flashcache.is_redundancy_degraded.v1": {
+  "reply": {
+   "error": {
+    "code": 114
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Flashcache",
+   "method": "is_redundancy_degraded",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Flashcache.shared_cache_config_get.v1:{\"id\": \"\\\"shared_cache_1\\\"\"}": {
+  "reply": {
+   "error": {
+    "code": 117
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Flashcache",
+   "id": "\"shared_cache_1\"",
+   "method": "shared_cache_config_get",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Flashcache.shared_cache_config_get.v1:{\"shared_cache\": \"\\\"shared_cache_1\\\"\"}": {
+  "reply": {
+   "data": {
+    "can_modify": true,
+    "max_degrade_flush": false
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Flashcache",
+   "method": "shared_cache_config_get",
+   "shared_cache": "\"shared_cache_1\"",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Flashcache.shared_cache_config_get.v1:{\"shared_cache_id\": \"\\\"shared_cache_1\\\"\"}": {
+  "reply": {
+   "error": {
+    "code": 117
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Flashcache",
+   "method": "shared_cache_config_get",
+   "shared_cache_id": "\"shared_cache_1\"",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Flashcache.shared_cache_config_get.v1:{\"shared_cache_id\": \"shared_cache_1\"}": {
+  "reply": {
+   "error": {
+    "code": 117
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Flashcache",
+   "method": "shared_cache_config_get",
+   "shared_cache_id": "shared_cache_1",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.HddMan.get.v1": {
+  "reply": {
+   "data": {
+    "BadSctrThrEn": true,
+    "RemainLifeThrEn": true,
+    "RemainLifeThrVal": 5,
+    "SBMonthLeftThrEn": true,
+    "SBMonthLeftThrVal": 6,
+    "WddaEn": 0,
+    "chkMailSetting": 1,
+    "db_last_update_time": 1780664047,
+    "healthReportEn": 1
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.HddMan",
+   "method": "get",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Pool.enum_resource.v1": {
+  "reply": {
+   "error": {
+    "code": 114
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Pool",
+   "method": "enum_resource",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Pool.get_setting.v1": {
+  "reply": {
+   "error": {
+    "code": 114
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Pool",
+   "method": "get_setting",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Pool.get_setting.v1:{\"pool_path\": \"/dev/vg1\"}": {
+  "reply": {
+   "data": {
+    "stripe_cache_size": "default"
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Pool",
+   "method": "get_setting",
+   "pool_path": "/dev/vg1",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Pool.is_disk_detected_old_info.v1": {
+  "reply": {
+   "error": {
+    "code": 114
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Pool",
+   "method": "is_disk_detected_old_info",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Scrubbing.get_state.v1": {
+  "reply": {
+   "error": {
+    "code": 101
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Scrubbing",
+   "method": "get_state",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Smart.Scheduler.get.v1": {
+  "reply": {
+   "error": {
+    "code": 114
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Smart.Scheduler",
+   "method": "get",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Smart.Scheduler.list.v1": {
+  "reply": {
+   "data": {
+    "items": [
+     {
+      "action": "#smart:smart_desc_quick_all#",
+      "app": "SYNO.SDS.TaskScheduler.SMART",
+      "app_args": "{ \"enabled\": \"true\", \"id\": \"3\", \"task_name\": \"Disk Test\", \"test_range\": \"all\", \"test_style\": \"quick\", \"test_type\": \"smart\", \"selected_disks\": [ ] }",
+      "app_name": "#smart:smart_toolbar_smart_test#",
+      "can_run": true,
+      "edit_app": "SYNO.SDS.TaskScheduler.EditDialog",
+      "edit_form": "",
+      "enabled": true,
+      "id": 3,
+      "next_trigger_time": "2026-10-29 04:00",
+      "simple_edit_form": false,
+      "task_name": "Disk Test"
+     },
+     {
+      "action": "#smart:smart_desc_extend_all#",
+      "app": "SYNO.SDS.TaskScheduler.SMART",
+      "app_args": "{ \"enabled\": \"true\", \"id\": \"-1\", \"task_name\": \"Extended Tests\", \"test_range\": \"all\", \"test_style\": \"extend\", \"test_type\": \"smart\", \"selected_disks\": [ ] }",
+      "app_name": "#smart:smart_toolbar_smart_test#",
+      "can_run": true,
+      "edit_app": "SYNO.SDS.TaskScheduler.EditDialog",
+      "edit_form": "",
+      "enabled": true,
+      "id": 4,
+      "next_trigger_time": "2026-11-01 02:00",
+      "simple_edit_form": false,
+      "task_name": "Extended Tests"
+     }
+    ],
+    "total": 2
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Smart.Scheduler",
+   "method": "list",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Smart.get.v1": {
+  "reply": {
+   "data": {
+    "extend_last": "",
+    "hddinfo": [],
+    "latest_test_time": "",
+    "quick_last": "",
+    "testInfo": [
+     {
+      "latest_test_type": null
+     }
+    ]
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Smart",
+   "method": "get",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Smart.get_health_info.v1": {
+  "reply": {
+   "error": {
+    "code": 117
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Smart",
+   "method": "get_health_info",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Smart.get_health_info.v1:{\"device\": \"/dev/sda\"}": {
+  "reply": {
+   "data": {
+    "healthInfo": {
+     "count": 18,
+     "history": {
+      "incremental": {
+       "idnf": [
+        [
+         0,
+         0
+        ],
+        [
+         1,
+         0
+        ],
+        [
+         2,
+         0
+        ],
+        [
+         3,
+         0
+        ],
+        [
+         4,
+         0
+        ],
+        [
+         5,
+         0
+        ],
+        [
+         6,
+         0
+        ],
+        [
+         7,
+         0
+        ],
+        [
+         8,
+         0
+        ],
+        [
+         9,
+         0
+        ],
+        [
+         10,
+         0
+        ],
+        [
+         11,
+         0
+        ]
+       ],
+       "offset": 10,
+       "remainLife": [
+        [
+         0
+        ],
+        [
+         1
+        ],
+        [
+         2
+        ],
+        [
+         3
+        ],
+        [
+         4
+        ],
+        [
+         5
+        ],
+        [
+         6
+        ],
+        [
+         7
+        ],
+        [
+         8
+        ],
+        [
+         9
+        ],
+        [
+         10
+        ],
+        [
+         11,
+         -1
+        ]
+       ],
+       "retry": [
+        [
+         0,
+         0
+        ],
+        [
+         1,
+         0
+        ],
+        [
+         2,
+         0
+        ],
+        [
+         3,
+         0
+        ],
+        [
+         4,
+         0
+        ],
+        [
+         5,
+         0
+        ],
+        [
+         6,
+         0
+        ],
+        [
+         7,
+         0
+        ],
+        [
+         8,
+         0
+        ],
+        [
+         9,
+         0
+        ],
+        [
+         10,
+         0
+        ],
+        [
+         11,
+         0
+        ]
+       ],
+       "unc": [
+        [
+         0,
+         0
+        ],
+        [
+         1,
+         0
+        ],
+        [
+         2,
+         0
+        ],
+        [
+         3,
+         0
+        ],
+        [
+         4,
+         0
+        ],
+        [
+         5,
+         0
+        ],
+        [
+         6,
+         0
+        ],
+        [
+         7,
+         0
+        ],
+        [
+         8,
+         0
+        ],
+        [
+         9,
+         0
+        ],
+        [
+         10,
+         0
+        ],
+        [
+         11,
+         0
+        ]
+       ]
+      },
+      "single": {
+       "idnf": [
+        [
+         0,
+         0
+        ],
+        [
+         1,
+         0
+        ],
+        [
+         2,
+         0
+        ],
+        [
+         3,
+         0
+        ],
+        [
+         4,
+         0
+        ],
+        [
+         5,
+         0
+        ],
+        [
+         6,
+         0
+        ],
+        [
+         7,
+         0
+        ],
+        [
+         8,
+         0
+        ],
+        [
+         9,
+         0
+        ],
+        [
+         10,
+         0
+        ],
+        [
+         11,
+         0
+        ]
+       ],
+       "offset": 10,
+       "remainLife": [
+        [
+         0
+        ],
+        [
+         1
+        ],
+        [
+         2
+        ],
+        [
+         3
+        ],
+        [
+         4
+        ],
+        [
+         5
+        ],
+        [
+         6
+        ],
+        [
+         7
+        ],
+        [
+         8
+        ],
+        [
+         9
+        ],
+        [
+         10
+        ],
+        [
+         11
+        ]
+       ],
+       "retry": [
+        [
+         0,
+         0
+        ],
+        [
+         1,
+         0
+        ],
+        [
+         2,
+         0
+        ],
+        [
+         3,
+         0
+        ],
+        [
+         4,
+         0
+        ],
+        [
+         5,
+         0
+        ],
+        [
+         6,
+         0
+        ],
+        [
+         7,
+         0
+        ],
+        [
+         8,
+         0
+        ],
+        [
+         9,
+         0
+        ],
+        [
+         10,
+         0
+        ],
+        [
+         11,
+         0
+        ]
+       ],
+       "unc": [
+        [
+         0,
+         0
+        ],
+        [
+         1,
+         0
+        ],
+        [
+         2,
+         0
+        ],
+        [
+         3,
+         0
+        ],
+        [
+         4,
+         0
+        ],
+        [
+         5,
+         0
+        ],
+        [
+         6,
+         0
+        ],
+        [
+         7,
+         0
+        ],
+        [
+         8,
+         0
+        ],
+        [
+         9,
+         0
+        ],
+        [
+         10,
+         0
+        ],
+        [
+         11,
+         0
+        ]
+       ]
+      }
+     },
+     "overview": {
+      "adv_key": "",
+      "adv_modifiable": false,
+      "adv_modified": false,
+      "adv_progress": "",
+      "adv_scheduled": false,
+      "adv_section": "",
+      "adv_status": "not_support",
+      "adv_test_code": "",
+      "below_remain_life_mail_notify_thr": false,
+      "below_remain_life_show_thr": false,
+      "below_remain_life_thr": false,
+      "compatibility": "support",
+      "disk_code": "",
+      "disk_error_reset_fail_status": "normal",
+      "disk_error_timeout_status": "normal",
+      "disk_error_unc_status": "normal",
+      "idnf": 0,
+      "ihm_schedule_list": [],
+      "isNVMeDisk": false,
+      "isSataDisk": true,
+      "isSsd": false,
+      "isSynoDrive": false,
+      "is_bundle_ssd": false,
+      "low_performance_in_raid": "normal",
+      "low_performance_in_raid_disk_list": "",
+      "overview_status": "normal",
+      "overview_weight": 0,
+      "poweron": "35535",
+      "read_only": false,
+      "remain_life": -1,
+      "remain_life_attr": "",
+      "remain_life_danger": false,
+      "remain_life_disable": 0,
+      "remain_life_suppress": 0,
+      "retry": 0,
+      "sb_days_left": 0,
+      "sb_days_left_critical": false,
+      "sb_days_left_warning": false,
+      "scheduled": true,
+      "seq_status": "normal",
+      "smart": "normal",
+      "smartInfo_support": 1,
+      "smart_disable": 0,
+      "smart_fail": [],
+      "smart_fail_critical": false,
+      "smart_fail_past": false,
+      "smart_fail_repeat": false,
+      "smart_info": "normal",
+      "smart_progress": "",
+      "smart_schedule_list": [
+       {
+        "next_trigger_time": "2026-10-29 04:00"
+       },
+       {
+        "next_trigger_time": "2026-11-01 02:00"
+       }
+      ],
+      "smart_suppress": 0,
+      "smart_test": "normal",
+      "smart_test_disable": 0,
+      "smart_test_limit": 0,
+      "smart_test_suppress": 0,
+      "ssd_bad_block_over_thr": false,
+      "unc": 0,
+      "wdda_disable": 0,
+      "wdda_modifiable": false,
+      "wdda_status": "not_support",
+      "wdda_suppress": 0
+     },
+     "smartInfo": [
+      {
+       "current": "100",
+       "id": "1",
+       "name": "Raw_Read_Error_Rate",
+       "raw": "0",
+       "status": "OK",
+       "threshold": "001",
+       "worst": "100"
+      },
+      {
+       "current": "138",
+       "id": "2",
+       "name": "Throughput_Performance",
+       "raw": "96",
+       "status": "OK",
+       "threshold": "054",
+       "worst": "138"
+      },
+      {
+       "current": "089",
+       "id": "3",
+       "name": "Spin-up_Time",
+       "raw": "30089740364",
+       "status": "OK",
+       "threshold": "001",
+       "worst": "089"
+      },
+      {
+       "current": "100",
+       "id": "4",
+       "name": "Start/Stop_Count",
+       "raw": "6",
+       "status": "OK",
+       "threshold": "000",
+       "worst": "100"
+      },
+      {
+       "current": "100",
+       "id": "5",
+       "name": "Re-allocated_Sector_Count",
+       "raw": "0",
+       "status": "OK",
+       "threshold": "001",
+       "worst": "100"
+      },
+      {
+       "current": "100",
+       "id": "7",
+       "name": "Seek_Error_Rate",
+       "raw": "0",
+       "status": "OK",
+       "threshold": "001",
+       "worst": "100"
+      },
+      {
+       "current": "133",
+       "id": "8",
+       "name": "Seek_Time_Performance",
+       "raw": "18",
+       "status": "OK",
+       "threshold": "020",
+       "worst": "133"
+      },
+      {
+       "current": "095",
+       "id": "9",
+       "name": "Power-on_Hours_Count",
+       "raw": "35535",
+       "status": "OK",
+       "threshold": "000",
+       "worst": "095"
+      },
+      {
+       "current": "100",
+       "id": "10",
+       "name": "Spin_Retry_Count",
+       "raw": "0",
+       "status": "OK",
+       "threshold": "001",
+       "worst": "100"
+      },
+      {
+       "current": "100",
+       "id": "12",
+       "name": "Drive_Power_Cycle_Count",
+       "raw": "6",
+       "status": "OK",
+       "threshold": "000",
+       "worst": "100"
+      },
+      {
+       "current": "100",
+       "id": "22",
+       "name": "Internal_Environment_Status_(Helium_Status)",
+       "raw": "100",
+       "status": "OK",
+       "threshold": "025",
+       "worst": "100"
+      },
+      {
+       "current": "100",
+       "id": "192",
+       "name": "Power_Off_Retract_Count",
+       "raw": "1270",
+       "status": "OK",
+       "threshold": "000",
+       "worst": "100"
+      },
+      {
+       "current": "100",
+       "id": "193",
+       "name": "Load/Unload_Cycle_Count",
+       "raw": "1270",
+       "status": "OK",
+       "threshold": "000",
+       "worst": "100"
+      },
+      {
+       "current": "057",
+       "id": "194",
+       "name": "Temperature",
+       "raw": "37",
+       "status": "OK",
+       "threshold": "000",
+       "worst": "057"
+      },
+      {
+       "current": "100",
+       "id": "196",
+       "name": "Relocation_Event_Count",
+       "raw": "0",
+       "status": "OK",
+       "threshold": "000",
+       "worst": "100"
+      },
+      {
+       "current": "100",
+       "id": "197",
+       "name": "Current_Pending_Sector_Count",
+       "raw": "0",
+       "status": "OK",
+       "threshold": "000",
+       "worst": "100"
+      },
+      {
+       "current": "100",
+       "id": "198",
+       "name": "Off-Line_Scan_Uncorrectable_Sector_Count",
+       "raw": "0",
+       "status": "OK",
+       "threshold": "000",
+       "worst": "100"
+      },
+      {
+       "current": "100",
+       "id": "199",
+       "name": "Ultra_DMA_CRC_Error_Rate",
+       "raw": "0",
+       "status": "OK",
+       "threshold": "000",
+       "worst": "100"
+      }
+     ]
+    }
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Smart",
+   "device": "/dev/sda",
+   "method": "get_health_info",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Smart.get_health_info.v1:{\"device\": \"/dev/sde\"}": {
+  "reply": {
+   "data": {
+    "healthInfo": {
+     "count": 18,
+     "history": {
+      "incremental": {
+       "idnf": [
+        [
+         0,
+         0
+        ],
+        [
+         1,
+         0
+        ],
+        [
+         2,
+         0
+        ],
+        [
+         3,
+         0
+        ],
+        [
+         4,
+         0
+        ],
+        [
+         5,
+         0
+        ],
+        [
+         6,
+         0
+        ],
+        [
+         7,
+         0
+        ],
+        [
+         8,
+         0
+        ],
+        [
+         9,
+         0
+        ],
+        [
+         10,
+         0
+        ],
+        [
+         11,
+         0
+        ]
+       ],
+       "offset": 10,
+       "remainLife": [
+        [
+         0
+        ],
+        [
+         1
+        ],
+        [
+         2
+        ],
+        [
+         3
+        ],
+        [
+         4
+        ],
+        [
+         5
+        ],
+        [
+         6
+        ],
+        [
+         7
+        ],
+        [
+         8
+        ],
+        [
+         9
+        ],
+        [
+         10
+        ],
+        [
+         11,
+         -1
+        ]
+       ],
+       "retry": [
+        [
+         0,
+         0
+        ],
+        [
+         1,
+         0
+        ],
+        [
+         2,
+         0
+        ],
+        [
+         3,
+         0
+        ],
+        [
+         4,
+         0
+        ],
+        [
+         5,
+         0
+        ],
+        [
+         6,
+         0
+        ],
+        [
+         7,
+         0
+        ],
+        [
+         8,
+         0
+        ],
+        [
+         9,
+         0
+        ],
+        [
+         10,
+         0
+        ],
+        [
+         11,
+         0
+        ]
+       ],
+       "unc": [
+        [
+         0,
+         0
+        ],
+        [
+         1,
+         0
+        ],
+        [
+         2,
+         0
+        ],
+        [
+         3,
+         0
+        ],
+        [
+         4,
+         0
+        ],
+        [
+         5,
+         0
+        ],
+        [
+         6,
+         0
+        ],
+        [
+         7,
+         0
+        ],
+        [
+         8,
+         0
+        ],
+        [
+         9,
+         0
+        ],
+        [
+         10,
+         0
+        ],
+        [
+         11,
+         0
+        ]
+       ]
+      },
+      "single": {
+       "idnf": [
+        [
+         0,
+         0
+        ],
+        [
+         1,
+         0
+        ],
+        [
+         2,
+         0
+        ],
+        [
+         3,
+         0
+        ],
+        [
+         4,
+         0
+        ],
+        [
+         5,
+         0
+        ],
+        [
+         6,
+         0
+        ],
+        [
+         7,
+         0
+        ],
+        [
+         8,
+         0
+        ],
+        [
+         9,
+         0
+        ],
+        [
+         10,
+         0
+        ],
+        [
+         11,
+         0
+        ]
+       ],
+       "offset": 10,
+       "remainLife": [
+        [
+         0
+        ],
+        [
+         1
+        ],
+        [
+         2
+        ],
+        [
+         3
+        ],
+        [
+         4
+        ],
+        [
+         5
+        ],
+        [
+         6
+        ],
+        [
+         7
+        ],
+        [
+         8
+        ],
+        [
+         9
+        ],
+        [
+         10
+        ],
+        [
+         11
+        ]
+       ],
+       "retry": [
+        [
+         0,
+         0
+        ],
+        [
+         1,
+         0
+        ],
+        [
+         2,
+         0
+        ],
+        [
+         3,
+         0
+        ],
+        [
+         4,
+         0
+        ],
+        [
+         5,
+         0
+        ],
+        [
+         6,
+         0
+        ],
+        [
+         7,
+         0
+        ],
+        [
+         8,
+         0
+        ],
+        [
+         9,
+         0
+        ],
+        [
+         10,
+         0
+        ],
+        [
+         11,
+         0
+        ]
+       ],
+       "unc": [
+        [
+         0,
+         0
+        ],
+        [
+         1,
+         0
+        ],
+        [
+         2,
+         0
+        ],
+        [
+         3,
+         0
+        ],
+        [
+         4,
+         0
+        ],
+        [
+         5,
+         0
+        ],
+        [
+         6,
+         0
+        ],
+        [
+         7,
+         0
+        ],
+        [
+         8,
+         0
+        ],
+        [
+         9,
+         0
+        ],
+        [
+         10,
+         0
+        ],
+        [
+         11,
+         0
+        ]
+       ]
+      }
+     },
+     "overview": {
+      "adv_key": "",
+      "adv_modifiable": false,
+      "adv_modified": false,
+      "adv_progress": "",
+      "adv_scheduled": false,
+      "adv_section": "",
+      "adv_status": "not_support",
+      "adv_test_code": "",
+      "below_remain_life_mail_notify_thr": false,
+      "below_remain_life_show_thr": false,
+      "below_remain_life_thr": false,
+      "compatibility": "not_in_support",
+      "disk_code": "",
+      "disk_error_reset_fail_status": "normal",
+      "disk_error_timeout_status": "normal",
+      "disk_error_unc_status": "normal",
+      "idnf": 0,
+      "ihm_schedule_list": [],
+      "isNVMeDisk": false,
+      "isSataDisk": true,
+      "isSsd": false,
+      "isSynoDrive": false,
+      "is_bundle_ssd": false,
+      "low_performance_in_raid": "normal",
+      "low_performance_in_raid_disk_list": "",
+      "overview_status": "normal",
+      "overview_weight": 0,
+      "poweron": "22832",
+      "read_only": false,
+      "remain_life": -1,
+      "remain_life_attr": "",
+      "remain_life_danger": false,
+      "remain_life_disable": 0,
+      "remain_life_suppress": 0,
+      "retry": 0,
+      "sb_days_left": 0,
+      "sb_days_left_critical": false,
+      "sb_days_left_warning": false,
+      "scheduled": true,
+      "seq_status": "normal",
+      "smart": "normal",
+      "smartInfo_support": 1,
+      "smart_disable": 0,
+      "smart_fail": [],
+      "smart_fail_critical": false,
+      "smart_fail_past": false,
+      "smart_fail_repeat": false,
+      "smart_info": "normal",
+      "smart_progress": "",
+      "smart_schedule_list": [
+       {
+        "next_trigger_time": "2026-10-29 04:00"
+       },
+       {
+        "next_trigger_time": "2026-11-01 02:00"
+       }
+      ],
+      "smart_suppress": 0,
+      "smart_test": "normal",
+      "smart_test_disable": 0,
+      "smart_test_limit": 0,
+      "smart_test_suppress": 0,
+      "ssd_bad_block_over_thr": false,
+      "unc": 0,
+      "wdda_disable": 0,
+      "wdda_modifiable": false,
+      "wdda_status": "not_support",
+      "wdda_suppress": 0
+     },
+     "smartInfo": [
+      {
+       "current": "100",
+       "id": "1",
+       "name": "Raw_Read_Error_Rate",
+       "raw": "0",
+       "status": "OK",
+       "threshold": "001",
+       "worst": "100"
+      },
+      {
+       "current": "147",
+       "id": "2",
+       "name": "Throughput_Performance",
+       "raw": "52",
+       "status": "OK",
+       "threshold": "054",
+       "worst": "147"
+      },
+      {
+       "current": "097",
+       "id": "3",
+       "name": "Spin_Up_Time",
+       "raw": "138",
+       "status": "OK",
+       "threshold": "001",
+       "worst": "097"
+      },
+      {
+       "current": "100",
+       "id": "4",
+       "name": "Start_Stop_Count",
+       "raw": "2",
+       "status": "OK",
+       "threshold": "000",
+       "worst": "100"
+      },
+      {
+       "current": "100",
+       "id": "5",
+       "name": "Reallocated_Sector_Ct",
+       "raw": "0",
+       "status": "OK",
+       "threshold": "001",
+       "worst": "100"
+      },
+      {
+       "current": "100",
+       "id": "7",
+       "name": "Seek_Error_Rate",
+       "raw": "0",
+       "status": "OK",
+       "threshold": "001",
+       "worst": "100"
+      },
+      {
+       "current": "140",
+       "id": "8",
+       "name": "Seek_Time_Performance",
+       "raw": "15",
+       "status": "OK",
+       "threshold": "020",
+       "worst": "140"
+      },
+      {
+       "current": "097",
+       "id": "9",
+       "name": "Power_On_Hours",
+       "raw": "22832",
+       "status": "OK",
+       "threshold": "000",
+       "worst": "097"
+      },
+      {
+       "current": "100",
+       "id": "10",
+       "name": "Spin_Retry_Count",
+       "raw": "0",
+       "status": "OK",
+       "threshold": "001",
+       "worst": "100"
+      },
+      {
+       "current": "100",
+       "id": "12",
+       "name": "Power_Cycle_Count",
+       "raw": "2",
+       "status": "OK",
+       "threshold": "000",
+       "worst": "100"
+      },
+      {
+       "current": "100",
+       "id": "22",
+       "name": "Helium_Level",
+       "raw": "6553700",
+       "status": "OK",
+       "threshold": "025",
+       "worst": "100"
+      },
+      {
+       "current": "100",
+       "id": "192",
+       "name": "Power-Off_Retract_Count",
+       "raw": "960",
+       "status": "OK",
+       "threshold": "000",
+       "worst": "100"
+      },
+      {
+       "current": "100",
+       "id": "193",
+       "name": "Load_Cycle_Count",
+       "raw": "960",
+       "status": "OK",
+       "threshold": "000",
+       "worst": "100"
+      },
+      {
+       "current": "055",
+       "id": "194",
+       "name": "Temperature_Celsius",
+       "raw": "39",
+       "status": "OK",
+       "threshold": "000",
+       "worst": "055"
+      },
+      {
+       "current": "100",
+       "id": "196",
+       "name": "Reallocated_Event_Count",
+       "raw": "0",
+       "status": "OK",
+       "threshold": "000",
+       "worst": "100"
+      },
+      {
+       "current": "100",
+       "id": "197",
+       "name": "Current_Pending_Sector",
+       "raw": "0",
+       "status": "OK",
+       "threshold": "000",
+       "worst": "100"
+      },
+      {
+       "current": "100",
+       "id": "198",
+       "name": "Offline_Uncorrectable",
+       "raw": "0",
+       "status": "OK",
+       "threshold": "000",
+       "worst": "100"
+      },
+      {
+       "current": "100",
+       "id": "199",
+       "name": "UDMA_CRC_Error_Count",
+       "raw": "0",
+       "status": "OK",
+       "threshold": "000",
+       "worst": "100"
+      }
+     ]
+    }
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Smart",
+   "device": "/dev/sde",
+   "method": "get_health_info",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Smart.get_health_info.v1:{\"device\": \"/dev/sdf\"}": {
+  "reply": {
+   "data": {
+    "healthInfo": {
+     "count": 15,
+     "history": {
+      "incremental": {
+       "idnf": [
+        [
+         0,
+         0
+        ],
+        [
+         1,
+         0
+        ],
+        [
+         2,
+         0
+        ],
+        [
+         3,
+         0
+        ],
+        [
+         4,
+         0
+        ],
+        [
+         5,
+         0
+        ],
+        [
+         6,
+         0
+        ],
+        [
+         7,
+         0
+        ],
+        [
+         8,
+         0
+        ],
+        [
+         9,
+         0
+        ],
+        [
+         10,
+         0
+        ],
+        [
+         11,
+         0
+        ]
+       ],
+       "offset": 10,
+       "remainLife": [
+        [
+         0,
+         90
+        ],
+        [
+         1,
+         90
+        ],
+        [
+         2,
+         88
+        ],
+        [
+         3,
+         85
+        ],
+        [
+         4,
+         81
+        ],
+        [
+         5,
+         79
+        ],
+        [
+         6,
+         76
+        ],
+        [
+         7,
+         74
+        ],
+        [
+         8,
+         73
+        ],
+        [
+         9,
+         71
+        ],
+        [
+         10,
+         69
+        ],
+        [
+         11,
+         67
+        ]
+       ],
+       "retry": [
+        [
+         0,
+         0
+        ],
+        [
+         1,
+         0
+        ],
+        [
+         2,
+         0
+        ],
+        [
+         3,
+         0
+        ],
+        [
+         4,
+         0
+        ],
+        [
+         5,
+         0
+        ],
+        [
+         6,
+         0
+        ],
+        [
+         7,
+         0
+        ],
+        [
+         8,
+         0
+        ],
+        [
+         9,
+         0
+        ],
+        [
+         10,
+         0
+        ],
+        [
+         11,
+         0
+        ]
+       ],
+       "unc": [
+        [
+         0
+        ],
+        [
+         1
+        ],
+        [
+         2
+        ],
+        [
+         3
+        ],
+        [
+         4
+        ],
+        [
+         5
+        ],
+        [
+         6
+        ],
+        [
+         7
+        ],
+        [
+         8
+        ],
+        [
+         9
+        ],
+        [
+         10
+        ],
+        [
+         11,
+         -1
+        ]
+       ]
+      },
+      "single": {
+       "idnf": [
+        [
+         0,
+         0
+        ],
+        [
+         1,
+         0
+        ],
+        [
+         2,
+         0
+        ],
+        [
+         3,
+         0
+        ],
+        [
+         4,
+         0
+        ],
+        [
+         5,
+         0
+        ],
+        [
+         6,
+         0
+        ],
+        [
+         7,
+         0
+        ],
+        [
+         8,
+         0
+        ],
+        [
+         9,
+         0
+        ],
+        [
+         10,
+         0
+        ],
+        [
+         11,
+         0
+        ]
+       ],
+       "offset": 10,
+       "remainLife": [
+        [
+         0,
+         0
+        ],
+        [
+         1,
+         0
+        ],
+        [
+         2,
+         -2
+        ],
+        [
+         3,
+         -3
+        ],
+        [
+         4,
+         -4
+        ],
+        [
+         5,
+         -2
+        ],
+        [
+         6,
+         -3
+        ],
+        [
+         7,
+         -2
+        ],
+        [
+         8,
+         -1
+        ],
+        [
+         9,
+         -2
+        ],
+        [
+         10,
+         -2
+        ],
+        [
+         11,
+         -2
+        ]
+       ],
+       "retry": [
+        [
+         0,
+         0
+        ],
+        [
+         1,
+         0
+        ],
+        [
+         2,
+         0
+        ],
+        [
+         3,
+         0
+        ],
+        [
+         4,
+         0
+        ],
+        [
+         5,
+         0
+        ],
+        [
+         6,
+         0
+        ],
+        [
+         7,
+         0
+        ],
+        [
+         8,
+         0
+        ],
+        [
+         9,
+         0
+        ],
+        [
+         10,
+         0
+        ],
+        [
+         11,
+         0
+        ]
+       ],
+       "unc": [
+        [
+         0
+        ],
+        [
+         1
+        ],
+        [
+         2
+        ],
+        [
+         3
+        ],
+        [
+         4
+        ],
+        [
+         5
+        ],
+        [
+         6
+        ],
+        [
+         7
+        ],
+        [
+         8
+        ],
+        [
+         9
+        ],
+        [
+         10
+        ],
+        [
+         11
+        ]
+       ]
+      }
+     },
+     "overview": {
+      "adv_key": "",
+      "adv_modifiable": false,
+      "adv_modified": false,
+      "adv_progress": "",
+      "adv_scheduled": false,
+      "adv_section": "",
+      "adv_status": "not_support",
+      "adv_test_code": "",
+      "below_remain_life_mail_notify_thr": false,
+      "below_remain_life_show_thr": false,
+      "below_remain_life_thr": false,
+      "compatibility": "not_in_support",
+      "disk_code": "",
+      "disk_error_reset_fail_status": "normal",
+      "disk_error_timeout_status": "normal",
+      "disk_error_unc_status": "normal",
+      "idnf": 0,
+      "ihm_schedule_list": [],
+      "isNVMeDisk": false,
+      "isSataDisk": true,
+      "isSsd": true,
+      "isSynoDrive": false,
+      "is_bundle_ssd": false,
+      "low_performance_in_raid": "normal",
+      "low_performance_in_raid_disk_list": "",
+      "overview_status": "normal",
+      "overview_weight": 0,
+      "poweron": "24882",
+      "read_only": false,
+      "remain_life": 67,
+      "remain_life_attr": "Wear_Leveling_Count",
+      "remain_life_danger": false,
+      "remain_life_disable": 0,
+      "remain_life_suppress": 0,
+      "retry": 0,
+      "sb_days_left": 0,
+      "sb_days_left_critical": false,
+      "sb_days_left_warning": false,
+      "scheduled": true,
+      "seq_status": "normal",
+      "smart": "normal",
+      "smartInfo_support": 1,
+      "smart_disable": 0,
+      "smart_fail": [],
+      "smart_fail_critical": false,
+      "smart_fail_past": false,
+      "smart_fail_repeat": false,
+      "smart_info": "normal",
+      "smart_progress": "",
+      "smart_schedule_list": [
+       {
+        "next_trigger_time": "2026-10-29 04:00"
+       },
+       {
+        "next_trigger_time": "2026-11-01 02:00"
+       }
+      ],
+      "smart_suppress": 0,
+      "smart_test": "normal",
+      "smart_test_disable": 0,
+      "smart_test_limit": 0,
+      "smart_test_suppress": 0,
+      "ssd_bad_block_over_thr": false,
+      "unc": -1,
+      "wdda_disable": 0,
+      "wdda_modifiable": false,
+      "wdda_status": "not_support",
+      "wdda_suppress": 0
+     },
+     "smartInfo": [
+      {
+       "current": "100",
+       "id": "5",
+       "name": "Reallocated_Sector_Ct",
+       "raw": "0",
+       "status": "OK",
+       "threshold": "010",
+       "worst": "100"
+      },
+      {
+       "current": "095",
+       "id": "9",
+       "name": "Power_On_Hours",
+       "raw": "24882",
+       "status": "OK",
+       "threshold": "000",
+       "worst": "095"
+      },
+      {
+       "current": "099",
+       "id": "12",
+       "name": "Power_Cycle_Count",
+       "raw": "3",
+       "status": "OK",
+       "threshold": "000",
+       "worst": "099"
+      },
+      {
+       "current": "067",
+       "id": "177",
+       "name": "Wear_Leveling_Count",
+       "raw": "594",
+       "status": "OK",
+       "threshold": "000",
+       "worst": "067"
+      },
+      {
+       "current": "100",
+       "id": "179",
+       "name": "Used_Rsvd_Blk_Cnt_Tot",
+       "raw": "0",
+       "status": "OK",
+       "threshold": "010",
+       "worst": "100"
+      },
+      {
+       "current": "100",
+       "id": "181",
+       "name": "Program_Fail_Cnt_Total",
+       "raw": "0",
+       "status": "OK",
+       "threshold": "010",
+       "worst": "100"
+      },
+      {
+       "current": "100",
+       "id": "182",
+       "name": "Erase_Fail_Count_Total",
+       "raw": "0",
+       "status": "OK",
+       "threshold": "010",
+       "worst": "100"
+      },
+      {
+       "current": "100",
+       "id": "183",
+       "name": "Runtime_Bad_Block",
+       "raw": "0",
+       "status": "OK",
+       "threshold": "010",
+       "worst": "100"
+      },
+      {
+       "current": "100",
+       "id": "187",
+       "name": "Uncorrectable_Error_Cnt",
+       "raw": "0",
+       "status": "OK",
+       "threshold": "000",
+       "worst": "100"
+      },
+      {
+       "current": "059",
+       "id": "190",
+       "name": "Airflow_Temperature_Cel",
+       "raw": "41",
+       "status": "OK",
+       "threshold": "000",
+       "worst": "048"
+      },
+      {
+       "current": "200",
+       "id": "195",
+       "name": "ECC_Error_Rate",
+       "raw": "0",
+       "status": "OK",
+       "threshold": "000",
+       "worst": "200"
+      },
+      {
+       "current": "100",
+       "id": "199",
+       "name": "CRC_Error_Count",
+       "raw": "0",
+       "status": "OK",
+       "threshold": "000",
+       "worst": "100"
+      },
+      {
+       "current": "099",
+       "id": "235",
+       "name": "POR_Recovery_Count",
+       "raw": "1",
+       "status": "OK",
+       "threshold": "000",
+       "worst": "099"
+      },
+      {
+       "current": "099",
+       "id": "241",
+       "name": "Total_LBAs_Written",
+       "raw": "161695205023",
+       "status": "OK",
+       "threshold": "000",
+       "worst": "099"
+      },
+      {
+       "current": "100",
+       "id": "252",
+       "name": "Added_Bad_Flash_Blk_Ct",
+       "raw": "0",
+       "status": "OK",
+       "threshold": "000",
+       "worst": "100"
+      }
+     ]
+    }
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Smart",
+   "device": "/dev/sdf",
+   "method": "get_health_info",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Smart.get_health_info.v1:{\"device\": \"/dev/sdz\"}": {
+  "reply": {
+   "error": {
+    "code": 117
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Smart",
+   "device": "/dev/sdz",
+   "method": "get_health_info",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Smart.get_smart_info.v1": {
+  "reply": {
+   "error": {
+    "code": 114
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Smart",
+   "method": "get_smart_info",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Smart.get_smart_info.v1:{\"device\": \"/dev/sda\"}": {
+  "reply": {
+   "data": {
+    "smartInfo": [
+     {
+      "current": "100",
+      "id": "1",
+      "name": "Raw_Read_Error_Rate",
+      "raw": "0",
+      "status": "OK",
+      "threshold": "001",
+      "worst": "100"
+     },
+     {
+      "current": "138",
+      "id": "2",
+      "name": "Throughput_Performance",
+      "raw": "96",
+      "status": "OK",
+      "threshold": "054",
+      "worst": "138"
+     },
+     {
+      "current": "089",
+      "id": "3",
+      "name": "Spin-up_Time",
+      "raw": "30089740364",
+      "status": "OK",
+      "threshold": "001",
+      "worst": "089"
+     },
+     {
+      "current": "100",
+      "id": "4",
+      "name": "Start/Stop_Count",
+      "raw": "6",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "100"
+     },
+     {
+      "current": "100",
+      "id": "5",
+      "name": "Re-allocated_Sector_Count",
+      "raw": "0",
+      "status": "OK",
+      "threshold": "001",
+      "worst": "100"
+     },
+     {
+      "current": "100",
+      "id": "7",
+      "name": "Seek_Error_Rate",
+      "raw": "0",
+      "status": "OK",
+      "threshold": "001",
+      "worst": "100"
+     },
+     {
+      "current": "133",
+      "id": "8",
+      "name": "Seek_Time_Performance",
+      "raw": "18",
+      "status": "OK",
+      "threshold": "020",
+      "worst": "133"
+     },
+     {
+      "current": "095",
+      "id": "9",
+      "name": "Power-on_Hours_Count",
+      "raw": "35535",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "095"
+     },
+     {
+      "current": "100",
+      "id": "10",
+      "name": "Spin_Retry_Count",
+      "raw": "0",
+      "status": "OK",
+      "threshold": "001",
+      "worst": "100"
+     },
+     {
+      "current": "100",
+      "id": "12",
+      "name": "Drive_Power_Cycle_Count",
+      "raw": "6",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "100"
+     },
+     {
+      "current": "100",
+      "id": "22",
+      "name": "Internal_Environment_Status_(Helium_Status)",
+      "raw": "100",
+      "status": "OK",
+      "threshold": "025",
+      "worst": "100"
+     },
+     {
+      "current": "100",
+      "id": "192",
+      "name": "Power_Off_Retract_Count",
+      "raw": "1270",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "100"
+     },
+     {
+      "current": "100",
+      "id": "193",
+      "name": "Load/Unload_Cycle_Count",
+      "raw": "1270",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "100"
+     },
+     {
+      "current": "057",
+      "id": "194",
+      "name": "Temperature",
+      "raw": "37",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "057"
+     },
+     {
+      "current": "100",
+      "id": "196",
+      "name": "Relocation_Event_Count",
+      "raw": "0",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "100"
+     },
+     {
+      "current": "100",
+      "id": "197",
+      "name": "Current_Pending_Sector_Count",
+      "raw": "0",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "100"
+     },
+     {
+      "current": "100",
+      "id": "198",
+      "name": "Off-Line_Scan_Uncorrectable_Sector_Count",
+      "raw": "0",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "100"
+     },
+     {
+      "current": "100",
+      "id": "199",
+      "name": "Ultra_DMA_CRC_Error_Rate",
+      "raw": "0",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "100"
+     }
+    ]
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Smart",
+   "device": "/dev/sda",
+   "method": "get_smart_info",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Smart.get_smart_info.v1:{\"device\": \"/dev/sde\"}": {
+  "reply": {
+   "data": {
+    "smartInfo": [
+     {
+      "current": "100",
+      "id": "1",
+      "name": "Raw_Read_Error_Rate",
+      "raw": "0",
+      "status": "OK",
+      "threshold": "001",
+      "worst": "100"
+     },
+     {
+      "current": "147",
+      "id": "2",
+      "name": "Throughput_Performance",
+      "raw": "52",
+      "status": "OK",
+      "threshold": "054",
+      "worst": "147"
+     },
+     {
+      "current": "097",
+      "id": "3",
+      "name": "Spin_Up_Time",
+      "raw": "138",
+      "status": "OK",
+      "threshold": "001",
+      "worst": "097"
+     },
+     {
+      "current": "100",
+      "id": "4",
+      "name": "Start_Stop_Count",
+      "raw": "2",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "100"
+     },
+     {
+      "current": "100",
+      "id": "5",
+      "name": "Reallocated_Sector_Ct",
+      "raw": "0",
+      "status": "OK",
+      "threshold": "001",
+      "worst": "100"
+     },
+     {
+      "current": "100",
+      "id": "7",
+      "name": "Seek_Error_Rate",
+      "raw": "0",
+      "status": "OK",
+      "threshold": "001",
+      "worst": "100"
+     },
+     {
+      "current": "140",
+      "id": "8",
+      "name": "Seek_Time_Performance",
+      "raw": "15",
+      "status": "OK",
+      "threshold": "020",
+      "worst": "140"
+     },
+     {
+      "current": "097",
+      "id": "9",
+      "name": "Power_On_Hours",
+      "raw": "22832",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "097"
+     },
+     {
+      "current": "100",
+      "id": "10",
+      "name": "Spin_Retry_Count",
+      "raw": "0",
+      "status": "OK",
+      "threshold": "001",
+      "worst": "100"
+     },
+     {
+      "current": "100",
+      "id": "12",
+      "name": "Power_Cycle_Count",
+      "raw": "2",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "100"
+     },
+     {
+      "current": "100",
+      "id": "22",
+      "name": "Helium_Level",
+      "raw": "6553700",
+      "status": "OK",
+      "threshold": "025",
+      "worst": "100"
+     },
+     {
+      "current": "100",
+      "id": "192",
+      "name": "Power-Off_Retract_Count",
+      "raw": "960",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "100"
+     },
+     {
+      "current": "100",
+      "id": "193",
+      "name": "Load_Cycle_Count",
+      "raw": "960",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "100"
+     },
+     {
+      "current": "055",
+      "id": "194",
+      "name": "Temperature_Celsius",
+      "raw": "39",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "055"
+     },
+     {
+      "current": "100",
+      "id": "196",
+      "name": "Reallocated_Event_Count",
+      "raw": "0",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "100"
+     },
+     {
+      "current": "100",
+      "id": "197",
+      "name": "Current_Pending_Sector",
+      "raw": "0",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "100"
+     },
+     {
+      "current": "100",
+      "id": "198",
+      "name": "Offline_Uncorrectable",
+      "raw": "0",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "100"
+     },
+     {
+      "current": "100",
+      "id": "199",
+      "name": "UDMA_CRC_Error_Count",
+      "raw": "0",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "100"
+     }
+    ]
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Smart",
+   "device": "/dev/sde",
+   "method": "get_smart_info",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Smart.get_smart_info.v1:{\"device\": \"/dev/sdf\"}": {
+  "reply": {
+   "data": {
+    "smartInfo": [
+     {
+      "current": "100",
+      "id": "5",
+      "name": "Reallocated_Sector_Ct",
+      "raw": "0",
+      "status": "OK",
+      "threshold": "010",
+      "worst": "100"
+     },
+     {
+      "current": "095",
+      "id": "9",
+      "name": "Power_On_Hours",
+      "raw": "24881",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "095"
+     },
+     {
+      "current": "099",
+      "id": "12",
+      "name": "Power_Cycle_Count",
+      "raw": "3",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "099"
+     },
+     {
+      "current": "067",
+      "id": "177",
+      "name": "Wear_Leveling_Count",
+      "raw": "594",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "067"
+     },
+     {
+      "current": "100",
+      "id": "179",
+      "name": "Used_Rsvd_Blk_Cnt_Tot",
+      "raw": "0",
+      "status": "OK",
+      "threshold": "010",
+      "worst": "100"
+     },
+     {
+      "current": "100",
+      "id": "181",
+      "name": "Program_Fail_Cnt_Total",
+      "raw": "0",
+      "status": "OK",
+      "threshold": "010",
+      "worst": "100"
+     },
+     {
+      "current": "100",
+      "id": "182",
+      "name": "Erase_Fail_Count_Total",
+      "raw": "0",
+      "status": "OK",
+      "threshold": "010",
+      "worst": "100"
+     },
+     {
+      "current": "100",
+      "id": "183",
+      "name": "Runtime_Bad_Block",
+      "raw": "0",
+      "status": "OK",
+      "threshold": "010",
+      "worst": "100"
+     },
+     {
+      "current": "100",
+      "id": "187",
+      "name": "Uncorrectable_Error_Cnt",
+      "raw": "0",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "100"
+     },
+     {
+      "current": "059",
+      "id": "190",
+      "name": "Airflow_Temperature_Cel",
+      "raw": "41",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "048"
+     },
+     {
+      "current": "200",
+      "id": "195",
+      "name": "ECC_Error_Rate",
+      "raw": "0",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "200"
+     },
+     {
+      "current": "100",
+      "id": "199",
+      "name": "CRC_Error_Count",
+      "raw": "0",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "100"
+     },
+     {
+      "current": "099",
+      "id": "235",
+      "name": "POR_Recovery_Count",
+      "raw": "1",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "099"
+     },
+     {
+      "current": "099",
+      "id": "241",
+      "name": "Total_LBAs_Written",
+      "raw": "161695021409",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "099"
+     },
+     {
+      "current": "100",
+      "id": "252",
+      "name": "Added_Bad_Flash_Blk_Ct",
+      "raw": "0",
+      "status": "OK",
+      "threshold": "000",
+      "worst": "100"
+     }
+    ]
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Smart",
+   "device": "/dev/sdf",
+   "method": "get_smart_info",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Smart.get_smart_info.v1:{\"device\": \"/dev/sdz\"}": {
+  "reply": {
+   "error": {
+    "code": 117
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Smart",
+   "device": "/dev/sdz",
+   "method": "get_smart_info",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Smart.get_smart_test_log.v1": {
+  "reply": {
+   "error": {
+    "code": 114
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Smart",
+   "method": "get_smart_test_log",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Smart.list.v1": {
+  "reply": {
+   "error": {
+    "code": 121
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Smart",
+   "method": "list",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Smart.smart_warning_get.v1": {
+  "reply": {
+   "error": {
+    "code": 114
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Smart",
+   "method": "smart_warning_get",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Smart.smart_warning_get.v1:{\"device\": \"/dev/sda\"}": {
+  "reply": {
+   "data": [],
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Smart",
+   "device": "/dev/sda",
+   "method": "smart_warning_get",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Smart.smart_warning_get.v1:{\"device\": \"/dev/sde\"}": {
+  "reply": {
+   "data": [],
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Smart",
+   "device": "/dev/sde",
+   "method": "smart_warning_get",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Smart.smart_warning_get.v1:{\"device\": \"/dev/sdf\"}": {
+  "reply": {
+   "data": [],
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Smart",
+   "device": "/dev/sdf",
+   "method": "smart_warning_get",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Spare.Conf.get.v1": {
+  "reply": {
+   "data": {
+    "auto_replacement": false
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Spare.Conf",
+   "method": "get",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Spare.list.v1": {
+  "reply": {
+   "data": {
+    "hotSpares": [
+     {
+      "id": "sde",
+      "model": "WD142KFGX-68AFPN0",
+      "num_id": 0,
+      "path": "/dev/sde",
+      "protect_spaces": [
+       "/dev/vg1"
+      ],
+      "serial": "4TVTLE7H",
+      "size": "14000519643136",
+      "status": {
+       "raid_path": "",
+       "space_path": "",
+       "type": "standby"
+      }
+     }
+    ]
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Spare",
+   "method": "list",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Spare.potential_spares_dump.v1": {
+  "reply": {
+   "data": {
+    "disks": [
+     {
+      "path": "/dev/sdf"
+     }
+    ],
+    "spaces": [
+     {
+      "diff_4kn": [],
+      "diff_container": [],
+      "diff_drive_type": [
+       "/dev/sdf"
+      ],
+      "diff_protocol_type": [],
+      "min_hotspare_size": "13994369810432",
+      "size_too_small": [
+       "/dev/sdf"
+      ],
+      "space_path": "/dev/vg1",
+      "support_hotspare": true,
+      "valid_spares": []
+     }
+    ]
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Spare",
+   "method": "potential_spares_dump",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Storage.get_auto_repair_config.v1": {
+  "reply": {
+   "data": {
+    "enable": false
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Storage",
+   "method": "get_auto_repair_config",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Storage.get_fast_repair_config.v1": {
+  "reply": {
+   "data": {
+    "is_auto_scrubbing_enable": true,
+    "is_fast_repair_enable": true
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Storage",
+   "method": "get_fast_repair_config",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Storage.get_resync_speed.v1": {
+  "reply": {
+   "data": {
+    "speed_max": 600,
+    "speed_min": 10,
+    "speed_option": "resync_slower"
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Storage",
+   "method": "get_resync_speed",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Storage.get_sche_task_list.v1": {
+  "reply": {
+   "data": {
+    "data_scrubbing": {
+     "tasks": [
+      {
+       "next_run_time": 1797573600,
+       "status": "ready",
+       "target": [
+        "reuse_1"
+       ]
+      }
+     ]
+    },
+    "iron_wolf": {
+     "tasks": []
+    },
+    "smart": {
+     "tasks": [
+      {
+       "next_run_time": 1793268000,
+       "status": "ready",
+       "target": [
+        "sda",
+        "sdb",
+        "sdc",
+        "sdd",
+        "sde",
+        "sdf"
+       ],
+       "test_style": "quick"
+      },
+      {
+       "next_run_time": 1793520000,
+       "status": "running",
+       "target": [
+        "sda",
+        "sdb",
+        "sdc",
+        "sdd",
+        "sde",
+        "sdf"
+       ],
+       "test_style": "extend"
+      }
+     ]
+    },
+    "ssd_trim": {
+     "tasks": []
+    }
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Storage",
+   "method": "get_sche_task_list",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Storage.get_schedule_plan.v1": {
+  "reply": {
+   "data": {
+    "schedule": {
+     "interval": 3,
+     "next_start_time": 1797573600,
+     "run_time_option": "run_setting_time",
+     "sche_is_running": false,
+     "sche_pool_order": [
+      "/dev/vg1"
+     ],
+     "schedule_enabled": 1,
+     "schedule_plan": "111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111",
+     "start_time": 1671343200
+    }
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Storage",
+   "method": "get_schedule_plan",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Storage.get_space_reclaim_schedule.v1": {
+  "reply": {
+   "data": {
+    "delay_end_time": 0,
+    "run_time_option": "run_all_time",
+    "schedule_table": "111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Storage",
+   "method": "get_space_reclaim_schedule",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Storage.get_space_reclaim_status.v1": {
+  "reply": {
+   "data": {
+    "delay_end_time": 0,
+    "num_subvolume_remain": 0,
+    "state": "idle"
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Storage",
+   "method": "get_space_reclaim_status",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Storage.load_bad_disks.v1": {
+  "reply": {
+   "data": {
+    "not_compatible": [],
+    "unhealthy": []
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Storage",
+   "method": "load_bad_disks",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Storage.load_info.v1": {
+  "reply": {
+   "data": {
+    "detected_pools": [],
+    "disks": [
+     {
+      "action": {
+       "alert": false,
+       "notification": false,
+       "selectable": true,
+       "show_lifetime_chart": true
+      },
+      "adv_progress": "",
+      "adv_status": "not_support",
+      "below_remain_life_mail_notify_thr": false,
+      "below_remain_life_show_thr": false,
+      "below_remain_life_thr": false,
+      "compatibility": "support",
+      "container": {
+       "order": 0,
+       "str": "DS1618+",
+       "supportPwrBtnDisable": false,
+       "type": "internal"
+      },
+      "container_id": 0,
+      "device": "/dev/sda",
+      "disable_secera": false,
+      "diskType": "SATA",
+      "disk_code": "",
+      "disk_location": "Main",
+      "erase_time": 1368,
+      "firm": "83.00A83",
+      "firmware_status": "-",
+      "has_system": true,
+      "hide_info": [],
+      "i18nNamingInfo": "[\"dsm:volume:volume_disk\",\" \",\"1\"]",
+      "id": "sda",
+      "ihm_testing": false,
+      "is4Kn": false,
+      "isSsd": false,
+      "isSynoDrive": false,
+      "isSynoPartition": true,
+      "is_bundle_ssd": false,
+      "is_erasing": false,
+      "longName": "Drive 1",
+      "model": "WD141KFGX-68FH9N0",
+      "name": "Drive 1",
+      "num_id": 1,
+      "order": 1,
+      "overview_status": "normal",
+      "pciSlot": -1,
+      "perf_testing": false,
+      "portType": "normal",
+      "remain_life": -1,
+      "remain_life_danger": false,
+      "remote_info": {
+       "compatibility": "disabled",
+       "unc": 0
+      },
+      "sb_days_left": 0,
+      "sb_days_left_critical": false,
+      "sb_days_left_warning": false,
+      "serial": "4YTATEAG",
+      "size_total": "14000519643136",
+      "slot_id": 1,
+      "smart_progress": "",
+      "smart_status": "normal",
+      "smart_test_limit": 0,
+      "smart_test_support": true,
+      "smart_testing": false,
+      "status": "normal",
+      "summary_status_category": "space",
+      "summary_status_key": "normal",
+      "temp": 38,
+      "testing_progress": "",
+      "testing_type": "idle",
+      "tray_status": "join",
+      "ui_serial": "4YTATEAG",
+      "unc": 0,
+      "used_by": "reuse_1",
+      "vendor": "WDC     ",
+      "wcache_force_off": false,
+      "wcache_force_on": false,
+      "wdda_support": false
+     },
+     {
+      "action": {
+       "alert": true,
+       "notification": false,
+       "selectable": true,
+       "show_lifetime_chart": true
+      },
+      "adv_progress": "",
+      "adv_status": "not_support",
+      "below_remain_life_mail_notify_thr": false,
+      "below_remain_life_show_thr": false,
+      "below_remain_life_thr": false,
+      "compatibility": "not_in_support",
+      "container": {
+       "order": 0,
+       "str": "DS1618+",
+       "supportPwrBtnDisable": false,
+       "type": "internal"
+      },
+      "container_id": 0,
+      "device": "/dev/sdb",
+      "disable_secera": false,
+      "diskType": "SATA",
+      "disk_code": "",
+      "disk_location": "Main",
+      "erase_time": 1346,
+      "firm": "83.00A83",
+      "firmware_status": "-",
+      "has_system": true,
+      "hide_info": [],
+      "i18nNamingInfo": "[\"dsm:volume:volume_disk\",\" \",\"2\"]",
+      "id": "sdb",
+      "ihm_testing": false,
+      "is4Kn": false,
+      "isSsd": false,
+      "isSynoDrive": false,
+      "isSynoPartition": true,
+      "is_bundle_ssd": false,
+      "is_erasing": false,
+      "longName": "Drive 2",
+      "model": "WD142KFGX-68AFPN0",
+      "name": "Drive 2",
+      "num_id": 2,
+      "order": 2,
+      "overview_status": "normal",
+      "pciSlot": -1,
+      "perf_testing": false,
+      "portType": "normal",
+      "remain_life": -1,
+      "remain_life_danger": false,
+      "remote_info": {
+       "compatibility": "disabled",
+       "unc": 0
+      },
+      "sb_days_left": 0,
+      "sb_days_left_critical": false,
+      "sb_days_left_warning": false,
+      "serial": "5JWN9VBX",
+      "size_total": "14000519643136",
+      "slot_id": 2,
+      "smart_progress": "90%",
+      "smart_status": "normal",
+      "smart_test_limit": 0,
+      "smart_test_support": true,
+      "smart_testing": true,
+      "status": "normal",
+      "summary_status_category": "processing",
+      "summary_status_key": "smart",
+      "temp": 41,
+      "testing_progress": "90%",
+      "testing_type": "smart",
+      "tray_status": "join",
+      "ui_serial": "5JWN9VBX",
+      "unc": 0,
+      "used_by": "reuse_1",
+      "vendor": "WDC     ",
+      "wcache_force_off": false,
+      "wcache_force_on": false,
+      "wdda_support": false
+     },
+     {
+      "action": {
+       "alert": false,
+       "notification": false,
+       "selectable": true,
+       "show_lifetime_chart": true
+      },
+      "adv_progress": "",
+      "adv_status": "not_support",
+      "below_remain_life_mail_notify_thr": false,
+      "below_remain_life_show_thr": false,
+      "below_remain_life_thr": false,
+      "compatibility": "support",
+      "container": {
+       "order": 0,
+       "str": "DS1618+",
+       "supportPwrBtnDisable": false,
+       "type": "internal"
+      },
+      "container_id": 0,
+      "device": "/dev/sdc",
+      "disable_secera": false,
+      "diskType": "SATA",
+      "disk_code": "",
+      "disk_location": "Main",
+      "erase_time": 1320,
+      "firm": "83.00A83",
+      "firmware_status": "-",
+      "has_system": true,
+      "hide_info": [],
+      "i18nNamingInfo": "[\"dsm:volume:volume_disk\",\" \",\"3\"]",
+      "id": "sdc",
+      "ihm_testing": false,
+      "is4Kn": false,
+      "isSsd": false,
+      "isSynoDrive": false,
+      "isSynoPartition": true,
+      "is_bundle_ssd": false,
+      "is_erasing": false,
+      "longName": "Drive 3",
+      "model": "WD141KFGX-68FH9N0",
+      "name": "Drive 3",
+      "num_id": 3,
+      "order": 3,
+      "overview_status": "normal",
+      "pciSlot": -1,
+      "perf_testing": false,
+      "portType": "normal",
+      "remain_life": -1,
+      "remain_life_danger": false,
+      "remote_info": {
+       "compatibility": "disabled",
+       "unc": 0
+      },
+      "sb_days_left": 0,
+      "sb_days_left_critical": false,
+      "sb_days_left_warning": false,
+      "serial": "6YTV3WCU",
+      "size_total": "14000519643136",
+      "slot_id": 3,
+      "smart_progress": "",
+      "smart_status": "normal",
+      "smart_test_limit": 0,
+      "smart_test_support": true,
+      "smart_testing": false,
+      "status": "normal",
+      "summary_status_category": "space",
+      "summary_status_key": "normal",
+      "temp": 39,
+      "testing_progress": "",
+      "testing_type": "idle",
+      "tray_status": "join",
+      "ui_serial": "6YTV3WCU",
+      "unc": 0,
+      "used_by": "reuse_1",
+      "vendor": "WDC     ",
+      "wcache_force_off": false,
+      "wcache_force_on": false,
+      "wdda_support": false
+     },
+     {
+      "action": {
+       "alert": false,
+       "notification": false,
+       "selectable": true,
+       "show_lifetime_chart": true
+      },
+      "adv_progress": "",
+      "adv_status": "not_support",
+      "below_remain_life_mail_notify_thr": false,
+      "below_remain_life_show_thr": false,
+      "below_remain_life_thr": false,
+      "compatibility": "support",
+      "container": {
+       "order": 0,
+       "str": "DS1618+",
+       "supportPwrBtnDisable": false,
+       "type": "internal"
+      },
+      "container_id": 0,
+      "device": "/dev/sdd",
+      "disable_secera": false,
+      "diskType": "SATA",
+      "disk_code": "",
+      "disk_location": "Main",
+      "erase_time": 1490,
+      "firm": "01.01H01",
+      "firmware_status": "-",
+      "has_system": true,
+      "hide_info": [],
+      "i18nNamingInfo": "[\"dsm:volume:volume_disk\",\" \",\"4\"]",
+      "id": "sdd",
+      "ihm_testing": false,
+      "is4Kn": false,
+      "isSsd": false,
+      "isSynoDrive": false,
+      "isSynoPartition": true,
+      "is_bundle_ssd": false,
+      "is_erasing": false,
+      "longName": "Drive 4",
+      "model": "WD161KRYZ-01AGBB0",
+      "name": "Drive 4",
+      "num_id": 4,
+      "order": 4,
+      "overview_status": "normal",
+      "pciSlot": -1,
+      "perf_testing": false,
+      "portType": "normal",
+      "remain_life": -1,
+      "remain_life_danger": false,
+      "remote_info": {
+       "compatibility": "disabled",
+       "unc": 0
+      },
+      "sb_days_left": 0,
+      "sb_days_left_critical": false,
+      "sb_days_left_warning": false,
+      "serial": "5JUPVR7N",
+      "size_total": "16000900661248",
+      "slot_id": 4,
+      "smart_progress": "90%",
+      "smart_status": "normal",
+      "smart_test_limit": 0,
+      "smart_test_support": true,
+      "smart_testing": true,
+      "status": "normal",
+      "summary_status_category": "processing",
+      "summary_status_key": "smart",
+      "temp": 42,
+      "testing_progress": "90%",
+      "testing_type": "smart",
+      "tray_status": "join",
+      "ui_serial": "5JUPVR7N",
+      "unc": 0,
+      "used_by": "reuse_1",
+      "vendor": "WDC     ",
+      "wcache_force_off": false,
+      "wcache_force_on": false,
+      "wdda_support": false
+     },
+     {
+      "action": {
+       "alert": true,
+       "notification": false,
+       "selectable": true,
+       "show_lifetime_chart": true
+      },
+      "adv_progress": "",
+      "adv_status": "not_support",
+      "below_remain_life_mail_notify_thr": false,
+      "below_remain_life_show_thr": false,
+      "below_remain_life_thr": false,
+      "compatibility": "not_in_support",
+      "container": {
+       "order": 0,
+       "str": "DS1618+",
+       "supportPwrBtnDisable": false,
+       "type": "internal"
+      },
+      "container_id": 0,
+      "device": "/dev/sde",
+      "disable_secera": false,
+      "diskType": "SATA",
+      "disk_code": "",
+      "disk_location": "Main",
+      "erase_time": 1328,
+      "firm": "83.00A83",
+      "firmware_status": "-",
+      "has_system": false,
+      "hide_info": [],
+      "i18nNamingInfo": "[\"dsm:volume:volume_disk\",\" \",\"5\"]",
+      "id": "sde",
+      "ihm_testing": false,
+      "is4Kn": false,
+      "isSsd": false,
+      "isSynoDrive": false,
+      "isSynoPartition": false,
+      "is_bundle_ssd": false,
+      "is_erasing": false,
+      "longName": "Drive 5",
+      "model": "WD142KFGX-68AFPN0",
+      "name": "Drive 5",
+      "num_id": 5,
+      "order": 5,
+      "overview_status": "normal",
+      "pciSlot": -1,
+      "perf_testing": false,
+      "portType": "normal",
+      "remain_life": -1,
+      "remain_life_danger": false,
+      "remote_info": {
+       "compatibility": "disabled",
+       "unc": 0
+      },
+      "sb_days_left": 0,
+      "sb_days_left_critical": false,
+      "sb_days_left_warning": false,
+      "serial": "4TVTLE7H",
+      "size_total": "14000519643136",
+      "slot_id": 5,
+      "smart_progress": "",
+      "smart_status": "normal",
+      "smart_test_limit": 0,
+      "smart_test_support": true,
+      "smart_testing": false,
+      "status": "not_use",
+      "summary_status_category": "space",
+      "summary_status_key": "hotspare",
+      "temp": 39,
+      "testing_progress": "",
+      "testing_type": "idle",
+      "tray_status": "not join",
+      "ui_serial": "4TVTLE7H",
+      "unc": 0,
+      "used_by": "hotspare",
+      "vendor": "WDC     ",
+      "wcache_force_off": false,
+      "wcache_force_on": false,
+      "wdda_support": false
+     },
+     {
+      "action": {
+       "alert": true,
+       "notification": false,
+       "selectable": true,
+       "show_lifetime_chart": true
+      },
+      "adv_progress": "",
+      "adv_status": "not_support",
+      "below_remain_life_mail_notify_thr": false,
+      "below_remain_life_show_thr": false,
+      "below_remain_life_thr": false,
+      "compatibility": "not_in_support",
+      "container": {
+       "order": 0,
+       "str": "DS1618+",
+       "supportPwrBtnDisable": false,
+       "type": "internal"
+      },
+      "container_id": 0,
+      "device": "/dev/sdf",
+      "disable_secera": false,
+      "diskType": "SATA",
+      "disk_code": "",
+      "disk_location": "Main",
+      "erase_time": 4,
+      "firm": "SVT03B6Q",
+      "firmware_status": "-",
+      "has_system": false,
+      "hide_info": [],
+      "i18nNamingInfo": "[\"dsm:volume:volume_disk\",\" \",\"6\"]",
+      "id": "sdf",
+      "ihm_testing": false,
+      "is4Kn": false,
+      "isSsd": true,
+      "isSynoDrive": false,
+      "isSynoPartition": false,
+      "is_bundle_ssd": false,
+      "is_erasing": false,
+      "longName": "Drive 6",
+      "model": "SSD 870 EVO 1TB",
+      "name": "Drive 6",
+      "num_id": 6,
+      "order": 6,
+      "overview_status": "normal",
+      "pciSlot": -1,
+      "perf_testing": false,
+      "portType": "normal",
+      "remain_life": 67,
+      "remain_life_danger": false,
+      "remote_info": {
+       "compatibility": "disabled",
+       "unc": 0
+      },
+      "sb_days_left": 0,
+      "sb_days_left_critical": false,
+      "sb_days_left_warning": false,
+      "serial": "C56DLT8B042708S",
+      "size_total": "1000204886016",
+      "slot_id": 6,
+      "smart_progress": "",
+      "smart_status": "normal",
+      "smart_test_limit": 0,
+      "smart_test_support": true,
+      "smart_testing": false,
+      "status": "normal",
+      "summary_status_category": "space",
+      "summary_status_key": "normal",
+      "temp": 41,
+      "testing_progress": "",
+      "testing_type": "idle",
+      "tray_status": "ssd cache",
+      "ui_serial": "C56DLT8B042708S",
+      "unc": -1,
+      "used_by": "shared_cache_1",
+      "vendor": "Samsung ",
+      "wcache_force_off": false,
+      "wcache_force_on": false,
+      "wdda_support": false
+     }
+    ],
+    "env": {
+     "batchtask": {
+      "max_task": 64,
+      "remain_task": 64
+     },
+     "bay_number": "6",
+     "cache_max_ssd_num": 6,
+     "data_scrubbing": {
+      "sche_enabled": "1",
+      "sche_pool_order": [
+       "/dev/vg1"
+      ],
+      "sche_status": "done"
+     },
+     "eunits": [],
+     "fs_acting": false,
+     "is_space_actioning": false,
+     "m2_card_info": [],
+     "max_fs_bytes": "118747255799808",
+     "max_fs_bytes_high_end": "219902325555200",
+     "model_name": "DS1618+",
+     "multipathStatus": "normal",
+     "multipathSupport": false,
+     "ram_enough_for_fs_high_end": false,
+     "ram_size": 4,
+     "ram_size_required": 32,
+     "showpooltab": true,
+     "space_size_limit": {
+      "allocatable_size": 0,
+      "is_limited": false,
+      "size_limit": 0
+     },
+     "status": {
+      "is_support_sha_peta_volume": false,
+      "root_size_byte": 2549940224,
+      "system_crashed": false,
+      "system_need_repair": false,
+      "system_rebuilding": false
+     },
+     "storageMachineInfo": [
+      {
+       "isInternal": true,
+       "isSAS": false,
+       "machineSerial": "39K9MNAH21P6L",
+       "machineStatus": "existed",
+       "modelName": "DS1618+",
+       "nameStr": "Seska",
+       "order": 0,
+       "ports": []
+      }
+     ],
+     "support": {
+      "ebox": true,
+      "raid_cross": true,
+      "sysdef": true
+     },
+     "unique_key": "04d9970d79"
+    },
+    "missing_pools": [],
+    "overview_data": {
+     "incompatible_eunit": [],
+     "pools_to_show": {
+      "detected_pool": [],
+      "storage_pool": [
+       "reuse_1"
+      ]
+     },
+     "sample_level_str": {
+      "attention": "status_level_abnormal",
+      "danger": "status_level_danger",
+      "normal": "status_level_normal"
+     },
+     "space_affect_by_eunit_lost": false,
+     "space_affect_by_location_mismatch": false,
+     "status_level": "status_level_abnormal"
+    },
+    "ports": [],
+    "sharedCaches": [
+     {
+      "apm_flush_status": "no_need",
+      "can_do": {
+       "delete": true,
+       "migrate": {
+        "to_raid1": 3,
+        "to_raid5": 2
+       },
+       "raid_cross": true
+      },
+      "compatibility": true,
+      "desc": "",
+      "device_type": "basic",
+      "disks": [
+       "sdf"
+      ],
+      "id": "shared_cache_1",
+      "is_missing": false,
+      "is_writable": true,
+      "minimal_disk_size": "1000200210432",
+      "num_id": 1,
+      "raids": [
+       {
+        "designedDiskCount": 1,
+        "devices": [
+         {
+          "id": "sdf",
+          "slot": 0,
+          "status": "normal"
+         }
+        ],
+        "hasParity": false,
+        "minDevSize": "1000200210432",
+        "normalDevCount": 1,
+        "raidCrashedReason": 0,
+        "raidPath": "/dev/md3",
+        "raidStatus": 1,
+        "spares": []
+       }
+      ],
+      "size": {
+       "recyclable": "0",
+       "total": "1000198897664",
+       "used": "999666221056"
+      },
+      "space_path": "/dev/shared_cache_vg1",
+      "task": "none"
+     }
+    ],
+    "ssdCaches": [
+     {
+      "SSDPath": "/dev/shared_cache_vg1/alloc_cache_1",
+      "SSDUUID": "ve2A6W-slwj-rXwE-f9yq-9rzX-gUXh-5wW52o",
+      "cacheStatus": "",
+      "cache_disks": [],
+      "can_assemble": false,
+      "can_do": {
+       "cancelDelete": false,
+       "delete": true,
+       "migrate": {
+        "to_raid1": 3,
+        "to_raid5": 2
+       },
+       "raid_cross": true
+      },
+      "compatibility": true,
+      "container": "internal",
+      "data_scrubbing": {
+       "can_do_manual": false,
+       "can_do_schedule": false,
+       "reason": "not_support"
+      },
+      "designedDiskCount": 1,
+      "dev_count": 1,
+      "device_type": "basic",
+      "disk_failure_number": 0,
+      "disks": [
+       "sdf"
+      ],
+      "drive_type": 1,
+      "hash_mapping": true,
+      "hit_rate": 83,
+      "hit_rate_write": 0,
+      "hit_rates": {
+       "Current": {
+        "data_size": 1,
+        "io_hit": 20501,
+        "io_need_acceleration": 21831,
+        "success": true
+       },
+       "Daily": {
+        "data_size": 0,
+        "io_hit": 0,
+        "io_need_acceleration": 0,
+        "success": false
+       },
+       "HalfYearly": {
+        "data_size": 0,
+        "io_hit": 0,
+        "io_need_acceleration": 0,
+        "success": false
+       },
+       "Minutely": {
+        "data_size": 0,
+        "io_hit": 0,
+        "io_need_acceleration": 0,
+        "success": false
+       },
+       "Monthly": {
+        "data_size": 0,
+        "io_hit": 0,
+        "io_need_acceleration": 0,
+        "success": false
+       },
+       "Weekly": {
+        "data_size": 0,
+        "io_hit": 0,
+        "io_need_acceleration": 0,
+        "success": false
+       },
+       "Yearly": {
+        "data_size": 0,
+        "io_hit": 0,
+        "io_need_acceleration": 0,
+        "success": false
+       },
+       "has_history": false
+      },
+      "id": "alloc_cache_1_1",
+      "is_actioning": false,
+      "is_backgroundbuilding": false,
+      "is_missing": false,
+      "is_scheduled": false,
+      "last_done_time": 0,
+      "limited_disk_number": 24,
+      "loaded": true,
+      "maxDegradeFlush": false,
+      "maximal_disk_size": "0",
+      "memory": "381337600",
+      "metadataCache": false,
+      "metadataCacheOptionShow": false,
+      "minimal_disk_size": "1000200210432",
+      "minimal_spare_size": "0",
+      "missing_drives": [],
+      "mode": "read",
+      "mountSpaceId": "volume_1",
+      "next_schedule_time": 0,
+      "num_id": 0,
+      "path": "/volume1",
+      "policy": 0,
+      "pool_path": "",
+      "progress": {
+       "cur_step": 0,
+       "is_resync_speed_limited": false,
+       "percent": "-1",
+       "remaining_time": 0,
+       "step": "none",
+       "total_step": 0
+      },
+      "protectProgress": -1,
+      "raids": [
+       {
+        "designedDiskCount": 1,
+        "devices": [
+         {
+          "id": "sdf",
+          "slot": 0,
+          "status": "normal"
+         }
+        ],
+        "hasParity": false,
+        "minDevSize": "1000200210432",
+        "normalDevCount": 1,
+        "raidCrashedReason": 0,
+        "raidPath": "/dev/md3",
+        "raidStatus": 1,
+        "spares": []
+       }
+      ],
+      "repair_action": "none",
+      "scrubbingStatus": "",
+      "show_assemble_btn": false,
+      "size": {
+       "occupied": "0",
+       "reusable": "999559135232",
+       "total": "999653638144"
+      },
+      "skipSeqIO": true,
+      "space_path": "/dev/shared_cache_vg1/alloc_cache_1",
+      "space_status": {
+       "detail": "cache_normal",
+       "show_attention": false,
+       "show_danger": false,
+       "show_flag_detail": "",
+       "status": "cache_normal",
+       "summary_status": "normal"
+      },
+      "spares": [],
+      "status": "normal",
+      "suggestions": [],
+      "summary_status": "normal",
+      "task": "none",
+      "timebackup": false,
+      "uuid": "ve2A6W-slwj-rXwE-f9yq-9rzX-gUXh-5wW52o",
+      "version": 3,
+      "version_status": "vol_latest_version",
+      "vspace_can_do": {
+       "drbd": {
+        "resize": {
+         "can_do": false,
+         "errCode": 53504,
+         "stopService": false
+        }
+       },
+       "flashcache": {
+        "apply": {
+         "can_do": false,
+         "errCode": 768,
+         "stopService": false
+        },
+        "remove": {
+         "can_do": false,
+         "errCode": 768,
+         "stopService": false
+        },
+        "resize": {
+         "can_do": false,
+         "errCode": 768,
+         "stopService": false
+        }
+       },
+       "snapshot": {
+        "resize": {
+         "can_do": false,
+         "errCode": 53504,
+         "stopService": false
+        }
+       }
+      }
+     }
+    ],
+    "storagePools": [
+     {
+      "cacheStatus": "",
+      "cache_disks": [
+       "sdf"
+      ],
+      "can_assemble": false,
+      "can_do": {
+       "delete": true,
+       "disk_replace": true,
+       "expand_by_disk": 1,
+       "migrate": {
+        "to_raid6": 1
+       },
+       "raid_cross": true
+      },
+      "compatibility": true,
+      "container": "internal",
+      "data_scrubbing": {
+       "can_do_manual": true,
+       "can_do_schedule": true,
+       "reason": ""
+      },
+      "desc": "",
+      "device_type": "raid_5",
+      "disk_failure_number": 0,
+      "disks": [
+       "sda",
+       "sdb",
+       "sdc",
+       "sdd"
+      ],
+      "drive_type": 0,
+      "has_full_child_vol": true,
+      "id": "reuse_1",
+      "is_actioning": false,
+      "is_backgroundbuilding": false,
+      "is_scheduled": true,
+      "is_writable": true,
+      "last_done_time": 1782186138,
+      "limited_disk_number": 12,
+      "maximal_disk_size": "0",
+      "minimal_disk_size": "13994369810432",
+      "minimal_spare_size": "13994369810432",
+      "missing_drives": [],
+      "next_schedule_time": 1797573600,
+      "num_id": 1,
+      "pool_child": [
+       {
+        "id": "volume_1",
+        "size": {
+         "total": "41968272932864"
+        }
+       }
+      ],
+      "pool_path": "reuse_1",
+      "progress": {
+       "cur_step": 0,
+       "is_resync_speed_limited": false,
+       "percent": "-1",
+       "remaining_time": 0,
+       "step": "none",
+       "total_step": 0
+      },
+      "raidType": "multiple",
+      "raids": [
+       {
+        "designedDiskCount": 4,
+        "devices": [
+         {
+          "id": "sdd",
+          "slot": 3,
+          "status": "normal"
+         },
+         {
+          "id": "sdc",
+          "slot": 2,
+          "status": "normal"
+         },
+         {
+          "id": "sdb",
+          "slot": 1,
+          "status": "normal"
+         },
+         {
+          "id": "sda",
+          "slot": 0,
+          "status": "normal"
+         }
+        ],
+        "hasParity": true,
+        "minDevSize": "13994369810432",
+        "normalDevCount": 4,
+        "raidCrashedReason": 0,
+        "raidPath": "/dev/md2",
+        "raidStatus": 1,
+        "spares": [
+         {
+          "id": "sde",
+          "path": "/dev/sde"
+         }
+        ]
+       }
+      ],
+      "repair_action": "none",
+      "scrubbingStatus": "schedule_done",
+      "show_assemble_btn": false,
+      "size": {
+       "total": "41968612671488",
+       "used": "41968285515776"
+      },
+      "space_path": "/dev/vg1",
+      "space_status": {
+       "detail": "fs_almost_full",
+       "show_attention": false,
+       "show_danger": false,
+       "show_flag_detail": "",
+       "status": "pool_normal",
+       "summary_status": "attention"
+      },
+      "spares": [
+       {
+        "id": "sde",
+        "path": "/dev/sde"
+       }
+      ],
+      "status": "attention",
+      "suggestions": [
+       {
+        "arg": [
+         "1"
+        ],
+        "section": "volume",
+        "str": "volume_usage_suggestion",
+        "type": "warning"
+       }
+      ],
+      "summary_status": "attention",
+      "timebackup": false,
+      "uuid": "XrR6MF-1701-eaBj-Tf3M-HeC3-W0g2-a7LhHc",
+      "vspace_can_do": {
+       "drbd": {
+        "resize": {
+         "can_do": false,
+         "errCode": 53504,
+         "stopService": false
+        }
+       },
+       "flashcache": {
+        "apply": {
+         "can_do": false,
+         "errCode": 768,
+         "stopService": false
+        },
+        "remove": {
+         "can_do": false,
+         "errCode": 768,
+         "stopService": false
+        },
+        "resize": {
+         "can_do": false,
+         "errCode": 768,
+         "stopService": false
+        }
+       },
+       "snapshot": {
+        "resize": {
+         "can_do": false,
+         "errCode": 53504,
+         "stopService": false
+        }
+       }
+      }
+     }
+    ],
+    "volumes": [
+     {
+      "atime_checked": false,
+      "atime_opt": "relatime",
+      "cache": {
+       "id": "alloc_cache_1_1",
+       "status": "normal"
+      },
+      "cacheStatus": "",
+      "cache_advisor_running": false,
+      "cache_disks": [],
+      "can_assemble": false,
+      "can_do": {
+       "delete": true,
+       "raid_cross": true
+      },
+      "container": "internal",
+      "device_type": "raid_5",
+      "disk_failure_number": 0,
+      "disks": [],
+      "drive_type": 0,
+      "fs_type": "btrfs",
+      "id": "volume_1",
+      "is_acting": false,
+      "is_actioning": false,
+      "is_backgroundbuilding": false,
+      "is_inode_full": false,
+      "is_scheduled": false,
+      "is_writable": true,
+      "last_done_time": 0,
+      "limited_disk_number": 12,
+      "max_fs_size": "1152921504606846976",
+      "metadata_cache_hard_lower_bound_byte": 485973032960,
+      "metadata_cache_option_show": true,
+      "missing_drives": [],
+      "next_schedule_time": 0,
+      "num_id": 1,
+      "pool_path": "reuse_1",
+      "progress": {
+       "cur_step": 0,
+       "is_resync_speed_limited": false,
+       "percent": "-1",
+       "remaining_time": 0,
+       "step": "none",
+       "total_step": 0
+      },
+      "raidType": "multiple",
+      "repair_action": "none",
+      "scrubbingStatus": "",
+      "show_assemble_btn": false,
+      "size": {
+       "free_inode": "0",
+       "total": "40289542017024",
+       "total_device": "41968272932864",
+       "total_inode": "0",
+       "used": "38890201681920"
+      },
+      "space_status": {
+       "detail": "fs_almost_full",
+       "show_attention": false,
+       "show_danger": false,
+       "show_flag_detail": "",
+       "status": "fs_almost_full",
+       "summary_status": "attention"
+      },
+      "ssd_trim": {
+       "support": "not support"
+      },
+      "status": "attention",
+      "suggestions": [],
+      "summary_status": "attention",
+      "timebackup": false,
+      "used_by_gluster": false,
+      "uuid": "gnd6Gh-tJsO-H4Zu-h5Ub-1alu-WYZu-jbbPBC",
+      "vol_attribute": "generic",
+      "vol_desc": "Located on Storage Pool 1, RAID 5",
+      "vol_path": "/volume1",
+      "vspace_can_do": {
+       "drbd": {
+        "resize": {
+         "can_do": false,
+         "errCode": 53504,
+         "stopService": false
+        }
+       },
+       "flashcache": {
+        "apply": {
+         "can_do": false,
+         "errCode": 49152,
+         "stopService": false
+        },
+        "remove": {
+         "can_do": true,
+         "errCode": 0,
+         "stopService": true
+        },
+        "resize": {
+         "can_do": true,
+         "errCode": 0,
+         "stopService": false
+        }
+       },
+       "snapshot": {
+        "resize": {
+         "can_do": false,
+         "errCode": 53504,
+         "stopService": false
+        }
+       }
+      }
+     }
+    ]
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Storage",
+   "method": "load_info",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Storage.login_check.v1": {
+  "reply": {
+   "data": {
+    "isDisplay": false
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Storage",
+   "method": "login_check",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.TaipeiEnclosure.load.v1": {
+  "reply": {
+   "error": {
+    "code": 121
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.TaipeiEnclosure",
+   "method": "load",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Volume.enum_resource.v1": {
+  "reply": {
+   "error": {
+    "code": 101
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Volume",
+   "method": "enum_resource",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Volume.enum_resource.v1:{\"space_id\": \"[\\\"volume_1\\\"]\"}": {
+  "reply": {
+   "data": {
+    "check": {
+     "shares": {
+      "NetBackup": {
+       "hard": [
+        "{\"task\":\"Rsync Service\",\"task_i18n\":\"backup:rsync_service_share_action_warning\"}"
+       ]
+      },
+      "docker": {
+       "hard": [
+        "{\"args\":[\"Docker\"],\"task\":\"docker share delete check\",\"task_i18n\":\"docker:docker_share_delete_feasibility_check\"}"
+       ]
+      },
+      "music": {
+       "hard": [
+        "{\"args\":[\"iTunes Server\"],\"task\":\"Share Occupied By Package\",\"task_i18n\":\"pkgmgr:stop_before_proceed\"}"
+       ]
+      },
+      "surveillance": {
+       "soft": [
+        "{\"args\":[\"Surveillance Station\"],\"task\":\"This share is used by Surveillance Station.\",\"task_i18n\":\"SYNO.SDS.SurveillanceStation:event:delete_using_share_app\"}"
+       ]
+      },
+      "video": {
+       "hard": [
+        "{\"args\":[\"Video Station, iTunes Server\"],\"task\":\"Share Occupied By Package\",\"task_i18n\":\"pkgmgr:stop_before_proceed\"}",
+        "{\"args\":[\"Docker\"],\"task\":\"docker share delete check\",\"task_i18n\":\"docker:docker_share_delete_feasibility_check\"}"
+       ]
+      },
+      "web": {
+       "hard": [
+        "{\"args\":[\"Web Station\"],\"task\":\"Share Occupied By Package\",\"task_i18n\":\"pkgmgr:stop_before_proceed\"}"
+       ]
+      },
+      "web_packages": {
+       "hard": [
+        "{\"args\":[\"Web Station\"],\"task\":\"Share Occupied By Package\",\"task_i18n\":\"pkgmgr:stop_before_proceed\"}"
+       ]
+      }
+     },
+     "volumes": {
+      "/volume1": {
+       "hard": [
+        "{\"args\":[\"Cloud Sync\"],\"task\":\"CloudSync\",\"task_i18n\":\"SYNO.SDS.DSCloudSync.Instance:app:app_vol_del_hard\"}",
+        "{\"args\":[\"Seska - VM Storage 1\"],\"task\":\"Virtual Machine Manager storage: {0}\",\"task_i18n\":\"SYNO.SDS.Virtualization.Application:app:vm_list_volume_delete\"}",
+        "{\"args\":[\"Virtual Machine Manager\"],\"task\":\"Some packages are installed on a volume you want to remove. Please uninstall the following packages first: <b>{0}</b>.\",\"task_i18n\":\"pkgmgr:uninstall_before_proceed\"}"
+       ]
+      }
+     }
+    },
+    "iscsiluns": [],
+    "pkgs": [
+     {
+      "name": "Download Station"
+     },
+     {
+      "name": "Node.js v14"
+     },
+     {
+      "name": "Log Center"
+     },
+     {
+      "name": "Cloud Sync"
+     },
+     {
+      "name": "Node.js v18"
+     },
+     {
+      "name": "Synology Photos"
+     },
+     {
+      "name": "SynoCli Video Drivers"
+     },
+     {
+      "name": "iTunes Server"
+     },
+     {
+      "name": "Media Server"
+     },
+     {
+      "name": "Web Station"
+     },
+     {
+      "name": "Surveillance Video Extension"
+     },
+     {
+      "name": "Advanced Media Extensions"
+     },
+     {
+      "name": "Surveillance Station"
+     },
+     {
+      "name": "Hyper Backup Vault"
+     },
+     {
+      "name": "Apache HTTP Server 2.4"
+     },
+     {
+      "name": "Jellyfin"
+     },
+     {
+      "name": "Python 3.11"
+     },
+     {
+      "name": "Tailscale"
+     },
+     {
+      "name": "FFmpeg 7"
+     },
+     {
+      "name": "Docker"
+     },
+     {
+      "name": "SynoCli Video Driver Tools"
+     },
+     {
+      "name": "Hyper Backup"
+     },
+     {
+      "name": "Virtual Machine Manager"
+     },
+     {
+      "name": "Video Station"
+     },
+     {
+      "name": "Synology Application Service"
+     }
+    ],
+    "services": [],
+    "shares": [
+     {
+      "name": "awareness-backups"
+     },
+     {
+      "name": "Backups"
+     },
+     {
+      "name": "BitTorrents"
+     },
+     {
+      "name": "docker"
+     },
+     {
+      "name": "fah"
+     },
+     {
+      "name": "git"
+     },
+     {
+      "name": "homes"
+     },
+     {
+      "name": "mcp-synology-test"
+     },
+     {
+      "name": "mcp-synology-test-claude-ai"
+     },
+     {
+      "name": "mcp-synology-test-claude-code"
+     },
+     {
+      "name": "mcp-synology-test-muse"
+     },
+     {
+      "name": "misc"
+     },
+     {
+      "name": "music"
+     },
+     {
+      "name": "NetBackup"
+     },
+     {
+      "name": "owncloud"
+     },
+     {
+      "name": "photo"
+     },
+     {
+      "name": "surveillance"
+     },
+     {
+      "name": "Test-Resources"
+     },
+     {
+      "name": "video"
+     },
+     {
+      "name": "web"
+     },
+     {
+      "name": "web_packages"
+     }
+    ]
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Volume",
+   "method": "enum_resource",
+   "space_id": "[\"volume_1\"]",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Volume.enum_resource.v1:{\"space_id\": [\"volume_1\"]}": {
+  "reply": {
+   "error": {
+    "code": 101
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Volume",
+   "method": "enum_resource",
+   "space_id": [
+    "volume_1"
+   ],
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Volume.get_space_usage.v1": {
+  "reply": {
+   "error": {
+    "code": 114
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Volume",
+   "method": "get_space_usage",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Volume.get_space_usage.v1:{\"volume_path\": \"/volume1\"}": {
+  "reply": {
+   "data": {
+    "categories": [
+     {
+      "category_name": "c2share",
+      "size": 0
+     },
+     {
+      "category_name": "drive",
+      "size": 0
+     },
+     {
+      "category_name": "lun",
+      "size": 34293030912
+     },
+     {
+      "category_name": "others",
+      "size": 40208875520
+     },
+     {
+      "category_name": "petaspace",
+      "size": 0
+     },
+     {
+      "category_name": "share",
+      "size": 38804405866496
+     },
+     {
+      "category_name": "snapshot",
+      "size": 12789989376
+     }
+    ],
+    "error_code": 0,
+    "free_size": 1396686823424,
+    "progress_done": 0,
+    "progress_total": 0,
+    "status": "enabled",
+    "total_size": 40289542017024,
+    "volume_path": "/volume1"
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Volume",
+   "method": "get_space_usage",
+   "version": 1,
+   "volume_path": "/volume1"
+  }
+ },
+ "admin:SYNO.Storage.CGI.Volume.get_space_usage.v1:{\"volume_path\": \"/volume9\"}": {
+  "reply": {
+   "error": {
+    "code": 48640
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Volume",
+   "method": "get_space_usage",
+   "version": 1,
+   "volume_path": "/volume9"
+  }
+ },
+ "admin:SYNO.Storage.CGI.Volume.next_trim_time_get.v1": {
+  "reply": {
+   "error": {
+    "code": 117
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Volume",
+   "method": "next_trim_time_get",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Volume.ssd_trim_get.v1": {
+  "reply": {
+   "error": {
+    "code": 101
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Volume",
+   "method": "ssd_trim_get",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Volume.ssd_trim_get.v1:{\"space_path\": \"/volume1\"}": {
+  "reply": {
+   "data": {
+    "ssd_trim": {
+     "support": "not support"
+    }
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Volume",
+   "method": "ssd_trim_get",
+   "space_path": "/volume1",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Volume.ssd_trim_get.v1:{\"space_path\": \"/volume9\"}": {
+  "reply": {
+   "error": {
+    "code": 117
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Volume",
+   "method": "ssd_trim_get",
+   "space_path": "/volume9",
+   "version": 1
+  }
+ },
+ "admin:SYNO.Storage.CGI.Volume.vol_extent_size_get.v1": {
+  "reply": {
+   "error": {
+    "code": 121
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Volume",
+   "method": "vol_extent_size_get",
+   "version": 1
+  }
+ }
+}

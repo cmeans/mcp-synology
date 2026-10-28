@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- **Storage module spec (phase 1, READ)** (for #49) — `docs/specs/storage-module-spec.md` specifies 11 READ tools for the coming `storage` module: overview, storage pools (with hot spares), volumes, disks with S.M.A.R.T. and health trend, SSD caches, schedules, settings, external storage and share snapshots. It's written from live captures on vdsm (DSM 7.1, 7.2.2, 7.3.2, 7.4.1) and a real DS1618+ (DSM 7.1.1, read-only), now in `tests/modules/storage/fixtures/` with every serial number replaced. Findings that shaped it: every storage API is administrator-only; `SYNO.Core.Storage.Disk/Pool/Volume list` answer 101, so the tools read `SYNO.Storage.CGI.Storage load_info` as Storage Manager does; vdsm has no disks or pools, so disk and RAID paths are tested against the real NAS's fixture; `Share.Snapshot list` v1 returns no snapshots when there are some (v2 does); per-object calls fail with mixed codes for unknown IDs, and `Share.Snapshot get_schedule` reports success for a share that doesn't exist, so every tool checks IDs first; 121 means a feature the NAS doesn't support. The scope (Storage Manager, external storage, snapshots, system health), the exclusion of operations that wipe disks or change a pool's layout, and the planned phase 2 WRITE tools are recorded in the spec. The Awareness health poller is split out as #427
+
 ## 0.10.0 (2026-10-28)
 
 **Upgrading from 0.9.x:** 0.10.0 adds the Synology Photos module and tightens config checking. Five things to know:

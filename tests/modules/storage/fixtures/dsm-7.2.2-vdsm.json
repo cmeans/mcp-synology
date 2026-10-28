@@ -1,0 +1,3848 @@
+{
+ "admin:BtrfsDedupe.get_volume_info:/volume1": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": {
+    "volumes": [
+     {
+      "deduped": false,
+      "has_snapshot": true,
+      "is_schedule_enabled": false,
+      "last_dry_run_estimated": 0,
+      "last_dry_run_time": 0,
+      "last_manual_dedupe_savings": 0,
+      "last_manual_dedupe_time": 0,
+      "result": "success",
+      "schedule_disable_time": 0,
+      "support_dedupe": true,
+      "vol_path": "/volume1"
+     }
+    ]
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.BtrfsDedupe",
+   "method": "get_volume_info",
+   "version": "1",
+   "vol_paths": "[\"/volume1\"]"
+  },
+  "transport": "GET"
+ },
+ "admin:Core.Share.list": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": {
+    "shares": [
+     {
+      "desc": "homes contains all users' home",
+      "is_usb_share": false,
+      "name": "homes",
+      "uuid": "fc9f9945-3e3a-4807-936c-5b620faf8a40",
+      "vol_path": "/volume1"
+     },
+     {
+      "desc": "System default shared folder",
+      "is_usb_share": false,
+      "name": "photo",
+      "uuid": "a49c42fc-1409-4e0d-a23b-d1fe0f4a3eca",
+      "vol_path": "/volume1"
+     },
+     {
+      "desc": "MCP test",
+      "is_usb_share": false,
+      "name": "testshare",
+      "uuid": "e9f8f71d-6708-4afe-a01b-bd0f079a2607",
+      "vol_path": "/volume1"
+     },
+     {
+      "desc": "MCP writable",
+      "is_usb_share": false,
+      "name": "writable",
+      "uuid": "29187d83-2ab7-4b8a-8952-b9176886d004",
+      "vol_path": "/volume1"
+     }
+    ],
+    "total": 4
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Core.Share",
+   "method": "list",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:Region.NTP.get": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": {
+    "date": "2026/10/28",
+    "enable_ntp": "ntp",
+    "hour": 15,
+    "minute": 16,
+    "now": "Wed Oct 28 15:16:15 2026\n",
+    "second": 15,
+    "server": "time.google.com",
+    "timestamp": 1793200575,
+    "timezone": "GMT"
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Core.Region.NTP",
+   "method": "get",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Core.ExternalDevice.Storage.EUnit.list.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": {
+    "devices": []
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Core.ExternalDevice.Storage.EUnit",
+   "method": "list",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Core.ExternalDevice.Storage.Setting.get.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": {
+    "delalloc": false,
+    "forbid_usb": false,
+    "needReboot": false,
+    "non_admin_eject": false,
+    "setting": false,
+    "support_exfat_mkfs": false
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Core.ExternalDevice.Storage.Setting",
+   "method": "get",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Core.ExternalDevice.Storage.USB.list.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": {
+    "devices": []
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Core.ExternalDevice.Storage.USB",
+   "method": "list",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Core.ExternalDevice.Storage.eSATA.list.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": {
+    "devices": []
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Core.ExternalDevice.Storage.eSATA",
+   "method": "list",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Core.Share.Snapshot.get_schedule.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 403
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Share.Snapshot",
+   "method": "get_schedule",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Core.Share.Snapshot.get_share_conf.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 403
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Share.Snapshot",
+   "method": "get_share_conf",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Core.Share.Snapshot.list.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 403
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Share.Snapshot",
+   "method": "list",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Core.Share.Snapshot.list.v2": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 403
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Share.Snapshot",
+   "method": "list",
+   "version": "2"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Core.Storage.Disk.FWUpgrade.get_latest_auto_upgrade_result.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 117,
+    "errors": {}
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk.FWUpgrade",
+   "method": "get_latest_auto_upgrade_result",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Core.Storage.Disk.FWUpgrade.get_summary.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 114,
+    "errors": {
+     "drives": [],
+     "success": false
+    }
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk.FWUpgrade",
+   "method": "get_summary",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Core.Storage.Disk.FWUpgrade.get_upgrade_method.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 121
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk.FWUpgrade",
+   "method": "get_upgrade_method",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Core.Storage.Disk.FWUpgrade.list_drive.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": {
+    "access_network": true,
+    "drives": []
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk.FWUpgrade",
+   "method": "list_drive",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Core.Storage.Disk.FWUpgrade.list_drive_group.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 121
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk.FWUpgrade",
+   "method": "list_drive_group",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Core.Storage.Disk.disk_health_prediction_log_get.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "disk_health_prediction_log_get",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Core.Storage.Disk.disk_test_log_get.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 117
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "disk_test_log_get",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Core.Storage.Disk.disks_info_get.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 121
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "disks_info_get",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Core.Storage.Disk.get_adv_test_log.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 114
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "get_adv_test_log",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Core.Storage.Disk.get_disk_led_status.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 114
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "get_disk_led_status",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Core.Storage.Disk.get_offlinekit_ver.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": {
+    "ver": 648
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "get_offlinekit_ver",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Core.Storage.Disk.get_performance_test_info.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 114
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "get_performance_test_info",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Core.Storage.Disk.get_performance_test_log.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 101
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "get_performance_test_log",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Core.Storage.Disk.get_performance_test_status.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 114
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "get_performance_test_status",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Core.Storage.Disk.get_smart_info.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 114
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "get_smart_info",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Core.Storage.Disk.get_smart_test_log.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 114
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "get_smart_test_log",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Core.Storage.Disk.get_synoblock.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 114
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "get_synoblock",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Core.Storage.Disk.get_wdda_test_result.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 114
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "get_wdda_test_result",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Core.Storage.Disk.health_report_get.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": {
+    "content": "",
+    "err_disk_cnt": 0
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "health_report_get",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Core.Storage.Disk.list.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 101
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "list",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Core.Storage.Disk.list_detail.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": {
+    "disks": [
+     {
+      "is_syno_partition": false,
+      "partition_layout_version": 0,
+      "path": "/dev/sda"
+     },
+     {
+      "is_syno_partition": false,
+      "partition_layout_version": 0,
+      "path": "/dev/sdb"
+     }
+    ]
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "list_detail",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Core.Storage.Disk.load_info.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 121
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "load_info",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Core.Storage.Disk.load_local_info.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 121
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "load_local_info",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Core.Storage.Disk.set_disk_led_status.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 114
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "set_disk_led_status",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Core.Storage.Disk.wcache_get.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": {
+    "wcache_en": false
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "wcache_get",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Core.Storage.Pool.list.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 101
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Pool",
+   "method": "list",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Core.Storage.Volume.conf_get.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 101
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Volume",
+   "method": "conf_get",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Core.Storage.Volume.get.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 101
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Volume",
+   "method": "get",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Core.Storage.Volume.list.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 101
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Volume",
+   "method": "list",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Core.System.SystemHealth.get.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": {
+    "hostname": "VirtualDSM",
+    "interfaces": [
+     {
+      "id": "eth0",
+      "ip": "10.0.2.100",
+      "type": "lan"
+     }
+    ],
+    "rule": {
+     "description": {
+      "description_format": "{0}",
+      "description_params": [
+       "widget:system_ok"
+      ],
+      "description_use_formatted": false
+     },
+     "id": "system_health",
+     "priority": 40,
+     "type": 2
+    },
+    "uptime": "0:3:6"
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Core.System.SystemHealth",
+   "method": "get",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.BtrfsDedupe.get_schedule_plan.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": {
+    "schedule_plan": "111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.BtrfsDedupe",
+   "method": "get_schedule_plan",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.BtrfsDedupe.get_status.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": {
+    "op_type": "none",
+    "progress": 0,
+    "state": "inactive",
+    "target_volumes": []
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.BtrfsDedupe",
+   "method": "get_status",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.BtrfsDedupe.get_volume_info.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 120
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.BtrfsDedupe",
+   "method": "get_volume_info",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.Cache.Protection.get_config.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 121
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Cache.Protection",
+   "method": "get_config",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.Cache.Protection.get_status.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 121
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Cache.Protection",
+   "method": "get_status",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.Cache.Protection.get_status_all.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 121
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Cache.Protection",
+   "method": "get_status_all",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.Check.is_building.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": {
+    "isBuilding": false
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Check",
+   "method": "is_building",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.Check.is_data_scrubbing.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": {
+    "isBuilding": false
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Check",
+   "method": "is_data_scrubbing",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.Check.should_ask_for_fsck_scan.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Check",
+   "method": "should_ask_for_fsck_scan",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.DualEnclosure.load.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 121
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.DualEnclosure",
+   "method": "load",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.Enclosure.exp_fw_fail_get.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 121
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Enclosure",
+   "method": "exp_fw_fail_get",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.Enclosure.exp_fw_update_list_get.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 121
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Enclosure",
+   "method": "exp_fw_update_list_get",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.Enclosure.exp_fw_update_status_get.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 121
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Enclosure",
+   "method": "exp_fw_update_status_get",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.Enclosure.is_exp_connected.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 121
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Enclosure",
+   "method": "is_exp_connected",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.Enclosure.load.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 121
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Enclosure",
+   "method": "load",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.Enclosure.sha_exp_fw_fail_get.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 121
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Enclosure",
+   "method": "sha_exp_fw_fail_get",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.Enclosure.sha_exp_fw_update_list_get.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 121
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Enclosure",
+   "method": "sha_exp_fw_update_list_get",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.Enclosure.sha_exp_fw_update_status_get.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 121
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Enclosure",
+   "method": "sha_exp_fw_update_status_get",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.EncryptionKeyVault.get_info.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": {
+    "has_encrypted_volume": false,
+    "has_locked_volume": false,
+    "is_connected": false,
+    "is_enabled": false,
+    "is_encvol_acting": false,
+    "key_vault_action": "none",
+    "loc_type": "unknown",
+    "need_repair": false,
+    "passwd_create_time": "",
+    "share_path": "",
+    "support_volume_encryption": false
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.EncryptionKeyVault",
+   "method": "get_info",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.Flashcache.advisor_history_get.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": {
+    "items": null
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Flashcache",
+   "method": "advisor_history_get",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.Flashcache.is_redundancy_degraded.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 114
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Flashcache",
+   "method": "is_redundancy_degraded",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.Flashcache.shared_cache_config_get.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 117
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Flashcache",
+   "method": "shared_cache_config_get",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.HddMan.get.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": {
+    "BadSctrThrEn": true,
+    "RemainLifeThrEn": false,
+    "RemainLifeThrVal": 1,
+    "SBMonthLeftThrEn": false,
+    "SBMonthLeftThrVal": 1,
+    "WddaEn": false,
+    "chkMailSetting": false,
+    "db_last_update_time": 0,
+    "healthReportEn": false
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.HddMan",
+   "method": "get",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.KMIP.get.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": {
+    "client_cert_info": null,
+    "client_enable": false,
+    "conn_success": false,
+    "conn_time": "",
+    "kmip_conn_server_desc": "",
+    "kmip_conn_server_port": "5696",
+    "kmip_db_loc": "",
+    "kmip_enabled": "",
+    "kmip_mode": "",
+    "kmip_server": "",
+    "kmip_server_port": "5696",
+    "server_cert_info": null,
+    "server_enable": false,
+    "support_kmip": "no"
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.KMIP",
+   "method": "get",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.KMIP.get_key_list.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 117
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.KMIP",
+   "method": "get_key_list",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.KMIP.get_server_hostname.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": {
+    "server_hostname": "-"
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.KMIP",
+   "method": "get_server_hostname",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.KMIP.get_version_info.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": {
+    "auth_version": "TLS1.2",
+    "kmip_version": "1.2"
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.KMIP",
+   "method": "get_version_info",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.KMIP.list_cert.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": {
+    "certificates": []
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.KMIP",
+   "method": "list_cert",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.Pool.enum_resource.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 114
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Pool",
+   "method": "enum_resource",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.Pool.get_setting.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 114
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Pool",
+   "method": "get_setting",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.Pool.is_disk_detected_old_info.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 114
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Pool",
+   "method": "is_disk_detected_old_info",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.Scrubbing.get_state.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 101
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Scrubbing",
+   "method": "get_state",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.Smart.Scheduler.get.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 114
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Smart.Scheduler",
+   "method": "get",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.Smart.Scheduler.list.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": {
+    "items": [],
+    "total": 0
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Smart.Scheduler",
+   "method": "list",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.Smart.get_health_info.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 114
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Smart",
+   "method": "get_health_info",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.Smart.get_latest_online_drive_db_info.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": {
+    "version": 1101
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Smart",
+   "method": "get_latest_online_drive_db_info",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.Smart.get_smart_info.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 114
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Smart",
+   "method": "get_smart_info",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.Smart.list.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 121
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Smart",
+   "method": "list",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.Smart.smart_warning_get.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 114
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Smart",
+   "method": "smart_warning_get",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.Spare.Conf.get.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": {
+    "auto_replacement": false
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Spare.Conf",
+   "method": "get",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.Spare.list.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": {
+    "hotSpares": []
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Spare",
+   "method": "list",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.Spare.potential_spares_dump.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": {
+    "disks": [
+     {
+      "path": "/dev/sda"
+     }
+    ],
+    "spaces": [
+     {
+      "diff_4kn": [],
+      "diff_container": [],
+      "diff_drive_type": [],
+      "diff_protocol_type": [],
+      "min_hotspare_size": "0",
+      "not_support_reason": "wrong_raid_type",
+      "size_too_small": [],
+      "space_path": "/dev/sdb1",
+      "support_hotspare": false,
+      "valid_spares": []
+     }
+    ]
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Spare",
+   "method": "potential_spares_dump",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.Storage.get_auto_repair_config.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": {
+    "enable": false
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Storage",
+   "method": "get_auto_repair_config",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.Storage.get_fast_repair_config.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": {
+    "is_auto_scrubbing_enable": true,
+    "is_fast_repair_enable": true
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Storage",
+   "method": "get_fast_repair_config",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.Storage.get_resync_speed.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": {
+    "speed_max": 600,
+    "speed_min": 10,
+    "speed_option": "resync_slower"
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Storage",
+   "method": "get_resync_speed",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.Storage.get_sche_task_list.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": {
+    "data_scrubbing": {
+     "tasks": []
+    },
+    "iron_wolf": {
+     "tasks": []
+    },
+    "smart": {
+     "tasks": []
+    },
+    "ssd_trim": {
+     "tasks": []
+    }
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Storage",
+   "method": "get_sche_task_list",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.Storage.get_schedule_plan.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": {
+    "schedule": {
+     "interval": 0,
+     "next_start_time": 0,
+     "run_time_option": "run_all_time",
+     "sche_is_running": false,
+     "sche_pool_order": [
+      "/dev/sdb1"
+     ],
+     "schedule_enabled": 0,
+     "schedule_plan": "111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111",
+     "start_time": 0
+    }
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Storage",
+   "method": "get_schedule_plan",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.Storage.get_space_reclaim_schedule.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": {
+    "delay_end_time": 0,
+    "run_time_option": "run_all_time",
+    "schedule_table": "111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Storage",
+   "method": "get_space_reclaim_schedule",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.Storage.get_space_reclaim_status.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": {
+    "delay_end_time": 0,
+    "force_enable": false,
+    "num_subvolume_remain": 0,
+    "state": "idle"
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Storage",
+   "method": "get_space_reclaim_status",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.Storage.load_bad_disks.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": {
+    "not_compatible": [
+     "Drive 1",
+     "Drive 2"
+    ],
+    "unhealthy": [
+     "Drive 1",
+     "Drive 2"
+    ]
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Storage",
+   "method": "load_bad_disks",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.Storage.load_info.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": {
+    "detected_pools": [],
+    "disks": [],
+    "env": {
+     "batchtask": {
+      "max_task": 64,
+      "remain_task": 64
+     },
+     "bay_number": "12",
+     "cache_max_ssd_num": 6,
+     "data_scrubbing": {
+      "sche_enabled": "0",
+      "sche_pool_order": [
+       "/dev/sdb1"
+      ],
+      "sche_status": "disabled"
+     },
+     "dedupeMemoryCheck": true,
+     "eunits": [],
+     "fs_acting": false,
+     "hideExtraLineCharts": false,
+     "is_space_actioning": false,
+     "limit_fs_bytes_high_end": "219902325555200",
+     "limit_fs_bytes_peta": "1125899906842624",
+     "m2_card_info": [],
+     "max_fs_bytes": "118747255799808",
+     "model_name": "VirtualDSM",
+     "multipathStatus": "normal",
+     "multipathSupport": false,
+     "showpooltab": false,
+     "space_size_limit": {
+      "allocatable_size": 0,
+      "is_limited": false,
+      "size_limit": 0
+     },
+     "storageMachineInfo": [
+      {
+       "isInternal": true,
+       "isSAS": false,
+       "machineSerial": "",
+       "machineStatus": "existed",
+       "modelName": "VirtualDSM",
+       "nameStr": "VirtualDSM",
+       "order": 0,
+       "ports": []
+      }
+     ],
+     "support": {
+      "ebox": false,
+      "raid_cross": false,
+      "sysdef": false
+     },
+     "support_volume_encryption": false,
+     "unique_key": "fc02664322"
+    },
+    "missing_pools": [],
+    "overview_data": {
+     "incompatible_eunit": [],
+     "pools_to_show": {
+      "detected_pool": [],
+      "storage_pool": []
+     },
+     "sample_level_str": {
+      "attention": "status_level_abnormal",
+      "danger": "status_level_danger",
+      "normal": "status_level_normal"
+     },
+     "space_affect_by_eunit_lost": false,
+     "space_affect_by_location_mismatch": false,
+     "status_level": "status_level_normal"
+    },
+    "ports": [],
+    "storagePools": [],
+    "volumes": [
+     {
+      "atime_checked": false,
+      "atime_opt": "relatime",
+      "cacheStatus": "",
+      "cache_advisor_running": false,
+      "cache_disks": [],
+      "can_assemble": false,
+      "can_do": {},
+      "compatibility": true,
+      "container": "internal",
+      "data_scrubbing": {
+       "can_do_manual": true,
+       "can_do_schedule": true,
+       "reason": ""
+      },
+      "dedup_info": {
+       "btn_alert": "",
+       "last_run_time": 0,
+       "show": false,
+       "show_config_btn": false,
+       "status": "disable",
+       "total": 0,
+       "used": 0
+      },
+      "deploy_path": "volume_1",
+      "desc": "",
+      "device_type": "basic",
+      "disk_failure_number": 0,
+      "disks": [],
+      "drive_type": 1,
+      "fs_type": "btrfs",
+      "id": "volume_1",
+      "is_acting": false,
+      "is_actioning": false,
+      "is_backgroundbuilding": false,
+      "is_encrypted": false,
+      "is_inode_full": false,
+      "is_locked": false,
+      "is_scheduled": true,
+      "is_vault_contain_key": false,
+      "is_writable": true,
+      "last_done_time": 0,
+      "limited_disk_number": 0,
+      "max_fs_size": "1152921504606846976",
+      "metadata_cache_hard_lower_bound_byte": 346030080,
+      "metadata_cache_option_show": true,
+      "missing_drives": [],
+      "next_schedule_time": 0,
+      "num_id": 1,
+      "pool_path": "",
+      "progress": {
+       "cur_step": 0,
+       "is_resync_speed_limited": false,
+       "percent": "-1",
+       "remaining_time": 0,
+       "step": "none",
+       "total_step": 0
+      },
+      "raidType": "single",
+      "repair_action": "none",
+      "scrubbingStatus": "ready",
+      "show_assemble_btn": false,
+      "size": {
+       "free_inode": "0",
+       "total": "16486404096",
+       "total_device": "17173336064",
+       "total_inode": "0",
+       "used": "781721600"
+      },
+      "space_path": "/dev/sdb1",
+      "space_status": {
+       "detail": "pool_normal",
+       "show_attention": false,
+       "show_danger": false,
+       "show_flag_detail": "",
+       "status": "fs_normal",
+       "summary_status": "normal"
+      },
+      "ssd_trim": {
+       "support": "not support"
+      },
+      "status": "normal",
+      "suggestions": [],
+      "summary_status": "normal",
+      "timebackup": false,
+      "used_by_gluster": false,
+      "uuid": "/dev/sdb1",
+      "vol_attribute": "generic",
+      "vol_desc": "",
+      "vol_path": "/volume1",
+      "vspace_can_do": {
+       "drbd": {
+        "resize": {
+         "can_do": false,
+         "errCode": 53504,
+         "stopService": false
+        }
+       },
+       "flashcache": {
+        "apply": {
+         "can_do": false,
+         "errCode": 53504,
+         "stopService": false
+        },
+        "remove": {
+         "can_do": false,
+         "errCode": 53504,
+         "stopService": false
+        },
+        "resize": {
+         "can_do": false,
+         "errCode": 53504,
+         "stopService": false
+        }
+       },
+       "snapshot": {
+        "resize": {
+         "can_do": false,
+         "errCode": 53504,
+         "stopService": false
+        }
+       }
+      }
+     }
+    ]
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Storage",
+   "method": "load_info",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.Storage.login_check.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": {
+    "isDisplay": false
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Storage",
+   "method": "login_check",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.Storage.repair_system_partition_list.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 117
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Storage",
+   "method": "repair_system_partition_list",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.Storage.set_data_scrubbing_schedule_status.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 114
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Storage",
+   "method": "set_data_scrubbing_schedule_status",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.TaipeiEnclosure.load.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 121
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.TaipeiEnclosure",
+   "method": "load",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.Volume.enum_resource.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 101
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Volume",
+   "method": "enum_resource",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.Volume.get_dump_volumes.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": [
+    {
+     "atime_checked": false,
+     "atime_opt": "relatime",
+     "cacheStatus": "",
+     "cache_advisor_running": false,
+     "cache_disks": [],
+     "can_assemble": false,
+     "can_do": {},
+     "compatibility": true,
+     "container": "internal",
+     "data_scrubbing": {
+      "can_do_manual": true,
+      "can_do_schedule": true,
+      "reason": ""
+     },
+     "dedup_info": {
+      "btn_alert": "",
+      "last_run_time": 0,
+      "show": false,
+      "show_config_btn": false,
+      "status": "disable",
+      "total": 0,
+      "used": 0
+     },
+     "deploy_path": "volume_1",
+     "desc": "",
+     "device_type": "basic",
+     "disk_failure_number": 0,
+     "disks": [],
+     "drive_type": 1,
+     "fs_type": "btrfs",
+     "id": "volume_1",
+     "is_acting": false,
+     "is_actioning": false,
+     "is_backgroundbuilding": false,
+     "is_encrypted": false,
+     "is_inode_full": false,
+     "is_locked": false,
+     "is_scheduled": true,
+     "is_vault_contain_key": false,
+     "is_writable": true,
+     "last_done_time": 0,
+     "limited_disk_number": 0,
+     "max_fs_size": "1152921504606846976",
+     "metadata_cache_hard_lower_bound_byte": 346030080,
+     "metadata_cache_option_show": true,
+     "missing_drives": [],
+     "next_schedule_time": 0,
+     "num_id": 1,
+     "pool_path": "",
+     "progress": {
+      "cur_step": 0,
+      "is_resync_speed_limited": false,
+      "percent": "-1",
+      "remaining_time": 0,
+      "step": "none",
+      "total_step": 0
+     },
+     "raidType": "single",
+     "repair_action": "none",
+     "scrubbingStatus": "ready",
+     "show_assemble_btn": false,
+     "size": {
+      "free_inode": "0",
+      "total": "16486404096",
+      "total_device": "17173336064",
+      "total_inode": "0",
+      "used": "781721600"
+     },
+     "space_path": "/dev/sdb1",
+     "space_status": {
+      "detail": "pool_normal",
+      "show_attention": false,
+      "show_danger": false,
+      "show_flag_detail": "",
+      "status": "fs_normal",
+      "summary_status": "normal"
+     },
+     "ssd_trim": {
+      "support": "not support"
+     },
+     "status": "normal",
+     "suggestions": [],
+     "summary_status": "normal",
+     "timebackup": false,
+     "used_by_gluster": false,
+     "uuid": "/dev/sdb1",
+     "vol_attribute": "generic",
+     "vol_desc": "",
+     "vol_path": "/volume1",
+     "vspace_can_do": {
+      "drbd": {
+       "resize": {
+        "can_do": false,
+        "errCode": 53504,
+        "stopService": false
+       }
+      },
+      "flashcache": {
+       "apply": {
+        "can_do": false,
+        "errCode": 53504,
+        "stopService": false
+       },
+       "remove": {
+        "can_do": false,
+        "errCode": 53504,
+        "stopService": false
+       },
+       "resize": {
+        "can_do": false,
+        "errCode": 53504,
+        "stopService": false
+       }
+      },
+      "snapshot": {
+       "resize": {
+        "can_do": false,
+        "errCode": 53504,
+        "stopService": false
+       }
+      }
+     }
+    }
+   ],
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Volume",
+   "method": "get_dump_volumes",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.Volume.get_space_usage.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 114
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Volume",
+   "method": "get_space_usage",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.Volume.next_trim_time_get.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 117
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Volume",
+   "method": "next_trim_time_get",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.Volume.ssd_trim_get.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 101
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Volume",
+   "method": "ssd_trim_get",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:SYNO.Storage.CGI.Volume.vol_extent_size_get.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 121
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Volume",
+   "method": "vol_extent_size_get",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:Share.Snapshot.create:writable": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": "GMT+00-2026.10.28-15.04.00",
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Core.Share.Snapshot",
+   "method": "create",
+   "name": "writable",
+   "snapinfo": "{\"desc\": \"mcp capture\", \"lock\": false}",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:Share.Snapshot.get_schedule:no-such-share": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": {
+    "enable_snapshot_schedule": false,
+    "schedule": {
+     "date": "2026/10/28",
+     "date_type": 0,
+     "hour": 0,
+     "last_work_hour": 0,
+     "min": 0,
+     "monthly_week": [],
+     "next_trigger_time": "",
+     "repeat": 0,
+     "repeat_hour": 0,
+     "repeat_hour_store_config": null,
+     "repeat_min": 0,
+     "repeat_min_store_config": null,
+     "week_name": "0,1,2,3,4,5,6"
+    },
+    "task_id": -1
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Core.Share.Snapshot",
+   "method": "get_schedule",
+   "name": "\"no-such-share\"",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:Share.Snapshot.get_schedule:writable": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": {
+    "enable_snapshot_schedule": false,
+    "schedule": {
+     "date": "2026/10/28",
+     "date_type": 0,
+     "hour": 0,
+     "last_work_hour": 0,
+     "min": 0,
+     "monthly_week": [],
+     "next_trigger_time": "",
+     "repeat": 0,
+     "repeat_hour": 0,
+     "repeat_hour_store_config": null,
+     "repeat_min": 0,
+     "repeat_min_store_config": null,
+     "week_name": "0,1,2,3,4,5,6"
+    },
+    "task_id": -1
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Core.Share.Snapshot",
+   "method": "get_schedule",
+   "name": "\"writable\"",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:Share.Snapshot.list.v1:writable:noadd": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": {
+    "snapshots": [],
+    "total": 0
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Core.Share.Snapshot",
+   "method": "list",
+   "name": "writable",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:Share.Snapshot.list.v1:writable:recheck": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": {
+    "snapshots": [],
+    "total": 0
+   },
+   "success": true
+  },
+  "request": {
+   "additional": "[\"desc\", \"lock\", \"worm_lock\", \"schedule_snapshot\"]",
+   "api": "SYNO.Core.Share.Snapshot",
+   "limit": "-1",
+   "method": "list",
+   "name": "writable",
+   "offset": "0",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:Share.Snapshot.list.v2:quoted:writable": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": {
+    "snapshots": [
+     {
+      "desc": "mcp capture",
+      "lock": false,
+      "schedule_snapshot": false,
+      "time": "GMT+00-2026.10.28-15.04.00",
+      "worm_lock": false
+     }
+    ],
+    "total": 1
+   },
+   "success": true
+  },
+  "request": {
+   "additional": "[\"desc\", \"lock\", \"worm_lock\", \"schedule_snapshot\"]",
+   "api": "SYNO.Core.Share.Snapshot",
+   "limit": "-1",
+   "method": "list",
+   "name": "\"writable\"",
+   "offset": "0",
+   "version": "2"
+  },
+  "transport": "GET"
+ },
+ "admin:Share.Snapshot.list.v2:writable": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": {
+    "snapshots": [
+     {
+      "desc": "mcp capture",
+      "lock": false,
+      "schedule_snapshot": false,
+      "time": "GMT+00-2026.10.28-15.04.00",
+      "worm_lock": false
+     }
+    ],
+    "total": 1
+   },
+   "success": true
+  },
+  "request": {
+   "additional": "[\"desc\", \"lock\", \"worm_lock\", \"schedule_snapshot\"]",
+   "api": "SYNO.Core.Share.Snapshot",
+   "limit": "-1",
+   "method": "list",
+   "name": "writable",
+   "offset": "0",
+   "version": "2"
+  },
+  "transport": "GET"
+ },
+ "admin:Share.Snapshot.list.v2:writable:recheck": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": {
+    "snapshots": [
+     {
+      "desc": "mcp capture",
+      "lock": false,
+      "schedule_snapshot": false,
+      "time": "GMT+00-2026.10.28-15.04.00",
+      "worm_lock": false
+     }
+    ],
+    "total": 1
+   },
+   "success": true
+  },
+  "request": {
+   "additional": "[\"desc\", \"lock\", \"worm_lock\", \"schedule_snapshot\"]",
+   "api": "SYNO.Core.Share.Snapshot",
+   "limit": "-1",
+   "method": "list",
+   "name": "writable",
+   "offset": "0",
+   "version": "2"
+  },
+  "transport": "GET"
+ },
+ "admin:Share.Snapshot.list:testshare": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": {
+    "snapshots": [],
+    "total": 0
+   },
+   "success": true
+  },
+  "request": {
+   "additional": "[\"desc\", \"lock\", \"worm_lock\", \"schedule_snapshot\"]",
+   "api": "SYNO.Core.Share.Snapshot",
+   "limit": "-1",
+   "method": "list",
+   "name": "testshare",
+   "offset": "0",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:Share.Snapshot.list:writable": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": {
+    "snapshots": [],
+    "total": 0
+   },
+   "success": true
+  },
+  "request": {
+   "additional": "[\"desc\", \"lock\", \"worm_lock\", \"schedule_snapshot\"]",
+   "api": "SYNO.Core.Share.Snapshot",
+   "limit": "-1",
+   "method": "list",
+   "name": "writable",
+   "offset": "0",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:Share.Snapshot.list:writable:after-create": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": {
+    "snapshots": [],
+    "total": 0
+   },
+   "success": true
+  },
+  "request": {
+   "additional": "[\"desc\", \"lock\", \"worm_lock\", \"schedule_snapshot\"]",
+   "api": "SYNO.Core.Share.Snapshot",
+   "limit": "-1",
+   "method": "list",
+   "name": "writable",
+   "offset": "0",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "admin:Volume.get_space_usage:/volume1": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": {
+    "categories": [
+     {
+      "category_name": "c2share",
+      "size": 0
+     },
+     {
+      "category_name": "drive",
+      "size": 0
+     },
+     {
+      "category_name": "lun",
+      "size": 0
+     },
+     {
+      "category_name": "others",
+      "size": 0
+     },
+     {
+      "category_name": "petaspace",
+      "size": 0
+     },
+     {
+      "category_name": "share",
+      "size": 0
+     },
+     {
+      "category_name": "snapshot",
+      "size": 0
+     }
+    ],
+    "error_code": 0,
+    "free_size": 15703908352,
+    "progress_done": 0,
+    "progress_total": 0,
+    "status": "disabled",
+    "total_size": 16486404096,
+    "volume_path": "/volume1"
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Volume",
+   "method": "get_space_usage",
+   "version": "1",
+   "volume_path": "/volume1"
+  },
+  "transport": "GET"
+ },
+ "admin:Volume.ssd_trim_get:/volume1": {
+  "path": "entry.cgi",
+  "reply": {
+   "data": {
+    "ssd_trim": {
+     "support": "not support"
+    }
+   },
+   "success": true
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Volume",
+   "method": "ssd_trim_get",
+   "space_path": "/volume1",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Core.ExternalDevice.Storage.EUnit.list.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.ExternalDevice.Storage.EUnit",
+   "method": "list",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Core.ExternalDevice.Storage.EUnit.list.v1:recheck": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.ExternalDevice.Storage.EUnit",
+   "method": "list",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Core.ExternalDevice.Storage.Setting.get.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.ExternalDevice.Storage.Setting",
+   "method": "get",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Core.ExternalDevice.Storage.USB.list.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 404
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.ExternalDevice.Storage.USB",
+   "method": "list",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Core.ExternalDevice.Storage.USB.list.v1:recheck": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 404
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.ExternalDevice.Storage.USB",
+   "method": "list",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Core.ExternalDevice.Storage.eSATA.list.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.ExternalDevice.Storage.eSATA",
+   "method": "list",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Core.ExternalDevice.Storage.eSATA.list.v1:recheck": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.ExternalDevice.Storage.eSATA",
+   "method": "list",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Core.Share.Snapshot.get_schedule.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Share.Snapshot",
+   "method": "get_schedule",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Core.Share.Snapshot.get_share_conf.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Share.Snapshot",
+   "method": "get_share_conf",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Core.Share.Snapshot.list.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Share.Snapshot",
+   "method": "list",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Core.Share.Snapshot.list.v2": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Share.Snapshot",
+   "method": "list",
+   "version": "2"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Core.Storage.Disk.FWUpgrade.get_latest_auto_upgrade_result.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk.FWUpgrade",
+   "method": "get_latest_auto_upgrade_result",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Core.Storage.Disk.FWUpgrade.get_summary.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk.FWUpgrade",
+   "method": "get_summary",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Core.Storage.Disk.FWUpgrade.get_upgrade_method.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk.FWUpgrade",
+   "method": "get_upgrade_method",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Core.Storage.Disk.FWUpgrade.list_drive.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk.FWUpgrade",
+   "method": "list_drive",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Core.Storage.Disk.FWUpgrade.list_drive_group.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk.FWUpgrade",
+   "method": "list_drive_group",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Core.Storage.Disk.disk_health_prediction_log_get.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "disk_health_prediction_log_get",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Core.Storage.Disk.disk_test_log_get.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "disk_test_log_get",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Core.Storage.Disk.disks_info_get.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "disks_info_get",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Core.Storage.Disk.get_adv_test_log.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "get_adv_test_log",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Core.Storage.Disk.get_disk_led_status.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "get_disk_led_status",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Core.Storage.Disk.get_offlinekit_ver.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "get_offlinekit_ver",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Core.Storage.Disk.get_performance_test_info.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "get_performance_test_info",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Core.Storage.Disk.get_performance_test_log.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "get_performance_test_log",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Core.Storage.Disk.get_performance_test_status.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "get_performance_test_status",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Core.Storage.Disk.get_smart_info.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "get_smart_info",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Core.Storage.Disk.get_smart_test_log.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "get_smart_test_log",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Core.Storage.Disk.get_synoblock.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "get_synoblock",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Core.Storage.Disk.get_wdda_test_result.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "get_wdda_test_result",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Core.Storage.Disk.health_report_get.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "health_report_get",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Core.Storage.Disk.list.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "list",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Core.Storage.Disk.list_detail.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "list_detail",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Core.Storage.Disk.load_info.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "load_info",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Core.Storage.Disk.load_local_info.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "load_local_info",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Core.Storage.Disk.wcache_get.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Disk",
+   "method": "wcache_get",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Core.Storage.Pool.list.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Pool",
+   "method": "list",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Core.Storage.Volume.conf_get.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Volume",
+   "method": "conf_get",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Core.Storage.Volume.get.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Volume",
+   "method": "get",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Core.Storage.Volume.list.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.Storage.Volume",
+   "method": "list",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Core.System.SystemHealth.get.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Core.System.SystemHealth",
+   "method": "get",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.BtrfsDedupe.get_schedule_plan.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.BtrfsDedupe",
+   "method": "get_schedule_plan",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.BtrfsDedupe.get_status.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.BtrfsDedupe",
+   "method": "get_status",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.BtrfsDedupe.get_volume_info.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.BtrfsDedupe",
+   "method": "get_volume_info",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.Cache.Protection.get_config.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Cache.Protection",
+   "method": "get_config",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.Cache.Protection.get_status.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Cache.Protection",
+   "method": "get_status",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.Cache.Protection.get_status_all.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Cache.Protection",
+   "method": "get_status_all",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.Check.is_building.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Check",
+   "method": "is_building",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.Check.is_data_scrubbing.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Check",
+   "method": "is_data_scrubbing",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.Check.should_ask_for_fsck_scan.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Check",
+   "method": "should_ask_for_fsck_scan",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.DualEnclosure.load.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.DualEnclosure",
+   "method": "load",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.Enclosure.exp_fw_fail_get.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Enclosure",
+   "method": "exp_fw_fail_get",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.Enclosure.exp_fw_update_list_get.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Enclosure",
+   "method": "exp_fw_update_list_get",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.Enclosure.exp_fw_update_status_get.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Enclosure",
+   "method": "exp_fw_update_status_get",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.Enclosure.is_exp_connected.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Enclosure",
+   "method": "is_exp_connected",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.Enclosure.load.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Enclosure",
+   "method": "load",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.Enclosure.sha_exp_fw_fail_get.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Enclosure",
+   "method": "sha_exp_fw_fail_get",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.Enclosure.sha_exp_fw_update_list_get.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Enclosure",
+   "method": "sha_exp_fw_update_list_get",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.Enclosure.sha_exp_fw_update_status_get.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Enclosure",
+   "method": "sha_exp_fw_update_status_get",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.EncryptionKeyVault.get_info.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.EncryptionKeyVault",
+   "method": "get_info",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.Flashcache.advisor_history_get.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Flashcache",
+   "method": "advisor_history_get",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.Flashcache.is_redundancy_degraded.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Flashcache",
+   "method": "is_redundancy_degraded",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.Flashcache.shared_cache_config_get.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Flashcache",
+   "method": "shared_cache_config_get",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.HddMan.get.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.HddMan",
+   "method": "get",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.KMIP.get.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.KMIP",
+   "method": "get",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.KMIP.get_key_list.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.KMIP",
+   "method": "get_key_list",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.KMIP.get_server_hostname.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.KMIP",
+   "method": "get_server_hostname",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.KMIP.get_version_info.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.KMIP",
+   "method": "get_version_info",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.KMIP.list_cert.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.KMIP",
+   "method": "list_cert",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.Pool.enum_resource.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Pool",
+   "method": "enum_resource",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.Pool.get_setting.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Pool",
+   "method": "get_setting",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.Pool.is_disk_detected_old_info.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Pool",
+   "method": "is_disk_detected_old_info",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.Scrubbing.get_state.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Scrubbing",
+   "method": "get_state",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.Smart.Scheduler.get.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Smart.Scheduler",
+   "method": "get",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.Smart.Scheduler.list.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Smart.Scheduler",
+   "method": "list",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.Smart.get_health_info.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Smart",
+   "method": "get_health_info",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.Smart.get_latest_online_drive_db_info.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Smart",
+   "method": "get_latest_online_drive_db_info",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.Smart.get_smart_info.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Smart",
+   "method": "get_smart_info",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.Smart.list.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Smart",
+   "method": "list",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.Smart.smart_warning_get.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Smart",
+   "method": "smart_warning_get",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.Spare.Conf.get.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Spare.Conf",
+   "method": "get",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.Spare.list.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Spare",
+   "method": "list",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.Spare.potential_spares_dump.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Spare",
+   "method": "potential_spares_dump",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.Storage.get_auto_repair_config.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Storage",
+   "method": "get_auto_repair_config",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.Storage.get_fast_repair_config.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Storage",
+   "method": "get_fast_repair_config",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.Storage.get_resync_speed.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Storage",
+   "method": "get_resync_speed",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.Storage.get_sche_task_list.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Storage",
+   "method": "get_sche_task_list",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.Storage.get_schedule_plan.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Storage",
+   "method": "get_schedule_plan",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.Storage.get_space_reclaim_schedule.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Storage",
+   "method": "get_space_reclaim_schedule",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.Storage.get_space_reclaim_status.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Storage",
+   "method": "get_space_reclaim_status",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.Storage.load_bad_disks.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Storage",
+   "method": "load_bad_disks",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.Storage.load_info.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Storage",
+   "method": "load_info",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.Storage.login_check.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Storage",
+   "method": "login_check",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.TaipeiEnclosure.load.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.TaipeiEnclosure",
+   "method": "load",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.Volume.enum_resource.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Volume",
+   "method": "enum_resource",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.Volume.get_dump_volumes.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Volume",
+   "method": "get_dump_volumes",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.Volume.get_space_usage.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Volume",
+   "method": "get_space_usage",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.Volume.next_trim_time_get.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Volume",
+   "method": "next_trim_time_get",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.Volume.ssd_trim_get.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Volume",
+   "method": "ssd_trim_get",
+   "version": "1"
+  },
+  "transport": "GET"
+ },
+ "test:SYNO.Storage.CGI.Volume.vol_extent_size_get.v1": {
+  "path": "entry.cgi",
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  },
+  "request": {
+   "api": "SYNO.Storage.CGI.Volume",
+   "method": "vol_extent_size_get",
+   "version": "1"
+  },
+  "transport": "GET"
+ }
+}
