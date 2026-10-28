@@ -159,11 +159,12 @@ MODULE_INFO = ModuleInfo(
         ToolInfo(
             name="pause_download",
             description=(
-                "Pause one or more download tasks. An "
-                "already-paused task is refused for that id (error 405), while the others "
-                "are paused; a finished task is reported as `not paused: already finished` "
-                "(Download Station may accept the pause and change nothing). If none of the "
-                "ids can be paused, the whole call fails with invalid_parameter."
+                "Pause one or more download tasks. When some of the tasks can be paused, an "
+                "already-paused or finished one is refused for its id (error 405) or shown as "
+                "`not paused: already finished`, and the others are paused. When none can be "
+                "paused (one finished or already-paused task alone, a missing id, or another "
+                "user's task), the whole call fails with invalid_parameter; list_downloads "
+                "shows each task's status."
             ),
             permission_tier=PermissionTier.WRITE,
         ),

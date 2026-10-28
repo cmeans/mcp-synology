@@ -420,6 +420,15 @@ class TestModuleInfoDescriptions:
         assert "405" in desc
         assert "invalid_parameter" in desc
 
+    def test_pause_download_keeps_per_task_refusals_to_mixed_calls(self) -> None:
+        """#421 (0.10.0rc10 live test): a lone finished or already-paused task gets the
+        whole-call 101, so the per-task replies are promised only when something else in
+        the call can be paused, and the finished-task row is named."""
+        desc = self._desc("pause_download")
+        assert "When some of the tasks can be paused" in desc
+        assert "not paused: already finished" in desc
+        assert "one finished or already-paused task alone" in desc
+
     def test_resume_download_describes_real_405_semantics(self) -> None:
         """QA on #153: resuming an active or finished task is a per-task 405."""
         desc = self._desc("resume_download")

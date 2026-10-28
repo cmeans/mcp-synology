@@ -1717,7 +1717,10 @@ class TestInstructionComments:
 # Station 3.9.5 accepts the pause), edit_download says a finished task's file isn't moved,
 # and download_photos' size says the preview sizes are the short side, never larger than
 # the original (0.10.0rc9 live test).
-PAYLOAD_BUDGET_CHARS = 49_882
+# Raised by #422 to 49,963 (+81): pause_download says its per-task refusals happen only
+# when something else in the call can be paused, and that a lone finished or
+# already-paused task fails the whole call (#421, 0.10.0rc10 live test).
+PAYLOAD_BUDGET_CHARS = 49_963
 
 
 class TestPayloadBudget:

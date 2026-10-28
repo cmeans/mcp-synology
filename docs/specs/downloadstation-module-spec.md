@@ -423,10 +423,11 @@ Remove tasks.
 **DSM API:** `SYNO.DownloadStation.Task` / `pause` v1
 
 **Tool description (LLM-facing):**
-> Pause one or more download tasks. An already-paused task is refused for that id (error 405), while
-> the others are paused; a finished task is reported as `not paused: already finished` (Download
-> Station may accept the pause and change nothing). If none of the ids can be paused, the whole call
-> fails with invalid_parameter.
+> Pause one or more download tasks. When some of the tasks can be paused, an already-paused or
+> finished one is refused for its id (error 405) or shown as `not paused: already finished`, and the
+> others are paused. When none can be paused (one finished or already-paused task alone, a missing
+> id, or another user's task), the whole call fails with invalid_parameter; list_downloads shows each
+> task's status.
 
 **Parameters:**
 
@@ -436,7 +437,7 @@ Remove tasks.
 
 **Response shape:** a per-task table under `Pause download — N task(s)`, plus the not-found hint when needed.
 
-**Design notes:** pause is the one method that fails the **whole call** with 101 when no ID can be paused. That covers a missing ID, another user's task, and the caller's own finished or already-paused task (probed on DSM 7.1 and 7.2.2), so it becomes `invalid_parameter` naming the IDs and all three causes, not `not_found`. Within a mixed list, an already-paused or finished task is refused **per task** with 405 while the others are paused; the whole-call 101 happens only when nothing in the call is pausable (QA on #153, DSM 7.1 and 7.2.2). **Download Station 3.9.5 (DSM 7.1.1, a real DS1618+) answers a finished task's pause with a per-task `ok`, and the task stays finished** (0.10.0rc9 live test, #413; resume of the same task got 405). So after a pause, the tasks DSM answered `ok` for are read back (`Task getinfo` v1, `additional=detail`), and a finished one's row says `not paused: already finished`. If the read-back fails (a DSM error or no answer), DSM's rows stand. Resume reads nothing back.
+**Design notes:** pause is the one method that fails the **whole call** with 101 when no ID can be paused. That covers a missing ID, another user's task, and the caller's own finished or already-paused task (probed on DSM 7.1 and 7.2.2), so it becomes `invalid_parameter` naming the IDs and all three causes, not `not_found`. Within a mixed list, an already-paused or finished task is refused **per task** with 405 while the others are paused; the whole-call 101 happens only when nothing in the call is pausable (QA on #153, DSM 7.1 and 7.2.2). **Download Station 3.9.5 (DSM 7.1.1, a real DS1618+) once answered a finished task's pause with a per-task `ok`, and the task stayed finished** (0.10.0rc9 live test, #413: the task had finished 2 s earlier; resume of the same task got 405). In the 0.10.0rc10 live test the same NAS gave the whole-call 101 for a lone task that had finished about 20 s earlier, and for a lone already-paused task, as vdsm does (#421). The description therefore names both outcomes and keeps the per-task ones to calls where something else can be paused. So after a pause, the tasks DSM answered `ok` for are read back (`Task getinfo` v1, `additional=detail`), and a finished one's row says `not paused: already finished`. If the read-back fails (a DSM error or no answer), DSM's rows stand. Resume reads nothing back.
 
 ---
 
