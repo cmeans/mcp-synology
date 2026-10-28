@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## 0.10.0 (2026-10-27)
+## 0.10.0 (2026-10-28)
 
 **Upgrading from 0.9.x:** 0.10.0 adds the Synology Photos module and tightens config checking. Five things to know:
 
