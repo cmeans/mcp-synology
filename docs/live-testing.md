@@ -39,10 +39,10 @@ follows is what we observed in the 0.10.0rc5 test; clients change, so check agai
 |---|---|---|
 | **Claude Code** | Starts the server itself (stdio); one server process for the session | The server's instructions reached the model. No reply time limit. Fast: after the first call, a read cost one DSM round trip. Good for checking instructions, long operations (`file_task` hand-offs) and parallel calls |
 | **claude.ai, through a local device bridge** (the desktop app) | The app starts the server on the user's machine; claude.ai reaches it through the bridge | **The server's instructions didn't reach the model** (shown with blind questions), so anything the model must know has to be in tool descriptions and replies. Tool titles and annotations were dropped too. Replies were cut off after about 60 s, and the bridge dropped once for about a minute. A few seconds per call |
-| **An agent on a remote machine calling tools one at a time** (a separate script per call) | Each call starts a fresh server process, logs in, makes one call and exits; in our setup over plain HTTP through a VPN | Nothing kept in memory carried over between calls (caches, session). Every call paid a login, so it was slow (about 20 to 25 s per call). The harness didn't show the model the tool schemas, so it retried on argument names (`path` vs `paths`); those are harness errors, not findings. Plain HTTP showed the server's plain-HTTP warnings |
+| **An agent on a remote machine calling tools one at a time** (a separate script per call) | Each call starts a fresh server process, logs in, makes one call and exits; in our setup over plain HTTP through a VPN | Nothing kept in memory carried over between calls (caches, session). Every call paid a process start and a login, so it was the slowest of the three. The harness didn't show the model the tool schemas, so it retried on argument names (`path` vs `paths`); those are harness errors, not findings. Plain HTTP showed the server's plain-HTTP warnings |
 
-The three ran the same kind of plan in about 8, 12 and 27 minutes. We saw nothing to
-attribute the difference to the server; per-call overhead explains it.
+Speed depends on the setup (network, VPN, the client), so it isn't recorded here. We saw
+nothing to attribute the differences to the server; per-call overhead explains them.
 
 ## 1. Build the candidate
 

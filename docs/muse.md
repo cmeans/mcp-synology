@@ -3,13 +3,13 @@
 [Meta Muse](https://www.meta.ai/) is an agent that runs in its own VM. It has no MCP client
 built in, so it connects to an MCP server by writing its own. Left to itself it usually
 writes a script that starts `mcp-synology serve` for each tool call. That works, but every
-call then pays a process start and a DSM login (about 25–30 s per call in our live tests),
-and the model never sees what a normal MCP client keeps from the connection: the tool list
-with its descriptions and parameter schemas, and the server's instructions.
+call then pays a process start and a DSM login, and the model never sees what a normal MCP
+client keeps from the connection: the tool list with its descriptions and parameter
+schemas, and the server's instructions.
 
-Ask Muse to run the server as **one long-lived session** instead. In our live tests this
-took reads from about 25–30 s to about 1–2 s after the first call, and DSM logins from two
-per call to one per session. Paste this into Muse, filling in the two paths:
+Ask Muse to run the server as **one long-lived session** instead. After the first call,
+each call skips the process start and the login: DSM logins go from two per call to one
+per session. Paste this into Muse, filling in the two paths:
 
 ```text
 Set up mcp-synology as one long-lived MCP session, not a process per call.
