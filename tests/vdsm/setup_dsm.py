@@ -52,6 +52,13 @@ _SYNO_PATH = "PATH=/usr/syno/bin:/usr/syno/sbin:/usr/bin:/bin:/usr/sbin:/sbin"
 # (SYNO.Core.Package.Server list, 2026-10-19) gives Photos 1.9.1-10928 needing
 # Node.js_v20 and SynologyApplicationService 1.9.0, which needs Node.js_v22 (#307).
 _PHOTOS_NODE_20_22 = ("Node.js_v20", "Node.js_v22", "SynologyApplicationService", "SynologyPhotos")
+# Snapshot Replication, for share snapshots (the Storage module, #49). One package with
+# nothing to install first, on all four versions (installed by hand on each, 2026-10-28).
+# The gate is SYNO.Btrfs.Replica.Core, the one API the package adds on 7.1. Not
+# SYNO.DR.Node: base DSM registers that without the package (2026-10-28).
+SNAPSHOT_PACKAGE = "ReplicationService"
+_SNAPSHOT_APIS = ("SYNO.Btrfs.Replica.Core",)
+
 PHOTOS_PACKAGES: dict[str, tuple[str, ...]] = {
     "7.1": ("Node.js_v18", "SynologyApplicationService", "SynologyPhotos"),
     "7.2.2": _PHOTOS_NODE_20_22,
@@ -915,6 +922,52 @@ def _install_photos_via_ssh(
     print("    Synology Photos installed and API-verified.")
 
 
+def _install_snapshot_replication_via_ssh(
+    host: str,
+    ssh_port: int,
+    admin_password: str,
+    base_url: str,
+    *,
+    register_timeout_sec: int = 300,
+) -> None:
+    """Install Snapshot Replication with synopkg over SSH (share snapshots, #49).
+
+    As for Photos, the gate is the API cache. Idempotent: returns at once if its APIs
+    are already registered.
+    """
+    if not _missing_apis(base_url, _SNAPSHOT_APIS):
+        print("    Snapshot Replication already installed (its APIs are in the cache)")
+        return
+    start = time.monotonic()
+    rc, out = _ssh_exec(
+        host,
+        ssh_port,
+        admin_password,
+        f"sh -c 'echo; env {_SYNO_PATH} /usr/syno/bin/synopkg install_from_server "
+        f"{SNAPSHOT_PACKAGE}'",
+        sudo=True,
+        timeout=900,
+    )
+    elapsed = int(time.monotonic() - start)
+    if rc != 0:
+        msg = (
+            f"synopkg install_from_server {SNAPSHOT_PACKAGE} failed after {elapsed}s "
+            f"(rc={rc}): {out}"
+        )
+        raise RuntimeError(msg)
+    print(f"    Installed {SNAPSHOT_PACKAGE} in {elapsed}s")
+    deadline = time.monotonic() + register_timeout_sec
+    while _missing_apis(base_url, _SNAPSHOT_APIS):
+        if time.monotonic() > deadline:
+            msg = (
+                f"Snapshot Replication's APIs still missing after {register_timeout_sec}s. "
+                "Check /var/log/synopkg.log on the NAS."
+            )
+            raise RuntimeError(msg)
+        time.sleep(3)
+    print("    Snapshot Replication installed and API-verified.")
+
+
 def _photos_call(
     client: httpx.Client,
     sid: str,
@@ -1124,8 +1177,8 @@ def setup_dsm_for_testing(
 
     Sets the timezone (DSM_TIMEZONES) and enables SSH via the DSM API, then
     SSHes into the DSM guest VM (via QEMU) to create the test user (synouser),
-    install Download Station and Synology Photos (synopkg), and create shared
-    folders, test data, and permissions (synoshare).
+    install Download Station, Synology Photos and Snapshot Replication (synopkg), and
+    create shared folders, test data, and permissions (synoshare).
 
     Returns metadata dict for the golden image sidecar.
     """
@@ -1153,27 +1206,30 @@ def setup_dsm_for_testing(
         raise RuntimeError(msg)
 
     # First, so every file and Photos item the bake creates gets times in this zone.
-    print(f"\n  [1/8] Setting the timezone to {timezone}...")
+    print(f"\n  [1/9] Setting the timezone to {timezone}...")
     _set_timezone_via_api(base_url, admin_user, admin_password, timezone)
 
-    print("\n  [2/8] Enabling SSH...")
+    print("\n  [2/9] Enabling SSH...")
     _enable_ssh(base_url, admin_user, admin_password)
 
     test_users = (
         (DEFAULT_TEST_USER, DEFAULT_TEST_PASSWORD),
         (DEFAULT_FRESH_USER, DEFAULT_FRESH_PASSWORD),
     )
-    print("\n  [3/8] Creating test users via synouser (SSH)...")
+    print("\n  [3/9] Creating test users via synouser (SSH)...")
     for user, password in test_users:
         _create_user_via_ssh(ssh_host, ssh_port, admin_password, user, password)
 
-    print("\n  [4/8] Installing Download Station via synopkg (SSH)...")
+    print("\n  [4/9] Installing Download Station via synopkg (SSH)...")
     _install_download_station_via_ssh(ssh_host, ssh_port, admin_password, base_url)
 
-    print("\n  [5/8] Installing Synology Photos via synopkg (SSH)...")
+    print("\n  [5/9] Installing Synology Photos via synopkg (SSH)...")
     _install_photos_via_ssh(ssh_host, ssh_port, admin_password, base_url, photos_packages)
 
-    print("\n  [6/8] Creating shared folders and test data via SSH...")
+    print("\n  [6/9] Installing Snapshot Replication via synopkg (SSH)...")
+    _install_snapshot_replication_via_ssh(ssh_host, ssh_port, admin_password, base_url)
+
+    print("\n  [7/9] Creating shared folders and test data via SSH...")
     _create_shared_folders_via_ssh(
         ssh_host,
         ssh_port,
@@ -1181,7 +1237,7 @@ def setup_dsm_for_testing(
         tuple(user for user, _ in test_users),
     )
 
-    print("\n  [7/8] Configuring Download Station...")
+    print("\n  [8/9] Configuring Download Station...")
     _configure_download_station_via_api(
         base_url=base_url,
         admin_user=admin_user,
@@ -1192,7 +1248,7 @@ def setup_dsm_for_testing(
     _set_own_ds_default_destination(base_url, DEFAULT_TEST_USER, DEFAULT_TEST_PASSWORD, "writable")
     _verify_no_ds_default_destination(base_url, DEFAULT_FRESH_USER, DEFAULT_FRESH_PASSWORD)
 
-    print("\n  [8/8] Configuring Synology Photos...")
+    print("\n  [9/9] Configuring Synology Photos...")
     _configure_photos_via_api(base_url, admin_user, admin_password, DEFAULT_TEST_USER)
     _verify_photos_access(
         base_url,
@@ -1216,7 +1272,7 @@ def setup_dsm_for_testing(
         "admin_password": admin_password,
         "test_user": DEFAULT_TEST_USER,
         "test_password": DEFAULT_TEST_PASSWORD,
-        "dsm_packages": ["DownloadStation", *photos_packages],
+        "dsm_packages": ["DownloadStation", *photos_packages, SNAPSHOT_PACKAGE],
         "bake_version": BAKE_VERSION,
         "timezone": timezone,
         "fresh_user": DEFAULT_FRESH_USER,
