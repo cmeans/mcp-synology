@@ -41,22 +41,37 @@ _HEADING = re.compile(r"^### \d+\. `([a-z_]+)`", re.M)
 _TIER = re.compile(r"\*\*Permission tier:\*\*\s*(\w+)")
 _DESCRIPTION = re.compile(r"\*\*Tool description \(LLM-facing\):\*\*\s*\n((?:>.*\n?)+)")
 _PARAM_ROW = re.compile(r"^\|\s*`([a-z_]+)`\s*\|", re.M)
+_TOP_SECTION = re.compile(r"^## ", re.M)
 
 
 def _sections(spec: str) -> dict[str, str]:
+    """Each tool's section: from its heading to the next tool heading or `## ` section.
+
+    Ending at a `## ` heading keeps the last tool from taking in what follows the tool
+    list (a Phase 2 table, open items), whose rows could look like parameters (#429).
+    """
     heads = [(m.start(), m.group(1)) for m in _HEADING.finditer(spec)]
-    return {
-        name: spec[start : heads[i + 1][0] if i + 1 < len(heads) else len(spec)]
-        for i, (start, name) in enumerate(heads)
-    }
+    sections = {}
+    for i, (start, name) in enumerate(heads):
+        end = heads[i + 1][0] if i + 1 < len(heads) else len(spec)
+        top = _TOP_SECTION.search(spec, start, end)
+        sections[name] = spec[start : top.start() if top else end]
+    return sections
 
 
 def _spec_params(section: str) -> set[str]:
+    """The names in the first column of the table right under **Parameters:**."""
     if re.search(r"\*\*Parameters:\*\*\s*None", section):
         return set()
-    start = section.index("**Parameters:**")
-    end = section.find("\n**", start + len("**Parameters:**"))
-    return set(_PARAM_ROW.findall(section[start : end if end != -1 else None]))
+    lines = section[section.index("**Parameters:**") :].splitlines()[1:]
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    table = []
+    for line in lines:
+        if not line.lstrip().startswith("|"):
+            break
+        table.append(line)
+    return set(_PARAM_ROW.findall("\n".join(table)))
 
 
 def _normalize(text: str) -> str:
@@ -108,3 +123,57 @@ def test_spec_matches_shipped_tools(module_name: str) -> None:
                 f"{name}: parameters spec={sorted(spec_params)} code={sorted(code_params)}"
             )
     assert not problems, f"{SPECS[module_name]} is out of date:\n  " + "\n  ".join(problems)
+
+
+_SAMPLE_SPEC = """## READ Tier Tools (2 tools)
+
+### 1. `first_tool`
+
+**Permission tier:** READ
+
+**Parameters:**
+
+| Name | Type | Default | Description |
+|---|---|---|---|
+| `path` | str | (required) | A path. |
+
+Notes after the table, including a stray `| `not_a_param` |` in prose.
+
+| `also_not_a_param` | a second table, after text |
+
+### 2. `last_tool`
+
+**Permission tier:** READ
+
+**Parameters:**
+| Name | Type | Default | Description |
+|---|---|---|---|
+| `share` | str | None | A share. |
+
+## Phase 2 (planned)
+
+| Area | Methods |
+|---|---|
+| `snapshots` | create, delete |
+
+1. **An open item** with `code`.
+"""
+
+
+def test_sections_end_at_the_next_top_level_heading() -> None:
+    sections = _sections(_SAMPLE_SPEC)
+    assert set(sections) == {"first_tool", "last_tool"}
+    assert "Phase 2" not in sections["last_tool"]
+    assert "Phase 2" not in sections["first_tool"]
+
+
+def test_params_come_only_from_the_table_under_parameters() -> None:
+    sections = _sections(_SAMPLE_SPEC)
+    assert _spec_params(sections["first_tool"]) == {"path"}
+    assert _spec_params(sections["last_tool"]) == {"share"}
+    # Before #429 the last tool also took in the Phase 2 table's `snapshots` row.
+    assert _spec_params(_SAMPLE_SPEC[_SAMPLE_SPEC.index("### 2.") :]) == {"share"}
+
+
+def test_params_none() -> None:
+    assert _spec_params("### 1. `t`\n\n**Parameters:** None.\n\n| `x` | y |\n") == set()
