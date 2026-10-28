@@ -8,7 +8,7 @@
 
 ### Fixed
 
-- **The spec check reads each tool's parameters from its own table only** (#431) — closes #429, found in QA of #428. `tests/test_module_specs.py` let the last tool section of a spec run to the end of the file, and read parameters from everything between **Parameters:** and the next bold line, so a later table row starting with a backticked name (the Storage spec's Phase 2 table, once that module is registered) or a second table after prose became a parameter. A tool section now ends at the next tool heading or `## ` heading, and parameters come from the table right under **Parameters:**. New tests cover both cases; the five specs parse as before
+- **The spec check reads each tool's parameters from its own table only** (#432) — closes #429, found in QA of #428. `tests/test_module_specs.py` let the last tool section of a spec run to the end of the file, and read parameters from everything between **Parameters:** and the next bold line, so a later table row starting with a backticked name (the Storage spec's Phase 2 table, once that module is registered) or a second table after prose became a parameter. A tool section now ends at the next tool heading or `## ` heading, and parameters come from the table right under **Parameters:**. New tests cover both cases; the five specs parse as before
 
 ## 0.10.0 (2026-10-28)
 
