@@ -56,6 +56,13 @@ def _fake_home(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPath
     keyring.set_keyring(NullKeyring())
     request.addfinalizer(lambda: keyring.set_keyring(previous))
 
+    # The update check (PyPI, GitHub) never reaches the network from a unit test: the
+    # server's lifespan starts it (#314). A test that exercises it patches urlopen itself.
+    def _no_network(*_args: Any, **_kwargs: Any) -> Any:
+        raise OSError("network access is disabled in unit tests")
+
+    mp.setattr("mcp_synology.cli.version.urlopen", _no_network)
+
 
 BASE_URL = "http://nas:5000"
 

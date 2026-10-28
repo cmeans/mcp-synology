@@ -277,6 +277,12 @@ class TestEnvOverrides:
             result = _merge_env_overrides(raw)
         assert result["connection"]["https"] is True
 
+    def test_update_notices_override(self) -> None:
+        raw: dict[str, Any] = {}
+        with patch.dict(os.environ, {"SYNOLOGY_UPDATE_NOTICES": "security"}):
+            result = _merge_env_overrides(raw)
+        assert result["update_notices"] == "security"
+
     def test_env_does_not_override_when_not_set(self) -> None:
         raw: dict[str, Any] = {"connection": {"host": "original"}}
         env = {k: v for k, v in os.environ.items() if not k.startswith("SYNOLOGY_")}
@@ -339,3 +345,18 @@ class TestTopLevelAllowedLocalPaths:
     def test_unknown_top_level_key_still_rejected(self) -> None:
         with pytest.raises(ValidationError):
             AppConfig(**{**_minimal_raw(), "allowed_local_path": ["/x"]})
+
+
+class TestUpdateNotices:
+    """Per config, since configs may run different installs (#314)."""
+
+    def test_defaults_to_all(self) -> None:
+        assert AppConfig(**_minimal_raw()).update_notices == "all"
+
+    @pytest.mark.parametrize("value", ["all", "security", "off"])
+    def test_accepts_the_three_settings(self, value: str) -> None:
+        assert AppConfig(**{**_minimal_raw(), "update_notices": value}).update_notices == value
+
+    def test_rejects_anything_else(self) -> None:
+        with pytest.raises(ValidationError, match="update_notices"):
+            AppConfig(**{**_minimal_raw(), "update_notices": "weekly"})

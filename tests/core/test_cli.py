@@ -912,6 +912,39 @@ class TestSetupConnectionFailures:
 
 
 class TestCheckCommand:
+    def test_check_reports_an_update_before_the_login(self, tmp_path: Path) -> None:
+        # Someone running check because logins fail may be on an old version (#314).
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "schema_version: 1\nconnection:\n  host: nas\nmodules:\n  filestation: {}\n"
+        )
+        runner = CliRunner()
+        with (
+            patch("mcp_synology.cli.check.asyncio.run", side_effect=SystemExit(1)),
+            patch(
+                "mcp_synology.cli.version._check_and_describe_update",
+                return_value="A new version of mcp-synology is available: 9.9.9",
+            ),
+        ):
+            result = runner.invoke(main, ["check", "-c", str(config_file)])
+        assert result.exit_code == 1
+        assert result.output.index("9.9.9") < result.output.index("Checking credentials")
+
+    @pytest.mark.parametrize("error", [OSError("offline"), TypeError("bad state")])
+    def test_check_survives_a_failing_update_check(self, tmp_path: Path, error: Exception) -> None:
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "schema_version: 1\nconnection:\n  host: nas\nmodules:\n  filestation: {}\n"
+        )
+        runner = CliRunner()
+        with (
+            patch("mcp_synology.cli.check.asyncio.run", return_value=None),
+            patch("mcp_synology.cli.version._check_and_describe_update", side_effect=error),
+        ):
+            result = runner.invoke(main, ["check", "-c", str(config_file)])
+        assert result.exit_code == 0
+        assert "Checking credentials" in result.output
+
     def test_check_with_valid_config(self, tmp_path: Path) -> None:
         """Check command loads config and attempts login."""
         config_file = tmp_path / "config.yaml"
@@ -1408,58 +1441,49 @@ class TestCheckLogin:
 class TestMainGroupOptions:
     """Tests for cli/main.py top-level options: --check-update, --auto-upgrade, --revert."""
 
-    def test_check_update_with_newer_version_uv_installer(self) -> None:
+    @pytest.mark.parametrize(
+        ("installer", "command"),
+        [
+            ("uv", "run `uv tool upgrade mcp-synology`"),
+            ("pipx", "run `pipx upgrade mcp-synology`"),
+            ("uvx", "restart your MCP client (uvx fetches the latest version on start"),
+            (None, "-m pip install -U mcp-synology`"),
+        ],
+    )
+    def test_check_update_with_newer_version(self, installer: str | None, command: str) -> None:
+        # The same text as the update notice (#314), for a person: no "mention once".
         runner = CliRunner()
         with (
-            patch("mcp_synology.cli.main._load_global_state", return_value={}),
-            patch("mcp_synology.cli.main._save_global_state"),
-            patch("mcp_synology.cli.main._check_for_update", return_value="9.9.9"),
-            patch("mcp_synology.cli.main._get_current_version", return_value="0.5.0"),
-            patch("mcp_synology.cli.main._detect_installer", return_value="uv"),
+            patch(
+                "mcp_synology.cli.main.refresh_update_check",
+                return_value=("9.9.9", False, {}),
+            ),
+            patch("mcp_synology.cli.version._get_current_version", return_value="0.5.0"),
+            patch("mcp_synology.cli.version._detect_installer", return_value=installer),
+            patch("mcp_synology.cli.version._uv_managed_env", return_value=False),
         ):
             result = runner.invoke(main, ["--check-update"])
 
         assert result.exit_code == 0
-        assert "Update available" in result.output
-        assert "0.5.0" in result.output
-        assert "9.9.9" in result.output
-        assert "uv tool install" in result.output
+        assert "A new version of mcp-synology is available: 9.9.9 (running 0.5.0)" in result.output
+        assert command in result.output
+        assert "Mention this" not in result.output
 
-    def test_check_update_with_newer_version_pipx_installer(self) -> None:
+    def test_check_update_says_security_release(self) -> None:
         runner = CliRunner()
         with (
-            patch("mcp_synology.cli.main._load_global_state", return_value={}),
-            patch("mcp_synology.cli.main._save_global_state"),
-            patch("mcp_synology.cli.main._check_for_update", return_value="9.9.9"),
-            patch("mcp_synology.cli.main._get_current_version", return_value="0.5.0"),
-            patch("mcp_synology.cli.main._detect_installer", return_value="pipx"),
+            patch(
+                "mcp_synology.cli.main.refresh_update_check",
+                return_value=("9.9.9", True, {"latest_is_security": True}),
+            ),
         ):
             result = runner.invoke(main, ["--check-update"])
-
-        assert result.exit_code == 0
-        assert "pipx upgrade" in result.output
-
-    def test_check_update_with_newer_version_unknown_installer(self) -> None:
-        """Falls back to uv tool install when installer can't be detected."""
-        runner = CliRunner()
-        with (
-            patch("mcp_synology.cli.main._load_global_state", return_value={}),
-            patch("mcp_synology.cli.main._save_global_state"),
-            patch("mcp_synology.cli.main._check_for_update", return_value="9.9.9"),
-            patch("mcp_synology.cli.main._get_current_version", return_value="0.5.0"),
-            patch("mcp_synology.cli.main._detect_installer", return_value=None),
-        ):
-            result = runner.invoke(main, ["--check-update"])
-
-        assert result.exit_code == 0
-        assert "uv tool install" in result.output
+        assert "A security release of mcp-synology is available: 9.9.9" in result.output
 
     def test_check_update_no_newer_version(self) -> None:
         runner = CliRunner()
         with (
-            patch("mcp_synology.cli.main._load_global_state", return_value={}),
-            patch("mcp_synology.cli.main._save_global_state"),
-            patch("mcp_synology.cli.main._check_for_update", return_value=None),
+            patch("mcp_synology.cli.main.refresh_update_check", return_value=(None, False, {})),
             patch("mcp_synology.cli.main._get_current_version", return_value="0.5.0"),
         ):
             result = runner.invoke(main, ["--check-update"])

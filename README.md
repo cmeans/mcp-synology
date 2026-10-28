@@ -265,6 +265,7 @@ Without a config file, mcp-synology always runs **File Station, read-only**. No 
 | `SYNOLOGY_DEVICE_ID` | `auth.device_id` (2FA device token) | the keyring |
 | `SYNOLOGY_INSTANCE_ID` | `instance_id` (names the keyring entry and state folder) | derived from the host |
 | `SYNOLOGY_LOG_LEVEL` | `logging.level` (`debug`, `info`, `warning`, `error`) | `info` |
+| `SYNOLOGY_UPDATE_NOTICES` | `update_notices` (`all`, `security`, `off`) | `all` |
 
 ## 2FA Support
 
@@ -294,7 +295,23 @@ See [docs/credentials.md](docs/credentials.md) for keyring service names, multi-
 
 ## Updates
 
-mcp-synology checks for updates and notifies you in your Claude Desktop conversation — the first tool response in each session will include a notice if a newer version is available on PyPI.
+mcp-synology checks PyPI for a newer version once a day, in the background when the server starts, and tells your MCP client's model, which passes it on:
+
+- **On the first tool result** after the check finds one, whichever module the tool belongs to. An ordinary release is announced **once a week** per install: connections that share an install (one copy serving several NASes) say it once between them.
+- **A security release** is announced in every session: in the server's instructions when the previous check already knew of it (so the model knows from the first message), otherwise on the first tool result.
+- **Outside the chat:** the client's MCP server log gets a WARNING, and `mcp-synology check` prints it.
+
+The notice names the new version, the command that upgrades your install (`uv tool upgrade mcp-synology`, `pipx upgrade mcp-synology`, a restart for `uvx`, or `pip install -U`), and the release notes.
+
+Each config (connection) chooses what it hears, since configs may run different installs and versions:
+
+```yaml
+update_notices: all        # all (default) | security | off
+```
+
+`security` keeps only security releases; `off` stops every notice in the chat (the log line and `check` still report it). `check_for_updates: false` turns off the check altogether.
+
+To hear about releases without running the server, watch the repository on GitHub (**Watch → Custom → Releases**), or follow [PyPI](https://pypi.org/project/mcp-synology/) or the [MCP Registry](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.cmeans/mcp-synology).
 
 To manage updates from the CLI:
 
@@ -303,13 +320,6 @@ mcp-synology --check-update                 # Check for a newer version
 mcp-synology --auto-upgrade enable           # Auto-upgrade on each interactive run
 mcp-synology --revert                        # Roll back to previous version
 mcp-synology --revert 0.1.0                  # Roll back to a specific version
-```
-
-To disable update notifications, add to your config (top level):
-
-```yaml
-# ~/.config/mcp-synology/config.yaml
-check_for_updates: false
 ```
 
 ## Configuration

@@ -41,6 +41,8 @@ OFFLINE_CONFIG = """\
 # measure_tools.py: all modules at write tier; TEST-NET-1 host, so nothing reaches a NAS.
 schema_version: 1
 instance_id: measure-tools
+# No update check: the payload mustn't depend on this machine's cached update state.
+check_for_updates: false
 connection: {host: 192.0.2.1, port: 5000, https: false}
 auth: {username: nobody}
 modules:

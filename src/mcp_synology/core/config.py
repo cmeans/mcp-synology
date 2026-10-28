@@ -34,6 +34,7 @@ ENV_VAR_MAP: dict[str, str] = {
     "SYNOLOGY_DEVICE_ID": "auth.device_id",
     "SYNOLOGY_INSTANCE_ID": "instance_id",
     "SYNOLOGY_LOG_LEVEL": "logging.level",
+    "SYNOLOGY_UPDATE_NOTICES": "update_notices",
 }
 
 
@@ -86,6 +87,10 @@ class AppConfig(BaseModel, extra="forbid"):
     instance_id: str | None = None
     alias: str | None = None
     check_for_updates: bool = True
+    # Which update notices reach the model for this connection (#314): every new version
+    # (ordinary ones once a week, security releases every session), only security
+    # releases, or none. The log line and `mcp-synology check` report either way.
+    update_notices: Literal["all", "security", "off"] = "all"
     custom_instructions: str | None = None
     instructions_file: str | None = None
     connection: ConnectionConfig | None = None

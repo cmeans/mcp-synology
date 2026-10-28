@@ -25,7 +25,6 @@ def _make_ctx(
     manager = MagicMock()
     fake_client = MagicMock()
     manager.get_client = AsyncMock(return_value=fake_client)
-    manager.with_update_notice = MagicMock(side_effect=lambda s: s)
 
     if allowed is None:
         allowed = {t.name for t in MODULE_INFO.tools}

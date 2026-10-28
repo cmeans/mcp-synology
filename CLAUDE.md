@@ -183,6 +183,7 @@ This convention was retired-and-restored on 2026-04-11 after PRs #13, #15, and #
 2. Run `python scripts/sync-server-json.py` to propagate the version into `server.json` (top-level + `packages[0].version`)
 3. Run `uv lock` to refresh `uv.lock`
 4. Rename `## Unreleased` in `CHANGELOG.md` to `## <version> (<date>)`, then add a fresh empty `## Unreleased` section above it for the next cycle
+   - **A security release** starts that section with a `**Security release:** …` line (what's fixed and who's affected). `publish.yml` copies the section into the GitHub release, and the running servers' update check reads that line to announce the release in every session until users upgrade, instead of once a week (#314)
 5. **Minor or major bump only:** update the supported-versions line and table in `SECURITY.md` (e.g. "the 0.6.x line", `0.6.x ✅` / `< 0.6 ❌`) and the **Current status** line at the top of this file
 6. Commit these files together
 
