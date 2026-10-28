@@ -405,38 +405,58 @@ def _check_due(state: dict[str, Any], now: float) -> bool:
     return now - last >= _VERSION_CHECK_INTERVAL
 
 
+def _security_retry_due(state: dict[str, Any], now: float) -> bool:
+    """Whether to ask GitHub again after it didn't answer: at most once an hour."""
+    try:
+        last = datetime.fromisoformat(str(state["security_checked_at"])).timestamp()
+    except (KeyError, ValueError, TypeError):
+        return True
+    return now - last >= 3600
+
+
 def refresh_update_check(*, force: bool = False) -> tuple[str | None, bool, dict[str, Any]]:
     """The update check behind the notices: ``(newer version or None, security, state)``.
 
     PyPI is asked at most once a day (unless ``force``), and GitHub once per new version
     whether it's a security release, whatever version this install runs, so an older
-    install sharing the cache doesn't miss the flag (an unreachable GitHub is asked again
-    next time). The network calls run **outside** the global-state lock: it's held only to
-    read, then to merge and save, so a connection claiming an announcement (#314) never
-    waits on another's network round trip.
+    install sharing the cache doesn't miss the flag. A GitHub that didn't answer (offline,
+    or the release not published yet) is asked again at most hourly. The network calls run
+    **outside** the global-state lock: it's held only to read, then to merge and save, so
+    a connection claiming an announcement (#314) never waits on another's network round
+    trip.
     """
     with _with_global_state_lock():
         state = _load_global_state()
     now = datetime.now(tz=UTC).timestamp()
-    fetched = _get_latest_pypi_version() if force or _check_due(state, now) else None
     due = force or _check_due(state, now)
+    fetched = _get_latest_pypi_version() if due else None
     known = fetched or state.get("latest_known_version")
     security: bool | None = None
+    asked = False
     if isinstance(known, str) and (
-        known != state.get("latest_known_version") or "latest_is_security" not in state
+        known != state.get("latest_known_version")
+        or ("latest_is_security" not in state and _security_retry_due(state, now))
     ):
         security = _is_security_release(known)
+        asked = True
 
     with _with_global_state_lock():
         state = _load_global_state()
         if due:
             state["last_version_check"] = datetime.now(tz=UTC).isoformat()
-        if fetched:
+        # Never move backwards: another process may have stored a newer version (from
+        # another PyPI CDN node) between the two lock sections.
+        if fetched and not _is_newer(state.get("latest_known_version"), fetched):
             if state.get("latest_known_version") != fetched:
                 state.pop("latest_is_security", None)
+                state.pop("security_checked_at", None)
             state["latest_known_version"] = fetched
-        if security is not None and state.get("latest_known_version") == known:
-            state["latest_is_security"] = security
+        if asked and state.get("latest_known_version") == known:
+            if security is None:
+                state["security_checked_at"] = datetime.now(tz=UTC).isoformat()
+            else:
+                state["latest_is_security"] = security
+                state.pop("security_checked_at", None)
         _save_global_state(state)
     latest = _cached_update(state)
     return latest, bool(latest and state.get("latest_is_security")), state

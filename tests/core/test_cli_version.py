@@ -550,16 +550,46 @@ class TestRefreshUpdateCheck:
         with patch("mcp_synology.cli.version._get_current_version", return_value="0.5.0"):
             assert v.refresh_update_check()[:2] == ("9.9.9", True)  # from the cache
 
-    def test_unreachable_github_is_asked_again_next_time(self) -> None:
+    def test_unreachable_github_is_asked_again_hourly(self) -> None:
         with (
             patch("mcp_synology.cli.version._get_latest_pypi_version", return_value="9.9.9"),
             patch("mcp_synology.cli.version._get_current_version", return_value="0.5.0"),
         ):
             assert v.refresh_update_check()[:2] == ("9.9.9", False)
-            assert "latest_is_security" not in v._load_global_state()
-            with patch("mcp_synology.cli.version._is_security_release", return_value=False) as sec:
-                v.refresh_update_check()  # cached PyPI answer, GitHub asked again
+            state = v._load_global_state()
+            assert "latest_is_security" not in state
+            assert "security_checked_at" in state
+            with patch("mcp_synology.cli.version._is_security_release") as sec:
+                v.refresh_update_check()  # within the hour: not asked
+            sec.assert_not_called()
+            state["security_checked_at"] = "2000-01-01T00:00:00+00:00"
+            v._save_global_state(state)
+            with patch("mcp_synology.cli.version._is_security_release", return_value=True) as sec:
+                assert v.refresh_update_check()[:2] == ("9.9.9", True)
             sec.assert_called_once_with("9.9.9")
+        assert "security_checked_at" not in v._load_global_state()
+
+    def test_never_moves_the_cached_version_backwards(self) -> None:
+        # Another process stored 9.9.9 (and its flag) between this one's lock sections,
+        # while this one's PyPI CDN node still said 9.9.8 (pre-QA round 3).
+        real_load = v._load_global_state
+        calls = {"n": 0}
+
+        def _load() -> dict[str, Any]:
+            calls["n"] += 1
+            if calls["n"] == 2:
+                v._save_global_state({"latest_known_version": "9.9.9", "latest_is_security": True})
+            return real_load()
+
+        with (
+            patch("mcp_synology.cli.version._load_global_state", side_effect=_load),
+            patch("mcp_synology.cli.version._get_latest_pypi_version", return_value="9.9.8"),
+            patch("mcp_synology.cli.version._get_current_version", return_value="0.5.0"),
+            patch("mcp_synology.cli.version._is_security_release", return_value=False),
+        ):
+            assert v.refresh_update_check(force=True)[:2] == ("9.9.9", True)
+        state = real_load()
+        assert (state["latest_known_version"], state["latest_is_security"]) == ("9.9.9", True)
 
     def test_a_newer_latest_resets_the_security_flag(self) -> None:
         v._save_global_state({"latest_known_version": "9.9.8", "latest_is_security": True})
