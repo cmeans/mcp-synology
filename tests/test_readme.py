@@ -9,13 +9,19 @@ For every module in the server's registry, the README must have:
 - in that section, a settings table naming exactly the fields of the module's
   ``settings_schema`` (or ``**Settings:** none.`` without one), and a ``yaml``
   block whose ``settings`` are valid for the schema
+- each settings-table default, and each setting in a ``yaml`` block that says
+  its values are the defaults, matching the default the code applies
+- every section having the same parts: a ``yaml`` block, Accounts, DSM versions,
+  Not covered and a Spec link
 
 When this fails, update the README in the same PR as the code change.
 """
 
 from __future__ import annotations
 
+import inspect
 import re
+import types
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +43,20 @@ SECTIONS = {
 _TABLE_ROW = re.compile(r"^\| \[[^\]]+\]\(#[^)]+\) \| `([a-z]+)` \| ([^|]+) \| ([^|]+) \|", re.M)
 _SETTING_ROW = re.compile(r"^\| `([a-z_]+)` \|", re.M)
 _YAML_BLOCK = re.compile(r"```yaml\n(.*?)```", re.S)
+_DEFAULT_CELL = re.compile(r"^\| `([a-z_]+)` \| ([^|]+) \|", re.M)
+
+# Settings whose schema default is None and that the module resolves to something
+# else (filestation/__init__.py, register(); test_resolved_defaults_match_the_code
+# reads them there). Any other None default is described in words ("your Downloads
+# folder", "none"), never as a value.
+_RESOLVED_DEFAULTS: dict[tuple[str, str], object] = {
+    ("filestation", "search_timeout"): "async_timeout",
+    ("filestation", "dir_size_timeout"): "async_timeout",
+    ("filestation", "delete_timeout"): 30,
+    ("filestation", "copy_move_timeout"): 30,
+    ("filestation", "upload_timeout"): 300,
+    ("filestation", "download_timeout"): 300,
+}
 
 
 def _count(cell: str) -> int:
@@ -65,6 +85,20 @@ def _tiers(module: str) -> tuple[set[str], set[str]]:
     tools = _MODULE_REGISTRY[module].MODULE_INFO.tools
     read = {t.name for t in tools if t.permission_tier == PermissionTier.READ}
     return read, {t.name for t in tools} - read
+
+
+def _effective_default(module: str, field: str) -> object:
+    schema = _MODULE_REGISTRY[module].MODULE_INFO.settings_schema
+    assert schema is not None
+    default = schema.model_fields[field].default
+    if default is None:
+        return _RESOLVED_DEFAULTS.get((module, field))
+    return default
+
+
+def _as_cell(value: object) -> str:
+    text = str(value).lower() if isinstance(value, bool) else str(value)
+    return f"`{text}`"
 
 
 def test_every_module_is_documented() -> None:
@@ -103,3 +137,51 @@ def test_section_settings(module: str) -> None:
     # The settings models ignore unknown keys, so check the names first.
     assert set(settings) <= set(schema.model_fields)
     schema.model_validate(settings)
+
+
+@pytest.mark.parametrize("module", sorted(SECTIONS))
+def test_section_defaults(module: str) -> None:
+    section = _section(SECTIONS[module])
+    if _MODULE_REGISTRY[module].MODULE_INFO.settings_schema is None:
+        return
+    for field, cell in _DEFAULT_CELL.findall(section):
+        expected = _effective_default(module, field)
+        if expected is None:
+            assert not cell.strip().startswith("`"), f"{field}'s table default isn't a value"
+        else:
+            assert cell.strip() == _as_cell(expected), f"{field}'s table default"
+    for block in _YAML_BLOCK.findall(section):
+        if "the values shown are the defaults" not in block:
+            continue
+        settings = yaml.safe_load(block)["modules"][module].get("settings") or {}
+        for field, value in settings.items():
+            expected = _effective_default(module, field)
+            if isinstance(expected, str) and expected in settings:  # e.g. async_timeout
+                expected = settings[expected]
+            assert value == expected, f"{field} in the yaml block"
+
+
+def test_resolved_defaults_match_the_code() -> None:
+    source = inspect.getsource(_MODULE_REGISTRY["filestation"].register)
+    for (_, field), value in _RESOLVED_DEFAULTS.items():
+        fallback = f"settings.{value}" if isinstance(value, str) else str(value)
+        assert f"settings.{field} or {fallback})" in source, field
+
+
+@pytest.mark.parametrize("module", sorted(SECTIONS))
+def test_every_numeric_none_default_is_resolved(module: str) -> None:
+    schema = _MODULE_REGISTRY[module].MODULE_INFO.settings_schema
+    if schema is None:
+        return
+    for field, info in schema.model_fields.items():
+        args = set(getattr(info.annotation, "__args__", ()))
+        numeric = isinstance(info.annotation, types.UnionType) and args & {int, float}
+        if info.default is None and numeric:
+            assert (module, field) in _RESOLVED_DEFAULTS, f"{module}.{field}"
+
+
+@pytest.mark.parametrize("module", sorted(SECTIONS))
+def test_section_parts(module: str) -> None:
+    section = _section(SECTIONS[module])
+    for part in ("```yaml", "**Accounts.**", "**DSM versions:**", "**Not covered:**", "Spec: "):
+        assert part in section, f"no {part} in ### {SECTIONS[module]}"

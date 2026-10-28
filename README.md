@@ -69,14 +69,14 @@ A client can change the outcome on its own: the same model does less well throug
 
 ### Tested models
 
-**For best results, use Claude Sonnet 5.5 or better.** To compare models, we held the client fixed: headless Claude Code (server instructions and full tool schemas delivered, no other tools), the same 12 tasks across all four modules, a fresh DSM 7.2.2 as a non-admin user (2026-10-28).
+**For best results, use Claude Sonnet 5.5 or better.** To compare models, we held the client fixed: headless Claude Code (server instructions and full tool schemas delivered, no other tools), the same 12 tasks across all four modules, on a DSM 7.2.2 test NAS restored fresh for each model, as a non-admin user (2026-10-28).
 
 | Model | Tasks completed |
 |---|---|
 | Claude Sonnet 5.5 | 12 of 12 |
 | Claude Haiku 5.5 | 11 of 12 |
 
-Both handled Photos uploads, albums and tags, recycle-bin checks, Download Station tasks and honest answers about what isn't supported. The task Haiku missed needed an extra lookup it didn't think to make (matching a download by its source URL); Sonnet made it. Haiku is fine for reads; for writes, and deletes above all, use Sonnet or better.
+Both handled Photos uploads, albums and tags, recycle-bin checks, Download Station tasks and honest answers about what isn't supported. The task Haiku missed needed an extra lookup it didn't think to make (matching a download by its source URL); Sonnet made it. Haiku is fine for reads; for writes, and deletes above all, use Sonnet or better. The tasks, how each was graded and the per-task results are in [Comparing models](docs/live-testing.md#comparing-models).
 
 ## Quick Start
 
@@ -199,6 +199,8 @@ modules:
 
 **Tools.** `get_system_info` gives every account the model, serial number, DSM version, RAM, uptime, the NAS's local time and code page, and the temperature where the NAS has a sensor. An admin account also gets the CPU, time zone and current UTC offset, NTP server, firmware date, DSM's update-ready and crash flags, eSATA port, attached USB, SATA and PCIe devices, and redundant power on models that report it; any other account gets a line naming what needs an administrator. `get_resource_usage` shows live CPU load, memory usage, disk I/O and network throughput, and needs an admin account.
 
+**Accounts.** Any account can use `get_system_info`; an admin account sees more (above). `get_resource_usage` needs an admin account.
+
 **DSM versions:** 7.1 – 7.4.1. The incompatible-NIC flag (admin only) appears from DSM 7.2.2.
 
 **Not covered:** process list, system health, logs, connected users; no reboot or shutdown.
@@ -251,6 +253,8 @@ modules:
 | `allowed_local_paths` | your Downloads folder | local folders | Local folders `upload_file` and `download_file` may use, including subfolders. See [Local path confinement](#features). |
 | `default_download_dir` | none | a local folder | Where `download_file` saves when no `dest_folder` is given. It's always allowed. |
 | `default_upload_dir` | none | a NAS folder | Where `upload_file` uploads when no `dest_folder` is given. |
+
+**Accounts.** Any account. The tools see the shared folders that account can see, and can change only what its DSM permissions allow.
 
 **DSM versions:** 7.1 – 7.4.1, the same tools on each.
 
