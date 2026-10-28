@@ -185,7 +185,7 @@ Tested against DSM 7.1 (Synology Photos 1.3.4), DSM 7.2.2, 7.3.2 and 7.4.1 (Syno
 uvx mcp-synology setup
 ```
 
-Requires [uv](https://docs.astral.sh/uv/). `uvx` downloads and runs the latest version automatically — no separate install step needed.
+Requires [uv](https://docs.astral.sh/uv/). `uvx` downloads the latest version on its first run and reuses that cached copy afterwards — no separate install step needed. To upgrade it later, see [Updates](#updates).
 
 Setup will prompt for your NAS host, credentials, and preferences. If your account has 2FA enabled, it will prompt for an OTP code and store a device token for automatic future logins.
 
@@ -295,13 +295,13 @@ See [docs/credentials.md](docs/credentials.md) for keyring service names, multi-
 
 ## Updates
 
-mcp-synology checks PyPI for a newer version once a day, in the background when the server starts, and tells your MCP client's model, which passes it on:
+mcp-synology checks PyPI for a newer version once a day (hourly while PyPI can't be reached), in the background when the server starts, and tells your MCP client's model, which passes it on:
 
 - **On the first tool result** after the check finds one, whichever module the tool belongs to. An ordinary release is announced **once a week** per install: connections that share an install (one copy serving several NASes) say it once between them.
 - **A security release** is announced in every session: in the server's instructions when the previous check already knew of it (so the model knows from the first message), otherwise on the first tool result.
 - **Outside the chat:** the client's MCP server log gets a WARNING, and `mcp-synology check` prints it.
 
-The notice names the new version, the command that upgrades your install (`uv tool upgrade mcp-synology`, `pipx upgrade mcp-synology`, a restart for `uvx`, or `pip install -U`), and the release notes.
+The notice names the new version, the command that upgrades your install (`uv tool upgrade mcp-synology`, `pipx upgrade mcp-synology`, `uv cache clean mcp-synology` and a restart for `uvx`, whose cached copy a restart alone doesn't replace, or `pip install -U`), and the release notes.
 
 Each config (connection) chooses what it hears, since configs may run different installs and versions:
 

@@ -360,3 +360,19 @@ class TestUpdateNotices:
     def test_rejects_anything_else(self) -> None:
         with pytest.raises(ValidationError, match="update_notices"):
             AppConfig(**{**_minimal_raw(), "update_notices": "weekly"})
+
+    @pytest.mark.parametrize(("written", "expected"), [("off", "off"), ("on", "all")])
+    def test_unquoted_yaml_booleans(self, tmp_path: Path, written: str, expected: str) -> None:
+        # YAML 1.1 reads an unquoted `off` as false; the README and the notice write it
+        # unquoted (QA round 1 on #433).
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "schema_version: 1\n"
+            f"update_notices: {written}\n"
+            "connection:\n"
+            "  host: 192.168.1.100\n"
+            "modules:\n"
+            "  filestation:\n"
+            "    enabled: true\n"
+        )
+        assert load_config(config_file).update_notices == expected

@@ -2069,6 +2069,16 @@ class TestUpdateNoticeDelivery:
 
         _save_global_state({"latest_known_version": latest, **extra})
 
+    def test_a_corrupt_global_state_does_not_stop_the_server(self) -> None:
+        # Every instance shares the file; a bad write mustn't stop them all (QA round 1).
+        from mcp_synology.cli.version import _global_state_path
+
+        path = _global_state_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        for content in (b"- a\n", b"a string\n", b"\xff\xfe\n"):
+            path.write_bytes(content)
+            create_server(make_test_config(check_for_updates=True))
+
     def test_instructions_leave_out_an_ordinary_release(self) -> None:
         # An MCP client keeps a server across chats: the instructions reach every chat.
         self._cache("99.0.0")

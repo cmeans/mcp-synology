@@ -170,9 +170,12 @@ def _upgrade_hint() -> str:
     if installer == "pipx":
         return f"run `pipx upgrade {_PYPI_PACKAGE}`, then restart your MCP client"
     if installer == "uvx":
+        # uvx keeps using the version it cached on its first run (uv's docs, "Tool
+        # versions"), so a restart alone doesn't upgrade it.
         return (
-            "restart your MCP client (uvx fetches the latest version on start, unless the "
-            "client's config pins one)"
+            f"quit your MCP client, run `uv cache clean {_PYPI_PACKAGE}`, then start it again "
+            f"(or make the client's command `uvx {_PYPI_PACKAGE}@latest`, which checks for a "
+            "new version on every start)"
         )
     if _uv_managed_env():
         return (
@@ -319,10 +322,12 @@ def _load_global_state() -> dict[str, Any]:
     if not path.exists():
         return {}
     try:
-        raw: dict[str, Any] = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        return raw
-    except (OSError, yaml.YAMLError):
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, yaml.YAMLError):  # ValueError: not UTF-8
         return {}
+    # Every instance on the machine shares this file: anything but a mapping is a bad
+    # write, read as no state rather than stopping the server.
+    return raw if isinstance(raw, dict) else {}
 
 
 def _save_global_state(state: dict[str, Any]) -> None:
@@ -367,27 +372,22 @@ def _with_global_state_lock() -> Iterator[None]:
 def _check_for_update(state: dict[str, Any], *, force: bool = False) -> str | None:
     """Check PyPI for a newer version. Returns latest version string if newer, else None.
 
-    PyPI is asked at most once per ``_VERSION_CHECK_INTERVAL`` (unless ``force``); in
-    between, the version it last reported is used. Used by auto-upgrade, with the caller
-    holding the state lock; the update notices use ``refresh_update_check``, which also
-    learns whether the release is a security release and keeps the network out of the
-    lock (#314).
+    PyPI is asked at most once per ``_VERSION_CHECK_INTERVAL``, or hourly after it didn't
+    answer (unless ``force``); in between, the version it last reported is used. Used by
+    auto-upgrade, with the caller holding the state lock; the update notices use
+    ``refresh_update_check``, which also learns whether the release is a security release
+    and keeps the network out of the lock (#314).
     """
-    now = datetime.now(tz=UTC).timestamp()
-    if not force:
-        last = state.get("last_version_check")
-        if last:
-            try:
-                elapsed = now - datetime.fromisoformat(last).timestamp()
-                if elapsed < _VERSION_CHECK_INTERVAL:
-                    return _cached_update(state)
-            except (ValueError, TypeError, AttributeError):
-                pass
+    if not force and not _check_due(state, datetime.now(tz=UTC).timestamp()):
+        return _cached_update(state)
 
     latest = _get_latest_pypi_version()
-    state["last_version_check"] = datetime.now(tz=UTC).isoformat()
     if not latest:
+        # Not stamped: an offline check mustn't hold off the notices' check for a day.
+        state["version_check_failed_at"] = datetime.now(tz=UTC).isoformat()
         return None
+    state["last_version_check"] = datetime.now(tz=UTC).isoformat()
+    state.pop("version_check_failed_at", None)
 
     if state.get("latest_known_version") != latest:
         state.pop("latest_is_security", None)
@@ -398,20 +398,28 @@ def _check_for_update(state: dict[str, Any], *, force: bool = False) -> str | No
 
 
 def _check_due(state: dict[str, Any], now: float) -> bool:
+    """Whether to ask PyPI: once a day, or at most hourly after it didn't answer."""
     try:
         last = datetime.fromisoformat(str(state["last_version_check"])).timestamp()
     except (KeyError, ValueError, TypeError):
+        last = None
+    if last is not None and now - last < _VERSION_CHECK_INTERVAL:
+        return False
+    return _retry_due(state, "version_check_failed_at", now)
+
+
+def _retry_due(state: dict[str, Any], key: str, now: float) -> bool:
+    """Whether an hour has passed since the failed check recorded under ``key``."""
+    try:
+        last = datetime.fromisoformat(str(state[key])).timestamp()
+    except (KeyError, ValueError, TypeError):
         return True
-    return now - last >= _VERSION_CHECK_INTERVAL
+    return now - last >= 3600
 
 
 def _security_retry_due(state: dict[str, Any], now: float) -> bool:
     """Whether to ask GitHub again after it didn't answer: at most once an hour."""
-    try:
-        last = datetime.fromisoformat(str(state["security_checked_at"])).timestamp()
-    except (KeyError, ValueError, TypeError):
-        return True
-    return now - last >= 3600
+    return _retry_due(state, "security_checked_at", now)
 
 
 def refresh_update_check(*, force: bool = False) -> tuple[str | None, bool, dict[str, Any]]:
@@ -419,8 +427,8 @@ def refresh_update_check(*, force: bool = False) -> tuple[str | None, bool, dict
 
     PyPI is asked at most once a day (unless ``force``), and GitHub once per new version
     whether it's a security release, whatever version this install runs, so an older
-    install sharing the cache doesn't miss the flag. A GitHub that didn't answer (offline,
-    or the release not published yet) is asked again at most hourly. The network calls run
+    install sharing the cache doesn't miss the flag. A PyPI or GitHub that didn't answer
+    (offline, or the release not published yet) is asked again at most hourly. The network calls run
     **outside** the global-state lock: it's held only to read, then to merge and save, so
     a connection claiming an announcement (#314) never waits on another's network round
     trip.
@@ -442,8 +450,11 @@ def refresh_update_check(*, force: bool = False) -> tuple[str | None, bool, dict
 
     with _with_global_state_lock():
         state = _load_global_state()
-        if due:
+        if fetched:
             state["last_version_check"] = datetime.now(tz=UTC).isoformat()
+            state.pop("version_check_failed_at", None)
+        elif due:
+            state["version_check_failed_at"] = datetime.now(tz=UTC).isoformat()
         # Never move backwards: another process may have stored a newer version (from
         # another PyPI CDN node) between the two lock sections.
         if fetched and not _is_newer(state.get("latest_known_version"), fetched):

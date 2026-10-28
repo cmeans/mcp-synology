@@ -1446,7 +1446,7 @@ class TestMainGroupOptions:
         [
             ("uv", "run `uv tool upgrade mcp-synology`"),
             ("pipx", "run `pipx upgrade mcp-synology`"),
-            ("uvx", "restart your MCP client (uvx fetches the latest version on start"),
+            ("uvx", "quit your MCP client, run `uv cache clean mcp-synology`, then start it again"),
             (None, "-m pip install -U mcp-synology`"),
         ],
     )

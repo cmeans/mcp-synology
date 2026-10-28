@@ -192,7 +192,7 @@ class TestUpgradeHint:
         [
             ("uv", "run `uv tool upgrade mcp-synology`, then restart your MCP client"),
             ("pipx", "run `pipx upgrade mcp-synology`, then restart your MCP client"),
-            ("uvx", "restart your MCP client (uvx fetches the latest version on start"),
+            ("uvx", "quit your MCP client, run `uv cache clean mcp-synology`, then start it again"),
         ],
     )
     def test_per_installer(self, installer: str, expected: str) -> None:
@@ -351,6 +351,20 @@ class TestGlobalState:
         with patch("pathlib.Path.home", return_value=tmp_path):
             assert v._load_global_state() == {}
 
+    @pytest.mark.parametrize(
+        "content", [b"- a\n- b\n", b"just a string\n", b"42\n", b"\xff\xfe not utf-8\n"]
+    )
+    def test_load_returns_empty_for_anything_but_a_mapping(
+        self, tmp_path: Path, content: bytes
+    ) -> None:
+        # A bad write to the shared file mustn't stop every connection from starting
+        # (QA round 1 on #433).
+        state_dir = tmp_path / ".local" / "state" / "mcp-synology"
+        state_dir.mkdir(parents=True)
+        (state_dir / "global.yaml").write_bytes(content)
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            assert v._load_global_state() == {}
+
     def test_save_creates_directory_and_file(self, tmp_path: Path) -> None:
         with patch("pathlib.Path.home", return_value=tmp_path):
             v._save_global_state({"running_version": "1.0.0", "auto_upgrade": True})
@@ -486,8 +500,11 @@ class TestCheckForUpdate:
             patch("mcp_synology.cli.version._get_current_version", return_value="0.5.0"),
         ):
             assert v._check_for_update(state) is None
-        # Even on failure the timestamp gets updated (so we don't hammer PyPI)
-        assert "last_version_check" in state
+        # A failure is retried hourly, not stamped as the day's check (QA round 1 on #433)
+        assert "last_version_check" not in state
+        with patch("mcp_synology.cli.version._get_latest_pypi_version") as pypi:
+            assert v._check_for_update(state) is None
+        pypi.assert_not_called()
 
     def test_pypi_returns_same_version(self) -> None:
         state: dict[str, Any] = {}
@@ -568,6 +585,31 @@ class TestRefreshUpdateCheck:
                 assert v.refresh_update_check()[:2] == ("9.9.9", True)
             sec.assert_called_once_with("9.9.9")
         assert "security_checked_at" not in v._load_global_state()
+
+    def test_unreachable_pypi_is_asked_again_hourly(self) -> None:
+        # Offline at start mustn't skip PyPI for a day (QA round 1 on #433).
+        with patch("mcp_synology.cli.version._get_latest_pypi_version", return_value=None):
+            assert v.refresh_update_check()[:2] == (None, False)
+        state = v._load_global_state()
+        assert "last_version_check" not in state
+        assert "version_check_failed_at" in state
+        with patch("mcp_synology.cli.version._get_latest_pypi_version") as pypi:
+            v.refresh_update_check()  # within the hour: not asked
+        pypi.assert_not_called()
+        state["version_check_failed_at"] = "2000-01-01T00:00:00+00:00"
+        v._save_global_state(state)
+        with (
+            patch("mcp_synology.cli.version._get_latest_pypi_version", return_value="9.9.9"),
+            patch("mcp_synology.cli.version._get_current_version", return_value="0.5.0"),
+            patch("mcp_synology.cli.version._is_security_release", return_value=False),
+        ):
+            assert v.refresh_update_check()[:2] == ("9.9.9", False)
+        state = v._load_global_state()
+        assert "version_check_failed_at" not in state
+        assert "last_version_check" in state
+        with patch("mcp_synology.cli.version._get_latest_pypi_version") as pypi:
+            v.refresh_update_check()  # checked today: not asked
+        pypi.assert_not_called()
 
     def test_never_moves_the_cached_version_backwards(self) -> None:
         # Another process stored 9.9.9 (and its flag) between this one's lock sections,

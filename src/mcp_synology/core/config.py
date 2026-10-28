@@ -101,6 +101,17 @@ class AppConfig(BaseModel, extra="forbid"):
     # adds to it (#257). Unset keeps the per-module rule from before #257.
     allowed_local_paths: list[str] | None = Field(default=None, min_length=1)
 
+    @field_validator("update_notices", mode="before")
+    @classmethod
+    def _yaml_bool_notices(cls, value: object) -> object:
+        # YAML 1.1 reads an unquoted `off` as false (and `on` as true), so
+        # `update_notices: off` arrives as a bool.
+        if value is False:
+            return "off"
+        if value is True:
+            return "all"
+        return value
+
     @field_validator("allowed_local_paths")
     @classmethod
     def _absolute_local_paths(cls, value: list[str] | None) -> list[str] | None:
