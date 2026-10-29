@@ -1772,7 +1772,7 @@ class TestInstructionComments:
 # Raised by #422 to 49,963 (+81): pause_download says its per-task refusals happen only
 # when something else in the call can be paused, and that a lone finished or
 # already-paused task fails the whole call (#421, 0.10.0rc10 live test).
-# Raised by #49 to 55,411 (+5,448): the opt-in Storage module's 11 READ tools and its
+# Raised by #49 to 55,411 (+5,448): the Storage module's 11 READ tools and its
 # instructions section (the administrator requirement). A connection without Storage
 # enabled doesn't carry them.
 PAYLOAD_BUDGET_CHARS = 55_411

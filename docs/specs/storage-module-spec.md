@@ -49,7 +49,7 @@ MODULE_INFO = ModuleInfo(
 )
 ```
 
-The module has no settings in phase 1. It's opt-in like the others: added under `modules:` as `storage`.
+The module has no settings in phase 1. Like every module, it loads only when it's listed under `modules:`, as `storage`.
 
 ---
 

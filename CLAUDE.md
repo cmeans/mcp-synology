@@ -6,14 +6,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 mcp-synology is an MCP server for Synology NAS devices. It exposes Synology DSM API functionality as MCP tools that Claude can use. Modular, secure (2FA-ready), permission-tiered. Python 3.11+, async throughout, Apache 2.0 licensed.
 
-**Current status:** v0.10.x — File Station (15 tools) + System monitoring (2 tools) + Download Station (12 tools, opt-in) + Synology Photos (19 tools, opt-in) + Storage (11 READ tools, administrator only), CLI, integration and vdsm tests.
+**Current status:** v0.10.x — System monitoring (2 tools) + File Station (15 tools) + Synology Photos (19 tools) + Download Station (12 tools) + Storage (11 READ tools, administrator only), CLI, integration and vdsm tests. Every module loads only when it's listed under `modules:`; `setup` writes File Station only.
 
 ## Architecture
 
 Layered design: core → modules → server/CLI.
 
 - **Core** (`src/mcp_synology/core/`): DSM API client (async httpx), auth manager (session lifecycle, 2FA, keyring), YAML+Pydantic config loader, shared response formatters, typed exception hierarchy
-- **Modules** (`src/mcp_synology/modules/`): Feature-specific tool handlers. Each module declares `MODULE_INFO` with API requirements and tool metadata. File Station (15 tools: 7 READ + 8 WRITE), System (2 tools: get_system_info, get_resource_usage), Download Station (12 tools: 5 READ + 7 WRITE; opt-in), Photos (19 tools: 4 READ + 15 WRITE; opt-in), Storage (11 READ tools; administrator-only APIs)
+- **Modules** (`src/mcp_synology/modules/`): Feature-specific tool handlers. Each module declares `MODULE_INFO` with API requirements and tool metadata. System (2 tools: get_system_info, get_resource_usage), File Station (15 tools: 7 READ + 8 WRITE), Photos (19 tools: 4 READ + 15 WRITE), Download Station (12 tools: 5 READ + 7 WRITE), Storage (11 READ tools; administrator-only APIs). The README's coverage table and module sections are checked against `MODULE_INFO` and each `settings_schema` by `tests/test_readme.py`: update them in the same PR
 - **Server** (`src/mcp_synology/server.py`): MCP server (`MCPServer` subclass) initialization, module loading, startup
 - **CLI** (`src/mcp_synology/cli/`): click-based package with `serve`, `setup`, `check` subcommands
 
