@@ -352,8 +352,10 @@ async def upload_photos(
     # (inferred: Shared Space wasn't probed).
     personal_root = sp == "personal" and target.get("name") == "/"
     prepared = False
-    # No answer from Setting.User: the call may still have created the folder, so a later
-    # file can land where this one couldn't. The row says so rather than "no folder".
+    # No answer from Setting.User, or a proxy's 5xx or login page in its place (#282): the
+    # call may still have created the folder, so a later file can land where this one
+    # couldn't. The row says so rather than "no folder". A request that never left (refused,
+    # connect timeout) or a 4xx created nothing.
     unanswered = False
 
     async def prepare_root() -> bool:
@@ -365,7 +367,10 @@ async def upload_photos(
             await ph.call("Setting.User", "get", personal=True)
         except (SynologyError, httpx.TransportError) as e:
             logger.debug("Photos Setting.User get failed: %s", type(e).__name__)
-            unanswered = isinstance(e, httpx.TransportError)
+            unanswered = (
+                isinstance(e, httpx.TransportError | DsmReplyError)
+                and not isinstance(e, httpx.ConnectError | httpx.ConnectTimeout)
+            ) or (isinstance(e, DsmHttpError) and e.status >= 500)
             return False
         return True
 

@@ -101,8 +101,8 @@ def test_only_browse_item_and_folder_required() -> None:
 # next once ruff format wraps the call (#440 QA round 2). One-word names (UserInfo,
 # Thumbnail) are only recognizable this way.
 _API_CALL = r'\.(?:call|api|walk|has)\(\s*"([A-Z][A-Za-z.]+)"'
-# Dotted names are recognizable anywhere: as another helper's argument (_by_id_or_name)
-# or in a conditional expression choosing between two APIs.
+# Dotted names are recognizable anywhere, such as another helper's argument
+# (_by_id_or_name), so a call written some other way later is still caught.
 _DOTTED = re.compile(r"[A-Z][A-Za-z]+(\.[A-Z][A-Za-z]+)+")
 
 

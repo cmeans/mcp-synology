@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import httpx
 import pytest
@@ -1000,16 +1000,32 @@ class TestUploadPersonalRootFolder:
     def _timeout(_p: Any) -> Any:
         raise httpx.ReadTimeout("slow")
 
-    @pytest.mark.parametrize("answer", ["dsm-error", "no-answer"])
+    @staticmethod
+    def _refused(_p: Any) -> Any:
+        raise httpx.ConnectError("refused")
+
+    _SETTING_USER_REPLIES: ClassVar[dict[str, tuple[Any, bool]]] = {
+        # name: (Setting.User's reply, whether the call may have created the folder)
+        "dsm-error": (lambda _p: {"success": False, "error": {"code": 119}}, False),
+        "no-answer": (_timeout, True),
+        "proxy-502": (lambda _p: httpx.Response(502, text="<html>Bad Gateway</html>"), True),
+        "login-page": (
+            lambda _p: httpx.Response(
+                200, text="<html>Sign in</html>", headers={"content-type": "text/html"}
+            ),
+            True,
+        ),
+        "proxy-403": (lambda _p: httpx.Response(403, text="<html>Forbidden</html>"), False),
+        "refused": (_refused, False),
+    }
+
+    @pytest.mark.parametrize("answer", sorted(_SETTING_USER_REPLIES))
     async def test_setting_user_failing_isnt_resent(self, tmp_path: Path, answer: str) -> None:
         """A DSM error or no answer from Setting.User: the upload's own 117 is reported,
-        not a transport error with the other files left untried. After no answer the call
-        may have created the folder (b.jpg lands there), so the row says to upload again."""
-        reply = (
-            self._timeout
-            if answer == "no-answer"
-            else (lambda _p: {"success": False, "error": {"code": 119}})
-        )
+        not a transport error with the other files left untried. After no answer (or a
+        proxy's 5xx or login page, #282) the call may have created the folder (b.jpg lands
+        there), so the row says to upload again; not after a refused connection or a 4xx."""
+        reply, maybe_created = self._SETTING_USER_REPLIES[answer]
         fake = self._root(reply)
         out, sent = await self._upload(
             tmp_path, _NO_FOLDER, _NEW, fake=fake, names=("a.jpg", "b.jpg")
@@ -1018,7 +1034,7 @@ class TestUploadPersonalRootFolder:
         lines = out.splitlines()
         assert "homes/<user>/Photos; 117" in lines[1] and "failed" in lines[1]
         maybe = "so the folder may exist now. Upload this file again; if it fails the same way"
-        assert (maybe in lines[1]) is (answer == "no-answer")
+        assert (maybe in lines[1]) is maybe_created
         assert lines[2].split()[:2] == ["b.jpg", "new"]
 
     async def test_resend_keeps_the_transient_retry(self, tmp_path: Path) -> None:
