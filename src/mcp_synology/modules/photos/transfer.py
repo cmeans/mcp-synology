@@ -424,6 +424,9 @@ async def upload_photos(
             code = f" ({e.code})" if e.code else ""
             note = f"{e}{code}"
             if e.code == 117 and personal_root and unanswered:
+                # Only the file whose 117 came before that call: a later file's 117, sent
+                # after it, says the folder still isn't there.
+                unanswered = False
                 note = (
                     "this account's personal space had no folder on the NAS "
                     "(homes/<user>/Photos; 117), and the call that creates it got no answer, "

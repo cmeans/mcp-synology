@@ -1004,6 +1004,10 @@ class TestUploadPersonalRootFolder:
     def _refused(_p: Any) -> Any:
         raise httpx.ConnectError("refused")
 
+    @staticmethod
+    def _connect_timeout(_p: Any) -> Any:
+        raise httpx.ConnectTimeout("connect")
+
     _SETTING_USER_REPLIES: ClassVar[dict[str, tuple[Any, bool]]] = {
         # name: (Setting.User's reply, whether the call may have created the folder)
         "dsm-error": (lambda _p: {"success": False, "error": {"code": 119}}, False),
@@ -1017,6 +1021,7 @@ class TestUploadPersonalRootFolder:
         ),
         "proxy-403": (lambda _p: httpx.Response(403, text="<html>Forbidden</html>"), False),
         "refused": (_refused, False),
+        "connect-timeout": (_connect_timeout, False),
     }
 
     @pytest.mark.parametrize("answer", sorted(_SETTING_USER_REPLIES))
@@ -1036,6 +1041,25 @@ class TestUploadPersonalRootFolder:
         maybe = "so the folder may exist now. Upload this file again; if it fails the same way"
         assert (maybe in lines[1]) is maybe_created
         assert lines[2].split()[:2] == ["b.jpg", "new"]
+
+    async def test_upload_again_only_for_the_first_file(self, tmp_path: Path) -> None:
+        """After no answer from Setting.User, only the file whose 117 came before the call
+        is told to upload again: a later file's 117, sent after the call, says the folder
+        still isn't there."""
+        fake = self._root(self._timeout)
+        out, sent = await self._upload(
+            tmp_path,
+            _NO_FOLDER,
+            _NO_FOLDER,
+            _NO_FOLDER,
+            fake=fake,
+            names=("a.jpg", "b.jpg", "c.jpg"),
+        )
+        assert sent == 3
+        rows = out.splitlines()[1:4]
+        assert "so the folder may exist now. Upload this file again" in rows[0]
+        for row in rows[1:]:
+            assert "has no folder on the NAS (homes/<user>/Photos; 117)" in row
 
     async def test_resend_keeps_the_transient_retry(self, tmp_path: Path) -> None:
         """The resend after Setting.User is an attempt like the first: a 623 on it is
