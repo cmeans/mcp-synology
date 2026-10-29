@@ -990,19 +990,48 @@ class TestUploadPersonalRootFolder:
         rows = out.splitlines()[1:3]
         for row in rows:
             assert "failed" in row
-            assert "no folder on the NAS yet (homes/<user>/Photos) (117)" in row
-            assert "Open Synology Photos once as this user" in row
+            assert row.endswith(
+                "failed   this account's personal space has no folder on the NAS "
+                "(homes/<user>/Photos; 117). Create a folder with photo_folder and upload "
+                "into it, or open Synology Photos once as this user."
+            )
 
-    async def test_setting_user_failing_isnt_resent(self, tmp_path: Path) -> None:
-        fake = self._root(lambda _p: {"success": False, "error": {"code": 119}})
-        out, sent = await self._upload(tmp_path, _NO_FOLDER, fake=fake)
-        assert sent == 1
-        assert "homes/<user>/Photos" in out
+    @staticmethod
+    def _timeout(_p: Any) -> Any:
+        raise httpx.ReadTimeout("slow")
+
+    @pytest.mark.parametrize("answer", ["dsm-error", "no-answer"])
+    async def test_setting_user_failing_isnt_resent(self, tmp_path: Path, answer: str) -> None:
+        """A DSM error or no answer from Setting.User: the upload's own 117 is reported,
+        not a transport error with the other files left untried."""
+        reply = (
+            self._timeout
+            if answer == "no-answer"
+            else (lambda _p: {"success": False, "error": {"code": 119}})
+        )
+        fake = self._root(reply)
+        out, sent = await self._upload(
+            tmp_path, _NO_FOLDER, _NEW, fake=fake, names=("a.jpg", "b.jpg")
+        )
+        assert sent == 2  # a.jpg once, then b.jpg
+        lines = out.splitlines()
+        assert "homes/<user>/Photos; 117" in lines[1] and "failed" in lines[1]
+        assert lines[2].split()[:2] == ["b.jpg", "new"]
+
+    async def test_resend_keeps_the_transient_retry(self, tmp_path: Path) -> None:
+        """The resend after Setting.User is an attempt like the first: a 623 on it is
+        retried once after the delay, as a first attempt's would be."""
+        fake = self._root()
+        busy = {"success": False, "error": {"code": 623}}
+        out, sent = await self._upload(tmp_path, _NO_FOLDER, busy, _NEW, fake=fake)
+        assert sent == 3
+        assert "new      id 5" in out
 
     @pytest.mark.parametrize("where", ["subfolder", "shared"])
     async def test_not_the_personal_root(self, tmp_path: Path, where: str) -> None:
-        """A subfolder's existence means the space's folder exists, and Shared Space lives
-        in its own shared folder: a 117 there is reported as DSM's, with no extra call."""
+        """A subfolder's existence means the space's folder exists, and Shared Space's root
+        is a shared folder of its own (inferred, not probed): a 117 there is reported as
+        DSM's, with no extra call."""
         if where == "subfolder":
             fake = FakePhotos().on(
                 "SYNO.Foto.Browse.Folder", "get", 2, captured("folder-get-by-name")

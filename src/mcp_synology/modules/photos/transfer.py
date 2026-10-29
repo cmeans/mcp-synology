@@ -225,7 +225,10 @@ async def _upload_one(
     path: Path,
     prepare: Callable[[], Awaitable[bool]] | None = None,
 ) -> dict[str, Any]:
-    """Upload one file; on a 117, ``prepare`` (if given) may fix the cause, then it's resent."""
+    """Upload one file; on a 117, ``prepare`` (if given) may fix the cause, then it's resent.
+
+    The resend is an attempt like the first: a transient code it gets is retried once.
+    """
 
     async def send() -> dict[str, Any]:
         return await client.upload_multipart(
@@ -237,12 +240,18 @@ async def _upload_one(
             filename=path.name,
         )
 
-    try:
-        return await send()
-    except SynologyError as e:
-        if e.code == 117 and prepare is not None and await prepare():
-            logger.info("Photos upload of %s got 117; resending after Setting.User", path.name)
+    async def attempt() -> dict[str, Any]:
+        try:
             return await send()
+        except SynologyError as e:
+            if e.code == 117 and prepare is not None and await prepare():
+                logger.info("Photos upload of %s got 117; resending after Setting.User", path.name)
+                return await send()
+            raise
+
+    try:
+        return await attempt()
+    except SynologyError as e:
         if e.code is None or e.code in _UPLOAD_FINAL:
             raise
         logger.info("Photos upload of %s got %s; retrying once", path.name, e.code)
@@ -337,7 +346,9 @@ async def upload_photos(
     # An account that has never used Photos has no homes/<user>/Photos folder yet, and
     # every upload to the personal root answers 117 until it does (#436). The web app's
     # Setting.User get creates it (for a user with no items), so after a 117 that call is
-    # made once and the file is resent.
+    # made once and the file is resent. Only the personal root: a subfolder means the folder
+    # exists. Shared Space is left out because its root is a shared folder of its own
+    # (inferred: Shared Space wasn't probed).
     personal_root = sp == "personal" and target.get("name") == "/"
     prepared = False
 
@@ -404,9 +415,9 @@ async def upload_photos(
             note = f"{e}{code}"
             if e.code == 117 and personal_root:
                 note = (
-                    "this account's personal space has no folder on the NAS yet "
-                    "(homes/<user>/Photos) (117). Open Synology Photos once as this user, "
-                    "or create a folder with photo_folder and upload into it."
+                    "this account's personal space has no folder on the NAS "
+                    "(homes/<user>/Photos; 117). Create a folder with photo_folder and "
+                    "upload into it, or open Synology Photos once as this user."
                 )
             rows.append((path.name, "failed", note))
             continue
