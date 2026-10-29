@@ -35,6 +35,7 @@ SPECS = {
     "system": "system-module-spec.md",
     "downloadstation": "downloadstation-module-spec.md",
     "photos": "photos-module-spec.md",
+    "storage": "storage-module-spec.md",
 }
 
 _HEADING = re.compile(r"^### \d+\. `([a-z_]+)`", re.M)

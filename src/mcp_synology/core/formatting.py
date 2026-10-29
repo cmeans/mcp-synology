@@ -275,3 +275,43 @@ def format_timestamp(epoch: float) -> str:
     """
     dt = datetime.datetime.fromtimestamp(epoch, tz=datetime.UTC)
     return dt.strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
+_DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+
+# DSM's weekly plans (Download Station's schedule, Storage Manager's scrubbing,
+# reclamation and deduplication windows): day-major Sun..Sat, 24 chars per day,
+# one char per hour (verified from DSM's SYNO.ux.ScheduleTable widget, #123).
+SCHEDULE_PLAN_LENGTH = 7 * 24
+
+
+def weekly_plan_grid(plan: str, glyphs: dict[str, str], legend: str) -> str:
+    """Render a DSM weekly plan as a 7 × 24 text grid.
+
+    ``glyphs`` maps each plan character to its cell, and ``legend`` explains them.
+    A malformed plan is rendered rather than rejected: missing or unrecognized
+    cells show as '?' and a note names the problem.
+    """
+    hour_header = "     " + " ".join(f"{h:02d}" for h in range(24))
+    lines = [hour_header]
+    for day_idx, name in enumerate(_DAY_NAMES):
+        day_slice = plan[day_idx * 24 : (day_idx + 1) * 24].ljust(24, "?")
+        # Two spaces between cells: each cell sits under its 2-digit hour label.
+        cells = "  ".join(glyphs.get(ch, "?") for ch in day_slice)
+        lines.append(f"{name}  {cells}")
+
+    lines.append("")
+    lines.append(legend)
+    lines.append("Hours are the NAS's local time.")
+    if len(plan) != SCHEDULE_PLAN_LENGTH:
+        lines.append(
+            f"Note: stored plan is malformed ({len(plan)} chars, expected "
+            f"{SCHEDULE_PLAN_LENGTH}); '?' marks unreadable hours."
+        )
+    elif set(plan) - set(glyphs):
+        valid = "/".join(sorted(glyphs))
+        lines.append(
+            f"Note: stored plan is malformed (contains values other than {valid}); "
+            "'?' marks unreadable hours."
+        )
+    return "\n".join(lines)

@@ -1138,6 +1138,7 @@ class TestWithheldToolsNotice:
                 "system": {"enabled": True, "permission": "write"},
                 "downloadstation": {"enabled": True, "permission": "write"},
                 "photos": {"enabled": True, "permission": "write"},
+                "storage": {"enabled": True},
             }
         )
         assert "PERMISSIONS" not in text
@@ -1280,6 +1281,7 @@ ALL_MODULES: dict[str, Any] = {
     "system": {"enabled": True},
     "downloadstation": {"enabled": True, "permission": "write"},
     "photos": {"enabled": True, "permission": "write"},
+    "storage": {"enabled": True},
 }
 
 
@@ -1557,7 +1559,7 @@ class TestServedSchemas:
 
     async def test_client_sees_no_titles_or_null_unions(self) -> None:
         tools, _ = await _served(create_server(make_test_config(modules=ALL_MODULES)))
-        assert len(tools) == 48
+        assert len(tools) == 59
         for tool in tools:
             for node in _walk(tool.input_schema):
                 if isinstance(node, dict):
@@ -1770,7 +1772,10 @@ class TestInstructionComments:
 # Raised by #422 to 49,963 (+81): pause_download says its per-task refusals happen only
 # when something else in the call can be paused, and that a lone finished or
 # already-paused task fails the whole call (#421, 0.10.0rc10 live test).
-PAYLOAD_BUDGET_CHARS = 49_963
+# Raised by #49 to 55,411 (+5,448): the opt-in Storage module's 11 READ tools and its
+# instructions section (the administrator requirement). A connection without Storage
+# enabled doesn't carry them.
+PAYLOAD_BUDGET_CHARS = 55_411
 
 
 class TestPayloadBudget:
