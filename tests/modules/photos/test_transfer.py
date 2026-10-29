@@ -1003,7 +1003,8 @@ class TestUploadPersonalRootFolder:
     @pytest.mark.parametrize("answer", ["dsm-error", "no-answer"])
     async def test_setting_user_failing_isnt_resent(self, tmp_path: Path, answer: str) -> None:
         """A DSM error or no answer from Setting.User: the upload's own 117 is reported,
-        not a transport error with the other files left untried."""
+        not a transport error with the other files left untried. After no answer the call
+        may have created the folder (b.jpg lands there), so the row says to upload again."""
         reply = (
             self._timeout
             if answer == "no-answer"
@@ -1016,6 +1017,8 @@ class TestUploadPersonalRootFolder:
         assert sent == 2  # a.jpg once, then b.jpg
         lines = out.splitlines()
         assert "homes/<user>/Photos; 117" in lines[1] and "failed" in lines[1]
+        maybe = "so the folder may exist now. Upload this file again; if it fails the same way"
+        assert (maybe in lines[1]) is (answer == "no-answer")
         assert lines[2].split()[:2] == ["b.jpg", "new"]
 
     async def test_resend_keeps_the_transient_retry(self, tmp_path: Path) -> None:

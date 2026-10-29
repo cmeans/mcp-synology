@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from mcp.server.mcpserver import MCPServer
 from pydantic import ValidationError
 
+import mcp_synology.modules.photos as photos_pkg
 from mcp_synology.modules import PermissionTier, RegisterContext
 from mcp_synology.modules.photos import MODULE_INFO, PhotosSettings, register
 
@@ -91,6 +94,18 @@ def test_only_allowed_tools() -> None:
 def test_only_browse_item_and_folder_required() -> None:
     required = {r.api_name for r in MODULE_INFO.required_apis if not r.optional}
     assert required == {"SYNO.Foto.Browse.Item", "SYNO.Foto.Browse.Folder"}
+
+
+def test_every_api_called_is_declared() -> None:
+    """Each SYNO.Foto API the module calls is in required_apis (and so in the spec's
+    ApiRequirement block): #440 QA found Setting.User missing."""
+    src = Path(photos_pkg.__file__ or "").parent
+    used = set()
+    for path in src.glob("*.py"):
+        used |= set(re.findall(r'ph\.[a-z_]+\("([A-Z][A-Za-z.]+)"', path.read_text()))
+    assert "Setting.User" in used
+    declared = {r.api_name for r in MODULE_INFO.required_apis}
+    assert {f"SYNO.Foto.{name}" for name in used} <= declared
 
 
 def test_task_timeout_bounds() -> None:

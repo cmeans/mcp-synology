@@ -292,6 +292,19 @@ they exist only in the personal space, so album tools take no `space`.
 
 **What to do:** update DSM and Synology Photos. See [not_supported](error-codes.md#not_supported).
 
+### `upload_photos` says the personal space "has no folder on the NAS" (117)
+
+**Why:** the account has never used Synology Photos, so its folder on disk,
+`homes/<user>/Photos`, doesn't exist yet. Creating the user, granting the Photos privilege
+and logging in to DSM don't create it. `upload_photos` already makes the call the Photos web
+app makes at sign-in, which creates it for an account with no photos, and resends the file;
+this row means that didn't help, most likely because the account had photos once and its
+folder was deleted.
+
+**What to do:** create a folder with `photo_folder` and upload into it, or open Synology
+Photos once as this user. If the row says the call that creates the folder got no answer,
+upload the file again first.
+
 ### Photos tools fail with DSM error 602 or 901
 
 **Why:** 602: the account has no personal space, because the user home service is off. 901

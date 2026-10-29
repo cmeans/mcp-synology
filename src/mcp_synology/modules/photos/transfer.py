@@ -352,9 +352,12 @@ async def upload_photos(
     # (inferred: Shared Space wasn't probed).
     personal_root = sp == "personal" and target.get("name") == "/"
     prepared = False
+    # No answer from Setting.User: the call may still have created the folder, so a later
+    # file can land where this one couldn't. The row says so rather than "no folder".
+    unanswered = False
 
     async def prepare_root() -> bool:
-        nonlocal prepared
+        nonlocal prepared, unanswered
         if not personal_root or prepared:
             return False
         prepared = True
@@ -362,6 +365,7 @@ async def upload_photos(
             await ph.call("Setting.User", "get", personal=True)
         except (SynologyError, httpx.TransportError) as e:
             logger.debug("Photos Setting.User get failed: %s", type(e).__name__)
+            unanswered = isinstance(e, httpx.TransportError)
             return False
         return True
 
@@ -414,7 +418,15 @@ async def upload_photos(
         except SynologyError as e:
             code = f" ({e.code})" if e.code else ""
             note = f"{e}{code}"
-            if e.code == 117 and personal_root:
+            if e.code == 117 and personal_root and unanswered:
+                note = (
+                    "this account's personal space had no folder on the NAS "
+                    "(homes/<user>/Photos; 117), and the call that creates it got no answer, "
+                    "so the folder may exist now. Upload this file again; if it fails the "
+                    "same way, create a folder with photo_folder and upload into it, or open "
+                    "Synology Photos once as this user."
+                )
+            elif e.code == 117 and personal_root:
                 note = (
                     "this account's personal space has no folder on the NAS "
                     "(homes/<user>/Photos; 117). Create a folder with photo_folder and "
