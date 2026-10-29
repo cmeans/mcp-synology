@@ -50,6 +50,7 @@ modules:
   system: {enabled: true}
   downloadstation: {enabled: true, permission: write}
   photos: {enabled: true, permission: write}
+  storage: {enabled: true}
 """
 
 

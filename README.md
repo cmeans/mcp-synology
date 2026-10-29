@@ -43,7 +43,7 @@ Each module covers one DSM package. A module loads only when it's listed under `
 | [File Station](#file-station) | `filestation` | 7 · 🟢 Most | 8 · 🟡 Partial | Any | 7.1 – 7.4.1 |
 | [Synology Photos](#synology-photos) | `photos` | 4 · 🟢 Most | 15 · 🟢 Most | Any, with the Photos privilege | 7.1 – 7.4.1 (favorites and concepts: 7.2.2+) |
 | [Download Station](#download-station) | `downloadstation` | 5 · 🟢 Most | 7 · 🟡 Partial | Any, with the Download Station privilege (non-admins see only their own tasks) | 7.1 – 7.4.1 |
-| [Storage](#coming-next) | `storage` | *11 planned* | *planned (phase 2)* | Admin only | — |
+| [Storage](#storage) | `storage` | 11 · 🟢 Most | — | Admin only | 7.1 – 7.4.1 |
 | [Container Manager](#coming-next) | — | *planned* | *planned* | — | — |
 
 **Coverage**, per tier, of what the package itself can do: ✅ **Full**: everything; 🟢 **Most**: the main features, with gaps listed under the module; 🟡 **Partial**: the core features, with notable gaps; — no tools in that tier.
@@ -54,6 +54,7 @@ What's not covered yet, in short:
 - **File Station:** compress and extract, share links, favorites, thumbnails, MD5 checksums, permissions and ownership changes, mounting remote folders.
 - **Synology Photos:** timeline and similar-photo views, video streaming, Shared Space folder permissions, face-level People edits, guest uploads to photo requests, Photos' own settings.
 - **Download Station:** BT search, RSS feeds, choosing files inside a torrent, editing a torrent's trackers, settings other than speed limits and the default destination.
+- **Storage:** no WRITE tools yet (phase 2: scrubbing, S.M.A.R.T. tests, hot spares, settings, snapshots); iSCSI LUNs and SAN Manager, Hyper Backup and Task Scheduler (modules of their own later). Never anything that wipes disks or changes a pool's layout.
 
 ### Tested clients
 
@@ -69,7 +70,7 @@ A client can change the outcome on its own: the same model does less well throug
 
 ### Tested models
 
-**For best results, use Claude Sonnet 5.5 or better.** To compare models, we held the client fixed: headless Claude Code (server instructions and full tool schemas delivered, no other tools), the same 12 tasks across all four modules, on a DSM 7.2.2 test NAS restored fresh for each model, as a non-admin user (2026-10-28).
+**For best results, use Claude Sonnet 5.5 or better.** To compare models, we held the client fixed: headless Claude Code (server instructions and full tool schemas delivered, no other tools), the same 12 tasks across System, File Station, Synology Photos and Download Station (Storage came later), on a DSM 7.2.2 test NAS restored fresh for each model, as a non-admin user (2026-10-28).
 
 | Model | Tasks completed |
 |---|---|
@@ -365,9 +366,33 @@ modules:
 
 Spec: [`docs/specs/downloadstation-module-spec.md`](docs/specs/downloadstation-module-spec.md).
 
+### Storage
+
+See the health of the NAS's storage: storage pools and RAID, volumes and free space, disks with S.M.A.R.T., SSD caches, external drives and share snapshots.
+
+- **READ:** `get_storage_overview`, `list_storage_pools`, `list_volumes`, `get_volume`, `list_disks`, `get_disk`, `list_ssd_caches`, `get_storage_schedules`, `get_storage_settings`, `list_external_storage`, `list_snapshots`
+- **WRITE:** none yet (phase 2)
+
+```yaml
+modules:
+  storage:
+    enabled: true   # no write tools yet, so no permission is needed
+```
+
+**Settings:** none.
+
+**Tools.** Start with `get_storage_overview`: DSM's own status summary, every pool, volume, disk and SSD cache in one line each, anything that needs attention (a degraded pool, a failing disk, a nearly full volume) and the storage tasks running or scheduled next. The others give one area in full, with every field DSM sends: `get_disk` adds every S.M.A.R.T. attribute, test results and history and a 12-month health trend; `get_volume` adds space by category, TRIM, deduplication and the attached SSD cache.
+
+**Accounts.** An administrator account only: Storage Manager answers no other account, so with any other account every tool returns `permission_denied`. `list_snapshots` also needs the Snapshot Replication package.
+
+**DSM versions:** 7.1 – 7.4.1, the same tools on each. A volume's encryption and lock state, a snapshot's immutable flag and the drive database version appear from DSM 7.2.2. A section a NAS doesn't support (deduplication on some models, for example) is left out with a note.
+
+**Not covered:** no WRITE tools yet: phase 2 plans data scrubbing, S.M.A.R.T. tests, hot spares, storage settings, TRIM and snapshot management. iSCSI LUNs and SAN Manager, Hyper Backup and Task Scheduler will be modules of their own. Anything that wipes disks or changes a pool's layout (creating, deleting, expanding or repairing pools and volumes, secure erase) is left out on purpose.
+
+Spec: [`docs/specs/storage-module-spec.md`](docs/specs/storage-module-spec.md).
+
 ### Coming next
 
-- **Storage** (#49): storage pools, volumes, disks with S.M.A.R.T. and health, SSD caches, external drives and share snapshots. Phase 1 is 11 READ tools ([spec](docs/specs/storage-module-spec.md)); phase 2 adds WRITE tools. Its APIs are administrator-only.
 - **Container Manager** (#268).
 
 ## Features
