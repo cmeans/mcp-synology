@@ -152,16 +152,18 @@ Note: `--no-cov` is recommended for vdsm runs since the coverage floor (95%) app
 
 ### Supported DSM Versions
 
-| Version | Build | PAT |
-|---------|-------|-----|
-| 7.0.1   | 42218 | VirtualDSM_42218.pat |
-| 7.1     | 42661 | VirtualDSM_42661.pat |
-| 7.2.1   | 69057 | VirtualDSM_69057.pat |
-| 7.2.2   | 72806 | VirtualDSM_72806.pat (default) |
-| 7.3.2   | 86009 | VirtualDSM_86009.pat |
-| 7.4.1   | 90080 | VirtualDSM_90080.pat |
+| Version (`--version`) | DSM | Build | Update | PAT |
+|---------|-----|-------|--------|-----|
+| 7.0.1   | 7.0.1 | 42218 | — | VirtualDSM_42218.pat |
+| 7.1     | 7.1.1 | 42962 | 9 | VirtualDSM_42962.pat |
+| 7.2.1   | 7.2.1 | 69057 | — | VirtualDSM_69057.pat |
+| 7.2.2   | 7.2.2 | 72806 | 10 | VirtualDSM_72806.pat (default) |
+| 7.3.2   | 7.3.2 | 86009 | 5 | VirtualDSM_86009.pat |
+| 7.4.1   | 7.4.1 | 90080 | 1 | VirtualDSM_90080.pat |
 
-CI runs 7.1, 7.2.2, 7.3.2 and 7.4.1 (#307); 7.0.1 and 7.2.1 are defined but not baked or tested.
+CI runs 7.1, 7.2.2, 7.3.2 and 7.4.1 (#307); 7.0.1 and 7.2.1 are defined but not baked or tested. The `7.1` image runs 7.1.1 since bake v9 (7.1-42661 before), the release Synology's 7.1 updates are for.
+
+Since bake v9, the bake installs the update in the Update column (`DsmVersionInfo.update` in `tests/vdsm/config.py`) right after enabling SSH, before the packages: the guest downloads Synology's update pack, `synoupgrade --check-pat` and `--patch` install it, and the bake reboots and checks `smallfixnumber`. `meta.json` records the build, the update and the version string DSM reports (`firmware_ver`), and `test_vdsm_bake.py` checks the restored image still reports it. When Synology ships a newer update, change the number and bump `BAKE_VERSION`. The virtual-dsm container image is pinned too (`VDSM_IMAGE`); move the pin in a bake change, not by pulling `latest`.
 
 ### How It Works
 

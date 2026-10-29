@@ -17,6 +17,7 @@ from tests.vdsm.config import (
     DSM_API_POLL_INTERVAL,
     DSM_BOOT_TIMEOUT,
     DSM_VERSIONS,
+    VDSM_IMAGE,
     DsmVersionInfo,
 )
 
@@ -115,7 +116,7 @@ class VirtualDsmContainer:
         os.environ.setdefault("TESTCONTAINERS_RYUK_DISABLED", "true")
         self.storage_dir.mkdir(parents=True, exist_ok=True)
 
-        container = DockerContainer("vdsm/virtual-dsm")
+        container = DockerContainer(VDSM_IMAGE)
         container.with_env("DISK_SIZE", CONTAINER_DISK_SIZE)
         container.with_env("URL", self.version_info.pat_url)
         container.with_env("RAM_SIZE", CONTAINER_RAM)

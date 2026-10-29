@@ -84,3 +84,25 @@ def test_every_dsm_version_has_a_bake_timezone() -> None:
 
     assert set(DSM_TIMEZONES) == set(PHOTOS_PACKAGES)
     assert "GMT" in DSM_TIMEZONES.values()  # one image covers UTC
+
+
+def test_every_baked_dsm_version_has_an_update() -> None:
+    # Bake v9 installs each baked version's latest update; a version CI tests without
+    # one would silently run the bare release. The pack URL is the build's own.
+    from tests.vdsm.config import DSM_TIMEZONES, DSM_VERSIONS
+
+    for version in DSM_TIMEZONES:
+        info = DSM_VERSIONS[version]
+        assert info.update > 0, version
+        assert f"/update_pack/{info.build}-{info.update}/" in info.update_url
+        assert f"/{info.build}/DSM_VirtualDSM_{info.build}.pat" in info.pat_url
+    assert DSM_VERSIONS["7.1"].pat_url.endswith("/7.1.1/42962/DSM_VirtualDSM_42962.pat")
+
+
+def test_vdsm_image_is_pinned() -> None:
+    from tests.vdsm.config import VDSM_IMAGE
+
+    repo, _, tag = VDSM_IMAGE.partition(":")
+    assert repo == "vdsm/virtual-dsm"
+    assert tag
+    assert tag != "latest"

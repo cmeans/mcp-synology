@@ -17,6 +17,17 @@ class DsmVersionInfo:
     version: str
     build: str
     pat_url: str
+    # The DSM update the bake installs on top of the release (its smallfixnumber),
+    # 0 for none. Synology's update packs are deltas for one build.
+    update: int = 0
+
+    @property
+    def update_url(self) -> str:
+        """The VirtualDSM update pack for ``update`` (only meaningful when it's set)."""
+        return (
+            "https://global.synologydownload.com/download/DSM/criticalupdate/update_pack"
+            f"/{self.build}-{self.update}/synology_kvmx64_virtualdsm.pat"
+        )
 
 
 DSM_VERSIONS: dict[str, DsmVersionInfo] = {
@@ -28,13 +39,16 @@ DSM_VERSIONS: dict[str, DsmVersionInfo] = {
             "/7.0.1/42218/DSM_VirtualDSM_42218.pat"
         ),
     ),
+    # 7.1.1 since bake v9 (7.1-42661 before): Synology's 7.1 updates are for 7.1.1, the
+    # release seska runs. The key stays "7.1", as CI's matrix and the image names use it.
     "7.1": DsmVersionInfo(
         version="7.1",
-        build="42661",
+        build="42962",
         pat_url=(
             "https://global.synologydownload.com/download/DSM/release"
-            "/7.1/42661/DSM_VirtualDSM_42661.pat"
+            "/7.1.1/42962/DSM_VirtualDSM_42962.pat"
         ),
+        update=9,
     ),
     "7.2.1": DsmVersionInfo(
         version="7.2.1",
@@ -51,6 +65,7 @@ DSM_VERSIONS: dict[str, DsmVersionInfo] = {
             "https://global.synologydownload.com/download/DSM/release"
             "/7.2.2/72806/DSM_VirtualDSM_72806.pat"
         ),
+        update=10,
     ),
     "7.3.2": DsmVersionInfo(
         version="7.3.2",
@@ -59,6 +74,7 @@ DSM_VERSIONS: dict[str, DsmVersionInfo] = {
             "https://global.synologydownload.com/download/DSM/release"
             "/7.3.2/86009/DSM_VirtualDSM_86009.pat"
         ),
+        update=5,
     ),
     "7.4.1": DsmVersionInfo(
         version="7.4.1",
@@ -67,6 +83,7 @@ DSM_VERSIONS: dict[str, DsmVersionInfo] = {
             "https://global.synologydownload.com/download/DSM/release"
             "/7.4.1/90080/DSM_VirtualDSM_90080.pat"
         ),
+        update=1,
     ),
 }
 
@@ -95,7 +112,14 @@ DEFAULT_DSM_VERSION: str = "7.2.2"
 #   v8: Snapshot Replication (ReplicationService), for share snapshots in the coming
 #       Storage module (#49): its vdsm tests take and list snapshots, as on a real NAS
 #       with the package.
-BAKE_VERSION: int = 8
+#   v9: the latest DSM update for each version (DsmVersionInfo.update), installed
+#       before the packages, and 7.1 moves to 7.1.1-42962; the virtual-dsm container
+#       image is pinned (VDSM_IMAGE). meta.json records the firmware version DSM reports.
+BAKE_VERSION: int = 9
+
+# The virtual-dsm container image, pinned so a new upstream release can't change the
+# VM a bake or a test run boots without a bake change.
+VDSM_IMAGE: str = "vdsm/virtual-dsm:7.66"
 
 # The timezone each golden image runs in, as SYNO.Core.Region.NTP names it
 # (listzone). Tests read the NAS's zone rather than assume one; between them
