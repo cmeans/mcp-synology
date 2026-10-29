@@ -1027,6 +1027,18 @@ class TestUploadPersonalRootFolder:
         assert sent == 3
         assert "new      id 5" in out
 
+    async def test_delayed_retry_gets_setting_user(self, tmp_path: Path) -> None:
+        """A 117 on the delayed retry after a transient code still calls Setting.User (#440
+        QA): a new account on a freshly booted NAS can meet 623 first, then 117."""
+        fake = self._root()
+        busy = {"success": False, "error": {"code": 623}}
+        out, sent = await self._upload(
+            tmp_path, busy, _NO_FOLDER, _NEW, _NEW, fake=fake, names=("a.jpg", "b.jpg")
+        )
+        assert sent == 4  # a.jpg 623, a.jpg 117, a.jpg after Setting.User, b.jpg
+        assert len(fake.of("SYNO.Foto.Setting.User")) == 1
+        assert out.splitlines()[0] == "Uploaded 2 of 2 file(s) to / (personal space)"
+
     @pytest.mark.parametrize("where", ["subfolder", "shared"])
     async def test_not_the_personal_root(self, tmp_path: Path, where: str) -> None:
         """A subfolder's existence means the space's folder exists, and Shared Space's root

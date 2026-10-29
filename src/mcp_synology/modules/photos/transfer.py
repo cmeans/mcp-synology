@@ -227,7 +227,8 @@ async def _upload_one(
 ) -> dict[str, Any]:
     """Upload one file; on a 117, ``prepare`` (if given) may fix the cause, then it's resent.
 
-    The resend is an attempt like the first: a transient code it gets is retried once.
+    The resend is an attempt like the first: a transient code it gets is retried once. The
+    delayed retry after a transient code is one too, so a 117 on it still calls ``prepare``.
     """
 
     async def send() -> dict[str, Any]:
@@ -256,7 +257,7 @@ async def _upload_one(
             raise
         logger.info("Photos upload of %s got %s; retrying once", path.name, e.code)
         await asyncio.sleep(UPLOAD_RETRY_DELAY)
-        return await send()
+        return await attempt()
 
 
 _MAX_UPLOAD = 50
