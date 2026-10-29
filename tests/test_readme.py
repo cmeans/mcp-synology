@@ -106,6 +106,15 @@ def test_every_module_is_documented() -> None:
     assert set(SECTIONS) == set(_MODULE_REGISTRY)
 
 
+def test_coverage_table_lists_only_implemented_modules() -> None:
+    """Every row of "Supported modules" is a module the server loads, in the README's
+    order: a planned one (Container Manager was, #441) goes under "Coming next"."""
+    table = README.split("## Supported modules", 1)[1].split("**Coverage**", 1)[0]
+    rows = [line for line in table.splitlines() if line.startswith("| [")]
+    assert [m.group(1) for m in _TABLE_ROW.finditer(table)] == list(SECTIONS)
+    assert len(rows) == len(_MODULE_REGISTRY)
+
+
 @pytest.mark.parametrize("module", sorted(SECTIONS))
 def test_coverage_table_counts(module: str) -> None:
     rows = {m.group(1): (m.group(2), m.group(3)) for m in _TABLE_ROW.finditer(README)}
