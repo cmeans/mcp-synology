@@ -268,8 +268,8 @@ the names in them (`haiku-test`, "Haiku Beach") come from the first run, which w
   install. t08 named a local folder, which `upload_photos` doesn't take. Only the
   rewritten tasks are scored, for both models.
 - **Synology Photos' personal folder already existed** in both scored t08b runs, so
-  neither met #436 (an upload to the personal root fails with 117 until that folder
-  exists). For Haiku, its first attempt had met it; for Sonnet, a setup check had created
+  neither met #436 (an upload to the personal root failed with 117 until that folder
+  existed; fixed in #440). For Haiku, its first attempt had met it; for Sonnet, a setup check had created
   the folder.
 - **One run per task per model.** A rerun can come out differently.
 - **Cost and speed aren't compared.** Both change with pricing and load, outside this
