@@ -84,7 +84,7 @@ versions without a physical NAS.
 
 ### Current Status
 
-The bake sets up everything the suite needs (users, packages, shared folders and seed data on the wizard's `/volume1`), and CI runs the full vdsm suite on DSM 7.1, 7.2.2, 7.3.2 and 7.4.1. No manual setup is needed.
+The bake sets up everything the suite needs (users, packages, shared folders and seed data on the auto-created `/volume1`), and CI runs the full vdsm suite on DSM 7.1, 7.2.2, 7.3.2 and 7.4.1. No manual setup is needed.
 
 ### Requirements
 
@@ -115,10 +115,9 @@ echo y | uv run python scripts/vdsm_setup.py --version 7.2.2 \
 The setup script:
 1. Boots a fresh virtual-dsm container (the pinned `VDSM_IMAGE`) via Podman/Docker
 2. Automates the DSM first-boot wizard via headless Playwright (account, updates, analytics)
-3. Dismisses post-login popups (2FA, MFA promotions) by force-removing them from the DOM
-4. Sets the timezone and enables SSH via the DSM API, then over SSH installs the DSM update and reboots, creates the `mcptest` and `mcpfresh` users (`synouser`), installs Download Station, Synology Photos and Snapshot Replication (`synopkg`), and creates the shared folders and seed data (`synoshare`) (`tests/vdsm/setup_dsm.py:setup_dsm_for_testing`)
-5. Configures Download Station and Photos via the DSM API, and checks each test user's access
-6. Saves a compressed golden image to `.vdsm/golden/`, with its `meta.json`
+3. Sets the timezone and enables SSH via the DSM API, then over SSH installs the DSM update and reboots, creates the `mcptest` and `mcpfresh` users (`synouser`), installs Download Station, Synology Photos and Snapshot Replication (`synopkg`), and creates the shared folders and seed data (`synoshare`) (`tests/vdsm/setup_dsm.py:setup_dsm_for_testing`)
+4. Configures Download Station and Photos via the DSM API, and checks each test user's access
+5. Saves a compressed golden image to `.vdsm/golden/`, with its `meta.json`
 
 Golden images are stored in `.vdsm/golden/` (about 1.2 GB each, gitignored).
 
@@ -158,15 +157,15 @@ Since bake v9, the bake installs the update in the Update column (`DsmVersionInf
 
 ### Known Limitations
 
-- **Users and shares over SSH** — `SYNO.Core.User`, `SYNO.Core.Share` and `SYNO.Core.Share.Permission` answered 105/403 on virtual-dsm even with an admin session, so the bake creates users and shared folders with `synouser` and `synoshare` in the guest over SSH.
+- **Users and shares over SSH** — the write methods of `SYNO.Core.User`, `SYNO.Core.Share` and `SYNO.Core.Share.Permission` (creating users and shares, setting permissions) answered 105/403 on virtual-dsm even with an admin session, so the bake creates users and shared folders with `synouser` and `synoshare` in the guest over SSH.
 - **DSM password policy** — DSM 7.2.2 requires "Strong" passwords (blocks "Moderate"). The test user password is `Mcp#Test9!xK27zQ`.
 
 ## Design Docs
 
-Detailed specs live in `docs/specs/`. These were the original design documents — the code is authoritative where they diverge (e.g., DSM API version pinning, GET-only requests, and search behavior were discovered during live testing and are documented in `CLAUDE.md`).
+Detailed specs live in `docs/specs/`. These were the original design documents — the code is authoritative where they diverge (e.g., DSM API version pinning, the transport each call uses, and search behavior were discovered during live testing and are documented in `CLAUDE.md`).
 
 - `architecture.md` — layered architecture, auth strategy, session lifecycle
-- `filestation-module-spec.md` — all 14 File Station tools (7 READ + 7 WRITE)
+- `filestation-module-spec.md` — all 15 File Station tools (7 READ + 8 WRITE)
 - `config-schema-spec.md` — YAML config structure and validation
 - `project-scaffolding-spec.md` — repo structure, CI, testing
 

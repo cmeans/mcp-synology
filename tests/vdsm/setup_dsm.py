@@ -8,13 +8,11 @@ Includes:
   packages (synopkg) and the shared folders with their seed data
   (synoshare), then Download Station and Photos settings via the DSM API
 
-SYNO.Core.User, SYNO.Core.Share and SYNO.Core.Share.Permission answered
-105/403 on virtual-dsm, so users and shared folders are made with DSM's own
-CLIs in the guest; synoshare registers proper DSM shared folders visible to
-FileStation.
-
-DSM 7 uses a windowed desktop UI with frequent overlay masks. Clicks use
-JavaScript dispatch or Playwright's force=True to bypass overlay interception.
+The write methods of SYNO.Core.User, SYNO.Core.Share and
+SYNO.Core.Share.Permission (creating users and shares, setting permissions)
+answered 105/403 on virtual-dsm, so users and shared folders are made with
+DSM's own CLIs in the guest; synoshare registers proper DSM shared folders
+visible to FileStation.
 """
 
 from __future__ import annotations
