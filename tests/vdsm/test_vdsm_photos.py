@@ -44,13 +44,14 @@ from mcp_synology.modules.photos.tasks import (
     photo_task,
 )
 from mcp_synology.modules.photos.transfer import download_photos, upload_photos
-from tests.vdsm.conftest import _ssh
+from tests.vdsm.conftest import _ssh, _user_session
 from tests.vdsm.golden_image import load_golden_meta, photos_skip_reason
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Sequence
 
     from mcp_synology.core.client import DsmClient
+    from mcp_synology.core.config import AppConfig
     from tests.vdsm.container import VirtualDsmContainer
 
 pytestmark = pytest.mark.vdsm
@@ -591,6 +592,70 @@ async def test_upload_continues_with_the_paths_not_tried(photos: DsmClient, tmp_
             photos, local_paths=paths, folder=path, on_duplicate="skip", allowed_roots=[tmp_path]
         )
         assert out.startswith("Uploaded 0 of 10 file(s) (10 skipped, already there)"), out
+
+
+async def test_upload_to_a_new_accounts_personal_root(
+    admin_client: Any,
+    vdsm_container: VirtualDsmContainer,
+    vdsm_config: tuple[AppConfig, dict[str, str]],
+    dsm_version: str,
+    dsm_transport: str,
+    photos_apis: None,
+) -> None:
+    """#436: an account that has never used Photos has no homes/<user>/Photos, and an
+    upload to its personal root answered 117 until Setting.User get created the folder.
+
+    The account is made here (the golden image's test user may already have the folder
+    from other tests): synouser, then the Photos privilege, as the bake does.
+    """
+    admin: DsmClient = admin_client[0]
+    if photos_skip_reason(load_golden_meta(dsm_version), admin.api_cache):
+        pytest.skip("Synology Photos isn't in this golden image")
+    ssh_password = str(load_golden_meta(dsm_version)["admin_password"])
+    user = f"t436{uuid.uuid4().hex[:6]}"
+    password = f"T436-{uuid.uuid4().hex[:8]}!"
+    folder = f"/volume1/homes/{user}/Photos"
+
+    def has_folder() -> bool:
+        # The home is drwx--x--x, so the SSH user can test the path without sudo.
+        rc, out = _ssh(vdsm_container, ssh_password, f"test -d {folder}", 30, sudo=False)
+        assert rc in (0, 1), out
+        return rc == 0
+
+    rc, out = _ssh(
+        vdsm_container,
+        ssh_password,
+        f"/usr/syno/sbin/synouser --add {user} {shlex.quote(password)} t436 0 '' 0",
+        60,
+    )
+    assert rc == 0, out
+    try:
+        rule = {
+            "entity_type": "user",
+            "entity_name": user,
+            "app_id": "SYNO.Foto.AppInstance",
+            "allow_ip": ["0.0.0.0"],
+            "deny_ip": [],
+        }
+        await admin.request("SYNO.Core.AppPriv.Rule", "set", 1, {"rules": json.dumps([rule])})
+        config, test_paths = vdsm_config
+        account = config.model_copy(
+            update={
+                "instance_id": f"{config.instance_id}-t436",
+                "auth": config.auth.model_copy(update={"username": user, "password": password}),
+            }
+        )
+        async for client, *_ in _user_session(
+            account, test_paths, dsm_version, "new Photos user", dsm_transport
+        ):
+            assert not has_folder(), "the new account already has its Photos folder"
+            out = await upload_photos(
+                client, local_paths=[str(SEED / "beach-sunset.jpg")], allowed_roots=[SEED]
+            )
+            assert out.startswith("Uploaded 1 of 1 file(s) to / (personal space)"), out
+            assert has_folder()
+    finally:
+        _ssh(vdsm_container, ssh_password, f"/usr/syno/sbin/synouser --del {user}", 60)
 
 
 async def test_copy_move_delete(photos: DsmClient) -> None:

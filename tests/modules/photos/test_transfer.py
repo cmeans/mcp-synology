@@ -823,10 +823,10 @@ class TestUpload:
             (tmp_path / name).write_bytes(b"x")
         real = transfer._upload_one
 
-        async def flaky(client: Any, api: Any, fields: dict[str, Any], path: Path) -> Any:
+        async def flaky(client: Any, api: Any, fields: dict[str, Any], path: Path, *a: Any) -> Any:
             if path.name == "a.jpg":
                 raise PermissionError(13, "Permission denied")
-            return await real(client, api, fields, path)
+            return await real(client, api, fields, path, *a)
 
         monkeypatch.setattr(transfer, "_upload_one", flaky)
         fake = FakePhotos().on("SYNO.Foto.Browse.Folder", "get", 2, captured("folder-get-root"))
@@ -887,8 +887,16 @@ class TestUploadRetry:
 
         monkeypatch.setattr(transfer, "UPLOAD_RETRY_DELAY", 0)
 
-    async def _upload(self, tmp_path: Path, *answers: dict[str, Any]) -> tuple[str, int]:
-        (tmp_path / "a.jpg").write_bytes(b"x")
+    async def _upload(
+        self,
+        tmp_path: Path,
+        *answers: dict[str, Any],
+        fake: FakePhotos | None = None,
+        names: tuple[str, ...] = ("a.jpg",),
+        **kwargs: Any,
+    ) -> tuple[str, int]:
+        for name in names:
+            (tmp_path / name).write_bytes(b"x")
         replies = iter(answers)
         sent: list[int] = []
 
@@ -896,14 +904,18 @@ class TestUploadRetry:
             sent.append(1)
             return httpx.Response(200, json=next(replies))
 
-        fake = FakePhotos().on("SYNO.Foto.Browse.Folder", "get", 2, captured("folder-get-root"))
+        if fake is None:
+            fake = FakePhotos().on("SYNO.Foto.Browse.Folder", "get", 2, captured("folder-get-root"))
         fake.multipart = multipart
         with respx.mock:
             install(fake)
             client = make_client()
             async with client:
                 out = await upload_photos(
-                    client, local_paths=[str(tmp_path / "a.jpg")], allowed_roots=[tmp_path]
+                    client,
+                    local_paths=[str(tmp_path / n) for n in names],
+                    allowed_roots=[tmp_path],
+                    **kwargs,
                 )
         return out, len(sent)
 
@@ -930,3 +942,79 @@ class TestUploadRetry:
         )
         assert sent == 2
         assert "failed" in out and "(623)" in out
+
+
+_NO_FOLDER = {"success": False, "error": {"code": 117}}
+_NEW = {"success": True, "data": {"action": "new", "id": 5}}
+
+
+class TestUploadPersonalRootFolder:
+    """#436: an account that has never used Photos has no homes/<user>/Photos yet, and
+    every upload to the personal root answers 117 until Setting.User get creates it."""
+
+    @pytest.fixture(autouse=True)
+    def _no_delay(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from mcp_synology.modules.photos import transfer
+
+        monkeypatch.setattr(transfer, "UPLOAD_RETRY_DELAY", 0)
+
+    _upload = TestUploadRetry._upload
+
+    @staticmethod
+    def _root(*setting_user: Any) -> FakePhotos:
+        fake = FakePhotos().on("SYNO.Foto.Browse.Folder", "get", 2, captured("folder-get-root"))
+        return fake.on(
+            "SYNO.Foto.Setting.User", "get", 1, *(setting_user or (captured("setting-user"),))
+        )
+
+    async def test_setting_user_then_resent(self, tmp_path: Path) -> None:
+        """Verified on vdsm 7.1, 7.2.2, 7.3.2 and 7.4.1: the call creates the folder and an
+        upload right after it succeeds."""
+        fake = self._root()
+        out, sent = await self._upload(
+            tmp_path, _NO_FOLDER, _NEW, _NEW, fake=fake, names=("a.jpg", "b.jpg")
+        )
+        assert sent == 3
+        assert fake.one("SYNO.Foto.Setting.User", "get").params == {}
+        assert out.splitlines()[0] == "Uploaded 2 of 2 file(s) to / (personal space)"
+
+    async def test_still_missing_says_why_once(self, tmp_path: Path) -> None:
+        """Setting.User is called once per call; a 117 isn't retried after a delay, which
+        can't help (the folder was just looked up)."""
+        fake = self._root()
+        out, sent = await self._upload(
+            tmp_path, _NO_FOLDER, _NO_FOLDER, _NO_FOLDER, fake=fake, names=("a.jpg", "b.jpg")
+        )
+        assert sent == 3  # a.jpg, a.jpg after Setting.User, b.jpg
+        assert len(fake.of("SYNO.Foto.Setting.User")) == 1
+        rows = out.splitlines()[1:3]
+        for row in rows:
+            assert "failed" in row
+            assert "no folder on the NAS yet (homes/<user>/Photos) (117)" in row
+            assert "Open Synology Photos once as this user" in row
+
+    async def test_setting_user_failing_isnt_resent(self, tmp_path: Path) -> None:
+        fake = self._root(lambda _p: {"success": False, "error": {"code": 119}})
+        out, sent = await self._upload(tmp_path, _NO_FOLDER, fake=fake)
+        assert sent == 1
+        assert "homes/<user>/Photos" in out
+
+    @pytest.mark.parametrize("where", ["subfolder", "shared"])
+    async def test_not_the_personal_root(self, tmp_path: Path, where: str) -> None:
+        """A subfolder's existence means the space's folder exists, and Shared Space lives
+        in its own shared folder: a 117 there is reported as DSM's, with no extra call."""
+        if where == "subfolder":
+            fake = FakePhotos().on(
+                "SYNO.Foto.Browse.Folder", "get", 2, captured("folder-get-by-name")
+            )
+            kwargs: dict[str, Any] = {"folder": "/Trips"}
+        else:
+            fake = FakePhotos().on(
+                "SYNO.FotoTeam.Browse.Folder", "get", 2, captured("folder-get-root")
+            )
+            kwargs = {"space": "shared"}
+        out, sent = await self._upload(tmp_path, _NO_FOLDER, fake=fake, **kwargs)
+        assert sent == 1
+        assert not fake.of("SYNO.Foto.Setting.User")
+        assert "homes/<user>/Photos" not in out
+        assert "(117)" in out
