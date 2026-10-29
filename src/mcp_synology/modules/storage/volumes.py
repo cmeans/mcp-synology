@@ -10,6 +10,7 @@ from mcp_synology.modules.storage.helpers import (
     STORAGE_API,
     Sections,
     cache_title,
+    cell,
     dicts,
     epoch_note,
     field_text,
@@ -82,7 +83,7 @@ def volume_pairs(volume: dict[str, Any], pools: dict[str, dict[str, Any]]) -> li
         except (TypeError, ValueError):
             free = None
     pairs = [
-        ("ID", str(volume.get("id"))),
+        ("ID", cell(volume.get("id"))),
         ("File system", fs_name(volume.get("fs_type"))),
         ("Size", usage(sizes)),
         ("Free", free or "—"),
@@ -120,7 +121,8 @@ async def list_volumes(client: DsmClient) -> str:
         pairs.append(("UUID", str(volume.get("uuid") or "—")))
         pairs.extend(other_fields(volume, _KNOWN))
         blocks.append(format_key_value(pairs, title=volume_label(volume)))
-    return "\n\n".join(blocks)
+    text = "\n\n".join(blocks)
+    return text + epoch_note(text)
 
 
 def resolve_volume(info: dict[str, Any], volume: str, operation: str) -> dict[str, Any]:

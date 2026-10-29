@@ -165,3 +165,24 @@ async def test_ssd_trim_reply_without_its_key_falls_back() -> None:
 
     text, _ = await run(get_volume, setup=setup, volume="volume_1")
     assert flat("SSD TRIM: support: x1") in flat(text)
+
+
+@pytest.mark.parametrize("fixture", VDSM[2:])  # 7.3.2 and later send dedup_info
+async def test_nested_text_isnt_escaped(fixture: str) -> None:
+    """Pre-QA (QA R1 fix): a zero last_run_time inside dedup_info becomes "—", which
+    json.dumps escaped as \\u2014; nested values are dumped with ensure_ascii=False."""
+    for tool, kwargs in ((list_volumes, {}), (get_volume, {"volume": "/volume1"})):
+        text, _ = await run(tool, fixture, **kwargs)
+        assert '"last_run_time": "—"' in text
+        assert "\\u" not in text
+
+
+async def test_list_volumes_adds_the_epoch_note() -> None:
+    def setup(replay: Replay, _: Any) -> None:
+        load_info_with(
+            replay,
+            lambda data: data["volumes"][0]["dedup_info"].update(last_run_time=1_790_000_000),
+        )
+
+    text, _ = await run(list_volumes, "dsm-7.3.2-vdsm.json", setup=setup)
+    assert "about " in text and EPOCH_NOTE in text

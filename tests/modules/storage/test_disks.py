@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from mcp_synology.modules.storage.disks import get_disk, list_disks, trend_lines
+from mcp_synology.modules.storage.disks import get_disk, list_disks, smart_table, trend_lines
 from tests.modules.storage.dsm import VDSM, Replay, flat, load_info_with, ok, run, run_error
 
 
@@ -103,3 +103,9 @@ async def test_missing_size_is_a_dash() -> None:
 
     text, _ = await run(list_disks, setup=setup)
     assert "None" not in text
+
+
+def test_smart_table_missing_cell_is_a_dash() -> None:
+    """Pre-QA sibling of QA R1 #3: a S.M.A.R.T. attribute without ``raw`` showed None."""
+    table = smart_table({"smartInfo": [{"id": 5, "name": "Reallocated", "current": 100}]})
+    assert "None" not in table and "—" in table

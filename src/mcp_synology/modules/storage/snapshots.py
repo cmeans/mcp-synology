@@ -116,6 +116,8 @@ async def list_snapshots(
                 return await _schedule(client, optional, name)
 
         shown = all_shares[offset : offset + limit]
+        if not all_shares:
+            return "No shared folders."
         if not shown:
             return f"No shared folders at offset {offset} (there are {len(all_shares)})."
         names = [str(s.get("name")) for s in shown]
@@ -158,7 +160,14 @@ async def list_snapshots(
         version=version,
     )
     snaps = [x for x in (reply or {}).get("snapshots") or [] if isinstance(x, dict)]
-    snaps.sort(key=lambda x: snapshot_time(str(x.get("time"))), reverse=True)
+
+    # Newest first; a name that isn't a readable time goes last, under its own name.
+    def newest(x: dict[str, Any]) -> tuple[bool, str]:
+        name = str(x.get("time"))
+        taken = snapshot_time(name)
+        return taken != name, taken
+
+    snaps.sort(key=newest, reverse=True)
     page = snaps[offset : offset + limit]
 
     pairs: list[tuple[str, str]] = [("Snapshots", str(len(snaps)))]

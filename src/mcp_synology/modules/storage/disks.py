@@ -9,9 +9,11 @@ from mcp_synology.modules.storage.helpers import (
     STORAGE_API,
     Sections,
     as_dict,
+    cell,
     check_range,
     dicts,
     disk_label,
+    epoch_note,
     items,
     load_info,
     not_found,
@@ -143,7 +145,8 @@ async def list_disks(client: DsmClient) -> str:
         pairs = disk_pairs(disk, roles.get(str(disk.get("id")), "—"), tasks)
         pairs.extend(other_fields(disk, _KNOWN))
         blocks.append(format_key_value(pairs, title=disk_label(disk)))
-    return "\n\n".join(blocks) + notes_block(optional.notes)
+    text = "\n\n".join(blocks)
+    return text + epoch_note(text) + notes_block(optional.notes)
 
 
 def resolve_disk(info: dict[str, Any], disk: str, operation: str) -> dict[str, Any]:
@@ -181,13 +184,13 @@ def trend_lines(health: Any) -> list[tuple[str, str]]:
 def smart_table(reply: Any) -> str:
     rows = [
         [
-            str(a.get("id")),
-            str(a.get("name")),
-            str(a.get("current")),
-            str(a.get("worst")),
-            str(a.get("threshold")),
-            str(a.get("raw")),
-            str(a.get("status")),
+            cell(a.get("id")),
+            cell(a.get("name")),
+            cell(a.get("current")),
+            cell(a.get("worst")),
+            cell(a.get("threshold")),
+            cell(a.get("raw")),
+            cell(a.get("status")),
         ]
         for a in dicts(as_dict(reply).get("smartInfo"))
     ]
@@ -304,4 +307,5 @@ async def get_disk(client: DsmClient, disk: str, history_limit: int = 10) -> str
     for table in (smart_table(smart), history_table(log)):
         if table:
             parts.append(table)
-    return "\n\n".join(parts) + notes_block(optional.notes)
+    text = "\n\n".join(parts)
+    return text + epoch_note(text) + notes_block(optional.notes)

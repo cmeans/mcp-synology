@@ -316,12 +316,17 @@ def yes_no(value: object) -> str:
     return str(value)
 
 
+def cell(value: object) -> str:
+    """A table cell or a plain value; a missing one is "—", never "None"."""
+    return "—" if value is None or value == "" else str(value)
+
+
 def value_text(value: object) -> str:
     """Any other field's value, shown as DSM sent it."""
     if isinstance(value, bool):
         return "yes" if value else "no"
     if isinstance(value, (dict, list)):
-        return json.dumps(value, separators=(", ", ": "))
+        return json.dumps(value, separators=(", ", ": "), ensure_ascii=False)
     if value == "" or value is None:
         return "—"
     return str(value)

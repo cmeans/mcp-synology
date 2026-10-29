@@ -187,8 +187,8 @@ async def test_impossible_snapshot_name_is_listed() -> None:
         )
 
     text, _ = await run(list_snapshots, REALNAS, setup=setup, share="share01")
-    assert "GMT+00-2026.13.45-99.99.99" in text
-    assert "2026-10-01 12:00:00 UTC" in text
+    # Newest first, and a name that isn't a readable time last.
+    assert text.index("2026-10-01 12:00:00 UTC") < text.index("GMT+00-2026.13.45-99.99.99")
 
 
 async def test_counts_per_share_are_paged() -> None:
@@ -206,3 +206,11 @@ async def test_counts_per_share_are_paged() -> None:
 
     text, _ = await run(list_snapshots, offset=len(names))
     assert text == f"No shared folders at offset {len(names)} (there are {len(names)})."
+
+
+async def test_no_shared_folders() -> None:
+    def setup(replay: Replay, _: Any) -> None:
+        replay.answer(SHARE_LIST, ok({"shares": []}))
+
+    text, _ = await run(list_snapshots, setup=setup)
+    assert text == "No shared folders."

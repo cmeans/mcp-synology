@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from mcp_synology.modules.storage.helpers import (
+    cell,
     is_ui_field,
     percent,
     raid_name,
@@ -40,6 +41,7 @@ def test_sizes_and_percentages() -> None:
     assert size("n/a") == "n/a"
     # A missing size is "—", as usage() and percent() show it (QA R1 #3).
     assert size(None) == "—" and size("") == "—"
+    assert cell(None) == "—" and cell("") == "—" and cell(0) == "0"
     assert to_int("x") is None
     assert percent("1", "4") == "25.0%"
     assert percent("1", "0") == "—"
