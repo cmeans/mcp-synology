@@ -39,8 +39,9 @@ DSM_VERSIONS: dict[str, DsmVersionInfo] = {
             "/7.0.1/42218/DSM_VirtualDSM_42218.pat"
         ),
     ),
-    # 7.1.1 since bake v9 (7.1-42661 before): Synology's 7.1 updates are for 7.1.1, the
-    # release seska runs. The key stays "7.1", as CI's matrix and the image names use it.
+    # 7.1.1 since bake v9 (7.1-42661 before): 7.1-42661's updates stop at Update 4, and
+    # Synology's later 7.1 updates are for 7.1.1, the release seska runs. The key stays
+    # "7.1", as CI's matrix and the image names use it.
     "7.1": DsmVersionInfo(
         version="7.1",
         build="42962",

@@ -106,3 +106,14 @@ def test_vdsm_image_is_pinned() -> None:
     assert repo == "vdsm/virtual-dsm"
     assert tag
     assert tag != "latest"
+
+
+def test_container_boots_the_pinned_image() -> None:
+    # The pin only holds if the container uses it; nothing else names the image.
+    import inspect
+
+    from tests.vdsm import container
+
+    source = inspect.getsource(container)
+    assert "DockerContainer(VDSM_IMAGE)" in source
+    assert source.count("DockerContainer(") == 1

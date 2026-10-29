@@ -105,7 +105,7 @@ The test infrastructure auto-detects the Podman socket at `/run/user/$UID/podman
 
 ### First-Time Setup
 
-Each DSM version needs a one-time golden image creation (~5 min):
+Each DSM version needs a one-time golden image creation:
 
 ```bash
 uv sync --extra dev --extra vdsm
@@ -115,14 +115,14 @@ echo y | uv run python scripts/vdsm_setup.py --version 7.2.2 \
 ```
 
 The setup script:
-1. Boots a fresh virtual-dsm container via Podman/Docker
+1. Boots a fresh virtual-dsm container (the pinned `VDSM_IMAGE`) via Podman/Docker
 2. Automates the DSM first-boot wizard via headless Playwright (account, updates, analytics)
 3. Dismisses post-login popups (2FA, MFA promotions) by force-removing them from the DOM
-4. Creates the `mcptest` test user via the Control Panel User Creation Wizard (Playwright)
-5. Creates test directories and seed data via `docker exec`
-6. Saves a compressed golden image to `.vdsm/golden/`
+4. Sets the timezone and enables SSH via the DSM API, then over SSH installs the DSM update and reboots, creates the `mcptest` and `mcpfresh` users (`synouser`), installs Download Station, Synology Photos and Snapshot Replication (`synopkg`), and creates the shared folders and seed data (`synoshare`) (`tests/vdsm/setup_dsm.py:setup_dsm_for_testing`)
+5. Configures Download Station and Photos via the DSM API, and checks each test user's access
+6. Saves a compressed golden image to `.vdsm/golden/`, with its `meta.json`
 
-Golden images are stored in `.vdsm/golden/` (~865 MB each, gitignored).
+Golden images are stored in `.vdsm/golden/` (about 1.2 GB each, gitignored).
 
 #### Manual Storage Volume Setup (for full 47-test suite)
 
@@ -161,7 +161,7 @@ Note: `--no-cov` is recommended for vdsm runs since the coverage floor (95%) app
 | 7.3.2   | 7.3.2 | 86009 | 5 | VirtualDSM_86009.pat |
 | 7.4.1   | 7.4.1 | 90080 | 1 | VirtualDSM_90080.pat |
 
-CI runs 7.1, 7.2.2, 7.3.2 and 7.4.1 (#307); 7.0.1 and 7.2.1 are defined but not baked or tested. The `7.1` image runs 7.1.1 since bake v9 (7.1-42661 before), the release Synology's 7.1 updates are for.
+CI runs 7.1, 7.2.2, 7.3.2 and 7.4.1 (#307); 7.0.1 and 7.2.1 are defined but not baked or tested. The `7.1` image runs 7.1.1 since bake v9 (7.1-42661 before): 7.1-42661's updates stop at Update 4, and Synology's later 7.1 updates are for 7.1.1.
 
 Since bake v9, the bake installs the update in the Update column (`DsmVersionInfo.update` in `tests/vdsm/config.py`) right after enabling SSH, before the packages: the guest downloads Synology's update pack, `synoupgrade --check-pat` and `--patch` install it, and the bake reboots and checks `smallfixnumber`. `meta.json` records the build, the update and the version string DSM reports (`firmware_ver`), and `test_vdsm_bake.py` checks the restored image still reports it. When Synology ships a newer update, change the number and bump `BAKE_VERSION`. The virtual-dsm container image is pinned too (`VDSM_IMAGE`); move the pin in a bake change, not by pulling `latest`.
 

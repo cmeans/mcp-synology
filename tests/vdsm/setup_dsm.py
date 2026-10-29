@@ -997,6 +997,15 @@ def _boot_id(host: str, ssh_port: int, admin_password: str) -> str | None:
     return out.strip() if rc == 0 and out.strip() else None
 
 
+def _boot_ready(host: str, ssh_port: int, admin_password: str) -> bool:
+    """Whether DSM reports its boot sequence done (False while SSH doesn't answer)."""
+    try:
+        rc, _ = _ssh(host, ssh_port, admin_password, f"{_SYNOBOOTSEQ} --is-ready")
+    except subprocess.TimeoutExpired:  # as in _boot_id
+        return False
+    return rc == 0
+
+
 def _install_dsm_update_via_ssh(
     host: str,
     ssh_port: int,
@@ -1039,6 +1048,9 @@ def _install_dsm_update_via_ssh(
         raise RuntimeError(msg)
 
     before = _boot_id(host, ssh_port, admin_password)
+    if before is None:  # without it, the wait below can't tell the new boot from the old
+        msg = "Couldn't read the guest's boot ID over SSH before the update's reboot"
+        raise RuntimeError(msg)
     with suppress(subprocess.TimeoutExpired):  # the connection drops: rc is meaningless
         _ssh(host, ssh_port, admin_password, "reboot")
     deadline = time.monotonic() + reboot_timeout_sec
@@ -1047,14 +1059,13 @@ def _install_dsm_update_via_ssh(
             msg = f"DSM didn't come back within {reboot_timeout_sec}s of the update's reboot"
             raise RuntimeError(msg)
         time.sleep(DSM_API_POLL_INTERVAL)
-    while _boot_id(host, ssh_port, admin_password) is None or (
-        _ssh(host, ssh_port, admin_password, f"{_SYNOBOOTSEQ} --is-ready")[0] != 0
-    ):
+    while not _boot_ready(host, ssh_port, admin_password):
         if time.monotonic() > deadline:
             msg = f"DSM didn't report boot done within {reboot_timeout_sec}s of the reboot"
             raise RuntimeError(msg)
         time.sleep(DSM_API_POLL_INTERVAL)
-    wait_for_api(base_url)
+    # The rest of the same budget, so the whole wait stays within reboot_timeout_sec.
+    wait_for_api(base_url, timeout=max(1, int(deadline - time.monotonic())))
     installed = _smallfix(host, ssh_port, admin_password)
     if installed != info.update:
         msg = f"After the reboot, smallfixnumber is {installed}, not {info.update}"
