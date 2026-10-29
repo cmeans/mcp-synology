@@ -90,6 +90,7 @@ MODULE_INFO = ModuleInfo(
         ApiRequirement(api_name="SYNO.Foto.Browse.Concept", min_version=2, optional=True),
         ApiRequirement(api_name="SYNO.Foto.Setting.Admin", min_version=1, optional=True),
         ApiRequirement(api_name="SYNO.Foto.Setting.TeamSpace", min_version=1, optional=True),
+        ApiRequirement(api_name="SYNO.Foto.Setting.User", min_version=1, optional=True),
         # Shared Space mirrors (SYNO.FotoTeam.*) are resolved per call, not required.
     ],
     tools=[
