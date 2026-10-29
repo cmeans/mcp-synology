@@ -686,9 +686,10 @@ def _withheld_tools_notice(config: AppConfig, plan: _ModulePlan) -> str:
             fix = f"set `enabled: true` for `{mod_name}`"
         else:
             fix = f"add `{mod_name}` under `modules:`"
+        needs = " (it needs a DSM administrator account)" if mod_name == "storage" else ""
         lines.append(
             f"- The {mod_name} module ({count} tools) is not enabled. The user can "
-            f"{fix} in the mcp-synology config."
+            f"{fix} in the mcp-synology config{needs}."
         )
     if not lines:
         return ""

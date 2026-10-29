@@ -120,10 +120,12 @@ class Sections:
         params: dict[str, Any] | None = None,
         *,
         version: int = 1,
+        refusals: frozenset[int] = frozenset({105}),
     ) -> Any:
         """The reply's data, or None (with a note) when the section can't be read.
 
-        A 105 still fails the whole tool: the account isn't an administrator.
+        A refusal (105; ``USB list`` also answers 404 to a non-admin) still fails the
+        whole tool: the account isn't an administrator.
         """
         if api not in client._api_cache:
             self.notes.append(f"{label}: not available on this NAS")
@@ -131,7 +133,7 @@ class Sections:
         try:
             return await client.request(api, method, version=version, params=params)
         except SynologyError as e:
-            if e.code == 105:
+            if e.code in refusals:
                 refuse_non_admin(self.operation)
             if e.code == NOT_SUPPORTED:
                 self.notes.append(f"{label}: not available on this NAS")
@@ -174,6 +176,19 @@ def items(info: dict[str, Any], key: str) -> list[dict[str, Any]]:
     """A list from ``load_info``; ``ssdCaches`` and ``sharedCaches`` are absent without a
     cache, not empty."""
     return dicts(info.get(key))
+
+
+def check_range(operation: str, param: str, value: int, low: int, high: int | None) -> None:
+    """Refuse an out-of-range paging value before any DSM call, as Photos does."""
+    if value < low or (high is not None and value > high):
+        accepted = f"{low}–{high:,}" if high is not None else f"{low} or more"
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            f"{operation} failed: {param} must be {accepted}.",
+            retryable=False,
+            param=param,
+            value=value,
+        )
 
 
 def not_found(operation: str, kind: str, param: str, value: str, valid: list[str]) -> None:

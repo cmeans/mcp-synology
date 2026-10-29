@@ -147,13 +147,13 @@ So every tool that takes an ID resolves it against `load_info` (disks, pools, vo
 
 ### Feature not supported: 121
 
-**121** looks like "this feature isn't available here" (inferred, from two cases): every `BtrfsDedupe` method answers 121 on the DS1618+ while `get_volume_info` answers `support_dedupe: true` on all four vdsm versions (verified); and `Cache.Protection` answers 121 on all four vdsm versions and on the real NAS, which does have an SSD cache, a read-only one (verified). Why the real NAS refuses `Cache.Protection` isn't known: it may apply only to read-write caches (unverified). The tools don't depend on the reason: a 121 from an optional section leaves that section out with a note (`Deduplication: not available on this NAS`); it never fails the tool. A **103** there (the method doesn't exist on this DSM: `get_latest_online_drive_db_info` on 7.1) gets `not available on this DSM version`, and any other error in an optional section `couldn't be read (DSM error N)`. Only `load_info` (or `Core.Share list` for snapshots) is required: an error there fails the tool.
+**121** looks like "this feature isn't available here" (inferred, from two cases): every `BtrfsDedupe` method answers 121 on the DS1618+ while `get_volume_info` answers `support_dedupe: true` on all four vdsm versions (verified); and `Cache.Protection` answers 121 on all four vdsm versions and on the real NAS, which does have an SSD cache, a read-only one (verified). Why the real NAS refuses `Cache.Protection` isn't known: it may apply only to read-write caches (unverified). The tools don't depend on the reason: a 121 from an optional section leaves that section out with a note (`Deduplication: not available on this NAS`); it never fails the tool. A **103** there (the method doesn't exist on this DSM; expected from `get_latest_online_drive_db_info` on 7.1, where the method is absent, inferred: no capture of that call on 7.1) gets `not available on this DSM version`, and any other error in an optional section `couldn't be read (DSM error N)`. The required calls are `load_info` for the tools built on it, and `Core.Share list` and `Share.Snapshot list` for `list_snapshots`: an error there fails the tool. `get_storage_schedules`, `get_storage_settings` and `list_external_storage` have no required call; each section is optional.
 
 114 and 120 were seen only from calls sent without their parameters during the sweep (inferred: a required parameter missing or invalid). **117 is also a missing or wrong parameter, not only an unknown ID:** `disk_test_log_get` with no device answers 117 on all five captures, `Flashcache shared_cache_config_get` with no parameter answers 117 on 7.2.2+ and with a wrong parameter name on the real NAS, and `Smart get_health_info` with no device answers 117 on 7.1 and the real NAS but 114 on 7.2.2+ (verified). The tools always send the right parameters, so any of 114, 117 or 120 after the ID check is a bug or a race and maps to `dsm_error` with the code.
 
 ### What's shown
 
-Every field DSM sends is shown (maintainer, 2026-10-23, for `get_system_info`: "We should be showing all information that's being provided. Even Serial #."). Known fields get labels and units; any other field is listed under its own name, so a field a newer DSM adds isn't dropped. Serial numbers are shown. UI-only fields (`show_*`, `*_btn*`, `i18nNamingInfo`, `can_do`, `vspace_can_do`, `suggestions`' i18n keys) are left out of list tools and shown raw only by the `get_*` tools (open item 4: confirm with QA that this is the right line).
+Every field DSM sends is shown (maintainer, 2026-10-23, for `get_system_info`: "We should be showing all information that's being provided. Even Serial #."). Known fields get labels and units; any other field is listed under its own name, so a field a newer DSM adds isn't dropped. `load_info`'s NAS-wide fields (`env`, `overview_data`, `ports` and any other top-level key besides the object lists) are shown in full by `get_storage_settings`, under Storage environment. Serial numbers are shown. UI-only fields (`show_*`, `*_btn*`, `i18nNamingInfo`, `can_do`, `vspace_can_do`, `suggestions`' i18n keys) are left out of list tools and shown raw only by the `get_*` tools (open item 4: confirm with QA that this is the right line).
 
 ### Formatting
 
@@ -191,13 +191,13 @@ The answer to "is anything wrong with my storage?".
 
 **Parameters:** None.
 
-**Response shape**, the DS1618+ (DSM 7.1.1; serials replaced):
+**Response shape**, the DS1618+ (DSM 7.1.1; serials replaced), as the tool prints it from the real-NAS fixture:
 
 ```
 Storage Overview — attention
-==================================================
-  System health:   storage needs attention (storage_is_attention)
-  Model:           DS1618+, 6 bays, no expansion units
+=================================
+  System health:  storage needs attention (storage_is_attention)
+  Model:          DS1618+, 6 bays, no expansion units
 
 Needs attention
   - Storage pool 1 (reuse_1): attention, fs_almost_full
@@ -214,16 +214,18 @@ Disks
   Drive 2 (sdb)   WD142KFGX-68AFPN0   12.7 TiB   41°C   normal   pool 1   extended S.M.A.R.T. test 90%, not on Synology's compatibility list
   Drive 3 (sdc)   WD141KFGX-68FH9N0   12.7 TiB   39°C   normal   pool 1
   Drive 4 (sdd)   WD161KRYZ-01AGBB0   14.6 TiB   41°C   normal   pool 1   extended S.M.A.R.T. test 90%
-  Drive 5 (sde)   WD142KFGX-68AFPN0   12.7 TiB   39°C   normal   hot spare, not on Synology's compatibility list
-  Drive 6 (sdf)   SSD 870 EVO 1TB   931.5 GiB   42°C   normal   SSD cache 1, 67% life left, not on Synology's compatibility list
+  Drive 5 (sde)   WD142KFGX-68AFPN0   12.7 TiB   39°C   normal   hot spare   not on Synology's compatibility list
+  Drive 6 (sdf)   SSD 870 EVO 1TB   931.5 GiB   42°C   normal   SSD cache 1 (shared_cache_1)   67% life left, not on Synology's compatibility list
 
 SSD caches
   Cache 1 (shared_cache_1)   read-only, 1 SSD   for volume 1   hit rate 83%
 
 Storage tasks
-  Running:  S.M.A.R.T. extended test (drives 2 and 4 at 90%)
+  Running:  S.M.A.R.T. extended test (Drive 2 at 90%, Drive 4 at 90%)
   Next:     S.M.A.R.T. quick test of 6 disks, 2026-10-29 04:00 (NAS time)
-            Data scrubbing of pool 1, about 2026-12-18 06:00 UTC
+            Data scrubbing of pool 1, about 2026-12-18 06:00:00 UTC
+
+Times marked "about" come from DSM as UTC instants, which can be an hour off while the NAS is on daylight saving time.
 ```
 
 The headline status is `overview_data.status_level`, which DSM 7.1 vdsm sends bare (`normal`) and the others prefixed (`status_level_normal`; the real NAS on 7.1.1 sent `status_level_abnormal`); both forms map the same way: `normal` → `normal`, `abnormal` → `attention`, `danger` → `danger` (verified: the two forms; `danger` inferred from `sample_level_str`). "Needs attention" lists each pool, volume and cache whose `summary_status` isn't `normal`, with its `space_status.detail`, and each disk whose `overview_status` isn't `normal` or that `load_bad_disks` lists as `unhealthy` or `not_compatible`. `load_bad_disks` names disks by display name (`Drive 1`), not ID, and on vdsm, which has no disks, it lists `Drive 1` and `Drive 2` in both lists (verified, all four versions); so each entry is matched against a disk's `id`, `name`, `longName` and `device`, and an entry that matches no disk is left out. A disk's `summary_status_key` isn't an alarm by itself: `smart` while a S.M.A.R.T. test runs and `hotspare` for a spare (verified), so it shows on the disk's line, not under Needs attention. The same goes for `compatibility: "not_in_support"` (three of the real NAS's six disks, while `load_bad_disks.not_compatible` is empty; verified): DSM itself doesn't treat it as a problem, so it isn't an attention item; `list_disks` and `get_disk` show it as `not on Synology's compatibility list`, and the overview shows it on the disk's line. On vdsm the Storage pools, Disks and SSD caches sections read `none`.
@@ -327,6 +329,8 @@ On vdsm: `No disks reported. Virtual DSM has no physical disks.` when `env.model
 | `disk` | str | (required) | The disk's ID (`sda`), device (`/dev/sda`) or bay name (`Drive 1`), as list_disks shows it. |
 | `history_limit` | int | 10 | How many recent test-history entries to show (1–100). |
 
+A value outside 1–100 is refused with `invalid_parameter` before any DSM call, as Photos and Download Station do.
+
 `Smart get_smart_info` and `Core.Storage.Disk get_smart_info` return the same attribute table (verified); the tool uses the first. The health trend is `get_health_info.healthInfo.history.incremental`: twelve monthly points per metric (`unc` bad sectors, `idnf`, `retry`, `remainLife`), a point with one element meaning no reading for that month (verified: the SSD's `remainLife` runs 90 → 67 over the year). An HDD's `remainLife` is eleven one-element points and a last point of `[11, -1]`, and the SSD's `unc` ends the same way: `-1` means the drive doesn't report that metric, shown as `—` (verified).
 
 ---
@@ -421,6 +425,8 @@ Scrubbing's `interval` is read as months (the real NAS: `interval: 3`, started 2
 | `offset` | int | 0 | Skip this many snapshots (newest first). |
 | `limit` | int | 50 | Show at most this many snapshots (1–500). |
 
+A negative `offset`, or a `limit` outside 1–500, is refused with `invalid_parameter` before any DSM call. A shared folder's name matches in any case.
+
 Snapshot times come as DSM's names (`GMT+00-2026.10.28-15.04.00`), which carry their offset; they're shown as UTC instants.
 
 Immutability: the captures carry only `worm_lock: false` (7.2.2+; 7.1 sends no `worm_lock` at all), and no immutable snapshot has been captured, so whether DSM also sends when the lock ends (a third-party client documents `worm_lock_begin`, `worm_lock_end` and `worm_lock_day`) is to verify. Until then the tool shows `worm_lock` and any such field by name.
@@ -452,6 +458,6 @@ Each gets a capture on vdsm (where the object exists there) before its spec sect
 2. **Snapshot Replication on vdsm:** done. Bake v8 installs it (#434), and `tests/vdsm/test_vdsm_bake.py` takes a snapshot on `writable` and checks that `list` v2 shows it while v1 doesn't.
 3. **`SYNO.Storage.CGI.VolumeReduction`** (DSM 7.4.1 only). Storage Manager's UI (`storage_panel.js`) calls its reads, `get_auto_enable_reduction_for_new` and `list_reduction_share`, with `volume` set to the volume's ID (`volume_1`), and its writes `set_reduction_config {volume, mode, auto_enable, update_shares}` and `manual_reduction {volume}`. On vdsm 7.4.1 both reads answer **101** with `volume: "volume_1"` and **120** with any other parameter name (`volume_path`, `volume_id`, `vol_path`), and **105** to the non-admin user (verified, in the 7.4.1 fixture): the parameter is right and the basic vdsm volume is refused, inferred to be ineligible for data reduction. Phase 1 doesn't call it; `get_volume` adds it once a capture on a NAS that supports it shows the reply.
 4. **Which fields list tools leave out.** The rule proposed above (UI-only fields only in `get_*`) needs QA's view against the "show every field" rule.
-5. **Payload:** measured. The 11 tools and the instructions section add 5,448 characters to a connection with every module enabled (`tests/core/test_server.py`'s budget, now 55,411); a connection without the module carries none of it. `list_external_storage` stays a tool of its own.
+5. **Payload:** measured. The 11 tools and the instructions section add 5,448 characters to a connection with every module enabled (`tests/core/test_server.py`'s budget, now 55,411); a connection without the module carries none of the tools or the section, only one line in the PERMISSIONS list (`The storage module (11 tools) is not enabled. … (it needs a DSM administrator account)`), about 160 characters. `list_external_storage` stays a tool of its own.
 6. **Error codes 117 and 48640.** 48640 is documented only from the unknown-volume capture; 117 from unknown IDs and from missing or wrong parameters (Unknown IDs and Feature not supported, above). Add both to the DSM API notes doc (#270; not written yet) with this module.
 7. **Epoch times during daylight saving time.** One capture shows `get_sche_task_list`'s `next_run_time` an hour later than the scheduler's local time while the NAS is on daylight time. Re-capture after DST ends (2026-11-01 in the US): if the two then agree, DSM uses the standard offset and the tools can correct for it; until then epochs are shown as approximate.

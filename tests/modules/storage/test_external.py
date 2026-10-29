@@ -69,3 +69,27 @@ async def test_other_usb_error_is_noted() -> None:
 
     text, _ = await run(list_external_storage, setup=setup)
     assert "USB drives: couldn't be read (DSM error 117)" in text
+
+
+@pytest.mark.parametrize(
+    ("reply", "note"),
+    [
+        (502, "USB drives: couldn't be read (HTTP 502)"),
+        (err(121), "USB drives: not available on this NAS"),
+        (err(117), "USB drives: couldn't be read (DSM error 117)"),
+    ],
+)
+async def test_usb_failures_are_noted_like_every_section(reply: Any, note: str) -> None:
+    def setup(replay: Replay, _: Any) -> None:
+        replay.answer({"api": "SYNO.Core.ExternalDevice.Storage.USB"}, reply)
+
+    text, _ = await run(list_external_storage, setup=setup)
+    assert f"  - {note}" in text
+
+
+async def test_usb_api_missing_is_noted() -> None:
+    def setup(_: Replay, client: Any) -> None:
+        del client._api_cache["SYNO.Core.ExternalDevice.Storage.USB"]
+
+    text, _ = await run(list_external_storage, setup=setup)
+    assert "  - USB drives: not available on this NAS" in text

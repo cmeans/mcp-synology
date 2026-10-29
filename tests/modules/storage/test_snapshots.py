@@ -153,3 +153,21 @@ async def test_non_admin() -> None:
 )
 def test_snapshot_time(name: str, expected: str) -> None:
     assert snapshot_time(name) == expected
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "param"),
+    [({"limit": 0}, "limit"), ({"limit": 501}, "limit"), ({"offset": -1}, "offset")],
+)
+async def test_paging_out_of_range_is_refused_first(kwargs: dict[str, int], param: str) -> None:
+    replays: list[Replay] = []
+    error = await run_error(list_snapshots, share="share01", replay_out=replays, **kwargs)
+    assert error["code"] == "invalid_parameter"
+    assert error["param"] == param
+    assert replays[0].seen == []
+
+
+async def test_share_name_in_any_case() -> None:
+    text, replay = await run(list_snapshots, share="SHARE04/")
+    assert text.startswith("Snapshots of share04")
+    assert replay.calls("SYNO.Core.Share.Snapshot", "list")[0]["name"] == '"share04"'

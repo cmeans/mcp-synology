@@ -122,10 +122,21 @@ async def test_snapshots(admin_client: Any) -> None:
     assert _error(exc)["code"] == "not_found"
 
 
-@pytest.mark.parametrize("tool", [*SIMPLE, list_snapshots], ids=lambda t: t.__name__)
-async def test_non_admin_is_refused(tool: Any, nas_client: Any, reauth_spy: ReauthSpy) -> None:
+# get_volume and get_disk read load_info before resolving their ID, so any ID gets the 105.
+ALL_TOOLS = [
+    *((t, {}) for t in SIMPLE),
+    (list_snapshots, {}),
+    (get_volume, {"volume": "/volume1"}),
+    (get_disk, {"disk": "sda"}),
+]
+
+
+@pytest.mark.parametrize(("tool", "kwargs"), ALL_TOOLS, ids=lambda t: getattr(t, "__name__", ""))
+async def test_non_admin_is_refused(
+    tool: Any, kwargs: dict[str, str], nas_client: Any, reauth_spy: ReauthSpy
+) -> None:
     with pytest.raises(ToolError) as exc:
-        await tool(nas_client[0])
+        await tool(nas_client[0], **kwargs)
     error = _error(exc)
     assert error["code"] == "permission_denied", error
     assert "administrator" in error["message"]

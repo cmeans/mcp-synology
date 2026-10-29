@@ -17,7 +17,8 @@ async def test_real_nas() -> None:
         "Read hit rate: 83%",
         "Shared cache: shared_cache_1 (Basic)",
         "setting: can_modify: yes",
-        "Current I/O: 114222 hits of 125817 cacheable",
+        "Hit rate history: Current: 114222 hits of 125817 cacheable I/O",
+        "Hit rate history: Daily: no data",
         "volume 1 (/volume1): finished about 2023-12-22 05:03:43 UTC, suggests 960 GiB "
         "(1.4 TiB with metadata pinned), meet_criteria",
     ):

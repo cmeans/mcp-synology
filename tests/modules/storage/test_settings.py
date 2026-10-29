@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 from mcp_synology.modules.storage.settings import get_storage_settings
-from tests.modules.storage.dsm import VDSM, Replay, err, flat, run
+from tests.modules.storage.dsm import VDSM, Replay, err, flat, run, run_error
 
 
 def _no_drive_db(replay: Replay, _: Any) -> None:
@@ -41,3 +41,21 @@ async def test_vdsm(fixture: str) -> None:
     text, replay = await run(get_storage_settings, fixture, setup=setup)
     assert replay.unmatched == []
     assert ("Latest online drive database" in text) == (setup is None)
+
+
+async def test_storage_environment() -> None:
+    text, _ = await run(get_storage_settings, setup=_no_drive_db)
+    env = text.split("Storage environment", 1)[1]
+    for line in ("ram_size: 4", "max_fs_bytes: 118747255799808", "multipathSupport: no",
+                 "overview: status_level: status_level_abnormal", "ports: []"):  # fmt: skip
+        assert flat(line) in flat(env)
+
+
+@pytest.mark.parametrize("fixture", ["dsm-7.2.2-vdsm.json"])
+async def test_non_admin_settings_and_schedules(fixture: str) -> None:
+    """Neither tool calls load_info first: the 105 comes from an optional section."""
+    from mcp_synology.modules.storage.schedules import get_storage_schedules
+
+    for tool in (get_storage_settings, get_storage_schedules):
+        error = await run_error(tool, fixture, persona="test")
+        assert error["code"] == "permission_denied", tool

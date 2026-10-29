@@ -11,6 +11,7 @@ from mcp_synology.modules.storage.helpers import (
     Sections,
     dicts,
     disk_label,
+    epoch_note,
     items,
     load_info,
     notes_block,
@@ -380,4 +381,5 @@ async def get_storage_overview(client: DsmClient) -> str:
             ),
         )
     )
-    return "\n\n".join(parts) + notes_block(optional.notes)
+    text = "\n\n".join(parts)
+    return text + epoch_note(text) + notes_block(optional.notes)

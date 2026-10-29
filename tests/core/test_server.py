@@ -1148,6 +1148,23 @@ class TestWithheldToolsNotice:
         assert "downloadstation" in text
         assert "not enabled" in text
 
+    def test_storage_not_enabled_names_the_administrator_requirement(self) -> None:
+        text = self._instructions(modules={"filestation": {"enabled": True, "permission": "write"}})
+        line = next(x for x in text.splitlines() if "The storage module" in x)
+        assert "not enabled" in line
+        assert "(it needs a DSM administrator account)" in line
+        other = next(x for x in text.splitlines() if "The photos module" in x)
+        assert "administrator" not in other
+
+    def test_storage_section_only_when_storage_is_enabled(self) -> None:
+        """#49: the STORAGE section says the tools need an administrator account."""
+        on = self._instructions(modules={"storage": {"enabled": True}})
+        assert "\n\nSTORAGE:\n" in on
+        assert "only a DSM administrator account" in on
+        assert "get_storage_overview" in on
+        off = self._instructions(modules={"filestation": {"enabled": True}})
+        assert "\n\nSTORAGE:\n" not in off
+
     def test_disabled_module_is_told_to_enable_not_add(self) -> None:
         """QA on #156: a module listed with ``enabled: false`` is already under
         ``modules:``; the fix the user needs is ``enabled: true``."""
@@ -1774,7 +1791,7 @@ class TestInstructionComments:
 # already-paused task fails the whole call (#421, 0.10.0rc10 live test).
 # Raised by #49 to 55,411 (+5,448): the Storage module's 11 READ tools and its
 # instructions section (the administrator requirement). A connection without Storage
-# enabled doesn't carry them.
+# carries only its one-line "not enabled" entry in PERMISSIONS (about 160 characters).
 PAYLOAD_BUDGET_CHARS = 55_411
 
 

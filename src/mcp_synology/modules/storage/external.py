@@ -4,14 +4,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from mcp_synology.core.errors import SynologyError
 from mcp_synology.core.formatting import format_size
 from mcp_synology.modules.storage.helpers import (
     Sections,
     dicts,
     json_list,
     notes_block,
-    refuse_non_admin,
     value_text,
 )
 
@@ -53,16 +51,14 @@ def mib(value: object) -> str:
 
 async def _usb(client: DsmClient, optional: Sections) -> Any:
     """USB list answers 404, not 105, to a non-admin on DSM 7.2.2 and later."""
-    api = "SYNO.Core.ExternalDevice.Storage.USB"
-    if api not in client._api_cache:
-        return None
-    try:
-        return await client.request(api, "list", version=1, params=_ALL)
-    except SynologyError as e:
-        if e.code in (105, 404):
-            refuse_non_admin(OPERATION)
-        optional.notes.append(f"USB drives: couldn't be read (DSM error {e.code})")
-        return None
+    return await optional.get(
+        client,
+        "USB drives",
+        "SYNO.Core.ExternalDevice.Storage.USB",
+        "list",
+        _ALL,
+        refusals=frozenset({105, 404}),
+    )
 
 
 def device_lines(devices: list[dict[str, Any]], kind: str) -> list[str]:

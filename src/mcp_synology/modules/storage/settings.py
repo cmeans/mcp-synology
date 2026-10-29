@@ -8,7 +8,9 @@ from mcp_synology.core.formatting import format_key_value
 from mcp_synology.modules.storage.helpers import (
     STORAGE_API,
     Sections,
+    as_dict,
     epoch_note,
+    field_text,
     notes_block,
     value_text,
     when,
@@ -51,8 +53,27 @@ def _pairs(reply: Any, labels: dict[str, str]) -> list[tuple[str, str]]:
     return out
 
 
+_OBJECT_LISTS = {
+    "disks", "storagePools", "volumes", "ssdCaches", "sharedCaches", "detected_pools",
+    "missing_pools", "env", "overview_data",
+}  # fmt: skip
+
+
+def environment_pairs(info: Any) -> list[tuple[str, str]]:
+    """load_info's NAS-wide fields (env, overview_data), which no other tool shows in full."""
+    info = as_dict(info)
+    pairs = [(k, field_text(k, v)) for k, v in as_dict(info.get("env")).items()]
+    overview = as_dict(info.get("overview_data"))
+    pairs.extend((f"overview: {k}", value_text(v)) for k, v in overview.items())
+    # Anything else at the top level (ports, or a key a newer DSM adds); the object lists
+    # have tools of their own.
+    pairs.extend((k, value_text(v)) for k, v in info.items() if k not in _OBJECT_LISTS)
+    return pairs
+
+
 async def get_storage_settings(client: DsmClient) -> str:
     optional = Sections(OPERATION)
+    info = await optional.get(client, "Storage environment", STORAGE_API, "load_info")
     resync = await optional.get(client, "RAID resync speed", STORAGE_API, "get_resync_speed")
     fast = await optional.get(client, "Fast repair", STORAGE_API, "get_fast_repair_config")
     auto = await optional.get(client, "Automatic repair", STORAGE_API, "get_auto_repair_config")
@@ -126,6 +147,9 @@ async def get_storage_settings(client: DsmClient) -> str:
                 title="External storage",
             )
         )
+    env_pairs = environment_pairs(info)
+    if env_pairs:
+        blocks.append(format_key_value(env_pairs, title="Storage environment"))
     if not blocks:
         blocks.append("No storage settings could be read.")
     text = "\n\n".join(blocks)

@@ -114,3 +114,9 @@ async def test_space_usage_off_on_the_real_nas_shape() -> None:
     text, _ = await run(get_volume, volume="/volume1", setup=setup)
     assert "off for this volume" in text
     assert "Shared folders" not in text
+
+
+@pytest.mark.parametrize("name", ["VOLUME1", "/volume1/", "Volume_1"])
+async def test_volume_names_ignore_case_and_a_trailing_slash(name: str) -> None:
+    text, _ = await run(get_volume, volume=name)
+    assert text.startswith("Volume 1 (/volume1)")

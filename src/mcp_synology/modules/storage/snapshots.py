@@ -14,6 +14,7 @@ from mcp_synology.modules.storage.helpers import (
     Sections,
     as_dict,
     call,
+    check_range,
     json_list,
     not_found,
     notes_block,
@@ -96,6 +97,8 @@ async def _schedule(client: DsmClient, optional: Sections, name: str) -> Any:
 async def list_snapshots(
     client: DsmClient, share: str | None = None, offset: int = 0, limit: int = 50
 ) -> str:
+    check_range(OPERATION, "offset", offset, 0, None)
+    check_range(OPERATION, "limit", limit, 1, 500)
     version = require_snapshot_api(client)
     all_shares = await shares(client)
     optional = Sections(OPERATION)
@@ -127,12 +130,14 @@ async def list_snapshots(
         )
         return table + notes_block(optional.notes)
 
-    name = share.strip().strip("/")
-    match = next((s for s in all_shares if str(s.get("name")) == name), None)
+    wanted = share.strip().strip("/").casefold()
+    match = next((s for s in all_shares if str(s.get("name")).casefold() == wanted), None)
     if match is None:
         not_found(
             OPERATION, "shared folder", "share", share, [str(s.get("name")) for s in all_shares]
         )
+        raise AssertionError  # not_found raises
+    name = str(match.get("name"))  # DSM's own spelling of the name
     reply = await call(
         client,
         OPERATION,
@@ -143,8 +148,6 @@ async def list_snapshots(
     )
     snaps = [x for x in (reply or {}).get("snapshots") or [] if isinstance(x, dict)]
     snaps.sort(key=lambda x: snapshot_time(str(x.get("time"))), reverse=True)
-    limit = max(1, min(limit, 500))
-    offset = max(0, offset)
     page = snaps[offset : offset + limit]
 
     pairs: list[tuple[str, str]] = [("Snapshots", str(len(snaps)))]

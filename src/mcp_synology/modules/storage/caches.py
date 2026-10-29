@@ -90,14 +90,23 @@ def cache_block(
         pairs.extend(other_fields(shared, _SHARED_KNOWN, prefix="  "))
     if isinstance(config, dict):
         pairs.extend((f"  setting: {k}", value_text(v)) for k, v in config.items())
-    current = as_dict(as_dict(cache.get("hit_rates")).get("Current"))
-    if current.get("success"):
-        pairs.append(
-            (
-                "Current I/O",
-                f"{current.get('io_hit')} hits of {current.get('io_need_acceleration')} cacheable",
-            )
+    rates = as_dict(cache.get("hit_rates"))
+    for period, rate in rates.items():
+        rate = as_dict(rate)
+        if not rate:
+            pairs.append((f"Hit rate history: {period}", value_text(rates[period])))
+            continue
+        text = (
+            f"{rate.get('io_hit')} hits of {rate.get('io_need_acceleration')} cacheable I/O"
+            if rate.get("success")
+            else "no data"
         )
+        extra = [
+            f"{k}: {value_text(v)}"
+            for k, v in rate.items()
+            if k not in ("io_hit", "io_need_acceleration", "success")
+        ]
+        pairs.append((f"Hit rate history: {period}", ", ".join([text, *extra])))
     pairs.extend(other_fields(cache, _CACHE_KNOWN))
     return format_key_value(pairs, title=cache_title(info, cache))
 

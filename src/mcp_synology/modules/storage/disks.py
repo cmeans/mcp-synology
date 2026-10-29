@@ -9,6 +9,7 @@ from mcp_synology.modules.storage.helpers import (
     STORAGE_API,
     Sections,
     as_dict,
+    check_range,
     dicts,
     disk_label,
     items,
@@ -87,7 +88,8 @@ def location(disk: dict[str, Any]) -> str:
         where += f" ({container['type']})"
     if disk.get("slot_id") is not None:
         where += f", bay {disk['slot_id']}"
-    return where
+    extra = [f"{k}: {value_text(v)}" for k, v in container.items() if k not in ("str", "type")]
+    return ", ".join([where, *extra])
 
 
 def disk_pairs(disk: dict[str, Any], role: str, tasks: Any) -> list[tuple[str, str]]:
@@ -147,8 +149,8 @@ async def list_disks(client: DsmClient) -> str:
 def resolve_disk(info: dict[str, Any], disk: str, operation: str) -> dict[str, Any]:
     wanted = disk.strip().lower()
     for d in items(info, "disks"):
-        names = {str(d.get(k) or "").lower() for k in ("id", "device", "name", "longName")}
-        if wanted in names or "/dev/" + wanted in names:
+        names = {str(d.get(k)).lower() for k in ("id", "device", "name", "longName") if d.get(k)}
+        if wanted and (wanted in names or "/dev/" + wanted in names):
             return d
     valid = [f"{d.get('id')} ({d.get('longName') or d.get('name')})" for d in items(info, "disks")]
     not_found(operation, "disk", "disk", disk, valid)
@@ -239,6 +241,7 @@ def history_table(reply: Any) -> str:
 
 async def get_disk(client: DsmClient, disk: str, history_limit: int = 10) -> str:
     operation = "Get disk"
+    check_range(operation, "history_limit", history_limit, 1, 100)
     info = await load_info(client, operation)
     d = resolve_disk(info, disk, operation)
     device = str(d.get("device") or f"/dev/{d.get('id')}")
@@ -264,7 +267,7 @@ async def get_disk(client: DsmClient, disk: str, history_limit: int = 10) -> str
         {
             "device": device,
             "offset": 0,
-            "limit": max(1, min(history_limit, 100)),
+            "limit": history_limit,
             "sort_by": "time",
             "sort_direction": "DESC",
         },

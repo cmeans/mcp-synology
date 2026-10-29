@@ -36,8 +36,10 @@ STORAGE_APIS = [
 
 
 def api_cache(*, snapshot_max: int = 2) -> dict[str, ApiInfoEntry]:
+    # Max version 3, above anything captured: a call that drops its v1 pin goes out as v3,
+    # matches no capture, and fails the test.
     cache = {
-        api: ApiInfoEntry(path="entry.cgi", min_version=1, max_version=1, request_format="JSON")
+        api: ApiInfoEntry(path="entry.cgi", min_version=1, max_version=3, request_format="JSON")
         for api in STORAGE_APIS
     }
     cache["SYNO.Core.Share.Snapshot"] = ApiInfoEntry(

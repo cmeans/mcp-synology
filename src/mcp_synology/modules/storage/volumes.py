@@ -122,10 +122,10 @@ async def list_volumes(client: DsmClient) -> str:
 
 
 def resolve_volume(info: dict[str, Any], volume: str, operation: str) -> dict[str, Any]:
-    wanted = volume.strip()
+    wanted = volume.strip().rstrip("/").casefold()
     for vol in items(info, "volumes"):
-        names = {str(vol.get("id")), str(vol.get("vol_path"))}
-        if wanted in names or "/" + wanted.lstrip("/") in names:
+        names = {str(vol.get(k)).casefold() for k in ("id", "vol_path") if vol.get(k)}
+        if wanted and (wanted in names or "/" + wanted.lstrip("/") in names):
             return vol
     not_found(
         operation,
