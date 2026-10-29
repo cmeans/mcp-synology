@@ -172,7 +172,11 @@ def flat(text: str) -> str:
 
 def load_info_with(replay: Replay, change: Any) -> None:
     """Answer load_info with the fixture's own reply after ``change(data)`` edits it."""
-    reply = next(r for q, r in replay.routes if q.get("method") == "load_info")
+    reply = next(
+        r
+        for q, r in replay.routes
+        if q.get("api") == "SYNO.Storage.CGI.Storage" and q.get("method") == "load_info"
+    )
     reply = copy.deepcopy(reply)
     change(reply["data"])
     replay.answer({"api": "SYNO.Storage.CGI.Storage", "method": "load_info"}, reply)

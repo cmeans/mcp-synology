@@ -152,8 +152,10 @@ def resolve_disk(info: dict[str, Any], disk: str, operation: str) -> dict[str, A
         names = {str(d.get(k)).lower() for k in ("id", "device", "name", "longName") if d.get(k)}
         if wanted and (wanted in names or "/dev/" + wanted in names):
             return d
-    valid = [f"{d.get('id')} ({d.get('longName') or d.get('name')})" for d in items(info, "disks")]
-    not_found(operation, "disk", "disk", disk, valid)
+    disks = items(info, "disks")
+    valid = [str(d.get("id")) for d in disks]
+    labels = [f"{d.get('id')} ({d.get('longName') or d.get('name')})" for d in disks]
+    not_found(operation, "disk", "disk", disk, valid, labels)
     raise AssertionError  # not_found raises
 
 

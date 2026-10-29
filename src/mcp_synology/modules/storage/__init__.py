@@ -275,10 +275,22 @@ def register(ctx: "RegisterContext") -> None:
                 ),
             ] = None,
             offset: Annotated[
-                int, Field(description="Skip this many snapshots (newest first).")
+                int,
+                Field(
+                    description=(
+                        "Skip this many: snapshots (newest first), or shared folders "
+                        "without `share`."
+                    )
+                ),
             ] = 0,
             limit: Annotated[
-                int, Field(description="Show at most this many snapshots (1–500).")
+                int,
+                Field(
+                    description=(
+                        "Show at most this many (1–500): snapshots, or shared folders "
+                        "without `share`."
+                    )
+                ),
             ] = 50,
         ) -> str:
             client = await manager.get_client()

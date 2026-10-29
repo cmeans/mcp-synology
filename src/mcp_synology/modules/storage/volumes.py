@@ -11,6 +11,8 @@ from mcp_synology.modules.storage.helpers import (
     Sections,
     cache_title,
     dicts,
+    epoch_note,
+    field_text,
     items,
     json_list,
     load_info,
@@ -175,7 +177,7 @@ def dedupe_lines(reply: Any, vol_path: str) -> list[tuple[str, str]]:
             continue
         pairs = [("Deduplication", "supported" if entry.get("support_dedupe") else "not supported")]
         pairs.extend(
-            (f"  {k}", value_text(v))
+            (f"  {k}", field_text(k, v))
             for k, v in entry.items()
             if k not in ("vol_path", "support_dedupe")
         )
@@ -253,14 +255,17 @@ async def get_volume(client: DsmClient, volume: str) -> str:
 
     pairs = volume_pairs(vol, pools)
     pairs.extend(space_usage_lines(space))
-    ssd_trim = (trim or {}).get("ssd_trim") if isinstance(trim, dict) else vol.get("ssd_trim")
+    ssd_trim = trim.get("ssd_trim") if isinstance(trim, dict) else None
+    if not isinstance(ssd_trim, dict):
+        ssd_trim = vol.get("ssd_trim")
     if isinstance(ssd_trim, dict):
         pairs.append(("SSD TRIM", ", ".join(f"{k}: {value_text(v)}" for k, v in ssd_trim.items())))
     pairs.extend(dedupe_lines(dedupe, path))
     if isinstance(reclaim, dict):
         pairs.append(("Space reclamation", str(reclaim.get("state", "—"))))
-        pairs.extend((f"  {k}", value_text(v)) for k, v in reclaim.items() if k != "state")
+        pairs.extend((f"  {k}", field_text(k, v)) for k, v in reclaim.items() if k != "state")
     pairs.extend(cache_lines(info, vol, shared_config))
     pairs.append(("UUID", str(vol.get("uuid") or "—")))
     pairs.extend(other_fields(vol, _KNOWN, keep_ui=True))
-    return format_key_value(pairs, title=volume_label(vol)) + notes_block(optional.notes)
+    text = format_key_value(pairs, title=volume_label(vol))
+    return text + epoch_note(text) + notes_block(optional.notes)

@@ -191,8 +191,17 @@ def check_range(operation: str, param: str, value: int, low: int, high: int | No
         )
 
 
-def not_found(operation: str, kind: str, param: str, value: str, valid: list[str]) -> None:
-    shown = ", ".join(valid) if valid else "none"
+def not_found(
+    operation: str,
+    kind: str,
+    param: str,
+    value: str,
+    valid: list[str],
+    labels: list[str] | None = None,
+) -> None:
+    """``valid`` holds values the tool takes back; ``labels`` (if given) shows them in the
+    message with more context, such as a disk's bay name."""
+    shown = ", ".join(labels or valid) if valid else "none"
     error_response(
         ErrorCode.NOT_FOUND,
         f"{operation} failed: no {kind} {value!r} on this NAS. Valid: {shown}.",
@@ -208,7 +217,9 @@ def not_found(operation: str, kind: str, param: str, value: str, valid: list[str
 
 
 def size(value: object) -> str:
-    """DSM's byte counts come as strings ("41968612671488")."""
+    """DSM's byte counts come as strings ("41968612671488"); a missing one is "—"."""
+    if value is None or value == "":
+        return "—"
     try:
         return format_size(int(str(value)))
     except (TypeError, ValueError):
@@ -320,7 +331,7 @@ def value_text(value: object) -> str:
 EPOCH_FIELDS = frozenset({
     "last_done_time", "next_schedule_time", "next_start_time", "start_time",
     "completed_time", "db_last_update_time", "delay_end_time", "schedule_disable_time",
-    "last_dry_run_time", "last_manual_dedupe_time", "next_run_time",
+    "last_dry_run_time", "last_manual_dedupe_time", "next_run_time", "last_run_time",
 })  # fmt: skip
 
 
@@ -332,7 +343,12 @@ def when(epoch: object) -> str:
 
 
 def field_text(key: str, value: object) -> str:
-    return when(value) if key in EPOCH_FIELDS else value_text(value)
+    """A field's value, with epoch fields as times, also one level down (``dedup_info``)."""
+    if key in EPOCH_FIELDS:
+        return when(value)
+    if isinstance(value, dict) and EPOCH_FIELDS.intersection(value):
+        value = {k: when(v) if k in EPOCH_FIELDS else v for k, v in value.items()}
+    return value_text(value)
 
 
 def other_fields(

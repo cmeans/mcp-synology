@@ -143,7 +143,7 @@ Each per-object call fails differently for an object that doesn't exist (verifie
 | `Share.Snapshot list` v2 | `no-such-share` | 402 |
 | `Share.Snapshot get_schedule` | `no-such-share` | **success** (a default schedule) |
 
-So every tool that takes an ID resolves it against `load_info` (disks, pools, volumes, caches) or `Core.Share list` (shares) **before** any per-object call, and an unknown ID is a `not_found` error that lists the valid ones. The DSM codes above are then only reachable through a race (an object removed between the two calls) and map to `dsm_error` with the code.
+So every tool that takes an ID resolves it against `load_info` (disks, pools, volumes, caches) or `Core.Share list` (shares) **before** any per-object call, and an unknown ID is a `not_found` error that lists the valid ones (in `valid`, values the tool takes back as they are; `get_disk`'s message also names each disk's bay). The DSM codes above are then only reachable through a race (an object removed between the two calls) and map to `dsm_error` with the code.
 
 ### Feature not supported: 121
 
@@ -422,10 +422,10 @@ Scrubbing's `interval` is read as months (the real NAS: `interval: 3`, started 2
 | Name | Type | Default | Description |
 |---|---|---|---|
 | `share` | str \| None | None | The shared folder's name (`media`, not a path). Leave empty for a count per shared folder. |
-| `offset` | int | 0 | Skip this many snapshots (newest first). |
-| `limit` | int | 50 | Show at most this many snapshots (1–500). |
+| `offset` | int | 0 | Skip this many: snapshots (newest first), or shared folders without `share`. |
+| `limit` | int | 50 | Show at most this many (1–500): snapshots, or shared folders without `share`. |
 
-A negative `offset`, or a `limit` outside 1–500, is refused with `invalid_parameter` before any DSM call. A shared folder's name matches in any case.
+A negative `offset`, or a `limit` outside 1–500, is refused with `invalid_parameter` before any DSM call. A shared folder's name matches in any case. Without a shared folder, `offset` and `limit` page the per-folder table (in `Core.Share list` order), and only the folders shown get a `get_schedule` call; a footer gives the next `offset` when there are more.
 
 Snapshot times come as DSM's names (`GMT+00-2026.10.28-15.04.00`), which carry their offset; they're shown as UTC instants.
 

@@ -83,9 +83,23 @@ async def test_location_shows_the_enclosure() -> None:
 async def test_unknown_disk() -> None:
     error = await run_error(get_disk, disk="sdz")
     assert error["code"] == "not_found"
-    assert "sda (Drive 1)" in error["valid"]
+    # valid holds what get_disk takes back; the message keeps the bay names (QA R1 #5).
+    assert error["valid"][:2] == ["sda", "sdb"]
+    assert "sda (Drive 1)" in error["message"]
+    text, _ = await run(get_disk, disk=error["valid"][0], history_limit=20)
+    assert text.startswith("Drive 1")
 
 
 def test_trend_without_history() -> None:
     assert trend_lines(None) == []
     assert trend_lines({"healthInfo": {"history": {"incremental": {"unc": []}}}}) == []
+
+
+async def test_missing_size_is_a_dash() -> None:
+    """QA R1 #3: a disk without size_total showed "Size: None"."""
+
+    def setup(replay: Replay, _: Any) -> None:
+        load_info_with(replay, lambda data: data["disks"][0].pop("size_total"))
+
+    text, _ = await run(list_disks, setup=setup)
+    assert "None" not in text

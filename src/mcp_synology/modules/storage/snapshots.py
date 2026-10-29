@@ -42,9 +42,12 @@ def snapshot_time(name: str) -> str:
     if not m:
         return name
     sign, oh, om, *parts = m.groups()
-    offset = timedelta(hours=int(oh), minutes=int(om or 0)) * (1 if sign == "+" else -1)
     year, month, day, hour, minute, second = (int(p) for p in parts)
-    local = datetime(year, month, day, hour, minute, second, tzinfo=timezone(offset))
+    try:
+        offset = timedelta(hours=int(oh), minutes=int(om or 0)) * (1 if sign == "+" else -1)
+        local = datetime(year, month, day, hour, minute, second, tzinfo=timezone(offset))
+    except ValueError:  # the shape of a time, not a real one (month 13, offset 25 h)
+        return name
     return local.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
@@ -112,10 +115,13 @@ async def list_snapshots(
             async with limit_calls:
                 return await _schedule(client, optional, name)
 
-        names = [str(s.get("name")) for s in all_shares]
+        shown = all_shares[offset : offset + limit]
+        if not shown:
+            return f"No shared folders at offset {offset} (there are {len(all_shares)})."
+        names = [str(s.get("name")) for s in shown]
         schedules = await asyncio.gather(*(schedule(n) for n in names))
         rows = []
-        for s, name, sched in zip(all_shares, names, schedules, strict=True):
+        for s, name, sched in zip(shown, names, schedules, strict=True):
             count = as_dict(s.get("snapshot_info")).get("snapshot_count", "—")
             on = (
                 "—"
@@ -128,6 +134,11 @@ async def list_snapshots(
             rows,
             title="Snapshots per shared folder",
         )
+        if offset + limit < len(all_shares):
+            table += (
+                f"\n\nShowing {offset + 1}–{offset + len(shown)} of {len(all_shares)} shared "
+                f"folders. Use offset={offset + limit} for more."
+            )
         return table + notes_block(optional.notes)
 
     wanted = share.strip().strip("/").casefold()

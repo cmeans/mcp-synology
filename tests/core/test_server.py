@@ -1792,7 +1792,9 @@ class TestInstructionComments:
 # Raised by #49 to 55,411 (+5,448): the Storage module's 11 READ tools and its
 # instructions section (the administrator requirement). A connection without Storage
 # carries only its one-line "not enabled" entry in PERMISSIONS (about 160 characters).
-PAYLOAD_BUDGET_CHARS = 55_411
+# +72 in QA round 1: list_snapshots' offset and limit say they page the shared folders
+# when no folder is given.
+PAYLOAD_BUDGET_CHARS = 55_483
 
 
 class TestPayloadBudget:

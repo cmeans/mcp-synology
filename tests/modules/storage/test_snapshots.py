@@ -149,6 +149,9 @@ async def test_non_admin() -> None:
         ("GMT+05:30-2026.10.28-20.34.00", "2026-10-28 15:04:00 UTC"),
         ("GMT+0530-2026.10.28-20.34.00", "2026-10-28 15:04:00 UTC"),
         ("weird", "weird"),
+        # The shape of a time but not a real one: shown as named (QA R1 #4).
+        ("GMT+00-2026.13.45-99.99.99", "GMT+00-2026.13.45-99.99.99"),
+        ("GMT+25-2026.10.28-15.04.00", "GMT+25-2026.10.28-15.04.00"),
     ],
 )
 def test_snapshot_time(name: str, expected: str) -> None:
@@ -171,3 +174,35 @@ async def test_share_name_in_any_case() -> None:
     text, replay = await run(list_snapshots, share="SHARE04/")
     assert text.startswith("Snapshots of share04")
     assert replay.calls("SYNO.Core.Share.Snapshot", "list")[0]["name"] == '"share04"'
+
+
+async def test_impossible_snapshot_name_is_listed() -> None:
+    """QA R1 #4: a name with an impossible date sorted through snapshot_time, which raised
+    ValueError and failed the whole call; it's now listed under its own name."""
+    snaps = [{"time": "GMT+00-2026.13.45-99.99.99"}, {"time": "GMT+00-2026.10.01-12.00.00"}]
+
+    def setup(replay: Replay, _: Any) -> None:
+        replay.answer(
+            {"api": "SYNO.Core.Share.Snapshot", "method": "list"}, ok({"snapshots": snaps})
+        )
+
+    text, _ = await run(list_snapshots, REALNAS, setup=setup, share="share01")
+    assert "GMT+00-2026.13.45-99.99.99" in text
+    assert "2026-10-01 12:00:00 UTC" in text
+
+
+async def test_counts_per_share_are_paged() -> None:
+    """QA R1 #2: without a shared folder, offset and limit page the per-folder table, and
+    only the folders shown get a get_schedule call."""
+    text, replay = await run(list_snapshots, offset=2, limit=3)
+    listed = next(
+        r for q, r in replay.routes if q.get("api") == "SYNO.Core.Share" and "additional" in q
+    )
+    names = [s["name"] for s in listed["data"]["shares"]]
+    rows = [ln.split()[0] for ln in text.splitlines() if ln.strip().startswith("share")]
+    assert rows == names[2:5]
+    assert len(replay.calls("SYNO.Core.Share.Snapshot", "get_schedule")) == 3
+    assert f"Showing 3–5 of {len(names)} shared folders. Use offset=5 for more." in text
+
+    text, _ = await run(list_snapshots, offset=len(names))
+    assert text == f"No shared folders at offset {len(names)} (there are {len(names)})."

@@ -38,6 +38,8 @@ def test_raid_name(device_type: str, expected: str) -> None:
 def test_sizes_and_percentages() -> None:
     assert size("1024") == "1 KiB"
     assert size("n/a") == "n/a"
+    # A missing size is "—", as usage() and percent() show it (QA R1 #3).
+    assert size(None) == "—" and size("") == "—"
     assert to_int("x") is None
     assert percent("1", "4") == "25.0%"
     assert percent("1", "0") == "—"

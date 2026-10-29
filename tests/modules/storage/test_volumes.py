@@ -6,8 +6,10 @@ from typing import Any
 
 import pytest
 
+from mcp_synology.core.formatting import format_timestamp
+from mcp_synology.modules.storage.helpers import EPOCH_NOTE
 from mcp_synology.modules.storage.volumes import get_volume, list_volumes
-from tests.modules.storage.dsm import VDSM, Replay, err, flat, load_info_with, run, run_error
+from tests.modules.storage.dsm import VDSM, Replay, err, flat, load_info_with, ok, run, run_error
 
 
 async def test_real_nas_list() -> None:
@@ -120,3 +122,46 @@ async def test_space_usage_off_on_the_real_nas_shape() -> None:
 async def test_volume_names_ignore_case_and_a_trailing_slash(name: str) -> None:
     text, _ = await run(get_volume, volume=name)
     assert text.startswith("Volume 1 (/volume1)")
+
+
+async def test_epoch_times_shown_as_times() -> None:
+    """QA R1 #1: deduplication, space reclamation and ``dedup_info`` times are epochs with
+    no local counterpart, shown as "about … UTC" like every other (spec: Formatting). Every
+    capture has them at 0, so they're set here."""
+    t = 1_790_000_000
+    shown = f"about {format_timestamp(t)}"
+
+    def setup(replay: Replay, _: Any) -> None:
+        dedupe = {
+            "vol_path": "/volume1",
+            "support_dedupe": True,
+            "last_manual_dedupe_time": t,
+            "last_dry_run_time": t,
+            "schedule_disable_time": t,
+        }
+        replay.answer({"method": "get_volume_info"}, ok({"volumes": [dedupe]}))
+        replay.answer(
+            {"method": "get_space_reclaim_status"}, ok({"state": "running", "delay_end_time": t})
+        )
+        load_info_with(
+            replay, lambda data: data["volumes"][0]["dedup_info"].update(last_run_time=t)
+        )
+
+    text, _ = await run(get_volume, "dsm-7.3.2-vdsm.json", setup=setup, volume="/volume1")
+    assert str(t) not in text
+    for key in ("last_manual_dedupe_time", "last_dry_run_time", "schedule_disable_time"):
+        assert flat(f"{key}: {shown}") in flat(text)
+    assert flat(f"delay_end_time: {shown}") in flat(text)
+    assert f'"last_run_time": "{shown}"' in text  # inside dedup_info
+    assert EPOCH_NOTE in text
+
+
+async def test_ssd_trim_reply_without_its_key_falls_back() -> None:
+    """QA R1 #6: an ssd_trim_get reply without ``ssd_trim`` uses the volume's own."""
+
+    def setup(replay: Replay, _: Any) -> None:
+        replay.answer({"method": "ssd_trim_get"}, ok({}))
+        load_info_with(replay, lambda data: data["volumes"][0].update(ssd_trim={"support": "x1"}))
+
+    text, _ = await run(get_volume, setup=setup, volume="volume_1")
+    assert flat("SSD TRIM: support: x1") in flat(text)
