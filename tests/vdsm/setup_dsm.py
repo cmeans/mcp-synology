@@ -2,14 +2,16 @@
 
 Includes:
 - Playwright-based wizard automation (first-boot setup, fully headless)
-- Playwright-based post-wizard configuration (user creation via Control Panel)
-- SSH into the DSM guest VM for shared folder creation via synoshare CLI
+- Post-wizard setup (setup_dsm_for_testing): the timezone and SSH via the
+  DSM API, then over SSH into the DSM guest (the QEMU VM inside the
+  container) the DSM update and its reboot, the test users (synouser), the
+  packages (synopkg) and the shared folders with their seed data
+  (synoshare), then Download Station and Photos settings via the DSM API
 
-The undocumented SYNO.Core.* write APIs do not work on virtual-dsm
-(error 105/403), so user creation is automated through the DSM web UI.
-Shared folders are created by SSH-ing into the DSM guest (the QEMU VM
-inside the container) and running /usr/syno/sbin/synoshare, which
-registers proper DSM shared folders visible to FileStation.
+SYNO.Core.User, SYNO.Core.Share and SYNO.Core.Share.Permission answered
+105/403 on virtual-dsm, so users and shared folders are made with DSM's own
+CLIs in the guest; synoshare registers proper DSM shared folders visible to
+FileStation.
 
 DSM 7 uses a windowed desktop UI with frequent overlay masks. Clicks use
 JavaScript dispatch or Playwright's force=True to bypass overlay interception.

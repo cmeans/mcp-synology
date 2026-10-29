@@ -84,9 +84,7 @@ versions without a physical NAS.
 
 ### Current Status
 
-**21 of 47 vdsm tests pass** on a bare DSM 7.2.2 instance (wizard completed, admin + test user created). The remaining 26 tests require shared folders on a properly configured storage volume. Virtual-dsm does not auto-create a storage volume during initial setup — this requires either manual Storage Manager configuration or additional automation (tracked as a follow-up).
-
-Tests that pass without a volume: connection (3), system info (1), resource usage (2), error handling (3), empty search cases (2), and several listing/metadata/transfer tests that validate error responses.
+The bake sets up everything the suite needs (users, packages, shared folders and seed data on the wizard's `/volume1`), and CI runs the full vdsm suite on DSM 7.1, 7.2.2, 7.3.2 and 7.4.1. No manual setup is needed.
 
 ### Requirements
 
@@ -124,20 +122,6 @@ The setup script:
 
 Golden images are stored in `.vdsm/golden/` (about 1.2 GB each, gitignored).
 
-#### Manual Storage Volume Setup (for full 47-test suite)
-
-After the automated setup, the golden image has no DSM storage volume. To enable shared folder tests:
-
-1. Boot the golden image: run `vdsm_setup.py` but stop it before the "Stopping container" step (or boot manually)
-2. Open the DSM web UI at the container's URL
-3. Open **Storage Manager** → create a **Storage Pool** (Basic/SHR) on the virtual disk → create a **Volume**
-4. Open **Control Panel** → **Shared Folder** → create `testshare` and `writable`
-5. Set read/write permissions for `mcptest` on both shares
-6. Upload test files to `/testshare/Documents/` (report.txt, search_target.txt) and `/testshare/Media/` (sample.mkv)
-7. Stop the container and re-save the golden image
-
-This manual step is a one-time investment per DSM version. Automating Storage Manager via Playwright is a planned follow-up.
-
 ### Running
 
 ```bash
@@ -168,16 +152,14 @@ Since bake v9, the bake installs the update in the Update column (`DsmVersionInf
 ### How It Works
 
 1. Restores a golden image (pre-configured DSM) to a temp storage directory
-2. Boots the virtual-dsm container via Podman/Docker (~30s from golden image)
+2. Boots the virtual-dsm container via Podman/Docker
 3. Runs the same test functions as the real NAS integration tests
 4. Container is stopped and cleaned up automatically
 
 ### Known Limitations
 
-- **No auto-volume** — virtual-dsm's QEMU disk is visible to DSM but requires manual Storage Manager configuration to create a storage pool and volume. The `DISK_SIZE` env var controls disk size but does not trigger DSM-level volume creation.
-- **Undocumented APIs fail** — `SYNO.Core.User`, `SYNO.Core.Share`, and `SYNO.Core.Share.Permission` return error 105/403 on virtual-dsm even with valid admin sessions. User creation is done via Playwright web UI automation instead.
+- **Users and shares over SSH** — `SYNO.Core.User`, `SYNO.Core.Share` and `SYNO.Core.Share.Permission` answered 105/403 on virtual-dsm even with an admin session, so the bake creates users and shared folders with `synouser` and `synoshare` in the guest over SSH.
 - **DSM password policy** — DSM 7.2.2 requires "Strong" passwords (blocks "Moderate"). The test user password is `Mcp#Test9!xK27zQ`.
-- **Boot time** — first boot from PAT download takes ~2 min; subsequent boots from golden image take ~30s.
 
 ## Design Docs
 
