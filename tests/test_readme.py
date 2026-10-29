@@ -110,10 +110,12 @@ def test_coverage_table_lists_only_implemented_modules() -> None:
     """Every row of "Supported modules" is a module the server loads, in the README's
     order: the README lists no planned module (Container Manager was, #441)."""
     table = README.split("## Supported modules", 1)[1].split("**Coverage**", 1)[0]
-    rows = [line for line in table.splitlines() if line.startswith("|")][2:]  # header, ---
+    # GitHub renders an indented "|" line as a row too; skip the header and --- lines.
+    rows = [line for line in table.splitlines() if line.lstrip().startswith("|")][2:]
     assert [m.group(1) for m in _TABLE_ROW.finditer(table)] == list(SECTIONS)
     assert len(rows) == len(_MODULE_REGISTRY)
-    assert "Coming next" not in README
+    roadmap = re.findall(r"(?i)\b(?:planned|roadmap|coming (?:next|soon))\b", README)
+    assert not roadmap, f"the README announces unbuilt work: {roadmap}"
 
 
 @pytest.mark.parametrize("module", sorted(SECTIONS))
