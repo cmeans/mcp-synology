@@ -279,9 +279,10 @@ def format_timestamp(epoch: float) -> str:
 
 _DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
 
-# DSM's weekly plans (Download Station's schedule, Storage Manager's scrubbing,
-# reclamation and deduplication windows): day-major Sun..Sat, 24 chars per day,
-# one char per hour (verified from DSM's SYNO.ux.ScheduleTable widget, #123).
+# DSM's weekly plans: day-major Sun..Sat, 24 chars per day, one char per hour. Verified
+# for Download Station's schedule from DSM's SYNO.ux.ScheduleTable widget (#123); Storage
+# Manager's scrubbing, reclamation and deduplication windows are 168 characters too, and
+# read the same way (inferred; storage-module-spec.md).
 SCHEDULE_PLAN_LENGTH = 7 * 24
 
 

@@ -6,20 +6,27 @@ import json
 from typing import TYPE_CHECKING, Any
 
 from mcp_synology.core.formatting import format_key_value
+from mcp_synology.modules.filestation.helpers import dsm_str
 from mcp_synology.modules.storage.helpers import (
     Sections,
+    as_dict,
+    cache_title,
+    dicts,
+    epoch_note,
     items,
     load_info,
     notes_block,
     other_fields,
+    pct,
     raid_name,
+    shared_cache_of,
     size,
     status_text,
     usage,
     value_text,
+    when,
     yes_no,
 )
-from mcp_synology.modules.storage.pools import when
 
 if TYPE_CHECKING:
     from mcp_synology.core.client import DsmClient
@@ -54,14 +61,21 @@ def _mode(mode: object) -> str:
 
 
 def cache_block(
-    cache: dict[str, Any], shared: dict[str, Any] | None, vols: dict[str, str], config: Any
+    info: dict[str, Any],
+    cache: dict[str, Any],
+    shared: dict[str, Any] | None,
+    vols: dict[str, str],
+    config: Any,
 ) -> str:
+    own_size = as_dict(cache.get("size"))
     pairs = [
         ("For volume", vols.get(str(cache.get("mountSpaceId")), str(cache.get("mountSpaceId")))),
         ("Mode", _mode(cache.get("mode"))),
         ("Status", status_text(cache)),
-        ("Read hit rate", f"{cache.get('hit_rate')}%"),
-        ("Write hit rate", f"{cache.get('hit_rate_write')}%"),
+        ("Read hit rate", pct(cache.get("hit_rate"))),
+        ("Write hit rate", pct(cache.get("hit_rate_write"))),
+        ("Size", ", ".join(f"{k} {size(v)}" for k, v in own_size.items()) or "—"),
+        ("UUID", str(cache.get("SSDUUID") or "—")),
         ("Metadata pinned", yes_no(cache.get("metadataCache"))),
         ("SSDs", ", ".join(map(str, cache.get("disks") or [])) or "—"),
     ]
@@ -76,7 +90,7 @@ def cache_block(
         pairs.extend(other_fields(shared, _SHARED_KNOWN, prefix="  "))
     if isinstance(config, dict):
         pairs.extend((f"  setting: {k}", value_text(v)) for k, v in config.items())
-    current = (cache.get("hit_rates") or {}).get("Current") or {}
+    current = as_dict(as_dict(cache.get("hit_rates")).get("Current"))
     if current.get("success"):
         pairs.append(
             (
@@ -85,12 +99,12 @@ def cache_block(
             )
         )
     pairs.extend(other_fields(cache, _CACHE_KNOWN))
-    return format_key_value(pairs, title=f"SSD cache {cache.get('id')}")
+    return format_key_value(pairs, title=cache_title(info, cache))
 
 
 def advisor_lines(history: Any, vols: dict[str, str]) -> list[str]:
     lines = []
-    for item in (history or {}).get("items") or [] if isinstance(history, dict) else []:
+    for item in dicts(history.get("items") if isinstance(history, dict) else None):
         lines.append(
             f"{vols.get(str(item.get('volume')), item.get('volume'))}: finished "
             f"{when(item.get('completed_time'))}, suggests {size(item.get('recommended_size'))} "
@@ -122,17 +136,9 @@ async def list_ssd_caches(client: DsmClient) -> str:
         for v in items(info, "volumes")
     }
     caches = items(info, "ssdCaches")
-    shared = items(info, "sharedCaches")
     blocks = []
     for cache in caches:
-        owner = next(
-            (
-                s
-                for s in shared
-                if str(cache.get("SSDPath", "")).startswith(str(s.get("space_path")) + "/")
-            ),
-            None,
-        )
+        owner = shared_cache_of(info, cache)
         config = None
         if owner:
             config = await optional.get(
@@ -140,18 +146,14 @@ async def list_ssd_caches(client: DsmClient) -> str:
                 f"{owner.get('id')} settings",
                 _FLASHCACHE,
                 "shared_cache_config_get",
-                {"shared_cache": json.dumps(str(owner.get("id")))},
+                {"shared_cache": dsm_str(str(owner.get("id")))},
             )
-        blocks.append(cache_block(cache, owner, vols, config))
+        blocks.append(cache_block(info, cache, owner, vols, config))
     if not caches:
         blocks.append("No SSD caches.")
     history = await optional.get(client, "SSD cache advisor", _FLASHCACHE, "advisor_history_get")
     lines = advisor_lines(history, vols)
     if lines:
         blocks.append("\n".join(["SSD cache advisor", *(f"  {x}" for x in lines)]))
-    footer = (
-        '\n\nTimes marked "about" are UTC and can be an hour off during daylight saving time.'
-        if lines
-        else ""
-    )
-    return "\n\n".join(blocks) + footer + notes_block(optional.notes)
+    text = "\n\n".join(blocks)
+    return text + epoch_note(text) + notes_block(optional.notes)

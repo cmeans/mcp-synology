@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
-import json
+import asyncio
 import re
 from datetime import UTC, datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
-from mcp_synology.core.errors import ErrorCode
+from mcp_synology.core.errors import ErrorCode, SynologyError
 from mcp_synology.core.formatting import error_response, format_key_value, format_table
+from mcp_synology.modules.filestation.helpers import dsm_str
 from mcp_synology.modules.storage.helpers import (
     Sections,
+    as_dict,
     call,
     json_list,
     not_found,
@@ -53,8 +55,18 @@ def require_snapshot_api(client: DsmClient) -> int:
             retryable=False,
             suggestion="Install Snapshot Replication from Package Center, then retry.",
         )
-    # v1 answers an empty list even when the share has snapshots; v2 lists them.
-    return client.negotiate_version(_SNAPSHOT, min_version=2)
+    # v1 answers an empty list even when the share has snapshots; v2 lists them. Pinned to
+    # exactly v2, the version verified on all four DSM versions.
+    try:
+        return client.negotiate_version(_SNAPSHOT, min_version=2, max_version=2)
+    except SynologyError:
+        error_response(
+            ErrorCode.NOT_SUPPORTED,
+            f"{OPERATION} failed: this NAS's Snapshot Replication doesn't offer the snapshot "
+            "list (version 2) these tools need.",
+            retryable=False,
+            suggestion="Update Snapshot Replication (and DSM) on the NAS, then retry.",
+        )
 
 
 async def shares(client: DsmClient) -> list[dict[str, Any]]:
@@ -77,7 +89,7 @@ def schedule_text(reply: Any) -> list[tuple[str, str]]:
 
 async def _schedule(client: DsmClient, optional: Sections, name: str) -> Any:
     return await optional.get(
-        client, f"{name} schedule", _SNAPSHOT, "get_schedule", {"name": json.dumps(name)}
+        client, f"{name} schedule", _SNAPSHOT, "get_schedule", {"name": dsm_str(name)}
     )
 
 
@@ -89,11 +101,19 @@ async def list_snapshots(
     optional = Sections(OPERATION)
 
     if not share:
+        # One get_schedule per share: a few at a time, so a NAS with many shares answers
+        # well inside a client's time limit.
+        limit_calls = asyncio.Semaphore(4)
+
+        async def schedule(name: str) -> Any:
+            async with limit_calls:
+                return await _schedule(client, optional, name)
+
+        names = [str(s.get("name")) for s in all_shares]
+        schedules = await asyncio.gather(*(schedule(n) for n in names))
         rows = []
-        for s in all_shares:
-            name = str(s.get("name"))
-            count = (s.get("snapshot_info") or {}).get("snapshot_count", "—")
-            sched = await _schedule(client, optional, name)
+        for s, name, sched in zip(all_shares, names, schedules, strict=True):
+            count = as_dict(s.get("snapshot_info")).get("snapshot_count", "—")
             on = (
                 "—"
                 if not isinstance(sched, dict)
@@ -118,7 +138,7 @@ async def list_snapshots(
         OPERATION,
         _SNAPSHOT,
         "list",
-        {"name": json.dumps(name), "additional": _SNAPSHOT_ADDITIONAL, "offset": 0, "limit": -1},
+        {"name": dsm_str(name), "additional": _SNAPSHOT_ADDITIONAL, "offset": 0, "limit": -1},
         version=version,
     )
     snaps = [x for x in (reply or {}).get("snapshots") or [] if isinstance(x, dict)]

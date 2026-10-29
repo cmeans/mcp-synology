@@ -8,11 +8,12 @@ from mcp_synology.core.formatting import format_key_value
 from mcp_synology.modules.storage.helpers import (
     STORAGE_API,
     Sections,
+    epoch_note,
     notes_block,
     value_text,
+    when,
     yes_no,
 )
-from mcp_synology.modules.storage.pools import when
 
 if TYPE_CHECKING:
     from mcp_synology.core.client import DsmClient
@@ -70,7 +71,7 @@ async def get_storage_settings(client: DsmClient) -> str:
             ("Mode", _SPEEDS.get(str(resync.get("speed_option")), str(resync.get("speed_option"))))
         ]
         if "speed_min" in resync:
-            pairs.append(("Range (MB/s)", f"{resync.get('speed_min')}–{resync.get('speed_max')}"))
+            pairs.append(("Limits", f"{resync.get('speed_min')} to {resync.get('speed_max')}"))
         pairs.extend(
             (k, value_text(v))
             for k, v in resync.items()
@@ -92,11 +93,13 @@ async def get_storage_settings(client: DsmClient) -> str:
         pairs = _pairs({k: v for k, v in hdd.items() if k != "db_last_update_time"}, _HDDMAN)
         if "db_last_update_time" in hdd:
             pairs.append(("Drive database updated", when(hdd.get("db_last_update_time"))))
-        if isinstance(db, dict):
-            pairs.extend(
-                (f"Latest online drive database: {k}", value_text(v)) for k, v in db.items()
-            )
         blocks.append(format_key_value(pairs, title="Disk health"))
+    if isinstance(db, dict):
+        blocks.append(
+            format_key_value(
+                [(k, value_text(v)) for k, v in db.items()], title="Latest online drive database"
+            )
+        )
     if isinstance(spare, dict):
         blocks.append(
             format_key_value(
@@ -125,4 +128,5 @@ async def get_storage_settings(client: DsmClient) -> str:
         )
     if not blocks:
         blocks.append("No storage settings could be read.")
-    return "\n\n".join(blocks) + notes_block(optional.notes)
+    text = "\n\n".join(blocks)
+    return text + epoch_note(text) + notes_block(optional.notes)

@@ -4,20 +4,23 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from mcp_synology.core.formatting import format_key_value, format_timestamp
+from mcp_synology.core.formatting import format_key_value
 from mcp_synology.modules.storage.helpers import (
-    EPOCH_NOTE,
     Sections,
+    as_dict,
+    dicts,
+    epoch_note,
     items,
     load_info,
     notes_block,
     other_fields,
+    percent,
     pool_label,
     raid_name,
     size,
     status_text,
-    usage,
     value_text,
+    when,
     yes_no,
 )
 
@@ -27,51 +30,36 @@ if TYPE_CHECKING:
 OPERATION = "List storage pools"
 
 _KNOWN = {
-    "id",
-    "num_id",
-    "pool_path",
-    "space_path",
-    "device_type",
-    "raidType",
-    "status",
-    "summary_status",
-    "space_status",
-    "size",
-    "disks",
-    "raids",
-    "spares",
-    "progress",
-    "data_scrubbing",
-    "scrubbingStatus",
-    "last_done_time",
-    "next_schedule_time",
-    "is_scheduled",
-    "desc",
-    "pool_child",
-    "uuid",
-    "missing_drives",
-    "disk_failure_number",
-    "repair_action",
-    "is_actioning",
-    "is_backgroundbuilding",
-}
-
-
-def when(epoch: object) -> str:
-    """An epoch DSM sends with no local-time counterpart, in UTC (see EPOCH_NOTE)."""
-    if isinstance(epoch, (int, float)) and epoch > 0:
-        return f"about {format_timestamp(epoch)}"
-    return "—"
+    "id", "num_id", "pool_path", "space_path", "device_type", "status", "summary_status",
+    "space_status", "size", "disks", "raids", "spares", "progress", "data_scrubbing",
+    "scrubbingStatus", "last_done_time", "next_schedule_time", "is_scheduled", "desc",
+    "pool_child", "uuid", "missing_drives", "disk_failure_number", "repair_action",
+}  # fmt: skip
+_RAID_KNOWN = {"raidPath", "devices", "designedDiskCount", "normalDevCount", "spares"}
+_PROGRESS_KNOWN = {"step", "percent", "cur_step", "total_step"}
 
 
 def members(pool: dict[str, Any]) -> str:
-    devices = [
-        f"{d.get('id')} ({d.get('status')})"
-        for raid in pool.get("raids") or []
-        for d in raid.get("devices") or []
-        if isinstance(d, dict)
-    ]
-    return ", ".join(devices) or ", ".join(str(d) for d in pool.get("disks") or []) or "—"
+    """Each member disk once, with its state (an SHR pool spans several md arrays)."""
+    seen: dict[str, str] = {}
+    for raid in dicts(pool.get("raids")):
+        for d in dicts(raid.get("devices")):
+            seen.setdefault(str(d.get("id")), str(d.get("status")))
+    if seen:
+        return ", ".join(f"{disk} ({state})" for disk, state in seen.items())
+    return ", ".join(str(d) for d in pool.get("disks") or []) or "—"
+
+
+def raid_lines(pool: dict[str, Any]) -> list[tuple[str, str]]:
+    pairs = []
+    for raid in dicts(pool.get("raids")):
+        normal, designed = raid.get("normalDevCount"), raid.get("designedDiskCount")
+        text = f"{normal} of {designed} disks working"
+        if normal is not None and designed is not None and normal != designed:
+            text += " (degraded)"
+        extra = [f"{k}: {value_text(v)}" for k, v in raid.items() if k not in _RAID_KNOWN]
+        pairs.append((f"  array {raid.get('raidPath', '?')}", ", ".join([text, *extra])))
+    return pairs
 
 
 def progress_text(progress: dict[str, Any]) -> str:
@@ -82,28 +70,37 @@ def progress_text(progress: dict[str, Any]) -> str:
     text = step + (f" {pct}%" if pct not in ("-1", "") else "")
     if progress.get("total_step"):
         text += f" (step {progress.get('cur_step')} of {progress.get('total_step')})"
-    return text
+    extra = [f"{k}: {value_text(v)}" for k, v in progress.items() if k not in _PROGRESS_KNOWN]
+    return ", ".join([text, *extra])
 
 
 def pool_block(pool: dict[str, Any], vol_names: dict[str, str], setting: Any) -> str:
-    scrub = pool.get("data_scrubbing") or {}
-    spares = [str(s.get("id")) for s in pool.get("spares") or [] if isinstance(s, dict)]
+    scrub = as_dict(pool.get("data_scrubbing"))
+    spares = [str(s.get("id")) for s in dicts(pool.get("spares"))]
+    sizes = as_dict(pool.get("size"))
+    space = as_dict(pool.get("space_status"))
+    allocated = (
+        f"{size(sizes.get('total'))}, of which {size(sizes.get('used'))} "
+        f"({percent(sizes.get('used'), sizes.get('total'))}) is allocated to volumes"
+    )
     pairs = [
         ("RAID type", raid_name(pool.get("device_type"))),
         ("Status", status_text(pool)),
-        ("Size", usage(pool.get("size") or {})),
+        ("Space status", str(space.get("status") or "—")),
+        # A pool's "used" is what its volumes take up, not the data in them.
+        ("Size", allocated),
         ("Disks", members(pool)),
+        *raid_lines(pool),
         ("Hot spares", ", ".join(spares) or "none"),
         ("Failed disks", str(pool.get("disk_failure_number", 0))),
         ("Missing disks", ", ".join(map(str, pool.get("missing_drives") or [])) or "none"),
-        ("In progress", progress_text(pool.get("progress") or {})),
+        ("In progress", progress_text(as_dict(pool.get("progress")))),
         ("Repair", str(pool.get("repair_action") or "none")),
         (
             "Volumes",
             ", ".join(
                 vol_names.get(str(c.get("id")), str(c.get("id")))
-                for c in pool.get("pool_child") or []
-                if isinstance(c, dict)
+                for c in dicts(pool.get("pool_child"))
             )
             or "none",
         ),
@@ -114,9 +111,11 @@ def pool_block(pool: dict[str, Any], vol_names: dict[str, str], setting: Any) ->
         (
             "  can run",
             f"manually {yes_no(scrub.get('can_do_manual'))}, "
-            f"on a schedule {yes_no(scrub.get('can_do_schedule'))}",
+            f"on a schedule {yes_no(scrub.get('can_do_schedule'))}"
+            + (f" ({scrub['reason']})" if scrub.get("reason") else ""),
         ),
         ("Device path", str(pool.get("space_path") or "—")),
+        ("Pool path", str(pool.get("pool_path") or "—")),
         ("UUID", str(pool.get("uuid") or "—")),
     ]
     if pool.get("desc"):
@@ -135,12 +134,13 @@ def spare_lines(spares: Any, pools: list[dict[str, Any]], conf: Any) -> list[str
             "Automatic replacement of a failed disk: " + yes_no(conf.get("auto_replacement"))
         )
     hot = (spares or {}).get("hotSpares") if isinstance(spares, dict) else None
-    for spare in hot or []:
+    for spare in dicts(hot):
         protects = (
             ", ".join(by_path.get(str(p), str(p)) for p in spare.get("protect_spaces") or [])
             or "nothing"
         )
-        state = (spare.get("status") or {}).get("type", "—")
+        status = spare.get("status")
+        state = status.get("type", "—") if isinstance(status, dict) else value_text(status)
         lines.append(
             f"{spare.get('id')}   {str(spare.get('model') or '—').strip()}   serial "
             f"{spare.get('serial') or '—'}   {size(spare.get('size'))}   {state}   "
@@ -156,7 +156,7 @@ def potential_lines(dump: Any, pools: list[dict[str, Any]]) -> list[str]:
         return []
     by_path = {str(p.get("space_path")): pool_label(p) for p in pools}
     lines = []
-    for space in dump.get("spaces") or []:
+    for space in dicts(dump.get("spaces")):
         name = by_path.get(str(space.get("space_path")), str(space.get("space_path")))
         valid = [
             str(v.get("path") if isinstance(v, dict) else v)
@@ -201,11 +201,20 @@ async def list_storage_pools(client: DsmClient) -> str:
             )
         blocks.append(pool_block(pool, vol_names, setting))
 
+    missing = items(info, "missing_pools")
+    detected = items(info, "detected_pools")
+    lost = [
+        f"{title}: " + (", ".join(value_text(p) for p in found) if found else "none")
+        for title, found in (("Missing pools", missing), ("Detected pools", detected))
+    ]
     if not pools:
-        blocks.append(
-            "No storage pools. Volumes on this NAS aren't in a storage pool (see get_volume)."
-        )
-        return "\n\n".join(blocks)
+        if missing or detected:
+            blocks.append("No assembled storage pools.")
+        else:
+            blocks.append(
+                "No storage pools. Volumes on this NAS aren't in a storage pool (see get_volume)."
+            )
+        return "\n\n".join([*blocks, *lost]) + notes_block(optional.notes)
 
     spares = await optional.get(client, "Hot spares", "SYNO.Storage.CGI.Spare", "list")
     potential = await optional.get(
@@ -222,7 +231,6 @@ async def list_storage_pools(client: DsmClient) -> str:
                 ]
             )
         )
-    for key, title in (("missing_pools", "Missing pools"), ("detected_pools", "Detected pools")):
-        found = items(info, key)
-        blocks.append(f"{title}: " + (", ".join(value_text(p) for p in found) if found else "none"))
-    return "\n\n".join(blocks) + "\n\n" + EPOCH_NOTE + notes_block(optional.notes)
+    blocks.extend(lost)
+    text = "\n\n".join(blocks)
+    return text + epoch_note(text) + notes_block(optional.notes)

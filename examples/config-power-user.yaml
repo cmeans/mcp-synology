@@ -69,6 +69,8 @@ modules:
         - ~/Downloads
         - ~/Pictures
       task_timeout: 60      # seconds a copy, move or delete waits before handing off
+  storage:
+    enabled: true  # read-only (no write tools yet); needs a DSM administrator account
 
 logging:
   level: debug

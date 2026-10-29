@@ -2339,5 +2339,89 @@
    "version": "1"
   },
   "transport": "GET"
+ },
+ "admin:VolumeReduction.get_auto_enable_reduction_for_new:\"volume_1\"": {
+  "request": {
+   "api": "SYNO.Storage.CGI.VolumeReduction",
+   "method": "get_auto_enable_reduction_for_new",
+   "version": "1",
+   "volume": "\"volume_1\""
+  },
+  "reply": {
+   "error": {
+    "code": 101
+   },
+   "success": false
+  }
+ },
+ "admin:VolumeReduction.list_reduction_share:\"volume_1\"": {
+  "request": {
+   "api": "SYNO.Storage.CGI.VolumeReduction",
+   "method": "list_reduction_share",
+   "version": "1",
+   "volume": "\"volume_1\""
+  },
+  "reply": {
+   "error": {
+    "code": 101
+   },
+   "success": false
+  }
+ },
+ "test:VolumeReduction.get_auto_enable_reduction_for_new:\"volume_1\"": {
+  "request": {
+   "api": "SYNO.Storage.CGI.VolumeReduction",
+   "method": "get_auto_enable_reduction_for_new",
+   "version": "1",
+   "volume": "\"volume_1\""
+  },
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  }
+ },
+ "test:VolumeReduction.list_reduction_share:\"volume_1\"": {
+  "request": {
+   "api": "SYNO.Storage.CGI.VolumeReduction",
+   "method": "list_reduction_share",
+   "version": "1",
+   "volume": "\"volume_1\""
+  },
+  "reply": {
+   "error": {
+    "code": 105
+   },
+   "success": false
+  }
+ },
+ "admin:VolumeReduction.get_auto_enable_reduction_for_new:volume_path=\"/volume1\"": {
+  "request": {
+   "api": "SYNO.Storage.CGI.VolumeReduction",
+   "method": "get_auto_enable_reduction_for_new",
+   "version": "1",
+   "volume_path": "\"/volume1\""
+  },
+  "reply": {
+   "error": {
+    "code": 120
+   },
+   "success": false
+  }
+ },
+ "admin:VolumeReduction.list_reduction_share:volume_path=\"/volume1\"": {
+  "request": {
+   "api": "SYNO.Storage.CGI.VolumeReduction",
+   "method": "list_reduction_share",
+   "version": "1",
+   "volume_path": "\"/volume1\""
+  },
+  "reply": {
+   "error": {
+    "code": 120
+   },
+   "success": false
+  }
  }
 }

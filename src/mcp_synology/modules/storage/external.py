@@ -8,6 +8,7 @@ from mcp_synology.core.errors import SynologyError
 from mcp_synology.core.formatting import format_size
 from mcp_synology.modules.storage.helpers import (
     Sections,
+    dicts,
     json_list,
     notes_block,
     refuse_non_admin,
@@ -56,7 +57,7 @@ async def _usb(client: DsmClient, optional: Sections) -> Any:
     if api not in client._api_cache:
         return None
     try:
-        return await client.request(api, "list", params=_ALL)
+        return await client.request(api, "list", version=1, params=_ALL)
     except SynologyError as e:
         if e.code in (105, 404):
             refuse_non_admin(OPERATION)
@@ -79,7 +80,7 @@ def device_lines(devices: list[dict[str, Any]], kind: str) -> list[str]:
         extra = {k: v for k, v in dev.items() if k not in _DEVICE_KNOWN}
         if extra:
             lines.append("    " + ", ".join(f"{k}: {value_text(v)}" for k, v in extra.items()))
-        for part in dev.get("partitions") or []:
+        for part in dicts(dev.get("partitions")):
             used = part.get("used_size_mb")
             space = (
                 f"{mib(used)} of {mib(part.get('total_size_mb'))} used"

@@ -12,8 +12,13 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from mcp_synology.core.errors import ErrorCode, SynologyError
-from mcp_synology.core.formatting import error_response, format_size, synology_error_response
+from mcp_synology.core.errors import DsmHttpError, DsmReplyError, ErrorCode, SynologyError
+from mcp_synology.core.formatting import (
+    error_response,
+    format_size,
+    format_timestamp,
+    synology_error_response,
+)
 
 if TYPE_CHECKING:
     from mcp_synology.core.client import DsmClient
@@ -64,9 +69,12 @@ async def call(
     method: str,
     params: dict[str, Any] | None = None,
     *,
-    version: int | None = None,
+    version: int = 1,
 ) -> Any:
     """A call the tool can't do without: any DSM error fails the tool.
+
+    Every call is pinned to v1, the version the captures verified, unless the caller
+    names another (the client would otherwise send the NAS's highest).
 
     105 is ``permission_denied`` naming the administrator requirement; 121 is
     ``not_supported``.
@@ -76,7 +84,11 @@ async def call(
             ErrorCode.API_NOT_FOUND,
             f"{operation} failed: {api} isn't available on this NAS.",
             retryable=False,
-            suggestion="Storage Manager may not be installed or running on this DSM.",
+            suggestion=(
+                "Storage Manager may not be installed or running on this DSM."
+                if api.startswith("SYNO.Storage.")
+                else f"{api} isn't offered by this DSM."
+            ),
         )
     try:
         return await client.request(api, method, version=version, params=params)
@@ -107,13 +119,14 @@ class Sections:
         method: str,
         params: dict[str, Any] | None = None,
         *,
-        version: int | None = None,
+        version: int = 1,
     ) -> Any:
         """The reply's data, or None (with a note) when the section can't be read.
 
         A 105 still fails the whole tool: the account isn't an administrator.
         """
         if api not in client._api_cache:
+            self.notes.append(f"{label}: not available on this NAS")
             return None
         try:
             return await client.request(api, method, version=version, params=params)
@@ -126,8 +139,29 @@ class Sections:
                 self.notes.append(f"{label}: not available on this DSM version")
             else:
                 logger.debug("%s %s/%s failed: %s", self.operation, api, method, e)
-                self.notes.append(f"{label}: couldn't be read (DSM error {e.code})")
+                self.notes.append(f"{label}: couldn't be read ({failure(e)})")
             return None
+
+
+def failure(e: SynologyError) -> str:
+    """'DSM error 117', or what came back instead of a DSM reply (a proxy's 502)."""
+    if e.code is not None:
+        return f"DSM error {e.code}"
+    if isinstance(e, DsmHttpError):
+        return f"HTTP {e.status}"
+    if isinstance(e, DsmReplyError):
+        return "no DSM reply"
+    return type(e).__name__
+
+
+def as_dict(value: object) -> dict[str, Any]:
+    """A dict DSM sent, or {} for anything else."""
+    return value if isinstance(value, dict) else {}
+
+
+def dicts(value: object) -> list[dict[str, Any]]:
+    """The dict items of a list DSM sent (anything else, or a non-list, is skipped)."""
+    return [x for x in value if isinstance(x, dict)] if isinstance(value, list) else []
 
 
 async def load_info(client: DsmClient, operation: str) -> dict[str, Any]:
@@ -139,8 +173,7 @@ async def load_info(client: DsmClient, operation: str) -> dict[str, Any]:
 def items(info: dict[str, Any], key: str) -> list[dict[str, Any]]:
     """A list from ``load_info``; ``ssdCaches`` and ``sharedCaches`` are absent without a
     cache, not empty."""
-    value = info.get(key)
-    return [x for x in value if isinstance(x, dict)] if isinstance(value, list) else []
+    return dicts(info.get(key))
 
 
 def not_found(operation: str, kind: str, param: str, value: str, valid: list[str]) -> None:
@@ -179,6 +212,11 @@ def percent(used: object, total: object) -> str:
     if u is None or not t:
         return "—"
     return f"{u / t * 100:.1f}%"
+
+
+def pct(value: object) -> str:
+    """A percentage DSM sends ('83'), or — when it's missing."""
+    return "—" if value is None or value == "" else f"{value}%"
 
 
 def usage(sizes: dict[str, Any]) -> str:
@@ -224,6 +262,26 @@ def disk_label(disk: dict[str, Any]) -> str:
     return f"{disk.get('longName') or disk.get('name') or 'Disk'} ({disk.get('id', '?')})"
 
 
+def shared_cache_of(info: dict[str, Any], cache: dict[str, Any]) -> dict[str, Any] | None:
+    """The shared SSD cache a volume's cache (``ssdCaches``) is carved from, if any."""
+    path = str(cache.get("SSDPath") or "")
+    for shared in items(info, "sharedCaches"):
+        if path.startswith(str(shared.get("space_path")) + "/"):
+            return shared
+    return None
+
+
+def cache_title(info: dict[str, Any], cache: dict[str, Any]) -> str:
+    """One name for one cache everywhere: 'Cache 1 (shared_cache_1, volume cache …)'."""
+    shared = shared_cache_of(info, cache)
+    if shared:
+        return (
+            f"Cache {shared.get('num_id', '?')} ({shared.get('id')}, volume cache "
+            f"{cache.get('id')})"
+        )
+    return f"Cache {cache.get('num_id', '?')} ({cache.get('id')})"
+
+
 def yes_no(value: object) -> str:
     if isinstance(value, bool):
         return "yes" if value else "no"
@@ -243,15 +301,39 @@ def value_text(value: object) -> str:
     return str(value)
 
 
+# Fields DSM sends as epoch seconds (0 = never or not scheduled).
+EPOCH_FIELDS = frozenset({
+    "last_done_time", "next_schedule_time", "next_start_time", "start_time",
+    "completed_time", "db_last_update_time", "delay_end_time", "schedule_disable_time",
+    "last_dry_run_time", "last_manual_dedupe_time", "next_run_time",
+})  # fmt: skip
+
+
+def when(epoch: object) -> str:
+    """An epoch DSM sends with no local-time counterpart, in UTC (see EPOCH_NOTE)."""
+    if isinstance(epoch, (int, float)) and not isinstance(epoch, bool) and epoch > 0:
+        return f"about {format_timestamp(epoch)}"
+    return "—"
+
+
+def field_text(key: str, value: object) -> str:
+    return when(value) if key in EPOCH_FIELDS else value_text(value)
+
+
 def other_fields(
     obj: dict[str, Any], known: set[str], *, keep_ui: bool = False, prefix: str = ""
 ) -> list[tuple[str, str]]:
     """Every field not already shown, under its own name, so nothing DSM sends is lost."""
     return [
-        (f"{prefix}{key}", value_text(value))
+        (f"{prefix}{key}", field_text(key, value))
         for key, value in obj.items()
         if key not in known and (keep_ui or not is_ui_field(key))
     ]
+
+
+def epoch_note(*texts: str) -> str:
+    """EPOCH_NOTE, when any of ``texts`` shows an "about" time."""
+    return "\n\n" + EPOCH_NOTE if any("about " in t for t in texts) else ""
 
 
 def notes_block(notes: list[str]) -> str:

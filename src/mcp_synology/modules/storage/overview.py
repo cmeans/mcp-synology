@@ -9,6 +9,7 @@ from mcp_synology.core.formatting import format_key_value, format_timestamp
 from mcp_synology.modules.storage.helpers import (
     STORAGE_API,
     Sections,
+    dicts,
     disk_label,
     items,
     load_info,
@@ -16,6 +17,7 @@ from mcp_synology.modules.storage.helpers import (
     percent,
     pool_label,
     raid_name,
+    shared_cache_of,
     size,
     status_text,
     usage,
@@ -61,7 +63,7 @@ def disk_roles(info: dict[str, Any]) -> dict[str, str]:
                 roles[str(spare["id"])] = "hot spare"
     for cache in items(info, "sharedCaches") or items(info, "ssdCaches"):
         for disk in cache.get("disks") or []:
-            roles.setdefault(str(disk), f"SSD cache {cache.get('num_id', '?')}")
+            roles.setdefault(str(disk), f"SSD cache {cache.get('num_id', '?')} ({cache.get('id')})")
     by_id = {str(p.get("id")): p for p in pools}
     for disk in items(info, "disks"):
         did = str(disk.get("id"))
@@ -80,7 +82,7 @@ def disk_roles(info: dict[str, Any]) -> dict[str, str]:
 
 
 def running_test_style(tasks: dict[str, Any] | None, disk_id: str) -> str:
-    for task in ((tasks or {}).get("smart") or {}).get("tasks") or []:
+    for task in task_list(tasks, "smart"):
         if task.get("status") == "running" and disk_id in (task.get("target") or []):
             return _TEST_STYLES.get(str(task.get("test_style")), str(task.get("test_style")))
     return ""
@@ -121,8 +123,7 @@ def cache_lines(info: dict[str, Any]) -> list[str]:
     vol_num = {str(v.get("id")): v.get("num_id", "?") for v in items(info, "volumes")}
     ssd = items(info, "ssdCaches")
     for shared in items(info, "sharedCaches"):
-        path = str(shared.get("space_path") or "")
-        attached = [c for c in ssd if path and str(c.get("SSDPath", "")).startswith(path + "/")]
+        attached = [c for c in ssd if shared_cache_of(info, c) is shared]
         disks = len(shared.get("disks") or [])
         parts = [f"Cache {shared.get('num_id', '?')} ({shared.get('id')})"]
         modes = {str(c.get("mode")) for c in attached}
@@ -144,6 +145,23 @@ def cache_lines(info: dict[str, Any]) -> list[str]:
     return lines
 
 
+def _names(entries: object) -> set[str]:
+    return {
+        str(e.get("id") if isinstance(e, dict) else e).lower()
+        for e in (entries if isinstance(entries, list) else [])
+    }
+
+
+def _disk_names(disk: dict[str, Any]) -> set[str]:
+    return {str(disk.get(k)).lower() for k in ("id", "name", "longName", "device") if disk.get(k)}
+
+
+def task_list(tasks: Any, kind: str) -> list[dict[str, Any]]:
+    """One kind's tasks from ``get_sche_task_list`` (smart, data_scrubbing, ssd_trim)."""
+    section = tasks.get(kind) if isinstance(tasks, dict) else None
+    return dicts(section.get("tasks")) if isinstance(section, dict) else []
+
+
 def attention_items(info: dict[str, Any], bad: dict[str, Any] | None) -> list[str]:
     found: list[str] = []
     for pool in items(info, "storagePools"):
@@ -160,18 +178,18 @@ def attention_items(info: dict[str, Any], bad: dict[str, Any] | None) -> list[st
         if cache.get("summary_status", "normal") != "normal":
             found.append(f"SSD cache {cache.get('id')}: {status_text(cache)}")
     bad = bad or {}
-    unhealthy = {str(x.get("id") if isinstance(x, dict) else x) for x in bad.get("unhealthy") or []}
-    incompatible = {
-        str(x.get("id") if isinstance(x, dict) else x) for x in bad.get("not_compatible") or []
-    }
+    # DSM lists them by display name ("Drive 1"); vdsm, which has no disks, lists two
+    # drives that don't exist, so an entry that matches no disk is left out.
+    unhealthy = _names(bad.get("unhealthy"))
+    incompatible = _names(bad.get("not_compatible"))
     for disk in items(info, "disks"):
-        did = str(disk.get("id"))
         reasons = []
         if disk.get("overview_status", "normal") != "normal":
             reasons.append(str(disk.get("overview_status")))
-        if did in unhealthy:
+        names = _disk_names(disk)
+        if names & unhealthy:
             reasons.append("unhealthy")
-        if did in incompatible:
+        if names & incompatible:
             reasons.append("not compatible")
         if reasons:
             found.append(f"{disk_label(disk)}: {', '.join(reasons)}")
@@ -181,7 +199,7 @@ def attention_items(info: dict[str, Any], bad: dict[str, Any] | None) -> list[st
 def scheduled_local_times(scheduler: dict[str, Any] | None) -> dict[str, str]:
     """Next run of each enabled S.M.A.R.T. task style, as the NAS's local clock time."""
     times: dict[str, str] = {}
-    for task in (scheduler or {}).get("items") or []:
+    for task in dicts(scheduler.get("items") if isinstance(scheduler, dict) else None):
         try:
             args = json.loads(task.get("app_args") or "{}")
         except (TypeError, ValueError):
@@ -206,7 +224,7 @@ def task_lines(
     upcoming: list[str] = []
     local = scheduled_local_times(scheduler)
 
-    for task in ((tasks or {}).get("smart") or {}).get("tasks") or []:
+    for task in task_list(tasks, "smart"):
         style = _TEST_STYLES.get(str(task.get("test_style")), str(task.get("test_style")))
         targets = [str(t) for t in task.get("target") or []]
         if task.get("status") == "running":
@@ -227,9 +245,10 @@ def task_lines(
                 if task.get("next_run_time")
                 else "not scheduled"
             )
-            upcoming.append(f"S.M.A.R.T. {style} test of {len(targets)} disks, {when_text}")
+            count = f"{len(targets)} disk{'s' if len(targets) != 1 else ''}"
+            upcoming.append(f"S.M.A.R.T. {style} test of {count}, {when_text}")
 
-    for task in ((tasks or {}).get("data_scrubbing") or {}).get("tasks") or []:
+    for task in task_list(tasks, "data_scrubbing"):
         names = [
             pool_label(pools[t]).split(" (")[0].lower() if t in pools else t
             for t in task.get("target") or []

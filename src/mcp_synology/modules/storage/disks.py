@@ -8,6 +8,8 @@ from mcp_synology.core.formatting import format_key_value, format_table
 from mcp_synology.modules.storage.helpers import (
     STORAGE_API,
     Sections,
+    as_dict,
+    dicts,
     disk_label,
     items,
     load_info,
@@ -49,8 +51,6 @@ _KNOWN = {
     "testing_type",
     "compatibility",
     "container",
-    "num_id",
-    "order",
     "slot_id",
     "summary_status_key",
     "summary_status_category",
@@ -79,6 +79,17 @@ def disk_type(disk: dict[str, Any]) -> str:
     return f"{kind} {port}".strip()
 
 
+def location(disk: dict[str, Any]) -> str:
+    """'DS1618+ (internal), bay 2': an expansion unit's disks name the unit here."""
+    container = as_dict(disk.get("container"))
+    where = str(container.get("str") or "—")
+    if container.get("type"):
+        where += f" ({container['type']})"
+    if disk.get("slot_id") is not None:
+        where += f", bay {disk['slot_id']}"
+    return where
+
+
 def disk_pairs(disk: dict[str, Any], role: str, tasks: Any) -> list[tuple[str, str]]:
     notes = disk_notes(disk, tasks)
     return [
@@ -103,6 +114,13 @@ def disk_pairs(disk: dict[str, Any], role: str, tasks: Any) -> list[tuple[str, s
             "not on Synology's compatibility list"
             if disk.get("compatibility") == "not_in_support"
             else str(disk.get("compatibility") or "—"),
+        ),
+        ("Location", location(disk)),
+        ("Port type", str(disk.get("portType") or "—")),
+        (
+            "Status detail",
+            f"{disk.get('summary_status_key') or '—'} "
+            f"({disk.get('summary_status_category') or '—'})",
         ),
         ("Notes", ", ".join(notes) or "none"),
     ]
@@ -138,8 +156,8 @@ def resolve_disk(info: dict[str, Any], disk: str, operation: str) -> dict[str, A
 
 
 def trend_lines(health: Any) -> list[tuple[str, str]]:
-    history = ((health or {}).get("healthInfo") or {}).get("history") or {}
-    incremental = history.get("incremental") or {}
+    history = as_dict(as_dict(as_dict(health).get("healthInfo")).get("history"))
+    incremental = as_dict(history.get("incremental"))
     pairs: list[tuple[str, str]] = []
     for key, label in _TREND.items():
         points = incremental.get(key)
@@ -167,8 +185,7 @@ def smart_table(reply: Any) -> str:
             str(a.get("raw")),
             str(a.get("status")),
         ]
-        for a in ((reply or {}).get("smartInfo") or [])
-        if isinstance(a, dict)
+        for a in dicts(as_dict(reply).get("smartInfo"))
     ]
     if not rows:
         return ""
@@ -182,28 +199,38 @@ def smart_table(reply: Any) -> str:
 def test_lines(log: Any) -> list[tuple[str, str]]:
     if not isinstance(log, dict):
         return []
+
+    def local(value: object) -> str:
+        return f"{value} (NAS time)" if value else "never"
+
     pairs = [
-        ("Last quick test", str(log.get("quick_last") or "never") + " (NAS time)"),
-        ("Last extended test", str(log.get("extend_last") or "never") + " (NAS time)"),
+        ("Last quick test", local(log.get("quick_last"))),
+        ("Last extended test", local(log.get("extend_last"))),
     ]
-    for info in log.get("testInfo") or []:
+    pairs.extend(
+        (f"  {k}", local(v) if k.endswith("_time") else value_text(v))
+        for k, v in log.items()
+        if k not in ("quick_last", "extend_last", "testInfo")
+    )
+    for info in dicts(log.get("testInfo")):
         pairs.append(("  quick result", str(info.get("quick") or "—")))
         pairs.append(("  extended result", str(info.get("extend") or "—")))
-        for key in ("quickTime", "extendTime"):
-            if str(info.get(key) or "").strip():
-                pairs.append((f"  {key}", str(info[key]).strip()))
         if info.get("testing"):
             pairs.append(
                 ("  testing now", f"yes, {info.get('remain') or 'remaining time unknown'}")
             )
+        pairs.extend(
+            (f"  {k}", value_text(str(v).strip() if isinstance(v, str) else v))
+            for k, v in info.items()
+            if k not in ("device", "quick", "extend", "testing", "remain")
+        )
     return pairs
 
 
 def history_table(reply: Any) -> str:
     rows = [
         [str(e.get("time")), str(e.get("type")), str(e.get("test_type")), str(e.get("result"))]
-        for e in ((reply or {}).get("testLog") or [])
-        if isinstance(e, dict)
+        for e in dicts(as_dict(reply).get("testLog"))
     ]
     if not rows:
         return ""
@@ -259,12 +286,8 @@ async def get_disk(client: DsmClient, disk: str, history_limit: int = 10) -> str
     if isinstance(perf, dict):
         pairs.extend((f"Test state: {k}", value_text(v)) for k, v in perf.items())
     pairs.extend(trend_lines(health))
-    overview = (
-        ((health or {}).get("healthInfo") or {}).get("overview")
-        if isinstance(health, dict)
-        else None
-    )
-    if isinstance(overview, dict):
+    overview = as_dict(as_dict(as_dict(health).get("healthInfo")).get("overview"))
+    if overview:
         pairs.extend(
             other_fields(overview, set(d) | {"compatibility"}, keep_ui=True, prefix="Health: ")
         )

@@ -7,14 +7,16 @@ from typing import TYPE_CHECKING, Any
 
 from mcp_synology.core.formatting import format_key_value, weekly_plan_grid
 from mcp_synology.modules.storage.helpers import (
-    EPOCH_NOTE,
     STORAGE_API,
     Sections,
+    dicts,
+    epoch_note,
     notes_block,
     value_text,
+    when,
     yes_no,
 )
-from mcp_synology.modules.storage.pools import when
+from mcp_synology.modules.storage.overview import task_list
 
 if TYPE_CHECKING:
     from mcp_synology.core.client import DsmClient
@@ -44,6 +46,7 @@ def scrubbing_block(plan: Any) -> str:
         ("Every", f"{sched.get('interval')} months" if sched.get("interval") else "—"),
         ("Pools, in order", ", ".join(map(str, sched.get("sche_pool_order") or [])) or "—"),
         ("Next run", when(sched.get("next_start_time"))),
+        ("First run", when(sched.get("start_time"))),
         ("Running now", yes_no(sched.get("sche_is_running"))),
         ("Runs", _RUN_OPTIONS.get(str(option), str(option))),
     ]
@@ -69,7 +72,7 @@ def scrubbing_block(plan: Any) -> str:
 
 def smart_block(scheduler: Any, tasks: Any) -> str:
     rows: list[tuple[str, str]] = []
-    for item in (scheduler or {}).get("items") or [] if isinstance(scheduler, dict) else []:
+    for item in dicts(scheduler.get("items") if isinstance(scheduler, dict) else None):
         try:
             args = json.loads(item.get("app_args") or "{}")
         except (TypeError, ValueError):
@@ -86,16 +89,14 @@ def smart_block(scheduler: Any, tasks: Any) -> str:
                 f"{item.get('next_trigger_time') or '—'} (NAS time)",
             )
         )
-    running = (
-        [
-            f"{_STYLES.get(str(t.get('test_style')), t.get('test_style'))} test of "
-            f"{', '.join(map(str, t.get('target') or []))}"
-            for t in ((tasks or {}).get("smart") or {}).get("tasks") or []
-            if t.get("status") == "running"
-        ]
-        if isinstance(tasks, dict)
-        else []
-    )
+    running = [
+        # The task's targets: some disks may have finished already (list_disks shows
+        # which are still testing).
+        f"{_STYLES.get(str(t.get('test_style')), t.get('test_style'))} test, started on "
+        f"{', '.join(map(str, t.get('target') or []))}"
+        for t in task_list(tasks, "smart")
+        if t.get("status") == "running"
+    ]
     if running:
         rows.append(("Running now", "; ".join(running)))
     if not rows:
@@ -147,7 +148,7 @@ async def get_storage_schedules(client: DsmClient) -> str:
                 {k: v for k, v in dedupe.items() if k != "schedule_plan"},
             )
         )
-    trim = ((tasks or {}).get("ssd_trim") or {}).get("tasks") if isinstance(tasks, dict) else None
+    trim = task_list(tasks, "ssd_trim") if isinstance(tasks, dict) else None
     if trim is not None:
         blocks.append(
             format_key_value(
@@ -157,4 +158,5 @@ async def get_storage_schedules(client: DsmClient) -> str:
     if not blocks:
         blocks.append("No storage schedules could be read.")
     blocks.append("Snapshot schedules are per shared folder: use list_snapshots.")
-    return "\n\n".join(blocks) + "\n\n" + EPOCH_NOTE + notes_block(optional.notes)
+    text = "\n\n".join(blocks)
+    return text + epoch_note(text) + notes_block(optional.notes)

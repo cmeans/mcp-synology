@@ -2,23 +2,27 @@
 
 from __future__ import annotations
 
-import json
 from typing import TYPE_CHECKING, Any
 
 from mcp_synology.core.formatting import format_key_value
+from mcp_synology.modules.filestation.helpers import dsm_str
 from mcp_synology.modules.storage.helpers import (
     STORAGE_API,
     Sections,
+    cache_title,
+    dicts,
     items,
     json_list,
     load_info,
     not_found,
     notes_block,
     other_fields,
+    pct,
     percent,
     raid_name,
     size,
     status_text,
+    to_int,
     usage,
     value_text,
     volume_label,
@@ -47,9 +51,6 @@ _KNOWN = {
     "vol_desc",
     "uuid",
     "ssd_trim",
-    "cache",
-    "atime_opt",
-    "vol_attribute",
 }
 
 _CATEGORIES = {
@@ -95,6 +96,11 @@ def volume_pairs(volume: dict[str, Any], pools: dict[str, dict[str, Any]]) -> li
         if key in volume:
             pairs.append((label, yes_no(volume[key])))
     pairs.append(("Data scrubbing", str(volume.get("scrubbingStatus") or "—")))
+    extra_sizes = {k: v for k, v in sizes.items() if k not in ("total", "used")}
+    if extra_sizes:
+        pairs.append(
+            ("Size details", ", ".join(f"{k}: {value_text(v)}" for k, v in extra_sizes.items()))
+        )
     if volume.get("vol_desc"):
         pairs.append(("Description", str(volume["vol_desc"])))
     return pairs
@@ -144,7 +150,7 @@ def space_usage_lines(report: Any) -> list[tuple[str, str]]:
         ]
     total = report.get("total_size")
     pairs = [("Space by category", f"{size(total)} total, {size(report.get('free_size'))} free")]
-    for cat in sorted(report.get("categories") or [], key=lambda c: -int(c.get("size") or 0)):
+    for cat in sorted(dicts(report.get("categories")), key=lambda c: -(to_int(c.get("size")) or 0)):
         name = str(cat.get("category_name"))
         pairs.append(
             (
@@ -164,7 +170,7 @@ def space_usage_lines(report: Any) -> list[tuple[str, str]]:
 def dedupe_lines(reply: Any, vol_path: str) -> list[tuple[str, str]]:
     if not isinstance(reply, dict):
         return []
-    for entry in reply.get("volumes") or []:
+    for entry in dicts(reply.get("volumes")):
         if entry.get("vol_path") != vol_path:
             continue
         pairs = [("Deduplication", "supported" if entry.get("support_dedupe") else "not supported")]
@@ -185,9 +191,12 @@ def cache_lines(info: dict[str, Any], volume: dict[str, Any], config: Any) -> li
         mode = {"read": "read-only", "write": "read-write"}.get(
             str(cache.get("mode")), str(cache.get("mode"))
         )
-        pairs.append(("SSD cache", f"{cache.get('id')}: {mode}, {status_text(cache)}"))
+        pairs.append(("SSD cache", f"{cache_title(info, cache)}: {mode}, {status_text(cache)}"))
         pairs.append(
-            ("  hit rate", f"read {cache.get('hit_rate')}%, write {cache.get('hit_rate_write')}%")
+            (
+                "  hit rate",
+                f"read {pct(cache.get('hit_rate'))}, write {pct(cache.get('hit_rate_write'))}",
+            )
         )
         pairs.append(("  SSDs", ", ".join(map(str, cache.get("disks") or [])) or "—"))
         pairs.append(("  metadata pinned", yes_no(cache.get("metadataCache"))))
@@ -239,7 +248,7 @@ async def get_volume(client: DsmClient, volume: str) -> str:
                 "Shared SSD cache settings",
                 "SYNO.Storage.CGI.Flashcache",
                 "shared_cache_config_get",
-                {"shared_cache": json.dumps(str(shared.get("id")))},
+                {"shared_cache": dsm_str(str(shared.get("id")))},
             )
 
     pairs = volume_pairs(vol, pools)
