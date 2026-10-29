@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import ast
+import re
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from mcp.server.mcpserver import MCPServer
 from pydantic import ValidationError
 
+import mcp_synology.modules.photos as photos_pkg
 from mcp_synology.modules import PermissionTier, RegisterContext
 from mcp_synology.modules.photos import MODULE_INFO, PhotosSettings, register
 
@@ -91,6 +95,47 @@ def test_only_allowed_tools() -> None:
 def test_only_browse_item_and_folder_required() -> None:
     required = {r.api_name for r in MODULE_INFO.required_apis if not r.optional}
     assert required == {"SYNO.Foto.Browse.Item", "SYNO.Foto.Browse.Folder"}
+
+
+# A Photos API name passed to call/api/walk/has on any receiver, on the same line or the
+# next once ruff format wraps the call (#440 QA round 2). One-word names (UserInfo,
+# Thumbnail) are only recognizable this way.
+_API_CALL = r'\.(?:call|api|walk|has)\(\s*"([A-Z][A-Za-z.]+)"'
+# Dotted names are recognizable anywhere, such as another helper's argument
+# (_by_id_or_name), so a call written some other way later is still caught.
+_DOTTED = re.compile(r"[A-Z][A-Za-z]+(\.[A-Z][A-Za-z]+)+")
+
+
+def test_every_api_called_is_declared() -> None:
+    """Each SYNO.Foto API the module calls is in required_apis (and so in the spec's
+    ApiRequirement block), and each declared one is called: #440 QA found Setting.User
+    missing."""
+    used: set[str] = set()
+    for path in Path(photos_pkg.__file__ or "").parent.glob("*.py"):
+        if path.name == "__init__.py":
+            continue
+        text = path.read_text()
+        used |= set(re.findall(_API_CALL, text))
+        used |= {
+            node.value
+            for node in ast.walk(ast.parse(text))
+            if isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and _DOTTED.fullmatch(node.value)
+            and not node.value.startswith("SYNO.")
+        }
+    # Wrapped calls, other receivers and names passed through another helper, which a
+    # same-line ph.call() match missed.
+    assert {
+        "Setting.User",
+        "Browse.ConditionAlbum",
+        "Search.Filter",
+        "BackgroundTask.File",
+        "Sharing.Passphrase",
+        "UserInfo",
+    } <= used
+    declared = {r.api_name for r in MODULE_INFO.required_apis}
+    assert {f"SYNO.Foto.{name}" for name in used} == declared
 
 
 def test_task_timeout_bounds() -> None:

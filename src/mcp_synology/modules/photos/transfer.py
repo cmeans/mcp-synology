@@ -25,6 +25,8 @@ from mcp_synology.modules.photos.helpers import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
     from mcp_synology.core.client import DsmClient
 
 logger = logging.getLogger(__name__)
@@ -208,16 +210,27 @@ async def _download_one(
 # -- upload_photos ------------------------------------------------------------------
 
 # Upload errors the web client doesn't retry (604, 605, 620, 622), plus a missing folder
-# (621) and the setup and permission codes. Anything else is retried once, as the web
-# client does (UPLOAD retry count 1): vdsm answered 623 to some uploads right after boot,
-# and the retry went through.
-_UPLOAD_FINAL = frozenset({604, 605, 620, 621, 622}) | SETUP_CODES
+# (621), a folder Photos can't find on disk (117: the folder was just looked up, so waiting
+# doesn't help, #436) and the setup and permission codes. Anything else is retried once, as
+# the web client does (UPLOAD retry count 1): vdsm answered 623 to some uploads right after
+# boot, and the retry went through.
+_UPLOAD_FINAL = frozenset({117, 604, 605, 620, 621, 622}) | SETUP_CODES
 UPLOAD_RETRY_DELAY = 2.0
 
 
 async def _upload_one(
-    client: DsmClient, api: str, fields: dict[str, Any], path: Path
+    client: DsmClient,
+    api: str,
+    fields: dict[str, Any],
+    path: Path,
+    prepare: Callable[[], Awaitable[bool]] | None = None,
 ) -> dict[str, Any]:
+    """Upload one file; on a 117, ``prepare`` (if given) may fix the cause, then it's resent.
+
+    The resend is an attempt like the first: a transient code it gets is retried once. The
+    delayed retry after a transient code is one too, so a 117 on it still calls ``prepare``.
+    """
+
     async def send() -> dict[str, Any]:
         return await client.upload_multipart(
             api,
@@ -228,14 +241,23 @@ async def _upload_one(
             filename=path.name,
         )
 
+    async def attempt() -> dict[str, Any]:
+        try:
+            return await send()
+        except SynologyError as e:
+            if e.code == 117 and prepare is not None and await prepare():
+                logger.info("Photos upload of %s got 117; resending after Setting.User", path.name)
+                return await send()
+            raise
+
     try:
-        return await send()
+        return await attempt()
     except SynologyError as e:
         if e.code is None or e.code in _UPLOAD_FINAL:
             raise
         logger.info("Photos upload of %s got %s; retrying once", path.name, e.code)
         await asyncio.sleep(UPLOAD_RETRY_DELAY)
-        return await send()
+        return await attempt()
 
 
 _MAX_UPLOAD = 50
@@ -322,6 +344,36 @@ async def upload_photos(
         target_album = await ph.album(album) if album is not None else None
     except SynologyError as e:
         synology_error_response(op, e)
+    # An account that has never used Photos has no homes/<user>/Photos folder yet, and
+    # every upload to the personal root answers 117 until it does (#436). The web app's
+    # Setting.User get creates it (for a user with no items), so after a 117 that call is
+    # made once and the file is resent. Only the personal root: a subfolder means the folder
+    # exists. Shared Space is left out because its root is a shared folder of its own
+    # (inferred: Shared Space wasn't probed).
+    personal_root = sp == "personal" and target.get("name") == "/"
+    prepared = False
+    # No answer from Setting.User, or a proxy's 5xx or login page in its place (#282): the
+    # call may still have created the folder, so a later file can land where this one
+    # couldn't. The row says so rather than "no folder". A request that never left (refused,
+    # connect timeout) or a 4xx created nothing.
+    unanswered = False
+
+    async def prepare_root() -> bool:
+        nonlocal prepared, unanswered
+        if not personal_root or prepared:
+            return False
+        prepared = True
+        try:
+            await ph.call("Setting.User", "get", personal=True)
+        except (SynologyError, httpx.TransportError) as e:
+            logger.debug("Photos Setting.User get failed: %s", type(e).__name__)
+            unanswered = (
+                isinstance(e, httpx.TransportError | DsmReplyError)
+                and not isinstance(e, httpx.ConnectError | httpx.ConnectTimeout)
+            ) or (isinstance(e, DsmHttpError) and e.status >= 500)
+            return False
+        return True
+
     rows: list[tuple[str, str, str]] = []
     uploaded: list[int] = []  # stored or already there: what an album gets
     renamed: list[int] = []
@@ -341,7 +393,7 @@ async def upload_photos(
                 "mtime": int(path.stat().st_mtime),
                 "target_folder_id": int(target["id"]),
             }
-            data = await _upload_one(client, ph.api("Upload.Item"), fields, path)
+            data = await _upload_one(client, ph.api("Upload.Item"), fields, path, prepare_root)
             action = str(data.get("action", "new"))
             item_id = int(data["id"])
         except (DsmHttpError, DsmReplyError, httpx.TransportError) as e:
@@ -370,7 +422,25 @@ async def upload_photos(
             break
         except SynologyError as e:
             code = f" ({e.code})" if e.code else ""
-            rows.append((path.name, "failed", f"{e}{code}"))
+            note = f"{e}{code}"
+            if e.code == 117 and personal_root and unanswered:
+                # Only the file whose 117 came before that call: a later file's 117, sent
+                # after it, says the folder still isn't there.
+                unanswered = False
+                note = (
+                    "this account's personal space had no folder on the NAS "
+                    "(homes/<user>/Photos; 117), and the call that creates it got no answer, "
+                    "so the folder may exist now. Upload this file again; if it fails the "
+                    "same way, create a folder with photo_folder and upload into it, or open "
+                    "Synology Photos once as this user."
+                )
+            elif e.code == 117 and personal_root:
+                note = (
+                    "this account's personal space has no folder on the NAS "
+                    "(homes/<user>/Photos; 117). Create a folder with photo_folder and "
+                    "upload into it, or open Synology Photos once as this user."
+                )
+            rows.append((path.name, "failed", note))
             continue
         except (OSError, KeyError, TypeError, ValueError) as e:
             if isinstance(e, OSError):
