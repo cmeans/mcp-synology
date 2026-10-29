@@ -29,7 +29,7 @@ MODULE_INFO = ModuleInfo(
 )
 ```
 
-The module is **opt-in**: add `downloadstation` under the top-level `modules:` key of the config file (or the per-NAS file). The tools register from the config alone. If the Download Station package isn't installed on the NAS, every call fails with `api_not_found`. The RSS and BT search APIs are declared for the planned Phase 3 and have no tools yet.
+Like every module, it loads only when it's listed: add `downloadstation` under the top-level `modules:` key of the config file (or the per-NAS file). The tools register from the config alone. If the Download Station package isn't installed on the NAS, every call fails with `api_not_found`. The RSS and BT search APIs are declared for the planned Phase 3 and have no tools yet.
 
 ---
 

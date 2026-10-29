@@ -56,7 +56,7 @@ class PhotosSettings(BaseModel):
     task_timeout: int = 30
 ```
 
-The module is **opt-in**, like Download Station: add `photos` under `modules:`. It doesn't depend on File Station: upload, download, delete, copy and move all go through the Photos APIs. If Synology Photos isn't installed, every call fails with `api_not_found`.
+Like every module, it loads only when it's listed: add `photos` under `modules:`. It doesn't depend on File Station: upload, download, delete, copy and move all go through the Photos APIs. If Synology Photos isn't installed, every call fails with `api_not_found`.
 
 ---
 
