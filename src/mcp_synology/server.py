@@ -29,6 +29,7 @@ from mcp_synology.modules import PermissionTier, RegisterContext, filter_tools_b
 from mcp_synology.modules import downloadstation as _downloadstation_mod
 from mcp_synology.modules import filestation as _filestation_mod
 from mcp_synology.modules import photos as _photos_mod
+from mcp_synology.modules import storage as _storage_mod
 from mcp_synology.modules import system as _system_mod
 
 if TYPE_CHECKING:
@@ -114,6 +115,7 @@ _MODULE_REGISTRY: dict[str, ModuleType] = {
     "downloadstation": _downloadstation_mod,
     "filestation": _filestation_mod,
     "photos": _photos_mod,
+    "storage": _storage_mod,
     "system": _system_mod,
 }
 
@@ -684,9 +686,10 @@ def _withheld_tools_notice(config: AppConfig, plan: _ModulePlan) -> str:
             fix = f"set `enabled: true` for `{mod_name}`"
         else:
             fix = f"add `{mod_name}` under `modules:`"
+        needs = " (it needs a DSM administrator account)" if mod_name == "storage" else ""
         lines.append(
             f"- The {mod_name} module ({count} tools) is not enabled. The user can "
-            f"{fix} in the mcp-synology config."
+            f"{fix} in the mcp-synology config{needs}."
         )
     if not lines:
         return ""
@@ -775,6 +778,19 @@ _PHOTOS_WRITE_NOTICE = """
 delete_photos, delete_photo_folders, delete_photo_albums and merge_people can't be undone
 from Photos: name what will go and confirm with the user first. A long copy, move or delete
 hands off with a photos:<id> handle; follow up with photo_task."""
+
+
+_STORAGE_NOTICE = """
+
+STORAGE:
+The storage tools read Storage Manager, which answers only a DSM administrator account; with
+any other account each one returns permission_denied. For any question about disks, RAID or
+free space, start with get_storage_overview."""
+
+
+def _storage_notice(plan: _ModulePlan) -> str:
+    """The storage module's administrator requirement, when it's enabled (#49)."""
+    return _STORAGE_NOTICE if any(name == "storage" for name, *_ in plan) else ""
 
 
 def _writes_registered(module: ModuleType, allowed: set[str]) -> bool:
@@ -906,6 +922,7 @@ def create_server(config: AppConfig) -> MCPServer:
     if replacement is None:
         # A full replacement file is the user's own; everything else gets the notices.
         instructions += _photos_notice(plan)
+        instructions += _storage_notice(plan)
         instructions += _withheld_tools_notice(config, plan)
         local_paths = _local_paths_notice(config, plan)
         if local_paths:

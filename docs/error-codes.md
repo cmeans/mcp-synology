@@ -74,6 +74,9 @@ Common causes:
 - Download Station: the account has no Download Station application privilege,
   or the operation needs a Download Station manager/admin (`set_download_config`,
   and the weekly plan and limited-speed rates in `get_schedule` / `set_schedule`).
+- Storage: Storage Manager answers only a DSM administrator, so every storage tool
+  refuses any other account (DSM's 105; `USB list` answers 404 instead on DSM 7.2.2 and
+  later). Use an administrator connection for the `storage` module.
   For `set_download_config` mcp-synology refuses on its own, because DSM answers
   "success" to non-managers while ignoring the change.
 - Synology Photos (DSM codes 160, 801, 803): **160** means the account has no Synology
@@ -122,6 +125,9 @@ Common causes:
 - DSM version is too old (mcp-synology requires DSM 7.0 or later).
 - The DSM package providing the API is not installed (e.g., File Station).
 - The API exists but the package is stopped.
+- Storage: `SYNO.Storage.CGI.Storage` (Storage Manager) is missing, or `list_snapshots`
+  is asked on a NAS without the **Snapshot Replication** package. A storage section whose
+  API is missing doesn't fail its tool: it's listed under "Not shown" instead.
 
 Fix:
 
@@ -144,6 +150,12 @@ features DSM silently ignores on older versions (Synology Photos 1.3.4 returns e
 item for a favorites filter), mcp-synology refuses before calling DSM.
 
 Examples: favorites and concepts need Synology Photos 1.9.1 or later (DSM 7.2).
+
+Storage: DSM answers 121 when the NAS doesn't have a feature (deduplication on a
+DS1618+, for example). In an optional section that's a "not available on this NAS" note,
+not an error; only a required call (`load_info`, `Core.Share list`, the snapshot list)
+fails with `not_supported`. `list_snapshots` also reports `not_supported` when Snapshot
+Replication doesn't offer the version-2 snapshot list (version 1 lists no snapshots).
 
 Fix:
 
@@ -172,6 +184,10 @@ Common causes:
 - For Download Station tasks: the task ID doesn't exist, or the task belongs to
   another user. DSM answers both the same way, and an account that isn't a
   Download Station manager sees only its own tasks.
+- For storage tools: a disk, volume or shared folder that isn't on the NAS. The error's
+  `valid` field lists the ones that are (`get_disk` takes `sda`, `/dev/sda` or `Drive 1`;
+  `get_volume` takes `/volume1` or `volume_1`; `list_snapshots` takes a shared folder's
+  name, in any case).
 
 Fix:
 

@@ -69,6 +69,8 @@ modules:
       allowed_local_paths:  # folders create_download may read .torrent/.nzb files from;
         - ~/Downloads       # adds to a top-level list; without one, replaces the Downloads
         - ~/Torrents        # default, so ~/Downloads is listed to keep it
+  storage:
+    enabled: true  # read-only (no write tools yet); needs a DSM administrator account
 
 logging:
   level: debug

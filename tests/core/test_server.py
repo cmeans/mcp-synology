@@ -1138,6 +1138,7 @@ class TestWithheldToolsNotice:
                 "system": {"enabled": True, "permission": "write"},
                 "downloadstation": {"enabled": True, "permission": "write"},
                 "photos": {"enabled": True, "permission": "write"},
+                "storage": {"enabled": True},
             }
         )
         assert "PERMISSIONS" not in text
@@ -1146,6 +1147,23 @@ class TestWithheldToolsNotice:
         text = self._instructions(modules={"filestation": {"enabled": True, "permission": "write"}})
         assert "downloadstation" in text
         assert "not enabled" in text
+
+    def test_storage_not_enabled_names_the_administrator_requirement(self) -> None:
+        text = self._instructions(modules={"filestation": {"enabled": True, "permission": "write"}})
+        line = next(x for x in text.splitlines() if "The storage module" in x)
+        assert "not enabled" in line
+        assert "(it needs a DSM administrator account)" in line
+        other = next(x for x in text.splitlines() if "The photos module" in x)
+        assert "administrator" not in other
+
+    def test_storage_section_only_when_storage_is_enabled(self) -> None:
+        """#49: the STORAGE section says the tools need an administrator account."""
+        on = self._instructions(modules={"storage": {"enabled": True}})
+        assert "\n\nSTORAGE:\n" in on
+        assert "only a DSM administrator account" in on
+        assert "get_storage_overview" in on
+        off = self._instructions(modules={"filestation": {"enabled": True}})
+        assert "\n\nSTORAGE:\n" not in off
 
     def test_disabled_module_is_told_to_enable_not_add(self) -> None:
         """QA on #156: a module listed with ``enabled: false`` is already under
@@ -1280,6 +1298,7 @@ ALL_MODULES: dict[str, Any] = {
     "system": {"enabled": True},
     "downloadstation": {"enabled": True, "permission": "write"},
     "photos": {"enabled": True, "permission": "write"},
+    "storage": {"enabled": True},
 }
 
 
@@ -1557,7 +1576,7 @@ class TestServedSchemas:
 
     async def test_client_sees_no_titles_or_null_unions(self) -> None:
         tools, _ = await _served(create_server(make_test_config(modules=ALL_MODULES)))
-        assert len(tools) == 48
+        assert len(tools) == 59
         for tool in tools:
             for node in _walk(tool.input_schema):
                 if isinstance(node, dict):
@@ -1770,7 +1789,12 @@ class TestInstructionComments:
 # Raised by #422 to 49,963 (+81): pause_download says its per-task refusals happen only
 # when something else in the call can be paused, and that a lone finished or
 # already-paused task fails the whole call (#421, 0.10.0rc10 live test).
-PAYLOAD_BUDGET_CHARS = 49_963
+# Raised by #49 to 55,411 (+5,448): the Storage module's 11 READ tools and its
+# instructions section (the administrator requirement). A connection without Storage
+# carries only its one-line "not enabled" entry in PERMISSIONS (about 160 characters).
+# +72 in QA round 1: list_snapshots' offset and limit say they page the shared folders
+# when no folder is given.
+PAYLOAD_BUDGET_CHARS = 55_483
 
 
 class TestPayloadBudget:

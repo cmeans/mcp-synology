@@ -5,7 +5,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from mcp_synology.core.errors import ErrorCode, SynologyError
-from mcp_synology.core.formatting import error_response, format_size
+from mcp_synology.core.formatting import (
+    SCHEDULE_PLAN_LENGTH,
+    error_response,
+    format_size,
+    weekly_plan_grid,
+)
 
 if TYPE_CHECKING:
     from mcp_synology.core.client import DsmClient
@@ -160,11 +165,8 @@ def format_eta(downloaded: int, total: int, speed: int) -> str:
     return f"{seconds // 86400}d{(seconds % 86400) // 3600}h"
 
 
-_DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
-
 # Weekly plan format, verified from DSM's own SYNO.ux.ScheduleTable widget
 # (#123): day-major Sun..Sat, 24 chars per day, one char per hour.
-SCHEDULE_PLAN_LENGTH = 7 * 24
 _VALID_PLAN_CHARS = frozenset("012")
 
 _CELL_GLYPHS: dict[str, str] = {
@@ -198,34 +200,15 @@ def schedule_plan_problem(plan: str) -> str | None:
 def format_schedule_grid(plan: str) -> str:
     """Render a Download Station weekly plan as a 7 × 24 text grid.
 
-    ``plan`` is day-major Sun..Sat, 24 chars per day: '0' = no download,
-    '1' = full speed, '2' = limited (alt speed). A malformed stored plan is
-    rendered rather than rejected — missing or unrecognized cells show as
-    '?' and a note names the problem — because other clients can store
-    anything and a read must never fail on it.
+    '0' = no download, '1' = full speed, '2' = limited (alt speed). A malformed
+    stored plan is rendered rather than rejected (see ``core.formatting``),
+    because other clients can store anything and a read must never fail on it.
     """
-    hour_header = "     " + " ".join(f"{h:02d}" for h in range(24))
-    lines = [hour_header]
-    for day_idx, name in enumerate(_DAY_NAMES):
-        day_slice = plan[day_idx * 24 : (day_idx + 1) * 24].ljust(24, "?")
-        # Two spaces between cells: each cell sits under its 2-digit hour label.
-        cells = "  ".join(_CELL_GLYPHS.get(ch, "?") for ch in day_slice)
-        lines.append(f"{name}  {cells}")
-
-    lines.append("")
-    lines.append("Legend: # = full speed   ~ = limited (alt speed)   . = no download")
-    lines.append("Hours are the NAS's local time.")
-    if len(plan) != SCHEDULE_PLAN_LENGTH:
-        lines.append(
-            f"Note: stored plan is malformed ({len(plan)} chars, expected "
-            f"{SCHEDULE_PLAN_LENGTH}); '?' marks unreadable hours."
-        )
-    elif set(plan) - _VALID_PLAN_CHARS:
-        lines.append(
-            "Note: stored plan is malformed (contains values other than 0/1/2); "
-            "'?' marks unreadable hours."
-        )
-    return "\n".join(lines)
+    return weekly_plan_grid(
+        plan,
+        _CELL_GLYPHS,
+        "Legend: # = full speed   ~ = limited (alt speed)   . = no download",
+    )
 
 
 async def ds_is_manager(client: DsmClient) -> bool | None:

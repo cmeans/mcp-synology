@@ -38,6 +38,7 @@ SECTIONS = {
     "filestation": "File Station",
     "photos": "Synology Photos",
     "downloadstation": "Download Station",
+    "storage": "Storage",
 }
 
 _TABLE_ROW = re.compile(r"^\| \[[^\]]+\]\(#[^)]+\) \| `([a-z]+)` \| ([^|]+) \| ([^|]+) \|", re.M)
