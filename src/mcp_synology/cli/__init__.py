@@ -1,7 +1,8 @@
 """CLI package: serve, setup, check subcommands (click-based).
 
 Re-exports for backward compatibility:
-- server.py imports: _check_for_update, _load_global_state, _save_global_state
+- server.py imports: _load_global_state (the update notices otherwise use cli.version)
+- tests import: _load_global_state, _save_global_state, _check_for_update
 - __main__.py imports: main
 """
 

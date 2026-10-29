@@ -7,6 +7,7 @@ import base64
 import json
 import logging
 import re
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -457,26 +458,44 @@ class TestCreateServerInstructionPaths:
 
 class TestSharedClientManagerLifecycle:
     """Direct tests of the SharedClientManager — get_client lazy init,
-    with_update_notice clearing behavior, signal handler installation,
+    update notice delivery, signal handler installation,
     background update check, cleanup_session."""
 
-    def test_with_update_notice_appends_and_clears(self) -> None:
-        config = make_test_config()
-        manager = SharedClientManager(config)
-        manager._update_notice = "\n--- update notice ---"
-        # First call: notice appended AND cleared
-        result = manager.with_update_notice("hello")
-        assert result == "hello\n--- update notice ---"
-        assert manager._update_notice is None
-        # Second call: notice already cleared, just returns input
-        result = manager.with_update_notice("world")
-        assert result == "world"
+    async def test_take_update_notice_once_and_claims_it(self) -> None:
+        manager = SharedClientManager(make_test_config())
+        manager._update_notice, manager._pending_version = "Update!", "9.9.9"
+        with patch("mcp_synology.cli.version.claim_announcement", return_value=True) as claim:
+            assert await manager.take_update_notice() == "\n\n---\nUpdate!"
+            assert await manager.take_update_notice() == ""
+        claim.assert_called_once_with("9.9.9")
+        assert manager._announced_version == "9.9.9"
 
-    def test_with_update_notice_no_notice(self) -> None:
-        config = make_test_config()
-        manager = SharedClientManager(config)
-        # _update_notice is None by default; passes input through unchanged
-        assert manager.with_update_notice("hello") == "hello"
+    async def test_two_connections_on_one_install_announce_once(self) -> None:
+        # Each connection's check queues it; the first to deliver claims it (#314).
+        first, second = (SharedClientManager(make_test_config()) for _ in range(2))
+        for m in (first, second):
+            m._update_notice, m._pending_version = "Update!", "9.9.9"
+        assert await first.take_update_notice() == "\n\n---\nUpdate!"
+        assert await second.take_update_notice() == ""
+
+    async def test_take_update_notice_without_one(self) -> None:
+        assert await SharedClientManager(make_test_config()).take_update_notice() == ""
+
+    async def test_start_update_check_once_and_only_when_enabled(self) -> None:
+        async def _no_op() -> None:
+            return None
+
+        off = SharedClientManager(make_test_config(check_for_updates=False))
+        off.start_update_check()
+        assert off._bg_task is None
+        on = SharedClientManager(make_test_config(check_for_updates=True))
+        with patch.object(SharedClientManager, "_bg_update_check", side_effect=_no_op):
+            on.start_update_check()
+            task = on._bg_task
+            on.start_update_check()
+            assert on._bg_task is task
+            assert task is not None
+            await task
 
     async def test_get_client_lazy_init_happy_path(self) -> None:
         config = make_test_config()
@@ -529,33 +548,9 @@ class TestSharedClientManagerLifecycle:
         with pytest.raises(RuntimeError, match="connection"):
             await manager.get_client()
 
-    async def test_get_client_schedules_bg_update_check(self) -> None:
+    async def test_get_client_no_longer_starts_the_update_check(self) -> None:
+        # The server's lifespan starts it (#314), so it doesn't wait for a DSM login.
         config = make_test_config(check_for_updates=True)
-        manager = SharedClientManager(config)
-
-        fake_client = MagicMock()
-        fake_client.__aenter__ = AsyncMock(return_value=fake_client)
-        fake_client.query_api_info = AsyncMock(return_value={})
-        fake_auth = MagicMock()
-        fake_auth.login = AsyncMock(return_value="sid")
-
-        async def _no_op() -> None:
-            return None
-
-        with (
-            patch("mcp_synology.server.DsmClient", return_value=fake_client),
-            patch("mcp_synology.server.AuthManager", return_value=fake_auth),
-            patch.object(SharedClientManager, "_bg_update_check", return_value=_no_op()),
-        ):
-            await manager.get_client()
-            # Let the scheduled task run to completion so we don't leak it
-            if manager._bg_task is not None:
-                await manager._bg_task
-
-        assert manager._bg_task is not None
-
-    async def test_get_client_skips_bg_update_check_when_disabled(self) -> None:
-        config = make_test_config(check_for_updates=False)
         manager = SharedClientManager(config)
 
         fake_client = MagicMock()
@@ -715,21 +710,76 @@ class TestSharedClientManagerLifecycle:
         manager = SharedClientManager(config)
 
         with (
-            patch("mcp_synology.cli._load_global_state", return_value={}),
-            patch("mcp_synology.cli._save_global_state"),
-            patch("mcp_synology.cli._check_for_update", return_value="9.9.9"),
+            patch(
+                "mcp_synology.cli.version.refresh_update_check",
+                return_value=("9.9.9", False, {}),
+            ),
         ):
             await manager._bg_update_check()
         assert manager._update_notice is not None
         assert "9.9.9" in manager._update_notice
+        assert manager._pending_version == "9.9.9"
+
+    async def test_bg_update_check_logs_a_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        manager = SharedClientManager(make_test_config(check_for_updates=True))
+        state = {"latest_is_security": True}
+        caplog.set_level(logging.WARNING, logger="mcp_synology.server")
+        with (
+            patch(
+                "mcp_synology.cli.version.refresh_update_check",
+                return_value=("9.9.9", bool(state.get("latest_is_security")), state),
+            ),
+        ):
+            await manager._bg_update_check()
+        assert "mcp-synology 9.9.9 is available, a security release" in caplog.text
+        assert manager._update_notice is not None
+        assert manager._update_notice.startswith("A security release of mcp-synology")
+
+    @pytest.mark.parametrize(
+        ("state", "announced_here"),
+        [
+            # Announced within the week, by any instance on the machine.
+            (
+                {
+                    "announced": {
+                        sys.prefix: {"version": "9.9.9", "at": "2999-01-01T00:00:00+00:00"}
+                    }
+                },
+                None,
+            ),
+            # This session's instructions already carry it.
+            ({}, "9.9.9"),
+        ],
+    )
+    async def test_bg_update_check_holds_back_an_announced_version(
+        self, state: dict[str, Any], announced_here: str | None
+    ) -> None:
+        manager = SharedClientManager(make_test_config(check_for_updates=True))
+        manager._announced_version = announced_here
+        with (
+            patch(
+                "mcp_synology.cli.version.refresh_update_check",
+                return_value=("9.9.9", bool(state.get("latest_is_security")), state),
+            ),
+        ):
+            await manager._bg_update_check()
+        assert manager._update_notice is None
+
+    async def test_server_lifespan_starts_the_update_check(self) -> None:
+        with patch.object(SharedClientManager, "start_update_check") as start:
+            server = create_server(make_test_config(check_for_updates=False))
+            start.assert_not_called()
+            async with Client(server):
+                start.assert_called_once()
 
     async def test_bg_update_check_no_update(self) -> None:
         config = make_test_config(check_for_updates=True)
         manager = SharedClientManager(config)
         with (
-            patch("mcp_synology.cli._load_global_state", return_value={}),
-            patch("mcp_synology.cli._save_global_state"),
-            patch("mcp_synology.cli._check_for_update", return_value=None),
+            patch(
+                "mcp_synology.cli.version.refresh_update_check",
+                return_value=(None, False, {}),
+            ),
         ):
             await manager._bg_update_check()
         assert manager._update_notice is None
@@ -744,7 +794,9 @@ class TestSharedClientManagerLifecycle:
         config = make_test_config(check_for_updates=True)
         manager = SharedClientManager(config)
         with (
-            patch("mcp_synology.cli._load_global_state", side_effect=OSError("disk full")),
+            patch(
+                "mcp_synology.cli.version.refresh_update_check", side_effect=OSError("disk full")
+            ),
             caplog.at_level(logging.DEBUG, logger="mcp_synology.server"),
         ):
             await manager._bg_update_check()  # must not raise
@@ -806,8 +858,6 @@ class TestSharedClientManagerLifecycle:
             return await _stuck_executor()
 
         with (
-            patch("mcp_synology.cli._load_global_state", return_value={}),
-            patch("mcp_synology.cli._save_global_state"),
             patch("asyncio.timeout", side_effect=_quick_timeout),
             patch.object(
                 asyncio.get_event_loop(),
@@ -1959,3 +2009,174 @@ class TestPhotosNotice:
 
     def test_absent_otherwise(self) -> None:
         assert "SYNOLOGY PHOTOS" not in (create_server(make_test_config()).instructions or "")
+
+
+class TestUpdateNoticeDelivery:
+    """The update notice reaches every module's tools and the instructions (#314)."""
+
+    @staticmethod
+    def _server(notice: str | None) -> _SynologyServer:
+        from mcp.server.mcpserver.exceptions import ToolError
+
+        server = _SynologyServer("notice-test")
+        manager = SharedClientManager(make_test_config(check_for_updates=False))
+        manager._update_notice, manager._pending_version = notice, "9.9.9"
+        server.update_notices = manager
+
+        @server.tool()
+        def get_resource_usage() -> str:  # a System tool, not File Station
+            return "CPU: 5%"
+
+        @server.tool()
+        def broken() -> str:
+            raise ToolError("nope")
+
+        return server
+
+    async def test_the_first_result_of_any_tool_carries_it_once(self) -> None:
+        server = self._server("Update!")
+        async with Client(server) as client:
+            first = await client.call_tool("get_resource_usage", {})
+            second = await client.call_tool("get_resource_usage", {})
+        assert first.content[0].text == "CPU: 5%\n\n---\nUpdate!"  # type: ignore[union-attr]
+        assert second.content[0].text == "CPU: 5%"  # type: ignore[union-attr]
+
+    async def test_a_failing_notice_never_fails_the_tool(self) -> None:
+        server = self._server("Update!")
+        with patch("mcp_synology.cli.version.claim_announcement", side_effect=TypeError("bad")):
+            async with Client(server) as client:
+                result = await client.call_tool("get_resource_usage", {})
+        assert not result.is_error
+        assert result.content[0].text == "CPU: 5%"  # type: ignore[union-attr]
+
+    async def test_an_error_result_carries_it_too(self) -> None:
+        server = self._server("Update!")
+        async with Client(server) as client:
+            result = await client.call_tool("broken", {})
+        assert result.is_error
+        text = result.content[0].text  # type: ignore[union-attr]
+        assert "nope" in text
+        assert text.endswith("\n\n---\nUpdate!")
+
+    async def test_no_notice_leaves_results_alone(self) -> None:
+        async with Client(self._server(None)) as client:
+            result = await client.call_tool("get_resource_usage", {})
+        assert result.content[0].text == "CPU: 5%"  # type: ignore[union-attr]
+
+    @staticmethod
+    def _cache(latest: str, **extra: Any) -> None:
+        from mcp_synology.cli import _save_global_state
+
+        _save_global_state({"latest_known_version": latest, **extra})
+
+    def test_a_corrupt_global_state_does_not_stop_the_server(self) -> None:
+        # Every instance shares the file; a bad write mustn't stop them all (QA round 1).
+        from mcp_synology.cli.version import _global_state_path
+
+        path = _global_state_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        for content in (b"- a\n", b"a string\n", b"\xff\xfe\n"):
+            path.write_bytes(content)
+            create_server(make_test_config(check_for_updates=True))
+
+    def test_instructions_leave_out_an_ordinary_release(self) -> None:
+        # An MCP client keeps a server across chats: the instructions reach every chat.
+        self._cache("99.0.0")
+        text = create_server(make_test_config(check_for_updates=True)).instructions or ""
+        assert "UPDATE AVAILABLE" not in text
+
+    def test_instructions_carry_a_security_release_every_time(self) -> None:
+        from mcp_synology.cli import _load_global_state
+
+        self._cache("99.0.0", latest_is_security=True)
+        for _ in range(2):
+            text = create_server(make_test_config(check_for_updates=True)).instructions or ""
+            expected = "UPDATE AVAILABLE:\nA security release of mcp-synology is available: 99.0.0"
+            assert expected in text
+        assert "announced" not in _load_global_state()  # nothing to claim: always said
+
+    @pytest.mark.parametrize(
+        ("latest", "overrides"),
+        [
+            ("0.0.1", {}),
+            ("99.0.0", {"check_for_updates": False}),
+            ("99.0.0", {"update_notices": "off"}),
+        ],
+    )
+    def test_no_instructions_line(self, latest: str, overrides: dict[str, Any]) -> None:
+        self._cache(latest, latest_is_security=True)
+        config = make_test_config(**{"check_for_updates": True, **overrides})
+        assert "UPDATE AVAILABLE" not in (create_server(config).instructions or "")
+
+    @pytest.mark.parametrize(
+        ("setting", "security", "queued"),
+        [
+            ("all", False, True),
+            ("all", True, True),
+            ("security", False, False),
+            ("security", True, True),
+            ("off", True, False),
+        ],
+    )
+    async def test_update_notices_setting(self, setting: str, security: bool, queued: bool) -> None:
+        manager = SharedClientManager(
+            make_test_config(check_for_updates=True, update_notices=setting)
+        )
+        with (
+            patch(
+                "mcp_synology.cli.version.refresh_update_check",
+                return_value=("9.9.9", security, {"latest_is_security": security}),
+            ),
+        ):
+            await manager._bg_update_check()
+        assert (manager._update_notice is not None) is queued
+
+    def test_the_session_does_not_announce_the_same_version_twice(self) -> None:
+        self._cache("99.0.0", latest_is_security=True)
+        server = create_server(make_test_config(check_for_updates=True))
+        assert isinstance(server, _SynologyServer)
+        assert server.update_notices is not None
+        assert server.update_notices._announced_version == "99.0.0"
+
+
+class TestUpdateNoticeEdges:
+    """Results that can't carry text, and a claim that fails (pre-QA round 2, #314)."""
+
+    @staticmethod
+    def _manager() -> SharedClientManager:
+        manager = SharedClientManager(make_test_config(check_for_updates=False))
+        manager._update_notice, manager._pending_version = "Update!", "9.9.9"
+        return manager
+
+    async def test_a_result_without_text_gets_its_own_text_block(self) -> None:
+        from mcp.types import CallToolResult, ImageContent
+
+        server = _SynologyServer("edges")
+        server.update_notices = self._manager()
+        image = ImageContent(type="image", data="aGk=", mime_type="image/png")
+        with patch.object(
+            _SynologyServer, "_call_tool", return_value=CallToolResult(content=[image])
+        ):
+            result = await server.call_tool("t", {})
+        assert isinstance(result, CallToolResult)
+        assert result.content[0] == image
+        assert result.content[1].text == "\n\n---\nUpdate!"  # type: ignore[union-attr]
+
+    async def test_a_non_call_result_leaves_the_notice_for_later(self) -> None:
+        server = _SynologyServer("edges")
+        manager = self._manager()
+        server.update_notices = manager
+        other = MagicMock()  # e.g. an InputRequiredResult
+        with patch.object(_SynologyServer, "_call_tool", return_value=other):
+            assert await server.call_tool("t", {}) is other
+        assert manager._update_notice == "Update!"
+
+    async def test_a_failed_claim_keeps_the_notice(self) -> None:
+        manager = self._manager()
+        with (
+            patch("mcp_synology.cli.version.claim_announcement", side_effect=OSError("lock")),
+            pytest.raises(OSError),
+        ):
+            await manager.take_update_notice()
+        assert manager._update_notice == "Update!"
+        assert manager._announced_version is None

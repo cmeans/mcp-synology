@@ -77,6 +77,8 @@ def _load_integration_config() -> tuple[AppConfig, dict[str, str]]:
     is_admin = raw.pop("is_admin", None)
     if isinstance(is_admin, bool):
         test_paths["is_admin"] = str(is_admin).lower()
+    # These tests use the real home directory: keep them off the update-check state (#314).
+    raw.setdefault("check_for_updates", False)
     config = AppConfig(**raw)
     return config, test_paths
 
@@ -195,6 +197,7 @@ async def admin_client(
         pytest.skip(f"Admin config not found: {admin_path}")
 
     raw = yaml.safe_load(admin_path.read_text(encoding="utf-8"))
+    raw.setdefault("check_for_updates", False)
     admin_cfg = AppConfig(**raw)
     conn = admin_cfg.connection
     assert conn is not None

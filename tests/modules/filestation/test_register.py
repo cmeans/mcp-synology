@@ -10,7 +10,7 @@ decorators but not the inner tool closures. These tests:
 3. Pull each tool function via server._tool_manager._tools[name].fn
 4. Mock the underlying domain function and invoke the tool, asserting the
    closure walked through `await manager.get_client()` and forwarded the
-   result through `manager.with_update_notice()`
+   result through the module's `_reply()`
 
 The tools that report progress (download_file, upload_file, and since #245
 copy_files, move_files, delete_files and restore_from_recycle_bin) take an extra
@@ -50,8 +50,6 @@ def _make_ctx(
     manager = MagicMock()
     fake_client = MagicMock()
     manager.get_client = AsyncMock(return_value=fake_client)
-    # `with_update_notice` is sync and just appends to a string. Echo through.
-    manager.with_update_notice = MagicMock(side_effect=lambda s: s)
 
     if allowed is None:
         allowed = {t.name for t in MODULE_INFO.tools}
@@ -928,15 +926,14 @@ class TestDiscoveryAtFirstConnection:
             )
         )
         server, manager, ctx = _make_ctx()
-        manager.with_update_notice = MagicMock(side_effect=lambda s: s + "\n[update notice]")
         self._wire(manager, mock_client, monkeypatch)
         register(ctx)
         fn = server._tool_manager._tools["list_shares"].fn
         first = await fn()
-        assert first.startswith("SHARES\n[update notice]")
+        assert first.startswith("SHARES\n\n---\nNote:")
         assert first.endswith("Use file_task to check on them or stop them.")
         assert "deleting /s/big (8 of 342 items, 2%), handle `delete:FileStation_D1`" in first
-        assert await fn() == "SHARES\n[update notice]"
+        assert await fn() == "SHARES"
         assert route.call_count == 1
         params = dict(route.calls.last.request.url.params)
         assert (params["api"], params["method"]) == ("SYNO.FileStation.BackgroundTask", "list")
@@ -981,7 +978,6 @@ class TestDiscoveryAtFirstConnection:
             "mcp_synology.modules.filestation.tasks.file_task", AsyncMock(return_value="STATUS")
         )
         server, manager, ctx = _make_ctx()
-        manager.with_update_notice = MagicMock(side_effect=lambda s: s)
         self._wire(manager, mock_client, monkeypatch)
         register(ctx)
         assert await server._tool_manager._tools["file_task"].fn(**kwargs) == first

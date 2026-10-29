@@ -2,7 +2,9 @@
 schema_version: 1
 instance_id: nas-primary
 alias: HomeNAS
-# check_for_updates: false  # Uncomment to disable update notices in Claude Desktop
+# Update notices to the model: all (default), security (security releases only) or off.
+# The update check still runs and logs a newer version either way.
+# update_notices: security
 
 # Custom instructions prepended to the built-in server prompt.
 # Useful for guiding Claude on when to use this connection vs others.
