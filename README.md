@@ -44,7 +44,6 @@ Each module covers one DSM package. A module loads only when it's listed under `
 | [Synology Photos](#synology-photos) | `photos` | 4 · 🟢 Most | 15 · 🟢 Most | Any, with the Photos privilege | 7.1 – 7.4.1 (favorites and concepts: 7.2.2+) |
 | [Download Station](#download-station) | `downloadstation` | 5 · 🟢 Most | 7 · 🟡 Partial | Any, with the Download Station privilege (non-admins see only their own tasks) | 7.1 – 7.4.1 |
 | [Storage](#storage) | `storage` | 11 · 🟢 Most | — | Admin only | 7.1 – 7.4.1 |
-| [Container Manager](#coming-next) | — | *planned* | *planned* | — | — |
 
 **Coverage**, per tier, of what the package itself can do: ✅ **Full**: everything; 🟢 **Most**: the main features, with gaps listed under the module; 🟡 **Partial**: the core features, with notable gaps; — no tools in that tier.
 
@@ -60,17 +59,17 @@ What's not covered yet, in short:
 
 Each release candidate is live-tested by these clients driving the tools on a real NAS ([how](docs/live-testing.md)):
 
-| Client | How it runs the server | Notes |
-|---|---|---|
-| **Claude Code** | Starts it itself (stdio) | Gets the server's instructions; no short reply limit (it aborts a call only after 30 minutes idle by default), so long operations and hand-offs are tested here |
-| **claude.ai** in the Claude desktop app | The app starts it locally; claude.ai reaches it through the app's device bridge | Doesn't pass on the server's instructions, tool titles or annotations, so the tools are written to work from their descriptions and replies alone. Replies are cut off after about 60 s |
-| **Meta Muse** (free plan) | Its own script around `mcp-synology serve`, on its VM | By default a fresh server process per call (slow: every call logs in). Ask it to keep one long-lived session instead: [docs/muse.md](docs/muse.md) has the instructions to paste |
+| Client | Model | How it runs the server | Notes |
+|---|---|---|---|
+| **Claude Code** | Claude Opus 5.5 | Starts it itself (stdio) | Gets the server's instructions; no short reply limit (it aborts a call only after 30 minutes idle by default), so long operations and hand-offs are tested here |
+| **claude.ai** in the Claude desktop app | Claude Opus 5.5 | The app starts it locally; claude.ai reaches it through the app's device bridge | Doesn't pass on the server's instructions, tool titles or annotations, so the tools are written to work from their descriptions and replies alone. Replies are cut off after about 60 s |
+| **Meta Muse** (free plan) | Muse Spark | Its own script around `mcp-synology serve`, on its VM | By default a fresh server process per call (slow: every call logs in). Ask it to keep one long-lived session instead: [docs/muse.md](docs/muse.md) has the instructions to paste |
 
-A client can change the outcome on its own: the same model does less well through a client that drops the server's instructions or annotations. Muse ran the live tests on Muse Spark.
+A client can change the outcome on its own: the same model does less well through a client that drops the server's instructions or annotations.
 
 ### Tested models
 
-**For best results, use Claude Sonnet 5.5 or better.** To compare models, we held the client fixed: headless Claude Code (server instructions and full tool schemas delivered, no other tools), the same 12 tasks across System, File Station, Synology Photos and Download Station (Storage came later), on a DSM 7.2.2 test NAS restored fresh for each model, as a non-admin user (2026-10-28).
+**For best results, use Claude Sonnet 5.5 or better.** The live tests above ran on Claude Opus 5.5 in both Claude clients. To compare models, we held the client fixed: headless Claude Code (server instructions and full tool schemas delivered, no other tools), the same 12 tasks across System, File Station, Synology Photos and Download Station (Storage came later), on a DSM 7.2.2 test NAS restored fresh for each model, as a non-admin user (2026-10-28).
 
 | Model | Tasks completed |
 |---|---|
