@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -96,16 +97,45 @@ def test_only_browse_item_and_folder_required() -> None:
     assert required == {"SYNO.Foto.Browse.Item", "SYNO.Foto.Browse.Folder"}
 
 
+# A Photos API name passed to call/api/walk/has on any receiver, on the same line or the
+# next once ruff format wraps the call (#440 QA round 2). One-word names (UserInfo,
+# Thumbnail) are only recognizable this way.
+_API_CALL = r'\.(?:call|api|walk|has)\(\s*"([A-Z][A-Za-z.]+)"'
+# Dotted names are recognizable anywhere: as another helper's argument (_by_id_or_name)
+# or in a conditional expression choosing between two APIs.
+_DOTTED = re.compile(r"[A-Z][A-Za-z]+(\.[A-Z][A-Za-z]+)+")
+
+
 def test_every_api_called_is_declared() -> None:
     """Each SYNO.Foto API the module calls is in required_apis (and so in the spec's
-    ApiRequirement block): #440 QA found Setting.User missing."""
-    src = Path(photos_pkg.__file__ or "").parent
-    used = set()
-    for path in src.glob("*.py"):
-        used |= set(re.findall(r'ph\.[a-z_]+\("([A-Z][A-Za-z.]+)"', path.read_text()))
-    assert "Setting.User" in used
+    ApiRequirement block), and each declared one is called: #440 QA found Setting.User
+    missing."""
+    used: set[str] = set()
+    for path in Path(photos_pkg.__file__ or "").parent.glob("*.py"):
+        if path.name == "__init__.py":
+            continue
+        text = path.read_text()
+        used |= set(re.findall(_API_CALL, text))
+        used |= {
+            node.value
+            for node in ast.walk(ast.parse(text))
+            if isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and _DOTTED.fullmatch(node.value)
+            and not node.value.startswith("SYNO.")
+        }
+    # Wrapped calls, other receivers and names passed through another helper, which a
+    # same-line ph.call() match missed.
+    assert {
+        "Setting.User",
+        "Browse.ConditionAlbum",
+        "Search.Filter",
+        "BackgroundTask.File",
+        "Sharing.Passphrase",
+        "UserInfo",
+    } <= used
     declared = {r.api_name for r in MODULE_INFO.required_apis}
-    assert {f"SYNO.Foto.{name}" for name in used} <= declared
+    assert {f"SYNO.Foto.{name}" for name in used} == declared
 
 
 def test_task_timeout_bounds() -> None:
