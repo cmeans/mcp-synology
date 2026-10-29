@@ -390,10 +390,6 @@ modules:
 
 Spec: [`docs/specs/storage-module-spec.md`](docs/specs/storage-module-spec.md).
 
-### Coming next
-
-- **Container Manager** (#268).
-
 ## Features
 
 - **Interactive setup** — guided configuration that creates your config, stores credentials, handles 2FA, and emits a Claude Desktop snippet
