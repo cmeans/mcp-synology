@@ -34,6 +34,7 @@ ENV_VAR_MAP: dict[str, str] = {
     "SYNOLOGY_DEVICE_ID": "auth.device_id",
     "SYNOLOGY_INSTANCE_ID": "instance_id",
     "SYNOLOGY_LOG_LEVEL": "logging.level",
+    "SYNOLOGY_UPDATE_NOTICES": "update_notices",
 }
 
 
@@ -86,6 +87,10 @@ class AppConfig(BaseModel, extra="forbid"):
     instance_id: str | None = None
     alias: str | None = None
     check_for_updates: bool = True
+    # Which update notices reach the model for this connection (#314): every new version
+    # (ordinary ones once a week, security releases every session), only security
+    # releases, or none. The log line and `mcp-synology check` report either way.
+    update_notices: Literal["all", "security", "off"] = "all"
     custom_instructions: str | None = None
     instructions_file: str | None = None
     connection: ConnectionConfig | None = None
@@ -95,6 +100,17 @@ class AppConfig(BaseModel, extra="forbid"):
     # Local folders every module's tools may use; each module's own allowed_local_paths
     # adds to it (#257). Unset keeps the per-module rule from before #257.
     allowed_local_paths: list[str] | None = Field(default=None, min_length=1)
+
+    @field_validator("update_notices", mode="before")
+    @classmethod
+    def _yaml_bool_notices(cls, value: object) -> object:
+        # YAML 1.1 reads an unquoted `off` as false (and `on` as true), so
+        # `update_notices: off` arrives as a bool.
+        if value is False:
+            return "off"
+        if value is True:
+            return "all"
+        return value
 
     @field_validator("allowed_local_paths")
     @classmethod

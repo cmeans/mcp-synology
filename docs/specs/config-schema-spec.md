@@ -221,7 +221,8 @@ logging:
 | `schema_version` | `int` | **Yes** | — | Config format version. Current: `1`. |
 | `instance_id` | `str` | No | Derived from `connection.host` | Unique identifier for this instance. Alphanumeric + hyphens only. |
 | `alias` | `str` | No | — | Human-friendly name for this NAS (e.g., "HomeNAS"). Used as `display_name` in tool output and server identity. |
-| `check_for_updates` | `bool` | No | `true` | Check PyPI for newer versions on first tool call. |
+| `check_for_updates` | `bool` | No | `true` | Check PyPI for a newer version, in the background when the server starts (at most once a day, or hourly while PyPI doesn't answer; the result is cached for every install on the machine). `false` turns off the check and every notice for this config. |
+| `update_notices` | `str` | No | `all` | Which update notices reach the model for this config (#314): `all` (an ordinary release once a week, on the first tool result, recorded per install so connections sharing an install say it once; a security release in every session, in the server instructions when the previous check already knew of it, else on the first tool result), `security` (only security releases) or `off` (none; YAML's unquoted `off`, read as false, works too). The WARNING log line and `mcp-synology check` report a newer version either way. Per config, since configs may run different installs. |
 | `custom_instructions` | `str` | No | — | Additional instructions prepended to the built-in server prompt (higher priority). Supports template variables: `{display_name}`, `{instance_id}`, `{host}`, `{port}`, `{home_dir}`, `{platform}`; only these are replaced, and any other brace (a JSON example, an unknown `{name}`) is left as written. Before 0.10.0 such a brace made `serve` fail with `KeyError`. Useful for guiding Claude on when to use this connection vs others. HTML comments (`<!-- ... -->`) are removed before the text is sent, so they can hold notes for whoever edits the file. |
 | `instructions_file` | `str` | No | — | Path to a custom `.md` file that **replaces** the built-in server instructions entirely. Start from the built-in files in `src/mcp_synology/instructions/` (see **Built-in instructions** below). Same template variables are supported, with other braces left as written. Takes precedence over `custom_instructions`. Unlike the built-in or prepended instructions, a replacement file doesn't get the generated PERMISSIONS section (below). HTML comments (`<!-- ... -->`) are removed before the text is sent, so they can hold notes for whoever edits the file. |
 | `connection` | `object` | No | — | NAS connection details. Required unless `SYNOLOGY_HOST` env var is set. |
@@ -356,6 +357,7 @@ Certain config values can be overridden by environment variables. This supports 
 | `SYNOLOGY_DEVICE_ID` | `auth.device_id` | Part of credential hierarchy |
 | `SYNOLOGY_INSTANCE_ID` | `instance_id` | — |
 | `SYNOLOGY_LOG_LEVEL` | `logging.level` | — |
+| `SYNOLOGY_UPDATE_NOTICES` | `update_notices` | `all`, `security` or `off` |
 
 **Precedence:** Environment variables override config file values. For credentials the keyring comes last: env vars, then the config file, then the keyring (`core/auth.py`), each value resolved separately. Explicit sources override the keyring default.
 

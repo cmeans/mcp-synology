@@ -16,7 +16,7 @@ import anyio
 import httpx
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError, UnexpectedToolError
-from mcp.types import Icon
+from mcp.types import CallToolResult, Icon, TextContent
 
 from mcp_synology import __version__
 from mcp_synology.core.auth import AuthManager
@@ -36,7 +36,7 @@ if TYPE_CHECKING:
     from types import ModuleType
 
     from mcp.server.mcpserver import Context
-    from mcp.types import CallToolResult, InputRequiredResult, ToolAnnotations
+    from mcp.types import InputRequiredResult, ToolAnnotations
     from mcp.types import Tool as MCPTool
 
     from mcp_synology.core.config import AppConfig, ModuleConfig
@@ -239,6 +239,10 @@ class _SynologyServer(MCPServer):
     take effect without touching SDK internals.
     """
 
+    # Set by create_server: the update notice goes on the session's first tool result,
+    # whichever module the tool belongs to (#314).
+    update_notices: SharedClientManager | None = None
+
     def add_tool(
         self,
         fn: Callable[..., Any],
@@ -277,6 +281,49 @@ class _SynologyServer(MCPServer):
         ]
 
     async def call_tool(
+        self, name: str, arguments: dict[str, Any], context: Context[Any, Any] | None = None
+    ) -> CallToolResult | InputRequiredResult:
+        """Run the tool (``_call_tool``), then add a pending update notice to its result.
+
+        The notice goes on the first result after the background check finds a version
+        to announce, for any module's tool and for an error too (#314). Before, only File
+        Station's tools carried it. It's taken only for a result that can carry it (not an
+        input request), and taking it can't fail the tool.
+        """
+        try:
+            result = await self._call_tool(name, arguments, context)
+        except ToolError as exc:
+            notice = await self._take_update_notice()
+            if notice:
+                raise type(exc)(f"{exc}{notice}") from exc.__cause__
+            raise
+        if not isinstance(result, CallToolResult):
+            return result
+        notice = await self._take_update_notice()
+        if notice:
+            texts = [i for i, c in enumerate(result.content) if isinstance(c, TextContent)]
+            if texts:
+                content = list(result.content)
+                last = content[texts[-1]]
+                assert isinstance(last, TextContent)
+                content[texts[-1]] = last.model_copy(update={"text": last.text + notice})
+                result = result.model_copy(update={"content": content})
+            else:
+                result = result.model_copy(
+                    update={"content": [*result.content, TextContent(type="text", text=notice)]}
+                )
+        return result
+
+    async def _take_update_notice(self) -> str:
+        if self.update_notices is None:
+            return ""
+        try:
+            return await self.update_notices.take_update_notice()
+        except Exception:  # noqa: BLE001 - a notice must never fail a tool that worked
+            logger.debug("Couldn't deliver the update notice", exc_info=True)
+            return ""
+
+    async def _call_tool(
         self, name: str, arguments: dict[str, Any], context: Context[Any, Any] | None = None
     ) -> CallToolResult | InputRequiredResult:
         """Keep the message of an exception that isn't a ``ToolError``.
@@ -366,6 +413,30 @@ def _strip_html_comments(text: str) -> str:
     return _HTML_COMMENT.sub("", text)
 
 
+def _startup_update_notice(config: AppConfig) -> tuple[str, str] | None:
+    """A security release the last check found, for the server instructions (#314).
+
+    Read from the global state's cache (no network call, so startup isn't delayed). Only
+    a security release goes in the instructions: an MCP client keeps a server running
+    across chats, so the instructions reach every chat until the client restarts, which
+    is right for a security release (announced every session anyway) and too often for
+    an ordinary one (once a week, through a tool result). Returns ``(version, notice)``,
+    or None when there's nothing to add or ``update_notices`` is ``off``.
+    """
+    if not config.check_for_updates or config.update_notices == "off":
+        return None
+    from mcp_synology.cli import _load_global_state
+    from mcp_synology.cli.version import _cached_update, update_notice
+
+    state = _load_global_state()
+    latest = _cached_update(state)
+    if latest is None or not state.get("latest_is_security"):
+        return None
+    if state.get("latest_known_version") != latest:
+        return None
+    return latest, update_notice(latest, security=True)
+
+
 class SharedClientManager:
     """Manages the shared DSM client lifecycle across all modules.
 
@@ -379,6 +450,10 @@ class SharedClientManager:
         self._auth: AuthManager | None = None
         self._server_state: ServerState = ServerState()
         self._update_notice: str | None = None
+        self._pending_version: str | None = None
+        # The version this session already announced (in the instructions or a result),
+        # so the background check doesn't announce it twice.
+        self._announced_version: str | None = None
         self._bg_task: asyncio.Task[None] | None = None
         # Re-auth callbacks queued by modules during sync `register()` — flushed
         # to the AuthManager once it's lazily created in `get_client`. Modules
@@ -419,10 +494,6 @@ class SharedClientManager:
             self._client = client
             self._auth = auth
 
-            # Check for updates in background — never blocks tool execution
-            if self._config.check_for_updates:
-                self._bg_task = asyncio.create_task(self._bg_update_check())
-
         if self._client is None:
             raise RuntimeError("Client initialization failed")
         return self._client
@@ -439,12 +510,38 @@ class SharedClientManager:
         else:
             self._pending_reauth_callbacks.append(cb)
 
-    def with_update_notice(self, result: str) -> str:
-        """Append update notice to tool result (first call only, then clears)."""
-        notice = self._update_notice or ""
-        if notice:
-            self._update_notice = None
-        return result + notice
+    def start_update_check(self) -> None:
+        """Start the background update check (from the server's lifespan, #314).
+
+        It used to start on the first DSM login, so a session's first tool result could
+        never carry the notice, and a session that never called a tool never checked.
+        """
+        if self._config.check_for_updates and self._bg_task is None:
+            self._bg_task = asyncio.create_task(self._bg_update_check())
+
+    async def take_update_notice(self) -> str:
+        """The pending update notice, once, as a footer (#314).
+
+        Every connection on an install checks on its own; the announcement is claimed
+        under the global-state lock here, at delivery, so only the first connection to
+        deliver an ordinary release says it, once a week (a security release is always
+        claimed). A connection that loses the claim says nothing.
+        """
+        from mcp_synology.cli.version import claim_announcement
+
+        notice, self._update_notice = self._update_notice, None
+        version = self._pending_version
+        if not notice or not version:
+            return ""
+        try:
+            claimed = await asyncio.to_thread(claim_announcement, version)
+        except BaseException:
+            # Not delivered: keep it for the next result. (A call canceled mid-claim may
+            # still have recorded it; that costs one weekly slot, not a repeat.)
+            self._update_notice = notice
+            raise
+        self._announced_version = version
+        return f"\n\n---\n{notice}" if claimed else ""
 
     def install_signal_handlers(self) -> None:
         """Turn SIGTERM and SIGINT into SystemExit, so the event loop unwinds through the
@@ -492,7 +589,14 @@ class SharedClientManager:
                 await client.__aexit__(None, None, None)
 
     async def _bg_update_check(self) -> None:
-        """Background update check — appends notice on first tool result.
+        """Background update check: log a newer version, and queue the notice (#314).
+
+        A newer version is logged at WARNING (the client's MCP server log). The notice
+        is queued for the next tool result when this connection's ``update_notices``
+        wants it (``all``, or ``security`` for a security release), the instructions
+        don't already carry it, and the once-a-week cooldown allows it; a security
+        release is announced every session. ``take_update_notice`` claims it at
+        delivery, so connections sharing an install don't each say it.
 
         Closes #39. Two pre-fix gaps:
 
@@ -511,43 +615,38 @@ class SharedClientManager:
            and exit cleanly so the tool flow is never blocked.
         """
         try:
-            from mcp_synology.cli import (
-                _check_for_update,
-                _load_global_state,
-                _save_global_state,
-                _with_global_state_lock,
+            from mcp_synology.cli.version import (
+                _should_announce,
+                refresh_update_check,
+                update_notice,
             )
 
             loop = asyncio.get_running_loop()
 
-            # Run the blocking PyPI check in a thread, bounded so a stuck
-            # executor (slow socket, slow YAML parse, hung disk) can't
-            # keep this coroutine alive forever. The inner urlopen has
-            # its own 5s timeout; the 10s outer bound is a safety margin
-            # for everything else _check_for_update does.
-            #
-            # The full load → check → save sequence runs inside the executor
-            # so the synchronous fcntl.flock never spans an `await`. Holding
-            # a sync lock across an await would be a deadlock footgun for any
-            # future async caller of `_with_global_state_lock` on this event
-            # loop (e.g. #75's ServerState lifecycle).
-            def _check_under_lock() -> str | None:
-                with _with_global_state_lock():
-                    gstate = _load_global_state()
-                    result = _check_for_update(gstate)
-                    _save_global_state(gstate)
-                    return result
+            # Run the blocking check in a thread, bounded so a stuck executor (slow
+            # socket, slow YAML parse, hung disk) can't keep this coroutine alive
+            # forever. PyPI (5 s) and GitHub (3 s) have their own timeouts; 10 s is the
+            # margin for the rest. The synchronous fcntl.flock stays inside the thread,
+            # never spanning an `await`, and the network calls run outside it.
+            def _check() -> tuple[str | None, bool, bool]:
+                result, sec, gstate = refresh_update_check()
+                return result, sec, bool(result) and _should_announce(gstate, str(result))
 
             async with asyncio.timeout(10):
-                latest = await loop.run_in_executor(None, _check_under_lock)
+                latest, security, announce = await loop.run_in_executor(None, _check)
             if latest:
-                from mcp_synology import __version__
-
-                self._update_notice = (
-                    f"\n\n---\nUpdate available: mcp-synology {latest} "
-                    f"(current: {__version__}). "
-                    f"Run: mcp-synology --check-update"
+                logger.warning(
+                    "mcp-synology %s is available%s (running %s).",
+                    latest,
+                    ", a security release" if security else "",
+                    __version__,
                 )
+                wanted = self._config.update_notices == "all" or (
+                    security and self._config.update_notices == "security"
+                )
+                if wanted and latest != self._announced_version and announce:
+                    self._update_notice = update_notice(latest, security=security)
+                    self._pending_version = latest
         except TimeoutError:
             # asyncio.timeout raises builtins.TimeoutError on 3.11+. Treat
             # as a non-event for the user-facing flow — they just don't
@@ -816,8 +915,18 @@ def create_server(config: AppConfig) -> MCPServer:
     manager = SharedClientManager(config)
     manager.install_signal_handlers()
 
+    # A security release the last check found goes in the instructions too, so the model
+    # knows from the first message (#314). Added to a replacement file as well: it isn't
+    # documentation the user wrote, and it's the only channel a no-tool chat has.
+    startup_update = _startup_update_notice(config)
+    if startup_update:
+        version, notice = startup_update
+        instructions += f"\n\nUPDATE AVAILABLE:\n{notice}"
+        manager._announced_version = version
+
     @asynccontextmanager
     async def _lifespan(_server: MCPServer[Any]) -> AsyncIterator[None]:
+        manager.start_update_check()
         try:
             yield None
         finally:
@@ -830,6 +939,7 @@ def create_server(config: AppConfig) -> MCPServer:
         version=__version__,
         lifespan=_lifespan,
     )
+    server.update_notices = manager
 
     logger.debug("Creating MCP server")
 

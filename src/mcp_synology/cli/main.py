@@ -13,16 +13,15 @@ from mcp_synology import __version__
 from mcp_synology.cli.logging_ import _configure_logging, _init_early_logging
 from mcp_synology.cli.version import (
     _check_for_update,
-    _detect_installer,
     _do_auto_upgrade,
     _do_revert,
     _get_current_version,
     _load_global_state,
     _save_global_state,
     _with_global_state_lock,
+    refresh_update_check,
+    update_notice,
 )
-
-_PYPI_PACKAGE = "mcp-synology"
 
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]}, invoke_without_command=True)
@@ -52,20 +51,12 @@ def main(
 ) -> None:
     """mcp-synology — MCP server for Synology NAS."""
     if check_update:
-        with _with_global_state_lock():
-            state = _load_global_state()
-            latest = _check_for_update(state, force=True)
-            _save_global_state(state)
+        latest, security, _ = refresh_update_check(force=True)
         current = _get_current_version()
         if latest:
-            click.echo(f"Update available: {current} -> {latest}")
-            installer = _detect_installer()
-            if installer == "uv":
-                click.echo(f"Upgrade with: uv tool install {_PYPI_PACKAGE}@latest")
-            elif installer == "pipx":
-                click.echo(f"Upgrade with: pipx upgrade {_PYPI_PACKAGE}")
-            else:
-                click.echo(f"Upgrade with: uv tool install {_PYPI_PACKAGE}@latest")
+            # The same text the update notice and `check` give (#314): the upgrade command
+            # for this install, and whether it's a security release.
+            click.echo(update_notice(latest, security=security, for_model=False))
         else:
             click.echo(f"You are running the latest version ({current}).")
         ctx.exit()

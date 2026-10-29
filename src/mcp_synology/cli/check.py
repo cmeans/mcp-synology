@@ -48,8 +48,25 @@ def check(config: str | None, verbose: bool) -> None:
     for notice in config_notices(app_config):
         click.echo(click.style(f"Warning: {notice}", fg="yellow"), err=True)
 
+    # Before the login: someone running check because logins fail may be on an old
+    # version (#314). `update_notices` doesn't apply here: a person asked.
+    if app_config.check_for_updates:
+        _report_update()
+
     click.echo(f"Checking credentials for '{app_config.display_name}'...")
     asyncio.run(_check_login(app_config))
+
+
+def _report_update() -> None:
+    """Say so when a newer mcp-synology is out (#314): best-effort, never fails check."""
+    from mcp_synology.cli.version import _check_and_describe_update
+
+    try:
+        notice = _check_and_describe_update()
+    except Exception:  # noqa: BLE001 - an update notice must never fail check
+        return
+    if notice:
+        click.echo(click.style(notice, fg="yellow"))
 
 
 def connection_failure_message(base_url: str, host: str, exc: BaseException) -> str:

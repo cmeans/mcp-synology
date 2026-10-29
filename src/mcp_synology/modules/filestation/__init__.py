@@ -393,12 +393,13 @@ def register(ctx: "RegisterContext") -> None:
         return client
 
     def _reply(result: str, *, skip: str | None = None, listed: bool = False) -> str:
-        """The tool result plus the update notice and, once, the discovery note.
+        """The tool result plus, once, the discovery note.
 
         A file_task reply leaves out the task it's about (``skip``), so the note doesn't
         repeat it right below, and a file_task list (``listed``) already shows them all.
+        The update notice is added for every module by the server's ``call_tool`` (#314).
         """
-        text = manager.with_update_notice(result)
+        text = result
         pending = discovery["note"]
         if isinstance(pending, DiscoveryNote):
             discovery["note"] = None

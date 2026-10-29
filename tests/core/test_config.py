@@ -277,6 +277,12 @@ class TestEnvOverrides:
             result = _merge_env_overrides(raw)
         assert result["connection"]["https"] is True
 
+    def test_update_notices_override(self) -> None:
+        raw: dict[str, Any] = {}
+        with patch.dict(os.environ, {"SYNOLOGY_UPDATE_NOTICES": "security"}):
+            result = _merge_env_overrides(raw)
+        assert result["update_notices"] == "security"
+
     def test_env_does_not_override_when_not_set(self) -> None:
         raw: dict[str, Any] = {"connection": {"host": "original"}}
         env = {k: v for k, v in os.environ.items() if not k.startswith("SYNOLOGY_")}
@@ -339,3 +345,34 @@ class TestTopLevelAllowedLocalPaths:
     def test_unknown_top_level_key_still_rejected(self) -> None:
         with pytest.raises(ValidationError):
             AppConfig(**{**_minimal_raw(), "allowed_local_path": ["/x"]})
+
+
+class TestUpdateNotices:
+    """Per config, since configs may run different installs (#314)."""
+
+    def test_defaults_to_all(self) -> None:
+        assert AppConfig(**_minimal_raw()).update_notices == "all"
+
+    @pytest.mark.parametrize("value", ["all", "security", "off"])
+    def test_accepts_the_three_settings(self, value: str) -> None:
+        assert AppConfig(**{**_minimal_raw(), "update_notices": value}).update_notices == value
+
+    def test_rejects_anything_else(self) -> None:
+        with pytest.raises(ValidationError, match="update_notices"):
+            AppConfig(**{**_minimal_raw(), "update_notices": "weekly"})
+
+    @pytest.mark.parametrize(("written", "expected"), [("off", "off"), ("on", "all")])
+    def test_unquoted_yaml_booleans(self, tmp_path: Path, written: str, expected: str) -> None:
+        # YAML 1.1 reads an unquoted `off` as false; the README and the notice write it
+        # unquoted (QA round 1 on #433).
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "schema_version: 1\n"
+            f"update_notices: {written}\n"
+            "connection:\n"
+            "  host: 192.168.1.100\n"
+            "modules:\n"
+            "  filestation:\n"
+            "    enabled: true\n"
+        )
+        assert load_config(config_file).update_notices == expected
