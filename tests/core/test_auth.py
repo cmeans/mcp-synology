@@ -1302,8 +1302,8 @@ class TestRefusalSuggestion:
                 {"device_id": "old"},
                 {},
                 "The device token comes from auth.device_id in the config file, which "
-                "overrides the keyring: remove it there, run 'mcp-synology setup' to sign in "
-                "with a new 2FA code, and restart the server.",
+                "overrides the keyring: remove it there, then run 'mcp-synology setup' to sign "
+                "in with a new 2FA code, and restart the server.",
                 "picks it up",
             ),
             (

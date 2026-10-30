@@ -1247,12 +1247,61 @@ class TestCheckLogin:
 
         assert "Authentication failed: No credentials found. Run setup." in capsys.readouterr().err
 
+    @pytest.mark.parametrize(
+        ("code", "message", "auth", "env", "expected"),
+        [
+            (
+                400,
+                "No such account or incorrect password",
+                {},
+                {},
+                "Authentication failed: No such account or incorrect password. Run "
+                "'mcp-synology setup' to store the right password.",
+            ),
+            (
+                400,
+                "No such account or incorrect password",
+                {"username": "me", "password": "pw"},
+                {},
+                "Authentication failed: No such account or incorrect password. The password "
+                "comes from auth.password in the config file: correct it there ('mcp-synology "
+                "setup' writes only the keyring). If the username is wrong, it comes from "
+                "auth.username in the config file: correct it there.",
+            ),
+            (
+                403,
+                "2FA is required and DSM rejected the device token (it may have been removed "
+                "or invalidated on the NAS).",
+                {"device_id": "cfgtoken"},
+                {},
+                "The device token comes from auth.device_id in the config file, which "
+                "overrides the keyring: remove it there, then run 'mcp-synology setup' to sign "
+                "in with a new 2FA code.",
+            ),
+            (
+                403,
+                "2FA is required and DSM rejected the device token (it may have been removed "
+                "or invalidated on the NAS).",
+                {},
+                {"SYNOLOGY_DEVICE_ID": "envtoken"},
+                "The device token comes from SYNOLOGY_DEVICE_ID in the server's environment",
+            ),
+        ],
+        ids=["400-keyring", "400-config", "403-config-token", "403-env-token"],
+    )
     async def test_check_login_prints_dsm_s_own_refusal(
-        self, capsys: pytest.CaptureFixture[str]
+        self,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+        code: int,
+        message: str,
+        auth: dict[str, str],
+        env: dict[str, str],
+        expected: str,
     ) -> None:
         """A refusal's text is about the running server (remembered refusals, restarts,
-        run check); check prints DSM's own error and suggestion instead (QA round 2 on
-        #461)."""
+        run check); check prints DSM's own error, with advice for this run by the code and
+        where the credential comes from (QA round 2 on #461 and its pre-QA)."""
         import pytest
 
         from mcp_synology.cli.check import _check_login
@@ -1260,11 +1309,11 @@ class TestCheckLogin:
         from mcp_synology.core.errors import AuthenticationError
         from tests.conftest import make_test_config
 
-        dsm = AuthenticationError(
-            "No such account or incorrect password",
-            code=400,
-            suggestion="Check username and password.",
-        )
+        for var in ("SYNOLOGY_USERNAME", "SYNOLOGY_PASSWORD", "SYNOLOGY_DEVICE_ID"):
+            monkeypatch.delenv(var, raising=False)
+        for var, value in env.items():
+            monkeypatch.setenv(var, value)
+        dsm = AuthenticationError(message, code=code, suggestion="Check username and password.")
         refusal = LoginRefusals().refuse("fp", dsm)
         refusal.__cause__ = dsm
         fake_auth = MagicMock()
@@ -1275,13 +1324,10 @@ class TestCheckLogin:
             patch("mcp_synology.core.auth.AuthManager", return_value=fake_auth),
             pytest.raises(SystemExit),
         ):
-            await _check_login(make_test_config())
+            await _check_login(make_test_config(auth=auth))
 
-        err = capsys.readouterr().err
-        assert (
-            "Authentication failed: No such account or incorrect password Check username "
-            "and password." in err
-        )
+        err = " ".join(capsys.readouterr().err.split())
+        assert expected in err
         assert "restart" not in err and "mcp-synology check" not in err
 
     async def test_check_login_http_error_has_a_check_specific_hint(

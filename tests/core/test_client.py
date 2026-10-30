@@ -1580,6 +1580,47 @@ class TestGeneralTransfers:
         assert b"\r\n\r\na\r\n" in route.calls.last.request.content
 
     @respx.mock
+    @pytest.mark.parametrize("path", ["form_post", "torrent", "download_binary"])
+    async def test_a_session_error_logs_in_once_and_retries_with_the_new_session(
+        self, tmp_path: Path, path: str
+    ) -> None:
+        """Each request path hands re-auth the session it sent, so a session that's
+        still the one that failed gets a login, and the retry carries the new one
+        (pre-QA on QA round 2, #461: these three paths had no test with a session)."""
+        client = make_client(self._cache())
+        expired = httpx.Response(200, json={"success": False, "error": {"code": 119}})
+        ok: httpx.Response = (
+            httpx.Response(200, content=b"jpeg", headers={"content-type": "image/jpeg"})
+            if path == "download_binary"
+            else httpx.Response(200, json={"success": True, "data": {"id": 1}})
+        )
+        route = respx.route(url__startswith=f"{BASE_URL}/webapi/").mock(side_effect=[expired, ok])
+        logins: list[int] = []
+
+        async def _reauth() -> None:
+            logins.append(1)
+            client.sid = "new-sid"
+
+        client.set_re_auth_callback(_reauth)
+        client.sid = "old-sid"
+        torrent = tmp_path / "a.torrent"
+        torrent.write_bytes(b"d4:infoe")
+        async with client:
+            if path == "form_post":
+                await client.request_form_post(
+                    "SYNO.DownloadStation2.Task", "create", 2, {"type": '"url"'}
+                )
+            elif path == "torrent":
+                await client.create_download_task_with_file(torrent, "a.torrent")
+            else:
+                await client.download_binary(
+                    "SYNO.Foto.Thumbnail", "get", 2, {"id": "1"}, tmp_path / "t.jpg"
+                )
+        assert logins == [1]
+        assert route.call_count == 2
+        assert "id=new-sid" in route.calls.last.request.headers.get("cookie", "")
+
+    @respx.mock
     async def test_upload_multipart_keeps_a_relogin_proxy_error(self, tmp_path: Path) -> None:
         """#321: a proxy's 502 on the re-login is raised as it is, not as error 119."""
         client = make_client(self._cache())

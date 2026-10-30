@@ -194,40 +194,50 @@ _SETUP_PICKED_UP = "the running server picks it up"
 _TWO_FA = (403, 404, 406)
 
 
-def refusal_advice(code: int | None, first: str, sources: dict[str, str | None]) -> str:
+def refusal_advice(
+    code: int | None, first: str, sources: dict[str, str | None], *, cli: bool = False
+) -> str:
     """What fixes a refused login, by DSM's code and where the credential it concerns
-    comes from (QA round 2 on #461). ``first`` is DSM's own suggestion for the code."""
+    comes from (QA round 2 on #461). ``first`` is DSM's own suggestion for the code.
+    ``cli`` leaves out what only a running server does (picking up the keyring, a restart):
+    `check` runs once and reads the credentials anew."""
+    picked = "" if cli else f"; {_SETUP_PICKED_UP}"
+    restart = "" if cli else " and restart the server"
     if code == 400:
         password, username = sources.get("password"), sources.get("username")
         if password == KEYRING:
-            advice = f"Run 'mcp-synology setup' to store the right password; {_SETUP_PICKED_UP}"
+            advice = f"Run 'mcp-synology setup' to store the right password{picked}"
         else:
             advice = (
-                f"The password comes from {password}: correct it there and restart the "
-                "server ('mcp-synology setup' writes only the keyring)"
+                f"The password comes from {password}: correct it there{restart} "
+                "('mcp-synology setup' writes only the keyring)"
             )
         if username != KEYRING:
             advice += f". If the username is wrong, it comes from {username}: correct it there"
             if password == KEYRING:
-                advice += " and restart the server"
+                advice += restart
         return advice
     if code in _TWO_FA:
         device = sources.get("device_id")
         if device is None:
-            advice = f"Run 'mcp-synology setup' to sign in with a new 2FA code; {_SETUP_PICKED_UP}"
+            advice = f"Run 'mcp-synology setup' to sign in with a new 2FA code{picked}"
         else:
             advice = (
                 f"The device token comes from {device}, which overrides the keyring: remove "
-                "it there, run 'mcp-synology setup' to sign in with a new 2FA code, and "
-                "restart the server"
+                "it there, then run 'mcp-synology setup' to sign in with a new 2FA code"
+                + ("" if cli else ", and restart the server")
             )
         return f"{first}. Then: {advice[0].lower()}{advice[1:]}" if code == 406 else advice
     if code == 401:
+        if cli:
+            return first or "The account is disabled in DSM"
         return (
             f"{first}. Once it's enabled again, restart the server"
             if first
             else ("Once the account is enabled again, restart the server")
         )
+    if cli:
+        return first or "Check the credentials"
     explicit = sorted({v for k, v in sources.items() if v and v != KEYRING})
     where = (
         "mcp-synology tries again once the credentials change ('mcp-synology setup' stores "

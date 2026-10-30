@@ -41,7 +41,9 @@ Fix:
    and reports which step fails (lookup → request → response).
 2. If 2FA is required, or DSM rejected the stored device token, run
    `mcp-synology setup` and complete the OTP exchange. This stores a new device
-   token in the keyring so subsequent runs do not need the OTP code.
+   token in the keyring so subsequent runs do not need the OTP code. A `device_id`
+   set in the environment or the config file overrides the keyring: remove it there
+   first (the error's suggestion says where it comes from).
 3. If the IP is auto-blocked, sign in to DSM directly and clear the entry at
    **Control Panel → Security → Account → Auto Block → Allow / Block List**.
 4. Verify the account has access to FileStation: **Control Panel → User & Group
