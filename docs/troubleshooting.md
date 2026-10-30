@@ -251,7 +251,9 @@ indexing`.
 HTML error page (verified on DSM 7.1 and 7.2.2; Photos spec, `download_photos`), so
 mcp-synology checks first and skips that item.
 
-**What to do:** try again shortly.
+**What to do:** try again shortly, with the same call (the same ids, in the same order): a file
+name depends on every item in the call, so a call with only the skipped item can name it onto
+another item's file.
 
 ### A taken-time change reads back as the old date
 

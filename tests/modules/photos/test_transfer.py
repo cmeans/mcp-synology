@@ -2,15 +2,23 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
 from typing import TYPE_CHECKING, Any, ClassVar
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 import respx
 from mcp.server.mcpserver.exceptions import ToolError
 
-from mcp_synology.modules.photos.transfer import download_photos, upload_photos
+from mcp_synology.modules.photos.transfer import (
+    _dest_name,
+    _name_key,
+    download_photos,
+    upload_photos,
+)
 from tests.modules.photos.dsm import FakePhotos, binary, captured, install, make_client
 
 if TYPE_CHECKING:
@@ -89,8 +97,31 @@ class TestOriginals:
             out = await download_photos(
                 client, ids=[12], dest_folder=str(tmp_path), allowed_roots=[tmp_path]
             )
-        assert "the file exists (overwrite=true replaces it)" in out
+        assert (
+            "12  forest-trail.jpg: not downloaded: another file has this name (if it's "
+            "another item's, from a call with more ids, repeat that whole call instead; "
+            "otherwise overwrite=true replaces it, or choose another folder)" in out
+        )
         assert (tmp_path / "forest-trail.jpg").read_bytes() == b"mine"
+
+    @respx.mock
+    async def test_existing_file_of_the_item_s_size_is_kept_quietly(self, tmp_path: Path) -> None:
+        """A file with the item's name and its filesize is most likely this item from an
+        earlier run: kept, without pushing toward overwrite=true (QA round 2 on #462)."""
+        (tmp_path / "forest-trail.jpg").write_bytes(b"x" * 49546)  # the capture's filesize
+        install(FakePhotos().on(ITEM, "get", 2, {"list": _items("ready")["list"][:1]}))
+        client = make_client()
+        async with client:
+            out = await download_photos(
+                client, ids=[12], dest_folder=str(tmp_path), allowed_roots=[tmp_path]
+            )
+        assert out.startswith("Downloaded 0 of 1 item(s)") and ", 1 already there)" in out
+        assert (
+            "12  forest-trail.jpg: already there: a file with this name and this item's size, "
+            "most likely this item from an earlier run; same name and size only, not verified "
+            "(kept)" in out
+        )
+        assert "overwrite=true" not in out
 
     @respx.mock
     async def test_overwrite_replaces(self, tmp_path: Path) -> None:
@@ -186,6 +217,40 @@ class TestOriginals:
         assert "Downloaded 2 of 2" in out
         assert "15  IMG_0001_15.jpg  " in out
 
+    @pytest.mark.parametrize("overwrite", [False, True])
+    @respx.mock
+    async def test_renamed_repeat_never_takes_another_items_name(
+        self, tmp_path: Path, overwrite: bool
+    ) -> None:
+        """#450: a repeat's ID-suffixed name can be another item's real name; the
+        third item used to get ``a_9.jpg`` again and replace the first's file."""
+        items = _items("ready", "ready")
+        third = json.loads(json.dumps(items["list"][1]))
+        items["list"].append(third)
+        for item, (item_id, name) in zip(
+            items["list"], [(1, "a_9.jpg"), (8, "a.jpg"), (9, "a.jpg")], strict=True
+        ):
+            item.update(id=item_id, filename=name)
+        fake = FakePhotos().on(ITEM, "get", 2, items)
+        fake.on("SYNO.Foto.Download", "download", 1, binary(b"1"), binary(b"8"), binary(b"9"))
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await download_photos(
+                client,
+                ids=[1, 8, 9],
+                dest_folder=str(tmp_path),
+                overwrite=overwrite,
+                allowed_roots=[tmp_path],
+            )
+        assert "Downloaded 3 of 3" in out
+        assert {p.name: p.read_bytes() for p in tmp_path.iterdir()} == {
+            "a_9.jpg": b"1",
+            "a.jpg": b"8",
+            "a_9_2.jpg": b"9",
+        }
+        assert "9  a_9_2.jpg  " in out
+
     @respx.mock
     async def test_dsm_not_answering_stops_and_names_the_rest(self, tmp_path: Path) -> None:
         items = _items("ready", "ready")
@@ -207,6 +272,11 @@ class TestOriginals:
         assert out.startswith("Downloaded 1 of 3")
         assert "15  beach-sunset_1.jpg: not downloaded: couldn't reach DSM (ReadTimeout)" in out
         assert "not tried: 16" in out
+        assert out.endswith(
+            "To retry, repeat this call with the same ids in the same order (overwrite=false "
+            "keeps the files already written): names depend on every item in the call, and "
+            "shift if an item that wasn't found is found then."
+        )
         assert len(fake.of("SYNO.Foto.Download")) == 2
 
 
@@ -1102,3 +1172,367 @@ class TestUploadPersonalRootFolder:
         assert not fake.of("SYNO.Foto.Setting.User")
         assert "homes/<user>/Photos" not in out
         assert "(117)" in out
+
+
+class TestDestName:
+    """#450: every name is unique within the call, whatever the order and size.
+
+    Previews couldn't hit #450 before either: a preview name ends ``_<size>.jpg`` and an
+    ID-suffixed one ``_<id>.jpg``, and IDs are deduplicated first. They're here so a
+    change to the naming keeps them unique too.
+    """
+
+    @staticmethod
+    def _names(items: list[tuple[int, str]], size: str) -> list[str]:
+        used: set[str] = set()
+        return [_dest_name({"id": i, "filename": f}, size, used) for i, f in items]
+
+    @pytest.mark.parametrize(
+        ("items", "size", "expected"),
+        [
+            (
+                [(1, "a_9.jpg"), (8, "a.jpg"), (9, "a.jpg")],
+                "original",
+                ["a_9.jpg", "a.jpg", "a_9_2.jpg"],
+            ),
+            (
+                [(9, "a.jpg"), (8, "a.jpg"), (1, "a_9.jpg")],
+                "original",
+                ["a.jpg", "a_8.jpg", "a_9.jpg"],
+            ),
+            (
+                [(8, "a.jpg"), (9, "a.jpg"), (1, "a_9.jpg")],
+                "original",
+                ["a.jpg", "a_9.jpg", "a_9_1.jpg"],
+            ),
+            (
+                [(1, "a_m_9.jpg"), (8, "a.png"), (9, "a.jpg")],
+                "m",
+                ["a_m_9_m.jpg", "a_m.jpg", "a_m_9.jpg"],
+            ),
+            (
+                [(1, "a_m_9.jpg"), (8, "a.jpg"), (9, "a.png"), (4, "a_m_9.png")],
+                "m",
+                ["a_m_9_m.jpg", "a_m.jpg", "a_m_9.jpg", "a_m_9_m_4.jpg"],
+            ),
+            (
+                [(1, "A.JPG"), (2, "a.jpg"), (3, "a_2.JPG")],
+                "original",
+                ["A.JPG", "a_2.jpg", "a_2_3.JPG"],
+            ),
+        ],
+    )
+    def test_names_are_unique(
+        self, items: list[tuple[int, str]], size: str, expected: list[str]
+    ) -> None:
+        names = self._names(items, size)
+        assert names == expected
+        assert len({_name_key(n) for n in names}) == len(names)
+
+    def test_many_repeats(self) -> None:
+        items = [(7, "x.jpg")] * 2 + [(1, f"x_7_{n}.jpg") for n in range(2, 5)] + [(7, "x.jpg")]
+        names = self._names(items, "original")
+        assert len({_name_key(n) for n in names}) == len(names)
+
+
+class TestDestNameAcrossFilesystems:
+    """QA round 1 on #462: names that are one file on macOS or Windows count as one."""
+
+    @staticmethod
+    def _names(items: list[tuple[int, str]]) -> list[str]:
+        used: set[str] = set()
+        return [_dest_name({"id": i, "filename": f}, "original", used) for i, f in items]
+
+    def test_nfc_and_nfd_are_one_name(self) -> None:
+        import unicodedata
+
+        nfc = unicodedata.normalize("NFC", "café.jpg")
+        nfd = unicodedata.normalize("NFD", "café.jpg")
+        assert nfc != nfd
+        names = self._names([(1, nfc), (2, nfd)])
+        assert names[0] == nfc
+        assert unicodedata.normalize("NFC", names[1]) == "café_2.jpg"
+
+    @pytest.mark.parametrize(
+        ("variant", "second"),
+        [
+            ("a.jpg.", "a_2.jpg"),
+            ("a.jpg ", "a_2.jpg"),
+            ("a.jpg. .", "a_2.jpg"),
+            ("A.JPG", "A_2.JPG"),
+        ],
+    )
+    def test_trailing_dots_spaces_and_case_are_one_name(self, variant: str, second: str) -> None:
+        assert self._names([(1, "a.jpg"), (2, variant)]) == ["a.jpg", second]
+
+    def test_only_dots_and_spaces_fall_back(self) -> None:
+        assert self._names([(7, ". ."), (8, "...")]) == ["item-7", "item-8"]
+
+
+class TestRetryAdvice:
+    """#467 (pre-QA on QA round 1): any item of a multi-item call that isn't downloaded,
+    not only items left after DSM stops answering, gets the whole-call retry advice."""
+
+    ADVICE = "To retry, repeat this call with the same ids in the same order"
+
+    @respx.mock
+    async def test_a_preview_not_ready_gets_the_advice(self, tmp_path: Path) -> None:
+        items = _items("ready", "converting")
+        for item in items["list"]:
+            item["filename"] = "a.jpg"
+        fake = FakePhotos().on(ITEM, "get", 2, items)
+        fake.on("SYNO.Foto.Thumbnail", "get", 2, binary(b"jpeg"))
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await download_photos(
+                client, ids=[12, 15], size="m", dest_folder=str(tmp_path), allowed_roots=[tmp_path]
+            )
+        assert "15  a_m_15.jpg: not downloaded" in out
+        assert self.ADVICE in out
+
+    @respx.mock
+    async def test_dsm_stopping_on_the_last_item_gets_the_advice(self, tmp_path: Path) -> None:
+        def timeout(_params: dict[str, Any]) -> httpx.Response:
+            raise httpx.ReadTimeout("timed out")
+
+        fake = FakePhotos().on(ITEM, "get", 2, _items("ready", "ready"))
+        fake.on("SYNO.Foto.Download", "download", 1, binary(b"one"), timeout)
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await download_photos(
+                client, ids=[12, 15], dest_folder=str(tmp_path), allowed_roots=[tmp_path]
+            )
+        assert "not tried" not in out
+        assert self.ADVICE in out
+
+    @respx.mock
+    async def test_no_advice_when_all_were_downloaded(self, tmp_path: Path) -> None:
+        fake = FakePhotos().on(ITEM, "get", 2, _items("ready", "ready"))
+        fake.on("SYNO.Foto.Download", "download", 1, binary(b"one"), binary(b"two"))
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await download_photos(
+                client, ids=[12, 15], dest_folder=str(tmp_path), allowed_roots=[tmp_path]
+            )
+        assert "Downloaded 2 of 2" in out and self.ADVICE not in out
+
+    @respx.mock
+    async def test_the_advised_retry_ends_without_the_advice(self, tmp_path: Path) -> None:
+        """QA round 2 on #462: repeating the call exactly, as advised, finds the files the
+        first run wrote; they're kept without suggesting overwrite=true, and the advice
+        goes away once every item is downloaded or already there."""
+
+        def timeout(_params: dict[str, Any]) -> httpx.Response:
+            raise httpx.ReadTimeout("timed out")
+
+        items = _items("ready", "ready")
+        third = json.loads(json.dumps(items["list"][1]))
+        third["id"] = 16
+        items["list"].append(third)
+        for item, name, data in zip(
+            items["list"], ["a.jpg", "a.jpg", "b.jpg"], [b"one", b"two", b"three"], strict=True
+        ):
+            item["filename"], item["filesize"] = name, len(data)
+        fake = FakePhotos().on(ITEM, "get", 2, items)
+        fake.on("SYNO.Foto.Download", "download", 1, binary(b"one"), timeout)
+        install(fake)
+        client = make_client()
+        async with client:
+            first = await download_photos(
+                client, ids=[12, 15, 16], dest_folder=str(tmp_path), allowed_roots=[tmp_path]
+            )
+        assert self.ADVICE in first
+
+        fake = FakePhotos().on(ITEM, "get", 2, items)
+        fake.on("SYNO.Foto.Download", "download", 1, binary(b"two"), binary(b"three"))
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await download_photos(
+                client, ids=[12, 15, 16], dest_folder=str(tmp_path), allowed_roots=[tmp_path]
+            )
+        assert out.startswith("Downloaded 2 of 3") and ", 1 already there)" in out
+        assert (
+            "12  a.jpg: already there: a file with this name and this item's size, most "
+            "likely this item from an earlier run; same name and size only, not verified" in out
+        )
+        assert "overwrite=true" not in out and self.ADVICE not in out
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["a.jpg", "a_15.jpg", "b.jpg"]
+        assert (tmp_path / "a.jpg").read_bytes() == b"one"
+
+    @respx.mock
+    async def test_a_failure_a_retry_cant_fix_gets_no_advice(self, tmp_path: Path) -> None:
+        """No preview, or an id not found: the advice would come back on every retry
+        (pre-QA on QA round 2 on #462)."""
+        install(FakePhotos().on(ITEM, "get", 2, _items("broken", "broken")))
+        client = make_client()
+        async with client:
+            out = await download_photos(
+                client,
+                ids=[12, 15, 99],
+                size="m",
+                dest_folder=str(tmp_path),
+                allowed_roots=[tmp_path],
+            )
+        assert "no m preview for this item (broken)" in out and "99  not downloaded" in out
+        assert self.ADVICE not in out
+
+    @respx.mock
+    async def test_an_item_found_later_never_takes_another_s_file(self, tmp_path: Path) -> None:
+        """QA round 2's observation: 12 isn't found, so 15 is written as a.jpg; when 12 is
+        found on a later call it's named a.jpg, finds 15's file (another size) and keeps
+        it, saying it's another file."""
+        items = _items("ready", "ready")
+        for item, size in zip(items["list"], [9, 3], strict=True):
+            item["filename"], item["filesize"] = "a.jpg", size
+        fake = FakePhotos().on(ITEM, "get", 2, {"list": items["list"][1:]})
+        fake.on("SYNO.Foto.Download", "download", 1, binary(b"two"))
+        install(fake)
+        client = make_client()
+        async with client:
+            await download_photos(
+                client, ids=[12, 15], dest_folder=str(tmp_path), allowed_roots=[tmp_path]
+            )
+        fake = FakePhotos().on(ITEM, "get", 2, items)
+        fake.on("SYNO.Foto.Download", "download", 1, binary(b"two"))
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await download_photos(
+                client, ids=[12, 15], dest_folder=str(tmp_path), allowed_roots=[tmp_path]
+            )
+        assert "12  a.jpg: not downloaded: another file has this name" in out
+        assert (tmp_path / "a.jpg").read_bytes() == b"two"
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        ("answer", "advice"),
+        [
+            ({"success": False, "error": {"code": 105}}, False),  # permission: not retryable
+            (httpx.Response(502), True),  # a proxy's 5xx: retryable
+            ("enospc", True),
+            ("eacces", False),
+            ("precheck", True),  # the client's free-space check (QA round 3 on #462)
+        ],
+        ids=["dsm-105", "http-502", "enospc", "eacces", "free-space-precheck"],
+    )
+    async def test_advice_follows_whether_a_retry_can_help(
+        self, tmp_path: Path, answer: Any, advice: bool
+    ) -> None:
+        """Pre-QA on QA round 2 (#462): DSM's own retryable flag decides, and of local
+        errors only a full disk is worth a retry."""
+        import errno
+
+        fake = FakePhotos().on(ITEM, "get", 2, _items("ready", "ready"))
+        if answer == "precheck":
+            # The real client: DSM sends a length, and the local disk has less free.
+            fake.on("SYNO.Foto.Download", "download", 1, binary(b"x"), binary(b"y"))
+            free = MagicMock(free=0)
+            patcher = patch("mcp_synology.core.client.shutil.disk_usage", return_value=free)
+        elif isinstance(answer, str):
+            fake.on("SYNO.Foto.Download", "download", 1, binary(b"x"), binary(b"y"))
+            code = errno.ENOSPC if answer == "enospc" else errno.EACCES
+            patcher = patch(
+                "mcp_synology.core.client.DsmClient.download_binary",
+                AsyncMock(side_effect=OSError(code, os.strerror(code))),
+            )
+        else:
+            response = (
+                answer if isinstance(answer, httpx.Response) else httpx.Response(200, json=answer)
+            )
+
+            def reply(_p: dict[str, Any]) -> httpx.Response:
+                return response
+
+            fake.on("SYNO.Foto.Download", "download", 1, reply, reply)
+            patcher = contextlib.nullcontext()
+        install(fake)
+        client = make_client()
+        with patcher:
+            async with client:
+                out = await download_photos(
+                    client, ids=[12, 15], dest_folder=str(tmp_path), allowed_roots=[tmp_path]
+                )
+        assert "Downloaded 0 of 2" in out
+        assert (self.ADVICE in out) is advice
+
+    @respx.mock
+    async def test_a_folder_with_the_name_is_reported(self, tmp_path: Path) -> None:
+        (tmp_path / "forest-trail.jpg").mkdir()
+        install(FakePhotos().on(ITEM, "get", 2, {"list": _items("ready")["list"][:1]}))
+        client = make_client()
+        async with client:
+            out = await download_photos(
+                client, ids=[12], dest_folder=str(tmp_path), allowed_roots=[tmp_path]
+            )
+        assert "12  forest-trail.jpg: not downloaded: a folder has that name" in out
+
+    @respx.mock
+    async def test_a_file_that_appears_while_downloading_is_kept(self, tmp_path: Path) -> None:
+        """Another call or program wrote it, so no overwrite=true hint (QA round 3 on
+        #462)."""
+        install(FakePhotos().on(ITEM, "get", 2, {"list": _items("ready")["list"][:1]}))
+        client = make_client()
+        with patch(
+            "mcp_synology.core.client.DsmClient.download_binary",
+            AsyncMock(side_effect=FileExistsError("x")),
+        ):
+            async with client:
+                out = await download_photos(
+                    client, ids=[12], dest_folder=str(tmp_path), allowed_roots=[tmp_path]
+                )
+        assert (
+            "12  forest-trail.jpg: not downloaded: a file with this name appeared while "
+            "downloading, written by something else (kept)" in out
+        )
+        assert "overwrite=true" not in out
+
+    @respx.mock
+    @pytest.mark.parametrize("filesize", ["not a number", None])
+    async def test_an_unreadable_filesize_is_another_file(
+        self, tmp_path: Path, filesize: object
+    ) -> None:
+        (tmp_path / "forest-trail.jpg").write_bytes(b"mine")
+        items = {"list": _items("ready")["list"][:1]}
+        items["list"][0]["filesize"] = filesize
+        install(FakePhotos().on(ITEM, "get", 2, items))
+        client = make_client()
+        async with client:
+            out = await download_photos(
+                client, ids=[12], dest_folder=str(tmp_path), allowed_roots=[tmp_path]
+            )
+        assert "12  forest-trail.jpg: not downloaded: another file has this name" in out
+
+    @respx.mock
+    async def test_an_existing_preview_says_both_cases(self, tmp_path: Path) -> None:
+        (tmp_path / "forest-trail_m.jpg").write_bytes(b"x")
+        install(FakePhotos().on(ITEM, "get", 2, _items("ready", "ready")))
+        client = make_client()
+        async with client:
+            out = await download_photos(
+                client, ids=[12], size="m", dest_folder=str(tmp_path), allowed_roots=[tmp_path]
+            )
+        assert (
+            "12  forest-trail_m.jpg: not downloaded: a file with this name is already there "
+            "(if an earlier run of this call wrote it, nothing to do; otherwise overwrite=true "
+            "replaces it, or choose another folder)" in out
+        )
+
+    @respx.mock
+    async def test_no_advice_for_a_single_item(self, tmp_path: Path) -> None:
+        install(FakePhotos().on(ITEM, "get", 2, {"list": _items("converting")["list"][:1]}))
+        client = make_client()
+        async with client:
+            out = await download_photos(
+                client, ids=[12], size="m", dest_folder=str(tmp_path), allowed_roots=[tmp_path]
+            )
+        assert "not downloaded" in out and self.ADVICE not in out
+
+
+def test_name_key_is_a_canonical_caseless_match() -> None:
+    # U+0390 and U+0399 U+0308 U+0301 are one name under Unicode's canonical caseless
+    # match; NFC-then-casefold alone keyed them apart.
+    assert _name_key("ΐ.jpg") == _name_key("Ϊ́.jpg")
