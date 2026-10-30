@@ -240,7 +240,9 @@ class TestOriginals:
             )
         assert out.startswith("Downloaded 1 of 3")
         assert "15  beach-sunset_1.jpg: not downloaded: couldn't reach DSM (ReadTimeout)" in out
-        assert "not tried: 16" in out
+        assert (
+            "not tried: 16. To finish, repeat this call with the same ids in the same order" in out
+        )
         assert len(fake.of("SYNO.Foto.Download")) == 2
 
 
@@ -1197,3 +1199,37 @@ class TestDestName:
         items = [(7, "x.jpg")] * 2 + [(1, f"x_7_{n}.jpg") for n in range(2, 5)] + [(7, "x.jpg")]
         names = self._names(items, "original")
         assert len({n.casefold() for n in names}) == len(names)
+
+
+class TestDestNameAcrossFilesystems:
+    """QA round 1 on #462: names that are one file on macOS or Windows count as one."""
+
+    @staticmethod
+    def _names(items: list[tuple[int, str]]) -> list[str]:
+        used: set[str] = set()
+        return [_dest_name({"id": i, "filename": f}, "original", used) for i, f in items]
+
+    def test_nfc_and_nfd_are_one_name(self) -> None:
+        import unicodedata
+
+        nfc = unicodedata.normalize("NFC", "café.jpg")
+        nfd = unicodedata.normalize("NFD", "café.jpg")
+        assert nfc != nfd
+        names = self._names([(1, nfc), (2, nfd)])
+        assert names[0] == nfc
+        assert unicodedata.normalize("NFC", names[1]) == "café_2.jpg"
+
+    @pytest.mark.parametrize(
+        ("variant", "second"),
+        [
+            ("a.jpg.", "a_2.jpg"),
+            ("a.jpg ", "a_2.jpg"),
+            ("a.jpg. .", "a_2.jpg"),
+            ("A.JPG", "A_2.JPG"),
+        ],
+    )
+    def test_trailing_dots_spaces_and_case_are_one_name(self, variant: str, second: str) -> None:
+        assert self._names([(1, "a.jpg"), (2, variant)]) == ["a.jpg", second]
+
+    def test_only_dots_and_spaces_fall_back(self) -> None:
+        assert self._names([(7, ". ."), (8, "...")]) == ["item-7", "item-8"]

@@ -388,8 +388,9 @@ Originals or thumbnails to a local folder.
 **Tool description (LLM-facing):**
 > Download Synology Photos items by id to a folder on this machine: the original files or JPEG
 > previews, one file per item, named after the original. Only writes inside the allowed local
-> folders, and never replaces an existing file unless overwrite=true. For files outside Photos, use
-> File Station's download_file when that module is enabled.
+> folders, and never replaces an existing file unless overwrite=true. Items that share a name get
+> their id added; to retry part of a call, repeat it with the same ids, since names depend on all
+> of them. For files outside Photos, use File Station's download_file when that module is enabled.
 
 **Parameters:**
 
@@ -413,7 +414,7 @@ Downloaded 2 of 3 item(s) to /home/user/Downloads (original, personal space)
 ```
 
 **Design notes:**
-- **One request per item**, written under its filename (`<stem>_<size>.jpg` for previews). Names are unique within a call: items in different folders can share a filename, and previews of `a.jpg` and `a.png` are both `a_m.jpg`, so a repeat gets the item ID added (`IMG_0001_41.jpg`) and one item never replaces another's file. If that name is taken too (an item really named `a_9.jpg`), a counter follows the ID (`a_9_2.jpg`) until it's free (#450). Names depend only on the items and their order, so repeating a call names each item the same way and `overwrite` applies per file; a file already in the folder is the overwrite rule's case, not renamed around.
+- **One request per item**, written under its filename (`<stem>_<size>.jpg` for previews). Names are unique within a call: items in different folders can share a filename, and previews of `a.jpg` and `a.png` are both `a_m.jpg`, so a repeat gets the item ID added (`IMG_0001_41.jpg`) and one item never replaces another's file. If that name is taken too (an item really named `a_9.jpg`), a counter follows the ID (`a_9_2.jpg`) until it's free (#450). Names depend only on the items and their order, so repeating a call names each item the same way and `overwrite` applies per file; a file already in the folder is the overwrite rule's case, not renamed around. Names compare the way the strictest common filesystem does: case-insensitively and after Unicode NFC normalization (macOS treats an NFC and an NFD `café.jpg` as one file), and trailing dots and spaces are dropped from a name (Windows strips them). Since names depend on every item in the call, a retry repeats the whole call: when DSM stops answering, the `not tried:` line says so, and the tool description too; a call with only some of the items could give one another item's file name and, with `overwrite=true`, replace it (#467).
 - **DSM not answering** (a dropped connection or a timeout) stops the call: that item's line names the error type, and the items after it are listed as not tried. A DSM error code or a local write error stays on its item's line, and the rest go on. Two or more `item_id`s in one request make DSM return a zip (verified, `application/zip`), which the tool avoids so names and errors stay per item.
 - A preview needs the item's thumbnail status `ready` for that size (from `get` with `additional: ["thumbnail"]`). `converting` gets 404/HTML from DSM (verified), reported as not generated yet; `broken` (e.g. `preview` for photos) as unavailable.
 - `cache_key` isn't checked by DSM (a bogus key still returned the image on both versions), but the tool sends the real one, as the client does.

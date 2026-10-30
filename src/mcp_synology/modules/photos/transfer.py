@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import time
+import unicodedata
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import TYPE_CHECKING, Any
 
@@ -37,7 +38,12 @@ _TIMEOUT = 300.0
 
 
 def _safe_name(name: str, fallback: str) -> str:
-    """``name`` if it's a plain file name, else ``fallback``: never write outside the folder."""
+    """``name`` if it's a plain file name, else ``fallback``: never write outside the folder.
+
+    Trailing dots and spaces are dropped: Windows strips them, so ``a.jpg.`` and
+    ``a.jpg`` would be one file there (QA round 1 on #462).
+    """
+    name = name.rstrip(". ")
     plain = (
         name
         and name not in (".", "..")
@@ -49,6 +55,12 @@ def _safe_name(name: str, fallback: str) -> str:
     return name if plain else fallback
 
 
+def _name_key(name: str) -> str:
+    """Names that are one file on some filesystem compare equal: case (Windows, macOS) and
+    Unicode normalization (macOS treats NFC and NFD as one name; QA round 1 on #462)."""
+    return unicodedata.normalize("NFC", name).casefold()
+
+
 def _dest_name(item: dict[str, Any], size: str, used: set[str]) -> str:
     """The local file name, unique within this call.
 
@@ -58,20 +70,21 @@ def _dest_name(item: dict[str, Any], size: str, used: set[str]) -> str:
     taken too, by an item really named so (``a_9.jpg``): then a counter follows the ID
     (``a_9_2.jpg``) until the name is free (#450). Names depend only on the items and
     their order, so the same call names each item the same way again and the overwrite
-    rule then applies to each file on its own.
+    rule then applies to each file on its own. Names compare as ``_name_key`` does, so
+    two that are one file on Windows or macOS count as the same name.
     """
     item_id = item.get("id")
     name = _safe_name(str(item.get("filename") or ""), f"item-{item_id}")
     if size != "original":
         name = f"{PurePosixPath(name).stem or f'item-{item_id}'}_{size}.jpg"
-    if name.casefold() in used:
+    if _name_key(name) in used:
         path = PurePosixPath(name)
         base, count = f"{path.stem}_{item_id}", 1
         name = f"{base}{path.suffix}"
-        while name.casefold() in used:
+        while _name_key(name) in used:
             count += 1
             name = f"{base}_{count}{path.suffix}"
-    used.add(name.casefold())
+    used.add(_name_key(name))
     return name
 
 
@@ -157,7 +170,12 @@ async def download_photos(
             )
             rest = unique[n + 1 :]
             if rest:
-                lines.append(f"  not tried: {', '.join(str(i) for i in rest)}")
+                lines.append(
+                    f"  not tried: {', '.join(str(i) for i in rest)}. To finish, repeat this "
+                    "call with the same ids in the same order (overwrite=false keeps the files "
+                    "already written): a name depends on every item in the call, so a call "
+                    "with only some of them can give an item another item's file name (#467)."
+                )
             break
         if result.startswith("not downloaded"):
             lines.append(f"  {item_id}  {name}: {result}")

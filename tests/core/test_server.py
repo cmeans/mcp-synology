@@ -1794,7 +1794,9 @@ class TestInstructionComments:
 # carries only its one-line "not enabled" entry in PERMISSIONS (about 160 characters).
 # +72 in QA round 1: list_snapshots' offset and limit say they page the shared folders
 # when no folder is given.
-PAYLOAD_BUDGET_CHARS = 55_483
+# +133 by #450 (QA round 1): download_photos says that items sharing a name get their id
+# added, and that a retry repeats the whole call with the same ids (#467).
+PAYLOAD_BUDGET_CHARS = 55_616
 
 
 class TestPayloadBudget:
