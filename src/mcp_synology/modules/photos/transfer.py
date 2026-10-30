@@ -152,7 +152,8 @@ async def download_photos(
         synology_error_response(op, e)
     found = {int(i["id"]): i for i in data.get("list", [])}
     lines: list[str] = []
-    done = kept = 0
+    done = 0
+    retry = False  # a failure that can succeed on a later call
     used: set[str] = set()
     for n, item_id in enumerate(unique):
         item = found.get(item_id)
@@ -164,7 +165,9 @@ async def download_photos(
             continue
         name = _dest_name(item, size, used)
         try:
-            result = await _download_one(ph, item, size, local_dir / name, overwrite=overwrite)
+            result, retryable = await _download_one(
+                ph, item, size, local_dir / name, overwrite=overwrite
+            )
         except httpx.TransportError as e:
             # DSM didn't answer (a dropped connection or a timeout): the rest would most
             # likely wait out the same timeout, so stop and say which weren't tried.
@@ -174,25 +177,20 @@ async def download_photos(
             rest = unique[n + 1 :]
             if rest:
                 lines.append(f"  not tried: {', '.join(str(i) for i in rest)}")
+            retry = True
             break
-        if result == _EXISTS and len(unique) > 1:
-            # Most likely written by an earlier run of this same call (the retry the advice
-            # below asks for), so it's kept without suggesting overwrite=true (#462).
-            kept += 1
-            lines.append(
-                f"  {item_id}  {name}: not downloaded: a file with this name is already "
-                "there (kept; after a retry of this same call, it's this item's)"
-            )
-        elif result.startswith("not downloaded"):
+        retry = retry or retryable
+        if result.startswith("not downloaded"):
             lines.append(f"  {item_id}  {name}: {result}")
         else:
             done += 1
             lines.append(f"  {item_id}  {name}  {result}")
-    if len(unique) > 1 and done + kept < len(unique):
+    if len(unique) > 1 and retry:
         # A name depends on every item in the call, so retrying only the ones that failed
         # can give one of them another item's file name and, with overwrite=true, replace
-        # it (#467). A file already there doesn't call for a retry: after one, every item
-        # is either downloaded or already there, and this line goes away.
+        # it (#467). Only a failure that can succeed later gets the advice: one that can't
+        # (no preview, a folder or another file with that name) would get it on every
+        # retry (pre-QA on QA round 2).
         lines.append(
             "To retry, repeat this call with the same ids in the same order (overwrite=false "
             "keeps the files already written): names depend on every item in the call, and "
@@ -205,17 +203,50 @@ async def download_photos(
     return "\n".join([head, *lines])
 
 
-_EXISTS = "not downloaded: the file exists (overwrite=true replaces it)"
+def _existing(dest: Path, item: dict[str, Any], size: str) -> str:
+    """The result line for a file already at ``dest``, kept (``overwrite=false``).
+
+    A retry of the same call finds the files the first run wrote. An original whose size
+    matches the item's is most likely that, and isn't pushed toward ``overwrite=true``;
+    another size is another file. A preview's size isn't known beforehand (QA round 2 and
+    its pre-QA on #462).
+    """
+    if size == "original":
+        expected = item.get("filesize")
+        try:
+            same = (
+                expected is not None
+                and dest.is_file()
+                and not dest.is_symlink()
+                and dest.stat().st_size == int(expected)
+            )
+        except (OSError, ValueError, TypeError):
+            same = False
+        if same:
+            return (
+                "not downloaded: a file with this name and this item's size is already "
+                "there, most likely this item from an earlier run (kept)"
+            )
+        return (
+            "not downloaded: another file has this name (overwrite=true replaces it, or "
+            "choose another folder)"
+        )
+    return (
+        "not downloaded: a file with this name is already there (if an earlier run of "
+        "this call wrote it, nothing to do; otherwise overwrite=true replaces it, or choose "
+        "another folder)"
+    )
 
 
 async def _download_one(
     ph: Photos, item: dict[str, Any], size: str, dest: Path, *, overwrite: bool
-) -> str:
-    """Download one item; a result line (``not downloaded: …`` on failure)."""
+) -> tuple[str, bool]:
+    """Download one item; a result line (``not downloaded: …`` on failure), and whether
+    the failure can succeed on a later call."""
     if dest.is_dir() and not dest.is_symlink():
-        return "not downloaded: a folder has that name"
+        return "not downloaded: a folder has that name", False
     if os.path.lexists(dest) and not overwrite:
-        return _EXISTS
+        return _existing(dest, item, size), False
     if size == "original":
         api, method, version = ph.api("Download"), "download", 1
         params = {"item_id": json.dumps([int(item["id"])]), "force_download": "true"}
@@ -227,8 +258,8 @@ async def _download_one(
                 return (
                     f"not downloaded: the {size} preview isn't generated yet "
                     f"({state or 'pending'}); try again shortly"
-                )
-            return f"not downloaded: no {size} preview for this item ({state})"
+                ), True
+            return f"not downloaded: no {size} preview for this item ({state})", False
         api, method, version = ph.api("Thumbnail"), "get", 2
         params = {
             "id": json.dumps(int(thumb.get("unit_id") or item["id"])),
@@ -241,15 +272,18 @@ async def _download_one(
             api, method, version, params, dest, timeout=_TIMEOUT, overwrite=overwrite
         )
     except FileExistsError:
-        return "not downloaded: the file appeared while downloading (overwrite=true replaces it)"
+        return (
+            "not downloaded: the file appeared while downloading (overwrite=true replaces it)",
+            False,
+        )
     except SynologyError as e:
         code = f" (DSM error {e.code})" if e.code else ""
-        return f"not downloaded: {e}{code}"
+        return f"not downloaded: {e}{code}", True
     except OSError as e:
         if e.errno == errno.ENOSPC:
-            return "not downloaded: no space left on the local disk"
-        return f"not downloaded: couldn't write the file ({e.strerror or e})"
-    return format_size(written)
+            return "not downloaded: no space left on the local disk", True
+        return f"not downloaded: couldn't write the file ({e.strerror or e})", True
+    return format_size(written), False
 
 
 # -- upload_photos ------------------------------------------------------------------

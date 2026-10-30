@@ -94,8 +94,28 @@ class TestOriginals:
             out = await download_photos(
                 client, ids=[12], dest_folder=str(tmp_path), allowed_roots=[tmp_path]
             )
-        assert "the file exists (overwrite=true replaces it)" in out
+        assert (
+            "12  forest-trail.jpg: not downloaded: another file has this name "
+            "(overwrite=true replaces it, or choose another folder)" in out
+        )
         assert (tmp_path / "forest-trail.jpg").read_bytes() == b"mine"
+
+    @respx.mock
+    async def test_existing_file_of_the_item_s_size_is_kept_quietly(self, tmp_path: Path) -> None:
+        """A file with the item's name and its filesize is most likely this item from an
+        earlier run: kept, without pushing toward overwrite=true (QA round 2 on #462)."""
+        (tmp_path / "forest-trail.jpg").write_bytes(b"x" * 49546)  # the capture's filesize
+        install(FakePhotos().on(ITEM, "get", 2, {"list": _items("ready")["list"][:1]}))
+        client = make_client()
+        async with client:
+            out = await download_photos(
+                client, ids=[12], dest_folder=str(tmp_path), allowed_roots=[tmp_path]
+            )
+        assert (
+            "12  forest-trail.jpg: not downloaded: a file with this name and this item's size "
+            "is already there, most likely this item from an earlier run (kept)" in out
+        )
+        assert "overwrite=true" not in out
 
     @respx.mock
     async def test_overwrite_replaces(self, tmp_path: Path) -> None:
@@ -1306,8 +1326,10 @@ class TestRetryAdvice:
         third = json.loads(json.dumps(items["list"][1]))
         third["id"] = 16
         items["list"].append(third)
-        for item, name in zip(items["list"], ["a.jpg", "a.jpg", "b.jpg"], strict=True):
-            item["filename"] = name
+        for item, name, data in zip(
+            items["list"], ["a.jpg", "a.jpg", "b.jpg"], [b"one", b"two", b"three"], strict=True
+        ):
+            item["filename"], item["filesize"] = name, len(data)
         fake = FakePhotos().on(ITEM, "get", 2, items)
         fake.on("SYNO.Foto.Download", "download", 1, binary(b"one"), timeout)
         install(fake)
@@ -1328,25 +1350,56 @@ class TestRetryAdvice:
             )
         assert out.startswith("Downloaded 2 of 3")
         assert (
-            "12  a.jpg: not downloaded: a file with this name is already there (kept; after "
-            "a retry of this same call, it's this item's)" in out
+            "12  a.jpg: not downloaded: a file with this name and this item's size is already "
+            "there, most likely this item from an earlier run (kept)" in out
         )
         assert "overwrite=true" not in out and self.ADVICE not in out
         assert sorted(p.name for p in tmp_path.iterdir()) == ["a.jpg", "a_15.jpg", "b.jpg"]
         assert (tmp_path / "a.jpg").read_bytes() == b"one"
 
     @respx.mock
-    async def test_an_item_not_found_gets_the_advice(self, tmp_path: Path) -> None:
-        fake = FakePhotos().on(ITEM, "get", 2, {"list": _items("ready")["list"][:1]})
-        fake.on("SYNO.Foto.Download", "download", 1, binary(b"one"))
+    async def test_a_failure_a_retry_cant_fix_gets_no_advice(self, tmp_path: Path) -> None:
+        """No preview, or an id not found: the advice would come back on every retry
+        (pre-QA on QA round 2 on #462)."""
+        install(FakePhotos().on(ITEM, "get", 2, _items("broken", "broken")))
+        client = make_client()
+        async with client:
+            out = await download_photos(
+                client,
+                ids=[12, 15, 99],
+                size="m",
+                dest_folder=str(tmp_path),
+                allowed_roots=[tmp_path],
+            )
+        assert "no m preview for this item (broken)" in out and "99  not downloaded" in out
+        assert self.ADVICE not in out
+
+    @respx.mock
+    async def test_an_item_found_later_never_takes_another_s_file(self, tmp_path: Path) -> None:
+        """QA round 2's observation: 12 isn't found, so 15 is written as a.jpg; when 12 is
+        found on a later call it's named a.jpg, finds 15's file (another size) and keeps
+        it, saying it's another file."""
+        items = _items("ready", "ready")
+        for item, size in zip(items["list"], [9, 3], strict=True):
+            item["filename"], item["filesize"] = "a.jpg", size
+        fake = FakePhotos().on(ITEM, "get", 2, {"list": items["list"][1:]})
+        fake.on("SYNO.Foto.Download", "download", 1, binary(b"two"))
+        install(fake)
+        client = make_client()
+        async with client:
+            await download_photos(
+                client, ids=[12, 15], dest_folder=str(tmp_path), allowed_roots=[tmp_path]
+            )
+        fake = FakePhotos().on(ITEM, "get", 2, items)
+        fake.on("SYNO.Foto.Download", "download", 1, binary(b"two"))
         install(fake)
         client = make_client()
         async with client:
             out = await download_photos(
-                client, ids=[12, 99], dest_folder=str(tmp_path), allowed_roots=[tmp_path]
+                client, ids=[12, 15], dest_folder=str(tmp_path), allowed_roots=[tmp_path]
             )
-        assert "99  not downloaded: not found" in out
-        assert self.ADVICE in out
+        assert "12  a.jpg: not downloaded: another file has this name" in out
+        assert (tmp_path / "a.jpg").read_bytes() == b"two"
 
     @respx.mock
     async def test_no_advice_for_a_single_item(self, tmp_path: Path) -> None:
