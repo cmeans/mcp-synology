@@ -318,7 +318,7 @@ def refuse_share_roots(paths: list[str]) -> None:
         if len(parts) == 1:
             error_response(
                 ErrorCode.INVALID_PARAMETER,
-                f"Delete files refused: {path} is a whole shared folder. delete_files "
+                f"Delete files refused: {path!r} is a whole shared folder. delete_files "
                 "doesn't delete or empty a shared folder: on DSM 7.2.2 to 7.4.1 (tested), "
                 "and likely later, that would delete the shared folder itself, beyond the "
                 "recycle bin's reach. "
@@ -327,8 +327,8 @@ def refuse_share_roots(paths: list[str]) -> None:
                 param="paths",
                 value=path,
                 suggestion="To empty it, list it with list_files and delete its items by "
-                "their own paths, after the user agrees; to delete the shared folder itself, "
-                "use DSM's Control Panel > Shared Folder.",
+                "their own paths (leaving out its #recycle), after the user agrees; to delete "
+                "the shared folder itself, use DSM's Control Panel > Shared Folder.",
             )
 
 
@@ -354,6 +354,10 @@ def _with_progress_so_far(error: ToolError, done: list[str], rest: list[str]) ->
         # The same call again is refused (the deleted paths are missing): only the items not
         # deleted can be retried (QA round 2 on #480).
         body["error"]["retryable"] = False
+        body["error"]["suggestion"] = (
+            "Don't repeat the same call: retry only the paths not deleted (the one that "
+            "failed and any not started), once the cause is fixed."
+        )
     if rest:
         message = _unstop(message) + f". Not started: {', '.join(rest)}."
     body["error"]["message"] = message

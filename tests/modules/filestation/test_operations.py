@@ -3178,6 +3178,7 @@ class TestDeleteFailurePartway:
 
         done = _with_progress_so_far(error(True), ["/video/a"], ["/video/c"])
         assert json.loads(str(done))["error"]["retryable"] is False
+        assert json.loads(str(done))["error"]["suggestion"].startswith("Don't repeat the same")
         # Nothing deleted yet: the same call can be retried, so the flag stays.
         first = _with_progress_so_far(error(True), [], ["/video/b"])
         assert json.loads(str(first))["error"]["retryable"] is True
