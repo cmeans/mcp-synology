@@ -301,9 +301,10 @@ class TestMatchesPattern:
         # name for `*a*a*a*a*b`, and grows with each star; fnmatch's translation doesn't.
         import time
 
+        # Sized so the old matcher fails in about 2 s instead of hanging (QA round 2).
         start = time.perf_counter()
-        for _ in range(20):
-            assert not matches_pattern("a" * 200, "*a*a*a*a*a*a*b")
+        for _ in range(5):
+            assert not matches_pattern("a" * 100, "*a*a*a*a*b")
         assert time.perf_counter() - start < 0.5
 
     def test_star_spans_a_newline(self) -> None:

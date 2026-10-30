@@ -594,7 +594,8 @@ def split_uris(text: str) -> list[str]:
             pieces[-1] += "," + piece
         else:
             pieces.append(piece)
-    return [u for u in (p.strip(" \t\r\n,") for p in pieces) if u]
+    # Any whitespace, a pasted no-break space included (QA round 2 on #459).
+    return [u for u in (p.strip().strip(",").strip() for p in pieces) if u]
 
 
 async def create_download(

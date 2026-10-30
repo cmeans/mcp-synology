@@ -508,7 +508,11 @@ class TestListFiles:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
         result = await list_files(mock_client, path="/video", limit=1, hide_recycle=True)
         assert "a.txt" in result and "b.txt" not in result
-        assert "Showing 1–1 of 3 items. Use offset=1 to see more." in result
+        # A #recycle may be hidden, so no range: QA round 2 on #459.
+        assert result.endswith(
+            "Showing 1 of 3 items (the total may include a hidden #recycle: the check for it "
+            "failed). Use offset=1 to see more."
+        )
 
     @respx.mock
     async def test_only_recycle_is_an_empty_folder(self, mock_client: DsmClient) -> None:

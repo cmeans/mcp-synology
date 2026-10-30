@@ -847,6 +847,8 @@ class TestSplitUris:
             # No scheme, no split: such a list goes to DSM as one URI.
             ("www.a.com/x.iso,www.b.com/y.iso", ["www.a.com/x.iso,www.b.com/y.iso"]),
             (" http://a/1 ,,", ["http://a/1"]),
+            # A pasted no-break space is stripped like any other (QA round 2).
+            ("https://a/x,\xa0https://b", ["https://a/x", "https://b"]),
             (",,", []),
             ("", []),
         ],

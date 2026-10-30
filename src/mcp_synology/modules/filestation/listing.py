@@ -320,11 +320,13 @@ async def list_files(
 
     # The total leaves out a hidden #recycle on every page, not only the one it's on.
     recycle_hidden = recycle_seen
+    check_failed = False
     if may_hide and not recycle_seen:
         try:
             recycle_hidden = await path_exists(client, f"{normalized}/#recycle") is True
         except Exception as e:  # the count is a nicety; the listing itself worked
             logger.debug("Couldn't check for %s/#recycle: %s", normalized, e)
+            check_failed = True
     total = dsm_total - 1 if recycle_hidden else dsm_total
     more = next_offset < dsm_total
 
@@ -370,6 +372,14 @@ async def list_files(
         # The count alone can't say a later page is the last one, so it says so.
         last = " Last page." if not more and offset > 0 else ""
         result += f"\n\nShowing {shown:,} of {total:,} items (#recycle hidden).{hint}{last}"
+    elif check_failed:
+        # A #recycle may be hidden, so positions may not line up with offsets either; the
+        # total is DSM's, which counts it (QA round 2).
+        last = " Last page." if not more and offset > 0 else ""
+        result += (
+            f"\n\nShowing {shown:,} of {total:,} items (the total may include a hidden "
+            f"#recycle: the check for it failed).{hint}{last}"
+        )
     elif more or offset > 0:
         page = f"{offset + 1:,}–{offset + shown:,}"
         result += f"\n\nShowing {page} of {total:,} items.{hint}"
