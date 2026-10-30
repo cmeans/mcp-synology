@@ -843,7 +843,8 @@ class TestRequestPostForm:
         assert data == {"sid": "new"}
         request = route.calls.last.request
         assert not request.url.params
-        assert request.headers["cookie"] == "id=the-sid"
+        # A login never sends the session it replaces (#359).
+        assert "cookie" not in request.headers
         assert "S3cret" not in str(request.url)
         assert dict(parse_qsl(request.content.decode())) == {
             "api": "SYNO.API.Auth",
@@ -1122,19 +1123,21 @@ class TestRequestFormPost:
                 await client.request_form_post("SYNO.DownloadStation2.Task", "create", version=2)
 
     @respx.mock
-    async def test_failed_reauth_raises_original_session_error(self) -> None:
+    async def test_failed_reauth_raises_the_login_error(self) -> None:
         client = make_client(make_api_cache())
+        failure = SynologyError("login failed")
 
         async def failing_reauth() -> None:
-            raise SynologyError("login failed")
+            raise failure
 
         client.set_re_auth_callback(failing_reauth)
         respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(
             json={"success": False, "error": {"code": 106}}
         )
         async with client:
-            with pytest.raises(SessionExpiredError):
+            with pytest.raises(SynologyError) as exc:
                 await client.request_form_post("SYNO.DownloadStation2.Task", "create", version=2)
+        assert exc.value is failure
 
     async def test_unknown_api_raises_api_not_found(self) -> None:
         client = make_client(make_api_cache())
@@ -1188,20 +1191,24 @@ class TestReauthProxyErrors:
                 await client.request_form_post("SYNO.DownloadStation2.Task", "create", version=2)
 
     @respx.mock
-    async def test_dsm_login_error_still_raises_the_session_error(self) -> None:
-        """A DSM verdict on the login (e.g. a changed password) keeps the old mapping."""
+    async def test_dsm_login_error_is_raised_not_the_session_error(self) -> None:
+        """#448: a DSM verdict on the login (a changed password) says so, with its
+        suggestion; it used to be replaced by the session error that led to the login."""
         client = make_client(make_api_cache())
+        refused = AuthenticationError("Login failed", code=400, suggestion="Run setup.")
 
         async def reauth() -> None:
-            raise AuthenticationError("Login failed", code=400)
+            raise refused
 
         client.set_re_auth_callback(reauth)
         respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
             json={"success": False, "error": {"code": 119}}
         )
         async with client:
-            with pytest.raises(SessionExpiredError):
+            with pytest.raises(AuthenticationError) as exc:
                 await client.request("SYNO.FileStation.Delete", "status", version=2)
+        assert exc.value is refused
+        assert exc.value.suggestion == "Run setup."
 
 
 class TestCreateDownloadTaskWithFile:
@@ -1458,21 +1465,23 @@ class TestUpload:
         assert route.call_count == 2
 
     @respx.mock
-    async def test_failed_reauth_raises_original_session_error(self, tmp_path: Path) -> None:
+    async def test_failed_reauth_raises_the_login_error(self, tmp_path: Path) -> None:
         client = make_client(make_api_cache())
         local = tmp_path / "a.txt"
         local.write_bytes(b"a")
+        failure = SynologyError("login failed")
 
         async def failing_reauth() -> None:
-            raise SynologyError("login failed")
+            raise failure
 
         client.set_re_auth_callback(failing_reauth)
         route = respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(
             json={"success": False, "error": {"code": 106}}
         )
         async with client:
-            with pytest.raises(SessionExpiredError):
+            with pytest.raises(SynologyError) as exc:
                 await client.upload("/video", local, "a.txt")
+        assert exc.value is failure
         assert route.call_count == 1
 
     @respx.mock
@@ -1569,6 +1578,47 @@ class TestGeneralTransfers:
         assert reauths == [1]
         assert route.call_count == 2
         assert b"\r\n\r\na\r\n" in route.calls.last.request.content
+
+    @respx.mock
+    @pytest.mark.parametrize("path", ["form_post", "torrent", "download_binary"])
+    async def test_a_session_error_logs_in_once_and_retries_with_the_new_session(
+        self, tmp_path: Path, path: str
+    ) -> None:
+        """Each request path hands re-auth the session it sent, so a session that's
+        still the one that failed gets a login, and the retry carries the new one
+        (pre-QA on QA round 2, #461: these three paths had no test with a session)."""
+        client = make_client(self._cache())
+        expired = httpx.Response(200, json={"success": False, "error": {"code": 119}})
+        ok: httpx.Response = (
+            httpx.Response(200, content=b"jpeg", headers={"content-type": "image/jpeg"})
+            if path == "download_binary"
+            else httpx.Response(200, json={"success": True, "data": {"id": 1}})
+        )
+        route = respx.route(url__startswith=f"{BASE_URL}/webapi/").mock(side_effect=[expired, ok])
+        logins: list[int] = []
+
+        async def _reauth() -> None:
+            logins.append(1)
+            client.sid = "new-sid"
+
+        client.set_re_auth_callback(_reauth)
+        client.sid = "old-sid"
+        torrent = tmp_path / "a.torrent"
+        torrent.write_bytes(b"d4:infoe")
+        async with client:
+            if path == "form_post":
+                await client.request_form_post(
+                    "SYNO.DownloadStation2.Task", "create", 2, {"type": '"url"'}
+                )
+            elif path == "torrent":
+                await client.create_download_task_with_file(torrent, "a.torrent")
+            else:
+                await client.download_binary(
+                    "SYNO.Foto.Thumbnail", "get", 2, {"id": "1"}, tmp_path / "t.jpg"
+                )
+        assert logins == [1]
+        assert route.call_count == 2
+        assert "id=new-sid" in route.calls.last.request.headers.get("cookie", "")
 
     @respx.mock
     async def test_upload_multipart_keeps_a_relogin_proxy_error(self, tmp_path: Path) -> None:

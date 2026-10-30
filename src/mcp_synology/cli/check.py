@@ -149,7 +149,7 @@ def exit_on_connection_failure(base_url: str, host: str) -> Iterator[None]:
 
 async def _check_login(config: object) -> None:
     """Validate credentials by attempting a login."""
-    from mcp_synology.core.auth import AuthManager
+    from mcp_synology.core.auth import AuthManager, credential_sources, refusal_advice
     from mcp_synology.core.client import DsmClient
     from mcp_synology.core.config import AppConfig
 
@@ -167,7 +167,12 @@ async def _check_login(config: object) -> None:
             verify_ssl=config.connection.verify_ssl,
             timeout=config.connection.timeout,
         ) as client:
-            from mcp_synology.core.errors import DsmHttpError, DsmReplyError, SynologyError
+            from mcp_synology.core.errors import (
+                DsmHttpError,
+                DsmReplyError,
+                LoginRefusedError,
+                SynologyError,
+            )
 
             try:
                 await client.query_api_info()
@@ -192,6 +197,22 @@ async def _check_login(config: object) -> None:
                 sys.exit(1)
             except (SynologyError, OSError) as e:
                 hint = getattr(e, "suggestion", None)
-                detail = f"{e} {hint}" if hint else str(e)
+                if isinstance(e, LoginRefusedError) and isinstance(e.__cause__, SynologyError):
+                    # A refusal from LoginRefusals: its text is about the running server
+                    # (remembered refusals, restarts, run check). Here, DSM's own error says
+                    # what happened, and the advice is for this run: by the code and where
+                    # the credential comes from (QA round 2 on #461).
+                    dsm = e.__cause__
+                    hint = refusal_advice(
+                        dsm.code,
+                        (dsm.suggestion or "").rstrip("."),
+                        credential_sources(config, cli=True),
+                        cli=True,
+                    )
+                    e = dsm
+                text = str(e).rstrip()
+                if text and text[-1] not in ".!?":
+                    text += "."  # DSM's messages have no final period
+                detail = f"{text} {hint.rstrip('.')}." if hint else text
                 click.echo(click.style(f"Authentication failed: {detail}", fg="red"), err=True)
                 sys.exit(1)

@@ -9,6 +9,7 @@ Strategy chain auto-detects 2FA vs non-2FA:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import uuid
 from typing import TYPE_CHECKING, Any
@@ -16,7 +17,13 @@ from typing import TYPE_CHECKING, Any
 import keyring as kr
 from keyring.errors import KeyringError
 
-from mcp_synology.core.errors import AuthenticationError, SynologyError
+from mcp_synology.core.errors import (
+    AuthenticationError,
+    LoginRefusedError,
+    RememberedRefusalError,
+    SessionExpiredError,
+    SynologyError,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -41,12 +48,301 @@ def _present_or_none(value: str | None) -> str | None:
     return value if (value and value.strip()) else None
 
 
+def resolve_credentials(config: AppConfig) -> tuple[str, str, str | None]:
+    """Resolve credentials from the storage hierarchy.
+
+    Order: env vars -> config file -> keyring.
+    Explicit sources (env, config) override the implicit default (keyring).
+    Returns: (username, password, device_id or None)
+    """
+    import os
+    import sys
+    from pathlib import Path
+
+    username: str | None = None
+    password: str | None = None
+    device_id: str | None = None
+
+    # 1. Environment variables (highest priority — explicit override)
+    # _present_or_none normalizes empty / whitespace-only to None so they
+    # fall through to the next strategy instead of becoming bogus creds.
+    username = _present_or_none(os.environ.get("SYNOLOGY_USERNAME"))
+    if username:
+        logger.debug("Username from env var SYNOLOGY_USERNAME: %s", username)
+    password = _present_or_none(os.environ.get("SYNOLOGY_PASSWORD"))
+    if password:
+        logger.debug("Password from env var SYNOLOGY_PASSWORD")
+    device_id = _present_or_none(os.environ.get("SYNOLOGY_DEVICE_ID"))
+    if device_id:
+        logger.debug("Device ID from env var SYNOLOGY_DEVICE_ID")
+
+    # 2. Config file (explicit, if present)
+    if not username and (cfg_user := _present_or_none(config.auth.username)):
+        username = cfg_user
+        logger.debug("Username from config file: %s", username)
+    if not password and (cfg_pass := _present_or_none(config.auth.password)):
+        password = cfg_pass
+        logger.debug("Password from config file (plaintext)")
+    if not device_id and (cfg_dev := _present_or_none(config.auth.device_id)):
+        device_id = cfg_dev
+        logger.debug("Device ID from config file")
+
+    # 3. OS keyring (implicit default — set by 'mcp-synology setup')
+    # Check keyring if we're missing username, password, OR device_id
+    if not username or not password or not device_id:
+        # On Linux, ensure D-Bus session address is available for keyring access.
+        # When launched by Claude Desktop, the env var may not be inherited.
+        # The keyring library reads DBUS_SESSION_BUS_ADDRESS from os.environ.
+        if sys.platform == "linux" and not os.environ.get("DBUS_SESSION_BUS_ADDRESS"):
+            uid = os.getuid()
+            socket_path = Path(f"/run/user/{uid}/bus")
+            if socket_path.exists():
+                dbus_addr = f"unix:path=/run/user/{uid}/bus"
+                os.environ["DBUS_SESSION_BUS_ADDRESS"] = dbus_addr
+                logger.debug("Set DBUS_SESSION_BUS_ADDRESS=%s for keyring access", dbus_addr)
+            else:
+                # INFO not DEBUG — without D-Bus the keyring path is dead
+                # for this session; the operator needs to know how to
+                # recover. Closes #38 (the operator-actionable hint).
+                logger.info(
+                    "D-Bus socket not found at %s; OS keyring is unavailable. "
+                    "Run 'mcp-synology setup' from a real desktop session "
+                    "(or under 'dbus-run-session'), or set credentials via the "
+                    "SYNOLOGY_USERNAME / SYNOLOGY_PASSWORD / SYNOLOGY_DEVICE_ID "
+                    "env vars to bypass the keyring entirely.",
+                    socket_path,
+                )
+
+        try:
+            service = f"mcp-synology/{config.instance_id or 'default'}"
+            logger.debug("Trying keyring service: %s", service)
+            kr_user = _present_or_none(kr.get_password(service, "username"))
+            kr_pass = _present_or_none(kr.get_password(service, "password"))
+            kr_device = _present_or_none(kr.get_password(service, "device_id"))
+            if kr_user and not username:
+                username = kr_user
+                logger.debug("Username from keyring: %s", username)
+            if kr_pass and not password:
+                password = kr_pass
+                logger.debug("Password from keyring")
+            if kr_device and not device_id:
+                device_id = kr_device
+                logger.debug("Device ID from keyring")
+        except KeyringError as e:
+            # Typed keyring failure (NoKeyringError, InitError,
+            # KeyringLocked, PasswordSetError, etc.). Log at DEBUG with
+            # `exc_info` so `mcp-synology check -v` surfaces the actual
+            # cause (locked keychain on macOS is operator-actionable;
+            # NoKeyringError on a headless host signals a config issue).
+            # Closes #38 — previously caught by a bare `except Exception`
+            # with a flat "Keyring not available." line that hid all of
+            # these. Falls through to the no-credentials check below;
+            # the resolver chain still works without keyring.
+            logger.debug("Keyring access failed: %s", e, exc_info=True)
+        except OSError as e:
+            # D-Bus socket present but unreachable, permission errors on
+            # the OS keychain backend, etc. Same DEBUG-with-exc_info
+            # treatment as the typed-error case above. The D-Bus pre-check above
+            # already emitted an INFO hint if the D-Bus
+            # socket was missing entirely; this branch covers the
+            # reach-but-fail variant.
+            logger.debug("Keyring OS-level error: %s", e, exc_info=True)
+
+    if not username or not password:
+        raise AuthenticationError(
+            "No credentials found.",
+            suggestion=(
+                "Run 'mcp-synology setup' to store credentials in the OS keyring, "
+                "or set SYNOLOGY_USERNAME and SYNOLOGY_PASSWORD environment variables."
+            ),
+        )
+
+    logger.debug(
+        "Credentials resolved: user=%s, has_password=yes, has_device_id=%s",
+        username,
+        "yes" if device_id else "no",
+    )
+    return username, password, device_id
+
+
+KEYRING = "the keyring"
+
+
+def credential_sources(config: AppConfig, *, cli: bool = False) -> dict[str, str | None]:
+    """Where each credential comes from, in `resolve_credentials`' order: an environment
+    variable, a config-file key, the keyring (``KEYRING``), or None for a device token
+    that isn't set anywhere but the keyring. `setup` writes only the keyring, so a
+    credential set elsewhere must be changed where it is (#447, QA rounds 1-2 on #461)."""
+    import os
+
+    sources: dict[str, str | None] = {}
+    for key, var in (
+        ("username", "SYNOLOGY_USERNAME"),
+        ("password", "SYNOLOGY_PASSWORD"),
+        ("device_id", "SYNOLOGY_DEVICE_ID"),
+    ):
+        if _present_or_none(os.environ.get(var)):
+            # `check` reads the shell's environment, the server its MCP client's config.
+            sources[key] = (
+                f"{var} in this shell's environment"
+                if cli
+                else f"{var} in the server's environment (the MCP client's config)"
+            )
+        elif _present_or_none(getattr(config.auth, key)):
+            sources[key] = f"auth.{key} in the config file"
+        else:
+            sources[key] = KEYRING if key != "device_id" else None
+    return sources
+
+
+_SETUP_PICKED_UP = "the running server picks it up"
+# The config file a user set up is usually `<instance_id>.yaml`, which `setup` and `check`
+# don't find on their own (pre-QA on QA round 3, #461).
+_SETUP = "'mcp-synology setup --config <your config file>'"
+_CHECK = "'mcp-synology check --config <your config file>'"
+_TWO_FA = (403, 404, 406)
+
+
+def refusal_advice(
+    code: int | None, first: str, sources: dict[str, str | None], *, cli: bool = False
+) -> str:
+    """What fixes a refused login, by DSM's code and where the credential it concerns
+    comes from (QA round 2 on #461). ``first`` is DSM's own suggestion for the code.
+    ``cli`` leaves out what only a running server does (picking up the keyring, a restart):
+    `check` runs once and reads the credentials anew."""
+    picked = "" if cli else f"; {_SETUP_PICKED_UP}"
+    restart = "" if cli else " and restart the server"
+    if code == 400:
+        password, username = sources.get("password"), sources.get("username")
+        if password == KEYRING:
+            advice = f"Run {_SETUP} to store the right password{picked}"
+        else:
+            advice = (
+                f"The password comes from {password}: correct it there{restart} "
+                "('mcp-synology setup' writes only the keyring)"
+            )
+        if username != KEYRING:
+            advice += f". If the username is wrong, it comes from {username}: correct it there"
+            if password == KEYRING:
+                advice += restart
+        return advice
+    if code in _TWO_FA:
+        device = sources.get("device_id")
+        if device is None:
+            advice = f"Run {_SETUP} to sign in with a new 2FA code{picked}"
+        else:
+            advice = (
+                f"The device token comes from {device}, which overrides the keyring: remove "
+                f"it there, then run {_SETUP} to sign in with a new 2FA code"
+                + ("" if cli else ", and restart the server")
+            )
+        return f"{first}. Then: {advice[0].lower()}{advice[1:]}" if code == 406 else advice
+    if code == 401:
+        if cli:
+            return first or "The account is disabled in DSM"
+        return (
+            f"{first}. Once it's enabled again, restart the server"
+            if first
+            else ("Once the account is enabled again, restart the server")
+        )
+    if cli:
+        return first or "Check the credentials"
+    explicit = sorted({v for k, v in sources.items() if v and v != KEYRING})
+    where = (
+        "mcp-synology tries again once the credentials change ("
+        f"{_SETUP} stores "
+        f"new ones in the keyring; {_SETUP_PICKED_UP})"
+    )
+    if explicit:
+        verb, them = ("overrides", "it") if len(explicit) == 1 else ("override", "those")
+        where += f"; {'; '.join(explicit)} {verb} the keyring: change {them} there and "
+        where += "restart the server"
+    return f"{first}. {where}" if first else where
+
+
+def credentials_fingerprint(username: str, password: str, device_id: str | None) -> str:
+    """A digest of the credentials, so a refused login can be recognized without
+    keeping a second copy of the password."""
+    joined = "\0".join((username, password, device_id or ""))
+    return hashlib.sha256(joined.encode()).hexdigest()
+
+
+class LoginRefusals:
+    """Remembers the credentials DSM refused, so they aren't sent again (#447).
+
+    DSM's Auto Block (on by default: 10 failed logins within 5 minutes) blocks the
+    computer's IP address, for the user's browser and every other client too. A refused
+    login retried on every tool call, or on every session error, would trip it. The
+    refusal holds until the credentials change (``mcp-synology setup`` writes new ones
+    to the keyring) or the server restarts. A transport error or any other failure is
+    never remembered: it says nothing about the credentials.
+    """
+
+    def __init__(self) -> None:
+        self._refused: tuple[str, AuthenticationError] | None = None
+
+    @property
+    def any(self) -> bool:
+        return self._refused is not None
+
+    def check(self, fingerprint: str) -> None:
+        """Raise the remembered refusal if these are the credentials DSM refused."""
+        if self._refused is not None and self._refused[0] == fingerprint:
+            error = self._refused[1]
+            logger.debug("Not sending a login DSM already refused (error %s)", error.code)
+            raise RememberedRefusalError(str(error), code=error.code, suggestion=error.suggestion)
+
+    def refuse(
+        self,
+        fingerprint: str,
+        error: AuthenticationError,
+        sources: dict[str, str | None] | None = None,
+    ) -> AuthenticationError:
+        """Remember DSM's refusal; return the error to raise, which says what happens next.
+
+        ``sources`` says where each credential comes from (``credential_sources``), so
+        the suggestion names the fix for the credential DSM refused: `setup` for one in
+        the keyring, the environment or config file for one set there.
+        """
+        reason = str(error).rstrip(".")
+        first = (error.suggestion or "").rstrip(".")
+        if sources is None:
+            sources = {"username": KEYRING, "password": KEYRING, "device_id": None}
+        where = refusal_advice(error.code, first, sources)
+        refusal = LoginRefusedError(
+            f"DSM refused the login: {reason}. mcp-synology won't send these credentials "
+            "again until they change or the server restarts, because repeated failed "
+            "logins can trip DSM's Auto Block, which blocks this computer's IP address "
+            "from the NAS.",
+            code=error.code,
+            suggestion=(
+                f"{where}. After the fix, {_CHECK} tests the login once (each "
+                "failed check counts toward Auto Block)."
+            ),
+        )
+        # Keep a fresh copy: the raised one carries the login's frames (and its password)
+        # in its traceback once raised.
+        self._refused = (
+            fingerprint,
+            AuthenticationError(str(refusal), code=refusal.code, suggestion=refusal.suggestion),
+        )
+        return refusal
+
+    def clear(self) -> None:
+        self._refused = None
+
+
 class AuthManager:
     """Manages DSM authentication and session lifecycle."""
 
-    def __init__(self, config: AppConfig, client: DsmClient) -> None:
+    def __init__(
+        self, config: AppConfig, client: DsmClient, refusals: LoginRefusals | None = None
+    ) -> None:
         self._config = config
         self._client = client
+        # Shared with the server's client manager, so a refusal outlives this
+        # AuthManager when the first login fails (#447).
+        self._refusals = refusals if refusals is not None else LoginRefusals()
         self._lock = asyncio.Lock()
         self._session_name = self._build_session_name()
         # Subscriber list — fired after a successful re-auth so module-owned
@@ -88,127 +384,18 @@ class AuthManager:
         return f"MCPSynology_{instance_id}_{suffix}"
 
     def _resolve_credentials(self) -> tuple[str, str, str | None]:
-        """Resolve credentials from the storage hierarchy.
-
-        Order: env vars -> config file -> keyring.
-        Explicit sources (env, config) override the implicit default (keyring).
-        Returns: (username, password, device_id or None)
-        """
-        import os
-        import sys
-        from pathlib import Path
-
-        username: str | None = None
-        password: str | None = None
-        device_id: str | None = None
-
-        # 1. Environment variables (highest priority — explicit override)
-        # _present_or_none normalizes empty / whitespace-only to None so they
-        # fall through to the next strategy instead of becoming bogus creds.
-        username = _present_or_none(os.environ.get("SYNOLOGY_USERNAME"))
-        if username:
-            logger.debug("Username from env var SYNOLOGY_USERNAME: %s", username)
-        password = _present_or_none(os.environ.get("SYNOLOGY_PASSWORD"))
-        if password:
-            logger.debug("Password from env var SYNOLOGY_PASSWORD")
-        device_id = _present_or_none(os.environ.get("SYNOLOGY_DEVICE_ID"))
-        if device_id:
-            logger.debug("Device ID from env var SYNOLOGY_DEVICE_ID")
-
-        # 2. Config file (explicit, if present)
-        if not username and (cfg_user := _present_or_none(self._config.auth.username)):
-            username = cfg_user
-            logger.debug("Username from config file: %s", username)
-        if not password and (cfg_pass := _present_or_none(self._config.auth.password)):
-            password = cfg_pass
-            logger.debug("Password from config file (plaintext)")
-        if not device_id and (cfg_dev := _present_or_none(self._config.auth.device_id)):
-            device_id = cfg_dev
-            logger.debug("Device ID from config file")
-
-        # 3. OS keyring (implicit default — set by 'mcp-synology setup')
-        # Check keyring if we're missing username, password, OR device_id
-        if not username or not password or not device_id:
-            # On Linux, ensure D-Bus session address is available for keyring access.
-            # When launched by Claude Desktop, the env var may not be inherited.
-            # The keyring library reads DBUS_SESSION_BUS_ADDRESS from os.environ.
-            if sys.platform == "linux" and not os.environ.get("DBUS_SESSION_BUS_ADDRESS"):
-                uid = os.getuid()
-                socket_path = Path(f"/run/user/{uid}/bus")
-                if socket_path.exists():
-                    dbus_addr = f"unix:path=/run/user/{uid}/bus"
-                    os.environ["DBUS_SESSION_BUS_ADDRESS"] = dbus_addr
-                    logger.debug("Set DBUS_SESSION_BUS_ADDRESS=%s for keyring access", dbus_addr)
-                else:
-                    # INFO not DEBUG — without D-Bus the keyring path is dead
-                    # for this session; the operator needs to know how to
-                    # recover. Closes #38 (the operator-actionable hint).
-                    logger.info(
-                        "D-Bus socket not found at %s; OS keyring is unavailable. "
-                        "Run 'mcp-synology setup' from a real desktop session "
-                        "(or under 'dbus-run-session'), or set credentials via the "
-                        "SYNOLOGY_USERNAME / SYNOLOGY_PASSWORD / SYNOLOGY_DEVICE_ID "
-                        "env vars to bypass the keyring entirely.",
-                        socket_path,
-                    )
-
-            try:
-                service = f"mcp-synology/{self._config.instance_id or 'default'}"
-                logger.debug("Trying keyring service: %s", service)
-                kr_user = _present_or_none(kr.get_password(service, "username"))
-                kr_pass = _present_or_none(kr.get_password(service, "password"))
-                kr_device = _present_or_none(kr.get_password(service, "device_id"))
-                if kr_user and not username:
-                    username = kr_user
-                    logger.debug("Username from keyring: %s", username)
-                if kr_pass and not password:
-                    password = kr_pass
-                    logger.debug("Password from keyring")
-                if kr_device and not device_id:
-                    device_id = kr_device
-                    logger.debug("Device ID from keyring")
-            except KeyringError as e:
-                # Typed keyring failure (NoKeyringError, InitError,
-                # KeyringLocked, PasswordSetError, etc.). Log at DEBUG with
-                # `exc_info` so `mcp-synology check -v` surfaces the actual
-                # cause (locked keychain on macOS is operator-actionable;
-                # NoKeyringError on a headless host signals a config issue).
-                # Closes #38 — previously caught by a bare `except Exception`
-                # with a flat "Keyring not available." line that hid all of
-                # these. Falls through to the no-credentials check below;
-                # the resolver chain still works without keyring.
-                logger.debug("Keyring access failed: %s", e, exc_info=True)
-            except OSError as e:
-                # D-Bus socket present but unreachable, permission errors on
-                # the OS keychain backend, etc. Same DEBUG-with-exc_info
-                # treatment as the typed-error case above. The pre-check at
-                # line 123-131 already emitted an INFO hint if the D-Bus
-                # socket was missing entirely; this branch covers the
-                # reach-but-fail variant.
-                logger.debug("Keyring OS-level error: %s", e, exc_info=True)
-
-        if not username or not password:
-            raise AuthenticationError(
-                "No credentials found.",
-                suggestion=(
-                    "Run 'mcp-synology setup' to store credentials in the OS keyring, "
-                    "or set SYNOLOGY_USERNAME and SYNOLOGY_PASSWORD environment variables."
-                ),
-            )
-
-        logger.debug(
-            "Credentials resolved: user=%s, has_password=yes, has_device_id=%s",
-            username,
-            "yes" if device_id else "no",
-        )
-        return username, password, device_id
+        """Resolve credentials from the storage hierarchy (``resolve_credentials``)."""
+        return resolve_credentials(self._config)
 
     async def login(self) -> str:
         """Authenticate with the NAS and return a session ID.
 
-        Uses the strategy chain to handle 2FA automatically.
+        Uses the strategy chain to handle 2FA automatically. Credentials DSM already
+        refused aren't sent again (#447): the refusal is raised without contacting DSM.
         """
         username, password, device_id = self._resolve_credentials()
+        fingerprint = credentials_fingerprint(username, password, device_id)
+        self._refusals.check(fingerprint)
 
         params: dict[str, Any] = {
             "account": username,
@@ -225,8 +412,26 @@ class AuthManager:
             logger.debug("Login path: simple (no device token)")
 
         try:
+            data = await self._send_login(params, device_id)
+        except AuthenticationError as e:
+            if e.code is None:
+                raise
+            raise self._refusals.refuse(fingerprint, e, credential_sources(self._config)) from e
+
+        sid: str | None = data.get("sid")
+        if not sid:
+            raise AuthenticationError("Login succeeded but no session ID returned.")
+
+        self._refusals.clear()
+        self._client.sid = sid
+        logger.info("Authenticated as '%s' (session: %s)", username, self._session_name)
+        return sid
+
+    async def _send_login(self, params: dict[str, Any], device_id: str | None) -> dict[str, Any]:
+        """Send the login; a 403 becomes the 2FA error that says what to do."""
+        try:
             # A POST keeps the password out of the URL (#235).
-            data = await self._client.request(
+            return await self._client.request(
                 "SYNO.API.Auth", "login", version=6, params=params, post_form=True
             )
         except SynologyError as e:
@@ -235,17 +440,16 @@ class AuthManager:
                     # DSM no longer trusts the stored token, e.g. the trusted
                     # device was removed in DSM's security settings.
                     logger.debug("Login failed: DSM rejected the stored 2FA device token")
+                    # The fix depends on where the token comes from, which the
+                    # refusal's suggestion says (QA round 2 on #461).
                     message = (
-                        "2FA is required and DSM rejected the stored device token "
-                        "(it may have been removed or invalidated on the NAS). "
-                        "Run 'mcp-synology setup' to sign in with a new 2FA code."
+                        "2FA is required and DSM rejected the device token "
+                        "(it may have been removed or invalidated on the NAS)."
                     )
                 else:
                     logger.debug("Login failed: 2FA required but no device token available")
-                    message = (
-                        "2FA is required but no device token is available. "
-                        "Run 'mcp-synology setup' to complete 2FA bootstrap."
-                    )
+                    # The refusal's suggestion says to run setup (QA round 3 on #461).
+                    message = "2FA is required but no device token is available."
                 raise AuthenticationError(
                     message,
                     code=_ERROR_2FA_REQUIRED,
@@ -253,19 +457,13 @@ class AuthManager:
                 ) from e
             raise
 
-        sid: str | None = data.get("sid")
-        if not sid:
-            raise AuthenticationError("Login succeeded but no session ID returned.")
-
-        self._client.sid = sid
-        logger.info("Authenticated as '%s' (session: %s)", username, self._session_name)
-        return sid
-
     async def logout(self, *, raise_errors: bool = False) -> None:
         """Log out the current session.
 
         A DSM error is logged at DEBUG and swallowed (the session may already be
-        expired), unless ``raise_errors`` is set: shutdown uses that to warn (#402).
+        expired), unless ``raise_errors`` is set: shutdown uses that to warn (#402). An
+        expired session (106/107/119) is always logged at DEBUG: after a failed re-login
+        it stays in place (#359), and shutdown sends it.
         """
         if not self._client.sid:
             return
@@ -279,6 +477,10 @@ class AuthManager:
                 params={"session": self._session_name},
             )
             logger.debug("Logout successful")
+        except SessionExpiredError:
+            # Already closed on DSM's side: after a failed re-login the expired session
+            # stays in place (#359), and shutdown's logout sends it (QA round 2 on #461).
+            logger.debug("Logout: the session had already expired.")
         except SynologyError:
             if raise_errors:
                 raise
@@ -296,15 +498,20 @@ class AuthManager:
     async def _re_authenticate(self) -> None:
         """Re-authenticate transparently (called by DsmClient on session errors).
 
-        Uses asyncio.Lock to prevent concurrent re-auth from multiple requests.
+        DsmClient runs one re-login at a time and skips it when another request's
+        re-login already replaced the session (#359). The expired session stays in
+        place until the new one exists: cleared first, every request sent during the
+        login would go without a session and queue its own re-login. A refused login
+        isn't sent again (#447).
+
         Fires every registered ``on_reauth`` callback after the new session is
         live so module-owned caches (filestation's recycle-bin probe, etc.)
         can drop entries that may have drifted while the session was down.
         """
         async with self._lock:
-            # Another coroutine may have already re-authenticated
-            logger.info("Re-authenticating session '%s'.", self._session_name)
-            self._client.sid = None
+            # DEBUG: a remembered refusal answers without a login; a real one logs
+            # "Authenticated as" at INFO, and any other failure is logged by the client.
+            logger.debug("Re-authenticating session '%s'.", self._session_name)
             await self.login()
             # NOTE: callbacks fire INSIDE `self._lock`. Per `add_on_reauth_callback`'s
             # contract they must be cheap and synchronous — anything heavy here would
