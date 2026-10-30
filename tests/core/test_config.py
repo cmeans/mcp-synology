@@ -232,8 +232,67 @@ class TestAppConfig:
         with pytest.raises(yaml.YAMLError) as exc:
             load_config(path)
         assert format_yaml_error(exc.value).startswith(
-            "The config file isn't valid YAML at line 4, column 9 (the `port` line). "
+            "The config file isn't valid YAML at line 4, column 9, on the `port` line. "
         )
+
+    @pytest.mark.parametrize(
+        "auth",
+        [
+            "auth:\n  username: me\n  password:\n    Hunter2x: @x\n",
+            "auth:\n  username: me\n  password: abc\n   Hunter2x: ghi\n",
+        ],
+    )
+    def test_a_password_line_is_never_taken_for_a_key(self, tmp_path: Any, auth: str) -> None:
+        """Only the config's own keys are named: a password continued on its own line
+        (`Hunter2x: …`) is text, not a key."""
+        import yaml
+
+        from mcp_synology.core.config import format_yaml_error, load_config
+
+        path = tmp_path / "c.yaml"
+        path.write_text("schema_version: 1\nconnection: {host: nas}\n" + auth)
+        with pytest.raises(yaml.YAMLError) as exc:
+            load_config(path)
+        assert "Hunter" not in format_yaml_error(exc.value)
+
+    @pytest.mark.parametrize(
+        "value", ["!!int Hunter2x", "!!float Hunter2x", "!!timestamp Hunter2x"]
+    )
+    def test_a_tag_that_does_not_fit_is_never_quoted(self, tmp_path: Any, value: str) -> None:
+        """PyYAML raises ValueError or AttributeError there, with the value in it."""
+        import yaml
+
+        from mcp_synology.core.config import ConfigValueError, format_yaml_error, load_config
+
+        path = tmp_path / "c.yaml"
+        path.write_text(
+            "schema_version: 1\nconnection: {host: nas}\n"
+            f"auth:\n  username: me\n  password: {value}\n"
+        )
+        with pytest.raises(ConfigValueError) as exc:
+            load_config(path)
+        assert isinstance(exc.value, yaml.YAMLError)
+        assert exc.value.__cause__ is None and exc.value.__suppress_context__
+        message = format_yaml_error(exc.value)
+        assert "hunter" not in message.casefold()
+        assert message.startswith("The config file has a value YAML can't build")
+
+    @pytest.mark.parametrize("value", ['"Hunter2x', "[Hunter2x", "{Hunter2x"])
+    def test_an_unclosed_value_names_where_it_starts(self, tmp_path: Any, value: str) -> None:
+        import yaml
+
+        from mcp_synology.core.config import format_yaml_error, load_config
+
+        path = tmp_path / "c.yaml"
+        path.write_text(
+            "schema_version: 1\nconnection: {host: nas}\n"
+            f"auth:\n  username: me\n  password: {value}\n"
+        )
+        with pytest.raises(yaml.YAMLError) as exc:
+            load_config(path)
+        message = format_yaml_error(exc.value)
+        assert "(in the value that starts at line 5), on the `password` line. " in message
+        assert "Hunter" not in message
 
     def test_a_set_is_not_shown(self) -> None:
         from pydantic import ValidationError

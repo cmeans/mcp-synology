@@ -342,28 +342,60 @@ def _may_show(err: Any, loc_parts: list[str]) -> bool:
 _YAML_KEY = re.compile(r"\s*-?\s*([A-Za-z_][A-Za-z0-9_]*)\s*:")
 
 
+class ConfigValueError(yaml.YAMLError):
+    """A value PyYAML parsed but couldn't build: a tag that doesn't fit it, such as
+    `!!int Hunter2x`. PyYAML raises ValueError or AttributeError there, with the value in
+    the message (#386)."""
+
+
+def _config_keys() -> set[str]:
+    """Every key the config's own sections define: the only ones a YAML error may name,
+    so a password's text on its own line is never mistaken for a key (#386)."""
+    models = (AppConfig, ConnectionConfig, AuthConfig, LoggingConfig, ModuleConfig)
+    return {name for model in models for name in model.model_fields}
+
+
+def _key_on_line(mark: Any) -> str | None:
+    buffer = getattr(mark, "buffer", None)
+    if not isinstance(buffer, str):
+        return None
+    lines = buffer.splitlines()
+    if mark.line >= len(lines):
+        return None
+    key = _YAML_KEY.match(lines[mark.line])
+    return key.group(1) if key and key.group(1) in _config_keys() else None
+
+
 def format_yaml_error(exc: yaml.YAMLError) -> str:
     """Say where a config file isn't valid YAML, without quoting it (#386).
 
     PyYAML's own message quotes the offending line, and its problem text can quote the
     value (`found undefined alias 'Hunter2x'` for `password: *Hunter2x`), so a password
-    with a YAML-special character would be printed. This names the line, the column and
-    the key on that line, never the value.
+    with a YAML-special character would be printed. This names the line and column, where
+    the broken value starts when PyYAML only notices at the end of the file (an
+    unterminated quote or bracket), and the config key on that line, never the text.
     """
+    hint = (
+        "The text there isn't shown, since it may be a password: check its quoting (a "
+        "value starting with a YAML special character, such as * ! @ % & ` | > [ { or a "
+        "quote, or containing ': ' or ' #', needs quotes) and indentation."
+    )
+    if isinstance(exc, ConfigValueError):
+        return (
+            "The config file has a value YAML can't build, such as one tagged !!int or "
+            f"!!timestamp that doesn't fit the tag. {hint}"
+        )
     mark = getattr(exc, "problem_mark", None)
     if mark is None:
-        return "The config file isn't valid YAML. Check its quoting and indentation."
+        return f"The config file isn't valid YAML. {hint}"
     where = f"line {mark.line + 1}, column {mark.column + 1}"
-    buffer = getattr(mark, "buffer", None)
-    if isinstance(buffer, str):
-        line = buffer.splitlines()[mark.line] if mark.line < len(buffer.splitlines()) else ""
-        if key := _YAML_KEY.match(line):
-            where += f" (the `{key.group(1)}` line)"
-    return (
-        f"The config file isn't valid YAML at {where}. The text there isn't shown, since it "
-        "may be a password: check its quoting (a value starting with *, !, @, ` or a quote, "
-        "or containing ': ', needs quotes) and indentation."
-    )
+    start = getattr(exc, "context_mark", None)
+    if start is not None and start.line != mark.line:
+        where += f" (in the value that starts at line {start.line + 1})"
+        mark = start
+    if key := _key_on_line(mark):
+        where += f", on the `{key}` line"
+    return f"The config file isn't valid YAML at {where}. {hint}"
 
 
 def format_validation_error(exc: Any) -> str:
@@ -413,7 +445,13 @@ def load_config(path: str | Path | None = None) -> AppConfig:
 
     logger.debug("Loading config from %s", config_path)
     raw_text = config_path.read_text(encoding="utf-8")
-    raw: dict[str, Any] = yaml.safe_load(raw_text) or {}
+    try:
+        raw: dict[str, Any] = yaml.safe_load(raw_text) or {}
+    except yaml.YAMLError:
+        raise
+    except (ValueError, TypeError, AttributeError) as e:
+        # A tag that doesn't fit its value (`!!int Hunter2x`): PyYAML's message quotes it.
+        raise ConfigValueError(type(e).__name__) from None
 
     raw = _merge_env_overrides(raw)
 

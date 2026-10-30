@@ -1830,3 +1830,5 @@ class TestConfigErrorsHideSecrets:
         assert result.exit_code == 1
         assert "Hunter2x" not in result.output
         assert "Error: " in result.output
+        if "pasword" in body:  # rejected by the config check, not a later failure
+            assert "connection.pasword: Extra inputs are not permitted" in result.output
