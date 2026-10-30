@@ -513,6 +513,15 @@ class TestListFiles:
         assert "(0 items)" in result and "offset=" not in result
 
     @respx.mock
+    async def test_short_page_of_only_recycle_points_past_it(self, mock_client: DsmClient) -> None:
+        # DSM sent fewer entries than asked for, only the hidden #recycle, though more
+        # follow: the empty page still points to the next one, after the #recycle.
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(json=self._page(["#recycle"], total=3))
+        result = await list_files(mock_client, path="/video", limit=2, hide_recycle=True)
+        assert "(0 items)" in result
+        assert result.endswith("Use offset=1 to see more.")
+
+    @respx.mock
     async def test_recycle_hidden_on_any_path_that_lists_it(self, mock_client: DsmClient) -> None:
         # /video/. lists the share's top level; #recycle stays hidden there too.
         respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
