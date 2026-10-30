@@ -565,3 +565,14 @@ def test_list_never_shows_a_mistagged_password(tmp_path: Path) -> None:
     assert "a.yaml  (could not parse)" in result.output
     assert "b.yaml  (could not parse)" in result.output
     assert "c.yaml  (could not parse)" in result.output  # not UTF-8: a ValueError
+
+
+def test_setup_reports_a_config_it_cant_read(tmp_path: Path) -> None:
+    """`setup --config` with a missing file, and plain `setup` on a discovered config
+    that raises ValueError, exit 1 with the message (#386: these branches split out)."""
+    missing = tmp_path / "nope.yaml"
+    result = CliRunner().invoke(main, ["setup", "--config", str(missing)])
+    assert result.exit_code == 1 and "Error: " in result.output
+    with patch("mcp_synology.core.config.load_config", side_effect=ValueError("not UTF-8")):
+        result = CliRunner().invoke(main, ["setup"])
+    assert result.exit_code == 1 and "Error: not UTF-8" in result.output

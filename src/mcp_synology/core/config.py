@@ -350,7 +350,13 @@ def _may_show(err: Any, loc_parts: list[str]) -> bool:
         return False
     # An unknown key's value, or a section given a plain value (`connection: https://
     # admin:…@nas` is a "should be a dictionary" error carrying that text).
-    if err.get("type") in ("extra_forbidden", "model_type", "dict_type", "model_attributes_type"):
+    if err.get("type") in (
+        "extra_forbidden",
+        "invalid_key",
+        "model_type",
+        "dict_type",
+        "model_attributes_type",
+    ):
         return False
     return not (loc_parts and loc_parts[0] == "auth")
 
@@ -381,6 +387,15 @@ def _shown_location(err: Any, loc_parts: list[str]) -> str:
     value elsewhere (`totally_unknown: x`) is named, as before.
     """
     loc = ".".join(loc_parts) if loc_parts else "<root>"
+    if err.get("type") == "invalid_key" and loc_parts:
+        # A key YAML read as a number or a date (`{password: Summer,2024}` splits into a
+        # key 2024): never a real config key, and possibly part of a password (QA round 1).
+        where = ".".join(loc_parts[:-1])
+        return (
+            (f"{where}." if where else "")
+            + "<a key that isn't text, not shown: it may be part of a password; quote a "
+            "value with a comma inside {…}>"
+        )
     if err.get("type") == "extra_forbidden" and loc_parts:
         key = loc_parts[-1]
         suspect = err.get("input") is None or loc_parts[0] == "auth"
@@ -416,6 +431,8 @@ def parse_config_text(text: str) -> Any:
         return yaml.safe_load(text)
     except yaml.YAMLError:
         raise
+    except RecursionError:
+        raise ConfigValueError("RecursionError") from None
     except Exception as e:  # noqa: BLE001 - any constructor error; its text names the value
         raise ConfigValueError(type(e).__name__) from None
 
@@ -452,6 +469,11 @@ def format_yaml_error(exc: yaml.YAMLError) -> str:
         "value starting with a YAML special character, such as * ! @ % & ` | > [ { or a "
         "quote, or containing ': ' or ' #', needs quotes) and indentation."
     )
+    if isinstance(exc, ConfigValueError) and str(exc) == "RecursionError":
+        return (
+            "The config file is nested too deeply for YAML to read. Check its brackets and "
+            "indentation."
+        )
     if isinstance(exc, ConfigValueError):
         return (
             "The config file has a value YAML can't build, such as one tagged !!int or "

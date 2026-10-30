@@ -380,6 +380,28 @@ class TestAppConfig:
         assert "  - totally_unknown: Extra inputs are not permitted" in message
         assert "  - connection.proxy: Extra inputs are not permitted" in message
 
+    @pytest.mark.parametrize("fragment", ["20245678", "3.14159", "2024-01-02"])
+    @pytest.mark.parametrize("section", ["auth", "connection", "logging"])
+    def test_a_fragment_that_isnt_text_is_not_named(self, fragment: str, section: str) -> None:
+        """QA round 1: YAML reads `{password: Summer,2024}`'s second half as a number or a
+        date key, which pydantic reports as `invalid_key`, not as an unknown key."""
+        import yaml
+        from pydantic import ValidationError
+
+        from mcp_synology.core.config import format_validation_error
+
+        body = {
+            "auth": "auth: {username: u, password: Summer,%s}\nconnection: {host: nas}\n",
+            "connection": "connection: {host: nas, password: Summer,%s}\n",
+            "logging": "connection: {host: nas}\nlogging: {file: Summer,%s}\n",
+        }[section] % fragment
+        raw = yaml.safe_load("schema_version: 1\nmodules: {filestation: {}}\n" + body)
+        with pytest.raises(ValidationError) as exc:
+            AppConfig(**raw)
+        message = format_validation_error(exc.value)
+        assert fragment not in message and "2024" not in message and "3.14" not in message
+        assert "<a key that isn't text, not shown" in message
+
     def test_a_misspelled_auth_key_is_still_named(self) -> None:
         from pydantic import ValidationError
 
@@ -435,6 +457,36 @@ class TestAppConfig:
             AppConfig(**raw)
         assert "hunter" not in str(exc.value).casefold()
         assert "The instance_id derived from connection.host contains invalid" in str(exc.value)
+
+    def test_yaml_error_without_a_location(self) -> None:
+        import yaml
+
+        from mcp_synology.core.config import format_yaml_error
+
+        assert format_yaml_error(yaml.YAMLError("Hunter2x")).startswith(
+            "The config file isn't valid YAML. The text there isn't shown"
+        )
+
+    def test_yaml_key_lookup_without_text_or_past_the_end(self) -> None:
+        from types import SimpleNamespace
+
+        from mcp_synology.core.config import _key_on_line
+
+        assert _key_on_line(SimpleNamespace(buffer=None, line=0)) is None
+        assert _key_on_line(SimpleNamespace(buffer="a: 1\n", line=5)) is None
+
+    def test_too_deep_a_config(self, tmp_path: Any) -> None:
+        import yaml
+
+        from mcp_synology.core.config import format_yaml_error, load_config
+
+        path = tmp_path / "c.yaml"
+        path.write_text("a: " + "[" * 20000 + "]" * 20000 + "\n")
+        with pytest.raises(yaml.YAMLError) as exc:
+            load_config(path)
+        assert format_yaml_error(exc.value).startswith(
+            "The config file is nested too deeply for YAML to read."
+        )
 
     def test_a_set_is_not_shown(self) -> None:
         from pydantic import ValidationError
