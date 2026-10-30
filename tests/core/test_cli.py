@@ -248,6 +248,18 @@ class TestCli:
         assert result.exit_code != 0
 
 
+@pytest.mark.parametrize("command", ["serve", "check", "setup"])
+@pytest.mark.parametrize("content", ["some-text\n", "- x\n", "12345678\n"])
+def test_non_mapping_config_reports_clean_error(tmp_path: Path, command: str, content: str) -> None:
+    config_file = tmp_path / "bad.yaml"
+    config_file.write_text(content)
+    result = CliRunner().invoke(main, [command, "--config", str(config_file)])
+    assert result.exit_code == 1
+    assert "YAML mapping" in result.output
+    assert "Traceback" not in result.output
+    assert not isinstance(result.exception, TypeError)
+
+
 class TestSetupList:
     def test_list_no_configs(self, tmp_path: Path) -> None:
         runner = CliRunner()
