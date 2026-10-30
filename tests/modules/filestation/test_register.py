@@ -1267,6 +1267,31 @@ class TestShareRootDelete:
         type(ctx).request_context = property(lambda _s: (_ for _ in ()).throw(ValueError("no")))
         assert _can_elicit(ctx) is False
 
+    @pytest.mark.parametrize(
+        ("form", "url", "expected"),
+        [(None, None, True), (True, None, True), (True, True, True), (None, True, False)],
+        ids=["neither-means-form", "form", "both", "url-only"],
+    )
+    def test_can_elicit_needs_the_form_mode(
+        self, form: bool | None, url: bool | None, expected: bool
+    ) -> None:
+        """A client that declares only URL elicitation can't answer a form: token path
+        (pre-QA on #480)."""
+        from mcp import types
+
+        from mcp_synology.modules.filestation import _can_elicit
+
+        modes = types.ElicitationCapability(
+            form=types.FormElicitationCapability() if form else None,
+            url=types.UrlElicitationCapability() if url else None,
+        )
+        ctx = MagicMock()
+        ctx.request_context.session.check_client_capability.return_value = True
+        ctx.request_context.session.client_capabilities = types.ClientCapabilities(
+            elicitation=modes
+        )
+        assert _can_elicit(ctx) is expected
+
     def test_can_elicit_logs_an_unexpected_error(self, caplog: pytest.LogCaptureFixture) -> None:
         """An SDK change mustn't silently turn the user's confirmation into a token the
         model holds (QA round 1 on #480)."""

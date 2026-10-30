@@ -976,8 +976,9 @@ async def delete_files(
             except httpx.TransportError as e:
                 if not deleted and not normalized[i + 1 :]:
                     raise  # nothing to add: the server reports the NAS unreachable
-                # The start (or its status) got no answer: it may have started. Say so,
-                # with what was done and what wasn't started (pre-QA on #480).
+                # The start got no answer (a status with none hands the item off in
+                # poll_task): it may have started. Say so, with what was done and what
+                # wasn't started (pre-QA on #480).
                 try:
                     error_response(
                         ErrorCode.UNAVAILABLE,
@@ -1114,6 +1115,11 @@ async def _delete_summary(
     return "\n".join(lines)
 
 
+def _unstop(message: str) -> str:
+    """``message`` without its final period, and only that one."""
+    return message[:-1] if message.endswith(".") else message
+
+
 # A shared folder's items came from its listing, which the model never saw in full.
 _AGAIN_ON_THE_SHARE = (
     " To go on with a shared folder's items, call delete_files on the shared folder again "
@@ -1134,10 +1140,11 @@ def _with_progress_so_far(
         message = body["error"]["message"]
     except (ValueError, KeyError, TypeError):
         return error
+    # One sentence period off at a time: a path can end in dots (`notes...`).
     if done and "Already deleted" not in message:
-        message = message.rstrip(".") + _already_done("Delete", done) + "."
+        message = _unstop(message) + _already_done("Delete", done) + "."
     if rest:
-        message = message.rstrip(".") + f". Not started: {short_list(rest)}."
+        message = _unstop(message) + f". Not started: {short_list(rest)}."
         if listed & set(rest):
             message += _AGAIN_ON_THE_SHARE
     body["error"]["message"] = message
@@ -1171,8 +1178,10 @@ async def _stopped_at_deadline(
                 success=False,
             ),
             *_listed_paths(rest),
+            # "The paths above" only when all of them are above (pre-QA on #480).
             "\nNothing is running on the NAS. To go on, call delete_files again: on the "
-            "shared folder (a new preview counts what's left), or on the paths above.",
+            "shared folder (a new preview counts what's left)"
+            + (", or on the paths above." if len(rest) <= LISTED_AT_MOST else "."),
         ]
     )
 

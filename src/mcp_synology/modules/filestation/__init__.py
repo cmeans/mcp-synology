@@ -303,11 +303,16 @@ def _can_elicit(ctx: Context) -> bool:
     from mcp import types
 
     try:
-        return bool(
-            ctx.request_context.session.check_client_capability(
-                types.ClientCapabilities(elicitation=types.ElicitationCapability())
-            )
-        )
+        session = ctx.request_context.session
+        if not session.check_client_capability(
+            types.ClientCapabilities(elicitation=types.ElicitationCapability())
+        ):
+            return False
+        # The form mode asks the question; a client that declares only the URL mode can't
+        # answer it. Declaring neither means form (pre-QA on #480).
+        declared = session.client_capabilities
+        modes = declared.elicitation if declared is not None else None
+        return modes is None or modes.form is not None or modes.url is None
     except ValueError:  # no request context (a direct call): no elicitation
         return False
     except Exception as e:  # noqa: BLE001 - never ask by guesswork, but say why not
@@ -1019,7 +1024,8 @@ def register(ctx: "RegisterContext") -> None:
             client = await _fs_client()
             paths = await ensure_known_shares(client, paths, known_shares)
             for path in paths:
-                # `/video/.` and `/video/x/..` name the shared folder too, and must never
+                # Whitespace-only and padded parts too: whether DSM trims them is
+                # unprobed. `/video/.` and `/video/x/..` name the shared folder too, and must never
                 # reach DSM's Delete; #470 refuses these for every tool (QA round 1 on #480).
                 # So would `//video` when DSM won't list shares (the share check is then
                 # skipped): an empty part is refused too (pre-QA on #480).

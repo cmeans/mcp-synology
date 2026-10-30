@@ -3334,6 +3334,56 @@ class TestDeleteDeadlineAndListed:
         assert "Not started: /video/i1, /video/i2." in out
         assert out.endswith("for a new preview of what's left.")
 
+    @pytest.mark.parametrize(("left", "expected"), [(2.0, 5.0), (20.0, 20.0), (500.0, 30.0)])
+    async def test_an_item_waits_only_what_is_left(
+        self, mock_client: DsmClient, left: float, expected: float
+    ) -> None:
+        """Near the deadline an item waits what's left, at least 5 s, at most the call's
+        wait (pre-QA on #480: untested)."""
+        from mcp_synology.modules.filestation import operations
+
+        waits: list[float] = []
+
+        async def one(*_a: Any, timeout: float, **_k: Any) -> None:
+            waits.append(timeout)
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(operations, "_delete_one_path", one)
+            mp.setattr(operations, "running_task", AsyncMock(return_value=None))
+            mp.setattr(operations, "find_missing_paths", AsyncMock(return_value=[]))
+            mp.setattr(operations, "_delete_summary", AsyncMock(return_value="done"))
+            mp.setattr(operations.time, "monotonic", lambda: 1000.0)
+            await delete_files(mock_client, paths=["/video/a"], timeout=30, deadline=1000.0 + left)
+        assert waits == [pytest.approx(expected)]
+
+    def test_a_path_ending_in_dots_keeps_them(self) -> None:
+        """Only the sentence's period comes off, never a name's own dots (pre-QA on
+        #480)."""
+        from mcp_synology.modules.filestation.operations import _with_progress_so_far
+
+        error = ToolError(json.dumps({"status": "error", "error": {"message": "Failed."}}))
+        out = _with_progress_so_far(error, ["/video/notes..."], ["/video/v1.", "/video/b"])
+        message = json.loads(str(out))["error"]["message"]
+        assert message == (
+            "Failed. Already deleted before this failure: /video/notes.... Not started: "
+            "/video/v1., /video/b."
+        )
+
+    async def test_a_long_deadline_list_doesnt_say_the_paths_above(
+        self, mock_client: DsmClient
+    ) -> None:
+        from mcp_synology.modules.filestation.operations import _stopped_at_deadline
+
+        rest = [f"/video/r{n}" for n in range(60)]
+        with pytest.MonkeyPatch.context() as mp:
+            from mcp_synology.modules.filestation import operations
+
+            mp.setattr(operations, "_delete_summary", AsyncMock(return_value="done"))
+            long = await _stopped_at_deadline(mock_client, ["/video/a"], rest, None)
+            short = await _stopped_at_deadline(mock_client, ["/video/a"], rest[:3], None)
+        assert long.endswith("(a new preview counts what's left).")
+        assert short.endswith("or on the paths above.")
+
     def test_an_error_that_isnt_the_envelope_is_kept_as_it_is(self) -> None:
         from mcp_synology.modules.filestation.operations import _with_progress_so_far
 

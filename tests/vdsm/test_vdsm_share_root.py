@@ -1,4 +1,6 @@
-"""delete_files on a shared folder deletes its contents, never the folder itself (#451).
+"""The pieces of a shared-folder delete on DSM: the preview, the share's listing, and that
+deleting listed items keeps the shared folder (#451). The tool's own expansion of a share
+root, with its confirmation, is covered by unit tests.
 
 On DSM 7.2.2 and later, File Station's Delete on `/<share>` removes the shared folder for
 any account with write access; DSM 7.1 refuses it. The tool lists the share's top-level
@@ -33,7 +35,7 @@ async def _shares(client: DsmClient) -> set[str]:
 
 
 @pytest.mark.parametrize("persona", ["user", "admin"])
-async def test_share_root_contents_deleted_share_kept(
+async def test_share_listing_preview_and_delete_keep_the_share(
     nas_client: Any, admin_client: Any, persona: str
 ) -> None:
     client: DsmClient = (nas_client if persona == "user" else admin_client)[0]
