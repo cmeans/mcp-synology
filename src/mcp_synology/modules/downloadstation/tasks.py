@@ -751,7 +751,8 @@ async def create_download(
                 return _created_message(task_ids, len(uris)) + note
 
     # v1 takes one comma-separated string: a comma inside a URI goes as "\," (DSM keeps
-    # it as a plain comma; unescaped, the create fails), as in File Station paths (#397).
+    # it as a plain comma; unescaped, the create fails; #397). Whether DSM also reads
+    # "\\" as a backslash is unverified, so backslashes are sent as they are.
     v1_params: dict[str, str] = {"uri": ",".join(u.replace(",", "\\,") for u in uris)}
     if destination is not None:
         v1_params["destination"] = destination

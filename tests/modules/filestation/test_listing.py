@@ -513,6 +513,16 @@ class TestListFiles:
         assert "(0 items)" in result and "offset=" not in result
 
     @respx.mock
+    async def test_recycle_hidden_on_any_path_that_lists_it(self, mock_client: DsmClient) -> None:
+        # /video/. lists the share's top level; #recycle stays hidden there too.
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json=self._page(["#recycle", "a.txt"], total=2)
+        )
+        result = await list_files(mock_client, path="/video/.", hide_recycle=True)
+        assert "#recycle" not in result.replace("(#recycle hidden)", "")
+        assert "Showing 1 of 1 items (#recycle hidden)." in result
+
+    @respx.mock
     async def test_offset_past_the_end_says_so(self, mock_client: DsmClient) -> None:
         # #389: it used to be just "No items to display".
         respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(json=self._page([], total=5))

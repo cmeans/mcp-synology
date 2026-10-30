@@ -302,12 +302,14 @@ async def list_files(
     dsm_total = data.get("total", len(entries))
 
     # DSM's offsets count every entry, the hidden #recycle too, so the next page
-    # starts after the last entry this one used (#389).
+    # starts after the last entry this one used (#389). A #recycle is hidden wherever
+    # it shows up (a path such as /video/. reaches a share's top level too); only the
+    # peek and the check above are limited to where it's expected.
     files: list[dict[str, Any]] = []
     used = 0
     recycle_seen = False
     for entry in entries:
-        if may_hide and entry.get("name") == "#recycle":
+        if hide_recycle and entry.get("name") == "#recycle":
             recycle_seen = True
         elif limit > 0 and len(files) == limit:
             break  # the peeked entry: it starts the next page

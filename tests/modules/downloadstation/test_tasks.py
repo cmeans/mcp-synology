@@ -820,6 +820,18 @@ class TestCreateDownloadUri:
             "http://h.example/a\\,b.iso,ftp://h.example/c.iso"
         )
 
+    async def test_neither_uri_nor_torrent_path_raises(self, mock_client: DsmClient) -> None:
+        with pytest.raises(ToolError, match="uri"):
+            await create_download(mock_client)
+
+    async def test_both_uri_and_torrent_path_raises(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        torrent = tmp_path / "x.torrent"
+        torrent.write_bytes(b"x")
+        with pytest.raises(ToolError, match="exactly one"):
+            await create_download(mock_client, uri="magnet:?xt=a", torrent_file_path=str(torrent))
+
 
 class TestSplitUris:
     @pytest.mark.parametrize(
@@ -832,6 +844,8 @@ class TestSplitUris:
             ("ed2k://|file|a,b|1|h|/,thunder:QUE=", ["ed2k://|file|a,b|1|h|/", "thunder:QUE="]),
             ("HTTP://A/1,FTP://B/2", ["HTTP://A/1", "FTP://B/2"]),
             ("http://a/x,y:z", ["http://a/x,y:z"]),  # "y:" isn't a URI start
+            # No scheme, no split: such a list goes to DSM as one URI.
+            ("www.a.com/x.iso,www.b.com/y.iso", ["www.a.com/x.iso,www.b.com/y.iso"]),
             (" http://a/1 ,,", ["http://a/1"]),
             (",,", []),
             ("", []),
@@ -841,18 +855,6 @@ class TestSplitUris:
         from mcp_synology.modules.downloadstation.tasks import split_uris
 
         assert split_uris(text) == expected
-
-    async def test_neither_uri_nor_torrent_path_raises(self, mock_client: DsmClient) -> None:
-        with pytest.raises(ToolError, match="uri"):
-            await create_download(mock_client)
-
-    async def test_both_uri_and_torrent_path_raises(
-        self, mock_client: DsmClient, tmp_path: Path
-    ) -> None:
-        torrent = tmp_path / "x.torrent"
-        torrent.write_bytes(b"x")
-        with pytest.raises(ToolError, match="exactly one"):
-            await create_download(mock_client, uri="magnet:?xt=a", torrent_file_path=str(torrent))
 
 
 def _default_destination(dest: str | None, *, is_manager: bool = True) -> respx.Route:

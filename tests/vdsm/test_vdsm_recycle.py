@@ -136,26 +136,29 @@ async def test_hidden_recycle_pages_every_item_once(nas_client: Any) -> None:
         assert "#recycle" in names, names
         expected = sorted(n for n in names if n != "#recycle")
 
-        for direction in ("asc", "desc"):
-            seen: list[str] = []
-            offset = 0
-            while True:
-                out = await list_files(
-                    client,
-                    path="/home",
-                    limit=2,
-                    offset=offset,
-                    sort_direction=direction,
-                    hide_recycle=True,
-                )
-                assert f"({len(expected)} items)" in out, out
-                assert "#recycle" not in out.replace("(#recycle hidden)", ""), out
-                seen += [n for n in expected if re.search(rf"\s{re.escape(n)}/?\s", out)]
-                hint = re.search(r"Use offset=(\d+)", out)
-                if not hint:
-                    break
-                offset = int(hint.group(1))
-            assert sorted(seen) == expected, (direction, seen)
+        # limit=len(expected) puts a descending listing's #recycle right after the
+        # only page: it must not promise a second, empty one.
+        for limit in (2, len(expected)):
+            for direction in ("asc", "desc"):
+                seen: list[str] = []
+                offset = 0
+                while True:
+                    out = await list_files(
+                        client,
+                        path="/home",
+                        limit=limit,
+                        offset=offset,
+                        sort_direction=direction,
+                        hide_recycle=True,
+                    )
+                    assert f"({len(expected)} items)" in out, out
+                    assert "#recycle" not in out.replace("(#recycle hidden)", ""), out
+                    seen += [n for n in expected if re.search(rf"\s{re.escape(n)}/?\s", out)]
+                    hint = re.search(r"Use offset=(\d+)", out)
+                    if not hint:
+                        break
+                    offset = int(hint.group(1))
+                assert sorted(seen) == expected, (limit, direction, seen)
     finally:
         for name in ("a", "b", "c", "gone"):
             await _clean(client, f"{top}-{name}")
