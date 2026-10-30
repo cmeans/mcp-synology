@@ -296,6 +296,16 @@ class TestMatchesPattern:
         assert not matches_pattern("a.txt", "*.nfo,*.txt")
         assert matches_pattern("a.nfo,b.txt", "*.nfo,*.txt")
 
+    def test_many_stars_do_not_backtrack(self) -> None:
+        # QA round 1 on #459: a regex with one `.*` per `*` took 427 ms per 100-character
+        # name for `*a*a*a*a*b`, and grows with each star; fnmatch's translation doesn't.
+        import time
+
+        start = time.perf_counter()
+        for _ in range(20):
+            assert not matches_pattern("a" * 200, "*a*a*a*a*a*a*b")
+        assert time.perf_counter() - start < 0.5
+
     def test_star_spans_a_newline(self) -> None:
         # As fnmatch did: a name with a newline still matches "*".
         assert matches_pattern("a\nb.txt", "a*.txt")

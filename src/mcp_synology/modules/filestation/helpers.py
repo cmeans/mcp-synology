@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import logging
 import re
@@ -323,10 +324,11 @@ def matches_pattern(filename: str, pattern: str) -> bool:
     ``[...]`` as a class either, but differ otherwise: a comma separates alternatives, and
     a pattern without ``*`` or ``?`` matches anywhere (``dsm_pattern_matcher``). With
     fnmatch, ``*[1080p]*`` was a character class that left out every name containing 1,
-    0, 8 or p (#396).
+    0, 8 or p (#396), so ``[`` is escaped as ``[[]``. fnmatch itself stays: a regex built
+    with one ``.*`` per ``*`` backtracks catastrophically (``*a*a*a*a*b`` against 100
+    ``a``s took 427 ms per name, QA round 1 on #459), while fnmatch's translation doesn't.
     """
-    body = re.escape(pattern).replace(r"\*", ".*").replace(r"\?", ".")
-    return re.fullmatch(body, filename, re.IGNORECASE | re.DOTALL) is not None
+    return fnmatch.fnmatchcase(filename.lower(), pattern.lower().replace("[", "[[]"))
 
 
 # Closes #37. Lazy per-share recycle-bin probe + observation-based self-correction.

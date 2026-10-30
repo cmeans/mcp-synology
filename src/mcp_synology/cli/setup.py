@@ -378,10 +378,7 @@ async def _connect_and_login(
             try:
                 dsm_info = await client.fetch_dsm_info()
             finally:
-                try:
-                    await client.request("SYNO.API.Auth", "logout", version=6, params={})
-                except Exception as e:  # best effort: DSM ends the session on its own timeout
-                    logger.debug("Setup logout failed: %s", e)
+                await _logout(client)
             nas_hostname = dsm_info.get("hostname") or ""
             if nas_hostname:
                 result["hostname"] = nas_hostname
@@ -421,10 +418,24 @@ async def _setup_login(config: object, username: str, password: str, service: st
 
             # Logout, best effort as in _connect_and_login: the login worked (#404).
             if client.sid:
-                try:
-                    await client.request("SYNO.API.Auth", "logout", version=6, params={})
-                except Exception as e:  # DSM ends the session on its own timeout
-                    logger.debug("Setup logout failed: %s", e)
+                await _logout(client)
+
+
+async def _logout(client: Any) -> None:
+    """Log out, best effort and bounded by serve's shutdown limit (``LOGOUT_TIMEOUT``).
+
+    DSM ends the session on its own timeout, so a failure is only logged. The bound keeps
+    a NAS that stopped answering (the reason a hostname read just timed out) from doubling
+    setup's wait with the client's full timeout (#404, QA round 1 on #459).
+    """
+    from mcp_synology.server import LOGOUT_TIMEOUT
+
+    try:
+        await asyncio.wait_for(
+            client.request("SYNO.API.Auth", "logout", version=6, params={}), LOGOUT_TIMEOUT
+        )
+    except Exception as e:  # noqa: BLE001 - TimeoutError included; never fails setup
+        logger.debug("Setup logout failed: %s: %s", type(e).__name__, e)
 
 
 def _emit_claude_desktop_snippet(config: Any, config_path: Path) -> None:

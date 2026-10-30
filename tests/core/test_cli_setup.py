@@ -244,6 +244,35 @@ class TestConnectAndLogin:
         assert result["success"] is True
         assert result["hostname"] == "MyNAS"
 
+    @pytest.mark.parametrize("where", ["dsm_info_fails", "setup_login"])
+    async def test_logout_is_bounded(self, where: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        """QA round 1 on #459: a NAS that stopped answering held the logout for the
+        client's whole timeout, doubling setup's wait. It's bounded by LOGOUT_TIMEOUT."""
+        import asyncio
+        import time
+
+        import httpx
+
+        monkeypatch.setattr("mcp_synology.server.LOGOUT_TIMEOUT", 0.05)
+
+        async def request(api: str, method: str, *args: object, **kwargs: object) -> dict[str, str]:
+            if method == "logout":
+                await asyncio.sleep(30)
+            return {"sid": "test-sid"}
+
+        config = _make_test_app_config()
+        client = self._make_client_cm(AsyncMock(side_effect=request), {})
+        start = time.perf_counter()
+        with patch("mcp_synology.core.client.DsmClient", return_value=client):
+            if where == "dsm_info_fails":
+                client.fetch_dsm_info = AsyncMock(side_effect=httpx.ReadTimeout("slow"))
+                with pytest.raises(SystemExit):
+                    await setup_mod._connect_and_login(config, "a", "pw", "s", verbose=False)
+            else:
+                client.sid = "test-sid"
+                await setup_mod._setup_login(config, "a", "pw", "s")
+        assert time.perf_counter() - start < 5
+
     async def test_connect_and_login_rejects_non_appconfig(self) -> None:
         with pytest.raises(RuntimeError, match="AppConfig"):
             await setup_mod._connect_and_login("not a config", "u", "p", "s", verbose=False)
