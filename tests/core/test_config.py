@@ -481,7 +481,7 @@ class TestAppConfig:
         assert "7319" not in message
         assert (
             "  - modules.<a key that isn't text, not shown: it may be part of a password; if a "
-            "value with a comma inside {…} was split there, quote that value>.permission: "
+            "comma inside {…} split a value there, quote that value>.permission: "
         ) in message
 
     def test_a_list_position_is_still_named(self) -> None:

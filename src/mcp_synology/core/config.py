@@ -376,11 +376,9 @@ _SECTION_MODELS: dict[str, type[BaseModel]] = {
 }
 
 # Conditional: a comma split can leave a key with or without a value (`a,B: x` gives `B: x`),
-# so the hint says when it applies (QA rounds 4 and 5 on #469).
-_NOT_TEXT_KEY = (
-    "<a key that isn't text, not shown: it may be part of a password; if a value with a "
-    "comma inside {…} was split there, quote that value>"
-)
+# so the hint says when it applies (QA rounds 4 and 5 on #469). One wording for every message.
+_SPLIT_HINT = "if a comma inside {…} split a value there, quote that value"
+_NOT_TEXT_KEY = f"<a key that isn't text, not shown: it may be part of a password; {_SPLIT_HINT}>"
 
 
 def _section_keys(loc_parts: list[str]) -> list[str]:
@@ -448,7 +446,7 @@ def _shown_location(
         if suspect:
             # A comma split can leave a fragment with a value too (`{password: a,B: x}` gives
             # `B: x`), so the hint is conditional, never left out (QA rounds 4 and 5 on #469).
-            split = "if a comma inside {…} split a value there, quote that value"
+            split = _SPLIT_HINT
             where = ".".join(loc_parts[:-1])
             by_lower = {k.lower(): k for k in valid}
             close = difflib.get_close_matches(key.lower(), list(by_lower), n=1, cutoff=0.75)
