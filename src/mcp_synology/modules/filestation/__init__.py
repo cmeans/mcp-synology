@@ -6,14 +6,12 @@
 # handler is defined (rc6 live test; see core.local_paths.roots_for_description).
 
 import logging
-import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Literal
 
 from mcp.server.mcpserver import (
     Context,  # noqa: TC002 — runtime import needed for MCPServer context injection
 )
-from mcp.shared.exceptions import NoBackChannelError
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field, field_validator
 
@@ -232,11 +230,9 @@ MODULE_INFO = ModuleInfo(
                 "list_recycle_bin shows them and restore_from_recycle_bin brings them back. "
                 "Without a bin, and for anything inside a bin (`/<share>/#recycle`), deletion is "
                 "permanent. Paths are exact, not wildcard patterns, and if any path is missing "
-                "nothing is deleted. A shared folder itself (`/video`) means its contents: the "
-                "call first shows how many files and how much would go, and the user confirms "
-                "in the client; a client that can't ask gets a one-time token in the reply: "
-                "show the preview, and pass the token as confirm only after the user agrees. A "
-                "long delete keeps running on the NAS and returns a handle for file_task."
+                "nothing is deleted. A whole shared folder (`/video`) is refused: delete its items "
+                "by path. A long delete keeps running on the NAS and returns a handle for "
+                "file_task."
             ),
             permission_tier=PermissionTier.WRITE,
             annotations=_ANNO_DESTRUCTIVE,
@@ -287,54 +283,12 @@ MODULE_INFO = ModuleInfo(
 )
 
 
-class _ConfirmShareDelete(BaseModel):
-    """What the user answers to a share-root delete's elicitation (#451)."""
-
-    delete: bool = Field(description="Delete everything listed")
-
-
-# The most other paths a call emptying a shared folder may carry: the confirmation lists
-# each one (pre-QA on #480).
-_OTHERS_AT_MOST = 50
-
-
-def _can_elicit(ctx: Context) -> bool:
-    """Whether the client can ask the user directly (MCP elicitation)."""
-    from mcp import types
-
-    try:
-        session = ctx.request_context.session
-        if not session.check_client_capability(
-            types.ClientCapabilities(elicitation=types.ElicitationCapability())
-        ):
-            return False
-        # The form mode asks the question; a client that declares only the URL mode can't
-        # answer it. Declaring neither means form (pre-QA on #480).
-        declared = session.client_capabilities
-        modes = declared.elicitation if declared is not None else None
-        return modes is None or modes.form is not None or modes.url is None
-    except ValueError:  # no request context (a direct call): no elicitation
-        return False
-    except Exception as e:  # noqa: BLE001 - never ask by guesswork, but say why not
-        # An SDK change would otherwise downgrade the user's own confirmation to a token
-        # the model holds, without a word (QA round 1 on #480).
-        logger.warning(
-            "Couldn't read the client's elicitation capability: %s", type(e).__name__, exc_info=True
-        )
-        return False
-
-
 def register(ctx: "RegisterContext") -> None:
     """Register File Station tools with the MCP server."""
     from mcp_synology.core import local_paths
-    from mcp_synology.core.errors import ErrorCode, SynologyError
-    from mcp_synology.core.formatting import error_response, synology_error_response
-    from mcp_synology.modules.filestation.helpers import (
-        ensure_known_shares,
-        find_missing_paths,
-        missing_paths_suggestion,
-        normalize_path,
-    )
+    from mcp_synology.core.errors import ErrorCode
+    from mcp_synology.core.formatting import error_response
+    from mcp_synology.modules.filestation.helpers import ensure_known_shares
     from mcp_synology.modules.filestation.listing import (
         list_files,
         list_recycle_bin,
@@ -342,17 +296,13 @@ def register(ctx: "RegisterContext") -> None:
     )
     from mcp_synology.modules.filestation.metadata import get_dir_size, get_file_info
     from mcp_synology.modules.filestation.operations import (
-        SHARE_ROOT_TOKEN_TTL,
-        ShareRootTokens,
         copy_files,
         create_folder,
         delete_files,
         move_files,
+        refuse_share_roots,
         rename,
         restore_from_recycle_bin,
-        share_contents,
-        share_root_preview,
-        share_roots,
     )
     from mcp_synology.modules.filestation.search import search_files
     from mcp_synology.modules.filestation.tasks import (
@@ -424,7 +374,6 @@ def register(ctx: "RegisterContext") -> None:
     # Handed-off tasks this server process knows about (#245), shared by the four
     # operations that hand off and file_task.
     records = TaskRecords()
-    share_root_tokens = ShareRootTokens()
     # Discovery of tasks still running from before this process (#245): once, at the
     # first successful client; its note goes on the first reply after it. Only where
     # file_task exists, since the note tells the model to use it.
@@ -1009,77 +958,12 @@ def register(ctx: "RegisterContext") -> None:
                     )
                 ),
             ] = True,
-            confirm: Annotated[
-                str | None,
-                Field(
-                    description=(
-                        "Only for deleting a whole shared folder's contents (a path such as "
-                        "`/video`): the token from that call's preview, passed once the user "
-                        "has seen the preview and agreed. Leave it out otherwise."
-                    )
-                ),
-            ] = None,
         ) -> str:
-            confirm = (confirm or "").strip() or None  # a blank optional string is absent
             client = await _fs_client()
             paths = await ensure_known_shares(client, paths, known_shares)
-            for path in paths:
-                # Whitespace-only and padded parts too: whether DSM trims them is
-                # unprobed. `/video/.` and `/video/x/..` name the shared folder too, and must never
-                # reach DSM's Delete; #470 refuses these for every tool (QA round 1 on #480).
-                # So would `//video` when DSM won't list shares (the share check is then
-                # skipped): an empty part is refused too (pre-QA on #480).
-                if any(
-                    part.strip() in (".", "..", "") for part in normalize_path(path).split("/")[1:]
-                ):
-                    error_response(
-                        ErrorCode.INVALID_PARAMETER,
-                        f"Delete files refused: '.', '..' and empty parts aren't allowed "
-                        f"({path}). Nothing was deleted.",
-                        retryable=False,
-                        param="paths",
-                        value=path,
-                        suggestion="Write the path out in full from the shared folder, e.g. "
-                        "/video/Movies.",
-                    )
-            roots = share_roots(paths)
-            listed: frozenset[str] = frozenset()
-            deadline: float | None = None
-            note = ""
-            if roots:
-                if not recursive:
-                    error_response(
-                        ErrorCode.INVALID_PARAMETER,
-                        "Delete files refused: a shared folder's contents are deleted with "
-                        "everything in them; recursive=false doesn't apply to "
-                        + ", ".join(roots)
-                        + ".",
-                        retryable=False,
-                        param="recursive",
-                        value=recursive,
-                        suggestion="Leave recursive at its default (true), or delete the "
-                        "share's items by their own paths.",
-                    )
-                confirmed = await _confirm_share_roots(ctx, client, paths, roots, confirm)
-                if isinstance(confirmed, str):
-                    return _reply(confirmed)
-                expanded, note = confirmed
-                listed = frozenset(p for p in expanded if p not in paths)
-                deadline = time.monotonic() + delete_wait
-                paths = expanded
-            elif confirm is not None:
-                error_response(
-                    ErrorCode.INVALID_PARAMETER,
-                    "Delete files failed: confirm is only for a shared folder's preview, and "
-                    "no path here is a whole shared folder.",
-                    retryable=False,
-                    param="confirm",
-                    value=confirm,
-                    suggestion="Call delete_files again without confirm.",
-                )
+            refuse_share_roots(paths)
             return _reply(
-                note
-                + await delete_files(
+                await delete_files(
                     client,
                     paths=paths,
                     recursive=recursive,
@@ -1087,177 +971,8 @@ def register(ctx: "RegisterContext") -> None:
                     timeout=delete_wait,
                     records=records,
                     on_progress=_progress_cb(ctx),
-                    deadline=deadline,
-                    listed=listed,
                 )
             )
-
-    async def _still_listed(
-        client: "DsmClient", roots: list[str], previewed: dict[str, list[str]]
-    ) -> tuple[dict[str, list[str]], str]:
-        """The previewed items still in each share, and a note on any added since: a
-        confirmed delete is of what the user saw, less what's gone (QA round 1 on #480)."""
-        contents: dict[str, list[str]] = {}
-        added = 0
-        for root in roots:
-            present = set(await share_contents(client, root))
-            contents[root] = [p for p in previewed.get(root, []) if p in present]
-            added += len(present - set(previewed.get(root, [])))
-        note = (
-            f"{added:,} item(s) added since the preview weren't deleted; call delete_files on "
-            "the shared folder again for a new preview of them.\n\n"
-            if added
-            else ""
-        )
-        return contents, note
-
-    async def _confirm_share_roots(
-        ctx: Context,
-        client: "DsmClient",
-        paths: list[str],
-        roots: list[str],
-        confirm: str | None,
-    ) -> tuple[list[str], str] | str:
-        """Confirm a delete of whole shared folders' contents (#451): the paths to delete
-        and a note to put before the result, or the reply to give instead (the preview, or
-        "not confirmed")."""
-        others = [p for p in paths if normalize_path(p) not in roots]
-        # A shared folder's own recycle bin in the same call would empty the bin the preview
-        # promises the items go into (pre-QA on #480).
-        in_bins = [
-            p
-            for p in others
-            if any(
-                normalize_path(p) == f"{r}/#recycle"
-                or normalize_path(p).startswith(f"{r}/#recycle/")
-                for r in roots
-            )
-        ]
-        if in_bins:
-            error_response(
-                ErrorCode.INVALID_PARAMETER,
-                "Delete files refused: emptying a shared folder puts its items in its recycle "
-                "bin, and this call also deletes from that bin ("
-                + ", ".join(in_bins)
-                + "). Nothing was deleted.",
-                retryable=False,
-                param="paths",
-                value=paths,
-                suggestion="Delete the shared folder's contents and its recycle bin in "
-                "separate calls.",
-            )
-        # Every path the user approves is shown: no "… and N more" in a confirmation.
-        if len(others) > _OTHERS_AT_MOST:
-            error_response(
-                ErrorCode.INVALID_PARAMETER,
-                f"Delete files refused: a call that empties a shared folder takes at most "
-                f"{_OTHERS_AT_MOST} other paths, so the confirmation can show them all; this "
-                f"one has {len(others):,}. Nothing was deleted.",
-                retryable=False,
-                param="paths",
-                value=len(others),
-                suggestion="Delete the other paths in their own call.",
-            )
-        # The call's other paths are checked first, so a mistyped one is refused before
-        # the user is asked (pre-QA on #451), as delete_files refuses it (#162).
-        try:
-            missing = (
-                await find_missing_paths(client, [normalize_path(p) for p in others])
-                if others
-                else []
-            )
-        except SynologyError as e:
-            synology_error_response("Delete files", e)
-        if missing:
-            error_response(
-                ErrorCode.NOT_FOUND,
-                "Delete files refused: not found: "
-                + "; ".join(f"{p} (DSM error {code})" for p, code in missing)
-                + ". Nothing was deleted.",
-                retryable=False,
-                param="paths",
-                value=paths,
-                suggestion=missing_paths_suggestion(missing),
-            )
-        note = ""
-        if confirm is not None:
-            stored = share_root_tokens.redeem(confirm, paths)
-            if stored is None:
-                error_response(
-                    ErrorCode.INVALID_PARAMETER,
-                    "Delete files failed: that confirm token isn't valid. A token is good once, "
-                    f"for {int(SHARE_ROOT_TOKEN_TTL // 60)} minutes, and only for the same paths "
-                    "as its preview.",
-                    retryable=False,
-                    param="confirm",
-                    value=confirm,
-                    suggestion="Call delete_files again without confirm for a new preview.",
-                )
-            contents, note = await _still_listed(client, roots, stored)
-            if not others and not any(contents.values()):
-                return note + "Nothing deleted: the items there at the preview are gone."
-        else:
-            contents = {root: await share_contents(client, root) for root in roots}
-            if not others and not any(contents.values()):
-                # Nothing to confirm (pre-QA on #451).
-                verb = "has" if len(roots) == 1 else "have"
-                return "Nothing to delete: " + ", ".join(roots) + f" {verb} nothing in it."
-            preview = await share_root_preview(
-                client, roots, timeout=dir_size_timeout, recycle_bin_status=recycle_status
-            )
-            if others:
-                # A yes covers the whole call, so the user sees all of it.
-                preview += "\nAlso deleted in this call:\n" + "\n".join(f"  {p}" for p in others)
-            asked = False
-            if _can_elicit(ctx):
-                try:
-                    answer = await ctx.elicit(
-                        message=f"{preview}\n\nDelete all of it?", schema=_ConfirmShareDelete
-                    )
-                    asked = True
-                except NoBackChannelError as e:
-                    # The client declared elicitation, but the transport can't carry a
-                    # request from the server: the token fallback.
-                    logger.debug("Elicitation can't be sent, falling back to a token: %s", e)
-                except Exception as e:  # noqa: BLE001 - the user may have closed it: no delete
-                    # A dismissed dialog, a client error or an answer that doesn't fit is
-                    # not a yes, and never becomes a token the model could use alone.
-                    logger.warning(
-                        "Confirmation of a shared-folder delete failed: %s: %s",
-                        type(e).__name__,
-                        e,
-                    )
-                    return (
-                        f"{preview}\n\nNothing deleted: the client's confirmation failed "
-                        f"({type(e).__name__}). Ask the user whether they still want this "
-                        "shared folder emptied before deleting anything."
-                    )
-            if asked:
-                if answer.action != "accept" or not answer.data.delete:
-                    return f"{preview}\n\nNothing deleted: the user didn't confirm."
-                # The user may have taken minutes: as on the token path, only what the
-                # preview listed and is still there (pre-QA on #480).
-                contents, note = await _still_listed(client, roots, contents)
-                if not others and not any(contents.values()):
-                    return note + "Nothing deleted: the items there at the preview are gone."
-            else:
-                token = share_root_tokens.issue(paths, contents)
-                return (
-                    f"{preview}\n\nNothing deleted yet. Show this to the user, and only if they "
-                    f'agree, call delete_files again with the same paths and confirm="{token}" '
-                    f"(good once, for {int(SHARE_ROOT_TOKEN_TTL // 60)} minutes)."
-                )
-        expanded: list[str] = []
-        for path in paths:
-            # Compared normalized: `writable/` names the shared folder too, and must never
-            # reach DSM as itself.
-            if normalize_path(path) in roots:
-                # The listing from before the confirmation: what was previewed, not
-                # anything added while the user decided.
-                expanded.extend(contents[normalize_path(path)])
-            else:
-                expanded.append(path)
-        return list(dict.fromkeys(expanded)), note  # a share named twice is listed once
 
     if "upload_file" in ctx.allowed_tools:
 

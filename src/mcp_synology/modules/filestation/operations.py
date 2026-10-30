@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import secrets
-import time
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -33,7 +31,6 @@ from mcp_synology.modules.filestation.helpers import (
     paths_isdir,
 )
 from mcp_synology.modules.filestation.tasks import (
-    LISTED_AT_MOST,
     Handle,
     HandleKind,
     Handoff,
@@ -44,7 +41,6 @@ from mcp_synology.modules.filestation.tasks import (
     handoff_reply,
     poll_task,
     running_task,
-    short_list,
 )
 
 if TYPE_CHECKING:
@@ -267,35 +263,82 @@ def _collapse_overlaps(paths: list[str], *, drop_nested: bool = True) -> list[st
     Copy passes ``drop_nested=False`` (QA R2 on #173): copying ``/a`` and ``/a/b`` is two
     copies, ``dest/a`` and ``dest/b``, and the child still exists after the parent's copy.
     """
-    # Sets and a walk up each path's parents, not a scan of every pair: a shared folder's
-    # contents can be thousands of paths (pre-QA on #480; 10,000 took 17 s).
-    given = {p.rstrip("/") for p in paths}
-    seen: set[str] = set()
     out: list[str] = []
     for p in paths:
-        if p in seen:
+        if p in out:
             continue
-        seen.add(p)
-        if drop_nested:
-            parent = p.rstrip("/")
-            nested = False
-            while "/" in parent[1:]:
-                parent = parent.rsplit("/", 1)[0]
-                if parent in given:
-                    nested = True
-                    break
-            if nested:
-                continue
+        if drop_nested and any(p != q and p.startswith(q.rstrip("/") + "/") for q in paths):
+            continue
         out.append(p)
     return out
+
+
+def refuse_share_roots(paths: list[str]) -> None:
+    """Refuse a path that names a whole shared folder (#451).
+
+    On DSM 7.2.2, 7.3.2 and 7.4.1, File Station's Delete on ``/<share>`` deletes the shared
+    folder itself, for any account with write access, and the recycle bin, inside the
+    share, can't bring it back; DSM 7.1 refuses it. Emptying a share safely is #484. A
+    ``.``, ``..``, empty or whitespace-only part is refused too: ``/video/.``,
+    ``/video/x/..`` and ``//video`` (when DSM won't list shares) name the share as well.
+    """
+    for path in paths:
+        parts = normalize_path(path).split("/")[1:]
+        if any(part.strip() in ("", ".", "..") for part in parts):
+            error_response(
+                ErrorCode.INVALID_PARAMETER,
+                f"Delete files refused: '.', '..' and empty parts aren't allowed ({path}). "
+                "Nothing was deleted.",
+                retryable=False,
+                param="paths",
+                value=path,
+                suggestion="Write the path out in full from the shared folder, e.g. /video/Movies.",
+            )
+        if len(parts) == 1:
+            error_response(
+                ErrorCode.INVALID_PARAMETER,
+                f"Delete files refused: {path} is a whole shared folder. delete_files "
+                "doesn't delete or empty a shared folder: on DSM 7.2.2 and later that "
+                "would delete the shared folder itself, beyond the recycle bin's reach. "
+                "Nothing was deleted.",
+                retryable=False,
+                param="paths",
+                value=path,
+                suggestion="To empty it, list it with list_files and delete its items by "
+                "their own paths, after the user agrees; to delete the shared folder itself, "
+                "use DSM's Control Panel > Shared Folder.",
+            )
+
+
+def _unstop(message: str) -> str:
+    """``message`` without its final period, and only that one: a path can end in dots."""
+    return message[:-1] if message.endswith(".") else message
+
+
+def _with_progress_so_far(error: ToolError, done: list[str], rest: list[str]) -> ToolError:
+    """A delete's error, saying what was already deleted and what wasn't started, so the
+    user can tell what's left after a failure partway (QA round 1 on #480)."""
+    if not done and not rest:
+        return error
+    try:
+        body = json.loads(str(error))
+        message = body["error"]["message"]
+    except (ValueError, KeyError, TypeError):
+        return error
+    if done and "Already deleted" not in message:
+        message = _unstop(message) + _already_done("Delete", done) + "."
+    if rest:
+        message = _unstop(message) + f". Not started: {', '.join(rest)}."
+    body["error"]["message"] = message
+    return ToolError(json.dumps(body))
 
 
 def _already_done(operation: str, done: list[str] | None) -> str:
     """Name the items a multi-path operation finished before a later one failed."""
     if not done:
         return ""
-    return f". Already {_PAST_TENSE.get(operation, 'processed')} before this failure: " + (
-        short_list(done)
+    return f". Already {_PAST_TENSE.get(operation, 'processed')} before this failure: " + ", ".join(
+        done
     )
 
 
@@ -889,8 +932,6 @@ async def delete_files(
     timeout: float = 120.0,
     records: TaskRecords | None = None,
     on_progress: ProgressCallback | None = None,
-    deadline: float | None = None,
-    listed: frozenset[str] = frozenset(),
 ) -> str:
     """Delete files or folders.
 
@@ -923,10 +964,8 @@ async def delete_files(
 
     # Refuse the whole call if any path is missing (#162): DSM "deletes" a missing path
     # without an error, and a partial delete of a mistyped list is worse than none.
-    # Items just read from a share's own listing (a share-root delete, #451) aren't
-    # checked one getinfo each: they exist, and there can be thousands.
     try:
-        missing = await find_missing_paths(client, [p for p in normalized if p not in listed])
+        missing = await find_missing_paths(client, normalized)
     except SynologyError as e:
         synology_error_response("Delete files", e)
     if missing:
@@ -946,10 +985,6 @@ async def delete_files(
 
     deleted: list[str] = []
     for i, p in enumerate(normalized):
-        if deadline is not None and deleted and time.monotonic() >= deadline:
-            # A share-root delete is one task per item: past the call's wait, stop
-            # starting new ones rather than outlast the client's time limit (#451).
-            return await _stopped_at_deadline(client, deleted, normalized[i:], recycle_bin_status)
         running = await running_task(client, api="SYNO.FileStation.Delete", path=p)
         handoff: Handoff | None
         if running is not None:
@@ -962,23 +997,18 @@ async def delete_files(
                     p,
                     recursive=recursive,
                     delete_version=delete_version,
-                    # Past the deadline no item starts, and one started just before it
-                    # waits only what's left (at least 5 s), so the call stays near its
-                    # wait (#451).
-                    timeout=timeout
-                    if deadline is None
-                    else min(timeout, max(5.0, deadline - time.monotonic())),
+                    timeout=timeout,
                     done=deleted,
                     on_progress=on_progress,
                 )
             except ToolError as e:
-                raise _with_progress_so_far(e, deleted, normalized[i + 1 :], listed) from None
+                raise _with_progress_so_far(e, deleted, normalized[i + 1 :]) from None
             except httpx.TransportError as e:
                 if not deleted and not normalized[i + 1 :]:
                     raise  # nothing to add: the server reports the NAS unreachable
                 # The start got no answer (a status with none hands the item off in
                 # poll_task): it may have started. Say so, with what was done and what
-                # wasn't started (pre-QA on #480).
+                # wasn't started (QA round 1 on #480).
                 try:
                     error_response(
                         ErrorCode.UNAVAILABLE,
@@ -989,7 +1019,7 @@ async def delete_files(
                         "before deleting again.",
                     )
                 except ToolError as err:
-                    raise _with_progress_so_far(err, deleted, normalized[i + 1 :], listed) from None
+                    raise _with_progress_so_far(err, deleted, normalized[i + 1 :]) from None
         if handoff is not None:
             handle = handoff.handle
             # No DSM request between the handoff and the reply: a recycle-bin probe to a
@@ -1014,8 +1044,6 @@ async def delete_files(
                 done=deleted,
                 not_started=normalized[i + 1 :],
             )
-            if listed & set(normalized[i + 1 :]):
-                reply += _AGAIN_ON_THE_SHARE
             return reply if running is None else _already_running("Delete", p) + "\n" + reply
         deleted.append(p)
 
@@ -1080,7 +1108,7 @@ async def _delete_summary(
     verb = "Deleted" if has_recycle else "Permanently deleted"
 
     lines = [format_status(f"{verb} {len(normalized):,} item(s):")]
-    lines.extend(_listed_paths(normalized))
+    lines.extend(f"  {p}" for p in normalized)
 
     lines.extend(
         f"\nRecycle bin is enabled on /{share} \u2014 "
@@ -1096,7 +1124,7 @@ async def _delete_summary(
                 f"\n\u26a0 Deleted from the recycle bin on /{share} \u2014 permanent, "
                 "these cannot be recovered:"
             )
-            lines.extend(_listed_paths(bin_paths))
+            lines.extend(f"  {p}" for p in bin_paths)
         else:
             lines.append(
                 f"\n\u26a0 Deleted from the recycle bin on /{share} \u2014 permanent, "
@@ -1113,77 +1141,6 @@ async def _delete_summary(
     )
 
     return "\n".join(lines)
-
-
-def _unstop(message: str) -> str:
-    """``message`` without its final period, and only that one."""
-    return message[:-1] if message.endswith(".") else message
-
-
-# A shared folder's items came from its listing, which the model never saw in full.
-_AGAIN_ON_THE_SHARE = (
-    " To go on with a shared folder's items, call delete_files on the shared folder again "
-    "for a new preview of what's left."
-)
-
-
-def _with_progress_so_far(
-    error: ToolError, done: list[str], rest: list[str], listed: frozenset[str] = frozenset()
-) -> ToolError:
-    """A delete's error, saying what was already deleted and what wasn't started: a
-    shared folder's items are many deletes, and a failure partway otherwise left the user
-    unable to tell what's left (QA round 1 on #480)."""
-    if not done and not rest:
-        return error
-    try:
-        body = json.loads(str(error))
-        message = body["error"]["message"]
-    except (ValueError, KeyError, TypeError):
-        return error
-    # One sentence period off at a time: a path can end in dots (`notes...`).
-    if done and "Already deleted" not in message:
-        message = _unstop(message) + _already_done("Delete", done) + "."
-    if rest:
-        message = _unstop(message) + f". Not started: {short_list(rest)}."
-        if listed & set(rest):
-            message += _AGAIN_ON_THE_SHARE
-    body["error"]["message"] = message
-    return ToolError(json.dumps(body))
-
-
-def _listed_paths(paths: Sequence[str]) -> list[str]:
-    """Indented path lines, at most ``LISTED_AT_MOST`` of them and a count of the rest:
-    a share's contents can be thousands of items (#451)."""
-    lines = [f"  {p}" for p in paths[:LISTED_AT_MOST]]
-    if len(paths) > LISTED_AT_MOST:
-        lines.append(f"  … and {len(paths) - LISTED_AT_MOST:,} more")
-    return lines
-
-
-async def _stopped_at_deadline(
-    client: DsmClient,
-    done: list[str],
-    rest: list[str],
-    recycle_bin_status: dict[str, bool] | None,
-) -> str:
-    """The reply when a long delete stopped starting new items at its deadline: what was
-    deleted (and whether into the recycle bin), then what wasn't started."""
-    return "\n".join(
-        [
-            await _delete_summary(client, done, recycle_bin_status),
-            "",
-            format_status(
-                f"Stopped at the time limit: {len(rest):,} of {len(done) + len(rest):,} "
-                "item(s) weren't started:",
-                success=False,
-            ),
-            *_listed_paths(rest),
-            # "The paths above" only when all of them are above (pre-QA on #480).
-            "\nNothing is running on the NAS. To go on, call delete_files again: on the "
-            "shared folder (a new preview counts what's left)"
-            + (", or on the paths above." if len(rest) <= LISTED_AT_MOST else "."),
-        ]
-    )
 
 
 def _as_restore(text: str, share_name: str) -> str:
@@ -1345,165 +1302,3 @@ async def _recreate_missing_folders(client: DsmClient, folders: list[str]) -> li
             synology_error_response("Restore files", e)
         created.append(path)
     return sorted(created)
-
-
-# -- delete_files on a share root (#451) --------------------------------------------
-#
-# On DSM 7.2.2 and later, File Station's Delete on `/<share>` deletes the shared folder
-# itself, for any account with write access, and the recycle bin (inside the share) can't
-# bring it back; DSM 7.1 refuses it (vdsm probes, #451). delete_files instead deletes a
-# share's contents, its top-level items, and only after a preview (counts and size) is
-# confirmed: by the user through MCP elicitation where the client supports it, otherwise
-# with a one-time token from the preview.
-
-SHARE_ROOT_TOKEN_TTL = 300.0  # seconds a preview's token stays valid
-
-
-def share_roots(paths: Sequence[str]) -> list[str]:
-    """The paths that name a shared folder itself (``/video``), normalized."""
-    roots = []
-    for path in paths:
-        normalized = normalize_path(path)
-        if normalized != "/" and "/" not in normalized[1:] and normalized not in roots:
-            roots.append(normalized)
-    return roots
-
-
-def _path_key(paths: Sequence[str]) -> tuple[str, ...]:
-    """The paths a token covers, in any order."""
-    return tuple(sorted({normalize_path(p) for p in paths}))
-
-
-class ShareRootTokens:
-    """One-time tokens a share-root preview hands out, for clients without elicitation.
-
-    A token is valid once, for ``SHARE_ROOT_TOKEN_TTL`` seconds, and only for the same
-    paths the preview covered. It keeps each share's listing from the preview, so the
-    delete it confirms is of those items, never of anything added since (QA round 1 on
-    #480). Tokens are per server process, not per MCP session.
-    """
-
-    def __init__(self) -> None:
-        self._tokens: dict[str, tuple[tuple[str, ...], dict[str, list[str]], float]] = {}
-
-    def issue(self, paths: Sequence[str], contents: dict[str, list[str]]) -> str:
-        now = time.monotonic()
-        self._tokens = {t: v for t, v in self._tokens.items() if v[2] > now}
-        token = secrets.token_hex(4)
-        self._tokens[token] = (_path_key(paths), dict(contents), now + SHARE_ROOT_TOKEN_TTL)
-        return token
-
-    def redeem(self, token: str, paths: Sequence[str]) -> dict[str, list[str]] | None:
-        """The listings the preview showed, or None for a token that isn't valid here."""
-        entry = self._tokens.pop(token.strip(), None)
-        if entry is None:
-            return None
-        covered, contents, expires = entry
-        if expires > time.monotonic() and covered == _path_key(paths):
-            return contents
-        return None
-
-
-async def share_root_preview(
-    client: DsmClient,
-    roots: Sequence[str],
-    *,
-    timeout: float,
-    recycle_bin_status: dict[str, bool] | None = None,
-) -> str:
-    """What deleting each share's contents would delete: files, folders and size.
-
-    DSM's DirSize counts the share's ``#recycle`` too, which isn't deleted, so its
-    totals are taken off when the folder exists.
-    """
-    from mcp_synology.modules.filestation.metadata import dir_size_totals
-
-    lines = []
-    for root in roots:
-        try:
-            size, files, folders = await dir_size_totals(client, path=root, timeout=timeout)
-        except ToolError as e:
-            # get_dir_size's error, said for delete_files: keep its code, retryable flag and
-            # suggestion, except a timeout's, which names get_dir_size's own argument.
-            try:
-                error = json.loads(str(e))["error"]
-            except (ValueError, KeyError, TypeError):
-                error = {}
-            timed_out = error.get("code") == ErrorCode.TIMEOUT.value
-            error_response(
-                ErrorCode(error.get("code", ErrorCode.FILESTATION_ERROR.value)),
-                f"Delete files refused: couldn't size {root} for the preview, so nothing was "
-                f"deleted: {error.get('message', str(e))}",
-                retryable=False if timed_out else bool(error.get("retryable", False)),
-                param="paths",
-                value=root,
-                suggestion=(
-                    "A large share can take longer than dir_size_timeout in the File Station "
-                    "settings: raise it, or delete the share's folders by their own paths "
-                    "(list_files lists them)."
-                    if timed_out
-                    else error.get("suggestion")
-                ),
-            )
-        note = ""
-        try:
-            has_bin = await path_exists(client, f"{root}/#recycle") is True
-            if has_bin:
-                b_size, b_files, b_folders = await dir_size_totals(
-                    client, path=f"{root}/#recycle", timeout=timeout
-                )
-                # The #recycle folder itself is one of the share's folders.
-                size, files, folders = size - b_size, files - b_files, folders - b_folders - 1
-        except Exception as e:  # noqa: BLE001 - the totals stand, with a note
-            logger.debug("Couldn't size %s/#recycle: %s", root, e)
-            note = " (these totals may include its recycle bin, which isn't deleted)"
-        lines.append(
-            f"  {root}: {max(files, 0):,} file(s) and {max(folders, 0):,} folder(s), "
-            f"{format_size(max(size, 0))}{note}{await _bin_note(client, root, recycle_bin_status)}"
-        )
-    return "\n".join(
-        [
-            "This would delete everything in these shared folders (their recycle bins and "
-            "the shared folders themselves are kept):",
-            *lines,
-        ]
-    )
-
-
-async def _bin_note(
-    client: DsmClient, root: str, recycle_bin_status: dict[str, bool] | None
-) -> str:
-    """Whether the preview's delete can be undone, so the user knows before saying yes."""
-    if recycle_bin_status is None:
-        return ""
-    try:
-        enabled = await ensure_recycle_status(client, root.strip("/"), recycle_bin_status)
-    except Exception as e:  # noqa: BLE001 - the preview stands without it
-        logger.debug("Recycle-bin check on %s failed: %s: %s", root, type(e).__name__, e)
-        return "; whether its recycle bin is on couldn't be checked"
-    if enabled:
-        return "; into its recycle bin (restore_from_recycle_bin brings items back)"
-    return "; \u26a0 no recycle bin: deleted permanently"
-
-
-async def share_contents(client: DsmClient, root: str) -> list[str]:
-    """The paths of a share's top-level items, its ``#recycle`` left out."""
-    items: list[str] = []
-    offset = 0
-    while True:
-        try:
-            data = await client.request(
-                "SYNO.FileStation.List",
-                "list",
-                params={"folder_path": root, "offset": offset, "limit": 1000, "filetype": "all"},
-            )
-        except SynologyError as e:
-            synology_error_response("Delete files", e)
-        files = data.get("files") or []
-        for entry in files:
-            name = str(entry.get("name", ""))
-            if name and name != "#recycle":
-                items.append(str(entry.get("path") or f"{root}/{name}"))
-        offset += len(files)
-        if not files or offset >= int(data.get("total", 0) or 0):
-            return items

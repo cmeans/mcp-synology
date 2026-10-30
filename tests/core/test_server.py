@@ -1829,11 +1829,9 @@ class TestInstructionComments:
 # themselves; the model otherwise read it like `pattern`, where a bare word matches anywhere.
 # +107 by #397 (QA round 1): create_download's `uri` says to give each URI its scheme,
 # since a comma starts another URI only when a scheme follows it.
-# +396 by #451: delete_files says a shared folder itself means its contents, deleted
-# after a preview the user confirms, and gains `confirm` for the one-time token.
-# +131 by #451 (QA round 1): it says the token flow outright (show the preview, pass the
-# token only after the user agrees), rather than claiming the user always confirms.
-PAYLOAD_BUDGET_CHARS = 56_322
+# +71 by #451 (#480): delete_files says a whole shared folder is refused, and to delete its
+# items by path.
+PAYLOAD_BUDGET_CHARS = 55_866
 
 
 class TestPayloadBudget:

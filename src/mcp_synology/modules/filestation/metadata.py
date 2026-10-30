@@ -292,28 +292,6 @@ async def get_dir_size(
     timeout: float = 120.0,
 ) -> str:
     """Calculate the total size of a directory."""
-    total_size, num_file, num_dir = await dir_size_totals(client, path=path, timeout=timeout)
-    return format_key_value(
-        [
-            ("Total size", format_size(total_size)),
-            ("Files", f"{num_file:,}"),
-            ("Directories", f"{num_dir:,}"),
-        ],
-        title=f"Directory Size: {normalize_path(path)}",
-    )
-
-
-async def dir_size_totals(
-    client: DsmClient,
-    *,
-    path: str,
-    timeout: float = 120.0,
-) -> tuple[int, int, int]:
-    """``(total_size, num_file, num_dir)`` of a directory, from DSM's DirSize task.
-
-    Errors are raised as ``get_dir_size`` reports them. ``delete_files`` uses it for the
-    preview of a share-root delete (#451).
-    """
     normalized = normalize_path(path)
 
     # DSM's DirSize task on a path that doesn't exist finishes at once with 0 bytes, 0
@@ -353,7 +331,7 @@ async def dir_size_totals(
     interval = 0.5
     poll_error: SynologyError | None = None
     unanswered: httpx.TransportError | None = None
-    result: tuple[int, int, int] | None = None
+    result: str | None = None
     status_errors: list[Any] = []
 
     try:
@@ -376,10 +354,17 @@ async def dir_size_totals(
                 status_errors = raw_errors if isinstance(raw_errors, list) else [raw_errors]
                 if status_errors:
                     break
-                result = (
-                    int(status.get("total_size", 0) or 0),
-                    int(status.get("num_file", 0) or 0),
-                    int(status.get("num_dir", 0) or 0),
+                total_size = status.get("total_size", 0)
+                num_file = status.get("num_file", 0)
+                num_dir = status.get("num_dir", 0)
+
+                result = format_key_value(
+                    [
+                        ("Total size", format_size(total_size)),
+                        ("Files", f"{num_file:,}"),
+                        ("Directories", f"{num_dir:,}"),
+                    ],
+                    title=f"Directory Size: {normalized}",
                 )
                 break
 
@@ -403,7 +388,7 @@ async def dir_size_totals(
                 "in the config."
             ),
         )
-    if result is not None:
+    if result:
         return result
 
     error_response(

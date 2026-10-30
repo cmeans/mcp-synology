@@ -249,6 +249,10 @@ Common causes:
 - The `new_name` argument to `rename` contains `/` (path separators are not
   allowed in rename — use copy/move to relocate a file).
 - A path is empty, all whitespace, or has no share component.
+- `delete_files` on a whole shared folder (`/video`), or on a path with a `.`, `..` or
+  empty part: a shared folder isn't deleted or emptied this way (#451; emptying one with
+  the user's confirmation is #484). Delete its items by path, or the shared folder itself
+  in DSM's Control Panel.
 - `upload_file` or `download_file` was called without `dest_folder`, and no
   default is configured (`default_upload_dir` or `default_download_dir` in the
   `filestation` module settings). The error's `param` is `dest_folder`.
