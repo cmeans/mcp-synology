@@ -289,7 +289,7 @@ def refuse_share_roots(paths: list[str]) -> None:
     for path in paths:
         parts = normalize_path(path).split("/")[1:]
         body = path.rstrip("/")
-        blank_last = "/" in body and not body.rsplit("/", 1)[-1].strip()
+        blank_last = not body.rsplit("/", 1)[-1].strip()
         if blank_last or any(part.strip() in ("", ".", "..") for part in parts):
             error_response(
                 ErrorCode.INVALID_PARAMETER,
@@ -298,7 +298,9 @@ def refuse_share_roots(paths: list[str]) -> None:
                 retryable=False,
                 param="paths",
                 value=path,
-                suggestion="Write the path out in full from the shared folder, e.g. /video/Movies.",
+                suggestion="Write the path out in full from the shared folder, e.g. "
+                "/video/Movies. An item whose name is only whitespace can't be reached "
+                "this way: delete it in DSM's File Station.",
             )
         if len(parts) == 1:
             error_response(

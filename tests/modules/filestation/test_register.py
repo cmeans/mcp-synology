@@ -1070,8 +1070,35 @@ class TestDiscoveryAtFirstConnection:
 
 
 class TestShareRootDeleteRefused:
-    """#451: the registered delete_files refuses a whole shared folder before any DSM
-    request (on DSM 7.2.2 to 7.4.1, tested, Delete on /<share> deletes the shared folder)."""
+    """#451: the registered delete_files refuses a whole shared folder before any delete is
+    sent (on DSM 7.2.2 to 7.4.1, tested, Delete on /<share> deletes the shared folder)."""
+
+    @pytest.mark.parametrize("path", ["/WRITABLE/x/ ", "/Writable/x/\t", "WRITABLE/x/  "])
+    async def test_a_blank_last_part_is_refused_before_the_share_name_is_rewritten(
+        self, monkeypatch: pytest.MonkeyPatch, path: str
+    ) -> None:
+        """The share-name rewrite normalizes the path, which strips a whitespace-only last
+        part: `/WRITABLE/x/ ` became `/writable/x`, deleting the folder (pre-QA on #480)."""
+        from mcp_synology.modules.filestation.helpers import normalize_path
+
+        def rewrite(_c: object, p: list[str], *_a: object, **_kw: object) -> list[str]:
+            # As ensure_known_shares does for a share named in another case.
+            return [normalize_path(x).replace("/WRITABLE", "/writable", 1) for x in p]
+
+        monkeypatch.setattr(
+            "mcp_synology.modules.filestation.helpers.ensure_known_shares",
+            AsyncMock(side_effect=lambda c, p, *a, **kw: rewrite(c, p)),
+        )
+        delete = AsyncMock(return_value="[+] Deleted")
+        monkeypatch.setattr("mcp_synology.modules.filestation.operations.delete_files", delete)
+        server, manager, ctx = _make_ctx()
+        manager.get_client = AsyncMock(return_value=MagicMock())
+        register(ctx)
+        with pytest.raises(ToolError) as exc:
+            await server._tool_manager._tools["delete_files"].fn(ctx=_fake_mcp_ctx(), paths=[path])
+        error = json.loads(str(exc.value))["error"]
+        assert (error["code"], error["value"]) == ("invalid_parameter", path)
+        delete.assert_not_awaited()
 
     @pytest.mark.parametrize("paths", [["/writable"], ["/writable/a", "writable/"], ["//writable"]])
     async def test_refused_before_any_delete(

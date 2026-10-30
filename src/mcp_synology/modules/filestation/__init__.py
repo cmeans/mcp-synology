@@ -960,8 +960,11 @@ def register(ctx: "RegisterContext") -> None:
             ] = True,
         ) -> str:
             client = await _fs_client()
-            paths = await ensure_known_shares(client, paths, known_shares)
+            # On the paths as given: the share-name rewrite below normalizes a path, which
+            # strips a whitespace-only last part (`/VIDEO/x/ ` -> `/video/x`; pre-QA on #480).
+            # delete_files checks the rewritten paths too.
             refuse_share_roots(paths)
+            paths = await ensure_known_shares(client, paths, known_shares)
             return _reply(
                 await delete_files(
                     client,
