@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Annotated, Literal
 from mcp.server.mcpserver import (
     Context,  # noqa: TC002 — runtime import needed for MCPServer context injection
 )
+from mcp.shared.exceptions import NoBackChannelError
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field, field_validator
 
@@ -1046,17 +1047,27 @@ def register(ctx: "RegisterContext") -> None:
                 )
         else:
             preview = await share_root_preview(client, roots, timeout=dir_size_timeout)
-            answer = None
+            others = [p for p in paths if normalize_path(p) not in roots]
+            if others:
+                # A yes covers the whole call, so the user sees all of it.
+                preview += "\nAlso deleted in this call:\n" + "\n".join(f"  {p}" for p in others)
+            asked = False
             if _can_elicit(ctx):
                 try:
                     answer = await ctx.elicit(
                         message=f"{preview}\n\nDelete all of it?", schema=_ConfirmShareDelete
                     )
-                except Exception as e:  # noqa: BLE001 - no way to ask: the token fallback
-                    # A client can declare elicitation over a transport with no channel
-                    # for server-initiated requests (the SDK's NoBackChannelError).
-                    logger.debug("Elicitation failed, falling back to a token: %s", e)
-            if answer is not None:
+                    asked = True
+                except NoBackChannelError as e:
+                    # The client declared elicitation, but the transport can't carry a
+                    # request from the server: the token fallback.
+                    logger.debug("Elicitation can't be sent, falling back to a token: %s", e)
+                except Exception as e:  # noqa: BLE001 - the user may have closed it: no delete
+                    # A dismissed dialog, a client error or an answer that doesn't fit is
+                    # not a yes, and never becomes a token the model could use alone.
+                    logger.debug("Elicitation failed: %s: %s", type(e).__name__, e)
+                    return f"{preview}\n\nNothing deleted: the user didn't confirm."
+            if asked:
                 if answer.action != "accept" or not answer.data.delete:
                     return f"{preview}\n\nNothing deleted: the user didn't confirm."
             else:

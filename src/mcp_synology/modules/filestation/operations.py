@@ -8,6 +8,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 import httpx
+from mcp.server.mcpserver.exceptions import ToolError
 
 from mcp_synology.core.errors import (
     FILESTATION_ERROR_CODES,
@@ -1281,7 +1282,24 @@ async def share_root_preview(client: DsmClient, roots: Sequence[str], *, timeout
 
     lines = []
     for root in roots:
-        size, files, folders = await dir_size_totals(client, path=root, timeout=timeout)
+        try:
+            size, files, folders = await dir_size_totals(client, path=root, timeout=timeout)
+        except ToolError as e:
+            # get_dir_size's own error names its `timeout` argument and suggests a
+            # subdirectory; for delete_files, say what the preview needs.
+            error_response(
+                ErrorCode.TIMEOUT if "timed out" in str(e) else ErrorCode.FILESTATION_ERROR,
+                f"Delete files refused: couldn't size {root} for the preview, so nothing was "
+                "deleted.",
+                retryable=False,
+                param="paths",
+                value=root,
+                suggestion=(
+                    "A large share can take longer than dir_size_timeout in the File Station "
+                    "settings: raise it, or delete the share's folders by their own paths "
+                    "(list_files lists them)."
+                ),
+            )
         note = ""
         try:
             has_bin = await path_exists(client, f"{root}/#recycle") is True

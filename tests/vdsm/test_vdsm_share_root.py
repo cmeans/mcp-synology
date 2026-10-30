@@ -49,6 +49,10 @@ async def test_share_root_contents_deleted_share_kept(
     assert f"/writable/sr-{persona}" in items and f"/writable/sr-{persona}-b" in items
     assert all(not i.endswith("/#recycle") for i in items)
 
-    await delete_files(client, paths=items, timeout=60)
+    # Only this test's items: /writable is shared by the whole vdsm session. What's
+    # checked on DSM is the listing (no #recycle) and that deleting items from the
+    # listing leaves the shared folder; the tool never sends /writable itself (unit tests).
+    mine = [i for i in items if i.startswith(f"/writable/sr-{persona}")]
+    await delete_files(client, paths=mine, timeout=60)
     assert "writable" in await _shares(client)  # the shared folder is still there
-    assert await share_contents(client, "/writable") == []
+    assert not set(mine) & set(await share_contents(client, "/writable"))

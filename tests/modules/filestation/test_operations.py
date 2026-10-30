@@ -3076,3 +3076,27 @@ class TestShareRootHelpers:
             "  /video: 1 file(s) and 0 folder(s), 1 KiB (these totals may include its recycle "
             "bin, which isn't deleted)"
         )
+
+    @respx.mock
+    async def test_preview_that_cant_size_the_share(self, mock_client: DsmClient) -> None:
+        from mcp_synology.core.errors import ErrorCode
+        from mcp_synology.core.formatting import error_response
+        from mcp_synology.modules.filestation import operations
+
+        def timed_out(*_a: object, **_k: object) -> None:
+            error_response(
+                ErrorCode.TIMEOUT, "Get directory size failed: timed out after 1s.", retryable=True
+            )
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "mcp_synology.modules.filestation.metadata.dir_size_totals",
+                AsyncMock(side_effect=timed_out),
+            )
+            with pytest.raises(ToolError) as exc:
+                await operations.share_root_preview(mock_client, ["/video"], timeout=1)
+        error = json.loads(str(exc.value))["error"]
+        assert error["code"] == "timeout" and error["param"] == "paths"
+        assert error["retryable"] is False
+        assert error["message"].startswith("Delete files refused: couldn't size /video")
+        assert "dir_size_timeout" in error["suggestion"]

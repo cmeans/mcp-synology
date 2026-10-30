@@ -1203,6 +1203,27 @@ class TestShareRootDelete:
             await fn(ctx=self._mcp_ctx(False), paths=["/writable"], confirm=token.group(1))
         delete.assert_not_awaited()
 
+    async def test_a_token_covers_the_whole_call(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import re
+
+        delete, _, fn = self._setup(monkeypatch)
+        first = await fn(ctx=self._mcp_ctx(False), paths=["/writable"])
+        token = re.search(r'confirm="([0-9a-f]{8})"', first)
+        assert token is not None
+        with pytest.raises(ToolError) as exc:
+            await fn(
+                ctx=self._mcp_ctx(False), paths=["/writable", "/other/x"], confirm=token.group(1)
+            )
+        assert json.loads(str(exc.value))["error"]["param"] == "confirm"
+        delete.assert_not_awaited()
+
+    async def test_other_paths_in_the_call_are_in_the_preview(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _, _, fn = self._setup(monkeypatch)
+        out = await fn(ctx=self._mcp_ctx(False), paths=["/writable", "/other/x"])
+        assert "\nAlso deleted in this call:\n  /other/x\n" in out
+
     async def test_confirm_without_a_share_root_is_refused(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1313,4 +1334,29 @@ class TestShareRootDeleteOverMcp:
         text = " ".join(getattr(c, "text", "") for c in result.content)
         assert not result.is_error, text
         assert 'confirm="' in text
+        delete.assert_not_awaited()
+
+    @pytest.mark.parametrize("reply", ["error", "invalid"])
+    async def test_a_failed_elicitation_is_not_a_yes(
+        self, monkeypatch: pytest.MonkeyPatch, reply: str
+    ) -> None:
+        # A dismissed dialog (an error) or an answer that doesn't fit must never become a
+        # token the model could use alone (pre-QA on #451).
+        from mcp import types
+        from mcp.client import Client
+
+        server, delete = self._server(monkeypatch)
+
+        async def on_elicit(
+            _context: object, params: types.ElicitRequestParams
+        ) -> types.ElicitResult | types.ErrorData:
+            if reply == "error":
+                return types.ErrorData(code=-32600, message="user closed the dialog")
+            return types.ElicitResult(action="accept", content={"delete": "maybe"})
+
+        async with Client(server, elicitation_callback=on_elicit, mode="legacy") as client:
+            result = await client.call_tool("delete_files", {"paths": ["/writable"]})
+        text = " ".join(getattr(c, "text", "") for c in result.content)
+        assert text.endswith("Nothing deleted: the user didn't confirm.")
+        assert 'confirm="' not in text
         delete.assert_not_awaited()
