@@ -126,7 +126,7 @@ async def _home_takes_only_its_listed_name(client: DsmClient, tmp_path: Path) ->
     with pytest.raises(ToolError, match="408"):
         await list_files(client, path="/Home")
     known: set[str] = set()
-    assert await ensure_known_shares(client, ["/Home/x", "Testshare"], known) == [
+    assert await ensure_known_shares(client, ["/Home/x", "Testshare"], known, "paths") == [
         "/home/x",
         "/testshare",
     ]
@@ -150,7 +150,7 @@ async def _home_takes_only_its_listed_name(client: DsmClient, tmp_path: Path) ->
             )
             assert len(data["files"]) == count and data["total"] == 2, (limit, data)
         await delete_files(client, paths=[f"/home/{top}"], recycle_bin_status={})
-        [share] = await ensure_known_shares(client, ["Home"], known)
+        [share] = await ensure_known_shares(client, ["Home"], known, "share")
         found = await list_recycle_bin(client, share=share, pattern=top)
         assert f"{top}/" in found, found
         status: dict[str, bool] = {}
