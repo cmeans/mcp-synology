@@ -1046,10 +1046,17 @@ def register(ctx: "RegisterContext") -> None:
                 )
         else:
             preview = await share_root_preview(client, roots, timeout=dir_size_timeout)
+            answer = None
             if _can_elicit(ctx):
-                answer = await ctx.elicit(
-                    message=f"{preview}\n\nDelete all of it?", schema=_ConfirmShareDelete
-                )
+                try:
+                    answer = await ctx.elicit(
+                        message=f"{preview}\n\nDelete all of it?", schema=_ConfirmShareDelete
+                    )
+                except Exception as e:  # noqa: BLE001 - no way to ask: the token fallback
+                    # A client can declare elicitation over a transport with no channel
+                    # for server-initiated requests (the SDK's NoBackChannelError).
+                    logger.debug("Elicitation failed, falling back to a token: %s", e)
+            if answer is not None:
                 if answer.action != "accept" or not answer.data.delete:
                     return f"{preview}\n\nNothing deleted: the user didn't confirm."
             else:

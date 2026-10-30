@@ -1233,3 +1233,84 @@ class TestShareRootDelete:
         await fn(ctx=mcp_ctx, paths=["writable/", " /writable ", "/x/a"])
         sent = delete.await_args.kwargs["paths"]
         assert sent == ["/writable/a", "/writable/b", "/x/a"]
+
+
+class TestShareRootDeleteOverMcp:
+    """#451 through a real MCP client: one that declares elicitation is asked; one that
+    doesn't gets the token preview."""
+
+    @staticmethod
+    def _server(monkeypatch: pytest.MonkeyPatch) -> tuple[MCPServer, AsyncMock]:
+        monkeypatch.setattr(
+            "mcp_synology.modules.filestation.helpers.ensure_known_shares",
+            AsyncMock(side_effect=lambda _c, paths, _k, *_a, **_kw: list(paths)),
+        )
+        monkeypatch.setattr(
+            "mcp_synology.modules.filestation.operations.share_root_preview",
+            AsyncMock(return_value="This would delete everything:\n  /writable: 1 file(s)"),
+        )
+        monkeypatch.setattr(
+            "mcp_synology.modules.filestation.operations.share_contents",
+            AsyncMock(return_value=["/writable/a"]),
+        )
+        delete = AsyncMock(return_value="[+] Deleted 1 item(s)")
+        monkeypatch.setattr("mcp_synology.modules.filestation.operations.delete_files", delete)
+        server, _, ctx = _make_ctx()
+        register(ctx)
+        return server, delete
+
+    async def test_a_client_with_elicitation_is_asked(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from mcp import types
+        from mcp.client import Client
+
+        server, delete = self._server(monkeypatch)
+        asked: list[str] = []
+
+        async def on_elicit(
+            _context: object, params: types.ElicitRequestParams
+        ) -> types.ElicitResult:
+            asked.append(params.message)
+            return types.ElicitResult(action="accept", content={"delete": True})
+
+        # Legacy mode: a session with a channel for server-initiated requests.
+        async with Client(server, elicitation_callback=on_elicit, mode="legacy") as client:
+            result = await client.call_tool("delete_files", {"paths": ["/writable"]})
+        text = " ".join(getattr(c, "text", "") for c in result.content)
+        assert not result.is_error, text
+        assert asked and asked[0].endswith("Delete all of it?")
+        assert delete.await_args.kwargs["paths"] == ["/writable/a"]
+
+    async def test_a_client_without_elicitation_gets_a_token(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from mcp.client import Client
+
+        server, delete = self._server(monkeypatch)
+        async with Client(server) as client:
+            result = await client.call_tool("delete_files", {"paths": ["/writable"]})
+        text = " ".join(getattr(c, "text", "") for c in result.content)
+        assert 'confirm="' in text and "Nothing deleted yet" in text
+        delete.assert_not_awaited()
+
+    async def test_a_client_whose_transport_cant_elicit_gets_a_token(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The modern (stateless) mode declares elicitation but has no back-channel for it.
+        from mcp import types
+        from mcp.client import Client
+
+        server, delete = self._server(monkeypatch)
+
+        async def on_elicit(
+            _context: object, params: types.ElicitRequestParams
+        ) -> types.ElicitResult:
+            return types.ElicitResult(action="accept", content={"delete": True})
+
+        async with Client(server, elicitation_callback=on_elicit) as client:
+            result = await client.call_tool("delete_files", {"paths": ["/writable"]})
+        text = " ".join(getattr(c, "text", "") for c in result.content)
+        assert not result.is_error, text
+        assert 'confirm="' in text
+        delete.assert_not_awaited()
