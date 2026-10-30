@@ -233,9 +233,10 @@ MODULE_INFO = ModuleInfo(
                 "Without a bin, and for anything inside a bin (`/<share>/#recycle`), deletion is "
                 "permanent. Paths are exact, not wildcard patterns, and if any path is missing "
                 "nothing is deleted. A shared folder itself (`/video`) means its contents: the "
-                "call first shows how many files and how much would go, and deletes only after "
-                "the user confirms. A long delete keeps running on the NAS and returns a handle "
-                "for file_task."
+                "call first shows how many files and how much would go, and the user confirms "
+                "in the client; a client that can't ask gets a one-time token in the reply: "
+                "show the preview, and pass the token as confirm only after the user agrees. A "
+                "long delete keeps running on the NAS and returns a handle for file_task."
             ),
             permission_tier=PermissionTier.WRITE,
             annotations=_ANNO_DESTRUCTIVE,
@@ -302,7 +303,12 @@ def _can_elicit(ctx: Context) -> bool:
                 types.ClientCapabilities(elicitation=types.ElicitationCapability())
             )
         )
-    except Exception:  # no request context (direct calls in tests): no elicitation
+    except ValueError:  # no request context (a direct call): no elicitation
+        return False
+    except Exception as e:  # noqa: BLE001 - never ask by guesswork, but say why not
+        # An SDK change would otherwise downgrade the user's own confirmation to a token
+        # the model holds, without a word (QA round 1 on #480).
+        logger.warning("Couldn't read the client's elicitation capability: %s", type(e).__name__)
         return False
 
 
@@ -1005,9 +1011,26 @@ def register(ctx: "RegisterContext") -> None:
             confirm = (confirm or "").strip() or None  # a blank optional string is absent
             client = await _fs_client()
             paths = await ensure_known_shares(client, paths, known_shares)
+            for path in paths:
+                # `/video/.` and `/video/x/..` name the shared folder too, and must never
+                # reach DSM's Delete; #470 refuses these for every tool (QA round 1 on #480).
+                if any(
+                    part.strip() in (".", "..") for part in normalize_path(path).split("/") if part
+                ):
+                    error_response(
+                        ErrorCode.INVALID_PARAMETER,
+                        f"Delete files refused: '.' and '..' parts aren't allowed ({path}). "
+                        "Nothing was deleted.",
+                        retryable=False,
+                        param="paths",
+                        value=path,
+                        suggestion="Write the path out in full from the shared folder, e.g. "
+                        "/video/Movies.",
+                    )
             roots = share_roots(paths)
             listed: frozenset[str] = frozenset()
             deadline: float | None = None
+            note = ""
             if roots:
                 if not recursive:
                     error_response(
@@ -1022,9 +1045,10 @@ def register(ctx: "RegisterContext") -> None:
                         suggestion="Leave recursive at its default (true), or delete the "
                         "share's items by their own paths.",
                     )
-                expanded = await _confirm_share_roots(ctx, client, paths, roots, confirm)
-                if isinstance(expanded, str):
-                    return _reply(expanded)
+                confirmed = await _confirm_share_roots(ctx, client, paths, roots, confirm)
+                if isinstance(confirmed, str):
+                    return _reply(confirmed)
+                expanded, note = confirmed
                 listed = frozenset(p for p in expanded if p not in paths)
                 deadline = time.monotonic() + delete_wait
                 paths = expanded
@@ -1039,7 +1063,8 @@ def register(ctx: "RegisterContext") -> None:
                     suggestion="Call delete_files again without confirm.",
                 )
             return _reply(
-                await delete_files(
+                note
+                + await delete_files(
                     client,
                     paths=paths,
                     recursive=recursive,
@@ -1058,9 +1083,10 @@ def register(ctx: "RegisterContext") -> None:
         paths: list[str],
         roots: list[str],
         confirm: str | None,
-    ) -> list[str] | str:
-        """Confirm a delete of whole shared folders' contents (#451): the paths to delete,
-        or the reply to give instead (the preview, or "not confirmed")."""
+    ) -> tuple[list[str], str] | str:
+        """Confirm a delete of whole shared folders' contents (#451): the paths to delete
+        and a note to put before the result, or the reply to give instead (the preview, or
+        "not confirmed")."""
         others = [p for p in paths if normalize_path(p) not in roots]
         # The call's other paths are checked first, so a mistyped one is refused before
         # the user is asked (pre-QA on #451), as delete_files refuses it (#162).
@@ -1083,13 +1109,10 @@ def register(ctx: "RegisterContext") -> None:
                 value=paths,
                 suggestion=missing_paths_suggestion(missing),
             )
-        contents = {root: await share_contents(client, root) for root in roots}
-        if not others and not any(contents.values()):
-            # Nothing to confirm (pre-QA on #451).
-            verb = "has" if len(roots) == 1 else "have"
-            return "Nothing to delete: " + ", ".join(roots) + f" {verb} nothing in it."
+        note = ""
         if confirm is not None:
-            if not share_root_tokens.redeem(confirm, paths):
+            stored = share_root_tokens.redeem(confirm, paths)
+            if stored is None:
                 error_response(
                     ErrorCode.INVALID_PARAMETER,
                     "Delete files failed: that confirm token isn't valid. A token is good once, "
@@ -1100,7 +1123,28 @@ def register(ctx: "RegisterContext") -> None:
                     value=confirm,
                     suggestion="Call delete_files again without confirm for a new preview.",
                 )
+            # Only what the preview listed, less what's gone since: never an item added
+            # after the user saw the preview (QA round 1 on #480).
+            contents = {}
+            added = 0
+            for root in roots:
+                now = await share_contents(client, root)
+                present = set(now)
+                contents[root] = [p for p in stored.get(root, []) if p in present]
+                added += len(present - set(stored.get(root, [])))
+            if added:
+                note = (
+                    f"{added:,} item(s) added since the preview weren't deleted; call "
+                    "delete_files on the shared folder again for a new preview of them.\n\n"
+                )
+            if not others and not any(contents.values()):
+                return note + "Nothing deleted: the items the preview listed are gone."
         else:
+            contents = {root: await share_contents(client, root) for root in roots}
+            if not others and not any(contents.values()):
+                # Nothing to confirm (pre-QA on #451).
+                verb = "has" if len(roots) == 1 else "have"
+                return "Nothing to delete: " + ", ".join(roots) + f" {verb} nothing in it."
             preview = await share_root_preview(
                 client, roots, timeout=dir_size_timeout, recycle_bin_status=recycle_status
             )
@@ -1134,7 +1178,7 @@ def register(ctx: "RegisterContext") -> None:
                 if answer.action != "accept" or not answer.data.delete:
                     return f"{preview}\n\nNothing deleted: the user didn't confirm."
             else:
-                token = share_root_tokens.issue(paths)
+                token = share_root_tokens.issue(paths, contents)
                 return (
                     f"{preview}\n\nNothing deleted yet. Show this to the user, and only if they "
                     f'agree, call delete_files again with the same paths and confirm="{token}" '
@@ -1150,7 +1194,7 @@ def register(ctx: "RegisterContext") -> None:
                 expanded.extend(contents[normalize_path(path)])
             else:
                 expanded.append(path)
-        return list(dict.fromkeys(expanded))  # a share named twice is listed once
+        return list(dict.fromkeys(expanded)), note  # a share named twice is listed once
 
     if "upload_file" in ctx.allowed_tools:
 

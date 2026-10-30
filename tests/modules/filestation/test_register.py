@@ -1080,6 +1080,8 @@ class TestShareRootDelete:
         monkeypatch: pytest.MonkeyPatch,
         contents: list[str] | None = None,
         missing: list[tuple[str, int]] | None = None,
+        listings_in_turn: list[list[str]] | None = None,
+        missing_error: Exception | None = None,
     ) -> tuple[AsyncMock, AsyncMock, object]:
         monkeypatch.setattr(
             "mcp_synology.modules.filestation.helpers.ensure_known_shares",
@@ -1091,15 +1093,15 @@ class TestShareRootDelete:
         monkeypatch.setattr(
             "mcp_synology.modules.filestation.operations.share_root_preview", preview
         )
-        monkeypatch.setattr(
-            "mcp_synology.modules.filestation.operations.share_contents",
-            AsyncMock(
-                return_value=["/writable/a", "/writable/b"] if contents is None else contents
-            ),
+        listings = AsyncMock(
+            return_value=["/writable/a", "/writable/b"] if contents is None else contents
         )
+        if listings_in_turn is not None:  # one listing per call, in order
+            listings = AsyncMock(side_effect=listings_in_turn)
+        monkeypatch.setattr("mcp_synology.modules.filestation.operations.share_contents", listings)
         monkeypatch.setattr(
             "mcp_synology.modules.filestation.helpers.find_missing_paths",
-            AsyncMock(return_value=missing or []),
+            AsyncMock(return_value=missing or [], side_effect=missing_error),
         )
         delete = AsyncMock(return_value="[+] Deleted")
         monkeypatch.setattr("mcp_synology.modules.filestation.operations.delete_files", delete)
@@ -1198,7 +1200,8 @@ class TestShareRootDelete:
         first = await fn(ctx=self._mcp_ctx(False), paths=["/writable"])
         token = re.search(r'confirm="([0-9a-f]{8})"', first)
         assert token is not None
-        monkeypatch.setattr("mcp_synology.modules.filestation.operations.SHARE_ROOT_TOKEN_TTL", 0)
+        # The clock moves past the TTL (QA round 1 on #480: patching the TTL after the
+        # token was issued did nothing).
         import time as time_module
 
         real = time_module.monotonic
@@ -1208,6 +1211,87 @@ class TestShareRootDelete:
         with pytest.raises(ToolError, match="confirm token isn't valid"):
             await fn(ctx=self._mcp_ctx(False), paths=["/writable"], confirm=token.group(1))
         delete.assert_not_awaited()
+
+    async def test_a_token_deletes_only_what_the_preview_listed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An item added between the preview and the confirm isn't deleted, and one gone
+        since is dropped; the reply says how many were added (QA round 1 on #480)."""
+        import re
+
+        delete, _, fn = self._setup(
+            monkeypatch,
+            listings_in_turn=[
+                ["/writable/a", "/writable/b"],  # the preview's listing
+                ["/writable/b", "/writable/NEW"],  # at the confirm: a gone, NEW added
+            ],
+        )
+        first = await fn(ctx=self._mcp_ctx(False), paths=["/writable"])
+        token = re.search(r'confirm="([0-9a-f]{8})"', first)
+        assert token is not None
+        out = await fn(ctx=self._mcp_ctx(False), paths=["/writable"], confirm=token.group(1))
+        assert delete.await_args.kwargs["paths"] == ["/writable/b"]
+        assert out.startswith("1 item(s) added since the preview weren't deleted; call")
+
+    async def test_a_token_whose_items_are_all_gone_deletes_nothing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import re
+
+        delete, _, fn = self._setup(monkeypatch, listings_in_turn=[["/writable/a"], []])
+        first = await fn(ctx=self._mcp_ctx(False), paths=["/writable"])
+        token = re.search(r'confirm="([0-9a-f]{8})"', first)
+        assert token is not None
+        out = await fn(ctx=self._mcp_ctx(False), paths=["/writable"], confirm=token.group(1))
+        assert out == "Nothing deleted: the items the preview listed are gone."
+        delete.assert_not_awaited()
+
+    @pytest.mark.parametrize("path", ["/writable/.", "/writable/x/..", "writable/ .. "])
+    async def test_a_dot_segment_never_reaches_dsm(
+        self, monkeypatch: pytest.MonkeyPatch, path: str
+    ) -> None:
+        """`/writable/.` names the shared folder too, and share_roots reads paths
+        lexically; it's refused before anything (QA round 1 on #480)."""
+        delete, preview, fn = self._setup(monkeypatch)
+        with pytest.raises(ToolError) as exc:
+            await fn(ctx=self._mcp_ctx(False), paths=[path])
+        error = json.loads(str(exc.value))["error"]
+        assert (error["code"], error["param"]) == ("invalid_parameter", "paths")
+        preview.assert_not_awaited()
+        delete.assert_not_awaited()
+
+    def test_can_elicit_outside_a_request_is_false(self) -> None:
+        from mcp_synology.modules.filestation import _can_elicit
+
+        ctx = MagicMock()
+        type(ctx).request_context = property(lambda _s: (_ for _ in ()).throw(ValueError("no")))
+        assert _can_elicit(ctx) is False
+
+    def test_can_elicit_logs_an_unexpected_error(self, caplog: pytest.LogCaptureFixture) -> None:
+        """An SDK change mustn't silently turn the user's confirmation into a token the
+        model holds (QA round 1 on #480)."""
+        import logging
+
+        from mcp_synology.modules.filestation import _can_elicit
+
+        ctx = MagicMock()
+        ctx.request_context.session.check_client_capability.side_effect = AttributeError("x")
+        with caplog.at_level(logging.WARNING, logger="mcp_synology.modules.filestation"):
+            assert _can_elicit(ctx) is False
+        assert "Couldn't read the client's elicitation capability: AttributeError" in caplog.text
+
+    async def test_a_dsm_error_checking_other_paths_is_structured(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from mcp_synology.core.errors import SynologyError
+
+        _, preview, fn = self._setup(monkeypatch, missing_error=SynologyError("boom", code=401))
+        with pytest.raises(ToolError) as exc:
+            await fn(ctx=self._mcp_ctx(False), paths=["/writable", "/other/x"])
+        assert (
+            "Delete files failed (DSM error 401)" in json.loads(str(exc.value))["error"]["message"]
+        )
+        preview.assert_not_awaited()
 
     async def test_a_token_covers_the_whole_call(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import re

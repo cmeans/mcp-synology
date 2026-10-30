@@ -1802,7 +1802,9 @@ class TestInstructionComments:
 # since a comma starts another URI only when a scheme follows it.
 # +396 by #451: delete_files says a shared folder itself means its contents, deleted
 # after a preview the user confirms, and gains `confirm` for the one-time token.
-PAYLOAD_BUDGET_CHARS = 56_191
+# +131 by #451 (QA round 1): it says the token flow outright (show the preview, pass the
+# token only after the user agrees), rather than claiming the user always confirms.
+PAYLOAD_BUDGET_CHARS = 56_322
 
 
 class TestPayloadBudget:

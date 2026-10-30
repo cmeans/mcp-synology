@@ -943,19 +943,23 @@ async def delete_files(
             # Never start a second delete of a path that already has one running (#245).
             handoff = Handoff(Handle("delete", str(running["taskid"])), running)
         else:
-            handoff = await _delete_one_path(
-                client,
-                p,
-                recursive=recursive,
-                delete_version=delete_version,
-                # Past the deadline no item starts, and one started just before it waits
-                # only what's left (at least 5 s), so the call stays near its wait (#451).
-                timeout=timeout
-                if deadline is None
-                else min(timeout, max(5.0, deadline - time.monotonic())),
-                done=deleted,
-                on_progress=on_progress,
-            )
+            try:
+                handoff = await _delete_one_path(
+                    client,
+                    p,
+                    recursive=recursive,
+                    delete_version=delete_version,
+                    # Past the deadline no item starts, and one started just before it
+                    # waits only what's left (at least 5 s), so the call stays near its
+                    # wait (#451).
+                    timeout=timeout
+                    if deadline is None
+                    else min(timeout, max(5.0, deadline - time.monotonic())),
+                    done=deleted,
+                    on_progress=on_progress,
+                )
+            except ToolError as e:
+                raise _with_progress_so_far(e, deleted, normalized[i + 1 :]) from None
         if handoff is not None:
             handle = handoff.handle
             # No DSM request between the handoff and the reply: a recycle-bin probe to a
@@ -1077,6 +1081,25 @@ async def _delete_summary(
     )
 
     return "\n".join(lines)
+
+
+def _with_progress_so_far(error: ToolError, done: list[str], rest: list[str]) -> ToolError:
+    """A delete's error, saying what was already deleted and what wasn't started: a
+    shared folder's items are many deletes, and a failure partway otherwise left the user
+    unable to tell what's left (QA round 1 on #480)."""
+    if not done and not rest:
+        return error
+    try:
+        body = json.loads(str(error))
+        message = body["error"]["message"]
+    except (ValueError, KeyError, TypeError):
+        return error
+    if done and "Already deleted" not in message:
+        message += _already_done("Delete", done)
+    if rest:
+        message = message.rstrip(".") + f". Not started: {short_list(rest)}."
+    body["error"]["message"] = message
+    return ToolError(json.dumps(body))
 
 
 def _listed_paths(paths: Sequence[str]) -> list[str]:
@@ -1304,25 +1327,30 @@ class ShareRootTokens:
     """One-time tokens a share-root preview hands out, for clients without elicitation.
 
     A token is valid once, for ``SHARE_ROOT_TOKEN_TTL`` seconds, and only for the same
-    paths the preview covered, so a delete can only follow a preview of what it deletes.
+    paths the preview covered. It keeps each share's listing from the preview, so the
+    delete it confirms is of those items, never of anything added since (QA round 1 on
+    #480). Tokens are per server process, not per MCP session.
     """
 
     def __init__(self) -> None:
-        self._tokens: dict[str, tuple[tuple[str, ...], float]] = {}
+        self._tokens: dict[str, tuple[tuple[str, ...], dict[str, list[str]], float]] = {}
 
-    def issue(self, paths: Sequence[str]) -> str:
+    def issue(self, paths: Sequence[str], contents: dict[str, list[str]]) -> str:
         now = time.monotonic()
-        self._tokens = {t: v for t, v in self._tokens.items() if v[1] > now}
+        self._tokens = {t: v for t, v in self._tokens.items() if v[2] > now}
         token = secrets.token_hex(4)
-        self._tokens[token] = (_path_key(paths), now + SHARE_ROOT_TOKEN_TTL)
+        self._tokens[token] = (_path_key(paths), dict(contents), now + SHARE_ROOT_TOKEN_TTL)
         return token
 
-    def redeem(self, token: str, paths: Sequence[str]) -> bool:
+    def redeem(self, token: str, paths: Sequence[str]) -> dict[str, list[str]] | None:
+        """The listings the preview showed, or None for a token that isn't valid here."""
         entry = self._tokens.pop(token.strip(), None)
         if entry is None:
-            return False
-        covered, expires = entry
-        return expires > time.monotonic() and covered == _path_key(paths)
+            return None
+        covered, contents, expires = entry
+        if expires > time.monotonic() and covered == _path_key(paths):
+            return contents
+        return None
 
 
 async def share_root_preview(
