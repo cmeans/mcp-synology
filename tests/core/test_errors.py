@@ -110,3 +110,47 @@ class TestErrorFromCode:
         assert isinstance(err, SynologyError)
         assert err.code == 9999
         assert "9999" in str(err)
+
+
+class TestDetachedCopy:
+    """QA round 2 on #461: a failed login kept for other waiters keeps no frames."""
+
+    def test_keeps_type_and_fields_drops_traceback_and_cause(self) -> None:
+        from mcp_synology.core.errors import DsmHttpError, detached_copy
+
+        def login(passwd: str) -> None:
+            try:
+                raise ValueError(passwd)
+            except ValueError as inner:
+                raise DsmHttpError("HTTP 502", 502, suggestion="s") from inner
+
+        try:
+            login("Hunter2x")
+        except DsmHttpError as e:
+            original = e
+        copy = detached_copy(original)
+        assert type(copy) is DsmHttpError and copy is not original
+        assert (str(copy), copy.status, copy.retryable, copy.suggestion) == (
+            "HTTP 502",
+            502,
+            True,
+            "s",
+        )
+        assert copy.__traceback__ is None
+        assert copy.__cause__ is None and copy.__context__ is None
+        assert original.__traceback__ is not None  # the original is untouched
+
+    def test_a_type_it_cannot_rebuild_gives_none(self) -> None:
+        """pydantic's ValidationError takes its own constructor arguments: no copy, and
+        the caller keeps the original rather than a TypeError (pre-QA on QA round 2)."""
+        from pydantic import BaseModel, ValidationError
+
+        from mcp_synology.core.errors import detached_copy
+
+        class Model(BaseModel):
+            n: int
+
+        try:
+            Model(n="x")  # type: ignore[arg-type]
+        except ValidationError as e:
+            assert detached_copy(e) is None

@@ -41,12 +41,24 @@ Fix:
    and reports which step fails (lookup → request → response).
 2. If 2FA is required, or DSM rejected the stored device token, run
    `mcp-synology setup` and complete the OTP exchange. This stores a new device
-   token in the keyring so subsequent runs do not need the OTP code.
+   token in the keyring so subsequent runs do not need the OTP code. A `device_id`
+   set in the environment or the config file overrides the keyring: remove it there
+   first (the error's suggestion says where it comes from).
 3. If the IP is auto-blocked, sign in to DSM directly and clear the entry at
    **Control Panel → Security → Account → Auto Block → Allow / Block List**.
 4. Verify the account has access to FileStation: **Control Panel → User & Group
    → [account] → Edit → Applications**. The account must be allowed to use
    File Station.
+
+When DSM refuses the credentials, the server doesn't send them again: every later
+tool call gets the same error, so a model's retries can't trip DSM's Auto Block.
+It tries again once the credentials change or the server restarts. `mcp-synology
+setup` stores new ones in the keyring, and the running server picks them up; a
+value set in `SYNOLOGY_USERNAME`, `SYNOLOGY_PASSWORD` or `SYNOLOGY_DEVICE_ID`, or
+in the config file's `auth:` section, overrides the keyring and must be changed
+there (then restart the server). The error's suggestion names where the refused
+credential comes from: the password for a wrong one (400), the device token for a
+2FA refusal (403, 404, 406); a disabled account (401) needs an administrator.
 
 `auth_failed` is **not** retryable. mcp-synology will not auto-retry on this
 code — fix the underlying credential or 2FA state before re-running.

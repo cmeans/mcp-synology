@@ -498,7 +498,7 @@ mcp-synology fully supports DSM accounts with two-factor authentication. It's au
 2. **Silent re-auth** — subsequent logins use the device token automatically (no OTP prompts)
 3. **Per-instance** — each NAS config gets its own device token, so mixed 2FA/non-2FA setups work fine
 
-Device tokens have no fixed lifetime: they last until the trusted device is removed in DSM (Personal > Security > Sign-in Activity) or DSM otherwise stops accepting it. If DSM rejects the stored token, the error says so; run `mcp-synology setup` again to sign in with a new 2FA code.
+Device tokens have no fixed lifetime: they last until the trusted device is removed in DSM (Personal > Security > Sign-in Activity) or DSM otherwise stops accepting it. If DSM rejects the stored token, the error says so; run `mcp-synology setup` again to sign in with a new 2FA code (if `device_id` is set in the environment, `SYNOLOGY_DEVICE_ID`, or the config file, it overrides the keyring: remove it there first, then restart the server after `setup`).
 
 ## Keyring & Credentials
 
