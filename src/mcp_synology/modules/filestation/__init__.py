@@ -1040,8 +1040,13 @@ def register(ctx: "RegisterContext") -> None:
                 )
 
             client = await _fs_client()
+            # Name the setting when the path came from it, not an argument the caller
+            # never passed (QA round 1 on #470).
             [effective_dest] = await ensure_known_shares(
-                client, [effective_dest], known_shares, "dest_folder"
+                client,
+                [effective_dest],
+                known_shares,
+                "dest_folder" if dest_folder else "default_upload_dir",
             )
 
             async def _progress(current: int, total: int | None) -> None:

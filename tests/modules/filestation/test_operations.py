@@ -170,6 +170,14 @@ class TestRename:
         assert body["error"]["code"] == "invalid_parameter"
         assert body["error"]["param"] == "new_name"
 
+    @pytest.mark.parametrize("name", [".", "..", " .. "])
+    async def test_rename_rejects_dot_names(self, mock_client: DsmClient, name: str) -> None:
+        # QA round 1 on #470: `.`/`..` are refused in paths, and as Photos folder names.
+        with pytest.raises(ToolError) as exc:
+            await rename(mock_client, path="/video/a.txt", new_name=name)
+        error = json.loads(str(exc.value))["error"]
+        assert (error["code"], error["param"]) == ("invalid_parameter", "new_name")
+
     @respx.mock
     async def test_rename_error(self, mock_client: DsmClient) -> None:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
@@ -258,9 +266,8 @@ class TestRename:
         ("path", "new_name"),
         [
             ("/video/a", "a"),  # its own name: the "existing" new path is the source
-            ("/video/a", "."),  # a folder, not an entry in it
-            ("/video/a", ".."),
             ("/video", "music"),  # a share root: no parent folder to look in
+            # `.` and `..` no longer reach DSM: test_rename_rejects_dot_names
         ],
     )
     async def test_rename_1200_claims_no_taken_name_it_cant_know(

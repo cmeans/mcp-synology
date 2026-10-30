@@ -843,6 +843,26 @@ class TestFilestationShareValidation:
         assert "'.' and '..' parts aren't allowed" in error["message"]
         domain.assert_not_awaited()
 
+    async def test_a_bad_default_upload_dir_is_named(self, tmp_path: Path) -> None:
+        # QA round 1 on #470: the error names the setting, not `dest_folder`, which the
+        # caller never passed.
+        local = tmp_path / "file.txt"
+        local.write_text("x")
+        server, manager, ctx = _make_ctx(
+            allowed={"upload_file"},
+            settings={"default_upload_dir": "/writable/../x"},
+            shared_paths=[str(tmp_path)],
+        )
+        client = MagicMock()
+        client.request = AsyncMock(return_value={"shares": [{"name": "writable"}]})
+        manager.get_client = AsyncMock(return_value=client)
+        register(ctx)
+        with pytest.raises(ToolError) as exc:
+            await server._tool_manager._tools["upload_file"].fn(
+                ctx=_fake_mcp_ctx(), local_path=str(local)
+            )
+        assert json.loads(str(exc.value))["error"]["param"] == "default_upload_dir"
+
     def test_every_path_tool_is_covered(self) -> None:
         # A new File Station tool that takes a NAS path must go through the share and
         # dot-part checks, and be listed here (#449).

@@ -146,11 +146,12 @@ async def rename(
     """Rename a file or folder."""
     normalized = normalize_path(path)
 
-    # Validate new_name is just a name, not a path
-    if "/" in new_name:
+    # Validate new_name is just a name, not a path (nor `.` or `..`, as #449 refuses in
+    # paths and Photos refuses for folder names)
+    if "/" in new_name or new_name.strip() in (".", ".."):
         error_response(
             ErrorCode.INVALID_PARAMETER,
-            "Rename failed: new_name should be just a filename, not a path.",
+            "Rename failed: new_name should be just a filename, not a path, '.' or '..'.",
             retryable=False,
             param="new_name",
             value=new_name,
