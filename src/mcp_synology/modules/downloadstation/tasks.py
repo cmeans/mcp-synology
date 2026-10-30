@@ -580,6 +580,9 @@ _URI_START = re.compile(
 )
 
 
+_EDGES = re.compile(r"^[\s,]+|[\s,]+\Z")
+
+
 def split_uris(text: str) -> list[str]:
     """Split create_download's ``uri`` on the commas that start another URI (#397).
 
@@ -594,8 +597,9 @@ def split_uris(text: str) -> list[str]:
             pieces[-1] += "," + piece
         else:
             pieces.append(piece)
-    # Any whitespace, a pasted no-break space included (QA round 2 on #459).
-    return [u for u in (p.strip().strip(",").strip() for p in pieces) if u]
+    # Any whitespace, a pasted no-break space included, and commas between it (QA rounds
+    # 2 and 3 on #459).
+    return [u for u in (_EDGES.sub("", p) for p in pieces) if u]
 
 
 async def create_download(

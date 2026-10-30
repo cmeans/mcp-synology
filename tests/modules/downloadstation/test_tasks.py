@@ -849,6 +849,10 @@ class TestSplitUris:
             (" http://a/1 ,,", ["http://a/1"]),
             # A pasted no-break space is stripped like any other (QA round 2).
             ("https://a/x,\xa0https://b", ["https://a/x", "https://b"]),
+            # Commas and whitespace interleaved at an edge (QA round 3).
+            ("https://a,  ,  ", ["https://a"]),
+            (", ,https://b", ["https://b"]),
+            ("https://a,\xa0", ["https://a"]),
             (",,", []),
             ("", []),
         ],
