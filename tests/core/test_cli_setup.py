@@ -257,7 +257,7 @@ class TestConnectAndLogin:
 
         async def request(api: str, method: str, *args: object, **kwargs: object) -> dict[str, str]:
             if method == "logout":
-                await asyncio.sleep(30)
+                await asyncio.sleep(1)
             return {"sid": "test-sid"}
 
         config = _make_test_app_config()
@@ -271,7 +271,7 @@ class TestConnectAndLogin:
             else:
                 client.sid = "test-sid"
                 await setup_mod._setup_login(config, "a", "pw", "s")
-        assert time.perf_counter() - start < 5
+        assert time.perf_counter() - start < 0.5
 
     async def test_connect_and_login_rejects_non_appconfig(self) -> None:
         with pytest.raises(RuntimeError, match="AppConfig"):

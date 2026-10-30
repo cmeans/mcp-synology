@@ -323,9 +323,12 @@ async def list_files(
     check_failed = False
     if may_hide and not recycle_seen:
         try:
-            recycle_hidden = await path_exists(client, f"{normalized}/#recycle") is True
+            found = await path_exists(client, f"{normalized}/#recycle")
+            recycle_hidden = found is True
+            # None: getinfo showed neither (a per-entry 407, say), as unknown as a failure.
+            check_failed = found is None
         except Exception as e:  # the count is a nicety; the listing itself worked
-            logger.debug("Couldn't check for %s/#recycle: %s", normalized, e)
+            logger.debug("Couldn't check for %s/#recycle: %s: %s", normalized, type(e).__name__, e)
             check_failed = True
     total = dsm_total - 1 if recycle_hidden else dsm_total
     more = next_offset < dsm_total
@@ -336,10 +339,15 @@ async def list_files(
             rows=[],
             title=f"Contents of {normalized} ({total:,} items)",
         )
+        maybe = (
+            " (the total may include a hidden #recycle: the check for it failed)"
+            if check_failed
+            else ""
+        )
         if more:
             result += f"\n\nUse offset={next_offset} to see more."
         elif offset > 0 and total > 0:
-            result += f"\n\nNo items from offset={offset}: there are {total:,}."
+            result += f"\n\nNo items from offset={offset}: there are {total:,}{maybe}."
         return result
 
     headers = ["Type", "Name", "Size", "Modified"]

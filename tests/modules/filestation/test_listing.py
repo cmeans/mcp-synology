@@ -515,6 +515,44 @@ class TestListFiles:
         )
 
     @respx.mock
+    @pytest.mark.parametrize("getinfo", ["502", "407"])
+    async def test_an_unknown_check_on_a_later_page(
+        self, mock_client: DsmClient, getinfo: str
+    ) -> None:
+        # Pre-QA on QA round 2: a failed check, or one that shows neither (a per-entry 407),
+        # gives the caveat on a later page too, never a range over DSM's total.
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = request.url.params
+            if params["method"] == "getinfo":
+                if getinfo == "502":
+                    return httpx.Response(502)
+                return httpx.Response(
+                    200, json={"success": True, "data": {"files": [{"code": 407}]}}
+                )
+            return httpx.Response(200, json=self._page(["c.txt"], total=4))
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        result = await list_files(mock_client, path="/video", offset=3, limit=5, hide_recycle=True)
+        assert result.endswith(
+            "Showing 1 of 4 items (the total may include a hidden #recycle: the check for it "
+            "failed). Last page."
+        )
+
+    @respx.mock
+    async def test_an_unknown_check_past_the_end(self, mock_client: DsmClient) -> None:
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            if request.url.params["method"] == "getinfo":
+                return httpx.Response(502)
+            return httpx.Response(200, json=self._page([], total=4))
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        result = await list_files(mock_client, path="/video", offset=9, hide_recycle=True)
+        assert result.endswith(
+            "No items from offset=9: there are 4 (the total may include a hidden #recycle: the "
+            "check for it failed)."
+        )
+
+    @respx.mock
     async def test_only_recycle_is_an_empty_folder(self, mock_client: DsmClient) -> None:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._folder(["#recycle"]))
         result = await list_files(mock_client, path="/video", limit=1, hide_recycle=True)
