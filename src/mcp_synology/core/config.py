@@ -429,7 +429,8 @@ def _shown_location(err: Any, loc_parts: list[str]) -> str:
                 # `Password1`, close to `password` (QA round 2 on #469).
                 return (f"{where}." if where else "") + (
                     f'<an unknown key close to "{by_lower[close[0]]}", not shown since it may '
-                    "be part of a password>"
+                    "be part of a password (a misspelling, or a comma inside {…} splitting a "
+                    "value: quote it)>"
                 )
             return (
                 (f"{where}." if where else "")

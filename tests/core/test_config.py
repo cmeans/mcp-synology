@@ -151,7 +151,7 @@ class TestAppConfig:
         # (QA round 2 on #469).
         shown = (
             'auth.<an unknown key close to "password", not shown since it may be part of a '
-            "password>"
+            "password (a misspelling, or a comma inside {…} splitting a value: quote it)>"
             if section == "auth"
             else f"{section}.{key}"
         )
@@ -376,7 +376,8 @@ class TestAppConfig:
             AppConfig(**raw)
         assert (
             '  - modules.filestation.<an unknown key close to "permission", not shown since it '
-            "may be part of a password>: Extra inputs are not permitted"
+            "may be part of a password (a misspelling, or a comma inside {…} splitting a value: "
+            "quote it)>: Extra inputs are not permitted"
         ) in (format_validation_error(exc.value))
 
     def test_a_near_miss_in_another_case_names_the_key_it_is_close_to(self) -> None:
@@ -391,7 +392,8 @@ class TestAppConfig:
             AppConfig(**raw)
         assert (
             '  - auth.<an unknown key close to "username", not shown since it may be part of a '
-            "password>: Extra inputs are not permitted"
+            "password (a misspelling, or a comma inside {…} splitting a value: quote it)>: "
+            "Extra inputs are not permitted"
         ) in (format_validation_error(exc.value))
 
     def test_a_non_text_key_in_module_settings_is_not_shown(self) -> None:
