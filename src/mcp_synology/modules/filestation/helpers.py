@@ -318,9 +318,12 @@ def escape_multi_path(paths: list[str]) -> str:
 def matches_pattern(filename: str, pattern: str) -> bool:
     """Check if a filename matches a wildcard pattern (case-insensitive).
 
-    Only ``*`` and ``?`` are wildcards; everything else, ``[...]`` included, matches
-    itself, as in DSM's own patterns. With fnmatch, ``*[1080p]*`` was a character class
-    that left out every name containing 1, 0, 8 or p (#396).
+    Only ``*`` and ``?`` are wildcards; everything else, ``[...]`` and commas included,
+    matches itself, and the pattern matches the whole name. DSM's own patterns don't read
+    ``[...]`` as a class either, but differ otherwise: a comma separates alternatives, and
+    a pattern without ``*`` or ``?`` matches anywhere (``dsm_pattern_matcher``). With
+    fnmatch, ``*[1080p]*`` was a character class that left out every name containing 1,
+    0, 8 or p (#396).
     """
     body = re.escape(pattern).replace(r"\*", ".*").replace(r"\?", ".")
     return re.fullmatch(body, filename, re.IGNORECASE | re.DOTALL) is not None

@@ -286,6 +286,16 @@ class TestMatchesPattern:
         assert matches_pattern("x.y", "x.y")
         assert not matches_pattern("xzy", "x.y")
 
+    def test_bare_word_matches_only_the_whole_name(self) -> None:
+        # The tool description says so: unlike DSM's `pattern`, no "anywhere" match.
+        assert not matches_pattern("Show.sample.mkv", "sample")
+        assert matches_pattern("sample", "SAMPLE")
+
+    def test_comma_is_one_pattern_not_alternatives(self) -> None:
+        assert not matches_pattern("a.nfo", "*.nfo,*.txt")
+        assert not matches_pattern("a.txt", "*.nfo,*.txt")
+        assert matches_pattern("a.nfo,b.txt", "*.nfo,*.txt")
+
     def test_star_spans_a_newline(self) -> None:
         # As fnmatch did: a name with a newline still matches "*".
         assert matches_pattern("a\nb.txt", "a*.txt")
