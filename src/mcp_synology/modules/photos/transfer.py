@@ -54,7 +54,11 @@ def _dest_name(item: dict[str, Any], size: str, used: set[str]) -> str:
 
     Items in different folders can share a filename (``IMG_0001.jpg``), and previews
     of ``a.jpg`` and ``a.png`` are both ``a_m.jpg``; a repeat gets the item ID added
-    (``IMG_0001_41.jpg``), so one item never replaces another's file.
+    (``IMG_0001_41.jpg``), so one item never replaces another's file. That name can be
+    taken too, by an item really named so (``a_9.jpg``): then a counter follows the ID
+    (``a_9_2.jpg``) until the name is free (#450). Names depend only on the items and
+    their order, so the same call names each item the same way again and the overwrite
+    rule then applies to each file on its own.
     """
     item_id = item.get("id")
     name = _safe_name(str(item.get("filename") or ""), f"item-{item_id}")
@@ -62,7 +66,11 @@ def _dest_name(item: dict[str, Any], size: str, used: set[str]) -> str:
         name = f"{PurePosixPath(name).stem or f'item-{item_id}'}_{size}.jpg"
     if name.casefold() in used:
         path = PurePosixPath(name)
-        name = f"{path.stem}_{item_id}{path.suffix}"
+        base, count = f"{path.stem}_{item_id}", 1
+        name = f"{base}{path.suffix}"
+        while name.casefold() in used:
+            count += 1
+            name = f"{base}_{count}{path.suffix}"
     used.add(name.casefold())
     return name
 

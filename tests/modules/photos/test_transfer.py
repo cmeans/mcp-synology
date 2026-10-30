@@ -10,7 +10,7 @@ import pytest
 import respx
 from mcp.server.mcpserver.exceptions import ToolError
 
-from mcp_synology.modules.photos.transfer import download_photos, upload_photos
+from mcp_synology.modules.photos.transfer import _dest_name, download_photos, upload_photos
 from tests.modules.photos.dsm import FakePhotos, binary, captured, install, make_client
 
 if TYPE_CHECKING:
@@ -185,6 +185,40 @@ class TestOriginals:
         assert (tmp_path / "IMG_0001_15.jpg").read_bytes() == b"two!"
         assert "Downloaded 2 of 2" in out
         assert "15  IMG_0001_15.jpg  " in out
+
+    @pytest.mark.parametrize("overwrite", [False, True])
+    @respx.mock
+    async def test_renamed_repeat_never_takes_another_items_name(
+        self, tmp_path: Path, overwrite: bool
+    ) -> None:
+        """#450: a repeat's ID-suffixed name can be another item's real name; the
+        third item used to get ``a_9.jpg`` again and replace the first's file."""
+        items = _items("ready", "ready")
+        third = json.loads(json.dumps(items["list"][1]))
+        items["list"].append(third)
+        for item, (item_id, name) in zip(
+            items["list"], [(1, "a_9.jpg"), (8, "a.jpg"), (9, "a.jpg")], strict=True
+        ):
+            item.update(id=item_id, filename=name)
+        fake = FakePhotos().on(ITEM, "get", 2, items)
+        fake.on("SYNO.Foto.Download", "download", 1, binary(b"1"), binary(b"8"), binary(b"9"))
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await download_photos(
+                client,
+                ids=[1, 8, 9],
+                dest_folder=str(tmp_path),
+                overwrite=overwrite,
+                allowed_roots=[tmp_path],
+            )
+        assert "Downloaded 3 of 3" in out
+        assert {p.name: p.read_bytes() for p in tmp_path.iterdir()} == {
+            "a_9.jpg": b"1",
+            "a.jpg": b"8",
+            "a_9_2.jpg": b"9",
+        }
+        assert "9  a_9_2.jpg  " in out
 
     @respx.mock
     async def test_dsm_not_answering_stops_and_names_the_rest(self, tmp_path: Path) -> None:
@@ -1102,3 +1136,59 @@ class TestUploadPersonalRootFolder:
         assert not fake.of("SYNO.Foto.Setting.User")
         assert "homes/<user>/Photos" not in out
         assert "(117)" in out
+
+
+class TestDestName:
+    """#450: every name is unique within the call, whatever the order and size."""
+
+    @staticmethod
+    def _names(items: list[tuple[int, str]], size: str) -> list[str]:
+        used: set[str] = set()
+        return [_dest_name({"id": i, "filename": f}, size, used) for i, f in items]
+
+    @pytest.mark.parametrize(
+        ("items", "size", "expected"),
+        [
+            (
+                [(1, "a_9.jpg"), (8, "a.jpg"), (9, "a.jpg")],
+                "original",
+                ["a_9.jpg", "a.jpg", "a_9_2.jpg"],
+            ),
+            (
+                [(9, "a.jpg"), (8, "a.jpg"), (1, "a_9.jpg")],
+                "original",
+                ["a.jpg", "a_8.jpg", "a_9.jpg"],
+            ),
+            (
+                [(8, "a.jpg"), (9, "a.jpg"), (1, "a_9.jpg")],
+                "original",
+                ["a.jpg", "a_9.jpg", "a_9_1.jpg"],
+            ),
+            (
+                [(1, "a_m_9.jpg"), (8, "a.png"), (9, "a.jpg")],
+                "m",
+                ["a_m_9_m.jpg", "a_m.jpg", "a_m_9.jpg"],
+            ),
+            (
+                [(1, "a_m_9.jpg"), (8, "a.jpg"), (9, "a.png"), (2, "a_m_9.png")],
+                "m",
+                ["a_m_9_m.jpg", "a_m.jpg", "a_m_9.jpg", "a_m_9_m_2.jpg"],
+            ),
+            (
+                [(1, "A.JPG"), (2, "a.jpg"), (3, "a_2.JPG")],
+                "original",
+                ["A.JPG", "a_2.jpg", "a_2_3.JPG"],
+            ),
+        ],
+    )
+    def test_names_are_unique(
+        self, items: list[tuple[int, str]], size: str, expected: list[str]
+    ) -> None:
+        names = self._names(items, size)
+        assert names == expected
+        assert len({n.casefold() for n in names}) == len(names)
+
+    def test_many_repeats(self) -> None:
+        items = [(7, "x.jpg")] * 2 + [(1, f"x_7_{n}.jpg") for n in range(2, 5)] + [(7, "x.jpg")]
+        names = self._names(items, "original")
+        assert len({n.casefold() for n in names}) == len(names)
