@@ -42,9 +42,16 @@ _MAGNET_URL_KEYS = frozenset({"tr", "ws", "as", "xs"})
 # Magnet parameters shown as they are: info hash, name, length, keywords.
 _MAGNET_SAFE_KEYS = frozenset({"xt", "dn", "xl", "kt"})
 
-# A URL or magnet inside free text. Commas end a match because v1 Task.create
-# takes a comma-separated URI list; quotes end it for DS2's JSON-encoded list.
-_URL_IN_TEXT = re.compile(r"""magnet:\?[^\s,"'<>]+|[A-Za-z][A-Za-z0-9+.-]*://[^\s,"'<>]+""")
+# A URL or magnet inside free text. A comma ends a match only where another URI
+# starts after it, as create_download splits its list (#397): a comma inside a URL
+# (`/a,b.iso?token=…`) is part of it, and v1 Task.create's list is comma-separated.
+# Quotes end a match for DS2's JSON-encoded list; a comma at the end of a match (a
+# URL in prose: "see https://…, then") is left out of it.
+_URL_CHAR = (
+    r"""(?:[^\s,"'<>]"""
+    r"""|,(?!\s*(?:[A-Za-z][A-Za-z0-9+.-]*://|(?i:magnet|ed2k|thunder|flashget|qqdl):)))"""
+)
+_URL_IN_TEXT = re.compile(rf"""(?:(?i:magnet):\?|[A-Za-z][A-Za-z0-9+.-]*://){_URL_CHAR}+(?<!,)""")
 
 
 # A query item or path parameter glued to a title: ``?key=value``, ``&key=value``
@@ -83,7 +90,8 @@ def _redact_query(query: str) -> str:
 
 def _redact_magnet(magnet: str) -> str:
     params = []
-    for item in magnet[len("magnet:?") :].split("&"):
+    prefix, rest = magnet[: len("magnet:?")], magnet[len("magnet:?") :]
+    for item in rest.split("&"):
         key, sep, value = item.partition("=")
         if not sep:
             item = MASK
@@ -95,12 +103,12 @@ def _redact_magnet(magnet: str) -> str:
         elif key not in _MAGNET_SAFE_KEYS:
             item = f"{key}={MASK}"
         params.append(item)
-    return "magnet:?" + "&".join(params)
+    return prefix + "&".join(params)
 
 
 def redact_url(url: str) -> str:
     """Return ``url`` with secrets masked; anything that isn't a URL is returned as-is."""
-    if url.startswith("magnet:?"):
+    if url[: len("magnet:?")].lower() == "magnet:?":  # any case, as DSM may accept it
         return _redact_magnet(url)
     if "://" not in url:
         return url

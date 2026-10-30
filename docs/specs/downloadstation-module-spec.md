@@ -101,7 +101,7 @@ DSM returns tracker announce URLs and task source URIs verbatim. A private track
 - the fragment is dropped
 - a magnet keeps only `xt`, `dn`, `xl` and `kt` as they are, redacts its URL-valued parameters (`tr`, `ws`, `as`, `xs`) recursively, and masks every other value. A tracker URL pasted unencoded splits on `&`, so its `passkey=` lands at the top level, where it's masked
 
-That covers `get_download_info`'s Trackers table and URI line, and every `DsmClient` DEBUG request log. DSM still receives the real values.
+In free text (a list, a log line, an error), a URL runs until whitespace, a quote, or a comma followed by another URI's start (#397), so a comma inside a URL doesn't end it; a magnet is recognized in any case (`MAGNET:?`). That covers `get_download_info`'s Trackers table and URI line, and every `DsmClient` DEBUG request log. DSM still receives the real values.
 
 Task titles get a narrower pass (`redact_title`): DSM titles an HTTP task with its URL's tail, query string included (`file.bin&_sid=...`, seen on vdsm). So `?key=`, `&key=` and `;key=` values in a title, and any whole URL in it, are masked in `list_downloads` and `get_download_info`. Whether token-shaped words are masked depends on the task type (`tasks._title`):
 - **BT:** kept, because a BT title is the torrent's name (`Show_Series_1_2026_1080p`).
@@ -359,7 +359,7 @@ Create tasks from URIs, or from a local .torrent / .nzb file.
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `uri` | `str` | One of `uri` / `torrent_file_path` | — | Comma-separated URIs: HTTP, HTTPS, FTP, magnet, etc. Not together with `torrent_file_path`. |
+| `uri` | `str` | One of `uri` / `torrent_file_path` | — | Comma-separated URIs: HTTP, HTTPS, FTP, magnet, etc.; commas inside a URI are kept (only a comma followed by a scheme starts another URI). Not together with `torrent_file_path`. |
 | `torrent_file_path` | `str` | One of `uri` / `torrent_file_path` | — | Local path to a `.torrent` or `.nzb` file (uploaded from this machine), inside the allowed local folders, which its description names (`roots_for_description`). |
 | `destination` | `str` | No | the user's default | Share-relative destination folder (`video/Torrents`); it must already exist. |
 | `username` | `str` | No | — | User name for a protected URL (not for torrent files). |
@@ -377,6 +377,7 @@ Create tasks from URIs, or from a local .torrent / .nzb file.
   - **no default and no `destination`:** refused with `invalid_parameter` for any account. A non-manager is told to set their default with `set_download_config`; anyone else is told to pass `destination`.
   - **a non-manager with an explicit `destination` but no default:** the task is created, with the note `Download Station won't start your tasks until your default destination is set; they stay waiting.`
   - **the Info API absent, or its config unreadable:** the request goes ahead unchanged.
+- **Commas inside a URI (#397).** A comma is legal in a URL (`https://h/a,b.iso`) and common in a magnet's `dn` name, so `uri` is split only where a comma is followed by a scheme with `//` (`http://`, `ftp://`, `ed2k://`) or `magnet:`, `ed2k:`, `thunder:`, `flashget:`, `qqdl:`; any other comma stays in its URI, so a list of scheme-less addresses (`www.a.com/x,www.b.com/y`) goes to DSM as one. DS2 gets the URIs as a JSON list, so a comma needs nothing more (verified on DSM 7.1, 7.2.2, 7.3.2 and 7.4.1: the task's URI reads back unchanged). v1 (the path for `username`/`password` sources, and the fallback when DS2 isn't available) takes one comma-separated string: an unescaped comma inside a URI makes the create fail, `%2C` is kept encoded, and `\,` is kept as a plain comma (verified on the same four versions), so the v1 fallback sends `\,`. Whether v1 reads `\\` as a backslash is unverified, so backslashes are sent as they are; a URI ending in `\` just before a separating comma would merge with the next one on v1.
 - Source URIs are redacted in DEBUG logs. The POST body DSM receives is not.
 - Validation: exactly one of `uri` / `torrent_file_path`; credentials only with `uri`; a non-empty URI list. For a file, in this order: a `.torrent` or `.nzb` extension (any case), inside the allowed local folders (resolved after `~`, `..` and symlinks; #257), then it must exist.
 
