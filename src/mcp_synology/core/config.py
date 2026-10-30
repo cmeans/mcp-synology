@@ -364,19 +364,28 @@ def _may_show(err: Any, loc_parts: list[str]) -> bool:
     return not (loc_parts and loc_parts[0] == "auth")
 
 
+# The sections whose keys are checked: both the near-miss rule and the YAML-error key names
+# read them from here.
+_SECTION_MODELS: dict[str, type[BaseModel]] = {
+    "connection": ConnectionConfig,
+    "auth": AuthConfig,
+    "logging": LoggingConfig,
+}
+
+_NOT_TEXT_KEY = (
+    "<a key that isn't text, not shown: it may be part of a password; quote a value with a "
+    "comma inside {…}>"
+)
+
+
 def _section_keys(loc_parts: list[str]) -> list[str]:
     """The keys the config section holding this location defines."""
-    models: dict[str, type[BaseModel]] = {
-        "connection": ConnectionConfig,
-        "auth": AuthConfig,
-        "logging": LoggingConfig,
-    }
     if len(loc_parts) == 1:
         model: type[BaseModel] = AppConfig
     elif loc_parts[0] == "modules" and len(loc_parts) == 3:
         model = ModuleConfig
     else:
-        model = models.get(loc_parts[0], AppConfig)
+        model = _SECTION_MODELS.get(loc_parts[0], AppConfig)
     return list(model.model_fields)
 
 
@@ -387,7 +396,10 @@ def _shown_location(err: Any, loc_parts: list[str]) -> str:
     second half arrives as a key with no value, in any section (#386). So an unknown key
     isn't named when it has no value, or when it's under `auth`, unless it's a near-miss of
     a key its section defines (`htps`, `pasword`, `levle` are named). An unknown key with a
-    value elsewhere (`totally_unknown: x`) is named, as before.
+    value elsewhere (`totally_unknown: x`) is named, as before. A near-miss is matched in
+    any case (`USERNAME`). A key YAML read as something other than text (`{password:
+    Summer,2024}` splits off a key 2024), anywhere, module settings included, is never
+    named: only the mapping it's in.
     """
     loc = ".".join(loc_parts) if loc_parts else "<root>"
     raw_loc = err.get("loc", ())
@@ -396,20 +408,13 @@ def _shown_location(err: Any, loc_parts: list[str]) -> str:
         # fails as `<settings>.2024.[key]`. Name the mapping, not the key.
         cut = raw_loc.index("[key]") - 1
         where = ".".join(str(p) for p in raw_loc[:cut])
-        return (
-            (f"{where}." if where else "")
-            + "<a key that isn't text, not shown: it may be part of a password; quote a "
-            "value with a comma inside {…}>"
-        )
+        return (f"{where}." if where else "") + _NOT_TEXT_KEY
     if err.get("type") == "invalid_key" and loc_parts:
         # A key YAML read as a number or a date (`{password: Summer,2024}` splits into a
-        # key 2024): never a real config key, and possibly part of a password (QA round 1).
+        # key 2024): never a real config key, and possibly part of a password (#469 QA
+        # round 1).
         where = ".".join(loc_parts[:-1])
-        return (
-            (f"{where}." if where else "")
-            + "<a key that isn't text, not shown: it may be part of a password; quote a "
-            "value with a comma inside {…}>"
-        )
+        return (f"{where}." if where else "") + _NOT_TEXT_KEY
     if err.get("type") == "extra_forbidden" and loc_parts:
         key = loc_parts[-1]
         suspect = err.get("input") is None or loc_parts[0] == "auth"
@@ -433,7 +438,10 @@ _YAML_KEY = re.compile(r"\s*-?\s*[\"']?([A-Za-z_][A-Za-z0-9_]*)[\"']?\s*:")
 class ConfigValueError(yaml.YAMLError):
     """A value PyYAML parsed but couldn't build: a tag that doesn't fit it, such as
     `!!int Hunter2x`. PyYAML raises ValueError or AttributeError there, with the value in
-    the message (#386)."""
+    the message (#386). ``kind`` names the error PyYAML raised (``RecursionError`` for a
+    file nested too deeply)."""
+
+    kind: str = ""
 
 
 def parse_config_text(text: str) -> Any:
@@ -447,16 +455,16 @@ def parse_config_text(text: str) -> Any:
         return yaml.safe_load(text)
     except yaml.YAMLError:
         raise
-    except RecursionError:
-        raise ConfigValueError("RecursionError") from None
     except Exception as e:  # noqa: BLE001 - any constructor error; its text names the value
-        raise ConfigValueError(type(e).__name__) from None
+        error = ConfigValueError(type(e).__name__)
+        error.kind = type(e).__name__
+        raise error from None
 
 
 def _config_keys() -> set[str]:
     """Every key the config's own sections define: the only ones a YAML error may name,
     so a password's text on its own line is never mistaken for a key (#386)."""
-    models = (AppConfig, ConnectionConfig, AuthConfig, LoggingConfig, ModuleConfig)
+    models: list[type[BaseModel]] = [AppConfig, ModuleConfig, *_SECTION_MODELS.values()]
     return {name for model in models for name in model.model_fields}
 
 
@@ -486,7 +494,7 @@ def format_yaml_error(exc: yaml.YAMLError) -> str:
         "value starting with a YAML special character, such as * ! @ % & ` | > [ { or a "
         "quote, or containing ': ' or ' #', needs quotes) and indentation."
     )
-    if isinstance(exc, ConfigValueError) and str(exc) == "RecursionError":
+    if isinstance(exc, ConfigValueError) and exc.kind == "RecursionError":
         return (
             "The config file is nested too deeply for YAML to read. Check its brackets and "
             "indentation."

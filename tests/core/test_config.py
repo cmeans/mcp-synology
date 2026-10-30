@@ -326,7 +326,9 @@ class TestAppConfig:
         message = format_validation_error(exc.value)
         assert "2x" not in message and "Hunter" not in message and "auth.y" not in message
         assert (
-            "auth.<an unknown key, not shown since it may hold or be part of a password" in message
+            "auth.<an unknown key, not shown since it may hold or be part of a password (a "
+            "comma inside {…} splits a value into a key); valid keys here: device_id, "
+            "password, username>" in message
         )
 
     @pytest.mark.parametrize(
