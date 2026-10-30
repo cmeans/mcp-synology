@@ -843,14 +843,21 @@ class TestFilestationShareValidation:
         assert "'.' and '..' parts aren't allowed" in error["message"]
         domain.assert_not_awaited()
 
-    async def test_a_bad_default_upload_dir_is_named(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize(
+        ("setting", "code"),
+        [("/writable/../x", "invalid_parameter"), ("/nosuch/x", "not_found")],
+        ids=["dot-part", "unknown-share"],
+    )
+    async def test_a_bad_default_upload_dir_is_named(
+        self, tmp_path: Path, setting: str, code: str
+    ) -> None:
         # QA round 1 on #470: the error names the setting, not `dest_folder`, which the
         # caller never passed.
         local = tmp_path / "file.txt"
         local.write_text("x")
         server, manager, ctx = _make_ctx(
             allowed={"upload_file"},
-            settings={"default_upload_dir": "/writable/../x"},
+            settings={"default_upload_dir": setting},
             shared_paths=[str(tmp_path)],
         )
         client = MagicMock()
@@ -862,7 +869,7 @@ class TestFilestationShareValidation:
                 ctx=_fake_mcp_ctx(), local_path=str(local)
             )
         error = json.loads(str(exc.value))["error"]
-        assert error["param"] == "default_upload_dir"
+        assert (error["code"], error["param"]) == (code, "default_upload_dir")
         # The fix is in the config, or a dest_folder (pre-QA on QA round 1).
         assert error["suggestion"] == (
             "Fix default_upload_dir in the filestation settings, or pass dest_folder."

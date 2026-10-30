@@ -544,6 +544,7 @@ class TestEnsureKnownShares:
             "writable/sub/../x",
             "/..",
             "/./writable",
+            "/writable/ .. /x",  # padded: DSM's trimming is unprobed (pre-QA, #470)
         ],
     )
     async def test_dot_parts_are_refused_before_dsm(

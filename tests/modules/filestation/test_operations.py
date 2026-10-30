@@ -170,23 +170,27 @@ class TestRename:
         assert body["error"]["code"] == "invalid_parameter"
         assert body["error"]["param"] == "new_name"
 
-    @pytest.mark.parametrize("name", [".", "..", "a\0b"])
-    async def test_rename_rejects_dot_names(self, mock_client: DsmClient, name: str) -> None:
+    @pytest.mark.parametrize(
+        ("name", "why"),
+        [
+            (".", "is '.' or '..'"),
+            ("..", "is '.' or '..'"),
+            (" .. ", "is '.' or '..'"),  # DSM's trimming is unprobed: refused too
+            ("a\0b", "contains a NUL character"),
+            ("a/b", "contains '/'"),
+        ],
+    )
+    async def test_rename_rejects_dot_names(
+        self, mock_client: DsmClient, name: str, why: str
+    ) -> None:
         # QA round 1 on #470: `.`/`..` are refused in paths, and as Photos folder names.
         with pytest.raises(ToolError) as exc:
             await rename(mock_client, path="/video/a.txt", new_name=name)
         error = json.loads(str(exc.value))["error"]
         assert (error["code"], error["param"]) == ("invalid_parameter", "new_name")
-
-    @respx.mock
-    async def test_rename_sends_a_padded_dot_name(self, mock_client: DsmClient) -> None:
-        """` .. ` is an ordinary name, as a path part is (pre-QA on QA round 1, #470):
-        only exactly `.` or `..` is refused."""
-        route = respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
-            json={"success": True, "data": {"files": [{"path": "/video/ .. ", "name": " .. "}]}}
+        assert (
+            error["message"] == f"Rename failed: new_name should be just a file name, but it {why}."
         )
-        await rename(mock_client, path="/video/a.txt", new_name=" .. ")
-        assert route.called
 
     @respx.mock
     async def test_rename_error(self, mock_client: DsmClient) -> None:

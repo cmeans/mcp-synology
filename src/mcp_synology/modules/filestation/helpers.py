@@ -586,14 +586,28 @@ def _with_listed_share_name(path: str, known_shares: set[str]) -> str:
     return "/".join(["", listed, *parts[2:]])
 
 
+def _is_dot(part: str) -> bool:
+    """``.`` or ``..``, surrounding spaces ignored: whether DSM trims `` .. `` to ``..`` is
+    unprobed, so a padded form is refused too, as Photos refuses folder names (#449)."""
+    return part.strip() in (".", "..")
+
+
 def refuse_bad_name(op: str, name: str, param: str, suggestion: str) -> None:
     """Raise ``invalid_parameter`` for a NAS file name that isn't one: a ``/``, a NUL, or
-    exactly ``.`` or ``..`` (#449). Surrounding spaces are kept, as in paths: `` .. `` is
-    an ordinary name on the NAS's filesystems."""
-    if "/" in name or "\0" in name or name in (".", ".."):
+    ``.`` or ``..`` (#449), naming which."""
+    problem = (
+        "contains '/'"
+        if "/" in name
+        else "contains a NUL character"
+        if "\0" in name
+        else "is '.' or '..'"
+        if _is_dot(name)
+        else None
+    )
+    if problem:
         error_response(
             ErrorCode.INVALID_PARAMETER,
-            f"{op} failed: {param} should be just a file name, not a path, '.' or '..'.",
+            f"{op} failed: {param} should be just a file name, but it {problem}.",
             retryable=False,
             param=param,
             value=name,
@@ -614,7 +628,7 @@ def refuse_dot_parts(
     on the share (the recycle-bin note after a delete, a hidden ``#recycle``) used the
     wrong one.
     """
-    if any(part in (".", "..") for part in normalize_path(path).split("/")):
+    if any(_is_dot(part) for part in normalize_path(path).split("/") if part):
         error_response(
             ErrorCode.INVALID_PARAMETER,
             f"Invalid path '{path}': '.' and '..' parts aren't allowed.",
