@@ -164,6 +164,10 @@ class TestRedactUrls:
         for text in (plain, encoded, f"see {plain}, then"):
             assert PASSKEY not in redact_urls(text), text
         assert redact_urls(plain).startswith(prefix)
+        # A capitalized magnet after a comma starts a new URL, as in split_uris.
+        assert redact_urls(f"https://h/a?k={PASSKEY},{prefix}xt=abc") == (
+            f"https://h/a?k=***,{prefix}xt=abc"
+        )
 
     def test_comma_after_a_url_in_prose_stays_outside(self) -> None:
         assert redact_urls(f"see https://h/x?k={PASSKEY}, then") == "see https://h/x?k=***, then"
