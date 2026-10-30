@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from tests.vdsm.config import DSM_TIMEZONES
+from tests.vdsm.config import DSM_TIMEZONES, DSM_VERSIONS
 from tests.vdsm.golden_image import load_golden_meta
 
 pytestmark = pytest.mark.vdsm
@@ -23,6 +23,19 @@ async def test_nas_timezone_is_the_baked_one(admin_client: Any, dsm_version: str
     ntp = await admin_client[0].request("SYNO.Core.Region.NTP", "get", version=1)
     assert ntp["timezone"] == DSM_TIMEZONES[dsm_version]
     assert load_golden_meta(dsm_version).get("timezone") == DSM_TIMEZONES[dsm_version]
+
+
+async def test_nas_runs_the_baked_dsm_update(admin_client: Any, dsm_version: str) -> None:
+    """Bake v9 installs the version's latest DSM update (DsmVersionInfo.update) and reboots:
+    the restored image reports that build and update, as the meta records."""
+    info = DSM_VERSIONS[dsm_version]
+    system = await admin_client[0].request("SYNO.Core.System", "info", version=1)
+    firmware = system["firmware_ver"]
+    assert f"-{info.build} Update {info.update}" in firmware, firmware
+    assert firmware.endswith(f"Update {info.update}"), firmware
+    meta = load_golden_meta(dsm_version)
+    assert (meta.get("dsm_build"), meta.get("dsm_update")) == (info.build, info.update)
+    assert meta.get("firmware_ver") == firmware
 
 
 async def test_snapshot_replication_is_installed(admin_client: Any, dsm_version: str) -> None:

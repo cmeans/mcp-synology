@@ -2,25 +2,26 @@
 
 Includes:
 - Playwright-based wizard automation (first-boot setup, fully headless)
-- Playwright-based post-wizard configuration (user creation via Control Panel)
-- SSH into the DSM guest VM for shared folder creation via synoshare CLI
+- Post-wizard setup (setup_dsm_for_testing): the timezone and SSH via the
+  DSM API, then over SSH into the DSM guest (the QEMU VM inside the
+  container) the DSM update and its reboot, the test users (synouser), the
+  packages (synopkg) and the shared folders with their seed data
+  (synoshare), then Download Station and Photos settings via the DSM API
 
-The undocumented SYNO.Core.* write APIs do not work on virtual-dsm
-(error 105/403), so user creation is automated through the DSM web UI.
-Shared folders are created by SSH-ing into the DSM guest (the QEMU VM
-inside the container) and running /usr/syno/sbin/synoshare, which
-registers proper DSM shared folders visible to FileStation.
-
-DSM 7 uses a windowed desktop UI with frequent overlay masks. Clicks use
-JavaScript dispatch or Playwright's force=True to bypass overlay interception.
+The write methods of SYNO.Core.User, SYNO.Core.Share and
+SYNO.Core.Share.Permission (creating users and shares, setting permissions)
+answered 105/403 on virtual-dsm, so users and shared folders are made with
+DSM's own CLIs in the guest; synoshare registers proper DSM shared folders
+visible to FileStation.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import subprocess
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -35,6 +36,7 @@ from tests.vdsm.config import (
     DSM_API_POLL_INTERVAL,
     DSM_BOOT_TIMEOUT,
     DSM_TIMEZONES,
+    DSM_VERSIONS,
 )
 
 if TYPE_CHECKING:
@@ -968,6 +970,116 @@ def _install_snapshot_replication_via_ssh(
     print("    Snapshot Replication installed and API-verified.")
 
 
+_SYNOUPGRADE = "/usr/syno/sbin/synoupgrade"
+_SYNOBOOTSEQ = "/usr/syno/bin/synobootseq"
+_UPDATE_PAT = "/volume1/dsm-update.pat"
+
+
+def _smallfix(host: str, ssh_port: int, admin_password: str) -> int:
+    """The DSM update installed (``smallfixnumber`` in /etc.defaults/VERSION)."""
+    rc, out = _ssh(host, ssh_port, admin_password, "cat /etc.defaults/VERSION", sudo=False)
+    for line in out.splitlines():
+        key, _, value = line.partition("=")
+        if key.strip() == "smallfixnumber":
+            return int(value.strip().strip('"'))
+    msg = f"No smallfixnumber in /etc.defaults/VERSION (rc={rc}): {out}"
+    raise RuntimeError(msg)
+
+
+def _boot_id(host: str, ssh_port: int, admin_password: str) -> str | None:
+    """The guest kernel's boot ID, or None while SSH doesn't answer (rebooting)."""
+    try:
+        rc, out = _ssh(
+            host, ssh_port, admin_password, "cat /proc/sys/kernel/random/boot_id", sudo=False
+        )
+    except subprocess.TimeoutExpired:  # slirp accepts the connection while sshd is down
+        return None
+    return out.strip() if rc == 0 and out.strip() else None
+
+
+def _boot_ready(host: str, ssh_port: int, admin_password: str) -> bool:
+    """Whether DSM reports its boot sequence done (False while SSH doesn't answer)."""
+    try:
+        rc, _ = _ssh(host, ssh_port, admin_password, f"{_SYNOBOOTSEQ} --is-ready")
+    except subprocess.TimeoutExpired:  # as in _boot_id
+        return False
+    return rc == 0
+
+
+def _install_dsm_update_via_ssh(
+    host: str,
+    ssh_port: int,
+    admin_password: str,
+    base_url: str,
+    dsm_version: str,
+    *,
+    reboot_timeout_sec: int = DSM_BOOT_TIMEOUT,
+) -> None:
+    """Install the version's DSM update (``DsmVersionInfo.update``) and reboot.
+
+    The guest downloads Synology's update pack itself (scp to the guest is refused),
+    ``synoupgrade --check-pat`` validates it and ``--patch`` installs it, which takes
+    seconds and doesn't reboot on its own. The bake reboots so everything after it,
+    and the saved image, runs the updated system. ``synofwupgrade`` logs errors about
+    drive firmware while it runs: vdsm has no physical disks, and they're harmless.
+    Idempotent: returns at once if the update is already installed.
+    """
+    info = DSM_VERSIONS[dsm_version]
+    if not info.update:
+        print("    No DSM update for this version")
+        return
+    if _smallfix(host, ssh_port, admin_password) == info.update:
+        print(f"    DSM {info.build} Update {info.update} already installed")
+        return
+    steps = (
+        f"wget -q -O {_UPDATE_PAT} {info.update_url}",
+        f"{_SYNOUPGRADE} --check-pat {_UPDATE_PAT}",
+        f"{_SYNOUPGRADE} --patch {_UPDATE_PAT}",
+    )
+    for cmd in steps:
+        rc, out = _ssh_exec(host, ssh_port, admin_password, cmd, sudo=True, timeout=900)
+        if rc != 0:
+            msg = f"DSM update step failed (rc={rc}): {cmd}: {out}"
+            raise RuntimeError(msg)
+    _ssh(host, ssh_port, admin_password, f"rm -f {_UPDATE_PAT}")
+    installed = _smallfix(host, ssh_port, admin_password)
+    if installed != info.update:
+        msg = f"synoupgrade --patch succeeded, but smallfixnumber is {installed}, not {info.update}"
+        raise RuntimeError(msg)
+
+    before = _boot_id(host, ssh_port, admin_password)
+    if before is None:  # without it, the wait below can't tell the new boot from the old
+        msg = "Couldn't read the guest's boot ID over SSH before the update's reboot"
+        raise RuntimeError(msg)
+    with suppress(subprocess.TimeoutExpired):  # the connection drops: rc is meaningless
+        _ssh(host, ssh_port, admin_password, "reboot")
+    deadline = time.monotonic() + reboot_timeout_sec
+    while _boot_id(host, ssh_port, admin_password) in (None, before):
+        if time.monotonic() > deadline:
+            msg = f"DSM didn't come back within {reboot_timeout_sec}s of the update's reboot"
+            raise RuntimeError(msg)
+        time.sleep(DSM_API_POLL_INTERVAL)
+    while not _boot_ready(host, ssh_port, admin_password):
+        if time.monotonic() > deadline:
+            msg = f"DSM didn't report boot done within {reboot_timeout_sec}s of the reboot"
+            raise RuntimeError(msg)
+        time.sleep(DSM_API_POLL_INTERVAL)
+    # The rest of the same budget, so the whole wait stays within reboot_timeout_sec.
+    wait_for_api(base_url, timeout=max(1, int(deadline - time.monotonic())))
+    installed = _smallfix(host, ssh_port, admin_password)
+    if installed != info.update:
+        msg = f"After the reboot, smallfixnumber is {installed}, not {info.update}"
+        raise RuntimeError(msg)
+    print(f"    Installed DSM {info.build} Update {info.update} and rebooted")
+
+
+def _firmware_version(base_url: str, admin_user: str, admin_password: str) -> str:
+    """DSM's own version string, e.g. ``DSM 7.1.1-42962 Update 9``."""
+    with _user_session(base_url, admin_user, admin_password) as (client, sid):
+        info = _core_call(client, sid, "SYNO.Core.System", "info")
+    return str(info.get("firmware_ver", ""))
+
+
 def _photos_call(
     client: httpx.Client,
     sid: str,
@@ -1176,7 +1288,8 @@ def setup_dsm_for_testing(
     """Run the full post-wizard setup.
 
     Sets the timezone (DSM_TIMEZONES) and enables SSH via the DSM API, then
-    SSHes into the DSM guest VM (via QEMU) to create the test user (synouser),
+    SSHes into the DSM guest VM (via QEMU) to install the DSM update
+    (DsmVersionInfo.update, then a reboot), create the test user (synouser),
     install Download Station, Synology Photos and Snapshot Replication (synopkg), and
     create shared folders, test data, and permissions (synoshare).
 
@@ -1206,30 +1319,34 @@ def setup_dsm_for_testing(
         raise RuntimeError(msg)
 
     # First, so every file and Photos item the bake creates gets times in this zone.
-    print(f"\n  [1/9] Setting the timezone to {timezone}...")
+    print(f"\n  [1/10] Setting the timezone to {timezone}...")
     _set_timezone_via_api(base_url, admin_user, admin_password, timezone)
 
-    print("\n  [2/9] Enabling SSH...")
+    print("\n  [2/10] Enabling SSH...")
     _enable_ssh(base_url, admin_user, admin_password)
+
+    # Before the packages, so they install on the updated system, as on a real NAS.
+    print("\n  [3/10] Installing the DSM update (SSH)...")
+    _install_dsm_update_via_ssh(ssh_host, ssh_port, admin_password, base_url, dsm_version)
 
     test_users = (
         (DEFAULT_TEST_USER, DEFAULT_TEST_PASSWORD),
         (DEFAULT_FRESH_USER, DEFAULT_FRESH_PASSWORD),
     )
-    print("\n  [3/9] Creating test users via synouser (SSH)...")
+    print("\n  [4/10] Creating test users via synouser (SSH)...")
     for user, password in test_users:
         _create_user_via_ssh(ssh_host, ssh_port, admin_password, user, password)
 
-    print("\n  [4/9] Installing Download Station via synopkg (SSH)...")
+    print("\n  [5/10] Installing Download Station via synopkg (SSH)...")
     _install_download_station_via_ssh(ssh_host, ssh_port, admin_password, base_url)
 
-    print("\n  [5/9] Installing Synology Photos via synopkg (SSH)...")
+    print("\n  [6/10] Installing Synology Photos via synopkg (SSH)...")
     _install_photos_via_ssh(ssh_host, ssh_port, admin_password, base_url, photos_packages)
 
-    print("\n  [6/9] Installing Snapshot Replication via synopkg (SSH)...")
+    print("\n  [7/10] Installing Snapshot Replication via synopkg (SSH)...")
     _install_snapshot_replication_via_ssh(ssh_host, ssh_port, admin_password, base_url)
 
-    print("\n  [7/9] Creating shared folders and test data via SSH...")
+    print("\n  [8/10] Creating shared folders and test data via SSH...")
     _create_shared_folders_via_ssh(
         ssh_host,
         ssh_port,
@@ -1237,7 +1354,7 @@ def setup_dsm_for_testing(
         tuple(user for user, _ in test_users),
     )
 
-    print("\n  [8/9] Configuring Download Station...")
+    print("\n  [9/10] Configuring Download Station...")
     _configure_download_station_via_api(
         base_url=base_url,
         admin_user=admin_user,
@@ -1248,7 +1365,7 @@ def setup_dsm_for_testing(
     _set_own_ds_default_destination(base_url, DEFAULT_TEST_USER, DEFAULT_TEST_PASSWORD, "writable")
     _verify_no_ds_default_destination(base_url, DEFAULT_FRESH_USER, DEFAULT_FRESH_PASSWORD)
 
-    print("\n  [9/9] Configuring Synology Photos...")
+    print("\n  [10/10] Configuring Synology Photos...")
     _configure_photos_via_api(base_url, admin_user, admin_password, DEFAULT_TEST_USER)
     _verify_photos_access(
         base_url,
@@ -1274,6 +1391,9 @@ def setup_dsm_for_testing(
         "test_password": DEFAULT_TEST_PASSWORD,
         "dsm_packages": ["DownloadStation", *photos_packages, SNAPSHOT_PACKAGE],
         "bake_version": BAKE_VERSION,
+        "dsm_build": DSM_VERSIONS[dsm_version].build,
+        "dsm_update": DSM_VERSIONS[dsm_version].update,
+        "firmware_ver": _firmware_version(base_url, admin_user, admin_password),
         "timezone": timezone,
         "fresh_user": DEFAULT_FRESH_USER,
         "fresh_password": DEFAULT_FRESH_PASSWORD,

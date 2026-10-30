@@ -84,9 +84,7 @@ versions without a physical NAS.
 
 ### Current Status
 
-**21 of 47 vdsm tests pass** on a bare DSM 7.2.2 instance (wizard completed, admin + test user created). The remaining 26 tests require shared folders on a properly configured storage volume. Virtual-dsm does not auto-create a storage volume during initial setup — this requires either manual Storage Manager configuration or additional automation (tracked as a follow-up).
-
-Tests that pass without a volume: connection (3), system info (1), resource usage (2), error handling (3), empty search cases (2), and several listing/metadata/transfer tests that validate error responses.
+The bake sets up everything the suite needs (users, packages, shared folders and seed data on the auto-created `/volume1`), and CI runs the full vdsm suite on DSM 7.1, 7.2.2, 7.3.2 and 7.4.1. No manual setup is needed.
 
 ### Requirements
 
@@ -105,7 +103,7 @@ The test infrastructure auto-detects the Podman socket at `/run/user/$UID/podman
 
 ### First-Time Setup
 
-Each DSM version needs a one-time golden image creation (~5 min):
+Each DSM version needs a one-time golden image creation:
 
 ```bash
 uv sync --extra dev --extra vdsm
@@ -115,28 +113,13 @@ echo y | uv run python scripts/vdsm_setup.py --version 7.2.2 \
 ```
 
 The setup script:
-1. Boots a fresh virtual-dsm container via Podman/Docker
+1. Boots a fresh virtual-dsm container (the pinned `VDSM_IMAGE`) via Podman/Docker
 2. Automates the DSM first-boot wizard via headless Playwright (account, updates, analytics)
-3. Dismisses post-login popups (2FA, MFA promotions) by force-removing them from the DOM
-4. Creates the `mcptest` test user via the Control Panel User Creation Wizard (Playwright)
-5. Creates test directories and seed data via `docker exec`
-6. Saves a compressed golden image to `.vdsm/golden/`
+3. Sets the timezone and enables SSH via the DSM API, then over SSH installs the DSM update and reboots, creates the `mcptest` and `mcpfresh` users (`synouser`), installs Download Station, Synology Photos and Snapshot Replication (`synopkg`), and creates the shared folders and seed data (`synoshare`) (`tests/vdsm/setup_dsm.py:setup_dsm_for_testing`)
+4. Configures Download Station and Photos via the DSM API, and checks each test user's access
+5. Saves a compressed golden image to `.vdsm/golden/`, with its `meta.json`
 
-Golden images are stored in `.vdsm/golden/` (~865 MB each, gitignored).
-
-#### Manual Storage Volume Setup (for full 47-test suite)
-
-After the automated setup, the golden image has no DSM storage volume. To enable shared folder tests:
-
-1. Boot the golden image: run `vdsm_setup.py` but stop it before the "Stopping container" step (or boot manually)
-2. Open the DSM web UI at the container's URL
-3. Open **Storage Manager** → create a **Storage Pool** (Basic/SHR) on the virtual disk → create a **Volume**
-4. Open **Control Panel** → **Shared Folder** → create `testshare` and `writable`
-5. Set read/write permissions for `mcptest` on both shares
-6. Upload test files to `/testshare/Documents/` (report.txt, search_target.txt) and `/testshare/Media/` (sample.mkv)
-7. Stop the container and re-save the golden image
-
-This manual step is a one-time investment per DSM version. Automating Storage Manager via Playwright is a planned follow-up.
+Golden images are stored in `.vdsm/golden/` (about 1.2 GB each, gitignored).
 
 ### Running
 
@@ -152,37 +135,37 @@ Note: `--no-cov` is recommended for vdsm runs since the coverage floor (95%) app
 
 ### Supported DSM Versions
 
-| Version | Build | PAT |
-|---------|-------|-----|
-| 7.0.1   | 42218 | VirtualDSM_42218.pat |
-| 7.1     | 42661 | VirtualDSM_42661.pat |
-| 7.2.1   | 69057 | VirtualDSM_69057.pat |
-| 7.2.2   | 72806 | VirtualDSM_72806.pat (default) |
-| 7.3.2   | 86009 | VirtualDSM_86009.pat |
-| 7.4.1   | 90080 | VirtualDSM_90080.pat |
+| Version (`--version`) | DSM | Build | Update | PAT |
+|---------|-----|-------|--------|-----|
+| 7.0.1   | 7.0.1 | 42218 | — | VirtualDSM_42218.pat |
+| 7.1     | 7.1.1 | 42962 | 9 | VirtualDSM_42962.pat |
+| 7.2.1   | 7.2.1 | 69057 | — | VirtualDSM_69057.pat |
+| 7.2.2   | 7.2.2 | 72806 | 10 | VirtualDSM_72806.pat (default) |
+| 7.3.2   | 7.3.2 | 86009 | 5 | VirtualDSM_86009.pat |
+| 7.4.1   | 7.4.1 | 90080 | 1 | VirtualDSM_90080.pat |
 
-CI runs 7.1, 7.2.2, 7.3.2 and 7.4.1 (#307); 7.0.1 and 7.2.1 are defined but not baked or tested.
+CI runs 7.1, 7.2.2, 7.3.2 and 7.4.1 (#307); 7.0.1 and 7.2.1 are defined but not baked or tested. The `7.1` image runs 7.1.1 since bake v9 (7.1-42661 before): 7.1-42661's updates stop at Update 4, and Synology's later 7.1 updates are for 7.1.1.
+
+Since bake v9, the bake installs the update in the Update column (`DsmVersionInfo.update` in `tests/vdsm/config.py`) right after enabling SSH, before the packages: the guest downloads Synology's update pack, `synoupgrade --check-pat` and `--patch` install it, and the bake reboots and checks `smallfixnumber`. `meta.json` records the build, the update and the version string DSM reports (`firmware_ver`), and `test_vdsm_bake.py` checks the restored image still reports it. When Synology ships a newer update, change the number and bump `BAKE_VERSION`. The virtual-dsm container image is pinned too (`VDSM_IMAGE`); move the pin in a bake change, not by pulling `latest`.
 
 ### How It Works
 
 1. Restores a golden image (pre-configured DSM) to a temp storage directory
-2. Boots the virtual-dsm container via Podman/Docker (~30s from golden image)
+2. Boots the virtual-dsm container via Podman/Docker
 3. Runs the same test functions as the real NAS integration tests
 4. Container is stopped and cleaned up automatically
 
 ### Known Limitations
 
-- **No auto-volume** — virtual-dsm's QEMU disk is visible to DSM but requires manual Storage Manager configuration to create a storage pool and volume. The `DISK_SIZE` env var controls disk size but does not trigger DSM-level volume creation.
-- **Undocumented APIs fail** — `SYNO.Core.User`, `SYNO.Core.Share`, and `SYNO.Core.Share.Permission` return error 105/403 on virtual-dsm even with valid admin sessions. User creation is done via Playwright web UI automation instead.
+- **Users and shares over SSH** — the write methods of `SYNO.Core.User`, `SYNO.Core.Share` and `SYNO.Core.Share.Permission` (creating users and shares, setting permissions) answered 105/403 on virtual-dsm even with an admin session, so the bake creates users and shared folders with `synouser` and `synoshare` in the guest over SSH.
 - **DSM password policy** — DSM 7.2.2 requires "Strong" passwords (blocks "Moderate"). The test user password is `Mcp#Test9!xK27zQ`.
-- **Boot time** — first boot from PAT download takes ~2 min; subsequent boots from golden image take ~30s.
 
 ## Design Docs
 
-Detailed specs live in `docs/specs/`. These were the original design documents — the code is authoritative where they diverge (e.g., DSM API version pinning, GET-only requests, and search behavior were discovered during live testing and are documented in `CLAUDE.md`).
+Detailed specs live in `docs/specs/`. These were the original design documents — the code is authoritative where they diverge (e.g., DSM API version pinning, the transport each call uses, and search behavior were discovered during live testing and are documented in `CLAUDE.md`).
 
 - `architecture.md` — layered architecture, auth strategy, session lifecycle
-- `filestation-module-spec.md` — all 14 File Station tools (7 READ + 7 WRITE)
+- `filestation-module-spec.md` — all 15 File Station tools (7 READ + 8 WRITE)
 - `config-schema-spec.md` — YAML config structure and validation
 - `project-scaffolding-spec.md` — repo structure, CI, testing
 

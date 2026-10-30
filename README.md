@@ -29,7 +29,7 @@
 
 MCP server for Synology NAS devices. Exposes Synology DSM API functionality as MCP tools that Claude can use.
 
-Tested against DSM 7.1, 7.2.2, 7.3.2 and 7.4.1: CI runs the integration tests for every module on a virtual DSM of each version. Release candidates are also live-tested on a real NAS (DSM 7.1.1) by AI clients driving the tools: for 0.10.0, Claude Code, claude.ai through the desktop app, and Meta Muse, as admin, regular, read-only and restricted users. See [docs/live-testing.md](docs/live-testing.md).
+Tested against DSM 7.1.1-42962 Update 9, 7.2.2-72806 Update 10, 7.3.2-86009 Update 5 and 7.4.1-90080 Update 1: CI runs the integration tests for every module on a virtual DSM of each. Release candidates are also live-tested on a real NAS (DSM 7.1.1-42962 Update 9) by AI clients driving the tools: for 0.10.0, Claude Code, claude.ai through the desktop app, and Meta Muse, as admin, regular, read-only and restricted users. See [docs/live-testing.md](docs/live-testing.md).
 
 <!-- mcp-name: io.github.cmeans/mcp-synology -->
 

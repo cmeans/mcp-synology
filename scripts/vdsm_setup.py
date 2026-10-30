@@ -83,9 +83,9 @@ def _check_prerequisites() -> None:
 def setup(dsm_version: str, admin_user: str, admin_password: str, assume_yes: bool) -> None:
     """Create a golden image for virtual-dsm testing.
 
-    This command starts a virtual-dsm container, waits for you to complete
-    the DSM setup wizard in a browser, then configures the instance for
-    integration testing and saves a golden image.
+    This command starts a virtual-dsm container, completes the DSM setup
+    wizard with headless Playwright, then configures the instance for the
+    vdsm tests and saves a golden image.
     """
     # 1. Check prerequisites
     click.echo("Checking prerequisites...")
@@ -135,7 +135,8 @@ def setup(dsm_version: str, admin_user: str, admin_password: str, assume_yes: bo
 
         time.sleep(30)
 
-        # 8. Run post-wizard configuration (user creation, SSH, shares)
+        # 8. Run post-wizard configuration (timezone, SSH, DSM update, users,
+        # packages, shares, Download Station and Photos settings)
         click.echo("\nConfiguring DSM for integration testing...")
         metadata = setup_dsm_for_testing(
             base_url,
@@ -167,8 +168,8 @@ def setup(dsm_version: str, admin_user: str, admin_password: str, assume_yes: bo
         click.echo(f"  Version: DSM {dsm_version}")
         click.echo(f"\n  Test user: {metadata['test_user']}")
         click.echo(f"  Test paths: {metadata['test_paths']}")
-        click.echo("\nTo run integration tests:")
-        click.echo("  uv run pytest -m integration -v")
+        click.echo("\nTo run the vdsm tests:")
+        click.echo(f"  uv run pytest tests/vdsm -m vdsm --dsm-version {dsm_version} --no-cov")
 
     except Exception:
         click.echo("\nError during setup. Stopping container...", err=True)
