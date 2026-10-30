@@ -3001,7 +3001,7 @@ class TestCountsSeparateThousands:
 
 class TestShareRootRefused:
     """#451: delete_files never sends a whole shared folder (or a spelling of one) to DSM.
-    On DSM 7.2.2 and later, Delete on /<share> deletes the shared folder itself."""
+    On DSM 7.2.2 to 7.4.1 (tested), Delete on /<share> deletes the shared folder itself."""
 
     @pytest.mark.parametrize("path", ["/video", "video/", " /video ", "/video//"])
     def test_a_share_root_is_refused(self, path: str) -> None:
@@ -3019,7 +3019,20 @@ class TestShareRootRefused:
         assert "list_files" in error["suggestion"] and "Control Panel" in error["suggestion"]
 
     @pytest.mark.parametrize(
-        "path", ["/video/.", "/video/x/..", "//video", "/video/ .. /x", "/video/ /x"]
+        "path",
+        [
+            "/video/.",
+            "/video/x/..",
+            "//video",
+            "/video/ .. /x",
+            "/video/ /x",
+            # A whitespace-only last part: normalizing alone would send /video/x, deleting
+            # the folder (QA round 2 on #480).
+            "/video/x/ ",
+            "/video/x/ /",
+            "/video/x/\u00a0",
+            "/video/x/\t/",
+        ],
     )
     def test_a_spelling_of_one_is_refused(self, path: str) -> None:
         from mcp_synology.modules.filestation.operations import refuse_share_roots
@@ -3028,9 +3041,13 @@ class TestShareRootRefused:
             refuse_share_roots([path])
         error = json.loads(str(exc.value))["error"]
         assert error["code"] == "invalid_parameter"
-        assert "'.', '..' and empty parts aren't allowed" in error["message"]
+        assert "'.', '..', empty and whitespace-only parts aren't allowed" in error["message"]
+        assert error["value"] == path
 
-    @pytest.mark.parametrize("path", ["/video/a", "/video/.hidden", "/video/a..b", "/video/a/"])
+    @pytest.mark.parametrize(
+        "path",
+        ["/video/a", "/video/.hidden", "/video/a..b", "/video/a/", "/video/x//", " /video/x "],
+    )
     def test_ordinary_paths_pass(self, path: str) -> None:
         from mcp_synology.modules.filestation.operations import refuse_share_roots
 
@@ -3144,6 +3161,21 @@ class TestDeleteFailurePartway:
         self._route(1, transport=True)
         with pytest.raises(httpx.ReadTimeout):
             await delete_files(mock_client, paths=["/video/a"], timeout=5)
+
+    def test_partway_is_not_retryable_once_something_was_deleted(self) -> None:
+        """The same call again is refused (the deleted paths are missing), so a retryable
+        DSM error partway comes back not retryable (QA round 2 on #480)."""
+        from mcp_synology.modules.filestation.operations import _with_progress_so_far
+
+        def error(retryable: bool) -> ToolError:
+            body = {"error": {"code": "unavailable", "message": "x.", "retryable": retryable}}
+            return ToolError(json.dumps(body))
+
+        done = _with_progress_so_far(error(True), ["/video/a"], ["/video/c"])
+        assert json.loads(str(done))["error"]["retryable"] is False
+        # Nothing deleted yet: the same call can be retried, so the flag stays.
+        first = _with_progress_so_far(error(True), [], ["/video/b"])
+        assert json.loads(str(first))["error"]["retryable"] is True
 
     def test_a_path_ending_in_dots_keeps_them(self) -> None:
         from mcp_synology.modules.filestation.operations import _with_progress_so_far

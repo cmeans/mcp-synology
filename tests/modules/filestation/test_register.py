@@ -1071,7 +1071,7 @@ class TestDiscoveryAtFirstConnection:
 
 class TestShareRootDeleteRefused:
     """#451: the registered delete_files refuses a whole shared folder before any DSM
-    request (on DSM 7.2.2 and later, Delete on /<share> deletes the shared folder)."""
+    request (on DSM 7.2.2 to 7.4.1, tested, Delete on /<share> deletes the shared folder)."""
 
     @pytest.mark.parametrize("paths", [["/writable"], ["/writable/a", "writable/"], ["//writable"]])
     async def test_refused_before_any_delete(

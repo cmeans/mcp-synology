@@ -1833,7 +1833,9 @@ class TestInstructionComments:
 # added, and that a retry repeats the whole call with the same ids in the same order (#467).
 # +71 by #451 (#480): delete_files says a whole shared folder is refused, and to delete its
 # items by path.
-PAYLOAD_BUDGET_CHARS = 56_017
+# +62 by #480 (QA round 2): delete_files says a path with a `.`, `..`, empty or
+# whitespace-only part is refused too.
+PAYLOAD_BUDGET_CHARS = 56_079
 
 
 class TestPayloadBudget:

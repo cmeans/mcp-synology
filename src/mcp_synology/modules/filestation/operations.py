@@ -282,14 +282,19 @@ def refuse_share_roots(paths: list[str]) -> None:
     share, can't bring it back; DSM 7.1 refuses it. Emptying a share safely is #484. A
     ``.``, ``..``, empty or whitespace-only part is refused too: ``/video/.``,
     ``/video/x/..`` and ``//video`` (when DSM won't list shares) name the share as well.
+    A whitespace-only last part is read from the path as given: ``normalize_path`` strips
+    the whole path, so ``/video/x/ `` would otherwise be sent as ``/video/x``, deleting
+    the folder (QA round 2 on #480; the same stripping in other tools is #488).
     """
     for path in paths:
         parts = normalize_path(path).split("/")[1:]
-        if any(part.strip() in ("", ".", "..") for part in parts):
+        body = path.rstrip("/")
+        blank_last = "/" in body and not body.rsplit("/", 1)[-1].strip()
+        if blank_last or any(part.strip() in ("", ".", "..") for part in parts):
             error_response(
                 ErrorCode.INVALID_PARAMETER,
-                f"Delete files refused: '.', '..' and empty parts aren't allowed ({path}). "
-                "Nothing was deleted.",
+                f"Delete files refused: '.', '..', empty and whitespace-only parts aren't "
+                f"allowed ({path}). Nothing was deleted.",
                 retryable=False,
                 param="paths",
                 value=path,
@@ -299,8 +304,9 @@ def refuse_share_roots(paths: list[str]) -> None:
             error_response(
                 ErrorCode.INVALID_PARAMETER,
                 f"Delete files refused: {path} is a whole shared folder. delete_files "
-                "doesn't delete or empty a shared folder: on DSM 7.2.2 and later that "
-                "would delete the shared folder itself, beyond the recycle bin's reach. "
+                "doesn't delete or empty a shared folder: on DSM 7.2.2 to 7.4.1 (tested), "
+                "and likely later, that would delete the shared folder itself, beyond the "
+                "recycle bin's reach. "
                 "Nothing was deleted.",
                 retryable=False,
                 param="paths",
@@ -330,6 +336,9 @@ def _with_progress_so_far(error: ToolError, done: list[str], rest: list[str]) ->
     # #480; a check for the words in the message missed a path containing them).
     if done:
         message = _unstop(message) + _already_done("Delete", done) + "."
+        # The same call again is refused (the deleted paths are missing): only the items not
+        # deleted can be retried (QA round 2 on #480).
+        body["error"]["retryable"] = False
     if rest:
         message = _unstop(message) + f". Not started: {', '.join(rest)}."
     body["error"]["message"] = message
