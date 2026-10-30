@@ -329,11 +329,17 @@ def _synthesize_env_config() -> AppConfig | None:
 _SECRET_KEY = re.compile(r"pass|secret|token|otp|device_id|key", re.IGNORECASE)
 
 
-def _may_be_secret(loc_parts: list[str]) -> bool:
-    """Whether an error's value may be a credential, so it's never echoed: anything under
-    `auth:` (a typo such as `pasword:` holds the password, #386), or a key that names one."""
-    return bool(loc_parts) and (
-        loc_parts[0] == "auth" or any(_SECRET_KEY.search(part) for part in loc_parts)
+def _may_show(err: Any, loc_parts: list[str]) -> bool:
+    """Whether an error's rejected value may be shown. Never when it could hold a
+    credential: a section or the whole config (a root or missing-field error's input is
+    the parent mapping, `auth` and env-var overrides included), anything under `auth:`,
+    a key that names a credential, or an unknown key (`pasword:` holds the password
+    wherever it's misplaced, #386)."""
+    if isinstance(err.get("input"), dict | list) or err.get("type") == "extra_forbidden":
+        return False
+    return not (
+        (loc_parts and loc_parts[0] == "auth")
+        or any(_SECRET_KEY.search(part) for part in loc_parts)
     )
 
 
@@ -354,9 +360,8 @@ def format_validation_error(exc: Any) -> str:
         loc = ".".join(loc_parts) if loc_parts else "<root>"
         msg = err.get("msg", "validation error")
         input_value = err.get("input")
-        if _may_be_secret(loc_parts):
-            suffix = ""
-        else:
+        suffix = ""
+        if _may_show(err, loc_parts):
             suffix = f" (got {input_value!r})" if input_value not in (None, "") else ""
         lines.append(f"  - {loc}: {msg}{suffix}")
     return "\n".join(lines)

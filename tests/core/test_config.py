@@ -146,9 +146,9 @@ class TestAppConfig:
         with pytest.raises(ValidationError) as exc:
             AppConfig(**raw)
         message = format_validation_error(exc.value)
-        assert f"  - {section}.{key}: Extra inputs are not permitted" in message
-        # A typo under auth holds a credential: its value is never echoed.
-        assert ("(got " not in message) == (section == "auth")
+        # An unknown key's value could be a misplaced credential: never echoed.
+        assert f"  - {section}.{key}: Extra inputs are not permitted\n" in message + "\n"
+        assert "(got " not in message
 
     @pytest.mark.parametrize(
         ("raw_update", "secret"),
@@ -157,6 +157,13 @@ class TestAppConfig:
             ({"auth": {"passwd": "hunter2"}}, "hunter2"),
             ({"password": "hunter2"}, "hunter2"),
             ({"connection": {"host": "nas", "api_token": "tok-1"}}, "tok-1"),
+            ({"connection": {"host": "nas", "pasword": "hunter2"}}, "hunter2"),
+            ({"pasword": "hunter2"}, "hunter2"),
+            # Root and missing-field errors carry the whole mapping as their input.
+            ({"instance_id": "my_nas", "auth": {"password": "hunter2"}}, "hunter2"),
+            ({"schema_version": 9, "auth": {"password": "hunter2"}}, "hunter2"),
+            ({"connection": {"passwd": "hunter2"}}, "hunter2"),
+            ({"modules": {}, "auth": {"device_id": "dev-tok"}}, "dev-tok"),
         ],
     )
     def test_validation_error_never_echoes_a_credential(
@@ -170,6 +177,39 @@ class TestAppConfig:
         with pytest.raises(ValidationError) as exc:
             AppConfig(**raw)
         assert secret not in format_validation_error(exc.value)
+
+    def test_env_password_never_echoed(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+    ) -> None:
+        """SYNOLOGY_PASSWORD is merged into the config before validation; a root error
+        (here, no module enabled) used to print the whole mapping with it."""
+        from pydantic import ValidationError
+
+        from mcp_synology.core.config import format_validation_error, load_config
+
+        path = tmp_path / "c.yaml"
+        path.write_text(
+            "schema_version: 1\nconnection: {host: nas}\nmodules: {filestation: {enabled: false}}\n"
+        )
+        monkeypatch.setenv("SYNOLOGY_PASSWORD", "env-secret")
+        monkeypatch.setenv("SYNOLOGY_DEVICE_ID", "dev-tok")
+        with pytest.raises(ValidationError) as exc:
+            load_config(path)
+        message = format_validation_error(exc.value)
+        assert "env-secret" not in message and "dev-tok" not in message
+        assert "<root>" in message
+
+    def test_a_plain_value_is_still_shown(self) -> None:
+        from pydantic import ValidationError
+
+        from mcp_synology.core.config import format_validation_error
+
+        raw = _minimal_raw()
+        raw["connection"]["timeout"] = 9999
+        with pytest.raises(ValidationError) as exc:
+            AppConfig(**raw)
+        assert "connection.timeout:" in format_validation_error(exc.value)
+        assert "(got 9999)" in format_validation_error(exc.value)
 
     def test_invalid_instance_id_characters(self) -> None:
         raw = _minimal_raw()
