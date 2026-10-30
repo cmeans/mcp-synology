@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import TypeVar
+
+import httpx
 
 # Help URLs point at sections of our own error-code reference rather than
 # Synology's KB. The KB is sparsely indexed and rarely matches the semantics
@@ -67,6 +70,9 @@ HELP_URLS: dict[str, str] = {
 }
 
 
+_E = TypeVar("_E", bound=BaseException)
+
+
 class SynologyError(Exception):
     """Base exception for all Synology DSM errors."""
 
@@ -88,10 +94,38 @@ class SynologyError(Exception):
         super().__init__(message)
 
 
+def detached_copy(error: _E) -> _E | None:
+    """A copy of ``error`` without its traceback, cause or context, built without calling
+    ``__init__``, or None when the type can't be rebuilt that way (pydantic's
+    ``ValidationError``). A failed login kept to answer other waiters would otherwise keep
+    the login's frames, and the password in them, alive (QA round 2 on #461). An httpx
+    error's request is replaced by one with the same method and URL and no body: the login
+    POST's body holds the password."""
+    try:
+        copy = type(error).__new__(type(error), *error.args)
+        copy.args = error.args
+        copy.__dict__.update(error.__dict__)
+    except Exception:  # noqa: BLE001 - an exception type with its own constructor rules
+        return None
+    request = copy.__dict__.get("_request")
+    if isinstance(request, httpx.Request):
+        copy.__dict__["_request"] = httpx.Request(request.method, request.url)
+    return copy
+
+
 class AuthenticationError(SynologyError):
     """Authentication failed (bad credentials, 2FA required, etc.)."""
 
     error_code = ErrorCode.AUTH_FAILED
+
+
+class LoginRefusedError(AuthenticationError):
+    """DSM refused the login; the text says what the running server does next (#447). Its
+    ``__cause__`` is DSM's own error, which `check` prints instead."""
+
+
+class RememberedRefusalError(AuthenticationError):
+    """A login DSM already refused, answered from memory without sending it (#447)."""
 
 
 class SessionExpiredError(SynologyError):

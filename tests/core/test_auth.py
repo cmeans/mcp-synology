@@ -2,19 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from urllib.parse import parse_qsl
 
 import httpx
 import pytest
 import respx
 
-from mcp_synology.core.auth import AuthManager
+from mcp_synology.core.auth import AuthManager, LoginRefusals
 from mcp_synology.core.client import DsmClient
 from mcp_synology.core.config import AppConfig
-from mcp_synology.core.errors import AuthenticationError
+from mcp_synology.core.errors import AuthenticationError, SynologyError
 from mcp_synology.core.state import ApiInfoEntry
 
 BASE_URL = "http://nas:5000"
@@ -326,9 +327,12 @@ class TestLogin:
             ):
                 await auth.login()
         message = str(exc.value)
-        assert "rejected" in message
+        assert "rejected the device token" in message
         assert "no device token" not in message
-        assert "mcp-synology setup" in message
+        # The fix depends on where the token is set (here, the config file): the
+        # suggestion says it, the message doesn't contradict it (QA round 2 on #461).
+        assert "mcp-synology setup" not in message
+        assert "auth.device_id in the config file" in (exc.value.suggestion or "")
 
     @respx.mock
     async def test_2fa_required_without_device_id(self) -> None:
@@ -935,3 +939,651 @@ class TestLogout:
             client.sid = "expired-sid"
             await auth.logout()  # must not raise
             assert client.sid is None
+
+
+def _auth_routes(
+    login: list[httpx.Response] | Any, logins: list[httpx.Request] | None = None
+) -> None:
+    """Route the login POSTs to ``login`` (a list of replies, in order, or a side effect)
+    and answer File Station reads by session: 119 for ``old-sid``, success otherwise."""
+
+    def on_post(request: httpx.Request) -> httpx.Response:
+        if logins is not None:
+            logins.append(request)
+        reply = login(request) if callable(login) else login.pop(0)
+        assert isinstance(reply, httpx.Response)
+        return reply
+
+    def on_get(request: httpx.Request) -> httpx.Response:
+        if "id=old-sid" in request.headers.get("cookie", ""):
+            return httpx.Response(200, json={"success": False, "error": {"code": 119}})
+        return httpx.Response(200, json={"success": True, "data": {"shares": []}})
+
+    respx.post(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=on_post)
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=on_get)
+
+
+def _refused(code: int = 400) -> httpx.Response:
+    return httpx.Response(200, json={"success": False, "error": {"code": code}})
+
+
+def _granted(sid: str = "new-sid") -> httpx.Response:
+    return httpx.Response(200, json={"success": True, "data": {"sid": sid}})
+
+
+class TestLoginRefusals:
+    """#447: a login DSM refused isn't sent again, so DSM's Auto Block isn't tripped."""
+
+    @respx.mock
+    @pytest.mark.parametrize("code", [400, 401, 403, 404, 406])
+    async def test_refused_login_is_sent_once(self, code: int) -> None:
+        logins: list[httpx.Request] = []
+        _auth_routes([_refused(code)], logins)
+        config = _make_config(auth={"username": "admin", "password": "wrong"})
+        async with _make_client() as client:
+            auth = AuthManager(config, client)
+            with (
+                patch.dict(os.environ, _clean_env(), clear=True),
+                patch("mcp_synology.core.auth.kr", _no_keyring()),
+            ):
+                errors = []
+                for _ in range(5):
+                    with pytest.raises(AuthenticationError) as exc:
+                        await auth.login()
+                    errors.append(exc.value)
+        assert len(logins) == 1
+        assert {e.code for e in errors} == {code}
+        assert len({str(e) for e in errors}) == 1  # the same answer every time
+        message = str(errors[0])
+        assert message.startswith("DSM refused the login: ")
+        assert "Auto Block" in message and ".." not in message
+        if code != 401:  # a disabled account: no credential change helps
+            assert "mcp-synology setup" in (errors[0].suggestion or "")
+        assert ".." not in (errors[0].suggestion or "")
+
+    @respx.mock
+    @pytest.mark.parametrize("code", [402, 407, 408])
+    async def test_other_login_errors_are_not_remembered(self, code: int) -> None:
+        # Not a verdict on the credentials (no permission for the service, a temporary
+        # lock or an IP block): the next call tries again.
+        logins: list[httpx.Request] = []
+        _auth_routes([_refused(code), _granted()], logins)
+        config = _make_config(auth={"username": "admin", "password": "secret"})
+        async with _make_client() as client:
+            auth = AuthManager(config, client)
+            with (
+                patch.dict(os.environ, _clean_env(), clear=True),
+                patch("mcp_synology.core.auth.kr", _no_keyring()),
+            ):
+                with pytest.raises(SynologyError) as exc:
+                    await auth.login()
+                assert not isinstance(exc.value, AuthenticationError)
+                assert await auth.login() == "new-sid"
+        assert len(logins) == 2
+
+    @respx.mock
+    async def test_transport_error_is_not_remembered(self) -> None:
+        logins: list[httpx.Request] = []
+        replies: list[Any] = [httpx.ConnectError("refused"), _granted()]
+
+        def login(request: httpx.Request) -> httpx.Response:
+            reply = replies.pop(0)
+            if isinstance(reply, Exception):
+                raise reply
+            assert isinstance(reply, httpx.Response)
+            return reply
+
+        _auth_routes(login, logins)
+        config = _make_config(auth={"username": "admin", "password": "secret"})
+        async with _make_client() as client:
+            auth = AuthManager(config, client)
+            with (
+                patch.dict(os.environ, _clean_env(), clear=True),
+                patch("mcp_synology.core.auth.kr", _no_keyring()),
+            ):
+                with pytest.raises(httpx.ConnectError):
+                    await auth.login()
+                assert await auth.login() == "new-sid"
+        assert len(logins) == 2
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        ("changed", "value"),
+        [("password", "fixed"), ("username", "other"), ("device_id", "dev-new")],
+    )
+    async def test_changed_credentials_are_tried(self, changed: str, value: str) -> None:
+        # `mcp-synology setup` writes new credentials to the keyring while the server runs.
+        logins: list[httpx.Request] = []
+        _auth_routes([_refused(), _granted()], logins)
+        stored = {"username": "admin", "password": "wrong", "device_id": "dev-old"}
+        config = _make_config()
+        async with _make_client() as client:
+            auth = AuthManager(config, client)
+            with patch.dict(os.environ, _clean_env(), clear=True):
+                with (
+                    patch("mcp_synology.core.auth.kr", _keyring_with(**stored)),
+                    pytest.raises(AuthenticationError),
+                ):
+                    await auth.login()
+                with (
+                    patch("mcp_synology.core.auth.kr", _keyring_with(**stored)),
+                    pytest.raises(AuthenticationError),
+                ):
+                    await auth.login()
+                assert len(logins) == 1
+                stored[changed] = value
+                with patch("mcp_synology.core.auth.kr", _keyring_with(**stored)):
+                    assert await auth.login() == "new-sid"
+        assert len(logins) == 2
+
+    @respx.mock
+    async def test_a_new_server_tries_again(self) -> None:
+        # The refusal lives in memory: a restart (a new LoginRefusals) sends the login.
+        logins: list[httpx.Request] = []
+        _auth_routes([_refused(), _refused()], logins)
+        config = _make_config(auth={"username": "admin", "password": "wrong"})
+        with (
+            patch.dict(os.environ, _clean_env(), clear=True),
+            patch("mcp_synology.core.auth.kr", _no_keyring()),
+        ):
+            for _ in range(2):
+                async with _make_client() as client:
+                    with pytest.raises(AuthenticationError):
+                        await AuthManager(config, client, LoginRefusals()).login()
+        assert len(logins) == 2
+
+    @respx.mock
+    async def test_relogin_after_a_session_error_uses_it(self) -> None:
+        # #447 and #448: a 119 whose re-login is refused says the login was refused, with
+        # its suggestion, and the next session error doesn't send the login again.
+        logins: list[httpx.Request] = []
+        _auth_routes([_refused()], logins)
+        config = _make_config(auth={"username": "admin", "password": "wrong"})
+        async with _make_client() as client:
+            AuthManager(config, client)
+            client.sid = "old-sid"
+            with (
+                patch.dict(os.environ, _clean_env(), clear=True),
+                patch("mcp_synology.core.auth.kr", _no_keyring()),
+            ):
+                for _ in range(3):
+                    with pytest.raises(AuthenticationError) as exc:
+                        await client.request("SYNO.FileStation.List", "list_share", version=2)
+                    assert exc.value.code == 400
+                    assert str(exc.value).startswith("DSM refused the login: ")
+                    assert "mcp-synology setup" in (exc.value.suggestion or "")
+            assert client.sid == "old-sid"
+        assert len(logins) == 1
+
+
+class TestConcurrentReauth:
+    """#359: requests that meet the same expired session log in once, not once each."""
+
+    @respx.mock
+    @pytest.mark.parametrize("n", [2, 5])
+    async def test_parallel_session_errors_log_in_once(self, n: int) -> None:
+        logins: list[httpx.Request] = []
+
+        async def slow_login(request: httpx.Request) -> httpx.Response:
+            logins.append(request)
+            await asyncio.sleep(0.01)  # the other requests meet 119 meanwhile
+            return _granted()
+
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=slow_login)
+
+        def on_get(request: httpx.Request) -> httpx.Response:
+            if "id=new-sid" in request.headers.get("cookie", ""):
+                return httpx.Response(200, json={"success": True, "data": {"shares": []}})
+            return httpx.Response(200, json={"success": False, "error": {"code": 119}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=on_get)
+        fired: list[int] = []
+        config = _make_config(auth={"username": "admin", "password": "secret"})
+        async with _make_client() as client:
+            auth = AuthManager(config, client)
+            auth.add_on_reauth_callback(lambda: fired.append(1))
+            client.sid = "old-sid"
+            with (
+                patch.dict(os.environ, _clean_env(), clear=True),
+                patch("mcp_synology.core.auth.kr", _no_keyring()),
+            ):
+                results = await asyncio.gather(
+                    *(
+                        client.request("SYNO.FileStation.List", "list_share", version=2)
+                        for _ in range(n)
+                    )
+                )
+        assert results == [{"shares": []}] * n
+        assert len(logins) == 1
+        assert fired == [1]
+        # The login itself never carries the session it replaces.
+        assert "cookie" not in logins[0].headers
+
+    @respx.mock
+    async def test_session_stays_until_the_new_one_exists(self) -> None:
+        # The expired session used to be cleared before the login, so a request sent
+        # meanwhile went with no session at all and queued its own re-login.
+        seen: list[str | None] = []
+        client = _make_client()
+
+        def login(request: httpx.Request) -> httpx.Response:
+            seen.append(client.sid)
+            return _granted()
+
+        _auth_routes(login)
+        config = _make_config(auth={"username": "admin", "password": "secret"})
+        async with client:
+            AuthManager(config, client)
+            client.sid = "old-sid"
+            with (
+                patch.dict(os.environ, _clean_env(), clear=True),
+                patch("mcp_synology.core.auth.kr", _no_keyring()),
+            ):
+                await client.request("SYNO.FileStation.List", "list_share", version=2)
+            assert client.sid == "new-sid"
+        assert seen == ["old-sid"]
+
+
+class TestRefusalEdges:
+    """Guards the pre-QA review found untested."""
+
+    @respx.mock
+    async def test_a_successful_login_forgets_the_refusal(self) -> None:
+        # Refused with A, then logged in with B: A is tried again, not answered unsent.
+        logins: list[httpx.Request] = []
+        _auth_routes([_refused(), _granted(), _refused()], logins)
+        stored = {"username": "admin", "password": "a"}
+        async with _make_client() as client:
+            auth = AuthManager(_make_config(), client)
+            with patch.dict(os.environ, _clean_env(), clear=True):
+                with (
+                    patch("mcp_synology.core.auth.kr", _keyring_with(**stored)),
+                    pytest.raises(AuthenticationError),
+                ):
+                    await auth.login()
+                stored["password"] = "b"
+                with patch("mcp_synology.core.auth.kr", _keyring_with(**stored)):
+                    await auth.login()
+                stored["password"] = "a"
+                with (
+                    patch("mcp_synology.core.auth.kr", _keyring_with(**stored)),
+                    pytest.raises(AuthenticationError),
+                ):
+                    await auth.login()
+        assert len(logins) == 3
+
+    @respx.mock
+    async def test_an_error_without_a_dsm_code_is_not_remembered(self) -> None:
+        # Only DSM's verdict is remembered; an AuthenticationError with no code isn't one.
+        config = _make_config(auth={"username": "admin", "password": "secret"})
+        async with _make_client() as client:
+            auth = AuthManager(config, client)
+            sent = AsyncMock(side_effect=[AuthenticationError("odd"), {"sid": "s"}])
+            with (
+                patch.dict(os.environ, _clean_env(), clear=True),
+                patch("mcp_synology.core.auth.kr", _no_keyring()),
+                patch.object(auth, "_send_login", sent),
+            ):
+                with pytest.raises(AuthenticationError, match="odd"):
+                    await auth.login()
+                assert await auth.login() == "s"
+        assert sent.await_count == 2
+
+    async def test_a_session_error_with_no_session_left_logs_in(self) -> None:
+        # The session was cleared (a logout) after the request went out: log in, rather
+        # than read "the session changed" as another request's re-login.
+        calls: list[int] = []
+
+        async def reauth() -> None:
+            calls.append(1)
+
+        async with _make_client() as client:
+            client.set_re_auth_callback(reauth)
+            client.sid = None
+            await client._re_authenticate(119, "SYNO.FileStation.List", "sent-sid")
+        assert calls == [1]
+
+
+class TestRefusalSuggestion:
+    """QA rounds 1-2 on #461: `setup` writes only the keyring, so a refusal names the fix
+    for the credential DSM refused: the password for 400, the device token for 2FA codes,
+    none for a disabled account; `setup` where it's in the keyring, the environment or
+    the config file where it's set there."""
+
+    ENV = "in the server's environment (the MCP client's config)"
+    SETUP_PW = (
+        "Run 'mcp-synology setup --config <your config file>' to store the right password; "
+        "the running server"
+    )
+    SETUP_2FA = (
+        "Run 'mcp-synology setup --config <your config file>' to sign in with a new 2FA "
+        "code; the running server"
+    )
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        ("code", "auth", "env", "expected", "absent"),
+        [
+            # Everything from the keyring.
+            (400, {}, {}, SETUP_PW + " picks it up. After the fix", "restart"),
+            # The recommended setup: a username in the config, the password in the keyring.
+            (
+                400,
+                {"username": "admin"},
+                {},
+                SETUP_PW + " picks it up. If the username is wrong, it comes from auth.username"
+                " in the config file: correct it there and restart the server.",
+                "overridden",
+            ),
+            # Both in the config file: setup can't help.
+            (
+                400,
+                {"username": "admin", "password": "wrong"},
+                {},
+                "The password comes from auth.password in the config file: correct it there "
+                "and restart the server ('mcp-synology setup' writes only the keyring). If the "
+                "username is wrong, it comes from auth.username in the config file: correct it "
+                "there.",
+                SETUP_PW,
+            ),
+            # The environment wins over the config for the same key: only it is named.
+            (
+                400,
+                {"username": "admin", "password": "unused"},
+                {"SYNOLOGY_PASSWORD": "wrong"},
+                "The password comes from SYNOLOGY_PASSWORD " + ENV,
+                "auth.password",
+            ),
+            # QA round 2: env credentials, the device token in the keyring, 403.
+            (
+                403,
+                {},
+                {"SYNOLOGY_USERNAME": "admin", "SYNOLOGY_PASSWORD": "wrong"},
+                SETUP_2FA + " picks it up. After the fix",
+                "SYNOLOGY_USERNAME",
+            ),
+            # A device token set outside the keyring overrides what setup writes.
+            (
+                404,
+                {"device_id": "old"},
+                {},
+                "The device token comes from auth.device_id in the config file, which "
+                "overrides the keyring: remove it there, then run 'mcp-synology setup --config "
+                "<your config file>' to sign "
+                "in with a new 2FA code, and restart the server.",
+                "picks it up",
+            ),
+            (
+                406,
+                {},
+                {},
+                "Admin requires 2FA. Enable 2FA in DSM > Personal > Security. Then: run "
+                "'mcp-synology setup --config <your config file>' to sign in with a new 2FA "
+                "code; the running server picks "
+                "it up.",
+                "password",
+            ),
+            # A disabled account: no credential change helps.
+            (
+                401,
+                {"username": "admin", "password": "wrong"},
+                {},
+                "This account is disabled in DSM. Contact your NAS administrator. Once it's "
+                "enabled again, restart the server.",
+                "setup",
+            ),
+        ],
+        ids=[
+            "400-keyring",
+            "400-config-username",
+            "400-config-both",
+            "400-env-over-config",
+            "403-env-creds-keyring-token",
+            "404-config-token",
+            "406",
+            "401",
+        ],
+    )
+    async def test_suggestion_names_the_fix_for_the_refused_credential(
+        self,
+        code: int,
+        auth: dict[str, str],
+        env: dict[str, str],
+        expected: str,
+        absent: str,
+    ) -> None:
+        _auth_routes([_refused(code)])
+        stored = _keyring_with(username="admin", password="wrong", device_id="d")
+        async with _make_client() as client:
+            refusal_auth = AuthManager(_make_config(auth=auth), client)
+            with (
+                patch.dict(os.environ, {**_clean_env(), **env}, clear=True),
+                patch("mcp_synology.core.auth.kr", stored),
+                pytest.raises(AuthenticationError) as exc,
+            ):
+                await refusal_auth.login()
+        suggestion = exc.value.suggestion or ""
+        assert expected in suggestion
+        assert absent not in suggestion
+
+    @pytest.mark.parametrize(
+        ("code", "first", "expected"),
+        [
+            (401, "", "Once the account is enabled again, restart the server"),
+            (
+                402,
+                "Not allowed",
+                "Not allowed. mcp-synology tries again once the credentials change "
+                "('mcp-synology setup --config <your config file>' stores new ones in the "
+                "keyring; the running server picks "
+                "it up); auth.password in the config file overrides the keyring: change it "
+                "there and restart the server",
+            ),
+            (
+                None,
+                "",
+                "mcp-synology tries again once the credentials change ('mcp-synology setup "
+                "--config <your config file>' "
+                "stores new ones in the keyring; the running server picks it up); "
+                "auth.password in the config file overrides the keyring: change it there and "
+                "restart the server",
+            ),
+        ],
+        ids=["401-without-suggestion", "unmapped-code", "no-code"],
+    )
+    def test_advice_for_other_codes(self, code: int | None, first: str, expected: str) -> None:
+        """Codes the five above don't cover (#460 decides 402 and 407-410) get the
+        general advice, naming credentials set outside the keyring."""
+        from mcp_synology.core.auth import KEYRING, refusal_advice
+
+        sources = {"username": KEYRING, "password": "auth.password in the config file"}
+        assert refusal_advice(code, first, {**sources, "device_id": None}) == expected
+
+    @pytest.mark.parametrize(
+        ("code", "first", "expected"),
+        [
+            (401, "Contact your NAS administrator", "Contact your NAS administrator"),
+            (401, "", "The account is disabled in DSM"),
+            (402, "Not allowed", "Not allowed"),
+            (None, "", "Check the credentials"),
+        ],
+    )
+    def test_cli_advice_has_no_server_sentences(
+        self, code: int | None, first: str, expected: str
+    ) -> None:
+        """`check` runs once: no "picks it up", no restart (QA round 3 on #461)."""
+        from mcp_synology.core.auth import KEYRING, refusal_advice
+
+        sources = {"username": KEYRING, "password": KEYRING, "device_id": None}
+        assert refusal_advice(code, first, sources, cli=True) == expected
+
+    @respx.mock
+    async def test_2fa_without_a_token_says_setup_once(self) -> None:
+        """The no-token 403's message leaves the fix to the suggestion, so the two don't
+        give two setup instructions (QA round 3 on #461)."""
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 403}}
+        )
+        async with _make_client() as client:
+            auth = AuthManager(_make_config(auth={"username": "a", "password": "b"}), client)
+            with (
+                patch.dict(os.environ, _clean_env(), clear=True),
+                patch("mcp_synology.core.auth.kr", _no_keyring()),
+                pytest.raises(AuthenticationError) as exc,
+            ):
+                await auth.login()
+        text = f"{exc.value} {exc.value.suggestion}"
+        assert text.count("mcp-synology setup") == 1
+
+    def test_check_tests_the_login_once(self) -> None:
+        """A model with a shell could loop on `check`, which has no remembered refusal:
+        the suggestion says once, and why (pre-QA on QA round 2, #461)."""
+        refusal = LoginRefusals().refuse(
+            "fp", AuthenticationError("No such account", code=400, suggestion="Check.")
+        )
+        assert (refusal.suggestion or "").endswith(
+            "After the fix, 'mcp-synology check --config <your config file>' tests the login "
+            "once (each failed check "
+            "counts toward Auto Block)."
+        )
+
+    @respx.mock
+    async def test_a_remembered_refusal_logs_no_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # Only a login actually sent and refused is a WARNING; answering one from memory
+        # on every later session error would flood the log (pre-QA on QA round 1).
+        import logging
+
+        _auth_routes([_refused()])
+        config = _make_config(auth={"username": "admin", "password": "wrong"})
+        async with _make_client() as client:
+            AuthManager(config, client)
+            client.sid = "old-sid"
+            with (
+                patch.dict(os.environ, _clean_env(), clear=True),
+                patch("mcp_synology.core.auth.kr", _no_keyring()),
+                caplog.at_level(logging.INFO),
+            ):
+                for _ in range(3):
+                    with pytest.raises(AuthenticationError):
+                        await client.request("SYNO.FileStation.List", "list_share", version=2)
+        warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+        assert len(warnings) == 1
+        assert not any("Re-authenticating" in r.getMessage() for r in caplog.records)
+
+    def test_the_remembered_refusal_keeps_no_frames(self) -> None:
+        # The raised refusal's traceback holds the login's frames, and its password.
+        refusals = LoginRefusals()
+        try:
+            try:
+                raise AuthenticationError("No such account", code=400, suggestion="x")
+            except AuthenticationError as e:
+                raise refusals.refuse("fp", e) from e
+        except AuthenticationError:
+            pass
+        stored = refusals._refused[1] if refusals._refused else None
+        assert stored is not None
+        assert stored.__traceback__ is None and stored.__cause__ is None
+
+
+class TestWaitersShareAFailedLogin:
+    """QA round 1 on #461: calls waiting on a re-login that fails get its error instead of
+    each sending a login of their own; a later call tries again."""
+
+    async def test_waiters_share_the_failure(self) -> None:
+        calls: list[int] = []
+
+        async def failing_reauth() -> None:
+            calls.append(1)
+            await asyncio.sleep(0.01)
+            raise httpx.ConnectError("refused")
+
+        async with _make_client() as client:
+            client.set_re_auth_callback(failing_reauth)
+            client.sid = "old-sid"
+            results = await asyncio.gather(
+                *(
+                    client._re_authenticate(119, "SYNO.FileStation.List", "old-sid")
+                    for _ in range(5)
+                ),
+                return_exceptions=True,
+            )
+            assert all(isinstance(r, httpx.ConnectError) for r in results)
+            assert calls == [1]
+            # QA round 2: the kept failure holds no frames (the login's password), and each
+            # waiter gets its own copy rather than one object every raise adds to.
+            stored = client._login_failure
+            assert stored is not None and stored.__traceback__ is None
+            assert len({id(r) for r in results}) == 5
+            with pytest.raises(httpx.ConnectError):  # a later call tries afresh
+                await client._re_authenticate(119, "SYNO.FileStation.List", "old-sid")
+            assert calls == [1, 1]
+
+    async def test_a_kept_transport_error_holds_no_password(self) -> None:
+        """An httpx error carries its request, and the login POST's body holds the
+        password; the kept copy's request has none (pre-QA on QA round 2, #461)."""
+        login = httpx.Request("POST", "https://nas:5001/webapi/entry.cgi", data={"passwd": "Hx7q"})
+
+        async def failing_reauth() -> None:
+            raise httpx.ConnectError("refused", request=login)
+
+        async with _make_client() as client:
+            client.set_re_auth_callback(failing_reauth)
+            client.sid = "old-sid"
+            with pytest.raises(httpx.ConnectError):
+                await client._re_authenticate(119, "SYNO.FileStation.List", "old-sid")
+            kept = client._login_failure
+            assert isinstance(kept, httpx.ConnectError)
+            assert b"Hx7q" not in kept.request.read()
+            assert (kept.request.method, kept.request.url) == (login.method, login.url)
+
+    async def test_a_failed_relogin_by_transport_is_logged(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Only the error's type: its text can quote the request (QA round 3 on #461)."""
+        import logging
+
+        async def failing_reauth() -> None:
+            raise httpx.ConnectError("refused to nas:5001 with secret-ish text")
+
+        async with _make_client() as client:
+            client.set_re_auth_callback(failing_reauth)
+            client.sid = "old-sid"
+            with (
+                caplog.at_level(logging.WARNING, logger="mcp_synology.core.client"),
+                pytest.raises(httpx.ConnectError),
+            ):
+                await client._re_authenticate(119, "SYNO.FileStation.List", "old-sid")
+        assert (
+            "Session error 119 on SYNO.FileStation.List; logging in again failed: ConnectError"
+            in caplog.text
+        )
+        assert "secret-ish" not in caplog.text
+
+    async def test_a_canceled_login_leaves_waiters_to_try(self) -> None:
+        # An earlier failure is not handed to requests that waited on a later, canceled
+        # attempt: they log in themselves.
+        calls: list[str] = []
+        started = asyncio.Event()
+
+        async def reauth() -> None:
+            calls.append("try")
+            if len(calls) == 1:
+                raise httpx.ConnectError("refused")
+            if len(calls) == 2:
+                started.set()
+                await asyncio.sleep(10)
+
+        async with _make_client() as client:
+            client.set_re_auth_callback(reauth)
+            client.sid = "old-sid"
+            with pytest.raises(httpx.ConnectError):
+                await client._re_authenticate(119, "X", "old-sid")
+            second = asyncio.create_task(client._re_authenticate(119, "X", "old-sid"))
+            await started.wait()
+            third = asyncio.create_task(client._re_authenticate(119, "X", "old-sid"))
+            await asyncio.sleep(0)
+            second.cancel()
+            await third  # not the earlier ConnectError: it logs in itself
+        assert calls == ["try", "try", "try"]
