@@ -180,6 +180,8 @@ class TestRename:
             ("a/b", "contains '/'"),
             ("", "is empty"),  # QA round 2 on #470: DSM's 1200 then read as "already exists"
             ("   ", "is empty"),
+            ("\t", "is empty"),  # any whitespace (QA round 3 on #470)
+            ("\xa0", "is empty"),
         ],
     )
     async def test_rename_rejects_dot_names(

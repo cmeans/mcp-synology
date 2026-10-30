@@ -114,10 +114,18 @@ async def upload_file(
             suggestion="Check the file path and try again.",
         )
 
-    # The local file's own name too: ` .. ` is a valid local name (pre-QA on #470).
-    refuse_bad_name(
-        "Upload", filename or local.name, "filename", "Pass a plain file name, e.g. report.pdf."
-    )
+    if filename:
+        refuse_bad_name("Upload", filename, "filename", "Pass a plain file name, e.g. report.pdf.")
+    else:
+        # The local file's own name too: ` .. ` is a valid local name (pre-QA on #470). It
+        # isn't `filename`, which the caller didn't pass (QA round 3).
+        refuse_bad_name(
+            "Upload",
+            local.name,
+            "local_path",
+            "Pass filename with a plain name for the file on the NAS.",
+            label=f"the local file's name ({local.name!r})",
+        )
     file_size = local.stat().st_size
     dest = normalize_path(dest_folder)
     effective_name = filename or local.name

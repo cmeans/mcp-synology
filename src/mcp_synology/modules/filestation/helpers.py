@@ -603,12 +603,17 @@ def _is_dot(part: str) -> bool:
     return part.strip(" ") in (".", "..")
 
 
-def refuse_bad_name(op: str, name: str, param: str, suggestion: str) -> None:
-    """Raise ``invalid_parameter`` for a NAS file name that isn't one: a ``/``, a NUL, or
-    ``.`` or ``..`` (#449), naming which."""
+def refuse_bad_name(
+    op: str, name: str, param: str, suggestion: str, label: str | None = None
+) -> None:
+    """Raise ``invalid_parameter`` for a NAS file name that isn't one: blank, a ``/``, a
+    NUL, or ``.`` or ``..`` (#449), naming which. ``label`` names it in the message when it
+    isn't ``param`` itself (an upload's local file name)."""
     problem = (
+        # Blank is any whitespace (a tab, a no-break space); only the dot rule is spaces
+        # only (QA round 3 on #470).
         "is empty"
-        if not name.strip(" ")
+        if not name.strip()
         else "contains '/'"
         if "/" in name
         else "contains a NUL character"
@@ -620,7 +625,7 @@ def refuse_bad_name(op: str, name: str, param: str, suggestion: str) -> None:
     if problem:
         error_response(
             ErrorCode.INVALID_PARAMETER,
-            f"{op} failed: {param} should be just a file name, but it {problem}.",
+            f"{op} failed: {label or param} should be just a file name, but it {problem}.",
             retryable=False,
             param=param,
             value=name,

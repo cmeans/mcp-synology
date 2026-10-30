@@ -63,9 +63,17 @@ class TestUploadFile:
         with pytest.raises(ToolError) as exc:
             await upload_file(mock_client, local_path=str(local_file), dest_folder="/video/up")
         error = json.loads(str(exc.value))["error"]
-        assert (error["code"], error["param"]) == ("invalid_parameter", "filename")
+        # Named as the local file, not `filename`, which wasn't passed (QA round 3 on #470).
+        assert (error["code"], error["param"]) == ("invalid_parameter", "local_path")
+        assert error["message"] == (
+            "Upload failed: the local file's name (' .. ') should be just a file name, but it "
+            "is '.' or '..'."
+        )
+        assert error["suggestion"] == "Pass filename with a plain name for the file on the NAS."
 
-    @pytest.mark.parametrize("filename", [".", "..", " .. ", "../x", "a/b", "/abs", "a\0b", "   "])
+    @pytest.mark.parametrize(
+        "filename", [".", "..", " .. ", "../x", "a/b", "/abs", "a\0b", "   ", "\t", "\xa0"]
+    )
     async def test_upload_refuses_a_filename_that_isnt_a_name(
         self, mock_client: DsmClient, tmp_path: Path, filename: str
     ) -> None:
