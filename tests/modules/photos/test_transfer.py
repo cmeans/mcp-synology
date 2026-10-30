@@ -6,7 +6,7 @@ import contextlib
 import json
 import os
 from typing import TYPE_CHECKING, Any, ClassVar
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -118,7 +118,8 @@ class TestOriginals:
         assert out.startswith("Downloaded 0 of 1 item(s)") and ", 1 already there)" in out
         assert (
             "12  forest-trail.jpg: already there: a file with this name and this item's size, "
-            "most likely this item from an earlier run (kept)" in out
+            "most likely this item from an earlier run; same name and size only, not verified "
+            "(kept)" in out
         )
         assert "overwrite=true" not in out
 
@@ -1356,7 +1357,7 @@ class TestRetryAdvice:
         assert out.startswith("Downloaded 2 of 3") and ", 1 already there)" in out
         assert (
             "12  a.jpg: already there: a file with this name and this item's size, most "
-            "likely this item from an earlier run (kept)" in out
+            "likely this item from an earlier run; same name and size only, not verified" in out
         )
         assert "overwrite=true" not in out and self.ADVICE not in out
         assert sorted(p.name for p in tmp_path.iterdir()) == ["a.jpg", "a_15.jpg", "b.jpg"]
@@ -1414,8 +1415,9 @@ class TestRetryAdvice:
             (httpx.Response(502), True),  # a proxy's 5xx: retryable
             ("enospc", True),
             ("eacces", False),
+            ("precheck", True),  # the client's free-space check (QA round 3 on #462)
         ],
-        ids=["dsm-105", "http-502", "enospc", "eacces"],
+        ids=["dsm-105", "http-502", "enospc", "eacces", "free-space-precheck"],
     )
     async def test_advice_follows_whether_a_retry_can_help(
         self, tmp_path: Path, answer: Any, advice: bool
@@ -1425,7 +1427,12 @@ class TestRetryAdvice:
         import errno
 
         fake = FakePhotos().on(ITEM, "get", 2, _items("ready", "ready"))
-        if isinstance(answer, str):
+        if answer == "precheck":
+            # The real client: DSM sends a length, and the local disk has less free.
+            fake.on("SYNO.Foto.Download", "download", 1, binary(b"x"), binary(b"y"))
+            free = MagicMock(free=0)
+            patcher = patch("mcp_synology.core.client.shutil.disk_usage", return_value=free)
+        elif isinstance(answer, str):
             fake.on("SYNO.Foto.Download", "download", 1, binary(b"x"), binary(b"y"))
             code = errno.ENOSPC if answer == "enospc" else errno.EACCES
             patcher = patch(
@@ -1451,6 +1458,53 @@ class TestRetryAdvice:
                 )
         assert "Downloaded 0 of 2" in out
         assert (self.ADVICE in out) is advice
+
+    @respx.mock
+    async def test_a_folder_with_the_name_is_reported(self, tmp_path: Path) -> None:
+        (tmp_path / "forest-trail.jpg").mkdir()
+        install(FakePhotos().on(ITEM, "get", 2, {"list": _items("ready")["list"][:1]}))
+        client = make_client()
+        async with client:
+            out = await download_photos(
+                client, ids=[12], dest_folder=str(tmp_path), allowed_roots=[tmp_path]
+            )
+        assert "12  forest-trail.jpg: not downloaded: a folder has that name" in out
+
+    @respx.mock
+    async def test_a_file_that_appears_while_downloading_is_kept(self, tmp_path: Path) -> None:
+        """Another call or program wrote it, so no overwrite=true hint (QA round 3 on
+        #462)."""
+        install(FakePhotos().on(ITEM, "get", 2, {"list": _items("ready")["list"][:1]}))
+        client = make_client()
+        with patch(
+            "mcp_synology.core.client.DsmClient.download_binary",
+            AsyncMock(side_effect=FileExistsError("x")),
+        ):
+            async with client:
+                out = await download_photos(
+                    client, ids=[12], dest_folder=str(tmp_path), allowed_roots=[tmp_path]
+                )
+        assert (
+            "12  forest-trail.jpg: not downloaded: a file with this name appeared while "
+            "downloading, written by something else (kept)" in out
+        )
+        assert "overwrite=true" not in out
+
+    @respx.mock
+    @pytest.mark.parametrize("filesize", ["not a number", None])
+    async def test_an_unreadable_filesize_is_another_file(
+        self, tmp_path: Path, filesize: object
+    ) -> None:
+        (tmp_path / "forest-trail.jpg").write_bytes(b"mine")
+        items = {"list": _items("ready")["list"][:1]}
+        items["list"][0]["filesize"] = filesize
+        install(FakePhotos().on(ITEM, "get", 2, items))
+        client = make_client()
+        async with client:
+            out = await download_photos(
+                client, ids=[12], dest_folder=str(tmp_path), allowed_roots=[tmp_path]
+            )
+        assert "12  forest-trail.jpg: not downloaded: another file has this name" in out
 
     @respx.mock
     async def test_an_existing_preview_says_both_cases(self, tmp_path: Path) -> None:

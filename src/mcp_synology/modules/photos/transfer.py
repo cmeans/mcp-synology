@@ -231,9 +231,11 @@ def _existing(dest: Path, item: dict[str, Any], size: str) -> str:
         except (OSError, ValueError, TypeError):
             same = False
         if same:
+            # A size match isn't proof: another photo can have the same name and size (a
+            # camera's RAW files; QA round 3 on #462).
             return (
                 f"{_ALREADY_THERE}: a file with this name and this item's size, most likely "
-                "this item from an earlier run (kept)"
+                "this item from an earlier run; same name and size only, not verified (kept)"
             )
         return (
             "not downloaded: another file has this name (if it's another item's, from a "
@@ -281,8 +283,10 @@ async def _download_one(
             api, method, version, params, dest, timeout=_TIMEOUT, overwrite=overwrite
         )
     except FileExistsError:
+        # Another call or program wrote it: never this call's own earlier run (QA round 3).
         return (
-            "not downloaded: the file appeared while downloading (overwrite=true replaces it)",
+            "not downloaded: a file with this name appeared while downloading, written by "
+            "something else (kept)",
             False,
         )
     except SynologyError as e:
