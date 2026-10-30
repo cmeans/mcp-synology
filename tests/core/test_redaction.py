@@ -157,6 +157,14 @@ class TestRedactUrls:
         text = f"https://h/a\\,b.iso?k={PASSKEY},magnet:?xt=urn:btih:abc"
         assert redact_urls(text) == "https://h/a\\,b.iso?k=***,magnet:?xt=urn:btih:abc"
 
+    @pytest.mark.parametrize("prefix", ["MAGNET:?", "Magnet:?"])
+    def test_uppercase_magnet_is_redacted(self, prefix: str) -> None:
+        plain = f"{prefix}xt=urn:btih:abc&tr=http://t.example/announce/{PASSKEY}"
+        encoded = f"{prefix}xt=urn:btih:abc&tr=http%3A%2F%2Ft.example%2Fa%2F{PASSKEY}"
+        for text in (plain, encoded, f"see {plain}, then"):
+            assert PASSKEY not in redact_urls(text), text
+        assert redact_urls(plain).startswith(prefix)
+
     def test_comma_after_a_url_in_prose_stays_outside(self) -> None:
         assert redact_urls(f"see https://h/x?k={PASSKEY}, then") == "see https://h/x?k=***, then"
 

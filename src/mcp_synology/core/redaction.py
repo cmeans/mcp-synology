@@ -49,11 +49,9 @@ _MAGNET_SAFE_KEYS = frozenset({"xt", "dn", "xl", "kt"})
 # URL in prose: "see https://…, then") is left out of it.
 _URL_CHAR = (
     r"""(?:[^\s,"'<>]"""
-    r"""|,(?!\s*(?:[A-Za-z][A-Za-z0-9+.-]*://|(?:magnet|ed2k|thunder|flashget|qqdl):)))"""
+    r"""|,(?!\s*(?:[A-Za-z][A-Za-z0-9+.-]*://|(?i:magnet|ed2k|thunder|flashget|qqdl):)))"""
 )
-_URL_IN_TEXT = re.compile(
-    rf"""(?:magnet:\?|[A-Za-z][A-Za-z0-9+.-]*://){_URL_CHAR}+(?<!,)""", re.IGNORECASE
-)
+_URL_IN_TEXT = re.compile(rf"""(?:(?i:magnet):\?|[A-Za-z][A-Za-z0-9+.-]*://){_URL_CHAR}+(?<!,)""")
 
 
 # A query item or path parameter glued to a title: ``?key=value``, ``&key=value``
@@ -92,7 +90,8 @@ def _redact_query(query: str) -> str:
 
 def _redact_magnet(magnet: str) -> str:
     params = []
-    for item in magnet[len("magnet:?") :].split("&"):
+    prefix, rest = magnet[: len("magnet:?")], magnet[len("magnet:?") :]
+    for item in rest.split("&"):
         key, sep, value = item.partition("=")
         if not sep:
             item = MASK
@@ -104,12 +103,12 @@ def _redact_magnet(magnet: str) -> str:
         elif key not in _MAGNET_SAFE_KEYS:
             item = f"{key}={MASK}"
         params.append(item)
-    return "magnet:?" + "&".join(params)
+    return prefix + "&".join(params)
 
 
 def redact_url(url: str) -> str:
     """Return ``url`` with secrets masked; anything that isn't a URL is returned as-is."""
-    if url.startswith("magnet:?"):
+    if url[: len("magnet:?")].lower() == "magnet:?":  # any case, as DSM may accept it
         return _redact_magnet(url)
     if "://" not in url:
         return url

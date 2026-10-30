@@ -101,7 +101,7 @@ DSM returns tracker announce URLs and task source URIs verbatim. A private track
 - the fragment is dropped
 - a magnet keeps only `xt`, `dn`, `xl` and `kt` as they are, redacts its URL-valued parameters (`tr`, `ws`, `as`, `xs`) recursively, and masks every other value. A tracker URL pasted unencoded splits on `&`, so its `passkey=` lands at the top level, where it's masked
 
-That covers `get_download_info`'s Trackers table and URI line, and every `DsmClient` DEBUG request log. DSM still receives the real values.
+In free text (a list, a log line, an error), a URL runs until whitespace, a quote, or a comma followed by another URI's start (#397), so a comma inside a URL doesn't end it; a magnet is recognized in any case (`MAGNET:?`). That covers `get_download_info`'s Trackers table and URI line, and every `DsmClient` DEBUG request log. DSM still receives the real values.
 
 Task titles get a narrower pass (`redact_title`): DSM titles an HTTP task with its URL's tail, query string included (`file.bin&_sid=...`, seen on vdsm). So `?key=`, `&key=` and `;key=` values in a title, and any whole URL in it, are masked in `list_downloads` and `get_download_info`. Whether token-shaped words are masked depends on the task type (`tasks._title`):
 - **BT:** kept, because a BT title is the torrent's name (`Show_Series_1_2026_1080p`).

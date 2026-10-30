@@ -144,7 +144,7 @@ async def test_hidden_recycle_pages_every_item_once(nas_client: Any) -> None:
                 "SYNO.FileStation.List",
                 "list",
                 version=2,
-                params={"folder_path": "/home", "sort_direction": direction},
+                params={"folder_path": "/home", "sort_by": "name", "sort_direction": direction},
             )
             positions[direction] = [f["name"] for f in ordered["files"]].index("#recycle")
         limits = {2, len(expected), *(p for p in positions.values() if p > 0)}
