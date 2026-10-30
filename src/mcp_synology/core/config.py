@@ -192,7 +192,8 @@ class AppConfig(BaseModel, extra="forbid"):
                     f"{what} contains invalid characters. Only lowercase alphanumeric "
                     "characters and hyphens are allowed"
                     + (
-                        ": set connection.host to a bare host name or address, or set instance_id."
+                        ": set instance_id (lowercase letters, digits and hyphens), or a "
+                        "connection.host it can be derived from."
                         if derived
                         else "."
                     )
@@ -501,7 +502,9 @@ def format_yaml_error(exc: yaml.YAMLError) -> str:
     hint = (
         "The text there isn't shown, since it may be a password: check its quoting (a "
         "value starting with a YAML special character, such as * ! @ % & ` | > [ { or a "
-        "quote, or containing ': ' or ' #', needs quotes) and indentation."
+        "quote, or containing ': ' or ' #', needs quotes; inside double quotes a backslash "
+        "starts an escape, so write a Windows path in single quotes, 'C:\\Users\\me', or "
+        "double each backslash) and indentation."
     )
     if isinstance(exc, ConfigValueError) and exc.kind == "RecursionError":
         return (

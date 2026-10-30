@@ -862,3 +862,21 @@ class TestUpdateNotices:
             "    enabled: true\n"
         )
         assert load_config(config_file).update_notices == expected
+
+
+def test_a_double_quoted_windows_path_gets_the_backslash_hint(tmp_path: Any) -> None:
+    """`"C:\\Users\\me"` is a YAML escape error; the text isn't shown, so the hint says why
+    (pre-QA on QA round 3, #469)."""
+    from mcp_synology.core.config import format_yaml_error, load_config
+
+    path = tmp_path / "c.yaml"
+    path.write_text(
+        'schema_version: 1\nconnection: {host: nas}\nallowed_local_paths: ["C:\\Data\\mine"]\n'
+    )
+    with pytest.raises(yaml.YAMLError) as exc:
+        load_config(path)
+    message = format_yaml_error(exc.value)
+    assert "Data" not in message and "mine" not in message
+    assert "write a Windows path in single quotes, 'C:\\Users\\me', or double each backslash" in (
+        message
+    )
