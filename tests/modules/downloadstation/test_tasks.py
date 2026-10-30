@@ -851,6 +851,9 @@ class TestSplitUris:
             ("https://a/x,\xa0https://b", ["https://a/x", "https://b"]),
             # Commas and whitespace interleaved at an edge (QA round 3).
             ("https://a,  ,  ", ["https://a"]),
+            ("https://a ,\t,\r\n", ["https://a"]),
+            ("magnet:?xt=1&dn=a,b , ,", ["magnet:?xt=1&dn=a,b"]),
+            # Guards that held before too.
             (", ,https://b", ["https://b"]),
             ("https://a,\xa0", ["https://a"]),
             (",,", []),
@@ -873,6 +876,16 @@ def _default_destination(dest: str | None, *, is_manager: bool = True) -> respx.
 def _has_default() -> None:
     """A manager whose default destination is set (the normal case)."""
     _default_destination("writable")
+
+    def test_a_long_run_of_separators_is_linear(self) -> None:
+        # Pre-QA on QA round 3: an end-anchored regex took 11.6 s on 64 KB of " ,".
+        import time
+
+        from mcp_synology.modules.downloadstation.tasks import split_uris
+
+        start = time.perf_counter()
+        assert split_uris("https://a/" + " ," * 32000 + "x") == ["https://a/" + " ," * 32000 + "x"]
+        assert time.perf_counter() - start < 0.5
 
 
 class TestCreateDownloadDestination:

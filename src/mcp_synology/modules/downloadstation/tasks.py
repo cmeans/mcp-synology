@@ -580,7 +580,15 @@ _URI_START = re.compile(
 )
 
 
-_EDGES = re.compile(r"^[\s,]+|[\s,]+\Z")
+def _trim_edges(piece: str) -> str:
+    """Drop whitespace and commas, interleaved, from both ends, in linear time: an
+    end-anchored regex backtracks quadratically on a long run of them mid-string."""
+    start, end = 0, len(piece)
+    while start < end and (piece[start].isspace() or piece[start] == ","):
+        start += 1
+    while end > start and (piece[end - 1].isspace() or piece[end - 1] == ","):
+        end -= 1
+    return piece[start:end]
 
 
 def split_uris(text: str) -> list[str]:
@@ -599,7 +607,7 @@ def split_uris(text: str) -> list[str]:
             pieces.append(piece)
     # Any whitespace, a pasted no-break space included, and commas between it (QA rounds
     # 2 and 3 on #459).
-    return [u for u in (_EDGES.sub("", p) for p in pieces) if u]
+    return [u for u in (_trim_edges(p) for p in pieces) if u]
 
 
 async def create_download(
