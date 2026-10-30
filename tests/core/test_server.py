@@ -1829,9 +1829,11 @@ class TestInstructionComments:
 # themselves; the model otherwise read it like `pattern`, where a bare word matches anywhere.
 # +107 by #397 (QA round 1): create_download's `uri` says to give each URI its scheme,
 # since a comma starts another URI only when a scheme follows it.
+# +151 by #450 (QA round 1): download_photos says that items sharing a name get their id
+# added, and that a retry repeats the whole call with the same ids in the same order (#467).
 # +71 by #451 (#480): delete_files says a whole shared folder is refused, and to delete its
 # items by path.
-PAYLOAD_BUDGET_CHARS = 55_866
+PAYLOAD_BUDGET_CHARS = 56_017
 
 
 class TestPayloadBudget:
