@@ -1175,7 +1175,9 @@ class DsmClient:
                         f"Insufficient local disk space: file is {format_size(total_size)} "
                         f"but only {format_size(free_space)} free."
                     )
-                    raise OSError(msg)
+                    # ENOSPC, as a write that runs out would raise, so callers treat both
+                    # the same (QA round 3 on #462).
+                    raise OSError(errno.ENOSPC, msg)
 
             # Binary response — stream to a temp file, then rename onto dest.
             # The temp name doesn't embed the target name, so a long target

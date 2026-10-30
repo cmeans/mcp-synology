@@ -265,6 +265,12 @@ async def test_download_photos(photos: DsmClient, tmp_path: Path) -> None:
         assert (tmp_path / "beach-sunset.jpg").read_bytes() == (
             SEED / "beach-sunset.jpg"
         ).read_bytes()
+        # The same call again finds the file at the item's filesize: DSM's filesize is the
+        # original's byte count, which the "already there" rule relies on (#462).
+        again = await download_photos(
+            photos, ids=[item], dest_folder=str(tmp_path), allowed_roots=[tmp_path]
+        )
+        assert ", 1 already there)" in again and "already there: a file with this name" in again
 
         async def preview() -> str | None:
             text = await download_photos(

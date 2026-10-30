@@ -990,6 +990,32 @@ class TestDownloadFile:
         assert body["status"] == "error"
         assert body["error"]["code"] == "disk_full"
 
+    @respx.mock
+    async def test_the_clients_free_space_check_reports_disk_full(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """No size from getinfo, so download_file's own check is skipped and the client's
+        catches it: `disk_full`, retryable, since #462 gave it ENOSPC (it was
+        `filesystem_error` with a filename suggestion)."""
+        from unittest.mock import MagicMock, patch
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=[
+                httpx.Response(
+                    200,
+                    json={"success": True, "data": {"files": [{"path": "/video/a.mkv"}]}},
+                ),
+                httpx.Response(200, content=b"x" * 5000, headers={"content-length": "5000"}),
+            ]
+        )
+        with (
+            patch("mcp_synology.core.client.shutil.disk_usage", return_value=MagicMock(free=1)),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await download_file(mock_client, path="/video/a.mkv", dest_folder=str(tmp_path))
+        error = json.loads(str(exc_info.value))["error"]
+        assert (error["code"], error["retryable"]) == ("disk_full", True)
+
     async def test_download_enospc_reports_disk_full(
         self, mock_client: DsmClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
