@@ -192,8 +192,9 @@ class AppConfig(BaseModel, extra="forbid"):
                     f"{what} contains invalid characters. Only lowercase alphanumeric "
                     "characters and hyphens are allowed"
                     + (
-                        ": set instance_id (lowercase letters, digits and hyphens), or a "
-                        "connection.host it can be derived from."
+                        ": write connection.host as a bare host name or IPv4 address (no "
+                        "https://, user name or port), or set instance_id (lowercase letters, "
+                        "digits and hyphens), which an IPv6 address needs."
                         if derived
                         else "."
                     )
@@ -390,7 +391,19 @@ def _section_keys(loc_parts: list[str]) -> list[str]:
     return list(model.model_fields)
 
 
-def _shown_location(err: Any, loc_parts: list[str]) -> str:
+def _non_text_keys(errors: list[Any]) -> set[tuple[Any, ...]]:
+    """The mappings' keys pydantic reported as not text (`modules.7319.[key]`), as the
+    location of the key itself (`("modules", 7319)`)."""
+    return {
+        tuple(raw[: raw.index("[key]")])
+        for raw in (tuple(err.get("loc", ())) for err in errors)
+        if "[key]" in raw
+    }
+
+
+def _shown_location(
+    err: Any, loc_parts: list[str], non_text_keys: set[tuple[Any, ...]] | None = None
+) -> str:
     """The error's location, except an unknown key that may be part of a password.
 
     YAML splits a value with a comma inside a flow mapping (`{password: a,Hunter2x}`): the
@@ -411,6 +424,13 @@ def _shown_location(err: Any, loc_parts: list[str]) -> str:
         cut = raw_loc.index("[key]") - 1
         where = ".".join(str(p) for p in raw_loc[:cut])
         return (f"{where}." if where else "") + _NOT_TEXT_KEY
+    for hidden in non_text_keys or ():
+        if tuple(raw_loc[: len(hidden)]) == hidden:
+            # Another error about that same key (`modules: {…, 7319}` also fails as
+            # `modules.7319`, "should be a dictionary"): it isn't named there either (#469
+            # QA round 4).
+            where = ".".join(str(p) for p in hidden[:-1])
+            return (f"{where}." if where else "") + _NOT_TEXT_KEY
     if err.get("type") == "invalid_key" and loc_parts:
         # A key YAML read as a number or a date (`{password: Summer,2024}` splits into a
         # key 2024): never a real config key, and possibly part of a password (#469 QA
@@ -419,7 +439,9 @@ def _shown_location(err: Any, loc_parts: list[str]) -> str:
         return (f"{where}." if where else "") + _NOT_TEXT_KEY
     if err.get("type") == "extra_forbidden" and loc_parts:
         key = loc_parts[-1]
-        suspect = err.get("input") is None or loc_parts[0] == "auth"
+        # Only a key with no value can be a comma-split fragment of a value (QA round 4).
+        valueless = err.get("input") is None
+        suspect = valueless or loc_parts[0] == "auth"
         valid = _section_keys(loc_parts)
         if suspect:
             where = ".".join(loc_parts[:-1])
@@ -430,14 +452,15 @@ def _shown_location(err: Any, loc_parts: list[str]) -> str:
                 # `Password1`, close to `password` (QA round 2 on #469).
                 return (f"{where}." if where else "") + (
                     f'<an unknown key close to "{by_lower[close[0]]}", not shown since it may '
-                    "be part of a password (a misspelling, or a comma inside {…} splitting a "
-                    "value: quote it)>"
+                    "be part of a password (a misspelling"
+                    + (", or a comma inside {…} splitting a value: quote it" if valueless else "")
+                    + ")>"
                 )
             return (
                 (f"{where}." if where else "")
-                + "<an unknown key, not shown since it may hold or be part of a password (a "
-                "comma inside {…} splits a value into a key); valid keys here: "
-                f"{', '.join(sorted(valid))}>"
+                + "<an unknown key, not shown since it may hold or be part of a password"
+                + (" (a comma inside {…} splits a value into a key)" if valueless else "")
+                + f"; valid keys here: {', '.join(sorted(valid))}>"
             )
     return loc
 
@@ -550,9 +573,10 @@ def format_validation_error(exc: Any) -> str:
     if not errors:
         return f"Configuration validation failed: {exc}"
     lines = [f"Configuration validation failed ({len(errors)} error(s)):"]
+    non_text_keys = _non_text_keys(errors)
     for err in errors:
         loc_parts = [str(p) for p in err.get("loc", ())]
-        loc = _shown_location(err, loc_parts)
+        loc = _shown_location(err, loc_parts, non_text_keys)
         msg = err.get("msg", "validation error")
         input_value = err.get("input")
         suffix = ""

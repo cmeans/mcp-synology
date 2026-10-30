@@ -148,10 +148,11 @@ class TestAppConfig:
         message = format_validation_error(exc.value)
         # An unknown key's value could be a misplaced credential: never echoed. Under
         # auth the key itself may be half a password: named by the real key it's close to
-        # (QA round 2 on #469).
+        # (QA round 2 on #469). It has a value, so it can't be a comma-split fragment: no
+        # "quote it" hint (QA round 4).
         shown = (
             'auth.<an unknown key close to "password", not shown since it may be part of a '
-            "password (a misspelling, or a comma inside {…} splitting a value: quote it)>"
+            "password (a misspelling)>"
             if section == "auth"
             else f"{section}.{key}"
         )
@@ -392,9 +393,68 @@ class TestAppConfig:
             AppConfig(**raw)
         assert (
             '  - auth.<an unknown key close to "username", not shown since it may be part of a '
-            "password (a misspelling, or a comma inside {…} splitting a value: quote it)>: "
-            "Extra inputs are not permitted"
+            "password (a misspelling)>: Extra inputs are not permitted"
         ) in (format_validation_error(exc.value))
+
+    def test_an_auth_key_with_a_value_and_no_near_miss_gets_no_comma_hint(self) -> None:
+        """`pwd: x` has a value, so no comma split made it (QA round 4 on #469): the valid
+        keys, without the comma clause."""
+        from pydantic import ValidationError
+
+        from mcp_synology.core.config import format_validation_error
+
+        raw = _minimal_raw()
+        raw["auth"] = {"pwd": "Hunter2x"}
+        with pytest.raises(ValidationError) as exc:
+            AppConfig(**raw)
+        message = format_validation_error(exc.value)
+        assert (
+            "  - auth.<an unknown key, not shown since it may hold or be part of a password; "
+            "valid keys here: device_id, password, username>: Extra inputs are not permitted"
+        ) in message
+        assert "Hunter" not in message and "pwd" not in message
+
+    @pytest.mark.parametrize(
+        "modules",
+        [
+            "{filestation: {enabled: true}, 7319}",
+            "{filestation: {enabled: true}, 2024-01-01}",
+            "{filestation: {enabled: true}, 7319: Hunter2x}",
+        ],
+        ids=["int", "date", "int-with-value"],
+    )
+    def test_a_non_text_key_under_modules_is_never_named(self, modules: str) -> None:
+        """`modules: {…, 7319}` fails twice for the same key: not text (`[key]`) and not a
+        module's mapping. Neither error names it (QA round 4 on #469)."""
+        import yaml
+        from pydantic import ValidationError
+
+        from mcp_synology.core.config import format_validation_error
+
+        raw = yaml.safe_load(f"schema_version: 1\nconnection: {{host: nas}}\nmodules: {modules}\n")
+        with pytest.raises(ValidationError) as exc:
+            AppConfig(**raw)
+        message = format_validation_error(exc.value)
+        assert "7319" not in message and "2024" not in message and "Hunter" not in message
+        lines = message.splitlines()[1:]
+        assert lines and all(
+            line.startswith("  - modules.<a key that isn't text, not shown") for line in lines
+        )
+
+    def test_a_list_position_is_still_named(self) -> None:
+        """Only a mapping's non-text key is hidden: a list's position (an int in pydantic's
+        location) is named as before."""
+        from pydantic import ValidationError
+
+        from mcp_synology.core.config import format_validation_error
+
+        raw = _minimal_raw()
+        raw["allowed_local_paths"] = ["/a", 5]
+        with pytest.raises(ValidationError) as exc:
+            AppConfig(**raw)
+        assert "  - allowed_local_paths.1: Input should be a valid string" in (
+            format_validation_error(exc.value)
+        )
 
     def test_a_non_text_key_in_module_settings_is_not_shown(self) -> None:
         """`{x: Hunter,2024}` in settings splits into a key 2024, which pydantic reports as
@@ -556,7 +616,14 @@ class TestAppConfig:
         with pytest.raises(ValueError) as exc:
             AppConfig(**raw)
         assert "hunter" not in str(exc.value).casefold()
-        assert "The instance_id derived from connection.host contains invalid" in str(exc.value)
+        # The whole advice: what a derivable host looks like, and when instance_id is needed
+        # (QA round 4 on #469).
+        assert (
+            "The instance_id derived from connection.host contains invalid characters. Only "
+            "lowercase alphanumeric characters and hyphens are allowed: write connection.host "
+            "as a bare host name or IPv4 address (no https://, user name or port), or set "
+            "instance_id (lowercase letters, digits and hyphens), which an IPv6 address needs."
+        ) in str(exc.value)
 
     def test_yaml_error_without_a_location(self) -> None:
         import yaml
