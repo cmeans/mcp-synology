@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from urllib.parse import parse_qsl
 
 import httpx
@@ -1178,3 +1178,63 @@ class TestConcurrentReauth:
                 await client.request("SYNO.FileStation.List", "list_share", version=2)
             assert client.sid == "new-sid"
         assert seen == ["old-sid"]
+
+
+class TestRefusalEdges:
+    """Guards the pre-QA review found untested."""
+
+    @respx.mock
+    async def test_a_successful_login_forgets_the_refusal(self) -> None:
+        # Refused with A, then logged in with B: A is tried again, not answered unsent.
+        logins: list[httpx.Request] = []
+        _auth_routes([_refused(), _granted(), _refused()], logins)
+        stored = {"username": "admin", "password": "a"}
+        async with _make_client() as client:
+            auth = AuthManager(_make_config(), client)
+            with patch.dict(os.environ, _clean_env(), clear=True):
+                with (
+                    patch("mcp_synology.core.auth.kr", _keyring_with(**stored)),
+                    pytest.raises(AuthenticationError),
+                ):
+                    await auth.login()
+                stored["password"] = "b"
+                with patch("mcp_synology.core.auth.kr", _keyring_with(**stored)):
+                    await auth.login()
+                stored["password"] = "a"
+                with (
+                    patch("mcp_synology.core.auth.kr", _keyring_with(**stored)),
+                    pytest.raises(AuthenticationError),
+                ):
+                    await auth.login()
+        assert len(logins) == 3
+
+    @respx.mock
+    async def test_an_error_without_a_dsm_code_is_not_remembered(self) -> None:
+        # Only DSM's verdict is remembered; an AuthenticationError with no code isn't one.
+        config = _make_config(auth={"username": "admin", "password": "secret"})
+        async with _make_client() as client:
+            auth = AuthManager(config, client)
+            sent = AsyncMock(side_effect=[AuthenticationError("odd"), {"sid": "s"}])
+            with (
+                patch.dict(os.environ, _clean_env(), clear=True),
+                patch("mcp_synology.core.auth.kr", _no_keyring()),
+                patch.object(auth, "_send_login", sent),
+            ):
+                with pytest.raises(AuthenticationError, match="odd"):
+                    await auth.login()
+                assert await auth.login() == "s"
+        assert sent.await_count == 2
+
+    async def test_a_session_error_with_no_session_left_logs_in(self) -> None:
+        # The session was cleared (a logout) after the request went out: log in, rather
+        # than read "the session changed" as another request's re-login.
+        calls: list[int] = []
+
+        async def reauth() -> None:
+            calls.append(1)
+
+        async with _make_client() as client:
+            client.set_re_auth_callback(reauth)
+            client.sid = None
+            await client._re_authenticate(119, "SYNO.FileStation.List", "sent-sid")
+        assert calls == [1]

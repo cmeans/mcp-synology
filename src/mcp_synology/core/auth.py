@@ -202,9 +202,10 @@ class LoginRefusals:
             "from the NAS.",
             code=error.code,
             suggestion=(
-                (f"{first}. Then store" if first else "Store") + " the corrected credentials with "
-                "'mcp-synology setup' (or update the config or environment and restart "
-                "the server); 'mcp-synology check' tests the login."
+                (f"{first}. " if first else "")
+                + "mcp-synology tries again once the stored credentials change "
+                "('mcp-synology setup' stores new ones; the running server picks them up) "
+                "or the server restarts; 'mcp-synology check' tests the login."
             ),
         )
         self._refused = (fingerprint, refusal)

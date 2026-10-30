@@ -49,8 +49,7 @@ Fix:
    File Station.
 
 When DSM refuses the credentials, the server doesn't send them again: every later
-tool call gets the same error without contacting DSM, so a model's retries can't
-trip DSM's Auto Block. It tries again once the credentials change (`mcp-synology
+tool call gets the same error, so a model's retries can't trip DSM's Auto Block. It tries again once the credentials change (`mcp-synology
 setup` stores new ones in the keyring; the running server picks them up) or the
 server restarts.
 

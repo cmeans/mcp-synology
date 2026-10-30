@@ -2256,9 +2256,9 @@ class TestFirstLogin:
             "Block, which blocks this computer's IP address from the NAS."
         )
         assert err["suggestion"] == (
-            "Check username and password. Then store the corrected credentials with "
-            "'mcp-synology setup' (or update the config or environment and restart the "
-            "server); 'mcp-synology check' tests the login."
+            "Check username and password. mcp-synology tries again once the stored "
+            "credentials change ('mcp-synology setup' stores new ones; the running server "
+            "picks them up) or the server restarts; 'mcp-synology check' tests the login."
         )
 
     @respx.mock
