@@ -9,6 +9,7 @@ Four-step loading:
 
 from __future__ import annotations
 
+import difflib
 import logging
 import os
 import re
@@ -172,16 +173,29 @@ class AppConfig(BaseModel, extra="forbid"):
             self.connection.port = 5001 if self.connection.https else 5000
 
         # Derive instance_id from host if not set
-        if self.instance_id is None:
+        derived = self.instance_id is None
+        if derived:
             self.instance_id = _derive_instance_id(self.connection.host)
 
         # Normalize and validate instance_id format
         if self.instance_id:
             self.instance_id = self.instance_id.lower()
             if not re.match(r"^[a-z0-9-]+$", self.instance_id):
+                # A derived one isn't quoted: a host written as a URL can carry a password
+                # (`https://admin:…@nas`, #386).
+                what = (
+                    "The instance_id derived from connection.host"
+                    if derived
+                    else f"instance_id '{self.instance_id}'"
+                )
                 msg = (
-                    f"instance_id '{self.instance_id}' contains invalid characters. "
-                    "Only lowercase alphanumeric characters and hyphens are allowed."
+                    f"{what} contains invalid characters. Only lowercase alphanumeric "
+                    "characters and hyphens are allowed"
+                    + (
+                        ": set connection.host to a bare host name or address, or set instance_id."
+                        if derived
+                        else "."
+                    )
                 )
                 raise ValueError(msg)
 
@@ -339,6 +353,21 @@ def _may_show(err: Any, loc_parts: list[str]) -> bool:
     return not (loc_parts and loc_parts[0] == "auth")
 
 
+def _shown_location(err: Any, loc_parts: list[str]) -> str:
+    """The error's location, except an unknown key under `auth:` that isn't a near-miss of
+    a real one: a password with a comma in a flow mapping (`{password: a,Hunter2x}`) is
+    split by YAML, and its second half arrives as a key (#386)."""
+    loc = ".".join(loc_parts) if loc_parts else "<root>"
+    if err.get("type") == "extra_forbidden" and loc_parts and loc_parts[0] == "auth":
+        key = loc_parts[-1]
+        if not difflib.get_close_matches(key, list(AuthConfig.model_fields), n=1, cutoff=0.75):
+            return (
+                "auth.<an unknown key, not shown: it may be part of a password; quote a "
+                "value with a comma inside {…}>"
+            )
+    return loc
+
+
 _YAML_KEY = re.compile(r"\s*-?\s*([A-Za-z_][A-Za-z0-9_]*)\s*:")
 
 
@@ -346,6 +375,21 @@ class ConfigValueError(yaml.YAMLError):
     """A value PyYAML parsed but couldn't build: a tag that doesn't fit it, such as
     `!!int Hunter2x`. PyYAML raises ValueError or AttributeError there, with the value in
     the message (#386)."""
+
+
+def parse_config_text(text: str) -> Any:
+    """`yaml.safe_load`, with any error building a value raised as `ConfigValueError`.
+
+    A tag that doesn't fit its value makes PyYAML raise ValueError (`!!int Hunter2x`),
+    KeyError (`!!bool Hunter2x`), AttributeError (`!!timestamp Hunter2x`) and so on, each
+    naming the value (#386). Every loader of a config file goes through here.
+    """
+    try:
+        return yaml.safe_load(text)
+    except yaml.YAMLError:
+        raise
+    except Exception as e:  # noqa: BLE001 - any constructor error; its text names the value
+        raise ConfigValueError(type(e).__name__) from None
 
 
 def _config_keys() -> set[str]:
@@ -387,10 +431,19 @@ def format_yaml_error(exc: yaml.YAMLError) -> str:
         )
     mark = getattr(exc, "problem_mark", None)
     if mark is None:
+        position = getattr(exc, "position", None)  # a ReaderError: a character YAML refuses
+        if isinstance(exc, yaml.reader.ReaderError) and isinstance(position, int):
+            return (
+                f"The config file has a character YAML doesn't accept (character "
+                f"{position + 1} of the file). {hint}"
+            )
         return f"The config file isn't valid YAML. {hint}"
     where = f"line {mark.line + 1}, column {mark.column + 1}"
     start = getattr(exc, "context_mark", None)
-    if start is not None and start.line != mark.line:
+    context = str(getattr(exc, "context", "") or "")
+    # PyYAML notices an unclosed quote or bracket only at the end of the file; its context
+    # then marks where that value starts. A block context marks the whole document.
+    if start is not None and start.line != mark.line and ("quoted" in context or "flow" in context):
         where += f" (in the value that starts at line {start.line + 1})"
         mark = start
     if key := _key_on_line(mark):
@@ -412,7 +465,7 @@ def format_validation_error(exc: Any) -> str:
     lines = [f"Configuration validation failed ({len(errors)} error(s)):"]
     for err in errors:
         loc_parts = [str(p) for p in err.get("loc", ())]
-        loc = ".".join(loc_parts) if loc_parts else "<root>"
+        loc = _shown_location(err, loc_parts)
         msg = err.get("msg", "validation error")
         input_value = err.get("input")
         suffix = ""
@@ -445,13 +498,7 @@ def load_config(path: str | Path | None = None) -> AppConfig:
 
     logger.debug("Loading config from %s", config_path)
     raw_text = config_path.read_text(encoding="utf-8")
-    try:
-        raw: dict[str, Any] = yaml.safe_load(raw_text) or {}
-    except yaml.YAMLError:
-        raise
-    except (ValueError, TypeError, AttributeError) as e:
-        # A tag that doesn't fit its value (`!!int Hunter2x`): PyYAML's message quotes it.
-        raise ConfigValueError(type(e).__name__) from None
+    raw: dict[str, Any] = parse_config_text(raw_text) or {}
 
     raw = _merge_env_overrides(raw)
 

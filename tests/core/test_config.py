@@ -256,7 +256,7 @@ class TestAppConfig:
         assert "Hunter" not in format_yaml_error(exc.value)
 
     @pytest.mark.parametrize(
-        "value", ["!!int Hunter2x", "!!float Hunter2x", "!!timestamp Hunter2x"]
+        "value", ["!!int Hunter2x", "!!float Hunter2x", "!!timestamp Hunter2x", "!!bool Hunter2x"]
     )
     def test_a_tag_that_does_not_fit_is_never_quoted(self, tmp_path: Any, value: str) -> None:
         """PyYAML raises ValueError or AttributeError there, with the value in it."""
@@ -293,6 +293,88 @@ class TestAppConfig:
         message = format_yaml_error(exc.value)
         assert "(in the value that starts at line 5), on the `password` line. " in message
         assert "Hunter" not in message
+
+    @pytest.mark.parametrize(
+        "auth",
+        [
+            "{username: me, password: a,Hunter2x}",
+            "{username: me, password: x,y,Hunter2x}",
+            "{username: me, password: Hunter,2x}",
+        ],
+    )
+    def test_a_password_split_by_a_comma_is_not_shown(self, auth: str) -> None:
+        """YAML splits `password: a,Hunter2x` in a flow mapping at the comma; the second
+        half arrives as an unknown key under auth, and isn't named."""
+        import yaml
+        from pydantic import ValidationError
+
+        from mcp_synology.core.config import format_validation_error
+
+        raw = yaml.safe_load(
+            "schema_version: 1\nconnection: {host: nas}\n"
+            f"auth: {auth}\nmodules: {{filestation: {{enabled: true}}}}\n"
+        )
+        with pytest.raises(ValidationError) as exc:
+            AppConfig(**raw)
+        message = format_validation_error(exc.value)
+        assert "2x" not in message and "Hunter" not in message and "auth.y" not in message
+        assert "auth.<an unknown key, not shown: it may be part of a password" in message
+
+    def test_a_misspelled_auth_key_is_still_named(self) -> None:
+        from pydantic import ValidationError
+
+        from mcp_synology.core.config import format_validation_error
+
+        raw = _minimal_raw()
+        raw["auth"] = {"usrname": "me", "pasword": "x", "device_ids": "y"}
+        with pytest.raises(ValidationError) as exc:
+            AppConfig(**raw)
+        message = format_validation_error(exc.value)
+        for key in ("usrname", "pasword", "device_ids"):
+            assert f"  - auth.{key}: Extra inputs are not permitted" in message
+
+    def test_a_block_context_does_not_point_to_line_1(self, tmp_path: Any) -> None:
+        # A misindented key: PyYAML's context is the whole document's block mapping.
+        import yaml
+
+        from mcp_synology.core.config import format_yaml_error, load_config
+
+        path = tmp_path / "c.yaml"
+        path.write_text(
+            "schema_version: 1\nconnection: {host: nas}\nauth:\n  username: me\n"
+            " password: Hunter2x\n"
+        )
+        with pytest.raises(yaml.YAMLError) as exc:
+            load_config(path)
+        message = format_yaml_error(exc.value)
+        assert "starts at line 1" not in message and "Hunter" not in message
+        assert message.startswith("The config file isn't valid YAML at line 5")
+
+    def test_a_refused_character_says_where(self, tmp_path: Any) -> None:
+        import yaml
+
+        from mcp_synology.core.config import format_yaml_error, load_config
+
+        path = tmp_path / "c.yaml"
+        path.write_text("schema_version: 1\nauth:\n  password: Hun\x07ter2x\n")
+        with pytest.raises(yaml.YAMLError) as exc:
+            load_config(path)
+        message = format_yaml_error(exc.value)
+        assert "ter2x" not in message
+        assert "(character 40 of the file)" in message
+
+    def test_a_derived_instance_id_is_not_quoted(self) -> None:
+        """A host written as a URL can carry a password; the instance_id derived from it
+        isn't quoted."""
+        raw: dict[str, Any] = {
+            "schema_version": 1,
+            "connection": {"host": "https://admin:Hunter2x@nas"},
+            "modules": {"filestation": {"enabled": True}},
+        }
+        with pytest.raises(ValueError) as exc:
+            AppConfig(**raw)
+        assert "hunter" not in str(exc.value).casefold()
+        assert "The instance_id derived from connection.host contains invalid" in str(exc.value)
 
     def test_a_set_is_not_shown(self) -> None:
         from pydantic import ValidationError

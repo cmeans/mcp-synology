@@ -64,6 +64,8 @@ def setup(config: str | None, list_configs: bool, verbose: bool) -> None:
 
 def _list_configurations() -> None:
     """List existing configuration files in the config directory."""
+    from mcp_synology.core.config import parse_config_text
+
     if not _CONFIG_DIR.exists():
         click.echo("No configurations found.")
         click.echo(f"Config directory: {_CONFIG_DIR}")
@@ -78,7 +80,7 @@ def _list_configurations() -> None:
     click.echo(f"Configurations in {_CONFIG_DIR}:\n")
     for f in yaml_files:
         try:
-            raw = yaml.safe_load(f.read_text(encoding="utf-8")) or {}
+            raw = parse_config_text(f.read_text(encoding="utf-8")) or {}
             host = raw.get("connection", {}).get("host", "?")
             alias = raw.get("alias", "")
             instance_id = raw.get("instance_id", f.stem)
@@ -87,7 +89,7 @@ def _list_configurations() -> None:
             click.echo(f"    Name: {label}")
             click.echo(f"    Host: {host}")
             click.echo()
-        except (OSError, yaml.YAMLError, AttributeError):
+        except (OSError, ValueError, yaml.YAMLError, AttributeError):
             click.echo(f"  {f.name}  (could not parse)")
 
 
