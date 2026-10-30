@@ -325,7 +325,9 @@ class TestAppConfig:
             AppConfig(**raw)
         message = format_validation_error(exc.value)
         assert "2x" not in message and "Hunter" not in message and "auth.y" not in message
-        assert "auth.<an unknown key, not shown: it may be part of a password" in message
+        assert (
+            "auth.<an unknown key, not shown since it may hold or be part of a password" in message
+        )
 
     @pytest.mark.parametrize(
         "body",
@@ -351,7 +353,7 @@ class TestAppConfig:
             AppConfig(**raw)
         message = format_validation_error(exc.value)
         assert "Hunter" not in message
-        assert "<an unknown key, not shown: it may be part of a password" in message
+        assert "<an unknown key, not shown since it may hold or be part of a password" in message
 
     def test_a_valueless_near_miss_under_a_module_is_named(self) -> None:
         from pydantic import ValidationError
@@ -365,6 +367,54 @@ class TestAppConfig:
         assert "  - modules.filestation.permision: Extra inputs are not permitted" in (
             format_validation_error(exc.value)
         )
+
+    def test_a_near_miss_in_another_case_is_named(self) -> None:
+        """`USERNAME` under auth is a near-miss of `username` in any case: named."""
+        from pydantic import ValidationError
+
+        from mcp_synology.core.config import format_validation_error
+
+        raw = _minimal_raw()
+        raw["auth"] = {"USERNAME": "me"}
+        with pytest.raises(ValidationError) as exc:
+            AppConfig(**raw)
+        assert "  - auth.USERNAME: Extra inputs are not permitted" in (
+            format_validation_error(exc.value)
+        )
+
+    def test_a_non_text_key_in_module_settings_is_not_shown(self) -> None:
+        """`{x: Hunter,2024}` in settings splits into a key 2024, which pydantic reports as
+        `settings.2024.[key]`: the mapping is named, never the key."""
+        import yaml
+        from pydantic import ValidationError
+
+        from mcp_synology.core.config import format_validation_error
+
+        raw = yaml.safe_load(
+            "schema_version: 1\nconnection: {host: nas}\n"
+            "modules: {filestation: {settings: {x: Hunter,2024}}}\n"
+        )
+        with pytest.raises(ValidationError) as exc:
+            AppConfig(**raw)
+        message = format_validation_error(exc.value)
+        assert "2024" not in message and "Hunter" not in message
+        assert "modules.filestation.settings.<a key that isn't text, not shown" in message
+
+    @pytest.mark.parametrize(
+        "line",
+        ["\ufeffschema_version: *x\n", '"schema_version": *x\n', "'schema_version': *x\n"],
+        ids=["bom", "double-quoted", "single-quoted"],
+    )
+    def test_yaml_error_names_a_bom_or_quoted_key(self, tmp_path: Any, line: str) -> None:
+        import yaml
+
+        from mcp_synology.core.config import format_yaml_error, load_config
+
+        path = tmp_path / "c.yaml"
+        path.write_text(line + "connection: {host: nas}\n", encoding="utf-8")
+        with pytest.raises(yaml.YAMLError) as exc:
+            load_config(path)
+        assert "on the `schema_version` line. " in format_yaml_error(exc.value)
 
     def test_an_unknown_key_with_a_value_is_still_named(self) -> None:
         from pydantic import ValidationError

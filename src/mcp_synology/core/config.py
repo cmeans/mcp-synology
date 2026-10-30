@@ -348,6 +348,9 @@ def _may_show(err: Any, loc_parts: list[str]) -> bool:
     never shown."""
     if not isinstance(err.get("input"), str | int | float | bool):
         return False
+    # A mapping key that failed (`settings.2024.[key]`): the input is the key itself.
+    if "[key]" in err.get("loc", ()):
+        return False
     # An unknown key's value, or a section given a plain value (`connection: https://
     # admin:…@nas` is a "should be a dictionary" error carrying that text).
     if err.get("type") in (
@@ -387,6 +390,17 @@ def _shown_location(err: Any, loc_parts: list[str]) -> str:
     value elsewhere (`totally_unknown: x`) is named, as before.
     """
     loc = ".".join(loc_parts) if loc_parts else "<root>"
+    raw_loc = err.get("loc", ())
+    if "[key]" in raw_loc:
+        # A key of a free-form mapping (module settings) that isn't text: `{x: Hunter,2024}`
+        # fails as `<settings>.2024.[key]`. Name the mapping, not the key.
+        cut = raw_loc.index("[key]") - 1
+        where = ".".join(str(p) for p in raw_loc[:cut])
+        return (
+            (f"{where}." if where else "")
+            + "<a key that isn't text, not shown: it may be part of a password; quote a "
+            "value with a comma inside {…}>"
+        )
     if err.get("type") == "invalid_key" and loc_parts:
         # A key YAML read as a number or a date (`{password: Summer,2024}` splits into a
         # key 2024): never a real config key, and possibly part of a password (QA round 1).
@@ -399,19 +413,21 @@ def _shown_location(err: Any, loc_parts: list[str]) -> str:
     if err.get("type") == "extra_forbidden" and loc_parts:
         key = loc_parts[-1]
         suspect = err.get("input") is None or loc_parts[0] == "auth"
+        valid = _section_keys(loc_parts)
         if suspect and not difflib.get_close_matches(
-            key, _section_keys(loc_parts), n=1, cutoff=0.75
+            key.lower(), [k.lower() for k in valid], n=1, cutoff=0.75
         ):
             where = ".".join(loc_parts[:-1])
             return (
                 (f"{where}." if where else "")
-                + "<an unknown key, not shown: it may be part of a password; quote a value "
-                "with a comma inside {…}>"
+                + "<an unknown key, not shown since it may hold or be part of a password (a "
+                "comma inside {…} splits a value into a key); valid keys here: "
+                f"{', '.join(sorted(valid))}>"
             )
     return loc
 
 
-_YAML_KEY = re.compile(r"\s*-?\s*([A-Za-z_][A-Za-z0-9_]*)\s*:")
+_YAML_KEY = re.compile(r"\s*-?\s*[\"']?([A-Za-z_][A-Za-z0-9_]*)[\"']?\s*:")
 
 
 class ConfigValueError(yaml.YAMLError):
@@ -451,7 +467,8 @@ def _key_on_line(mark: Any) -> str | None:
     lines = buffer.splitlines()
     if mark.line >= len(lines):
         return None
-    key = _YAML_KEY.match(lines[mark.line])
+    # A BOM (Windows Notepad's default) starts the first line.
+    key = _YAML_KEY.match(lines[mark.line].lstrip("\ufeff"))
     return key.group(1) if key and key.group(1) in _config_keys() else None
 
 
