@@ -140,9 +140,9 @@ async def upload_file(
             ErrorCode.ALREADY_EXISTS,
             f"Upload failed: File '{effective_name}' already exists in {dest}.",
             retryable=False,
-            # The argument the name came from, as download_file does (pre-QA on #470).
-            param="filename" if filename else "local_path",
-            value=filename if filename else local_path,
+            # The conflict is the file name, passed or not, as download_file reports it (#189).
+            param="filename",
+            value=effective_name,
             suggestion="Use overwrite=true to replace the existing file.",
         )
 

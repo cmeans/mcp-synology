@@ -124,8 +124,10 @@ class TestUploadFile:
         assert body["status"] == "error"
         assert body["error"]["code"] == "already_exists"
         assert "overwrite=true" in body["error"]["suggestion"]
-        # No filename was passed: the error names local_path (pre-QA on #470).
-        assert body["error"]["param"] == "local_path"
+        # No filename was passed: the conflict is still the file name, as download_file
+        # reports it (#189), with the local file's name as the value.
+        assert body["error"]["param"] == "filename"
+        assert body["error"]["value"] == "test.txt"
 
     @respx.mock
     @pytest.mark.parametrize(("overwrite", "sent"), [(False, None), (True, "true")])
