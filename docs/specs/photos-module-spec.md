@@ -411,7 +411,7 @@ Originals or thumbnails to a local folder.
 Downloaded 2 of 3 item(s) to /home/user/Downloads (original, personal space)
   41  beach-sunset.jpg  50.1 KiB
   36  clip-test.mp4  22.2 KiB
-  12  IMG_0001.jpg: not downloaded: another file has this name (overwrite=true replaces it, or choose another folder)
+  12  IMG_0001.jpg: not downloaded: another file has this name (if it's another item's, from a call with more ids, repeat that whole call instead; otherwise overwrite=true replaces it, or choose another folder)
 ```
 
 **Design notes:**

@@ -294,7 +294,9 @@ async def _download_one(
         return f"not downloaded: {e}{code}", e.retryable
     except OSError as e:
         if e.errno == errno.ENOSPC:
-            return "not downloaded: no space left on the local disk", True
+            # The client's free-space check says how much is needed (pre-QA on #462).
+            detail = f" ({e.strerror})" if e.strerror and e.strerror != os.strerror(e.errno) else ""
+            return f"not downloaded: no space left on the local disk{detail}", True
         # A permission or read-only folder doesn't change by repeating the call.
         return f"not downloaded: couldn't write the file ({e.strerror or e})", False
     return format_size(written), False
