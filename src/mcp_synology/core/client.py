@@ -333,7 +333,7 @@ class DsmClient:
                 return
             if self._login_attempts != attempt and self._login_failure is not None:
                 logger.debug("Re-login failed while this request waited; not repeating it.")
-                raise detached_copy(self._login_failure)
+                raise detached_copy(self._login_failure) or self._login_failure
             self._login_failure = None
             try:
                 await self._re_auth_callback()

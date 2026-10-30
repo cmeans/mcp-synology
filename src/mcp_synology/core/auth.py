@@ -19,6 +19,7 @@ from keyring.errors import KeyringError
 
 from mcp_synology.core.errors import (
     AuthenticationError,
+    LoginRefusedError,
     RememberedRefusalError,
     SessionExpiredError,
     SynologyError,
@@ -233,7 +234,8 @@ def refusal_advice(code: int | None, first: str, sources: dict[str, str | None])
         f"new ones in the keyring; {_SETUP_PICKED_UP})"
     )
     if explicit:
-        where += "; " + "; ".join(explicit) + " override the keyring: change those there and "
+        verb, them = ("overrides", "it") if len(explicit) == 1 else ("override", "those")
+        where += f"; {'; '.join(explicit)} {verb} the keyring: change {them} there and "
         where += "restart the server"
     return f"{first}. {where}" if first else where
 
@@ -287,13 +289,16 @@ class LoginRefusals:
         if sources is None:
             sources = {"username": KEYRING, "password": KEYRING, "device_id": None}
         where = refusal_advice(error.code, first, sources)
-        refusal = AuthenticationError(
+        refusal = LoginRefusedError(
             f"DSM refused the login: {reason}. mcp-synology won't send these credentials "
             "again until they change or the server restarts, because repeated failed "
             "logins can trip DSM's Auto Block, which blocks this computer's IP address "
             "from the NAS.",
             code=error.code,
-            suggestion=f"{where}. 'mcp-synology check' tests the login.",
+            suggestion=(
+                f"{where}. After the fix, 'mcp-synology check' tests the login once (each "
+                "failed check counts toward Auto Block)."
+            ),
         )
         # Keep a fresh copy: the raised one carries the login's frames (and its password)
         # in its traceback once raised.
@@ -415,10 +420,11 @@ class AuthManager:
                     # DSM no longer trusts the stored token, e.g. the trusted
                     # device was removed in DSM's security settings.
                     logger.debug("Login failed: DSM rejected the stored 2FA device token")
+                    # The fix depends on where the token comes from, which the
+                    # refusal's suggestion says (QA round 2 on #461).
                     message = (
-                        "2FA is required and DSM rejected the stored device token "
-                        "(it may have been removed or invalidated on the NAS). "
-                        "Run 'mcp-synology setup' to sign in with a new 2FA code."
+                        "2FA is required and DSM rejected the device token "
+                        "(it may have been removed or invalidated on the NAS)."
                     )
                 else:
                     logger.debug("Login failed: 2FA required but no device token available")
@@ -437,7 +443,9 @@ class AuthManager:
         """Log out the current session.
 
         A DSM error is logged at DEBUG and swallowed (the session may already be
-        expired), unless ``raise_errors`` is set: shutdown uses that to warn (#402).
+        expired), unless ``raise_errors`` is set: shutdown uses that to warn (#402). An
+        expired session (106/107/119) is always logged at DEBUG: after a failed re-login
+        it stays in place (#359), and shutdown sends it.
         """
         if not self._client.sid:
             return

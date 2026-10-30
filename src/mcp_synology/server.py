@@ -481,7 +481,7 @@ class SharedClientManager:
             async with self._init_lock:
                 if self._client is None:
                     if self._init_attempts != attempt and self._init_failure is not None:
-                        raise detached_copy(self._init_failure)
+                        raise detached_copy(self._init_failure) or self._init_failure
                     self._init_failure = None
                     try:
                         await self._init_client()

@@ -139,3 +139,18 @@ class TestDetachedCopy:
         assert copy.__traceback__ is None
         assert copy.__cause__ is None and copy.__context__ is None
         assert original.__traceback__ is not None  # the original is untouched
+
+    def test_a_type_it_cannot_rebuild_gives_none(self) -> None:
+        """pydantic's ValidationError takes its own constructor arguments: no copy, and
+        the caller keeps the original rather than a TypeError (pre-QA on QA round 2)."""
+        from pydantic import BaseModel, ValidationError
+
+        from mcp_synology.core.errors import detached_copy
+
+        class Model(BaseModel):
+            n: int
+
+        try:
+            Model(n="x")  # type: ignore[arg-type]
+        except ValidationError as e:
+            assert detached_copy(e) is None

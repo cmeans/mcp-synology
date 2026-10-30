@@ -327,9 +327,12 @@ class TestLogin:
             ):
                 await auth.login()
         message = str(exc.value)
-        assert "rejected" in message
+        assert "rejected the device token" in message
         assert "no device token" not in message
-        assert "mcp-synology setup" in message
+        # The fix depends on where the token is set (here, the config file): the
+        # suggestion says it, the message doesn't contradict it (QA round 2 on #461).
+        assert "mcp-synology setup" not in message
+        assert "auth.device_id in the config file" in (exc.value.suggestion or "")
 
     @respx.mock
     async def test_2fa_required_without_device_id(self) -> None:
@@ -1256,7 +1259,7 @@ class TestRefusalSuggestion:
         ("code", "auth", "env", "expected", "absent"),
         [
             # Everything from the keyring.
-            (400, {}, {}, SETUP_PW + " picks it up. 'mcp-synology check'", "restart"),
+            (400, {}, {}, SETUP_PW + " picks it up. After the fix", "restart"),
             # The recommended setup: a username in the config, the password in the keyring.
             (
                 400,
@@ -1290,7 +1293,7 @@ class TestRefusalSuggestion:
                 403,
                 {},
                 {"SYNOLOGY_USERNAME": "admin", "SYNOLOGY_PASSWORD": "wrong"},
-                SETUP_2FA + " picks it up. 'mcp-synology check'",
+                SETUP_2FA + " picks it up. After the fix",
                 "SYNOLOGY_USERNAME",
             ),
             # A device token set outside the keyring overrides what setup writes.
@@ -1354,6 +1357,48 @@ class TestRefusalSuggestion:
         suggestion = exc.value.suggestion or ""
         assert expected in suggestion
         assert absent not in suggestion
+
+    @pytest.mark.parametrize(
+        ("code", "first", "expected"),
+        [
+            (401, "", "Once the account is enabled again, restart the server"),
+            (
+                402,
+                "Not allowed",
+                "Not allowed. mcp-synology tries again once the credentials change "
+                "('mcp-synology setup' stores new ones in the keyring; the running server picks "
+                "it up); auth.password in the config file overrides the keyring: change it "
+                "there and restart the server",
+            ),
+            (
+                None,
+                "",
+                "mcp-synology tries again once the credentials change ('mcp-synology setup' "
+                "stores new ones in the keyring; the running server picks it up); "
+                "auth.password in the config file overrides the keyring: change it there and "
+                "restart the server",
+            ),
+        ],
+        ids=["401-without-suggestion", "unmapped-code", "no-code"],
+    )
+    def test_advice_for_other_codes(self, code: int | None, first: str, expected: str) -> None:
+        """Codes the five above don't cover (#460 decides 402 and 407-410) get the
+        general advice, naming credentials set outside the keyring."""
+        from mcp_synology.core.auth import KEYRING, refusal_advice
+
+        sources = {"username": KEYRING, "password": "auth.password in the config file"}
+        assert refusal_advice(code, first, {**sources, "device_id": None}) == expected
+
+    def test_check_tests_the_login_once(self) -> None:
+        """A model with a shell could loop on `check`, which has no remembered refusal:
+        the suggestion says once, and why (pre-QA on QA round 2, #461)."""
+        refusal = LoginRefusals().refuse(
+            "fp", AuthenticationError("No such account", code=400, suggestion="Check.")
+        )
+        assert (refusal.suggestion or "").endswith(
+            "After the fix, 'mcp-synology check' tests the login once (each failed check "
+            "counts toward Auto Block)."
+        )
 
     @respx.mock
     async def test_a_remembered_refusal_logs_no_warning(
@@ -1427,6 +1472,24 @@ class TestWaitersShareAFailedLogin:
             with pytest.raises(httpx.ConnectError):  # a later call tries afresh
                 await client._re_authenticate(119, "SYNO.FileStation.List", "old-sid")
             assert calls == [1, 1]
+
+    async def test_a_kept_transport_error_holds_no_password(self) -> None:
+        """An httpx error carries its request, and the login POST's body holds the
+        password; the kept copy's request has none (pre-QA on QA round 2, #461)."""
+        login = httpx.Request("POST", "https://nas:5001/webapi/entry.cgi", data={"passwd": "Hx7q"})
+
+        async def failing_reauth() -> None:
+            raise httpx.ConnectError("refused", request=login)
+
+        async with _make_client() as client:
+            client.set_re_auth_callback(failing_reauth)
+            client.sid = "old-sid"
+            with pytest.raises(httpx.ConnectError):
+                await client._re_authenticate(119, "SYNO.FileStation.List", "old-sid")
+            kept = client._login_failure
+            assert isinstance(kept, httpx.ConnectError)
+            assert b"Hx7q" not in kept.request.read()
+            assert (kept.request.method, kept.request.url) == (login.method, login.url)
 
     async def test_a_canceled_login_leaves_waiters_to_try(self) -> None:
         # An earlier failure is not handed to requests that waited on a later, canceled

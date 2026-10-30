@@ -2289,7 +2289,8 @@ class TestFirstLogin:
             "client's config): correct it there and restart the server ('mcp-synology setup' "
             "writes only the keyring). If the username is wrong, it comes from "
             "SYNOLOGY_USERNAME in the server's environment (the MCP client's config): correct "
-            "it there. 'mcp-synology check' tests the login."
+            "it there. After the fix, 'mcp-synology check' tests the login once (each failed "
+            "check counts toward Auto Block)."
         )
 
     @respx.mock
@@ -2340,6 +2341,11 @@ class TestFirstLoginFailureShared:
         )
         assert all(isinstance(r, ToolError) for r in results)
         assert info.call_count == 1
+        # The kept failure holds no frames, and each waiter gets its own copy (pre-QA on
+        # QA round 2, #461).
+        kept = manager._init_failure
+        assert kept is not None and kept.__traceback__ is None and kept.__cause__ is None
+        assert len({id(r) for r in results}) == 4
         with pytest.raises(ToolError):  # a later call tries again
             await manager.get_client()
         assert info.call_count == 2
