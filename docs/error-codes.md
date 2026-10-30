@@ -247,7 +247,9 @@ Common causes:
 
 - A filename contains a forbidden character: `/ \ : * ? " < > |`.
 - The `new_name` argument to `rename`, or `upload_file`'s `filename`, contains `/`
-  or a NUL, is blank, or is `.` or `..` (padded with spaces too); the message says which (path separators
+  or a NUL, is blank, or is `.` or `..` (padded with spaces too); the message says which.
+  With no `filename`, the local file's own name is checked the same way and reported as
+  `local_path` (path separators
   are not allowed in a name — use copy/move to relocate a file).
 - A bad configured `default_upload_dir` (a `.` or `..` part here, an unknown share
   under `not_found`) is named as `param: default_upload_dir`: fix the setting or pass

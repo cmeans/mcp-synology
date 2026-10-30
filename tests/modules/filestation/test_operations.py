@@ -179,9 +179,9 @@ class TestRename:
             ("a\0b", "contains a NUL character"),
             ("a/b", "contains '/'"),
             ("", "is empty"),  # QA round 2 on #470: DSM's 1200 then read as "already exists"
-            ("   ", "is empty"),
-            ("\t", "is empty"),  # any whitespace (QA round 3 on #470)
-            ("\xa0", "is empty"),
+            ("   ", "is blank"),
+            ("\t", "is blank"),  # any whitespace (QA round 3 on #470)
+            ("\xa0", "is blank"),
         ],
     )
     async def test_rename_rejects_dot_names(
@@ -195,6 +195,23 @@ class TestRename:
         assert (
             error["message"] == f"Rename failed: new_name should be just a file name, but it {why}."
         )
+
+    @pytest.mark.parametrize(
+        ("name", "suggestion"),
+        [
+            ("a/b", "Use move_files to relocate files to a different directory."),
+            ("..", "Use move_files to relocate files to a different directory."),
+            ("", "Pass the new name only, e.g. Severance."),
+            ("a\0b", "Pass the new name only, e.g. Severance."),
+        ],
+    )
+    async def test_rename_suggestion_fits_the_problem(
+        self, mock_client: DsmClient, name: str, suggestion: str
+    ) -> None:
+        # move_files only for a name that would relocate (pre-QA on QA round 3, #470).
+        with pytest.raises(ToolError) as exc:
+            await rename(mock_client, path="/video/a.txt", new_name=name)
+        assert json.loads(str(exc.value))["error"]["suggestion"] == suggestion
 
     @pytest.mark.parametrize("name", [".\t", "\t..", "..\n"])
     def test_a_name_with_other_whitespace_passes(self, name: str) -> None:

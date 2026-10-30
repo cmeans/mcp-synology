@@ -604,7 +604,12 @@ def _is_dot(part: str) -> bool:
 
 
 def refuse_bad_name(
-    op: str, name: str, param: str, suggestion: str, label: str | None = None
+    op: str,
+    name: str,
+    param: str,
+    suggestion: str,
+    label: str | None = None,
+    value: str | None = None,
 ) -> None:
     """Raise ``invalid_parameter`` for a NAS file name that isn't one: blank, a ``/``, a
     NUL, or ``.`` or ``..`` (#449), naming which. ``label`` names it in the message when it
@@ -613,6 +618,8 @@ def refuse_bad_name(
         # Blank is any whitespace (a tab, a no-break space); only the dot rule is spaces
         # only (QA round 3 on #470).
         "is empty"
+        if not name
+        else "is blank"
         if not name.strip()
         else "contains '/'"
         if "/" in name
@@ -628,7 +635,7 @@ def refuse_bad_name(
             f"{op} failed: {label or param} should be just a file name, but it {problem}.",
             retryable=False,
             param=param,
-            value=name,
+            value=name if value is None else value,
             suggestion=suggestion,
         )
 

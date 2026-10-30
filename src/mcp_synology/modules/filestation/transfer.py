@@ -125,6 +125,7 @@ async def upload_file(
             "local_path",
             "Pass filename with a plain name for the file on the NAS.",
             label=f"the local file's name ({local.name!r})",
+            value=local_path,
         )
     file_size = local.stat().st_size
     dest = normalize_path(dest_folder)
@@ -139,8 +140,9 @@ async def upload_file(
             ErrorCode.ALREADY_EXISTS,
             f"Upload failed: File '{effective_name}' already exists in {dest}.",
             retryable=False,
-            param="filename",
-            value=effective_name,
+            # The argument the name came from, as download_file does (pre-QA on #470).
+            param="filename" if filename else "local_path",
+            value=filename if filename else local_path,
             suggestion="Use overwrite=true to replace the existing file.",
         )
 

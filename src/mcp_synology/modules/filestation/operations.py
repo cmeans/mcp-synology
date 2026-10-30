@@ -148,8 +148,14 @@ async def rename(
     normalized = normalize_path(path)
 
     # new_name is just a name: not a path, nor `.` or `..`, as #449 refuses in paths
+    relocates = "/" in new_name or new_name.strip(" ") in (".", "..")
     refuse_bad_name(
-        "Rename", new_name, "new_name", "Use move_files to relocate files to a different directory."
+        "Rename",
+        new_name,
+        "new_name",
+        "Use move_files to relocate files to a different directory."
+        if relocates
+        else "Pass the new name only, e.g. Severance.",
     )
 
     try:

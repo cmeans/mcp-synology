@@ -70,6 +70,7 @@ class TestUploadFile:
             "is '.' or '..'."
         )
         assert error["suggestion"] == "Pass filename with a plain name for the file on the NAS."
+        assert error["value"] == str(local_file)  # the argument named, as passed
 
     @pytest.mark.parametrize(
         "filename", [".", "..", " .. ", "../x", "a/b", "/abs", "a\0b", "   ", "\t", "\xa0"]
@@ -123,6 +124,8 @@ class TestUploadFile:
         assert body["status"] == "error"
         assert body["error"]["code"] == "already_exists"
         assert "overwrite=true" in body["error"]["suggestion"]
+        # No filename was passed: the error names local_path (pre-QA on #470).
+        assert body["error"]["param"] == "local_path"
 
     @respx.mock
     @pytest.mark.parametrize(("overwrite", "sent"), [(False, None), (True, "true")])
