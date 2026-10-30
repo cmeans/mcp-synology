@@ -3042,7 +3042,7 @@ class TestDeleteFailurePartway:
     what wasn't started."""
 
     @staticmethod
-    def _route(fail_on: int, *, transport: bool = False) -> None:
+    def _route(fail_on: int, *, transport: bool = False, status: dict | None = None) -> None:
         starts: list[str] = []
 
         def side_effect(request: httpx.Request) -> httpx.Response:
@@ -3055,16 +3055,65 @@ class TestDeleteFailurePartway:
                 return httpx.Response(200, json={"success": True, "data": {"tasks": []}})
             if method == "start":
                 starts.append(p.get("path", ""))
-                if len(starts) == fail_on:
+                if len(starts) == fail_on and status is None:
                     if transport:
                         raise httpx.ReadTimeout("")
                     return httpx.Response(200, json={"success": False, "error": {"code": 407}})
                 return httpx.Response(200, json={"success": True, "data": {"taskid": "t"}})
             if method == "status":
-                return httpx.Response(200, json={"success": True, "data": {"finished": True}})
+                data = status if status and len(starts) == fail_on else {"finished": True}
+                return httpx.Response(200, json={"success": True, "data": data})
             return httpx.Response(200, json={"success": True, "data": {}})
 
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        ("status", "ends"),
+        [
+            # The task's own error, on a path ending in a dot (pre-QA on #480).
+            (
+                {"finished": True, "error": {"code": 407}, "path": "/video/v1."},
+                # The path's own dot, then the sentence's period.
+                "DSM error code 407 on path: /video/v1.. Already deleted before this failure: "
+                "/video/a. Not started: /video/c.",
+            ),
+            # Per-item errors: listed once, never twice (pre-QA on #480).
+            (
+                {"finished": True, "errors": [{"code": 900, "path": "/video/v1."}]},
+                "/video/v1. (DSM error 900). Already deleted before this failure: /video/a. "
+                "Not started: /video/c.",
+            ),
+        ],
+        ids=["task-error", "errors-list"],
+    )
+    async def test_a_task_error_partway(
+        self, mock_client: DsmClient, status: dict, ends: str
+    ) -> None:
+        self._route(2, status=status)
+        with pytest.raises(ToolError) as exc:
+            await delete_files(mock_client, paths=["/video/a", "/video/v1.", "/video/c"], timeout=5)
+        message = json.loads(str(exc.value))["error"]["message"]
+        assert message.endswith(ends)
+        assert message.count("Already deleted") == 1
+
+    @respx.mock
+    async def test_a_path_named_like_the_note_doesnt_hide_it(self, mock_client: DsmClient) -> None:
+        """The note was skipped when the message already held its words (pre-QA on #480)."""
+        self._route(2, status={"finished": True, "error": {"code": 407}})
+        with pytest.raises(ToolError) as exc:
+            await delete_files(
+                mock_client,
+                paths=["/video/a", "/video/Already deleted stuff", "/video/c"],
+                timeout=5,
+            )
+        message = json.loads(str(exc.value))["error"]["message"]
+        assert "Already deleted before this failure: /video/a." in message
+
+    async def test_delete_files_itself_refuses_a_share_root(self, mock_client: DsmClient) -> None:
+        """Not only the tool: a caller of delete_files can't send a share root either."""
+        with pytest.raises(ToolError, match="is a whole shared folder"):
+            await delete_files(mock_client, paths=["/video"])
 
     @respx.mock
     async def test_a_dsm_error_partway(self, mock_client: DsmClient) -> None:
@@ -3083,7 +3132,7 @@ class TestDeleteFailurePartway:
         with pytest.raises(ToolError) as exc:
             await delete_files(mock_client, paths=["/video/a", "/video/b", "/video/c"], timeout=5)
         error = json.loads(str(exc.value))["error"]
-        assert error["code"] == "unavailable"
+        assert error["code"] == "timeout"  # as the server's own timeout error says it
         assert error["message"] == (
             "Delete files failed: DSM didn't answer for /video/b (ReadTimeout); its delete "
             "may have started. Already deleted before this failure: /video/a. Not started: "

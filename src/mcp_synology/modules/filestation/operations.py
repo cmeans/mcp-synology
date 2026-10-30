@@ -22,6 +22,7 @@ from mcp_synology.core.formatting import (
     synology_error_response,
 )
 from mcp_synology.modules.filestation.helpers import (
+    describe_transport_error,
     dsm_str,
     ensure_recycle_status,
     find_missing_paths,
@@ -325,7 +326,9 @@ def _with_progress_so_far(error: ToolError, done: list[str], rest: list[str]) ->
         message = body["error"]["message"]
     except (ValueError, KeyError, TypeError):
         return error
-    if done and "Already deleted" not in message:
+    # The delete loop is the one place that adds these: _delete_result doesn't (pre-QA on
+    # #480; a check for the words in the message missed a path containing them).
+    if done:
         message = _unstop(message) + _already_done("Delete", done) + "."
     if rest:
         message = _unstop(message) + f". Not started: {', '.join(rest)}."
@@ -813,7 +816,6 @@ async def _delete_one_path(
     recursive: bool,
     delete_version: int,
     timeout: float,
-    done: list[str] | None = None,
     on_progress: ProgressCallback | None = None,
 ) -> Handoff | None:
     """Delete a single path via DSM async-task pattern.
@@ -858,13 +860,11 @@ async def _delete_one_path(
         stall = result.error if result.outcome == "stalled" else None
         return Handoff(Handle("delete", taskid), status, stall)
 
-    _delete_result(status, path, recursive=recursive, done=done)
+    _delete_result(status, path, recursive=recursive)
     return None
 
 
-def _delete_result(
-    status: dict[str, Any], path: str, *, recursive: bool, done: list[str] | None = None
-) -> None:
+def _delete_result(status: dict[str, Any], path: str, *, recursive: bool) -> None:
     """Raise ToolError if a finished Delete status reports a failure; else return."""
     if "error" in status:
         err = status["error"]
@@ -873,7 +873,7 @@ def _delete_result(
         mapped = error_from_code(err_code, "SYNO.FileStation.Delete")
         error_response(
             mapped.error_code,
-            f"Delete files failed: DSM error code {err_code} on path: {err_path}",
+            f"Delete files failed: DSM error code {err_code} on path: {err_path}.",
             retryable=mapped.retryable,
             suggestion=(
                 mapped.suggestion
@@ -902,7 +902,7 @@ def _delete_result(
             mapped.error_code,
             "Delete files failed: "
             + "; ".join(f"{p} (DSM error {code})" for p, code in failed)
-            + _already_done("Delete", done),
+            + ".",
             retryable=mapped.retryable,
             param="paths",
             value=path,
@@ -915,7 +915,7 @@ def _delete_result(
         error_response(
             ErrorCode.NOT_FOUND,
             f"Delete files failed: {path} was not found when the delete ran, so nothing "
-            "was deleted for it" + (_already_done("Delete", done) or "."),
+            "was deleted for it.",
             retryable=False,
             param="paths",
             value=path,
@@ -958,6 +958,9 @@ async def delete_files(
             suggestion="Pass at least one path.",
         )
 
+    # Here too, not only in the tool: a caller that skips the tool mustn't delete a shared
+    # folder (pre-QA on #480).
+    refuse_share_roots(paths)
     normalized = _collapse_overlaps([normalize_path(p) for p in paths])
     # One progress token per tool call: keep its values increasing across paths (#245).
     on_progress = MonotonicProgress.wrap(on_progress)
@@ -998,22 +1001,23 @@ async def delete_files(
                     recursive=recursive,
                     delete_version=delete_version,
                     timeout=timeout,
-                    done=deleted,
                     on_progress=on_progress,
                 )
             except ToolError as e:
                 raise _with_progress_so_far(e, deleted, normalized[i + 1 :]) from None
             except httpx.TransportError as e:
                 if not deleted and not normalized[i + 1 :]:
-                    raise  # nothing to add: the server reports the NAS unreachable
+                    raise  # nothing to add: the server's usual timeout or connection error
                 # The start got no answer (a status with none hands the item off in
                 # poll_task): it may have started. Say so, with what was done and what
                 # wasn't started (QA round 1 on #480).
                 try:
                     error_response(
-                        ErrorCode.UNAVAILABLE,
+                        ErrorCode.TIMEOUT
+                        if isinstance(e, httpx.TimeoutException)
+                        else ErrorCode.UNAVAILABLE,
                         f"Delete files failed: DSM didn't answer for {p} "
-                        f"({type(e).__name__}); its delete may have started.",
+                        f"({describe_transport_error(e)}); its delete may have started.",
                         retryable=False,
                         suggestion="Check with list_files, or file_task with no handle, "
                         "before deleting again.",
