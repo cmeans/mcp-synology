@@ -305,11 +305,14 @@ This ensures the MCP server doesn't kick out DSM web UI sessions, Home Assistant
 When a module makes an API call and the DSM client receives a session error, re-auth happens transparently:
 
 1. DSM client receives error 106 (timeout), 107 (duplicate login), or 119 (invalid session)
-2. Client requests re-authentication from the auth manager
-3. Auth manager acquires an `asyncio.Lock` (prevents concurrent re-auth from multiple in-flight requests)
-4. Auth manager logs in again using stored credentials + device_id
-5. On success → original request is retried with the new session ID; module never sees the error
-6. On failure → typed exception propagated to the module
+2. Client takes its re-login lock (an `asyncio.Lock`), so one re-login runs at a time. If the session was replaced after the failed request was sent (another request's re-login already ran), it skips the login and retries with the new session: parallel calls that meet the same expired session log in once, not once each (#359)
+3. Otherwise the auth manager logs in again using stored credentials + device_id. The expired session stays in place until the new one exists (cleared first, every request sent during the login would go without a session and queue its own re-login), and the login itself is sent without it
+4. On success → original request is retried with the new session ID; module never sees the error
+5. On failure → the login's own error propagates to the module (#448): a changed password, a disabled account or a 2FA prompt says so, with its suggestion, rather than reading as the session error that led to the login. A proxy's answer to the login (an HTTP error status, a page that isn't DSM's) is raised as it is (#321)
+
+**First login:** the server logs in lazily, on the first tool call. Parallel first calls wait for one client and one login (`SharedClientManager`'s init lock, #359).
+
+**Refused logins (#447):** when DSM refuses the credentials (400 wrong account or password, 401 disabled account, 403 2FA required or the device token rejected, 404 2FA code failed, 406 2FA enforced), the refusal is remembered and every later login with the same credentials is answered with it without contacting DSM, the first login and the re-login after a session error alike. DSM's Auto Block (on by default: 10 failed logins within 5 minutes) would otherwise block the computer's IP address, for the user's browser and every other client too, after a few tool calls. The refusal holds until the resolved credentials change (`mcp-synology setup` writes new ones to the keyring while the server runs; a changed config or environment needs a restart anyway) or the server restarts. Only a digest of the credentials is kept. A transport error, and DSM's 402 (no permission for the service), 407 (too many attempts) and 408 (IP blocked), aren't remembered: they say nothing about the credentials, or end on their own.
 
 **Retry limit:** Exactly one re-auth attempt per request. If the retry also fails, the error propagates. This prevents infinite loops when something is fundamentally wrong (e.g., password changed, account disabled).
 
