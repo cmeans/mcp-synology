@@ -201,8 +201,8 @@ DSM sorts folders and files separately; folders come first.
 - `📁` for directories, `📄` for generic files, `🎬` for video files. Configurable fallback to text markers (`[DIR]`/`[FILE]`).
 - Directories show `—` for size (use `get_dir_size` for directory sizes).
 - Trailing `/` on directory names for visual distinction.
-- Footer: `N of N items.` when everything fits; `"Showing 1–200 of 1,432 items. Use offset=200 to see more."` when truncated; `"Showing 1,401–1,432 of 1,432 items."` on a last page reached with `offset`. The range, not just the count, says where a page is (0.10.0rc6 live test), as `list_recycle_bin`'s pattern listing already did.
-- `#recycle` folders are **hidden by default**. They appear only via `list_recycle_bin` or direct path access.
+- Footer: `N of N items.` when everything fits; `"Showing 1–200 of 1,432 items. Use offset=200 to see more."` when truncated; `"Showing 1,401–1,432 of 1,432 items."` on a last page reached with `offset`. The range, not just the count, says where a page is (0.10.0rc6 live test), as `list_recycle_bin`'s pattern listing already did. An offset past the end says `No items from offset=9: there are 5.`, and a negative offset is read as 0 (#389).
+- `#recycle` is listed like any folder unless `hide_recycle_in_listings` is on (off by default); `list_recycle_bin` lists its contents. **When hidden (#389),** DSM still counts it in its `total` and offsets, so where it can appear (a share's top level, with folders listed and any `pattern` matching it) the tool fetches one entry more than `limit` and, when `#recycle` isn't on the page, checks for it with one `getinfo`. The total then leaves it out on every page, the next-page offset is DSM's (it counts `#recycle`), a `#recycle` right after a page is skipped with it rather than promising a page that turns out empty, and the footer gives a count, not a range: `Showing 2 of 4 items (#recycle hidden). Use offset=3 to see more.` A later page that ends the listing adds `Last page.`, since a count can't show where it is. A page that held only the hidden `#recycle` while more items follow (`/video/.` with `limit=1`, below) is titled with the folder's total and still says `Use offset=N to see more.` If that check fails, or its answer shows neither (a per-entry code such as 407), the listing still shows, with DSM's total and a count footer that says the total may include a hidden `#recycle` (a range could name positions the earlier pages didn't have); an empty page past the end says the same after its `there are N`. A `#recycle` entry is hidden on any path that lists it (`/video/.` also reaches the top level); `.` and `..` in paths are #449.
 - **DSM sorts by type first (#333):** ascending puts every folder before the files, descending puts the files first, and each group is sorted on its own (measured for `name`, `size`, `mtime` and `ctime` on DSM 7.1 and 7.3.2, and on seska's 7.1.1). A listing that mixes the two says so after the table: `DSM sorts folders and files separately; folders come first.` (`files` for descending). Without it, a listing sorted by date looked unsorted where the groups meet (0.10.0rc3 live test).
 
 ---
@@ -281,7 +281,7 @@ Search for files by name, type, size, or modification date within a given scope.
 | `size_to` | `str \| int` | No | `None` | Maximum file size. Same format as `size_from`. |
 | `mtime_from` | `str` | No | `None` | Modified at or after this time (ISO 8601, `YYYY-MM-DD` or epoch seconds). Inclusive, in whole seconds: a file modified at exactly this time matches, and one at T+0.9 s counts as T, so it doesn't match `mtime_from=T+1` (DSM 7.2.2 and 7.3.2, #306). |
 | `mtime_to` | `str` | No | `None` | Modified before this time. **Exclusive**: a file modified at exactly this time doesn't match (DSM 7.2.2 and 7.3.2, #306). |
-| `exclude_pattern` | `str` | No | `None` | Glob pattern to exclude from results (e.g., `*.torrent`), case-insensitive. Applied client-side to the (at most `limit`) results DSM returns, so a reply can hold fewer than `limit`. |
+| `exclude_pattern` | `str` | No | `None` | Wildcard pattern to exclude from results (e.g., `*.torrent`), case-insensitive, matched against the whole name. Only `*` and `?` are wildcards; `[...]` and commas match themselves (#396). Unlike DSM's own `pattern`, a word without wildcards matches only the whole name, and a comma doesn't separate alternatives. Applied client-side to the (at most `limit`) results DSM returns, so a reply can hold fewer than `limit`. |
 | `recursive` | `bool` | No | `true` | Search subdirectories; `false` searches only `folder_path` itself. |
 | `limit` | `int` | No | `500` | Max results to return. When DSM found more, the reply says so. |
 
@@ -866,7 +866,7 @@ File Station's guidance is in `src/mcp_synology/instructions/filestation.md` and
 
 ### 1. Recycle Bin Awareness ✓
 
-Module caches recycle bin status per share at initialization. `delete_files` response adapts based on status. Two convenience tools added: `list_recycle_bin` (READ) and `restore_from_recycle_bin` (READ). `#recycle` is hidden from normal `list_files` results. User treats delete as done — recycle bin info is a safety net.
+Module caches recycle bin status per share at initialization. `delete_files` response adapts based on status. Two convenience tools added: `list_recycle_bin` (READ) and `restore_from_recycle_bin` (READ). `#recycle` is hidden from `list_files` results only when `hide_recycle_in_listings` is on (off by default). User treats delete as done — recycle bin info is a safety net.
 
 ### 2. Batch Move Confirmation ✓
 

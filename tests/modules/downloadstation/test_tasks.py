@@ -793,6 +793,33 @@ class TestCreateDownloadUri:
         with pytest.raises(ToolError, match="empty"):
             await create_download(mock_client, uri=",,")
 
+    @respx.mock
+    async def test_comma_inside_a_uri_keeps_it_whole(self, mock_client: DsmClient) -> None:
+        """#397: only a comma followed by a scheme starts another URI."""
+        _has_default()
+        route = post_route(TASK2, "create", version=2).respond(
+            json=ok({"list_id": [], "task_id": ["dbid_1", "dbid_2"]})
+        )
+        magnet = "magnet:?xt=urn:btih:abc&dn=Movie,%20The"
+        await create_download(mock_client, uri=f"https://h.example/a,b.iso, {magnet},")
+        form = _form(route.calls.last.request)
+        assert json.loads(form["url"]) == ["https://h.example/a,b.iso", magnet]
+
+    @respx.mock
+    async def test_v1_escapes_a_comma_inside_a_uri(self, mock_client: DsmClient) -> None:
+        """#397: v1 takes one comma-separated string; DSM reads "\\," as a plain comma."""
+        _has_default()
+        v1 = post_route(TASK, "create", version=1).respond(json=ok())
+        await create_download(
+            mock_client,
+            uri="http://h.example/a,b.iso,ftp://h.example/c.iso",
+            username="u",
+            password="p",
+        )
+        assert _form(v1.calls.last.request)["uri"] == (
+            "http://h.example/a\\,b.iso,ftp://h.example/c.iso"
+        )
+
     async def test_neither_uri_nor_torrent_path_raises(self, mock_client: DsmClient) -> None:
         with pytest.raises(ToolError, match="uri"):
             await create_download(mock_client)
@@ -806,6 +833,39 @@ class TestCreateDownloadUri:
             await create_download(mock_client, uri="magnet:?xt=a", torrent_file_path=str(torrent))
 
 
+class TestSplitUris:
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("http://a/1.iso,http://b/2.iso", ["http://a/1.iso", "http://b/2.iso"]),
+            ("http://a/1.iso, magnet:?xt=x", ["http://a/1.iso", "magnet:?xt=x"]),
+            ("https://h/a,b.iso", ["https://h/a,b.iso"]),
+            ("magnet:?xt=x&dn=A,B,C", ["magnet:?xt=x&dn=A,B,C"]),
+            ("ed2k://|file|a,b|1|h|/,thunder:QUE=", ["ed2k://|file|a,b|1|h|/", "thunder:QUE="]),
+            ("HTTP://A/1,FTP://B/2", ["HTTP://A/1", "FTP://B/2"]),
+            ("http://a/x,y:z", ["http://a/x,y:z"]),  # "y:" isn't a URI start
+            # No scheme, no split: such a list goes to DSM as one URI.
+            ("www.a.com/x.iso,www.b.com/y.iso", ["www.a.com/x.iso,www.b.com/y.iso"]),
+            (" http://a/1 ,,", ["http://a/1"]),
+            # A pasted no-break space is stripped like any other (QA round 2).
+            ("https://a/x,\xa0https://b", ["https://a/x", "https://b"]),
+            # Commas and whitespace interleaved at an edge (QA round 3).
+            ("https://a,  ,  ", ["https://a"]),
+            ("https://a ,\t,\r\n", ["https://a"]),
+            ("magnet:?xt=1&dn=a,b , ,", ["magnet:?xt=1&dn=a,b"]),
+            # Guards that held before too.
+            (", ,https://b", ["https://b"]),
+            ("https://a,\xa0", ["https://a"]),
+            (",,", []),
+            ("", []),
+        ],
+    )
+    def test_split(self, text: str, expected: list[str]) -> None:
+        from mcp_synology.modules.downloadstation.tasks import split_uris
+
+        assert split_uris(text) == expected
+
+
 def _default_destination(dest: str | None, *, is_manager: bool = True) -> respx.Route:
     """Route Info.getconfig with the user's default destination (None = never set)."""
     body = captured("info_getconfig_admin" if is_manager else "info_getconfig_user")
@@ -816,6 +876,16 @@ def _default_destination(dest: str | None, *, is_manager: bool = True) -> respx.
 def _has_default() -> None:
     """A manager whose default destination is set (the normal case)."""
     _default_destination("writable")
+
+    def test_a_long_run_of_separators_is_linear(self) -> None:
+        # Pre-QA on QA round 3: an end-anchored regex took 11.6 s on 64 KB of " ,".
+        import time
+
+        from mcp_synology.modules.downloadstation.tasks import split_uris
+
+        start = time.perf_counter()
+        assert split_uris("https://a/" + " ," * 32000 + "x") == ["https://a/" + " ," * 32000 + "x"]
+        assert time.perf_counter() - start < 0.5
 
 
 class TestCreateDownloadDestination:
