@@ -1822,7 +1822,13 @@ class TestInstructionComments:
 # carries only its one-line "not enabled" entry in PERMISSIONS (about 160 characters).
 # +72 in QA round 1: list_snapshots' offset and limit say they page the shared folders
 # when no folder is given.
-PAYLOAD_BUDGET_CHARS = 55_483
+# +30 by #397: create_download's `uri` says commas inside a URI are kept.
+# +175 by #396 (QA round 1): search_files' exclude_pattern says only `*` and `?` are
+# wildcards, so a bare word matches only that exact name and `[...]` and commas match
+# themselves; the model otherwise read it like `pattern`, where a bare word matches anywhere.
+# +107 by #397 (QA round 1): create_download's `uri` says to give each URI its scheme,
+# since a comma starts another URI only when a scheme follows it.
+PAYLOAD_BUDGET_CHARS = 55_795
 
 
 class TestPayloadBudget:

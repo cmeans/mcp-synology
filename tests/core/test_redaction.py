@@ -143,6 +143,35 @@ class TestRedactUrls:
     def test_text_without_urls_is_unchanged(self) -> None:
         assert redact_urls("Created 2 task(s).") == "Created 2 task(s)."
 
+    def test_comma_inside_a_url_is_part_of_it(self) -> None:
+        # #397: create_download keeps such a comma, so redaction must too; it used to
+        # end the match and leave the query unmasked.
+        assert redact_urls(f"https://h.example/a,b.iso?token={PASSKEY}") == (
+            "https://h.example/a,b.iso?token=***"
+        )
+        assert json.loads(redact_urls(json.dumps([f"https://h/a,b?k={PASSKEY}"]))) == [
+            "https://h/a,b?k=***"
+        ]
+
+    def test_v1_list_with_an_escaped_comma(self) -> None:
+        text = f"https://h/a\\,b.iso?k={PASSKEY},magnet:?xt=urn:btih:abc"
+        assert redact_urls(text) == "https://h/a\\,b.iso?k=***,magnet:?xt=urn:btih:abc"
+
+    @pytest.mark.parametrize("prefix", ["MAGNET:?", "Magnet:?"])
+    def test_uppercase_magnet_is_redacted(self, prefix: str) -> None:
+        plain = f"{prefix}xt=urn:btih:abc&tr=http://t.example/announce/{PASSKEY}"
+        encoded = f"{prefix}xt=urn:btih:abc&tr=http%3A%2F%2Ft.example%2Fa%2F{PASSKEY}"
+        for text in (plain, encoded, f"see {plain}, then"):
+            assert PASSKEY not in redact_urls(text), text
+        assert redact_urls(plain).startswith(prefix)
+        # A capitalized magnet after a comma starts a new URL, as in split_uris.
+        assert redact_urls(f"https://h/a?k={PASSKEY},{prefix}xt=abc") == (
+            f"https://h/a?k=***,{prefix}xt=abc"
+        )
+
+    def test_comma_after_a_url_in_prose_stays_outside(self) -> None:
+        assert redact_urls(f"see https://h/x?k={PASSKEY}, then") == "see https://h/x?k=***, then"
+
 
 class TestRedactTitle:
     """DSM titles an HTTP task with the URL's tail, query string included (#144)."""
