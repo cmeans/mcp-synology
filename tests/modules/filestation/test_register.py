@@ -1077,7 +1077,9 @@ class TestShareRootDelete:
 
     @staticmethod
     def _setup(
-        monkeypatch: pytest.MonkeyPatch, contents: list[str] | None = None
+        monkeypatch: pytest.MonkeyPatch,
+        contents: list[str] | None = None,
+        missing: list[tuple[str, int]] | None = None,
     ) -> tuple[AsyncMock, AsyncMock, object]:
         monkeypatch.setattr(
             "mcp_synology.modules.filestation.helpers.ensure_known_shares",
@@ -1094,6 +1096,10 @@ class TestShareRootDelete:
             AsyncMock(
                 return_value=["/writable/a", "/writable/b"] if contents is None else contents
             ),
+        )
+        monkeypatch.setattr(
+            "mcp_synology.modules.filestation.helpers.find_missing_paths",
+            AsyncMock(return_value=missing or []),
         )
         delete = AsyncMock(return_value="[+] Deleted")
         monkeypatch.setattr("mcp_synology.modules.filestation.operations.delete_files", delete)
@@ -1270,6 +1276,29 @@ class TestShareRootDelete:
         mcp_ctx = self._mcp_ctx(True, AcceptedElicitation(data=_ConfirmShareDelete(delete=True)))
         out = await fn(ctx=mcp_ctx, paths=["/writable"])
         assert out == "Nothing to delete: /writable has nothing in it."
+        delete.assert_not_awaited()
+        mcp_ctx.elicit.assert_not_awaited()  # nothing to confirm (pre-QA on #451)
+
+    async def test_two_empty_shares_have_nothing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        delete, preview, fn = self._setup(monkeypatch, contents=[])
+        out = await fn(ctx=self._mcp_ctx(False), paths=["/writable", "/other"])
+        assert out == "Nothing to delete: /writable, /other have nothing in it."
+        preview.assert_not_awaited()
+        delete.assert_not_awaited()
+
+    async def test_a_missing_other_path_is_refused_before_asking(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A mistyped path beside the share is refused before the preview, so the user
+        isn't asked about a call that would then fail (pre-QA on #451)."""
+        delete, preview, fn = self._setup(monkeypatch, missing=[("/other/typo", 408)])
+        mcp_ctx = self._mcp_ctx(True)
+        with pytest.raises(ToolError) as exc:
+            await fn(ctx=mcp_ctx, paths=["/writable", "/other/typo"])
+        error = json.loads(str(exc.value))["error"]
+        assert error["code"] == "not_found" and "/other/typo (DSM error 408)" in error["message"]
+        preview.assert_not_awaited()
+        mcp_ctx.elicit.assert_not_awaited()
         delete.assert_not_awaited()
 
     async def test_the_share_root_path_is_never_sent(self, monkeypatch: pytest.MonkeyPatch) -> None:

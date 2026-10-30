@@ -309,9 +309,14 @@ def _can_elicit(ctx: Context) -> bool:
 def register(ctx: "RegisterContext") -> None:
     """Register File Station tools with the MCP server."""
     from mcp_synology.core import local_paths
-    from mcp_synology.core.errors import ErrorCode
-    from mcp_synology.core.formatting import error_response
-    from mcp_synology.modules.filestation.helpers import ensure_known_shares, normalize_path
+    from mcp_synology.core.errors import ErrorCode, SynologyError
+    from mcp_synology.core.formatting import error_response, synology_error_response
+    from mcp_synology.modules.filestation.helpers import (
+        ensure_known_shares,
+        find_missing_paths,
+        missing_paths_suggestion,
+        normalize_path,
+    )
     from mcp_synology.modules.filestation.listing import (
         list_files,
         list_recycle_bin,
@@ -1054,6 +1059,33 @@ def register(ctx: "RegisterContext") -> None:
     ) -> list[str] | str:
         """Confirm a delete of whole shared folders' contents (#451): the paths to delete,
         or the reply to give instead (the preview, or "not confirmed")."""
+        others = [p for p in paths if normalize_path(p) not in roots]
+        # The call's other paths are checked first, so a mistyped one is refused before
+        # the user is asked (pre-QA on #451), as delete_files refuses it (#162).
+        try:
+            missing = (
+                await find_missing_paths(client, [normalize_path(p) for p in others])
+                if others
+                else []
+            )
+        except SynologyError as e:
+            synology_error_response("Delete files", e)
+        if missing:
+            error_response(
+                ErrorCode.NOT_FOUND,
+                "Delete files refused: not found: "
+                + "; ".join(f"{p} (DSM error {code})" for p, code in missing)
+                + ". Nothing was deleted.",
+                retryable=False,
+                param="paths",
+                value=paths,
+                suggestion=missing_paths_suggestion(missing),
+            )
+        contents = {root: await share_contents(client, root) for root in roots}
+        if not others and not any(contents.values()):
+            # Nothing to confirm (pre-QA on #451).
+            verb = "has" if len(roots) == 1 else "have"
+            return "Nothing to delete: " + ", ".join(roots) + f" {verb} nothing in it."
         if confirm is not None:
             if not share_root_tokens.redeem(confirm, paths):
                 error_response(
@@ -1070,7 +1102,6 @@ def register(ctx: "RegisterContext") -> None:
             preview = await share_root_preview(
                 client, roots, timeout=dir_size_timeout, recycle_bin_status=recycle_status
             )
-            others = [p for p in paths if normalize_path(p) not in roots]
             if others:
                 # A yes covers the whole call, so the user sees all of it.
                 preview += "\nAlso deleted in this call:\n" + "\n".join(f"  {p}" for p in others)
@@ -1112,13 +1143,12 @@ def register(ctx: "RegisterContext") -> None:
             # Compared normalized: `writable/` names the shared folder too, and must never
             # reach DSM as itself.
             if normalize_path(path) in roots:
-                expanded.extend(await share_contents(client, normalize_path(path)))
+                # The listing from before the confirmation: what was previewed, not
+                # anything added while the user decided.
+                expanded.extend(contents[normalize_path(path)])
             else:
                 expanded.append(path)
-        expanded = list(dict.fromkeys(expanded))  # a share named twice is listed once
-        if not expanded:
-            return "Nothing to delete: " + ", ".join(roots) + " has nothing in it."
-        return expanded
+        return list(dict.fromkeys(expanded))  # a share named twice is listed once
 
     if "upload_file" in ctx.allowed_tools:
 

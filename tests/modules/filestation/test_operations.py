@@ -3177,6 +3177,24 @@ class TestDeleteDeadlineAndListed:
 
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
 
+    async def test_a_long_list_in_a_handoff_is_capped(self) -> None:
+        """A share's contents can be thousands of items: a hand-off names at most 50 of
+        those done and not started (pre-QA on #451)."""
+        from mcp_synology.modules.filestation.tasks import Handle, handoff_reply
+
+        done = [f"/video/d{n}" for n in range(60)]
+        rest = [f"/video/r{n}" for n in range(1000)]
+        out = handoff_reply(
+            verb="Still deleting",
+            path="/video/x",
+            handle=Handle("delete", "t"),
+            status={},
+            done=done,
+            not_started=rest,
+        )
+        assert "/video/d49 and 10 more." in out and "/video/d50" not in out
+        assert "/video/r49 and 950 more." in out and "/video/r50," not in out
+
     @respx.mock
     async def test_listed_items_get_no_getinfo(self, mock_client: DsmClient) -> None:
         calls: list[str] = []
@@ -3194,7 +3212,10 @@ class TestDeleteDeadlineAndListed:
         items = [f"/video/i{n}" for n in range(3)]
         out = await delete_files(mock_client, paths=items, deadline=0.0, timeout=5)
         assert calls.count("SYNO.FileStation.Delete/start") == 1  # the first always runs
-        assert out.startswith("[!] Deleted 1 of 3 item(s); stopped before the time limit")
+        # What was deleted, as any delete says it (the recycle-bin note included), then
+        # what wasn't started (pre-QA on #451).
+        assert "Deleted 1 item(s):\n  /video/i0" in out
+        assert "[!] Stopped at the time limit: 2 of 3 item(s) weren't started:" in out
         assert "  /video/i1\n  /video/i2" in out
         assert "Nothing is running on the NAS." in out
 

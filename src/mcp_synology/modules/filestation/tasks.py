@@ -399,6 +399,17 @@ _PAST = {
 }
 
 
+LISTED_AT_MOST = 50
+
+
+def short_list(paths: list[str]) -> str:
+    """Paths joined with commas, at most ``LISTED_AT_MOST`` and a count of the rest: a
+    shared folder's contents can be thousands of items (#451)."""
+    shown = ", ".join(paths[:LISTED_AT_MOST])
+    rest = len(paths) - LISTED_AT_MOST
+    return f"{shown} and {rest:,} more" if rest > 0 else shown
+
+
 def handoff_reply(
     *,
     verb: str,
@@ -448,10 +459,10 @@ def handoff_reply(
         'action="stop" (it may then be partly done).',
     ]
     if done:
-        lines.append(f"Already {past}: {', '.join(done)}.")
+        lines.append(f"Already {past}: {short_list(done)}.")
     if not_started:
         lines.append(
-            f"Not started: {', '.join(not_started)}. Run them again once this one finishes."
+            f"Not started: {short_list(not_started)}. Run them again once this one finishes."
         )
     return "\n".join(lines)
 

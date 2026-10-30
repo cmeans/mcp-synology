@@ -33,6 +33,7 @@ from mcp_synology.modules.filestation.helpers import (
     paths_isdir,
 )
 from mcp_synology.modules.filestation.tasks import (
+    LISTED_AT_MOST,
     Handle,
     HandleKind,
     Handoff,
@@ -43,6 +44,7 @@ from mcp_synology.modules.filestation.tasks import (
     handoff_reply,
     poll_task,
     running_task,
+    short_list,
 )
 
 if TYPE_CHECKING:
@@ -279,8 +281,8 @@ def _already_done(operation: str, done: list[str] | None) -> str:
     """Name the items a multi-path operation finished before a later one failed."""
     if not done:
         return ""
-    return f". Already {_PAST_TENSE.get(operation, 'processed')} before this failure: " + ", ".join(
-        done
+    return f". Already {_PAST_TENSE.get(operation, 'processed')} before this failure: " + (
+        short_list(done)
     )
 
 
@@ -934,7 +936,7 @@ async def delete_files(
         if deadline is not None and deleted and time.monotonic() >= deadline:
             # A share-root delete is one task per item: past the call's wait, stop
             # starting new ones rather than outlast the client's time limit (#451).
-            return _stopped_at_deadline(deleted, normalized[i:])
+            return await _stopped_at_deadline(client, deleted, normalized[i:], recycle_bin_status)
         running = await running_task(client, api="SYNO.FileStation.Delete", path=p)
         handoff: Handoff | None
         if running is not None:
@@ -946,7 +948,11 @@ async def delete_files(
                 p,
                 recursive=recursive,
                 delete_version=delete_version,
-                timeout=timeout,
+                # Past the deadline no item starts, and one started just before it waits
+                # only what's left (at least 5 s), so the call stays near its wait (#451).
+                timeout=timeout
+                if deadline is None
+                else min(timeout, max(5.0, deadline - time.monotonic())),
                 done=deleted,
                 on_progress=on_progress,
             )
@@ -1073,25 +1079,30 @@ async def _delete_summary(
     return "\n".join(lines)
 
 
-_LISTED_AT_MOST = 50
-
-
 def _listed_paths(paths: Sequence[str]) -> list[str]:
-    """Indented path lines, at most ``_LISTED_AT_MOST`` of them and a count of the rest:
+    """Indented path lines, at most ``LISTED_AT_MOST`` of them and a count of the rest:
     a share's contents can be thousands of items (#451)."""
-    lines = [f"  {p}" for p in paths[:_LISTED_AT_MOST]]
-    if len(paths) > _LISTED_AT_MOST:
-        lines.append(f"  … and {len(paths) - _LISTED_AT_MOST:,} more")
+    lines = [f"  {p}" for p in paths[:LISTED_AT_MOST]]
+    if len(paths) > LISTED_AT_MOST:
+        lines.append(f"  … and {len(paths) - LISTED_AT_MOST:,} more")
     return lines
 
 
-def _stopped_at_deadline(done: list[str], rest: list[str]) -> str:
-    """The reply when a long delete stopped starting new items at its deadline."""
+async def _stopped_at_deadline(
+    client: DsmClient,
+    done: list[str],
+    rest: list[str],
+    recycle_bin_status: dict[str, bool] | None,
+) -> str:
+    """The reply when a long delete stopped starting new items at its deadline: what was
+    deleted (and whether into the recycle bin), then what wasn't started."""
     return "\n".join(
         [
+            await _delete_summary(client, done, recycle_bin_status),
+            "",
             format_status(
-                f"Deleted {len(done):,} of {len(done) + len(rest):,} item(s); stopped "
-                "before the time limit, so the rest weren't started:",
+                f"Stopped at the time limit: {len(rest):,} of {len(done) + len(rest):,} "
+                "item(s) weren't started:",
                 success=False,
             ),
             *_listed_paths(rest),

@@ -37,22 +37,31 @@ async def test_share_root_contents_deleted_share_kept(
     nas_client: Any, admin_client: Any, persona: str
 ) -> None:
     client: DsmClient = (nas_client if persona == "user" else admin_client)[0]
-    await create_folder(client, paths=[f"/writable/sr-{persona}/a", f"/writable/sr-{persona}-b"])
+    mine = [f"/writable/sr-{persona}", f"/writable/sr-{persona}-b"]
+    await create_folder(client, paths=[f"{mine[0]}/a", mine[1]])
+    try:
+        preview = await share_root_preview(client, ["/writable"], timeout=60)
+        size, files, folders = await dir_size_totals(client, path="/writable", timeout=60)
+        assert preview.startswith("This would delete everything in these shared folders")
+        # No #recycle on vdsm's shares, so the preview's totals are DirSize's own; this
+        # test's three folders are among them (the share is shared by the session).
+        assert f"/writable: {max(files, 0):,} file(s) and {max(folders, 0):,} folder(s)" in (
+            preview
+        )
+        assert folders >= 3
 
-    preview = await share_root_preview(client, ["/writable"], timeout=60)
-    size, files, folders = await dir_size_totals(client, path="/writable", timeout=60)
-    print(preview, (size, files, folders))
-    assert preview.startswith("This would delete everything in these shared folders")
-    assert "/writable:" in preview
+        items = await share_contents(client, "/writable")
+        assert set(mine) <= set(items)
+        assert all(not i.endswith("/#recycle") for i in items)
 
-    items = await share_contents(client, "/writable")
-    assert f"/writable/sr-{persona}" in items and f"/writable/sr-{persona}-b" in items
-    assert all(not i.endswith("/#recycle") for i in items)
-
-    # Only this test's items: /writable is shared by the whole vdsm session. What's
-    # checked on DSM is the listing (no #recycle) and that deleting items from the
-    # listing leaves the shared folder; the tool never sends /writable itself (unit tests).
-    mine = [i for i in items if i.startswith(f"/writable/sr-{persona}")]
-    await delete_files(client, paths=mine, timeout=60)
-    assert "writable" in await _shares(client)  # the shared folder is still there
-    assert not set(mine) & set(await share_contents(client, "/writable"))
+        # Only this test's items: /writable is shared by the whole vdsm session. What's
+        # checked on DSM is the listing (no #recycle) and that deleting items from the
+        # listing leaves the shared folder; the tool never sends /writable itself (unit
+        # tests).
+        await delete_files(client, paths=mine, timeout=60)
+        assert "writable" in await _shares(client)  # the shared folder is still there
+        assert not set(mine) & set(await share_contents(client, "/writable"))
+    finally:
+        left = [p for p in mine if p in set(await share_contents(client, "/writable"))]
+        if left:
+            await delete_files(client, paths=left, timeout=60)
