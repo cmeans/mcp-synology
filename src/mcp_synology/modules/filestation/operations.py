@@ -267,12 +267,25 @@ def _collapse_overlaps(paths: list[str], *, drop_nested: bool = True) -> list[st
     Copy passes ``drop_nested=False`` (QA R2 on #173): copying ``/a`` and ``/a/b`` is two
     copies, ``dest/a`` and ``dest/b``, and the child still exists after the parent's copy.
     """
+    # Sets and a walk up each path's parents, not a scan of every pair: a shared folder's
+    # contents can be thousands of paths (pre-QA on #480; 10,000 took 17 s).
+    given = {p.rstrip("/") for p in paths}
+    seen: set[str] = set()
     out: list[str] = []
     for p in paths:
-        if p in out:
+        if p in seen:
             continue
-        if drop_nested and any(p != q and p.startswith(q.rstrip("/") + "/") for q in paths):
-            continue
+        seen.add(p)
+        if drop_nested:
+            parent = p.rstrip("/")
+            nested = False
+            while "/" in parent[1:]:
+                parent = parent.rsplit("/", 1)[0]
+                if parent in given:
+                    nested = True
+                    break
+            if nested:
+                continue
         out.append(p)
     return out
 
@@ -1082,7 +1095,7 @@ async def _delete_summary(
                 f"\n\u26a0 Deleted from the recycle bin on /{share} \u2014 permanent, "
                 "these cannot be recovered:"
             )
-            lines.extend(f"  {p}" for p in bin_paths)
+            lines.extend(_listed_paths(bin_paths))
         else:
             lines.append(
                 f"\n\u26a0 Deleted from the recycle bin on /{share} \u2014 permanent, "

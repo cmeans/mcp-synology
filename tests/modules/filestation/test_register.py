@@ -1243,7 +1243,7 @@ class TestShareRootDelete:
         token = re.search(r'confirm="([0-9a-f]{8})"', first)
         assert token is not None
         out = await fn(ctx=self._mcp_ctx(False), paths=["/writable"], confirm=token.group(1))
-        assert out == "Nothing deleted: the items the preview listed are gone."
+        assert out == "Nothing deleted: the items there at the preview are gone."
         delete.assert_not_awaited()
 
     @pytest.mark.parametrize("path", ["/writable/.", "/writable/x/..", "writable/ .. "])
@@ -1314,13 +1314,49 @@ class TestShareRootDelete:
         assert delete.await_args.kwargs["paths"] == ["/writable/b"]
         assert out.startswith("1 item(s) added since the preview weren't deleted")
 
-    async def test_other_paths_in_the_preview_are_capped(
+    async def test_more_other_paths_than_a_confirmation_shows_are_refused(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        delete, _, fn = self._setup(monkeypatch)
-        others = [f"/writable/o{n}" for n in range(60)]
-        out = await fn(ctx=self._mcp_ctx(False), paths=["/writable", *others])
-        assert "  /writable/o49\n  … and 10 more" in out and "/writable/o50" not in out
+        """A confirmation lists every path it covers, so a call emptying a shared folder
+        takes at most 50 others: a capped list hid paths the yes covered (pre-QA on #480)."""
+        delete, preview, fn = self._setup(monkeypatch)
+        out = await fn(
+            ctx=self._mcp_ctx(False), paths=["/writable", *[f"/writable/o{n}" for n in range(50)]]
+        )
+        assert "  /writable/o49" in out and "more" not in out  # 50 are listed in full
+        with pytest.raises(ToolError) as exc:
+            await fn(
+                ctx=self._mcp_ctx(False),
+                paths=["/writable", *[f"/writable/o{n}" for n in range(51)]],
+            )
+        error = json.loads(str(exc.value))["error"]
+        assert error["code"] == "invalid_parameter" and "at most 50 other paths" in error["message"]
+        delete.assert_not_awaited()
+
+    @pytest.mark.parametrize("bin_path", ["/writable/#recycle", "writable/#recycle/old.txt"])
+    async def test_a_share_and_its_own_bin_in_one_call_are_refused(
+        self, monkeypatch: pytest.MonkeyPatch, bin_path: str
+    ) -> None:
+        """The preview promises the items go into the bin; the same call would then delete
+        from it (pre-QA on #480)."""
+        delete, preview, fn = self._setup(monkeypatch)
+        with pytest.raises(ToolError) as exc:
+            await fn(ctx=self._mcp_ctx(False), paths=["/writable", bin_path])
+        assert "also deletes from that bin" in json.loads(str(exc.value))["error"]["message"]
+        preview.assert_not_awaited()
+        delete.assert_not_awaited()
+
+    async def test_an_accepted_dialog_with_everything_gone_deletes_nothing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from mcp.server.elicitation import AcceptedElicitation
+
+        from mcp_synology.modules.filestation import _ConfirmShareDelete
+
+        delete, _, fn = self._setup(monkeypatch, listings_in_turn=[["/writable/a"], []])
+        mcp_ctx = self._mcp_ctx(True, AcceptedElicitation(data=_ConfirmShareDelete(delete=True)))
+        out = await fn(ctx=mcp_ctx, paths=["/writable"])
+        assert out == "Nothing deleted: the items there at the preview are gone."
         delete.assert_not_awaited()
 
     async def test_an_empty_part_never_reaches_dsm(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1538,8 +1574,9 @@ class TestShareRootDeleteOverMcp:
         async with Client(server, elicitation_callback=on_elicit, mode="legacy") as client:
             result = await client.call_tool("delete_files", {"paths": ["/writable"]})
         text = " ".join(getattr(c, "text", "") for c in result.content)
-        # No promise that asking again works (pre-QA on #480).
+        # No way around the user (pre-QA on #480).
         assert "Nothing deleted: the client's confirmation failed" in text
-        assert "can be deleted by their own paths" in text
+        assert "Ask the user whether they still want this shared folder emptied" in text
+        assert "by their own paths" not in text
         assert 'confirm="' not in text
         delete.assert_not_awaited()

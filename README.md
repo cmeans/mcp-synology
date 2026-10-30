@@ -246,7 +246,7 @@ modules:
 | `async_timeout` | `120` | 10–3600 s | Time limit for `search_files` and `get_dir_size`. It doesn't apply to delete, copy, move or restore. |
 | `search_timeout` | `async_timeout` | 10–3600 s | Time limit for `search_files` only. The NAS search is stopped when it runs out. |
 | `dir_size_timeout` | `async_timeout` | 10–3600 s | Time limit for `get_dir_size`, and for the preview of a `delete_files` on a whole shared folder. |
-| `delete_timeout` | `30` | 10–3600 s | How long `delete_files` waits before handing off (capped at 600). |
+| `delete_timeout` | `30` | 10–3600 s | How long `delete_files` waits before handing off (capped at 600); for a shared folder's contents, also when it stops starting new items. |
 | `copy_move_timeout` | `30` | 10–3600 s | How long `copy_files`, `move_files` and `restore_from_recycle_bin` wait before handing off (capped at 600). |
 | `upload_timeout` | `300` | 10–3600 s | Time limit for `upload_file`. |
 | `download_timeout` | `300` | 10–3600 s | Time limit for `download_file`. |

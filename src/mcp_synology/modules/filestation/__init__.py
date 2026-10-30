@@ -293,6 +293,11 @@ class _ConfirmShareDelete(BaseModel):
     delete: bool = Field(description="Delete everything listed")
 
 
+# The most other paths a call emptying a shared folder may carry: the confirmation lists
+# each one (pre-QA on #480).
+_OTHERS_AT_MOST = 50
+
+
 def _can_elicit(ctx: Context) -> bool:
     """Whether the client can ask the user directly (MCP elicitation)."""
     from mcp import types
@@ -334,7 +339,6 @@ def register(ctx: "RegisterContext") -> None:
     from mcp_synology.modules.filestation.operations import (
         SHARE_ROOT_TOKEN_TTL,
         ShareRootTokens,
-        _listed_paths,
         copy_files,
         create_folder,
         delete_files,
@@ -1112,6 +1116,42 @@ def register(ctx: "RegisterContext") -> None:
         and a note to put before the result, or the reply to give instead (the preview, or
         "not confirmed")."""
         others = [p for p in paths if normalize_path(p) not in roots]
+        # A shared folder's own recycle bin in the same call would empty the bin the preview
+        # promises the items go into (pre-QA on #480).
+        in_bins = [
+            p
+            for p in others
+            if any(
+                normalize_path(p) == f"{r}/#recycle"
+                or normalize_path(p).startswith(f"{r}/#recycle/")
+                for r in roots
+            )
+        ]
+        if in_bins:
+            error_response(
+                ErrorCode.INVALID_PARAMETER,
+                "Delete files refused: emptying a shared folder puts its items in its recycle "
+                "bin, and this call also deletes from that bin ("
+                + ", ".join(in_bins)
+                + "). Nothing was deleted.",
+                retryable=False,
+                param="paths",
+                value=paths,
+                suggestion="Delete the shared folder's contents and its recycle bin in "
+                "separate calls.",
+            )
+        # Every path the user approves is shown: no "… and N more" in a confirmation.
+        if len(others) > _OTHERS_AT_MOST:
+            error_response(
+                ErrorCode.INVALID_PARAMETER,
+                f"Delete files refused: a call that empties a shared folder takes at most "
+                f"{_OTHERS_AT_MOST} other paths, so the confirmation can show them all; this "
+                f"one has {len(others):,}. Nothing was deleted.",
+                retryable=False,
+                param="paths",
+                value=len(others),
+                suggestion="Delete the other paths in their own call.",
+            )
         # The call's other paths are checked first, so a mistyped one is refused before
         # the user is asked (pre-QA on #451), as delete_files refuses it (#162).
         try:
@@ -1149,7 +1189,7 @@ def register(ctx: "RegisterContext") -> None:
                 )
             contents, note = await _still_listed(client, roots, stored)
             if not others and not any(contents.values()):
-                return note + "Nothing deleted: the items the preview listed are gone."
+                return note + "Nothing deleted: the items there at the preview are gone."
         else:
             contents = {root: await share_contents(client, root) for root in roots}
             if not others and not any(contents.values()):
@@ -1161,7 +1201,7 @@ def register(ctx: "RegisterContext") -> None:
             )
             if others:
                 # A yes covers the whole call, so the user sees all of it.
-                preview += "\nAlso deleted in this call:\n" + "\n".join(_listed_paths(others))
+                preview += "\nAlso deleted in this call:\n" + "\n".join(f"  {p}" for p in others)
             asked = False
             if _can_elicit(ctx):
                 try:
@@ -1183,8 +1223,8 @@ def register(ctx: "RegisterContext") -> None:
                     )
                     return (
                         f"{preview}\n\nNothing deleted: the client's confirmation failed "
-                        f"({type(e).__name__}). If it keeps failing, the shared folder's items "
-                        "can be deleted by their own paths (list_files lists them)."
+                        f"({type(e).__name__}). Ask the user whether they still want this "
+                        "shared folder emptied before deleting anything."
                     )
             if asked:
                 if answer.action != "accept" or not answer.data.delete:
@@ -1193,7 +1233,7 @@ def register(ctx: "RegisterContext") -> None:
                 # preview listed and is still there (pre-QA on #480).
                 contents, note = await _still_listed(client, roots, contents)
                 if not others and not any(contents.values()):
-                    return note + "Nothing deleted: the items the preview listed are gone."
+                    return note + "Nothing deleted: the items there at the preview are gone."
             else:
                 token = share_root_tokens.issue(paths, contents)
                 return (
