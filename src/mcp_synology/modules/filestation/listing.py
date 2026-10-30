@@ -332,7 +332,7 @@ async def list_files(
         result = format_table(
             headers=["Type", "Name"],
             rows=[],
-            title=f"Contents of {normalized} (0 items)",
+            title=f"Contents of {normalized} ({total:,} items)",
         )
         if more:
             result += f"\n\nUse offset={next_offset} to see more."
@@ -367,7 +367,9 @@ async def list_files(
     # hidden, positions no longer line up with offsets, so the count is given instead.
     hint = f" Use offset={next_offset} to see more." if more else ""
     if recycle_hidden:
-        result += f"\n\nShowing {shown:,} of {total:,} items (#recycle hidden).{hint}"
+        # The count alone can't say a later page is the last one, so it says so.
+        last = " Last page." if not more and offset > 0 else ""
+        result += f"\n\nShowing {shown:,} of {total:,} items (#recycle hidden).{hint}{last}"
     elif more or offset > 0:
         page = f"{offset + 1:,}–{offset + shown:,}"
         result += f"\n\nShowing {page} of {total:,} items.{hint}"

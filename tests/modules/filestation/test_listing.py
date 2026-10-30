@@ -470,6 +470,10 @@ class TestListFiles:
         assert seen == ["f0.txt", "f1.txt", "f2.txt", "f3.txt"]
         assert all("(4 items)" in r and "of 4 items (#recycle hidden)" in r for r in replies)
         assert all("#recycle" not in r.replace("(#recycle hidden)", "") for r in replies)
+        # Without a range, a later page says it's the last one (pre-QA on QA round 1).
+        if len(replies) > 1:
+            assert replies[-1].endswith("(#recycle hidden). Last page.")
+        assert all("Last page." not in r for r in replies[:-1])
 
     @respx.mock
     async def test_recycle_check_only_where_it_can_be(self, mock_client: DsmClient) -> None:
@@ -520,7 +524,7 @@ class TestListFiles:
             side_effect=self._folder(["#recycle", "a.txt", "b.txt"])
         )
         result = await list_files(mock_client, path="/video/.", limit=1, hide_recycle=True)
-        assert "Contents of /video/. (0 items)" in result
+        assert "Contents of /video/. (2 items)" in result
         assert result.endswith("Use offset=1 to see more.")
 
     @respx.mock
@@ -539,6 +543,8 @@ class TestListFiles:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(json=self._page([], total=5))
         result = await list_files(mock_client, path="/video", offset=9)
         assert "No items from offset=9: there are 5." in result
+        # The title gives the folder's total, as on every other page, not "(0 items)".
+        assert "Contents of /video (5 items)" in result
 
     @respx.mock
     async def test_negative_offset_is_clamped(self, mock_client: DsmClient) -> None:
