@@ -176,7 +176,7 @@ class TestFilestationToolInvocation:
         # These tests cover the closures' plumbing; share validation (#160) has its own.
         monkeypatch.setattr(
             "mcp_synology.modules.filestation.helpers.ensure_known_shares",
-            AsyncMock(side_effect=lambda _client, paths, _cache, *_params: list(paths)),
+            AsyncMock(side_effect=lambda _client, paths, _cache, *_args, **_kwargs: list(paths)),
         )
 
     @staticmethod
@@ -636,7 +636,7 @@ async def test_tools_send_the_share_name_as_listed(
     from mcp_synology.modules.filestation.helpers import _with_listed_share_name
 
     async def listed(
-        _client: object, paths: list[str], _cache: set[str], *_params: object
+        _client: object, paths: list[str], _cache: set[str], *_args: object, **_kwargs: object
     ) -> list[str]:
         return [_with_listed_share_name(p, {"video", "home"}) for p in paths]
 
@@ -843,6 +843,16 @@ class TestFilestationShareValidation:
         assert "'.' and '..' parts aren't allowed" in error["message"]
         domain.assert_not_awaited()
 
+    def test_every_path_tool_is_covered(self) -> None:
+        # A new File Station tool that takes a NAS path must go through the share and
+        # dot-part checks, and be listed here (#449).
+        server, _, ctx = self._ctx_with_shares("writable")
+        register(ctx)
+        tools = set(server._tool_manager._tools) - {"list_shares", "file_task"}
+        assert {c[0] for c in SHARE_CASES} == tools
+        assert {c[0] for c in DOT_CASES} == tools
+        assert set(SHARE_PARAMS) == tools
+
     async def test_known_share_reaches_the_tool(self, monkeypatch: pytest.MonkeyPatch) -> None:
         domain = AsyncMock(return_value="ran")
         monkeypatch.setattr("mcp_synology.modules.filestation.operations.delete_files", domain)
@@ -871,7 +881,7 @@ class TestFileTaskAndHandoff:
     def _shares_known(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
             "mcp_synology.modules.filestation.helpers.ensure_known_shares",
-            AsyncMock(side_effect=lambda _client, paths, _cache, *_params: list(paths)),
+            AsyncMock(side_effect=lambda _client, paths, _cache, *_args, **_kwargs: list(paths)),
         )
 
     def test_file_task_registered_write_only(self) -> None:

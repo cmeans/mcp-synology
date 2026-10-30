@@ -487,7 +487,7 @@ def register(ctx: "RegisterContext") -> None:
             ] = 200,
         ) -> str:
             client = await _fs_client()
-            [path] = await ensure_known_shares(client, [path], known_shares)
+            [path] = await ensure_known_shares(client, [path], known_shares, "path")
             return _reply(
                 await list_files(
                     client,
@@ -713,7 +713,7 @@ def register(ctx: "RegisterContext") -> None:
             ],
         ) -> str:
             client = await _fs_client()
-            [path] = await ensure_known_shares(client, [path], known_shares)
+            [path] = await ensure_known_shares(client, [path], known_shares, "path")
             result = await get_dir_size(client, path=path, timeout=dir_size_timeout)
             return _reply(result)
 
@@ -775,7 +775,7 @@ def register(ctx: "RegisterContext") -> None:
                 )
 
             client = await _fs_client()
-            [path] = await ensure_known_shares(client, [path], known_shares)
+            [path] = await ensure_known_shares(client, [path], known_shares, "path")
 
             async def _progress(current: int, total: int | None) -> None:
                 await ctx.report_progress(float(current), float(total) if total else None)
@@ -842,7 +842,7 @@ def register(ctx: "RegisterContext") -> None:
             ],
         ) -> str:
             client = await _fs_client()
-            [path] = await ensure_known_shares(client, [path], known_shares)
+            [path] = await ensure_known_shares(client, [path], known_shares, "path")
             return _reply(await rename(client, path=path, new_name=new_name))
 
     if "copy_files" in ctx.allowed_tools:
@@ -1108,6 +1108,14 @@ def register(ctx: "RegisterContext") -> None:
                 ),
             ] = False,
         ) -> str:
+            # The items are relative to the bin (or full paths into it), not share paths,
+            # so they skip the share check; a dot part would still escape the bin (#449).
+            for item in paths:
+                refuse_dot_parts(
+                    item,
+                    "paths",
+                    "Give the item as list_recycle_bin shows it, e.g. Shows/Ep1.mkv.",
+                )
             client = await _fs_client()
             share, *dest = await ensure_known_shares(
                 client,
@@ -1116,10 +1124,6 @@ def register(ctx: "RegisterContext") -> None:
                 ["share", *(["dest_folder"] if dest_folder else [])],
             )
             dest_folder = dest[0] if dest else None
-            # The items are relative to the bin (or full paths into it), not share paths,
-            # so they skip the share check; a dot part would still escape the bin (#449).
-            for item in paths:
-                refuse_dot_parts(item, "paths")
             return _reply(
                 await restore_from_recycle_bin(
                     client,

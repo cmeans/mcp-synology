@@ -586,7 +586,11 @@ def _with_listed_share_name(path: str, known_shares: set[str]) -> str:
     return "/".join(["", listed, *parts[2:]])
 
 
-def refuse_dot_parts(path: str, param: str) -> None:
+def refuse_dot_parts(
+    path: str,
+    param: str,
+    suggestion: str = "Write the path out in full from the shared folder, e.g. /video/Movies.",
+) -> None:
     """Raise ``invalid_parameter`` for a NAS path with a ``.`` or ``..`` part (#449).
 
     DSM refuses them itself (File Station answers 418 "Illegal name or path"; CreateFolder
@@ -602,7 +606,7 @@ def refuse_dot_parts(path: str, param: str) -> None:
             retryable=False,
             param=param,
             value=path,
-            suggestion="Write the path out in full from the shared folder, e.g. /video/Movies.",
+            suggestion=suggestion,
         )
 
 
@@ -610,7 +614,7 @@ async def ensure_known_shares(
     client: DsmClient,
     paths: list[str],
     known_shares: set[str],
-    params: str | list[str] = "path",
+    params: str | list[str],
 ) -> list[str]:
     """Raise ``not_found`` for a path whose first component isn't a shared folder (#160),
     and ``invalid_parameter`` for one with a ``.`` or ``..`` part (#449).

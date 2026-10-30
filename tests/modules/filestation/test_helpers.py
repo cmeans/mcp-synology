@@ -525,7 +525,7 @@ class TestEnsureKnownShares:
         calls: list[str] = []
         self._route([["testshare", "writable"], ["testshare", "writable"]], calls)
         with pytest.raises(ToolError) as exc_info:
-            await ensure_known_shares(mock_client, ["/video/downloads/*"], set())
+            await ensure_known_shares(mock_client, ["/video/downloads/*"], set(), "path")
         body = json.loads(str(exc_info.value))
         assert body["error"]["code"] == "not_found"
         assert body["error"]["retryable"] is False
@@ -569,7 +569,7 @@ class TestEnsureKnownShares:
     async def test_dots_inside_a_name_pass(self, mock_client: DsmClient, path: str) -> None:
         calls: list[str] = []
         self._route([["testshare", "writable"]], calls)
-        assert await ensure_known_shares(mock_client, [path], set()) == [path]
+        assert await ensure_known_shares(mock_client, [path], set(), "path") == [path]
 
     @respx.mock
     async def test_errors_name_each_paths_argument(self, mock_client: DsmClient) -> None:
@@ -598,15 +598,15 @@ class TestEnsureKnownShares:
             json={"success": False, "error": {"code": 105}}
         )
         with pytest.raises(ToolError, match="'.' and '..' parts"):
-            await ensure_known_shares(mock_client, ["/video/.."], set())
+            await ensure_known_shares(mock_client, ["/video/.."], set(), "path")
 
     @respx.mock
     async def test_known_share_passes_and_cache_is_reused(self, mock_client: DsmClient) -> None:
         calls: list[str] = []
         self._route([["testshare", "writable"]], calls)
         cache: set[str] = set()
-        await ensure_known_shares(mock_client, ["/writable/a", "writable/b"], cache)
-        await ensure_known_shares(mock_client, ["/testshare/c"], cache)
+        await ensure_known_shares(mock_client, ["/writable/a", "writable/b"], cache, "path")
+        await ensure_known_shares(mock_client, ["/testshare/c"], cache, "path")
         assert cache == {"testshare", "writable"}
         assert calls.count("list_share") == 1
 
@@ -615,7 +615,7 @@ class TestEnsureKnownShares:
         calls: list[str] = []
         self._route([["writable", "media"]], calls)
         cache = {"writable"}  # filled before "media" existed
-        await ensure_known_shares(mock_client, ["/media/x"], cache)
+        await ensure_known_shares(mock_client, ["/media/x"], cache, "path")
         assert "media" in cache
         assert calls.count("list_share") == 1
 
@@ -625,7 +625,9 @@ class TestEnsureKnownShares:
             json={"success": False, "error": {"code": 105}}
         )
         cache: set[str] = set()
-        await ensure_known_shares(mock_client, ["/whatever/x"], cache)  # DSM decides instead
+        await ensure_known_shares(
+            mock_client, ["/whatever/x"], cache, "path"
+        )  # DSM decides instead
         assert cache == set()
 
     @respx.mock
@@ -634,7 +636,7 @@ class TestEnsureKnownShares:
         calls: list[str] = []
         self._route([["writable"]], calls)
         cache: set[str] = set()
-        assert await ensure_known_shares(mock_client, [], cache) == []
+        assert await ensure_known_shares(mock_client, [], cache, "path") == []
         assert calls == [] and cache == set()
 
     @respx.mock
@@ -644,7 +646,9 @@ class TestEnsureKnownShares:
         calls: list[str] = []
         self._route([["testshare", "writable"]], calls)
         cache = {"testshare", "writable"}
-        out = await ensure_known_shares(mock_client, ["/TESTSHARE/Documents", "/Writable/x"], cache)
+        out = await ensure_known_shares(
+            mock_client, ["/TESTSHARE/Documents", "/Writable/x"], cache, "path"
+        )
         assert calls == []
         # Sent as listed (#353): DSM takes /TESTSHARE, but not /Home for the home service.
         assert out == ["/testshare/Documents", "/writable/x"]
@@ -658,6 +662,7 @@ class TestEnsureKnownShares:
             mock_client,
             ["Home", "/HOME/docs/a.txt", "homes/x/", "/backups", "/Backups/y", "home/z"],
             set(),
+            "paths",
         )
         # Changed only where the share name differs; anything else is left as given.
         assert out == ["/home", "/home/docs/a.txt", "homes/x/", "/Backups", "/Backups/y", "home/z"]
@@ -669,11 +674,11 @@ class TestEnsureKnownShares:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
             json={"success": False, "error": {"code": 105}}
         )
-        assert await ensure_known_shares(mock_client, ["/Home/x"], set()) == ["/Home/x"]
+        assert await ensure_known_shares(mock_client, ["/Home/x"], set(), "path") == ["/Home/x"]
 
     @respx.mock
     async def test_recycle_as_share_is_rejected(self, mock_client: DsmClient) -> None:
         calls: list[str] = []
         self._route([["writable"]], calls)
         with pytest.raises(ToolError):
-            await ensure_known_shares(mock_client, ["/#recycle/x"], {"writable"})
+            await ensure_known_shares(mock_client, ["/#recycle/x"], {"writable"}, "path")
