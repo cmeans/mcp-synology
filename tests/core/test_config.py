@@ -365,7 +365,7 @@ class TestAppConfig:
         assert "Hunter" not in message
         assert "<an unknown key, not shown since it may hold or be part of a password" in message
 
-    def test_a_valueless_near_miss_under_a_module_is_named(self) -> None:
+    def test_a_valueless_near_miss_under_a_module_names_the_key_it_is_close_to(self) -> None:
         from pydantic import ValidationError
 
         from mcp_synology.core.config import format_validation_error
@@ -379,8 +379,8 @@ class TestAppConfig:
             "may be part of a password>: Extra inputs are not permitted"
         ) in (format_validation_error(exc.value))
 
-    def test_a_near_miss_in_another_case_is_named(self) -> None:
-        """`USERNAME` under auth is a near-miss of `username` in any case: named."""
+    def test_a_near_miss_in_another_case_names_the_key_it_is_close_to(self) -> None:
+        """`USERNAME` under auth is a near-miss of `username` in any case: that key is named."""
         from pydantic import ValidationError
 
         from mcp_synology.core.config import format_validation_error
