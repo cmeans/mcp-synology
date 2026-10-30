@@ -597,8 +597,9 @@ def _with_listed_share_name(path: str, known_shares: set[str]) -> str:
 
 def _is_dot(part: str) -> bool:
     """``.`` or ``..``, surrounding spaces ignored: whether DSM trims `` .. `` to ``..`` is
-    unprobed, so a padded form is refused too, as Photos refuses folder names (#449). Only
-    spaces: a tab or newline beside a dot makes another name (QA round 2 on #470)."""
+    unprobed, so a padded form is refused too (#449). Only spaces: a tab or newline beside a
+    dot is a different Linux name, and DSM's handling of it is unprobed too (QA round 2 on
+    #470). Photos also refuses padded folder names, though it strips all whitespace."""
     return part.strip(" ") in (".", "..")
 
 

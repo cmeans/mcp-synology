@@ -53,6 +53,18 @@ class TestUploadFile:
         assert "test.txt" in result
         assert "/video/uploads/" in result
 
+    async def test_upload_refuses_a_local_name_that_isnt_one(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """With no filename, the local file's own name follows the same rule (pre-QA on
+        #470): ` .. ` is a valid local name."""
+        local_file = tmp_path / " .. "
+        local_file.write_text("x")
+        with pytest.raises(ToolError) as exc:
+            await upload_file(mock_client, local_path=str(local_file), dest_folder="/video/up")
+        error = json.loads(str(exc.value))["error"]
+        assert (error["code"], error["param"]) == ("invalid_parameter", "filename")
+
     @pytest.mark.parametrize("filename", [".", "..", " .. ", "../x", "a/b", "/abs", "a\0b", "   "])
     async def test_upload_refuses_a_filename_that_isnt_a_name(
         self, mock_client: DsmClient, tmp_path: Path, filename: str

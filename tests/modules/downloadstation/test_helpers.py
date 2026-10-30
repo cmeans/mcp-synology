@@ -202,6 +202,11 @@ class TestNormalizeDestination:
             given,
         )
 
+    @pytest.mark.parametrize("given", ["video/..\t/x", "video/.\t/x"])
+    def test_only_spaces_pad_a_dot_part(self, given: str) -> None:
+        # As File Station's: a tab makes another name (pre-QA on #470).
+        assert normalize_destination(given, operation="Edit download") == given
+
     def test_dots_inside_a_name_pass(self) -> None:
         assert normalize_destination("video/.hidden/a..b", operation="Edit download") == (
             "video/.hidden/a..b"

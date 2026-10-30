@@ -194,13 +194,14 @@ class TestRename:
             error["message"] == f"Rename failed: new_name should be just a file name, but it {why}."
         )
 
-    @pytest.mark.parametrize("name", [".\t", "\t..", ". x", "a b"])
+    @pytest.mark.parametrize("name", [".\t", "\t..", "..\n"])
     def test_a_name_with_other_whitespace_passes(self, name: str) -> None:
         """Only spaces pad a dot name: a tab or a newline beside it makes a different, valid
-        Linux name (QA round 2 on #470)."""
-        from mcp_synology.modules.filestation.helpers import refuse_bad_name
+        Linux name (QA round 2 on #470), in a name and in a path part."""
+        from mcp_synology.modules.filestation.helpers import refuse_bad_name, refuse_dot_parts
 
         refuse_bad_name("Rename", name, "new_name", "x")  # doesn't raise
+        refuse_dot_parts(f"/video/{name}/x", "path")  # doesn't raise
 
     @respx.mock
     async def test_rename_error(self, mock_client: DsmClient) -> None:
