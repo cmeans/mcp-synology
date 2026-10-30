@@ -959,7 +959,23 @@ async def delete_files(
                     on_progress=on_progress,
                 )
             except ToolError as e:
-                raise _with_progress_so_far(e, deleted, normalized[i + 1 :]) from None
+                raise _with_progress_so_far(e, deleted, normalized[i + 1 :], listed) from None
+            except httpx.TransportError as e:
+                if not deleted and not normalized[i + 1 :]:
+                    raise  # nothing to add: the server reports the NAS unreachable
+                # The start (or its status) got no answer: it may have started. Say so,
+                # with what was done and what wasn't started (pre-QA on #480).
+                try:
+                    error_response(
+                        ErrorCode.UNAVAILABLE,
+                        f"Delete files failed: DSM didn't answer for {p} "
+                        f"({type(e).__name__}); its delete may have started.",
+                        retryable=False,
+                        suggestion="Check with list_files, or file_task with no handle, "
+                        "before deleting again.",
+                    )
+                except ToolError as err:
+                    raise _with_progress_so_far(err, deleted, normalized[i + 1 :], listed) from None
         if handoff is not None:
             handle = handoff.handle
             # No DSM request between the handoff and the reply: a recycle-bin probe to a
@@ -984,6 +1000,8 @@ async def delete_files(
                 done=deleted,
                 not_started=normalized[i + 1 :],
             )
+            if listed & set(normalized[i + 1 :]):
+                reply += _AGAIN_ON_THE_SHARE
             return reply if running is None else _already_running("Delete", p) + "\n" + reply
         deleted.append(p)
 
@@ -1083,7 +1101,16 @@ async def _delete_summary(
     return "\n".join(lines)
 
 
-def _with_progress_so_far(error: ToolError, done: list[str], rest: list[str]) -> ToolError:
+# A shared folder's items came from its listing, which the model never saw in full.
+_AGAIN_ON_THE_SHARE = (
+    " To go on with a shared folder's items, call delete_files on the shared folder again "
+    "for a new preview of what's left."
+)
+
+
+def _with_progress_so_far(
+    error: ToolError, done: list[str], rest: list[str], listed: frozenset[str] = frozenset()
+) -> ToolError:
     """A delete's error, saying what was already deleted and what wasn't started: a
     shared folder's items are many deletes, and a failure partway otherwise left the user
     unable to tell what's left (QA round 1 on #480)."""
@@ -1095,9 +1122,11 @@ def _with_progress_so_far(error: ToolError, done: list[str], rest: list[str]) ->
     except (ValueError, KeyError, TypeError):
         return error
     if done and "Already deleted" not in message:
-        message += _already_done("Delete", done)
+        message = message.rstrip(".") + _already_done("Delete", done) + "."
     if rest:
         message = message.rstrip(".") + f". Not started: {short_list(rest)}."
+        if listed & set(rest):
+            message += _AGAIN_ON_THE_SHARE
     body["error"]["message"] = message
     return ToolError(json.dumps(body))
 

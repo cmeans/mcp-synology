@@ -308,7 +308,9 @@ def _can_elicit(ctx: Context) -> bool:
     except Exception as e:  # noqa: BLE001 - never ask by guesswork, but say why not
         # An SDK change would otherwise downgrade the user's own confirmation to a token
         # the model holds, without a word (QA round 1 on #480).
-        logger.warning("Couldn't read the client's elicitation capability: %s", type(e).__name__)
+        logger.warning(
+            "Couldn't read the client's elicitation capability: %s", type(e).__name__, exc_info=True
+        )
         return False
 
 
@@ -332,6 +334,7 @@ def register(ctx: "RegisterContext") -> None:
     from mcp_synology.modules.filestation.operations import (
         SHARE_ROOT_TOKEN_TTL,
         ShareRootTokens,
+        _listed_paths,
         copy_files,
         create_folder,
         delete_files,
@@ -1014,13 +1017,15 @@ def register(ctx: "RegisterContext") -> None:
             for path in paths:
                 # `/video/.` and `/video/x/..` name the shared folder too, and must never
                 # reach DSM's Delete; #470 refuses these for every tool (QA round 1 on #480).
+                # So would `//video` when DSM won't list shares (the share check is then
+                # skipped): an empty part is refused too (pre-QA on #480).
                 if any(
-                    part.strip() in (".", "..") for part in normalize_path(path).split("/") if part
+                    part.strip() in (".", "..", "") for part in normalize_path(path).split("/")[1:]
                 ):
                     error_response(
                         ErrorCode.INVALID_PARAMETER,
-                        f"Delete files refused: '.' and '..' parts aren't allowed ({path}). "
-                        "Nothing was deleted.",
+                        f"Delete files refused: '.', '..' and empty parts aren't allowed "
+                        f"({path}). Nothing was deleted.",
                         retryable=False,
                         param="paths",
                         value=path,
@@ -1077,6 +1082,25 @@ def register(ctx: "RegisterContext") -> None:
                 )
             )
 
+    async def _still_listed(
+        client: "DsmClient", roots: list[str], previewed: dict[str, list[str]]
+    ) -> tuple[dict[str, list[str]], str]:
+        """The previewed items still in each share, and a note on any added since: a
+        confirmed delete is of what the user saw, less what's gone (QA round 1 on #480)."""
+        contents: dict[str, list[str]] = {}
+        added = 0
+        for root in roots:
+            present = set(await share_contents(client, root))
+            contents[root] = [p for p in previewed.get(root, []) if p in present]
+            added += len(present - set(previewed.get(root, [])))
+        note = (
+            f"{added:,} item(s) added since the preview weren't deleted; call delete_files on "
+            "the shared folder again for a new preview of them.\n\n"
+            if added
+            else ""
+        )
+        return contents, note
+
     async def _confirm_share_roots(
         ctx: Context,
         client: "DsmClient",
@@ -1123,20 +1147,7 @@ def register(ctx: "RegisterContext") -> None:
                     value=confirm,
                     suggestion="Call delete_files again without confirm for a new preview.",
                 )
-            # Only what the preview listed, less what's gone since: never an item added
-            # after the user saw the preview (QA round 1 on #480).
-            contents = {}
-            added = 0
-            for root in roots:
-                now = await share_contents(client, root)
-                present = set(now)
-                contents[root] = [p for p in stored.get(root, []) if p in present]
-                added += len(present - set(stored.get(root, [])))
-            if added:
-                note = (
-                    f"{added:,} item(s) added since the preview weren't deleted; call "
-                    "delete_files on the shared folder again for a new preview of them.\n\n"
-                )
+            contents, note = await _still_listed(client, roots, stored)
             if not others and not any(contents.values()):
                 return note + "Nothing deleted: the items the preview listed are gone."
         else:
@@ -1150,7 +1161,7 @@ def register(ctx: "RegisterContext") -> None:
             )
             if others:
                 # A yes covers the whole call, so the user sees all of it.
-                preview += "\nAlso deleted in this call:\n" + "\n".join(f"  {p}" for p in others)
+                preview += "\nAlso deleted in this call:\n" + "\n".join(_listed_paths(others))
             asked = False
             if _can_elicit(ctx):
                 try:
@@ -1171,12 +1182,18 @@ def register(ctx: "RegisterContext") -> None:
                         e,
                     )
                     return (
-                        f"{preview}\n\nNothing deleted: the confirmation didn't complete "
-                        f"({type(e).__name__}). Ask the user, then call delete_files again."
+                        f"{preview}\n\nNothing deleted: the client's confirmation failed "
+                        f"({type(e).__name__}). If it keeps failing, the shared folder's items "
+                        "can be deleted by their own paths (list_files lists them)."
                     )
             if asked:
                 if answer.action != "accept" or not answer.data.delete:
                     return f"{preview}\n\nNothing deleted: the user didn't confirm."
+                # The user may have taken minutes: as on the token path, only what the
+                # preview listed and is still there (pre-QA on #480).
+                contents, note = await _still_listed(client, roots, contents)
+                if not others and not any(contents.values()):
+                    return note + "Nothing deleted: the items the preview listed are gone."
             else:
                 token = share_root_tokens.issue(paths, contents)
                 return (

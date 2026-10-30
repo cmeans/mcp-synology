@@ -3272,7 +3272,67 @@ class TestDeleteDeadlineAndListed:
             await delete_files(mock_client, paths=items, listed=frozenset(items), timeout=5)
         message = json.loads(str(exc.value))["error"]["message"]
         assert "Already deleted before this failure: /video/i0" in message
-        assert message.endswith("Not started: /video/i2.")
+        assert "Not started: /video/i2." in message
+        # The listed items came from the share's listing: the model can't name them
+        # (pre-QA on #480).
+        assert message.endswith(
+            "call delete_files on the shared folder again for a new preview of what's left."
+        )
+
+    @respx.mock
+    async def test_a_transport_error_partway_says_what_was_done(
+        self, mock_client: DsmClient
+    ) -> None:
+        """A start with no answer may have started: the error says so, with what was
+        deleted and not started, instead of a bare ReadTimeout (pre-QA on #480)."""
+        starts: list[str] = []
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            p = request.url.params
+            method, api = p.get("method"), p.get("api")
+            if method == "list" and api == "SYNO.FileStation.BackgroundTask":
+                return httpx.Response(200, json={"success": True, "data": {"tasks": []}})
+            if method == "start":
+                starts.append(p.get("path", ""))
+                if len(starts) == 2:
+                    raise httpx.ReadTimeout("")
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "t"}})
+            if method == "status":
+                return httpx.Response(200, json={"success": True, "data": {"finished": True}})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        items = [f"/video/i{n}" for n in range(3)]
+        with pytest.raises(ToolError) as exc:
+            await delete_files(mock_client, paths=items, timeout=5)
+        error = json.loads(str(exc.value))["error"]
+        assert error["code"] == "unavailable"
+        assert error["message"].startswith(
+            "Delete files failed: DSM didn't answer for /video/i1 (ReadTimeout); its delete "
+            "may have started. Already deleted before this failure: /video/i0. Not started: "
+            "/video/i2."
+        )
+
+    @respx.mock
+    async def test_a_handoff_of_listed_items_points_back_to_the_share(
+        self, mock_client: DsmClient
+    ) -> None:
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            p = request.url.params
+            method, api = p.get("method"), p.get("api")
+            if method == "list" and api == "SYNO.FileStation.BackgroundTask":
+                return httpx.Response(200, json={"success": True, "data": {"tasks": []}})
+            if method == "start":
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "t"}})
+            if method == "status":
+                return httpx.Response(200, json={"success": True, "data": {"finished": False}})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        items = [f"/video/i{n}" for n in range(3)]
+        out = await delete_files(mock_client, paths=items, listed=frozenset(items), timeout=0.01)
+        assert "Not started: /video/i1, /video/i2." in out
+        assert out.endswith("for a new preview of what's left.")
 
     def test_an_error_that_isnt_the_envelope_is_kept_as_it_is(self) -> None:
         from mcp_synology.modules.filestation.operations import _with_progress_so_far

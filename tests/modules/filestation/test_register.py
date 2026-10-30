@@ -1293,6 +1293,46 @@ class TestShareRootDelete:
         )
         preview.assert_not_awaited()
 
+    async def test_an_accepted_dialog_deletes_only_what_is_still_there(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The user may take minutes: after a yes, the share is listed again and only the
+        previewed items still there are deleted (pre-QA on #480)."""
+        from mcp.server.elicitation import AcceptedElicitation
+
+        from mcp_synology.modules.filestation import _ConfirmShareDelete
+
+        delete, _, fn = self._setup(
+            monkeypatch,
+            listings_in_turn=[
+                ["/writable/a", "/writable/b"],
+                ["/writable/b", "/writable/NEW"],
+            ],
+        )
+        mcp_ctx = self._mcp_ctx(True, AcceptedElicitation(data=_ConfirmShareDelete(delete=True)))
+        out = await fn(ctx=mcp_ctx, paths=["/writable"])
+        assert delete.await_args.kwargs["paths"] == ["/writable/b"]
+        assert out.startswith("1 item(s) added since the preview weren't deleted")
+
+    async def test_other_paths_in_the_preview_are_capped(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        delete, _, fn = self._setup(monkeypatch)
+        others = [f"/writable/o{n}" for n in range(60)]
+        out = await fn(ctx=self._mcp_ctx(False), paths=["/writable", *others])
+        assert "  /writable/o49\n  … and 10 more" in out and "/writable/o50" not in out
+        delete.assert_not_awaited()
+
+    async def test_an_empty_part_never_reaches_dsm(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """`//writable` when DSM won't list shares (the share check skipped) would name the
+        shared folder too (pre-QA on #480)."""
+        delete, preview, fn = self._setup(monkeypatch)
+        with pytest.raises(ToolError) as exc:
+            await fn(ctx=self._mcp_ctx(False), paths=["//writable"])
+        assert json.loads(str(exc.value))["error"]["code"] == "invalid_parameter"
+        preview.assert_not_awaited()
+        delete.assert_not_awaited()
+
     async def test_a_token_covers_the_whole_call(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import re
 
@@ -1498,6 +1538,8 @@ class TestShareRootDeleteOverMcp:
         async with Client(server, elicitation_callback=on_elicit, mode="legacy") as client:
             result = await client.call_tool("delete_files", {"paths": ["/writable"]})
         text = " ".join(getattr(c, "text", "") for c in result.content)
-        assert "Nothing deleted: the confirmation didn't complete" in text
+        # No promise that asking again works (pre-QA on #480).
+        assert "Nothing deleted: the client's confirmation failed" in text
+        assert "can be deleted by their own paths" in text
         assert 'confirm="' not in text
         delete.assert_not_awaited()
