@@ -394,8 +394,9 @@ def _shown_location(err: Any, loc_parts: list[str]) -> str:
 
     YAML splits a value with a comma inside a flow mapping (`{password: a,Hunter2x}`): the
     second half arrives as a key with no value, in any section (#386). So an unknown key
-    isn't named when it has no value, or when it's under `auth`, unless it's a near-miss of
-    a key its section defines (`htps`, `pasword`, `levle` are named). An unknown key with a
+    isn't named when it has no value, or when it's under `auth`; a near-miss of a key its
+    section defines names that key instead (`pasword` reads `<an unknown key close to
+    "password", …>`), since `Spring,Password1` splits off `Password1`. An unknown key with a
     value elsewhere (`totally_unknown: x`) is named, as before. A near-miss is matched in
     any case (`USERNAME`). A key YAML read as something other than text (`{password:
     Summer,2024}` splits off a key 2024), anywhere, module settings included, is never
@@ -419,10 +420,17 @@ def _shown_location(err: Any, loc_parts: list[str]) -> str:
         key = loc_parts[-1]
         suspect = err.get("input") is None or loc_parts[0] == "auth"
         valid = _section_keys(loc_parts)
-        if suspect and not difflib.get_close_matches(
-            key.lower(), [k.lower() for k in valid], n=1, cutoff=0.75
-        ):
+        if suspect:
             where = ".".join(loc_parts[:-1])
+            by_lower = {k.lower(): k for k in valid}
+            close = difflib.get_close_matches(key.lower(), list(by_lower), n=1, cutoff=0.75)
+            if close:
+                # A typo's help without its text: `Spring,Password1` splits off a key
+                # `Password1`, close to `password` (QA round 2 on #469).
+                return (f"{where}." if where else "") + (
+                    f'<an unknown key close to "{by_lower[close[0]]}", not shown since it may '
+                    "be part of a password>"
+                )
             return (
                 (f"{where}." if where else "")
                 + "<an unknown key, not shown since it may hold or be part of a password (a "
@@ -572,7 +580,15 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         raise
 
     logger.debug("Loading config from %s", config_path)
-    raw_text = config_path.read_text(encoding="utf-8")
+    try:
+        raw_text = config_path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as e:
+        # Its message quotes the byte, which may be one of a password's (QA round 2 on #469).
+        line = e.object[: e.start].count(b"\n") + 1
+        raise ValueError(
+            f"The config file isn't valid UTF-8 (line {line}). Save it as UTF-8 (in Notepad: "
+            "File > Save as, Encoding: UTF-8)."
+        ) from None
     raw: dict[str, Any] = parse_config_text(raw_text) or {}
 
     raw = _merge_env_overrides(raw)

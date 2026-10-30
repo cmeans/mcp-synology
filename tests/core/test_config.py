@@ -146,9 +146,17 @@ class TestAppConfig:
         with pytest.raises(ValidationError) as exc:
             AppConfig(**raw)
         message = format_validation_error(exc.value)
-        # An unknown key's value could be a misplaced credential: never echoed.
-        assert f"  - {section}.{key}: Extra inputs are not permitted\n" in message + "\n"
-        assert "(got " not in message
+        # An unknown key's value could be a misplaced credential: never echoed. Under
+        # auth the key itself may be half a password: named by the real key it's close to
+        # (QA round 2 on #469).
+        shown = (
+            'auth.<an unknown key close to "password", not shown since it may be part of a '
+            "password>"
+            if section == "auth"
+            else f"{section}.{key}"
+        )
+        assert f"  - {shown}: Extra inputs are not permitted\n" in message + "\n"
+        assert "(got " not in message and (section != "auth" or key not in message)
 
     @pytest.mark.parametrize(
         ("raw_update", "secret"),
@@ -366,9 +374,10 @@ class TestAppConfig:
         raw["modules"] = {"filestation": {"permision": None}}
         with pytest.raises(ValidationError) as exc:
             AppConfig(**raw)
-        assert "  - modules.filestation.permision: Extra inputs are not permitted" in (
-            format_validation_error(exc.value)
-        )
+        assert (
+            '  - modules.filestation.<an unknown key close to "permission", not shown since it '
+            "may be part of a password>: Extra inputs are not permitted"
+        ) in (format_validation_error(exc.value))
 
     def test_a_near_miss_in_another_case_is_named(self) -> None:
         """`USERNAME` under auth is a near-miss of `username` in any case: named."""
@@ -380,9 +389,10 @@ class TestAppConfig:
         raw["auth"] = {"USERNAME": "me"}
         with pytest.raises(ValidationError) as exc:
             AppConfig(**raw)
-        assert "  - auth.USERNAME: Extra inputs are not permitted" in (
-            format_validation_error(exc.value)
-        )
+        assert (
+            '  - auth.<an unknown key close to "username", not shown since it may be part of a '
+            "password>: Extra inputs are not permitted"
+        ) in (format_validation_error(exc.value))
 
     def test_a_non_text_key_in_module_settings_is_not_shown(self) -> None:
         """`{x: Hunter,2024}` in settings splits into a key 2024, which pydantic reports as
@@ -454,7 +464,8 @@ class TestAppConfig:
         assert fragment not in message and "2024" not in message and "3.14" not in message
         assert "<a key that isn't text, not shown" in message
 
-    def test_a_misspelled_auth_key_is_still_named(self) -> None:
+    def test_a_misspelled_auth_key_names_the_key_it_is_close_to(self) -> None:
+        """The typo's help without its text (QA round 2 on #469)."""
         from pydantic import ValidationError
 
         from mcp_synology.core.config import format_validation_error
@@ -464,8 +475,43 @@ class TestAppConfig:
         with pytest.raises(ValidationError) as exc:
             AppConfig(**raw)
         message = format_validation_error(exc.value)
-        for key in ("usrname", "pasword", "device_ids"):
-            assert f"  - auth.{key}: Extra inputs are not permitted" in message
+        for real in ("username", "password", "device_id"):
+            assert f'auth.<an unknown key close to "{real}", not shown' in message
+        assert "usrname" not in message and "pasword" not in message
+
+    def test_a_password_fragment_like_a_key_is_not_shown(self) -> None:
+        """`Spring,Password1` splits off a key `Password1`, close to `password`: it used to
+        be printed (QA round 2 on #469)."""
+        import yaml
+        from pydantic import ValidationError
+
+        from mcp_synology.core.config import format_validation_error
+
+        raw = yaml.safe_load(
+            "schema_version: 1\nconnection: {host: nas}\n"
+            "auth: {username: me, password: Spring,Password1}\n"
+            "modules: {filestation: {enabled: true}}\n"
+        )
+        with pytest.raises(ValidationError) as exc:
+            AppConfig(**raw)
+        message = format_validation_error(exc.value)
+        assert "Password1" not in message and "Spring" not in message
+        assert 'auth.<an unknown key close to "password", not shown' in message
+
+    def test_a_config_that_isnt_utf8_names_the_line_not_the_byte(self, tmp_path: Any) -> None:
+        """A cp1252 file (old Notepad's default) failed with Python's decode error, which
+        quotes the byte (QA round 2 on #469)."""
+        from mcp_synology.core.config import load_config
+
+        path = tmp_path / "c.yaml"
+        path.write_bytes(b"schema_version: 1\nauth:\n  password: Hunt\xe9r9x\n")
+        with pytest.raises(ValueError) as exc:
+            load_config(path)
+        assert str(exc.value) == (
+            "The config file isn't valid UTF-8 (line 3). Save it as UTF-8 (in Notepad: File > "
+            "Save as, Encoding: UTF-8)."
+        )
+        assert "xe9" not in str(exc.value)
 
     def test_a_block_context_does_not_point_to_line_1(self, tmp_path: Any) -> None:
         # A misindented key: PyYAML's context is the whole document's block mapping.
