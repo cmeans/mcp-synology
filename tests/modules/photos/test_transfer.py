@@ -1139,7 +1139,12 @@ class TestUploadPersonalRootFolder:
 
 
 class TestDestName:
-    """#450: every name is unique within the call, whatever the order and size."""
+    """#450: every name is unique within the call, whatever the order and size.
+
+    Previews couldn't hit #450 before either: a preview name ends ``_<size>.jpg`` and an
+    ID-suffixed one ``_<id>.jpg``, and IDs are deduplicated first. They're here so a
+    change to the naming keeps them unique too.
+    """
 
     @staticmethod
     def _names(items: list[tuple[int, str]], size: str) -> list[str]:
@@ -1170,9 +1175,9 @@ class TestDestName:
                 ["a_m_9_m.jpg", "a_m.jpg", "a_m_9.jpg"],
             ),
             (
-                [(1, "a_m_9.jpg"), (8, "a.jpg"), (9, "a.png"), (2, "a_m_9.png")],
+                [(1, "a_m_9.jpg"), (8, "a.jpg"), (9, "a.png"), (4, "a_m_9.png")],
                 "m",
-                ["a_m_9_m.jpg", "a_m.jpg", "a_m_9.jpg", "a_m_9_m_2.jpg"],
+                ["a_m_9_m.jpg", "a_m.jpg", "a_m_9.jpg", "a_m_9_m_4.jpg"],
             ),
             (
                 [(1, "A.JPG"), (2, "a.jpg"), (3, "a_2.JPG")],
