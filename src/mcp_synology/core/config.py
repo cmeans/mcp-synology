@@ -326,20 +326,43 @@ def _synthesize_env_config() -> AppConfig | None:
     return config
 
 
-_SECRET_KEY = re.compile(r"pass|secret|token|otp|device_id|key", re.IGNORECASE)
-
-
 def _may_show(err: Any, loc_parts: list[str]) -> bool:
-    """Whether an error's rejected value may be shown. Never when it could hold a
-    credential: a section or the whole config (a root or missing-field error's input is
-    the parent mapping, `auth` and env-var overrides included), anything under `auth:`,
-    a key that names a credential, or an unknown key (`pasword:` holds the password
-    wherever it's misplaced, #386)."""
-    if isinstance(err.get("input"), dict | list) or err.get("type") == "extra_forbidden":
+    """Whether an error's rejected value may be shown: only a plain value (text, a number,
+    true or false) outside `auth:`, and never an unknown key's (`pasword:` holds the
+    password wherever it's misplaced, #386). A section or the whole config, which a root or
+    missing-field error carries as its input (`auth` and env-var overrides included), is
+    never shown."""
+    if not isinstance(err.get("input"), str | int | float | bool):
         return False
-    return not (
-        (loc_parts and loc_parts[0] == "auth")
-        or any(_SECRET_KEY.search(part) for part in loc_parts)
+    if err.get("type") == "extra_forbidden":
+        return False
+    return not (loc_parts and loc_parts[0] == "auth")
+
+
+_YAML_KEY = re.compile(r"\s*-?\s*([A-Za-z_][A-Za-z0-9_]*)\s*:")
+
+
+def format_yaml_error(exc: yaml.YAMLError) -> str:
+    """Say where a config file isn't valid YAML, without quoting it (#386).
+
+    PyYAML's own message quotes the offending line, and its problem text can quote the
+    value (`found undefined alias 'Hunter2x'` for `password: *Hunter2x`), so a password
+    with a YAML-special character would be printed. This names the line, the column and
+    the key on that line, never the value.
+    """
+    mark = getattr(exc, "problem_mark", None)
+    if mark is None:
+        return "The config file isn't valid YAML. Check its quoting and indentation."
+    where = f"line {mark.line + 1}, column {mark.column + 1}"
+    buffer = getattr(mark, "buffer", None)
+    if isinstance(buffer, str):
+        line = buffer.splitlines()[mark.line] if mark.line < len(buffer.splitlines()) else ""
+        if key := _YAML_KEY.match(line):
+            where += f" (the `{key.group(1)}` line)"
+    return (
+        f"The config file isn't valid YAML at {where}. The text there isn't shown, since it "
+        "may be a password: check its quoting (a value starting with *, !, @, ` or a quote, "
+        "or containing ': ', needs quotes) and indentation."
     )
 
 

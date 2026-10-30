@@ -95,8 +95,9 @@ a private channel.
   leave orphan tasks consuming CPU on the NAS — `try/finally` cleanup
   must always call stop/clean.
 - Config-loading issues — strict validation everywhere except module
-  settings (which are lenient), config errors that show a credential, env-var override precedence, and the
-  read-only-from-server-perspective invariant. Anything that lets a
+  settings (which are lenient), config errors that show a credential,
+  env-var override precedence, and the read-only-from-server-perspective
+  invariant. Anything that lets a
   malformed config escalate beyond a clean error message is in scope.
 - Supply-chain or packaging issues affecting published wheels or
   sdists on PyPI (trusted publishing, sdist contents, lockfile

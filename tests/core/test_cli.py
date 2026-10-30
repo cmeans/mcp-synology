@@ -1801,3 +1801,32 @@ class TestVerboseShortFlag:
         result = CliRunner().invoke(main, ["-v"])
         assert result.exit_code == 0
         assert "version" in result.output
+
+
+class TestConfigErrorsHideSecrets:
+    """#386: serve, check and setup never print a password from a broken config."""
+
+    @pytest.mark.parametrize(
+        "args",
+        [["serve", "--config"], ["check", "--config"], ["setup", "--config"]],
+        ids=["serve", "check", "setup"],
+    )
+    @pytest.mark.parametrize(
+        "body",
+        [
+            "auth:\n  username: me\n  password: *Hunter2x\n",  # YAML error
+            "instance_id: my_nas\nauth:\n  username: me\n  password: Hunter2x\n",  # <root>
+            "connection: {host: nas, pasword: Hunter2x}\n",  # unknown key
+        ],
+        ids=["yaml", "root", "unknown-key"],
+    )
+    def test_no_password_in_the_output(self, tmp_path: Path, args: list[str], body: str) -> None:
+        path = tmp_path / "c.yaml"
+        text = "schema_version: 1\nmodules: {filestation: {enabled: true}}\n" + body
+        if "connection" not in body:
+            text += "connection: {host: nas}\n"
+        path.write_text(text)
+        result = CliRunner().invoke(main, [*args, str(path)])
+        assert result.exit_code == 1
+        assert "Hunter2x" not in result.output
+        assert "Error: " in result.output

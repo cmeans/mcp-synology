@@ -199,6 +199,53 @@ class TestAppConfig:
         assert "env-secret" not in message and "dev-tok" not in message
         assert "<root>" in message
 
+    @pytest.mark.parametrize(
+        "password",
+        ["*Hunter2x", "!Hunter2x", "@Hunter2x", "`Hunter2x", '"Hunter2x', "Hunt: er2x"],
+    )
+    def test_yaml_error_never_quotes_the_line(self, tmp_path: Any, password: str) -> None:
+        """PyYAML quotes the offending line, and its problem text can quote the value."""
+        import yaml
+
+        from mcp_synology.core.config import format_yaml_error, load_config
+
+        path = tmp_path / "c.yaml"
+        path.write_text(
+            "schema_version: 1\nconnection: {host: nas}\n"
+            f"auth:\n  username: me\n  password: {password}\n"
+            "modules: {filestation: {enabled: true}}\n"
+        )
+        with pytest.raises(yaml.YAMLError) as exc:
+            load_config(path)
+        assert "Hunt" in str(exc.value)  # PyYAML's own text would show it
+        message = format_yaml_error(exc.value)
+        assert "Hunt" not in message
+        assert message.startswith("The config file isn't valid YAML at line ")
+
+    def test_yaml_error_names_the_line_and_key(self, tmp_path: Any) -> None:
+        import yaml
+
+        from mcp_synology.core.config import format_yaml_error, load_config
+
+        path = tmp_path / "c.yaml"
+        path.write_text("schema_version: 1\nconnection:\n  host: nas\n  port: *x\n")
+        with pytest.raises(yaml.YAMLError) as exc:
+            load_config(path)
+        assert format_yaml_error(exc.value).startswith(
+            "The config file isn't valid YAML at line 4, column 9 (the `port` line). "
+        )
+
+    def test_a_set_is_not_shown(self) -> None:
+        from pydantic import ValidationError
+
+        from mcp_synology.core.config import format_validation_error
+
+        raw = _minimal_raw()
+        raw["connection"] = {"hunter2"}
+        with pytest.raises(ValidationError) as exc:
+            AppConfig(**raw)
+        assert "hunter2" not in format_validation_error(exc.value)
+
     def test_a_plain_value_is_still_shown(self) -> None:
         from pydantic import ValidationError
 

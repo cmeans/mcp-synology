@@ -39,7 +39,7 @@ def setup(config: str | None, list_configs: bool, verbose: bool) -> None:
     # Try to load an existing config via discovery
     from pydantic import ValidationError
 
-    from mcp_synology.core.config import format_validation_error, load_config
+    from mcp_synology.core.config import format_validation_error, format_yaml_error, load_config
 
     try:
         app_config = load_config(None)
@@ -51,7 +51,10 @@ def setup(config: str | None, list_configs: bool, verbose: bool) -> None:
         # Must precede ValueError — pydantic.ValidationError subclasses it.
         click.echo(click.style(f"Error: {format_validation_error(e)}", fg="red"), err=True)
         sys.exit(1)
-    except (ValueError, yaml.YAMLError) as e:
+    except yaml.YAMLError as e:
+        click.echo(click.style(f"Error: {format_yaml_error(e)}", fg="red"), err=True)
+        sys.exit(1)
+    except ValueError as e:
         click.echo(click.style(f"Error: {e}", fg="red"), err=True)
         sys.exit(1)
 
@@ -206,7 +209,7 @@ def _setup_with_config(config_path_str: str, verbose: bool) -> None:
     """Setup using an explicit config file path."""
     from pydantic import ValidationError
 
-    from mcp_synology.core.config import format_validation_error, load_config
+    from mcp_synology.core.config import format_validation_error, format_yaml_error, load_config
 
     try:
         app_config = load_config(config_path_str)
@@ -214,7 +217,10 @@ def _setup_with_config(config_path_str: str, verbose: bool) -> None:
         # Must precede ValueError — pydantic.ValidationError subclasses it.
         click.echo(click.style(f"Error: {format_validation_error(e)}", fg="red"), err=True)
         sys.exit(1)
-    except (FileNotFoundError, ValueError, yaml.YAMLError) as e:
+    except yaml.YAMLError as e:
+        click.echo(click.style(f"Error: {format_yaml_error(e)}", fg="red"), err=True)
+        sys.exit(1)
+    except (FileNotFoundError, ValueError) as e:
         click.echo(click.style(f"Error: {e}", fg="red"), err=True)
         sys.exit(1)
 
