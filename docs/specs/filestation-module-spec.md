@@ -470,7 +470,7 @@ Upload a local file from this machine to a NAS folder.
 |------|------|----------|---------|-------------|
 | `local_path` | `str` | **Yes** | — | Local file path on this machine, inside the allowed local folders (see Local path confinement). A folder is refused (`not_found`: only a file uploads). |
 | `dest_folder` | `str` | No | `default_upload_dir` | NAS destination folder. With neither set, `invalid_parameter` (`param: dest_folder`) before any NAS request (#194). When the destination comes from `default_upload_dir`, an error about it (a `.` or `..` part, an unknown share) names `default_upload_dir` and says to fix the setting or pass `dest_folder`. |
-| `filename` | `str` | No | `None` | Rename on upload (defaults to the local filename). A `/`, a NUL, or `.` or `..` (padded too) is refused with `invalid_parameter` (`param: filename`, #449). |
+| `filename` | `str` | No | `None` | Rename on upload (defaults to the local filename). A blank name, a `/`, a NUL, or `.` or `..` (padded with spaces too) is refused with `invalid_parameter` (`param: filename`, #449); an empty one means the local file's name. |
 | `overwrite` | `bool` | No | `false` | Replace existing NAS file. With `false`, an existing name is `already_exists` and the NAS file is kept (see #195 below). |
 | `create_parents` | `bool` | No | `true` | Create `dest_folder` and missing parent directories on the NAS. With `false`, `dest_folder` must already exist. |
 
@@ -587,7 +587,7 @@ Rename a file or folder.
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
 | `path` | `str` | **Yes** | — | Full path to the file or folder to rename. |
-| `new_name` | `str` | **Yes** | — | New name (filename/folder name only, not a full path; a `/`, a NUL, or `.` or `..` is refused with `invalid_parameter`, a padded ` .. ` too, since whether DSM trims it is unprobed; the message names which). A name already taken in the folder is refused by DSM (1200) and nothing is replaced. |
+| `new_name` | `str` | **Yes** | — | New name (filename/folder name only, not a full path; an empty or blank name, a `/`, a NUL, or `.` or `..` is refused with `invalid_parameter`, a padded ` .. ` too (spaces only: a tab beside a dot makes another name), since whether DSM trims it is unprobed; the message names which). A name already taken in the folder is refused by DSM (1200) and nothing is replaced. |
 
 **Response shape:**
 

@@ -1800,7 +1800,9 @@ class TestInstructionComments:
 # themselves; the model otherwise read it like `pattern`, where a bare word matches anywhere.
 # +107 by #397 (QA round 1): create_download's `uri` says to give each URI its scheme,
 # since a comma starts another URI only when a scheme follows it.
-PAYLOAD_BUDGET_CHARS = 55_795
+# +81 by #449 (QA round 2 on #470): the File Station instructions say `.` and `..` path parts
+# are refused, and rename's new_name and upload_file's filename say they aren't paths.
+PAYLOAD_BUDGET_CHARS = 55_876
 
 
 class TestPayloadBudget:

@@ -53,7 +53,7 @@ class TestUploadFile:
         assert "test.txt" in result
         assert "/video/uploads/" in result
 
-    @pytest.mark.parametrize("filename", [".", "..", " .. ", "../x", "a/b", "/abs", "a\0b"])
+    @pytest.mark.parametrize("filename", [".", "..", " .. ", "../x", "a/b", "/abs", "a\0b", "   "])
     async def test_upload_refuses_a_filename_that_isnt_a_name(
         self, mock_client: DsmClient, tmp_path: Path, filename: str
     ) -> None:

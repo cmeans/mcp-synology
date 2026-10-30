@@ -840,7 +840,8 @@ def register(ctx: "RegisterContext") -> None:
                 Field(description="The file or folder to rename (`/video/TV Shows/Severence`)."),
             ],
             new_name: Annotated[
-                str, Field(description="The new name only, not a path (`Severance`).")
+                str,
+                Field(description="The new name only, not a path, `.` or `..` (`Severance`)."),
             ],
         ) -> str:
             client = await _fs_client()
@@ -1005,7 +1006,10 @@ def register(ctx: "RegisterContext") -> None:
             ] = None,
             filename: Annotated[
                 str | None,
-                Field(description="Name for the file on the NAS (default: the local file's name)."),
+                Field(
+                    description="Name for the file on the NAS, not a path (default: the local "
+                    "file's name)."
+                ),
             ] = None,
             overwrite: Annotated[
                 bool,

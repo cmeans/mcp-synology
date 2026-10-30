@@ -180,7 +180,16 @@ class TestNormalizeDestination:
             normalize_destination(given, operation="Edit download")
 
     @pytest.mark.parametrize(
-        "given", ["writable/..", "/writable/../video", "./writable", "video/./x"]
+        "given",
+        # Padded in the middle too (QA round 2 on #470).
+        [
+            "writable/..",
+            "/writable/../video",
+            "./writable",
+            "video/./x",
+            "video/ .. /x",
+            "video/ ./x",
+        ],
     )
     def test_dot_parts_are_invalid(self, given: str) -> None:
         # #449: as in File Station's paths.

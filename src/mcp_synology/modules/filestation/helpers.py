@@ -597,15 +597,18 @@ def _with_listed_share_name(path: str, known_shares: set[str]) -> str:
 
 def _is_dot(part: str) -> bool:
     """``.`` or ``..``, surrounding spaces ignored: whether DSM trims `` .. `` to ``..`` is
-    unprobed, so a padded form is refused too, as Photos refuses folder names (#449)."""
-    return part.strip() in (".", "..")
+    unprobed, so a padded form is refused too, as Photos refuses folder names (#449). Only
+    spaces: a tab or newline beside a dot makes another name (QA round 2 on #470)."""
+    return part.strip(" ") in (".", "..")
 
 
 def refuse_bad_name(op: str, name: str, param: str, suggestion: str) -> None:
     """Raise ``invalid_parameter`` for a NAS file name that isn't one: a ``/``, a NUL, or
     ``.`` or ``..`` (#449), naming which."""
     problem = (
-        "contains '/'"
+        "is empty"
+        if not name.strip(" ")
+        else "contains '/'"
         if "/" in name
         else "contains a NUL character"
         if "\0" in name

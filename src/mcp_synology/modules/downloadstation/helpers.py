@@ -87,7 +87,8 @@ def normalize_destination(destination: str, *, operation: str, param: str = "des
     paths (#449). ``param`` names the caller's argument in errors.
     """
     relative = destination.strip().strip("/")
-    if any(part in (".", "..") for part in relative.split("/")):
+    # Padded too (` .. `), as File Station refuses them (QA round 2 on #470).
+    if any(part.strip(" ") in (".", "..") for part in relative.split("/")):
         error_response(
             ErrorCode.INVALID_PARAMETER,
             f"{operation} failed: {param} {destination!r}: '.' and '..' parts aren't allowed.",

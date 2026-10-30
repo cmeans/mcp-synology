@@ -178,6 +178,8 @@ class TestRename:
             (" .. ", "is '.' or '..'"),  # DSM's trimming is unprobed: refused too
             ("a\0b", "contains a NUL character"),
             ("a/b", "contains '/'"),
+            ("", "is empty"),  # QA round 2 on #470: DSM's 1200 then read as "already exists"
+            ("   ", "is empty"),
         ],
     )
     async def test_rename_rejects_dot_names(
@@ -191,6 +193,14 @@ class TestRename:
         assert (
             error["message"] == f"Rename failed: new_name should be just a file name, but it {why}."
         )
+
+    @pytest.mark.parametrize("name", [".\t", "\t..", ". x", "a b"])
+    def test_a_name_with_other_whitespace_passes(self, name: str) -> None:
+        """Only spaces pad a dot name: a tab or a newline beside it makes a different, valid
+        Linux name (QA round 2 on #470)."""
+        from mcp_synology.modules.filestation.helpers import refuse_bad_name
+
+        refuse_bad_name("Rename", name, "new_name", "x")  # doesn't raise
 
     @respx.mock
     async def test_rename_error(self, mock_client: DsmClient) -> None:
