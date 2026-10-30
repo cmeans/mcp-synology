@@ -28,6 +28,7 @@ from mcp_synology.core.errors import (
     DsmReplyError,
     DsmTimeoutError,
     DsmUnavailableError,
+    RememberedRefusalError,
     RequestTooLongError,
     SynologyError,
     error_detail,
@@ -337,7 +338,7 @@ class DsmClient:
                 await self._re_auth_callback()
             except Exception as e:
                 self._login_failure = e
-                if isinstance(e, SynologyError):
+                if isinstance(e, SynologyError) and not isinstance(e, RememberedRefusalError):
                     logger.warning(
                         "Session error %d on %s; logging in again failed: %s", code, api, e
                     )

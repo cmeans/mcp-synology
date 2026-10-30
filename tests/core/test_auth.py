@@ -1241,35 +1241,54 @@ class TestRefusalEdges:
 
 
 class TestRefusalSuggestion:
-    """QA round 1 on #461: `setup` writes only the keyring, so a refusal of credentials set
-    in the environment or the config file says to change them there."""
+    """QA round 1 on #461: `setup` writes only the keyring, so a refusal says where the
+    credentials come from: `setup` for what the keyring holds, the environment or the
+    config file for what overrides it."""
+
+    SETUP = "'mcp-synology setup' stores new credentials in the keyring, and the running server"
 
     @respx.mock
     @pytest.mark.parametrize(
-        ("auth", "env", "expected"),
+        ("auth", "env", "expected", "absent"),
         [
-            ({}, {}, "'mcp-synology setup' stores new ones; the running server picks them up"),
+            # Everything from the keyring.
+            ({}, {}, "the running server picks them up) or the server restarts", "override"),
+            # The recommended setup: a username in the config, the password in the keyring.
             (
-                {"password": "wrong"},
+                {"username": "admin"},
                 {},
-                "These credentials come from auth.password in the config file: change them",
+                SETUP + " picks them up; the keyring is overridden by auth.username in the "
+                "config file: change those there and restart the server",
+                "These credentials come from",
+            ),
+            # Username and password both outside the keyring: setup can't help.
+            (
+                {"username": "admin", "password": "wrong"},
+                {},
+                "These credentials come from auth.username and auth.password in the config "
+                "file: change them there and restart the server",
+                SETUP,
             ),
             (
                 {},
-                {"SYNOLOGY_PASSWORD": "wrong"},
-                "These credentials come from SYNOLOGY_PASSWORD in the server's environment",
+                {"SYNOLOGY_USERNAME": "admin", "SYNOLOGY_PASSWORD": "wrong"},
+                "These credentials come from SYNOLOGY_USERNAME and SYNOLOGY_PASSWORD in the "
+                "server's environment",
+                SETUP,
             ),
+            # The environment wins over the config for the same key: only it is named.
             (
-                {"username": "admin", "device_id": "d"},
+                {"username": "admin", "password": "unused"},
                 {"SYNOLOGY_PASSWORD": "wrong"},
-                "come from SYNOLOGY_PASSWORD in the server's environment (the MCP client's "
-                "config); auth.username and auth.device_id in the config file: change them",
+                "SYNOLOGY_PASSWORD in the server's environment (the MCP client's config); "
+                "auth.username in the config file",
+                "auth.password",
             ),
         ],
-        ids=["keyring", "config", "env", "both"],
+        ids=["keyring", "config-username", "config-both", "env-both", "env-over-config"],
     )
     async def test_suggestion_names_where_the_credentials_are(
-        self, auth: dict[str, str], env: dict[str, str], expected: str
+        self, auth: dict[str, str], env: dict[str, str], expected: str, absent: str
     ) -> None:
         _auth_routes([_refused()])
         keyring = _keyring_with(username="admin", password="wrong", device_id="d")
@@ -1281,9 +1300,48 @@ class TestRefusalSuggestion:
                 pytest.raises(AuthenticationError) as exc,
             ):
                 await refusal_auth.login()
-        assert expected in (exc.value.suggestion or "")
-        if auth or env:
-            assert "writes only the keyring" in (exc.value.suggestion or "")
+        suggestion = exc.value.suggestion or ""
+        assert expected in suggestion
+        assert absent not in suggestion
+
+    @respx.mock
+    async def test_a_remembered_refusal_logs_no_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # Only a login actually sent and refused is a WARNING; answering one from memory
+        # on every later session error would flood the log (pre-QA on QA round 1).
+        import logging
+
+        _auth_routes([_refused()])
+        config = _make_config(auth={"username": "admin", "password": "wrong"})
+        async with _make_client() as client:
+            AuthManager(config, client)
+            client.sid = "old-sid"
+            with (
+                patch.dict(os.environ, _clean_env(), clear=True),
+                patch("mcp_synology.core.auth.kr", _no_keyring()),
+                caplog.at_level(logging.INFO),
+            ):
+                for _ in range(3):
+                    with pytest.raises(AuthenticationError):
+                        await client.request("SYNO.FileStation.List", "list_share", version=2)
+        warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+        assert len(warnings) == 1
+        assert not any("Re-authenticating" in r.getMessage() for r in caplog.records)
+
+    def test_the_remembered_refusal_keeps_no_frames(self) -> None:
+        # The raised refusal's traceback holds the login's frames, and its password.
+        refusals = LoginRefusals()
+        try:
+            try:
+                raise AuthenticationError("No such account", code=400, suggestion="x")
+            except AuthenticationError as e:
+                raise refusals.refuse("fp", e) from e
+        except AuthenticationError:
+            pass
+        stored = refusals._refused[1] if refusals._refused else None
+        assert stored is not None
+        assert stored.__traceback__ is None and stored.__cause__ is None
 
 
 class TestWaitersShareAFailedLogin:

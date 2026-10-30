@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 import keyring as kr
 from keyring.errors import KeyringError
 
-from mcp_synology.core.errors import AuthenticationError, SynologyError
+from mcp_synology.core.errors import AuthenticationError, RememberedRefusalError, SynologyError
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -137,7 +137,7 @@ def resolve_credentials(config: AppConfig) -> tuple[str, str, str | None]:
             # D-Bus socket present but unreachable, permission errors on
             # the OS keychain backend, etc. Same DEBUG-with-exc_info
             # treatment as the typed-error case above. The D-Bus pre-check above
-            # line 123-131 already emitted an INFO hint if the D-Bus
+            # already emitted an INFO hint if the D-Bus
             # socket was missing entirely; this branch covers the
             # reach-but-fail variant.
             logger.debug("Keyring OS-level error: %s", e, exc_info=True)
@@ -159,14 +159,16 @@ def resolve_credentials(config: AppConfig) -> tuple[str, str, str | None]:
     return username, password, device_id
 
 
-def explicit_credential_sources(config: AppConfig) -> list[str]:
-    """Where each credential that overrides the keyring comes from, in
-    `resolve_credentials`' order: `setup` writes only the keyring, so these must be
-    changed where they are (#447, QA round 1 on #461)."""
+def explicit_credential_sources(config: AppConfig) -> tuple[list[str], bool]:
+    """Where the credentials that override the keyring come from, in
+    `resolve_credentials`' order, and whether the username or password comes from the
+    keyring. `setup` writes only the keyring, so the others must be changed where they
+    are (#447, QA round 1 on #461)."""
     import os
 
     env: list[str] = []
     file: list[str] = []
+    keyring = False
     for key, var in (
         ("username", "SYNOLOGY_USERNAME"),
         ("password", "SYNOLOGY_PASSWORD"),
@@ -176,12 +178,14 @@ def explicit_credential_sources(config: AppConfig) -> list[str]:
             env.append(var)
         elif _present_or_none(getattr(config.auth, key)):
             file.append(f"auth.{key}")
+        elif key != "device_id":
+            keyring = True
     found: list[str] = []
     if env:
         found.append(f"{' and '.join(env)} in the server's environment (the MCP client's config)")
     if file:
         found.append(f"{' and '.join(file)} in the config file")
-    return found
+    return found, keyring
 
 
 def credentials_fingerprint(username: str, password: str, device_id: str | None) -> str:
@@ -214,19 +218,35 @@ class LoginRefusals:
         if self._refused is not None and self._refused[0] == fingerprint:
             error = self._refused[1]
             logger.debug("Not sending a login DSM already refused (error %s)", error.code)
-            raise AuthenticationError(str(error), code=error.code, suggestion=error.suggestion)
+            raise RememberedRefusalError(str(error), code=error.code, suggestion=error.suggestion)
 
     def refuse(
-        self, fingerprint: str, error: AuthenticationError, explicit: list[str] | None = None
+        self,
+        fingerprint: str,
+        error: AuthenticationError,
+        explicit: list[str] | None = None,
+        keyring: bool = True,
     ) -> AuthenticationError:
         """Remember DSM's refusal; return the error to raise, which says what happens next.
 
         ``explicit`` lists credentials set outside the keyring (environment or config
         file): `setup` can't change those, so the suggestion says where they are.
+        ``keyring`` says whether the username or password comes from the keyring, which
+        `setup` does change (the recommended setup: a username in the config, the password
+        in the keyring).
         """
         reason = str(error).rstrip(".")
         first = (error.suggestion or "").rstrip(".")
-        if explicit:
+        stored = (
+            "'mcp-synology setup' stores new credentials in the keyring, and the running "
+            "server picks them up"
+        )
+        if explicit and keyring:
+            where = (
+                f"{stored}; the keyring is overridden by " + "; ".join(explicit) + ": change "
+                "those there and restart the server"
+            )
+        elif explicit:
             where = (
                 "These credentials come from "
                 + "; ".join(explicit)
@@ -249,7 +269,12 @@ class LoginRefusals:
                 (f"{first}. " if first else "") + f"{where}; 'mcp-synology check' tests the login."
             ),
         )
-        self._refused = (fingerprint, refusal)
+        # Keep a fresh copy: the raised one carries the login's frames (and its password)
+        # in its traceback once raised.
+        self._refused = (
+            fingerprint,
+            AuthenticationError(str(refusal), code=refusal.code, suggestion=refusal.suggestion),
+        )
         return refusal
 
     def clear(self) -> None:
@@ -340,8 +365,8 @@ class AuthManager:
         except AuthenticationError as e:
             if e.code is None:
                 raise
-            explicit = explicit_credential_sources(self._config)
-            raise self._refusals.refuse(fingerprint, e, explicit) from e
+            explicit, keyring = explicit_credential_sources(self._config)
+            raise self._refusals.refuse(fingerprint, e, explicit, keyring) from e
 
         sid: str | None = data.get("sid")
         if not sid:
@@ -429,7 +454,9 @@ class AuthManager:
         can drop entries that may have drifted while the session was down.
         """
         async with self._lock:
-            logger.info("Re-authenticating session '%s'.", self._session_name)
+            # DEBUG: a remembered refusal answers without a login; a real one logs
+            # "Authenticated as" at INFO, and a failure is logged by the client.
+            logger.debug("Re-authenticating session '%s'.", self._session_name)
             await self.login()
             # NOTE: callbacks fire INSIDE `self._lock`. Per `add_on_reauth_callback`'s
             # contract they must be cheap and synchronous — anything heavy here would

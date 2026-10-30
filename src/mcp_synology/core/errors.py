@@ -94,6 +94,10 @@ class AuthenticationError(SynologyError):
     error_code = ErrorCode.AUTH_FAILED
 
 
+class RememberedRefusalError(AuthenticationError):
+    """A login DSM already refused, answered from memory without sending it (#447)."""
+
+
 class SessionExpiredError(SynologyError):
     """Session expired or invalidated (codes 106, 107, 119).
 
