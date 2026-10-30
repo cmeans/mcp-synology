@@ -1238,3 +1238,105 @@ class TestRefusalEdges:
             client.sid = None
             await client._re_authenticate(119, "SYNO.FileStation.List", "sent-sid")
         assert calls == [1]
+
+
+class TestRefusalSuggestion:
+    """QA round 1 on #461: `setup` writes only the keyring, so a refusal of credentials set
+    in the environment or the config file says to change them there."""
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        ("auth", "env", "expected"),
+        [
+            ({}, {}, "'mcp-synology setup' stores new ones; the running server picks them up"),
+            (
+                {"password": "wrong"},
+                {},
+                "These credentials come from auth.password in the config file: change them",
+            ),
+            (
+                {},
+                {"SYNOLOGY_PASSWORD": "wrong"},
+                "These credentials come from SYNOLOGY_PASSWORD in the server's environment",
+            ),
+            (
+                {"username": "admin", "device_id": "d"},
+                {"SYNOLOGY_PASSWORD": "wrong"},
+                "come from SYNOLOGY_PASSWORD in the server's environment (the MCP client's "
+                "config); auth.username and auth.device_id in the config file: change them",
+            ),
+        ],
+        ids=["keyring", "config", "env", "both"],
+    )
+    async def test_suggestion_names_where_the_credentials_are(
+        self, auth: dict[str, str], env: dict[str, str], expected: str
+    ) -> None:
+        _auth_routes([_refused()])
+        keyring = _keyring_with(username="admin", password="wrong", device_id="d")
+        async with _make_client() as client:
+            refusal_auth = AuthManager(_make_config(auth=auth), client)
+            with (
+                patch.dict(os.environ, {**_clean_env(), **env}, clear=True),
+                patch("mcp_synology.core.auth.kr", keyring),
+                pytest.raises(AuthenticationError) as exc,
+            ):
+                await refusal_auth.login()
+        assert expected in (exc.value.suggestion or "")
+        if auth or env:
+            assert "writes only the keyring" in (exc.value.suggestion or "")
+
+
+class TestWaitersShareAFailedLogin:
+    """QA round 1 on #461: calls waiting on a re-login that fails get its error instead of
+    each sending a login of their own; a later call tries again."""
+
+    async def test_waiters_share_the_failure(self) -> None:
+        calls: list[int] = []
+
+        async def failing_reauth() -> None:
+            calls.append(1)
+            await asyncio.sleep(0.01)
+            raise httpx.ConnectError("refused")
+
+        async with _make_client() as client:
+            client.set_re_auth_callback(failing_reauth)
+            client.sid = "old-sid"
+            results = await asyncio.gather(
+                *(
+                    client._re_authenticate(119, "SYNO.FileStation.List", "old-sid")
+                    for _ in range(5)
+                ),
+                return_exceptions=True,
+            )
+            assert all(isinstance(r, httpx.ConnectError) for r in results)
+            assert calls == [1]
+            with pytest.raises(httpx.ConnectError):  # a later call tries afresh
+                await client._re_authenticate(119, "SYNO.FileStation.List", "old-sid")
+            assert calls == [1, 1]
+
+    async def test_a_canceled_login_leaves_waiters_to_try(self) -> None:
+        # An earlier failure is not handed to requests that waited on a later, canceled
+        # attempt: they log in themselves.
+        calls: list[str] = []
+        started = asyncio.Event()
+
+        async def reauth() -> None:
+            calls.append("try")
+            if len(calls) == 1:
+                raise httpx.ConnectError("refused")
+            if len(calls) == 2:
+                started.set()
+                await asyncio.sleep(10)
+
+        async with _make_client() as client:
+            client.set_re_auth_callback(reauth)
+            client.sid = "old-sid"
+            with pytest.raises(httpx.ConnectError):
+                await client._re_authenticate(119, "X", "old-sid")
+            second = asyncio.create_task(client._re_authenticate(119, "X", "old-sid"))
+            await started.wait()
+            third = asyncio.create_task(client._re_authenticate(119, "X", "old-sid"))
+            await asyncio.sleep(0)
+            second.cancel()
+            await third  # not the earlier ConnectError: it logs in itself
+        assert calls == ["try", "try", "try"]

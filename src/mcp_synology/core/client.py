@@ -251,6 +251,10 @@ class DsmClient:
         # One re-login at a time; a request that waited on it retries with the new
         # session instead of logging in again (#359).
         self._re_auth_lock = asyncio.Lock()
+        # Re-logins attempted so far, and how the last one failed: requests that were
+        # already waiting when it failed get the same error instead of each logging in.
+        self._login_attempts = 0
+        self._login_failure: Exception | None = None
         logger.debug(
             "DsmClient created: base_url=%s, verify_ssl=%s, timeout=%d",
             self._base_url,
@@ -308,7 +312,9 @@ class DsmClient:
 
         One re-login runs at a time. A request that waited for it finds the session
         already replaced and just retries with the new one: parallel calls that meet the
-        same expired session log in once, not once each (#359).
+        same expired session log in once, not once each (#359). If that re-login failed
+        (an unreachable NAS, a proxy error, a refusal), the requests that were waiting get
+        its error rather than each trying again; a later request tries afresh.
 
         The login's own error is raised (#448): a changed password, a disabled account
         or a 2FA prompt says so, with its suggestion, rather than reading as the session
@@ -318,15 +324,26 @@ class DsmClient:
         """
         if self._re_auth_callback is None:
             raise error_from_code(code, api)
+        attempt = self._login_attempts
         async with self._re_auth_lock:
             if self._sid is not None and self._sid != failed_sid:
                 logger.debug("Session already replaced by another request's re-login.")
                 return
+            if self._login_attempts != attempt and self._login_failure is not None:
+                logger.debug("Re-login failed while this request waited; not repeating it.")
+                raise self._login_failure
+            self._login_failure = None
             try:
                 await self._re_auth_callback()
-            except SynologyError as e:
-                logger.warning("Session error %d on %s; logging in again failed: %s", code, api, e)
+            except Exception as e:
+                self._login_failure = e
+                if isinstance(e, SynologyError):
+                    logger.warning(
+                        "Session error %d on %s; logging in again failed: %s", code, api, e
+                    )
                 raise
+            finally:
+                self._login_attempts += 1
 
     async def __aenter__(self) -> Self:
         logger.debug("Opening HTTP client connection to %s", self._base_url)

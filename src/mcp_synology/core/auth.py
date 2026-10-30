@@ -136,7 +136,7 @@ def resolve_credentials(config: AppConfig) -> tuple[str, str, str | None]:
         except OSError as e:
             # D-Bus socket present but unreachable, permission errors on
             # the OS keychain backend, etc. Same DEBUG-with-exc_info
-            # treatment as the typed-error case above. The pre-check at
+            # treatment as the typed-error case above. The D-Bus pre-check above
             # line 123-131 already emitted an INFO hint if the D-Bus
             # socket was missing entirely; this branch covers the
             # reach-but-fail variant.
@@ -157,6 +157,31 @@ def resolve_credentials(config: AppConfig) -> tuple[str, str, str | None]:
         "yes" if device_id else "no",
     )
     return username, password, device_id
+
+
+def explicit_credential_sources(config: AppConfig) -> list[str]:
+    """Where each credential that overrides the keyring comes from, in
+    `resolve_credentials`' order: `setup` writes only the keyring, so these must be
+    changed where they are (#447, QA round 1 on #461)."""
+    import os
+
+    env: list[str] = []
+    file: list[str] = []
+    for key, var in (
+        ("username", "SYNOLOGY_USERNAME"),
+        ("password", "SYNOLOGY_PASSWORD"),
+        ("device_id", "SYNOLOGY_DEVICE_ID"),
+    ):
+        if _present_or_none(os.environ.get(var)):
+            env.append(var)
+        elif _present_or_none(getattr(config.auth, key)):
+            file.append(f"auth.{key}")
+    found: list[str] = []
+    if env:
+        found.append(f"{' and '.join(env)} in the server's environment (the MCP client's config)")
+    if file:
+        found.append(f"{' and '.join(file)} in the config file")
+    return found
 
 
 def credentials_fingerprint(username: str, password: str, device_id: str | None) -> str:
@@ -191,10 +216,29 @@ class LoginRefusals:
             logger.debug("Not sending a login DSM already refused (error %s)", error.code)
             raise AuthenticationError(str(error), code=error.code, suggestion=error.suggestion)
 
-    def refuse(self, fingerprint: str, error: AuthenticationError) -> AuthenticationError:
-        """Remember DSM's refusal; return the error to raise, which says what happens next."""
+    def refuse(
+        self, fingerprint: str, error: AuthenticationError, explicit: list[str] | None = None
+    ) -> AuthenticationError:
+        """Remember DSM's refusal; return the error to raise, which says what happens next.
+
+        ``explicit`` lists credentials set outside the keyring (environment or config
+        file): `setup` can't change those, so the suggestion says where they are.
+        """
         reason = str(error).rstrip(".")
         first = (error.suggestion or "").rstrip(".")
+        if explicit:
+            where = (
+                "These credentials come from "
+                + "; ".join(explicit)
+                + ": change them there and restart the server ('mcp-synology setup' "
+                "writes only the keyring, which those override)"
+            )
+        else:
+            where = (
+                "mcp-synology tries again once the stored credentials change "
+                "('mcp-synology setup' stores new ones; the running server picks them up) "
+                "or the server restarts"
+            )
         refusal = AuthenticationError(
             f"DSM refused the login: {reason}. mcp-synology won't send these credentials "
             "again until they change or the server restarts, because repeated failed "
@@ -202,10 +246,7 @@ class LoginRefusals:
             "from the NAS.",
             code=error.code,
             suggestion=(
-                (f"{first}. " if first else "")
-                + "mcp-synology tries again once the stored credentials change "
-                "('mcp-synology setup' stores new ones; the running server picks them up) "
-                "or the server restarts; 'mcp-synology check' tests the login."
+                (f"{first}. " if first else "") + f"{where}; 'mcp-synology check' tests the login."
             ),
         )
         self._refused = (fingerprint, refusal)
@@ -299,7 +340,8 @@ class AuthManager:
         except AuthenticationError as e:
             if e.code is None:
                 raise
-            raise self._refusals.refuse(fingerprint, e) from e
+            explicit = explicit_credential_sources(self._config)
+            raise self._refusals.refuse(fingerprint, e, explicit) from e
 
         sid: str | None = data.get("sid")
         if not sid:

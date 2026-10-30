@@ -49,9 +49,11 @@ Fix:
    File Station.
 
 When DSM refuses the credentials, the server doesn't send them again: every later
-tool call gets the same error, so a model's retries can't trip DSM's Auto Block. It tries again once the credentials change (`mcp-synology
-setup` stores new ones in the keyring; the running server picks them up) or the
-server restarts.
+tool call gets the same error, so a model's retries can't trip DSM's Auto Block. It tries again once the credentials change or the server restarts.
+`mcp-synology setup` stores new ones in the keyring, and the running server picks
+them up, unless the credentials come from `SYNOLOGY_USERNAME`/`SYNOLOGY_PASSWORD`/
+`SYNOLOGY_DEVICE_ID` or the config file's `auth:` section, which override the
+keyring: then change them there and restart the server. The error says which.
 
 `auth_failed` is **not** retryable. mcp-synology will not auto-retry on this
 code — fix the underlying credential or 2FA state before re-running.

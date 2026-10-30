@@ -466,17 +466,30 @@ class SharedClientManager:
         # to the AuthManager once it's lazily created in `get_client`. Modules
         # use `subscribe_on_reauth` to register cache invalidators (see #37).
         self._pending_reauth_callbacks: list[Callable[[], None]] = []
-        # Parallel first tool calls build one client and log in once (#359).
+        # Parallel first tool calls build one client and log in once (#359); calls that
+        # were waiting when that failed get its error rather than each trying again.
         self._init_lock = asyncio.Lock()
+        self._init_attempts = 0
+        self._init_failure: Exception | None = None
         # Kept across failed first logins, so refused credentials aren't sent again (#447).
         self._login_refusals = LoginRefusals()
 
     async def get_client(self) -> DsmClient:
         """Lazily initialize and return the DSM client."""
         if self._client is None:
+            attempt = self._init_attempts
             async with self._init_lock:
                 if self._client is None:
-                    await self._init_client()
+                    if self._init_attempts != attempt and self._init_failure is not None:
+                        raise self._init_failure
+                    self._init_failure = None
+                    try:
+                        await self._init_client()
+                    except Exception as e:
+                        self._init_failure = e
+                        raise
+                    finally:
+                        self._init_attempts += 1
         if self._client is None:
             raise RuntimeError("Client initialization failed")
         return self._client

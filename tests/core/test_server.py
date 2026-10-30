@@ -2255,10 +2255,12 @@ class TestFirstLogin:
             "change or the server restarts, because repeated failed logins can trip DSM's Auto "
             "Block, which blocks this computer's IP address from the NAS."
         )
+        # SYNOLOGY_USERNAME/PASSWORD are set (the fixture): `setup` can't change them.
         assert err["suggestion"] == (
-            "Check username and password. mcp-synology tries again once the stored "
-            "credentials change ('mcp-synology setup' stores new ones; the running server "
-            "picks them up) or the server restarts; 'mcp-synology check' tests the login."
+            "Check username and password. These credentials come from SYNOLOGY_USERNAME and "
+            "SYNOLOGY_PASSWORD in the server's environment (the MCP client's config): change "
+            "them there and restart the server ('mcp-synology setup' writes only the keyring, "
+            "which those override); 'mcp-synology check' tests the login."
         )
 
     @respx.mock
@@ -2283,3 +2285,32 @@ class TestFirstLogin:
             assert login.call_count == 2
         finally:
             await manager.aclose()
+
+
+class TestFirstLoginFailureShared:
+    """QA round 1 on #461: parallel first calls that wait on a failed first login get its
+    error instead of each reading SYNO.API.Info and logging in again."""
+
+    @pytest.fixture(autouse=True)
+    def creds(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SYNOLOGY_USERNAME", "chris")
+        monkeypatch.setenv("SYNOLOGY_PASSWORD", "pw")
+
+    @respx.mock
+    async def test_waiters_share_an_unreachable_nas(self) -> None:
+        from mcp.server.mcpserver.exceptions import ToolError
+
+        async def unreachable(request: httpx.Request) -> httpx.Response:
+            await asyncio.sleep(0.01)
+            raise httpx.ConnectError("refused")
+
+        info = respx.get(f"{BASE_URL}/webapi/query.cgi").mock(side_effect=unreachable)
+        manager = SharedClientManager(make_test_config())
+        results = await asyncio.gather(
+            *(manager.get_client() for _ in range(4)), return_exceptions=True
+        )
+        assert all(isinstance(r, ToolError) for r in results)
+        assert info.call_count == 1
+        with pytest.raises(ToolError):  # a later call tries again
+            await manager.get_client()
+        assert info.call_count == 2
