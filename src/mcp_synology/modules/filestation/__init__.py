@@ -287,7 +287,7 @@ def register(ctx: "RegisterContext") -> None:
     from mcp_synology.core import local_paths
     from mcp_synology.core.errors import ErrorCode
     from mcp_synology.core.formatting import error_response
-    from mcp_synology.modules.filestation.helpers import ensure_known_shares
+    from mcp_synology.modules.filestation.helpers import ensure_known_shares, refuse_dot_parts
     from mcp_synology.modules.filestation.listing import (
         list_files,
         list_recycle_bin,
@@ -1116,6 +1116,10 @@ def register(ctx: "RegisterContext") -> None:
                 ["share", *(["dest_folder"] if dest_folder else [])],
             )
             dest_folder = dest[0] if dest else None
+            # The items are relative to the bin (or full paths into it), not share paths,
+            # so they skip the share check; a dot part would still escape the bin (#449).
+            for item in paths:
+                refuse_dot_parts(item, "paths")
             return _reply(
                 await restore_from_recycle_bin(
                     client,

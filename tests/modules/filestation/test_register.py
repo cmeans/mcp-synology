@@ -677,6 +677,86 @@ SHARE_CASES = [
         {"share": "nosuchshare", "paths": ["x"]},
     ),
 ]
+# The argument each SHARE_CASES error names (#449: it used to be "path" for every one).
+SHARE_PARAMS = {
+    "list_files": "path",
+    "list_recycle_bin": "share",
+    "search_files": "folder_path",
+    "get_file_info": "paths",
+    "get_dir_size": "path",
+    "download_file": "path",
+    "create_folder": "paths",
+    "rename": "path",
+    "copy_files": "dest_folder",
+    "move_files": "paths",
+    "delete_files": "paths",
+    "upload_file": "dest_folder",
+    "restore_from_recycle_bin": "share",
+}
+# #449: a . or .. part in each NAS path argument, refused before the tool runs.
+DOT_CASES = [
+    ("list_files", "listing.list_files", {"path": "/writable/.."}, "path"),
+    ("list_recycle_bin", "listing.list_recycle_bin", {"share": "writable/.."}, "share"),
+    ("search_files", "search.search_files", {"folder_path": "/writable/./x"}, "folder_path"),
+    (
+        "get_file_info",
+        "metadata.get_file_info",
+        {"paths": ["/writable/ok", "/writable/.."]},
+        "paths",
+    ),
+    ("get_dir_size", "metadata.get_dir_size", {"path": "/writable/../x"}, "path"),
+    (
+        "download_file",
+        "transfer.download_file",
+        {"path": "/writable/..", "dest_folder": "/tmp"},
+        "path",
+    ),
+    ("create_folder", "operations.create_folder", {"paths": ["/writable/a/../b"]}, "paths"),
+    ("rename", "operations.rename", {"path": "/writable/..", "new_name": "n"}, "path"),
+    (
+        "copy_files",
+        "operations.copy_files",
+        {"paths": ["/writable/.."], "dest_folder": "/writable"},
+        "paths",
+    ),
+    (
+        "copy_files",
+        "operations.copy_files",
+        {"paths": ["/writable/a"], "dest_folder": "/writable/.."},
+        "dest_folder",
+    ),
+    (
+        "move_files",
+        "operations.move_files",
+        {"paths": ["/writable/a"], "dest_folder": "/writable/./b"},
+        "dest_folder",
+    ),
+    ("delete_files", "operations.delete_files", {"paths": ["/writable/../x"]}, "paths"),
+    (
+        "upload_file",
+        "transfer.upload_file",
+        {"local_path": "/etc/hostname", "dest_folder": "/writable/.."},
+        "dest_folder",
+    ),
+    (
+        "restore_from_recycle_bin",
+        "operations.restore_from_recycle_bin",
+        {"share": "writable", "paths": ["../../other/x"]},
+        "paths",
+    ),
+    (
+        "restore_from_recycle_bin",
+        "operations.restore_from_recycle_bin",
+        {"share": "writable", "paths": ["/writable/#recycle/../x"]},
+        "paths",
+    ),
+    (
+        "restore_from_recycle_bin",
+        "operations.restore_from_recycle_bin",
+        {"share": "writable", "paths": ["a"], "dest_folder": "/writable/.."},
+        "dest_folder",
+    ),
+]
 NEEDS_CTX = {
     "download_file",
     "upload_file",
@@ -730,6 +810,37 @@ class TestFilestationShareValidation:
         assert body["error"]["code"] == "not_found"
         assert "nosuchshare" in body["error"]["message"]
         assert "writable" in body["error"]["message"]
+        assert body["error"]["param"] == SHARE_PARAMS[tool]
+        domain.assert_not_awaited()
+
+    @pytest.mark.parametrize(
+        ("tool", "target", "kwargs", "param"),
+        DOT_CASES,
+        ids=[f"{c[0]}-{c[3]}" for c in DOT_CASES],
+    )
+    async def test_dot_parts_refused_before_tool_runs(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tool: str,
+        target: str,
+        kwargs: dict[str, object],
+        param: str,
+    ) -> None:
+        domain = AsyncMock(return_value="ran")
+        monkeypatch.setattr(f"mcp_synology.modules.filestation.{target}", domain)
+        server, _, ctx = self._ctx_with_shares("writable", "other")
+        register(ctx)
+        fn = server._tool_manager._tools[tool].fn
+        extra: dict[str, object] = {}
+        if tool in NEEDS_CTX:
+            fake_mcp_ctx = MagicMock()
+            fake_mcp_ctx.report_progress = AsyncMock()
+            extra["ctx"] = fake_mcp_ctx
+        with pytest.raises(ToolError) as exc_info:
+            await fn(**extra, **kwargs)
+        error = json.loads(str(exc_info.value))["error"]
+        assert (error["code"], error["param"]) == ("invalid_parameter", param)
+        assert "'.' and '..' parts aren't allowed" in error["message"]
         domain.assert_not_awaited()
 
     async def test_known_share_reaches_the_tool(self, monkeypatch: pytest.MonkeyPatch) -> None:
