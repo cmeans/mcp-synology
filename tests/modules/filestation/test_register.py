@@ -861,7 +861,12 @@ class TestFilestationShareValidation:
             await server._tool_manager._tools["upload_file"].fn(
                 ctx=_fake_mcp_ctx(), local_path=str(local)
             )
-        assert json.loads(str(exc.value))["error"]["param"] == "default_upload_dir"
+        error = json.loads(str(exc.value))["error"]
+        assert error["param"] == "default_upload_dir"
+        # The fix is in the config, or a dest_folder (pre-QA on QA round 1).
+        assert error["suggestion"] == (
+            "Fix default_upload_dir in the filestation settings, or pass dest_folder."
+        )
 
     def test_every_path_tool_is_covered(self) -> None:
         # A new File Station tool that takes a NAS path must go through the share and

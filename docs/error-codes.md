@@ -234,8 +234,9 @@ operation.**
 Common causes:
 
 - A filename contains a forbidden character: `/ \ : * ? " < > |`.
-- The `new_name` argument to `rename` contains `/` (path separators are not
-  allowed in rename — use copy/move to relocate a file).
+- The `new_name` argument to `rename`, or `upload_file`'s `filename`, contains `/`
+  or a NUL, or is exactly `.` or `..` (path separators are not allowed in a name —
+  use copy/move to relocate a file).
 - A path is empty, all whitespace, or has no share component.
 - A File Station path, a `restore_from_recycle_bin` item, or a Download Station
   destination has a `.` or `..` part (`/video/../photo`, `video/./x`).

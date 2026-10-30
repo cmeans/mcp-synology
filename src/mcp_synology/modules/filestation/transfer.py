@@ -26,7 +26,7 @@ from mcp_synology.core.formatting import (
     synology_error_response,
 )
 from mcp_synology.core.local_paths import refuse_outside_roots
-from mcp_synology.modules.filestation.helpers import normalize_path
+from mcp_synology.modules.filestation.helpers import normalize_path, refuse_bad_name
 
 if TYPE_CHECKING:
     from mcp_synology.core.client import DsmClient, ProgressCallback
@@ -114,6 +114,8 @@ async def upload_file(
             suggestion="Check the file path and try again.",
         )
 
+    if filename:
+        refuse_bad_name("Upload", filename, "filename", "Pass a plain file name, e.g. report.pdf.")
     file_size = local.stat().st_size
     dest = normalize_path(dest_folder)
     effective_name = filename or local.name

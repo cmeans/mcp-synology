@@ -27,6 +27,7 @@ from mcp_synology.modules.filestation.helpers import (
     normalize_path,
     path_exists,
     paths_isdir,
+    refuse_bad_name,
 )
 from mcp_synology.modules.filestation.tasks import (
     Handle,
@@ -106,9 +107,9 @@ async def _explain_rename_1200(client: DsmClient, path: str, original: str, new_
     parent, _, name = path.rpartition("/")
     target = f"{parent}/{new_name}"
     # The new path can't stand for a taken name when it's the source itself (its own
-    # name), a folder rather than an entry in it ("." or ".."), or when the source is a
-    # share root (no parent folder to look in).
-    can_be_taken = bool(parent) and new_name not in (name, ".", "..")
+    # name), or when the source is a share root (no parent folder to look in). `rename`
+    # refuses "." and ".." before getting here (#449).
+    can_be_taken = bool(parent) and new_name != name
     try:
         source = await path_exists(client, path)
         taken = source is True and can_be_taken and await path_exists(client, target) is True
@@ -146,17 +147,10 @@ async def rename(
     """Rename a file or folder."""
     normalized = normalize_path(path)
 
-    # Validate new_name is just a name, not a path (nor `.` or `..`, as #449 refuses in
-    # paths and Photos refuses for folder names)
-    if "/" in new_name or new_name.strip() in (".", ".."):
-        error_response(
-            ErrorCode.INVALID_PARAMETER,
-            "Rename failed: new_name should be just a filename, not a path, '.' or '..'.",
-            retryable=False,
-            param="new_name",
-            value=new_name,
-            suggestion="Use move_files to relocate files to a different directory.",
-        )
+    # new_name is just a name: not a path, nor `.` or `..`, as #449 refuses in paths
+    refuse_bad_name(
+        "Rename", new_name, "new_name", "Use move_files to relocate files to a different directory."
+    )
 
     try:
         data = await client.request(

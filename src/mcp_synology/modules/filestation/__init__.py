@@ -1047,6 +1047,9 @@ def register(ctx: "RegisterContext") -> None:
                 [effective_dest],
                 known_shares,
                 "dest_folder" if dest_folder else "default_upload_dir",
+                None
+                if dest_folder
+                else "Fix default_upload_dir in the filestation settings, or pass dest_folder.",
             )
 
             async def _progress(current: int, total: int | None) -> None:

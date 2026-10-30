@@ -53,6 +53,24 @@ class TestUploadFile:
         assert "test.txt" in result
         assert "/video/uploads/" in result
 
+    @pytest.mark.parametrize("filename", [".", "..", "../x", "a/b", "/abs", "a\0b"])
+    async def test_upload_refuses_a_filename_that_isnt_a_name(
+        self, mock_client: DsmClient, tmp_path: Path, filename: str
+    ) -> None:
+        """`filename` is the name DSM writes in dest_folder: as with rename's new_name, no
+        path and no `.` or `..` (pre-QA on QA round 1, #470)."""
+        local_file = tmp_path / "test.txt"
+        local_file.write_text("x")
+        with pytest.raises(ToolError) as exc:
+            await upload_file(
+                mock_client,
+                local_path=str(local_file),
+                dest_folder="/video/uploads",
+                filename=filename,
+            )
+        error = json.loads(str(exc.value))["error"]
+        assert (error["code"], error["param"]) == ("invalid_parameter", "filename")
+
     async def test_upload_local_file_not_found(self, mock_client: DsmClient) -> None:
         with pytest.raises(ToolError) as exc_info:
             await upload_file(
