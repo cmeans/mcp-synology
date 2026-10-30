@@ -188,6 +188,11 @@ async def _check_login(config: object) -> None:
                 click.echo(click.style(message, fg="red"), err=True)
                 sys.exit(1)
             except (SynologyError, OSError) as e:
+                if isinstance(e.__cause__, SynologyError) and isinstance(e, SynologyError):
+                    # A refusal from LoginRefusals: its text is about the running server
+                    # (remembered refusals, restarts, run check). Here, DSM's own error says
+                    # it (QA round 2 on #461).
+                    e = e.__cause__
                 hint = getattr(e, "suggestion", None)
                 detail = f"{e} {hint}" if hint else str(e)
                 click.echo(click.style(f"Authentication failed: {detail}", fg="red"), err=True)

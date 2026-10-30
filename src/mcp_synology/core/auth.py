@@ -17,7 +17,12 @@ from typing import TYPE_CHECKING, Any
 import keyring as kr
 from keyring.errors import KeyringError
 
-from mcp_synology.core.errors import AuthenticationError, RememberedRefusalError, SynologyError
+from mcp_synology.core.errors import (
+    AuthenticationError,
+    RememberedRefusalError,
+    SessionExpiredError,
+    SynologyError,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -159,33 +164,78 @@ def resolve_credentials(config: AppConfig) -> tuple[str, str, str | None]:
     return username, password, device_id
 
 
-def explicit_credential_sources(config: AppConfig) -> tuple[list[str], bool]:
-    """Where the credentials that override the keyring come from, in
-    `resolve_credentials`' order, and whether the username or password comes from the
-    keyring. `setup` writes only the keyring, so the others must be changed where they
-    are (#447, QA round 1 on #461)."""
+KEYRING = "the keyring"
+
+
+def credential_sources(config: AppConfig) -> dict[str, str | None]:
+    """Where each credential comes from, in `resolve_credentials`' order: an environment
+    variable, a config-file key, the keyring (``KEYRING``), or None for a device token
+    that isn't set anywhere but the keyring. `setup` writes only the keyring, so a
+    credential set elsewhere must be changed where it is (#447, QA rounds 1-2 on #461)."""
     import os
 
-    env: list[str] = []
-    file: list[str] = []
-    keyring = False
+    sources: dict[str, str | None] = {}
     for key, var in (
         ("username", "SYNOLOGY_USERNAME"),
         ("password", "SYNOLOGY_PASSWORD"),
         ("device_id", "SYNOLOGY_DEVICE_ID"),
     ):
         if _present_or_none(os.environ.get(var)):
-            env.append(var)
+            sources[key] = f"{var} in the server's environment (the MCP client's config)"
         elif _present_or_none(getattr(config.auth, key)):
-            file.append(f"auth.{key}")
-        elif key != "device_id":
-            keyring = True
-    found: list[str] = []
-    if env:
-        found.append(f"{' and '.join(env)} in the server's environment (the MCP client's config)")
-    if file:
-        found.append(f"{' and '.join(file)} in the config file")
-    return found, keyring
+            sources[key] = f"auth.{key} in the config file"
+        else:
+            sources[key] = KEYRING if key != "device_id" else None
+    return sources
+
+
+_SETUP_PICKED_UP = "the running server picks it up"
+_TWO_FA = (403, 404, 406)
+
+
+def refusal_advice(code: int | None, first: str, sources: dict[str, str | None]) -> str:
+    """What fixes a refused login, by DSM's code and where the credential it concerns
+    comes from (QA round 2 on #461). ``first`` is DSM's own suggestion for the code."""
+    if code == 400:
+        password, username = sources.get("password"), sources.get("username")
+        if password == KEYRING:
+            advice = f"Run 'mcp-synology setup' to store the right password; {_SETUP_PICKED_UP}"
+        else:
+            advice = (
+                f"The password comes from {password}: correct it there and restart the "
+                "server ('mcp-synology setup' writes only the keyring)"
+            )
+        if username != KEYRING:
+            advice += f". If the username is wrong, it comes from {username}: correct it there"
+            if password == KEYRING:
+                advice += " and restart the server"
+        return advice
+    if code in _TWO_FA:
+        device = sources.get("device_id")
+        if device is None:
+            advice = f"Run 'mcp-synology setup' to sign in with a new 2FA code; {_SETUP_PICKED_UP}"
+        else:
+            advice = (
+                f"The device token comes from {device}, which overrides the keyring: remove "
+                "it there, run 'mcp-synology setup' to sign in with a new 2FA code, and "
+                "restart the server"
+            )
+        return f"{first}. Then: {advice[0].lower()}{advice[1:]}" if code == 406 else advice
+    if code == 401:
+        return (
+            f"{first}. Once it's enabled again, restart the server"
+            if first
+            else ("Once the account is enabled again, restart the server")
+        )
+    explicit = sorted({v for k, v in sources.items() if v and v != KEYRING})
+    where = (
+        "mcp-synology tries again once the credentials change ('mcp-synology setup' stores "
+        f"new ones in the keyring; {_SETUP_PICKED_UP})"
+    )
+    if explicit:
+        where += "; " + "; ".join(explicit) + " override the keyring: change those there and "
+        where += "restart the server"
+    return f"{first}. {where}" if first else where
 
 
 def credentials_fingerprint(username: str, password: str, device_id: str | None) -> str:
@@ -224,50 +274,26 @@ class LoginRefusals:
         self,
         fingerprint: str,
         error: AuthenticationError,
-        explicit: list[str] | None = None,
-        keyring: bool = True,
+        sources: dict[str, str | None] | None = None,
     ) -> AuthenticationError:
         """Remember DSM's refusal; return the error to raise, which says what happens next.
 
-        ``explicit`` lists credentials set outside the keyring (environment or config
-        file): `setup` can't change those, so the suggestion says where they are.
-        ``keyring`` says whether the username or password comes from the keyring, which
-        `setup` does change (the recommended setup: a username in the config, the password
-        in the keyring).
+        ``sources`` says where each credential comes from (``credential_sources``), so
+        the suggestion names the fix for the credential DSM refused: `setup` for one in
+        the keyring, the environment or config file for one set there.
         """
         reason = str(error).rstrip(".")
         first = (error.suggestion or "").rstrip(".")
-        stored = (
-            "'mcp-synology setup' stores new credentials in the keyring, and the running "
-            "server picks them up"
-        )
-        if explicit and keyring:
-            where = (
-                f"{stored}; the keyring is overridden by " + "; ".join(explicit) + ": change "
-                "those there and restart the server"
-            )
-        elif explicit:
-            where = (
-                "These credentials come from "
-                + "; ".join(explicit)
-                + ": change them there and restart the server ('mcp-synology setup' "
-                "writes only the keyring, which those override)"
-            )
-        else:
-            where = (
-                "mcp-synology tries again once the stored credentials change "
-                "('mcp-synology setup' stores new ones; the running server picks them up) "
-                "or the server restarts"
-            )
+        if sources is None:
+            sources = {"username": KEYRING, "password": KEYRING, "device_id": None}
+        where = refusal_advice(error.code, first, sources)
         refusal = AuthenticationError(
             f"DSM refused the login: {reason}. mcp-synology won't send these credentials "
             "again until they change or the server restarts, because repeated failed "
             "logins can trip DSM's Auto Block, which blocks this computer's IP address "
             "from the NAS.",
             code=error.code,
-            suggestion=(
-                (f"{first}. " if first else "") + f"{where}; 'mcp-synology check' tests the login."
-            ),
+            suggestion=f"{where}. 'mcp-synology check' tests the login.",
         )
         # Keep a fresh copy: the raised one carries the login's frames (and its password)
         # in its traceback once raised.
@@ -365,8 +391,7 @@ class AuthManager:
         except AuthenticationError as e:
             if e.code is None:
                 raise
-            explicit, keyring = explicit_credential_sources(self._config)
-            raise self._refusals.refuse(fingerprint, e, explicit, keyring) from e
+            raise self._refusals.refuse(fingerprint, e, credential_sources(self._config)) from e
 
         sid: str | None = data.get("sid")
         if not sid:
@@ -426,6 +451,10 @@ class AuthManager:
                 params={"session": self._session_name},
             )
             logger.debug("Logout successful")
+        except SessionExpiredError:
+            # Already closed on DSM's side: after a failed re-login the expired session
+            # stays in place (#359), and shutdown's logout sends it (QA round 2 on #461).
+            logger.debug("Logout: the session had already expired.")
         except SynologyError:
             if raise_errors:
                 raise

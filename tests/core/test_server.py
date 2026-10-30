@@ -644,6 +644,34 @@ class TestSharedClientManagerLifecycle:
             await manager.aclose()
         assert "Couldn't log out of DSM on shutdown" in caplog.text
 
+    @pytest.mark.parametrize("code", [106, 107, 119])
+    async def test_aclose_with_an_expired_session_does_not_warn(
+        self, caplog: pytest.LogCaptureFixture, code: int
+    ) -> None:
+        """After a failed re-login the expired session stays in place (#359), so shutdown
+        sends it; DSM's session error means it's already closed (QA round 2 on #461)."""
+        import respx
+
+        from mcp_synology.core.auth import AuthManager
+        from tests.conftest import BASE_URL, make_api_cache, make_client
+
+        manager = SharedClientManager(make_test_config())
+        client = make_client(make_api_cache())
+        await client.__aenter__()
+        client.sid = "expired"
+        manager._client = client
+        manager._auth = AuthManager(make_test_config(), client)
+        with (
+            respx.mock as mock,
+            caplog.at_level(logging.WARNING, logger="mcp_synology.server"),
+        ):
+            route = mock.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+                json={"success": False, "error": {"code": code}}
+            )
+            await manager.aclose()
+        assert route.call_count == 1
+        assert "Couldn't log out" not in caplog.text
+
     async def test_aclose_cancels_the_update_check(self) -> None:
         import asyncio
 
@@ -2257,10 +2285,11 @@ class TestFirstLogin:
         )
         # SYNOLOGY_USERNAME/PASSWORD are set (the fixture): `setup` can't change them.
         assert err["suggestion"] == (
-            "Check username and password. These credentials come from SYNOLOGY_USERNAME and "
-            "SYNOLOGY_PASSWORD in the server's environment (the MCP client's config): change "
-            "them there and restart the server ('mcp-synology setup' writes only the keyring, "
-            "which those override); 'mcp-synology check' tests the login."
+            "The password comes from SYNOLOGY_PASSWORD in the server's environment (the MCP "
+            "client's config): correct it there and restart the server ('mcp-synology setup' "
+            "writes only the keyring). If the username is wrong, it comes from "
+            "SYNOLOGY_USERNAME in the server's environment (the MCP client's config): correct "
+            "it there. 'mcp-synology check' tests the login."
         )
 
     @respx.mock

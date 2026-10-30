@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import TypeVar
 
 # Help URLs point at sections of our own error-code reference rather than
 # Synology's KB. The KB is sparsely indexed and rarely matches the semantics
@@ -67,6 +68,9 @@ HELP_URLS: dict[str, str] = {
 }
 
 
+_E = TypeVar("_E", bound=BaseException)
+
+
 class SynologyError(Exception):
     """Base exception for all Synology DSM errors."""
 
@@ -86,6 +90,16 @@ class SynologyError(Exception):
         # the URL from HELP_URLS using error_code at response-building time.
         self.help_url = help_url
         super().__init__(message)
+
+
+def detached_copy(error: _E) -> _E:
+    """A copy of ``error`` without its traceback, cause or context, built without calling
+    ``__init__``: a failed login kept to answer other waiters would otherwise keep the
+    login's frames, and the password in them, alive (QA round 2 on #461)."""
+    copy = type(error).__new__(type(error), *error.args)
+    copy.args = error.args
+    copy.__dict__.update(error.__dict__)
+    return copy
 
 
 class AuthenticationError(SynologyError):

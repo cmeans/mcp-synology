@@ -994,7 +994,8 @@ class TestLoginRefusals:
         message = str(errors[0])
         assert message.startswith("DSM refused the login: ")
         assert "Auto Block" in message and ".." not in message
-        assert "mcp-synology setup" in (errors[0].suggestion or "")
+        if code != 401:  # a disabled account: no credential change helps
+            assert "mcp-synology setup" in (errors[0].suggestion or "")
         assert ".." not in (errors[0].suggestion or "")
 
     @respx.mock
@@ -1241,62 +1242,112 @@ class TestRefusalEdges:
 
 
 class TestRefusalSuggestion:
-    """QA round 1 on #461: `setup` writes only the keyring, so a refusal says where the
-    credentials come from: `setup` for what the keyring holds, the environment or the
-    config file for what overrides it."""
+    """QA rounds 1-2 on #461: `setup` writes only the keyring, so a refusal names the fix
+    for the credential DSM refused: the password for 400, the device token for 2FA codes,
+    none for a disabled account; `setup` where it's in the keyring, the environment or
+    the config file where it's set there."""
 
-    SETUP = "'mcp-synology setup' stores new credentials in the keyring, and the running server"
+    ENV = "in the server's environment (the MCP client's config)"
+    SETUP_PW = "Run 'mcp-synology setup' to store the right password; the running server"
+    SETUP_2FA = "Run 'mcp-synology setup' to sign in with a new 2FA code; the running server"
 
     @respx.mock
     @pytest.mark.parametrize(
-        ("auth", "env", "expected", "absent"),
+        ("code", "auth", "env", "expected", "absent"),
         [
             # Everything from the keyring.
-            ({}, {}, "the running server picks them up) or the server restarts", "override"),
+            (400, {}, {}, SETUP_PW + " picks it up. 'mcp-synology check'", "restart"),
             # The recommended setup: a username in the config, the password in the keyring.
             (
+                400,
                 {"username": "admin"},
                 {},
-                SETUP + " picks them up; the keyring is overridden by auth.username in the "
-                "config file: change those there and restart the server",
-                "These credentials come from",
+                SETUP_PW + " picks it up. If the username is wrong, it comes from auth.username"
+                " in the config file: correct it there and restart the server.",
+                "overridden",
             ),
-            # Username and password both outside the keyring: setup can't help.
+            # Both in the config file: setup can't help.
             (
+                400,
                 {"username": "admin", "password": "wrong"},
                 {},
-                "These credentials come from auth.username and auth.password in the config "
-                "file: change them there and restart the server",
-                SETUP,
-            ),
-            (
-                {},
-                {"SYNOLOGY_USERNAME": "admin", "SYNOLOGY_PASSWORD": "wrong"},
-                "These credentials come from SYNOLOGY_USERNAME and SYNOLOGY_PASSWORD in the "
-                "server's environment",
-                SETUP,
+                "The password comes from auth.password in the config file: correct it there "
+                "and restart the server ('mcp-synology setup' writes only the keyring). If the "
+                "username is wrong, it comes from auth.username in the config file: correct it "
+                "there.",
+                SETUP_PW,
             ),
             # The environment wins over the config for the same key: only it is named.
             (
+                400,
                 {"username": "admin", "password": "unused"},
                 {"SYNOLOGY_PASSWORD": "wrong"},
-                "SYNOLOGY_PASSWORD in the server's environment (the MCP client's config); "
-                "auth.username in the config file",
+                "The password comes from SYNOLOGY_PASSWORD " + ENV,
                 "auth.password",
             ),
+            # QA round 2: env credentials, the device token in the keyring, 403.
+            (
+                403,
+                {},
+                {"SYNOLOGY_USERNAME": "admin", "SYNOLOGY_PASSWORD": "wrong"},
+                SETUP_2FA + " picks it up. 'mcp-synology check'",
+                "SYNOLOGY_USERNAME",
+            ),
+            # A device token set outside the keyring overrides what setup writes.
+            (
+                404,
+                {"device_id": "old"},
+                {},
+                "The device token comes from auth.device_id in the config file, which "
+                "overrides the keyring: remove it there, run 'mcp-synology setup' to sign in "
+                "with a new 2FA code, and restart the server.",
+                "picks it up",
+            ),
+            (
+                406,
+                {},
+                {},
+                "Admin requires 2FA. Enable 2FA in DSM > Personal > Security. Then: run "
+                "'mcp-synology setup' to sign in with a new 2FA code; the running server picks "
+                "it up.",
+                "password",
+            ),
+            # A disabled account: no credential change helps.
+            (
+                401,
+                {"username": "admin", "password": "wrong"},
+                {},
+                "This account is disabled in DSM. Contact your NAS administrator. Once it's "
+                "enabled again, restart the server.",
+                "setup",
+            ),
         ],
-        ids=["keyring", "config-username", "config-both", "env-both", "env-over-config"],
+        ids=[
+            "400-keyring",
+            "400-config-username",
+            "400-config-both",
+            "400-env-over-config",
+            "403-env-creds-keyring-token",
+            "404-config-token",
+            "406",
+            "401",
+        ],
     )
-    async def test_suggestion_names_where_the_credentials_are(
-        self, auth: dict[str, str], env: dict[str, str], expected: str, absent: str
+    async def test_suggestion_names_the_fix_for_the_refused_credential(
+        self,
+        code: int,
+        auth: dict[str, str],
+        env: dict[str, str],
+        expected: str,
+        absent: str,
     ) -> None:
-        _auth_routes([_refused()])
-        keyring = _keyring_with(username="admin", password="wrong", device_id="d")
+        _auth_routes([_refused(code)])
+        stored = _keyring_with(username="admin", password="wrong", device_id="d")
         async with _make_client() as client:
             refusal_auth = AuthManager(_make_config(auth=auth), client)
             with (
                 patch.dict(os.environ, {**_clean_env(), **env}, clear=True),
-                patch("mcp_synology.core.auth.kr", keyring),
+                patch("mcp_synology.core.auth.kr", stored),
                 pytest.raises(AuthenticationError) as exc,
             ):
                 await refusal_auth.login()
@@ -1368,6 +1419,11 @@ class TestWaitersShareAFailedLogin:
             )
             assert all(isinstance(r, httpx.ConnectError) for r in results)
             assert calls == [1]
+            # QA round 2: the kept failure holds no frames (the login's password), and each
+            # waiter gets its own copy rather than one object every raise adds to.
+            stored = client._login_failure
+            assert stored is not None and stored.__traceback__ is None
+            assert len({id(r) for r in results}) == 5
             with pytest.raises(httpx.ConnectError):  # a later call tries afresh
                 await client._re_authenticate(119, "SYNO.FileStation.List", "old-sid")
             assert calls == [1, 1]

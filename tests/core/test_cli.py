@@ -1247,6 +1247,43 @@ class TestCheckLogin:
 
         assert "Authentication failed: No credentials found. Run setup." in capsys.readouterr().err
 
+    async def test_check_login_prints_dsm_s_own_refusal(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A refusal's text is about the running server (remembered refusals, restarts,
+        run check); check prints DSM's own error and suggestion instead (QA round 2 on
+        #461)."""
+        import pytest
+
+        from mcp_synology.cli.check import _check_login
+        from mcp_synology.core.auth import LoginRefusals
+        from mcp_synology.core.errors import AuthenticationError
+        from tests.conftest import make_test_config
+
+        dsm = AuthenticationError(
+            "No such account or incorrect password",
+            code=400,
+            suggestion="Check username and password.",
+        )
+        refusal = LoginRefusals().refuse("fp", dsm)
+        refusal.__cause__ = dsm
+        fake_auth = MagicMock()
+        fake_auth.login = AsyncMock(side_effect=refusal)
+
+        with (
+            patch("mcp_synology.core.client.DsmClient", return_value=self._make_fake_client()),
+            patch("mcp_synology.core.auth.AuthManager", return_value=fake_auth),
+            pytest.raises(SystemExit),
+        ):
+            await _check_login(make_test_config())
+
+        err = capsys.readouterr().err
+        assert (
+            "Authentication failed: No such account or incorrect password Check username "
+            "and password." in err
+        )
+        assert "restart" not in err and "mcp-synology check" not in err
+
     async def test_check_login_http_error_has_a_check_specific_hint(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:

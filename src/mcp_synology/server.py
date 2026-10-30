@@ -26,7 +26,7 @@ from mcp_synology.core.auth import (
     resolve_credentials,
 )
 from mcp_synology.core.client import DsmClient, dsm_call_of
-from mcp_synology.core.errors import ErrorCode, SynologyError
+from mcp_synology.core.errors import ErrorCode, SynologyError, detached_copy
 from mcp_synology.core.formatting import error_response, synology_error_response
 from mcp_synology.core.redaction import redact_urls
 from mcp_synology.core.state import ServerState
@@ -481,12 +481,12 @@ class SharedClientManager:
             async with self._init_lock:
                 if self._client is None:
                     if self._init_attempts != attempt and self._init_failure is not None:
-                        raise self._init_failure
+                        raise detached_copy(self._init_failure)
                     self._init_failure = None
                     try:
                         await self._init_client()
                     except Exception as e:
-                        self._init_failure = e
+                        self._init_failure = detached_copy(e)
                         raise
                     finally:
                         self._init_attempts += 1

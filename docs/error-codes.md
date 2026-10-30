@@ -54,7 +54,9 @@ It tries again once the credentials change or the server restarts. `mcp-synology
 setup` stores new ones in the keyring, and the running server picks them up; a
 value set in `SYNOLOGY_USERNAME`, `SYNOLOGY_PASSWORD` or `SYNOLOGY_DEVICE_ID`, or
 in the config file's `auth:` section, overrides the keyring and must be changed
-there (then restart the server). The error names any such value.
+there (then restart the server). The error's suggestion names where the refused
+credential comes from: the password for a wrong one (400), the device token for a
+2FA refusal (403, 404, 406); a disabled account (401) needs an administrator.
 
 `auth_failed` is **not** retryable. mcp-synology will not auto-retry on this
 code — fix the underlying credential or 2FA state before re-running.
