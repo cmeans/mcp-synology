@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import fnmatch
 import json
 import logging
 import re
@@ -317,8 +316,14 @@ def escape_multi_path(paths: list[str]) -> str:
 
 
 def matches_pattern(filename: str, pattern: str) -> bool:
-    """Check if a filename matches a glob pattern (case-insensitive)."""
-    return fnmatch.fnmatch(filename.lower(), pattern.lower())
+    """Check if a filename matches a wildcard pattern (case-insensitive).
+
+    Only ``*`` and ``?`` are wildcards; everything else, ``[...]`` included, matches
+    itself, as in DSM's own patterns. With fnmatch, ``*[1080p]*`` was a character class
+    that left out every name containing 1, 0, 8 or p (#396).
+    """
+    body = re.escape(pattern).replace(r"\*", ".*").replace(r"\?", ".")
+    return re.fullmatch(body, filename, re.IGNORECASE | re.DOTALL) is not None
 
 
 # Closes #37. Lazy per-share recycle-bin probe + observation-based self-correction.

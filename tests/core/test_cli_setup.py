@@ -213,6 +213,37 @@ class TestConnectAndLogin:
             result = await setup_mod._connect_and_login(config, "admin", "pw", "svc", verbose=False)
         assert result["success"] is False
 
+    async def test_connect_and_login_logs_out_when_dsm_info_fails(self) -> None:
+        # #404: a transport error from fetch_dsm_info used to skip the logout. Setup
+        # still exits with its connection message (exit_on_connection_failure).
+        import httpx
+
+        config = _make_test_app_config()
+        request = AsyncMock(side_effect=[{"sid": "test-sid"}, {}])
+        client = self._make_client_cm(request, {})
+        client.fetch_dsm_info = AsyncMock(side_effect=httpx.ReadTimeout("slow"))
+        with (
+            patch("mcp_synology.core.client.DsmClient", return_value=client),
+            pytest.raises(SystemExit),
+        ):
+            await setup_mod._connect_and_login(config, "admin", "pw", "svc", verbose=False)
+        assert [c.args[:2] for c in request.await_args_list] == [
+            ("SYNO.API.Auth", "login"),
+            ("SYNO.API.Auth", "logout"),
+        ]
+
+    async def test_connect_and_login_succeeds_when_logout_fails(self) -> None:
+        # The login and DSM info worked; a failed logout only leaves the session to time out.
+        from mcp_synology.core.errors import SynologyError
+
+        config = _make_test_app_config()
+        request = AsyncMock(side_effect=[{"sid": "test-sid"}, SynologyError("gone", code=119)])
+        client = self._make_client_cm(request, {"hostname": "MyNAS"})
+        with patch("mcp_synology.core.client.DsmClient", return_value=client):
+            result = await setup_mod._connect_and_login(config, "admin", "pw", "svc", verbose=False)
+        assert result["success"] is True
+        assert result["hostname"] == "MyNAS"
+
     async def test_connect_and_login_rejects_non_appconfig(self) -> None:
         with pytest.raises(RuntimeError, match="AppConfig"):
             await setup_mod._connect_and_login("not a config", "u", "p", "s", verbose=False)

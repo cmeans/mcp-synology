@@ -269,6 +269,23 @@ class TestMatchesPattern:
     def test_wildcard(self) -> None:
         assert matches_pattern("Severance.S02E10.mkv", "*Severance*")
 
+    def test_question_mark_is_one_character(self) -> None:
+        assert matches_pattern("ep1.mkv", "ep?.mkv")
+        assert not matches_pattern("ep10.mkv", "ep?.mkv")
+
+    def test_brackets_match_themselves(self) -> None:
+        # #396: fnmatch read [...] as a character class.
+        assert matches_pattern("[a]x.mkv", "[a]x.mkv")
+        assert not matches_pattern("ax.mkv", "*[a]*")
+        assert not matches_pattern("Show.1080.mkv", "*[1080p]*")
+        assert matches_pattern("Show [1080p].mkv", "*[1080p]*")
+
+    def test_other_regex_characters_match_themselves(self) -> None:
+        assert matches_pattern("a+b (1).txt", "a+b (1).txt")
+        assert not matches_pattern("aab (1).txt", "a+b (1).txt")
+        assert matches_pattern("x.y", "x.y")
+        assert not matches_pattern("xzy", "x.y")
+
 
 # ---------- Recycle-bin probe + self-correct (closes #37) ----------
 

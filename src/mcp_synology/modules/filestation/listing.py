@@ -262,6 +262,7 @@ async def list_files(
     normalized = normalize_path(path)
 
     sort_by = _resolve_sort_by(sort_by)
+    offset = max(0, offset)  # as list_recycle_bin does (#389)
 
     params: dict[str, Any] = {
         "folder_path": normalized,
@@ -282,17 +283,31 @@ async def list_files(
 
     files = data.get("files", [])
     total = data.get("total", len(files))
+    # DSM's offsets count every entry, hidden ones too, so the next page starts after
+    # all of this page's entries (#389).
+    next_offset = offset + len(files)
 
-    # Optionally filter out #recycle (disabled by default)
+    # Optionally filter out #recycle (disabled by default). It's left out of the count
+    # when it's on this page; on another page DSM's total still counts it.
+    hidden = 0
     if hide_recycle:
-        files = [f for f in files if f.get("name") != "#recycle"]
+        kept = [f for f in files if f.get("name") != "#recycle"]
+        hidden = len(files) - len(kept)
+        files = kept
+        total -= hidden
 
     if not files:
-        return format_table(
+        result = format_table(
             headers=["Type", "Name"],
             rows=[],
             title=f"Contents of {normalized} (0 items)",
         )
+        if next_offset < total + hidden:
+            # A page holding only the hidden #recycle: there's more after it.
+            result += f"\n\nUse offset={next_offset} to see more."
+        elif offset > 0 and offset >= total > 0:
+            result += f"\n\nNo items from offset={offset}: there are {total:,}."
+        return result
 
     headers = ["Type", "Name", "Size", "Modified"]
     rows: list[list[str]] = []
@@ -317,14 +332,16 @@ async def list_files(
     result += _sort_note(files, sort_by, sort_direction)
 
     # The range, not just the count, so a later page says where it is: "Showing 3–4 of
-    # 5", as the recycle-bin pattern listing does (0.10.0rc6 live test).
-    next_offset = offset + shown
-    page = f"{offset + 1:,}–{next_offset:,}"
-    if next_offset < total:
-        result += f"\n\nShowing {page} of {total:,} items. Use offset={next_offset} to see more."
-    elif shown > 0 and offset > 0:
-        result += f"\n\nShowing {page} of {total:,} items."
-    elif shown > 0:
+    # 5", as the recycle-bin pattern listing does (0.10.0rc6 live test). A page that
+    # hid #recycle gives the count instead, since its positions no longer line up.
+    more = next_offset < total + hidden
+    hint = f" Use offset={next_offset} to see more." if more else ""
+    if hidden:
+        result += f"\n\nShowing {shown:,} of {total:,} items (#recycle hidden).{hint}"
+    elif more or offset > 0:
+        page = f"{offset + 1:,}–{offset + shown:,}"
+        result += f"\n\nShowing {page} of {total:,} items.{hint}"
+    else:
         result += f"\n\n{shown:,} of {total:,} items."
 
     return result

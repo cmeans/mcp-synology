@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import httpx
 import pytest
@@ -412,8 +412,54 @@ class TestListFiles:
             }
         )
         result = await list_files(mock_client, path="/video", hide_recycle=True)
-        assert "#recycle" not in result
+        assert "#recycle" not in result.replace("(#recycle hidden)", "")
         assert "real_file.txt" in result
+        # #389: the hidden entry isn't counted, and nothing more is promised.
+        assert "(1 items)" in result
+        assert "Showing 1 of 1 items (#recycle hidden)." in result
+        assert "offset=" not in result
+
+    @staticmethod
+    def _page(names: list[str], total: int) -> dict[str, Any]:
+        files = [{"name": n, "isdir": n == "#recycle", "additional": {}} for n in names]
+        return {"success": True, "data": {"files": files, "total": total}}
+
+    @respx.mock
+    async def test_hidden_recycle_next_offset_counts_it(self, mock_client: DsmClient) -> None:
+        # #389: DSM's offset counts #recycle, so the next page starts after all 3 entries.
+        # It used to hint offset=2 and repeat c.txt.
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json=self._page(["#recycle", "b.txt", "c.txt"], total=5)
+        )
+        result = await list_files(mock_client, path="/video", limit=3, hide_recycle=True)
+        assert "(4 items)" in result
+        assert "Showing 2 of 4 items (#recycle hidden). Use offset=3 to see more." in result
+
+    @respx.mock
+    async def test_hidden_recycle_alone_on_a_page_points_on(self, mock_client: DsmClient) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(json=self._page(["#recycle"], total=3))
+        result = await list_files(mock_client, path="/video", limit=1, hide_recycle=True)
+        assert "Use offset=1 to see more." in result
+
+    @respx.mock
+    async def test_offset_past_the_end_says_so(self, mock_client: DsmClient) -> None:
+        # #389: it used to be just "No items to display".
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(json=self._page([], total=5))
+        result = await list_files(mock_client, path="/video", offset=9)
+        assert "No items from offset=9: there are 5." in result
+
+    @respx.mock
+    async def test_negative_offset_is_clamped(self, mock_client: DsmClient) -> None:
+        captured: list[dict[str, str]] = []
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            captured.append(dict(request.url.params))
+            return httpx.Response(200, json=self._page(["a.txt", "b.txt"], total=5))
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        result = await list_files(mock_client, path="/video", offset=-1, limit=2)
+        assert captured[0]["offset"] == "0"
+        assert "Showing 1–2 of 5 items. Use offset=2 to see more." in result
 
     @respx.mock
     async def test_list_files_pagination(self, mock_client: DsmClient) -> None:

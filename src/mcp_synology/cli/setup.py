@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import shutil
 import sys
@@ -15,6 +16,8 @@ import yaml
 
 from mcp_synology.cli.check import exit_on_connection_failure
 from mcp_synology.cli.logging_ import _configure_logging, _init_early_logging
+
+logger = logging.getLogger(__name__)
 
 _CONFIG_DIR = Path.home() / ".config" / "mcp-synology"
 
@@ -370,17 +373,21 @@ async def _connect_and_login(
             if not login_result["success"]:
                 return result
 
-            # Fetch NAS hostname
-            dsm_info = await client.fetch_dsm_info()
+            # Fetch NAS hostname. The logout runs whatever happens here, so a
+            # timeout or dropped connection doesn't leave the session open (#404).
+            try:
+                dsm_info = await client.fetch_dsm_info()
+            finally:
+                try:
+                    await client.request("SYNO.API.Auth", "logout", version=6, params={})
+                except Exception as e:  # best effort: DSM ends the session on its own timeout
+                    logger.debug("Setup logout failed: %s", e)
             nas_hostname = dsm_info.get("hostname") or ""
             if nas_hostname:
                 result["hostname"] = nas_hostname
             dsm_version = dsm_info.get("version_string", "")
             if dsm_version:
                 result["dsm_version"] = dsm_version
-
-            # Logout
-            await client.request("SYNO.API.Auth", "logout", version=6, params={})
 
             result["success"] = True
 
