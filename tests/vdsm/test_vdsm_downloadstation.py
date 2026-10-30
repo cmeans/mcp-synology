@@ -512,6 +512,33 @@ class TestVdsmDownloadStationTasks:
         created = await create_download(client, uri=long_magnet, destination="writable")
         assert len(_ids_in(created)) == 1, created
 
+    async def test_create_keeps_commas_inside_a_uri(
+        self, nas_client: Any, _clean_queue: None
+    ) -> None:
+        """#397: a comma inside a URI no longer splits it, through DS2 and through v1
+        (username/password sources), whose comma-separated string gets it as "\\,"."""
+        from mcp_synology.modules.downloadstation.tasks import create_download
+
+        client, _, _, _ = _unpack(nas_client)
+        url = "http://127.0.0.1:5000/mcp-synology,comma.iso"
+        magnet = _magnet(397) + ",%20The"
+        created = await create_download(client, uri=f"{url},{magnet}", destination="writable")
+        assert len(_ids_in(created)) == 2, created
+
+        v1_url = "http://127.0.0.1:5000/mcp-synology,v1.iso"
+        await create_download(
+            client, uri=v1_url, destination="writable", username="u", password="p"
+        )
+
+        data = await client.request(
+            "SYNO.DownloadStation.Task", "list", version=1, params={"additional": "detail"}
+        )
+        uris = [t["additional"]["detail"]["uri"] for t in data["tasks"]]
+        assert len(uris) == 3, uris
+        assert url in uris and magnet in uris
+        # DSM puts the credentials into the URI it shows (masked).
+        assert [u for u in uris if u.endswith("/mcp-synology,v1.iso")], uris
+
     async def test_create_from_torrent_file(
         self, nas_client: Any, _clean_queue: None, tmp_path: Path
     ) -> None:

@@ -356,7 +356,8 @@ def register(ctx: "RegisterContext") -> None:
                 Field(
                     description=(
                         "One or more source URIs, comma-separated: HTTP, HTTPS, FTP, magnet "
-                        "and others. Pass this or `torrent_file_path`, not both."
+                        "and others; commas inside a URI are kept. Pass this or "
+                        "`torrent_file_path`, not both."
                     )
                 ),
             ] = None,

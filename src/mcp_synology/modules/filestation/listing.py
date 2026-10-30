@@ -25,6 +25,7 @@ from mcp_synology.modules.filestation.helpers import (
     ensure_recycle_status,
     file_type_icon,
     normalize_path,
+    path_exists,
     probe_recycle_status,
 )
 
@@ -254,15 +255,31 @@ async def list_files(
     sort_direction: str = "asc",
     offset: int = 0,
     limit: int = 200,
-    hide_recycle: bool = True,
+    hide_recycle: bool = False,
     file_type_indicator: str = "emoji",
 ) -> str:
-    """List files and folders within a directory path."""
+    """List files and folders within a directory path.
+
+    ``hide_recycle`` defaults off, as ``hide_recycle_in_listings`` does; the tool always
+    passes the setting.
+    """
 
     normalized = normalize_path(path)
 
     sort_by = _resolve_sort_by(sort_by)
     offset = max(0, offset)  # as list_recycle_bin does (#389)
+
+    # Hiding #recycle (opt-in) can only matter where DSM would list it: a share's top
+    # level, with folders listed and a pattern (if any) that matches it. There, one
+    # entry more is fetched, so a #recycle right after the page is skipped with it
+    # rather than promising a page that turns out empty (#389).
+    may_hide = (
+        hide_recycle
+        and normalized.count("/") == 1
+        and filetype != "file"
+        and (not pattern or dsm_pattern_matcher(pattern)("#recycle"))
+    )
+    peek = may_hide and limit > 0
 
     params: dict[str, Any] = {
         "folder_path": normalized,
@@ -271,7 +288,7 @@ async def list_files(
         "sort_by": sort_by,
         "sort_direction": sort_direction,
         "offset": str(offset),
-        "limit": str(limit),
+        "limit": str(limit + 1 if peek else limit),
     }
     if pattern:
         params["pattern"] = dsm_str(pattern)
@@ -281,20 +298,33 @@ async def list_files(
     except SynologyError as e:
         synology_error_response("List files", e)
 
-    files = data.get("files", [])
-    total = data.get("total", len(files))
-    # DSM's offsets count every entry, hidden ones too, so the next page starts after
-    # all of this page's entries (#389).
-    next_offset = offset + len(files)
+    entries = data.get("files", [])
+    dsm_total = data.get("total", len(entries))
 
-    # Optionally filter out #recycle (disabled by default). It's left out of the count
-    # when it's on this page; on another page DSM's total still counts it.
-    hidden = 0
-    if hide_recycle:
-        kept = [f for f in files if f.get("name") != "#recycle"]
-        hidden = len(files) - len(kept)
-        files = kept
-        total -= hidden
+    # DSM's offsets count every entry, the hidden #recycle too, so the next page
+    # starts after the last entry this one used (#389).
+    files: list[dict[str, Any]] = []
+    used = 0
+    recycle_seen = False
+    for entry in entries:
+        if may_hide and entry.get("name") == "#recycle":
+            recycle_seen = True
+        elif limit > 0 and len(files) == limit:
+            break  # the peeked entry: it starts the next page
+        else:
+            files.append(entry)
+        used += 1
+    next_offset = offset + used
+
+    # The total leaves out a hidden #recycle on every page, not only the one it's on.
+    recycle_hidden = recycle_seen
+    if may_hide and not recycle_seen:
+        try:
+            recycle_hidden = await path_exists(client, f"{normalized}/#recycle") is True
+        except Exception as e:  # the count is a nicety; the listing itself worked
+            logger.debug("Couldn't check for %s/#recycle: %s", normalized, e)
+    total = dsm_total - 1 if recycle_hidden else dsm_total
+    more = next_offset < dsm_total
 
     if not files:
         result = format_table(
@@ -302,10 +332,9 @@ async def list_files(
             rows=[],
             title=f"Contents of {normalized} (0 items)",
         )
-        if next_offset < total + hidden:
-            # A page holding only the hidden #recycle: there's more after it.
+        if more:
             result += f"\n\nUse offset={next_offset} to see more."
-        elif offset > 0 and offset >= total > 0:
+        elif offset > 0 and total > 0:
             result += f"\n\nNo items from offset={offset}: there are {total:,}."
         return result
 
@@ -332,11 +361,10 @@ async def list_files(
     result += _sort_note(files, sort_by, sort_direction)
 
     # The range, not just the count, so a later page says where it is: "Showing 3–4 of
-    # 5", as the recycle-bin pattern listing does (0.10.0rc6 live test). A page that
-    # hid #recycle gives the count instead, since its positions no longer line up.
-    more = next_offset < total + hidden
+    # 5", as the recycle-bin pattern listing does (0.10.0rc6 live test). With #recycle
+    # hidden, positions no longer line up with offsets, so the count is given instead.
     hint = f" Use offset={next_offset} to see more." if more else ""
-    if hidden:
+    if recycle_hidden:
         result += f"\n\nShowing {shown:,} of {total:,} items (#recycle hidden).{hint}"
     elif more or offset > 0:
         page = f"{offset + 1:,}–{offset + shown:,}"

@@ -793,6 +793,55 @@ class TestCreateDownloadUri:
         with pytest.raises(ToolError, match="empty"):
             await create_download(mock_client, uri=",,")
 
+    @respx.mock
+    async def test_comma_inside_a_uri_keeps_it_whole(self, mock_client: DsmClient) -> None:
+        """#397: only a comma followed by a scheme starts another URI."""
+        _has_default()
+        route = post_route(TASK2, "create", version=2).respond(
+            json=ok({"list_id": [], "task_id": ["dbid_1", "dbid_2"]})
+        )
+        magnet = "magnet:?xt=urn:btih:abc&dn=Movie,%20The"
+        await create_download(mock_client, uri=f"https://h.example/a,b.iso, {magnet},")
+        form = _form(route.calls.last.request)
+        assert json.loads(form["url"]) == ["https://h.example/a,b.iso", magnet]
+
+    @respx.mock
+    async def test_v1_escapes_a_comma_inside_a_uri(self, mock_client: DsmClient) -> None:
+        """#397: v1 takes one comma-separated string; DSM reads "\\," as a plain comma."""
+        _has_default()
+        v1 = post_route(TASK, "create", version=1).respond(json=ok())
+        await create_download(
+            mock_client,
+            uri="http://h.example/a,b.iso,ftp://h.example/c.iso",
+            username="u",
+            password="p",
+        )
+        assert _form(v1.calls.last.request)["uri"] == (
+            "http://h.example/a\\,b.iso,ftp://h.example/c.iso"
+        )
+
+
+class TestSplitUris:
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("http://a/1.iso,http://b/2.iso", ["http://a/1.iso", "http://b/2.iso"]),
+            ("http://a/1.iso, magnet:?xt=x", ["http://a/1.iso", "magnet:?xt=x"]),
+            ("https://h/a,b.iso", ["https://h/a,b.iso"]),
+            ("magnet:?xt=x&dn=A,B,C", ["magnet:?xt=x&dn=A,B,C"]),
+            ("ed2k://|file|a,b|1|h|/,thunder:QUE=", ["ed2k://|file|a,b|1|h|/", "thunder:QUE="]),
+            ("HTTP://A/1,FTP://B/2", ["HTTP://A/1", "FTP://B/2"]),
+            ("http://a/x,y:z", ["http://a/x,y:z"]),  # "y:" isn't a URI start
+            (" http://a/1 ,,", ["http://a/1"]),
+            (",,", []),
+            ("", []),
+        ],
+    )
+    def test_split(self, text: str, expected: list[str]) -> None:
+        from mcp_synology.modules.downloadstation.tasks import split_uris
+
+        assert split_uris(text) == expected
+
     async def test_neither_uri_nor_torrent_path_raises(self, mock_client: DsmClient) -> None:
         with pytest.raises(ToolError, match="uri"):
             await create_download(mock_client)

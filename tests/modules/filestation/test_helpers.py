@@ -286,6 +286,10 @@ class TestMatchesPattern:
         assert matches_pattern("x.y", "x.y")
         assert not matches_pattern("xzy", "x.y")
 
+    def test_star_spans_a_newline(self) -> None:
+        # As fnmatch did: a name with a newline still matches "*".
+        assert matches_pattern("a\nb.txt", "a*.txt")
+
 
 # ---------- Recycle-bin probe + self-correct (closes #37) ----------
 

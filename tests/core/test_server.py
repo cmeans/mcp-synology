@@ -1794,7 +1794,8 @@ class TestInstructionComments:
 # carries only its one-line "not enabled" entry in PERMISSIONS (about 160 characters).
 # +72 in QA round 1: list_snapshots' offset and limit say they page the shared folders
 # when no folder is given.
-PAYLOAD_BUDGET_CHARS = 55_483
+# +30 by #397: create_download's `uri` says commas inside a URI are kept.
+PAYLOAD_BUDGET_CHARS = 55_513
 
 
 class TestPayloadBudget:

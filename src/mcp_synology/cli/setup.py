@@ -419,9 +419,12 @@ async def _setup_login(config: object, username: str, password: str, service: st
             if not login_result["success"]:
                 return
 
-            # Logout
+            # Logout, best effort as in _connect_and_login: the login worked (#404).
             if client.sid:
-                await client.request("SYNO.API.Auth", "logout", version=6, params={})
+                try:
+                    await client.request("SYNO.API.Auth", "logout", version=6, params={})
+                except Exception as e:  # DSM ends the session on its own timeout
+                    logger.debug("Setup logout failed: %s", e)
 
 
 def _emit_claude_desktop_snippet(config: Any, config_path: Path) -> None:

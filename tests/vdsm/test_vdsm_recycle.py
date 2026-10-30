@@ -116,6 +116,51 @@ async def test_listings_say_dsm_sorts_folders_and_files_separately(
         await _clean(client, top.rsplit("/", 1)[1])
 
 
+async def test_hidden_recycle_pages_every_item_once(nas_client: Any) -> None:
+    """#389: with #recycle hidden, paging /home visits every other entry exactly once,
+    in both sort directions (#recycle comes first ascending, last descending), and
+    every page gives the same total."""
+    import re
+
+    client: DsmClient = nas_client[0]
+    top = f"t389-{uuid.uuid4().hex[:8]}"
+    try:
+        # Something in the bin, so /home/#recycle exists; entries to page through.
+        await create_folder(client, paths=[f"/home/{top}-{n}" for n in ("a", "b", "c", "gone")])
+        await delete_files(client, paths=[f"/home/{top}-gone"], recycle_bin_status={})
+
+        raw = await client.request(
+            "SYNO.FileStation.List", "list", version=2, params={"folder_path": "/home"}
+        )
+        names = [f["name"] for f in raw["files"]]
+        assert "#recycle" in names, names
+        expected = sorted(n for n in names if n != "#recycle")
+
+        for direction in ("asc", "desc"):
+            seen: list[str] = []
+            offset = 0
+            while True:
+                out = await list_files(
+                    client,
+                    path="/home",
+                    limit=2,
+                    offset=offset,
+                    sort_direction=direction,
+                    hide_recycle=True,
+                )
+                assert f"({len(expected)} items)" in out, out
+                assert "#recycle" not in out.replace("(#recycle hidden)", ""), out
+                seen += [n for n in expected if re.search(rf"\s{re.escape(n)}/?\s", out)]
+                hint = re.search(r"Use offset=(\d+)", out)
+                if not hint:
+                    break
+                offset = int(hint.group(1))
+            assert sorted(seen) == expected, (direction, seen)
+    finally:
+        for name in ("a", "b", "c", "gone"):
+            await _clean(client, f"{top}-{name}")
+
+
 async def _home_takes_only_its_listed_name(client: DsmClient, tmp_path: Path) -> None:
     """#353: DSM takes an ordinary share in any case, but the home service only as /home.
 

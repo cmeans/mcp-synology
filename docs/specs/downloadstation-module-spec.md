@@ -359,7 +359,7 @@ Create tasks from URIs, or from a local .torrent / .nzb file.
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `uri` | `str` | One of `uri` / `torrent_file_path` | — | Comma-separated URIs: HTTP, HTTPS, FTP, magnet, etc. Not together with `torrent_file_path`. |
+| `uri` | `str` | One of `uri` / `torrent_file_path` | — | Comma-separated URIs: HTTP, HTTPS, FTP, magnet, etc.; commas inside a URI are kept (only a comma followed by a scheme starts another URI). Not together with `torrent_file_path`. |
 | `torrent_file_path` | `str` | One of `uri` / `torrent_file_path` | — | Local path to a `.torrent` or `.nzb` file (uploaded from this machine), inside the allowed local folders, which its description names (`roots_for_description`). |
 | `destination` | `str` | No | the user's default | Share-relative destination folder (`video/Torrents`); it must already exist. |
 | `username` | `str` | No | — | User name for a protected URL (not for torrent files). |
@@ -377,6 +377,7 @@ Create tasks from URIs, or from a local .torrent / .nzb file.
   - **no default and no `destination`:** refused with `invalid_parameter` for any account. A non-manager is told to set their default with `set_download_config`; anyone else is told to pass `destination`.
   - **a non-manager with an explicit `destination` but no default:** the task is created, with the note `Download Station won't start your tasks until your default destination is set; they stay waiting.`
   - **the Info API absent, or its config unreadable:** the request goes ahead unchanged.
+- **Commas inside a URI (#397).** A comma is legal in a URL (`https://h/a,b.iso`) and common in a magnet's `dn` name, so `uri` is split only where a comma is followed by a scheme with `//` (`http://`, `ftp://`, `ed2k://`) or `magnet:`, `thunder:`, `flashget:`, `qqdl:`; any other comma stays in its URI. DS2 gets the URIs as a JSON list, so a comma needs nothing more (verified on DSM 7.1, 7.2.2, 7.3.2 and 7.4.1: the task's URI reads back unchanged). v1 takes one comma-separated string: an unescaped comma inside a URI makes the create fail, and `\,` is kept as a plain comma (verified on the same four versions), so the v1 fallback escapes it, as File Station's multi-path parameters do.
 - Source URIs are redacted in DEBUG logs. The POST body DSM receives is not.
 - Validation: exactly one of `uri` / `torrent_file_path`; credentials only with `uri`; a non-empty URI list. For a file, in this order: a `.torrent` or `.nzb` extension (any case), inside the allowed local folders (resolved after `~`, `..` and symlinks; #257), then it must exist.
 

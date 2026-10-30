@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NoReturn
 
@@ -572,6 +573,29 @@ async def _resolve_destination(
 # The only files create_download uploads (#257).
 _TORRENT_SUFFIXES = (".torrent", ".nzb")
 
+# Where a new URI starts in create_download's comma-separated list: a scheme with
+# "//" (http, https, ftp, ...) or one of the link schemes without it.
+_URI_START = re.compile(
+    r"\s*(?:[a-z][a-z0-9+.-]*://|(?:magnet|ed2k|thunder|flashget|qqdl):)", re.IGNORECASE
+)
+
+
+def split_uris(text: str) -> list[str]:
+    """Split create_download's ``uri`` on the commas that start another URI (#397).
+
+    A comma is legal inside a URL (``https://h/a,b.iso``) and common in a magnet's
+    ``dn`` name, so only a comma followed by a scheme separates two URIs; any other
+    comma stays in the URI it's in. Blank entries and stray commas at either end of
+    an entry are dropped.
+    """
+    pieces: list[str] = []
+    for piece in text.split(","):
+        if pieces and not _URI_START.match(piece):
+            pieces[-1] += "," + piece
+        else:
+            pieces.append(piece)
+    return [u for u in (p.strip(" \t\r\n,") for p in pieces) if u]
+
 
 async def create_download(
     client: DsmClient,
@@ -688,7 +712,7 @@ async def create_download(
         task_ids = [str(t) for t in data.get("task_id", [])]
         return f"{_created_message(task_ids, 1)} Source: file {path.name}.{note}"
 
-    uris = [u for u in (uri or "").split(",") if u]
+    uris = split_uris(uri or "")
     if not uris:
         error_response(
             ErrorCode.INVALID_PARAMETER,
@@ -726,7 +750,9 @@ async def create_download(
                 task_ids = [str(t) for t in data.get("task_id", [])]
                 return _created_message(task_ids, len(uris)) + note
 
-    v1_params: dict[str, str] = {"uri": ",".join(uris)}
+    # v1 takes one comma-separated string: a comma inside a URI goes as "\," (DSM keeps
+    # it as a plain comma; unescaped, the create fails), as in File Station paths (#397).
+    v1_params: dict[str, str] = {"uri": ",".join(u.replace(",", "\\,") for u in uris)}
     if destination is not None:
         v1_params["destination"] = destination
     if username is not None:

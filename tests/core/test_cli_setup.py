@@ -278,6 +278,17 @@ class TestSetupLogin:
         # Login + logout: 2 requests
         assert request.await_count == 2
 
+    async def test_setup_login_survives_a_failed_logout(self) -> None:
+        # A timeout on the logout used to exit setup with a connection error (#404).
+        import httpx
+
+        config = _make_test_app_config()
+        request = AsyncMock(side_effect=[{"sid": "test-sid"}, httpx.ReadTimeout("slow")])
+        client = self._make_client_cm(request)
+        with patch("mcp_synology.core.client.DsmClient", return_value=client):
+            await setup_mod._setup_login(config, "admin", "pw", "svc")
+        assert request.await_count == 2
+
     async def test_setup_login_failure_skips_logout(self) -> None:
         from mcp_synology.core.errors import SynologyError
 
