@@ -353,17 +353,43 @@ def _may_show(err: Any, loc_parts: list[str]) -> bool:
     return not (loc_parts and loc_parts[0] == "auth")
 
 
+def _section_keys(loc_parts: list[str]) -> list[str]:
+    """The keys the config section holding this location defines."""
+    models: dict[str, type[BaseModel]] = {
+        "connection": ConnectionConfig,
+        "auth": AuthConfig,
+        "logging": LoggingConfig,
+    }
+    if len(loc_parts) == 1:
+        model: type[BaseModel] = AppConfig
+    elif loc_parts[0] == "modules" and len(loc_parts) == 3:
+        model = ModuleConfig
+    else:
+        model = models.get(loc_parts[0], AppConfig)
+    return list(model.model_fields)
+
+
 def _shown_location(err: Any, loc_parts: list[str]) -> str:
-    """The error's location, except an unknown key under `auth:` that isn't a near-miss of
-    a real one: a password with a comma in a flow mapping (`{password: a,Hunter2x}`) is
-    split by YAML, and its second half arrives as a key (#386)."""
+    """The error's location, except an unknown key that may be part of a password.
+
+    YAML splits a value with a comma inside a flow mapping (`{password: a,Hunter2x}`): the
+    second half arrives as a key with no value, in any section (#386). So an unknown key
+    isn't named when it has no value, or when it's under `auth`, unless it's a near-miss of
+    a key its section defines (`htps`, `pasword`, `levle` are named). An unknown key with a
+    value elsewhere (`totally_unknown: x`) is named, as before.
+    """
     loc = ".".join(loc_parts) if loc_parts else "<root>"
-    if err.get("type") == "extra_forbidden" and loc_parts and loc_parts[0] == "auth":
+    if err.get("type") == "extra_forbidden" and loc_parts:
         key = loc_parts[-1]
-        if not difflib.get_close_matches(key, list(AuthConfig.model_fields), n=1, cutoff=0.75):
+        suspect = err.get("input") is None or loc_parts[0] == "auth"
+        if suspect and not difflib.get_close_matches(
+            key, _section_keys(loc_parts), n=1, cutoff=0.75
+        ):
+            where = ".".join(loc_parts[:-1])
             return (
-                "auth.<an unknown key, not shown: it may be part of a password; quote a "
-                "value with a comma inside {…}>"
+                (f"{where}." if where else "")
+                + "<an unknown key, not shown: it may be part of a password; quote a value "
+                "with a comma inside {…}>"
             )
     return loc
 

@@ -320,6 +320,46 @@ class TestAppConfig:
         assert "2x" not in message and "Hunter" not in message and "auth.y" not in message
         assert "auth.<an unknown key, not shown: it may be part of a password" in message
 
+    @pytest.mark.parametrize(
+        "body",
+        [
+            "connection: {host: nas, password: a,Hunter2x}\nmodules: {filestation: {}}\n",
+            "connection: {host: nas}\nmodules: {filestation: {}}\nlogging: {level: info}\n"
+            "auth: {username: a}\nextra: {password: a,Hunter2x}\n",
+            "connection: {host: nas}\nmodules: {filestation: {}}\nlogging: {file: a,Hunter2x}\n",
+            "connection: {host: nas}\nmodules: {filestation: {enabled: true, x: a,Hunter2x}}\n",
+        ],
+        ids=["connection", "top-level", "logging", "module"],
+    )
+    def test_a_comma_split_value_is_not_named_in_any_section(self, body: str) -> None:
+        import yaml
+        from pydantic import ValidationError
+
+        from mcp_synology.core.config import format_validation_error
+
+        raw = yaml.safe_load("schema_version: 1\n" + body)
+        if "extra" in raw:  # a whole flow-style document: `{…, password: a,Hunter2x}`
+            raw.update(raw.pop("extra"))
+        with pytest.raises(ValidationError) as exc:
+            AppConfig(**raw)
+        message = format_validation_error(exc.value)
+        assert "Hunter" not in message
+        assert "<an unknown key, not shown: it may be part of a password" in message
+
+    def test_an_unknown_key_with_a_value_is_still_named(self) -> None:
+        from pydantic import ValidationError
+
+        from mcp_synology.core.config import format_validation_error
+
+        raw = _minimal_raw()
+        raw["totally_unknown"] = "x"
+        raw["connection"]["proxy"] = "http://p"
+        with pytest.raises(ValidationError) as exc:
+            AppConfig(**raw)
+        message = format_validation_error(exc.value)
+        assert "  - totally_unknown: Extra inputs are not permitted" in message
+        assert "  - connection.proxy: Extra inputs are not permitted" in message
+
     def test_a_misspelled_auth_key_is_still_named(self) -> None:
         from pydantic import ValidationError
 
