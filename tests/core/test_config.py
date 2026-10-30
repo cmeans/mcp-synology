@@ -125,6 +125,52 @@ class TestAppConfig:
             AppConfig(**raw)
         assert "modules.filestation.permision" in format_validation_error(exc.value)
 
+    @pytest.mark.parametrize(
+        ("section", "key", "value"),
+        [
+            ("connection", "htps", True),
+            ("connection", "verfy_ssl", False),
+            ("auth", "pasword", "secret"),
+            ("logging", "levle", "debug"),
+        ],
+    )
+    def test_unknown_key_in_a_section_rejected(self, section: str, key: str, value: Any) -> None:
+        """#386: a typo inside connection, auth or logging is an error naming the key. It
+        was dropped: `htps: true` left `https` false, so the login went over plain HTTP."""
+        from pydantic import ValidationError
+
+        from mcp_synology.core.config import format_validation_error
+
+        raw = _minimal_raw()
+        raw.setdefault(section, {})[key] = value
+        with pytest.raises(ValidationError) as exc:
+            AppConfig(**raw)
+        message = format_validation_error(exc.value)
+        assert f"  - {section}.{key}: Extra inputs are not permitted" in message
+        # A typo under auth holds a credential: its value is never echoed.
+        assert ("(got " not in message) == (section == "auth")
+
+    @pytest.mark.parametrize(
+        ("raw_update", "secret"),
+        [
+            ({"auth": {"password": 12345678}}, "12345678"),
+            ({"auth": {"passwd": "hunter2"}}, "hunter2"),
+            ({"password": "hunter2"}, "hunter2"),
+            ({"connection": {"host": "nas", "api_token": "tok-1"}}, "tok-1"),
+        ],
+    )
+    def test_validation_error_never_echoes_a_credential(
+        self, raw_update: dict[str, Any], secret: str
+    ) -> None:
+        from pydantic import ValidationError
+
+        from mcp_synology.core.config import format_validation_error
+
+        raw = {**_minimal_raw(), **raw_update}
+        with pytest.raises(ValidationError) as exc:
+            AppConfig(**raw)
+        assert secret not in format_validation_error(exc.value)
+
     def test_invalid_instance_id_characters(self) -> None:
         raw = _minimal_raw()
         raw["instance_id"] = "bad_chars!"

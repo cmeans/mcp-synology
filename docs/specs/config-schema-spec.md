@@ -318,7 +318,7 @@ At startup, the config is validated with Pydantic. Validation failures produce c
 - `connection.port` is not a valid port number (1–65535)
 - `modules` is missing or empty, or no listed module is enabled (every module `enabled: false`). Either way the server would have no tools. The error names the listed modules and shows the fix (`filestation: {enabled: true}`); `check` and `setup` report it like any other config error (#168)
 - `instance_id` contains characters other than `a-z`, `0-9`, `-` (after lowercasing)
-- Unknown top-level keys (catch typos early — strict schema)
+- Unknown top-level keys, and unknown keys in `connection`, `auth`, `logging` or directly under `modules.<name>` (catch typos early — strict schema, #386)
 - `permission` value is not one of `read`, `write`, `admin`
 - `logging.level` value is not one of `debug`, `info`, `warning`, `error`
 - Module settings fail Pydantic validation (if the module provides a `settings_schema`)
@@ -520,9 +520,9 @@ SYNOLOGY_DEVICE_ID=AbCdEf123456
 
 ### 1. Strict vs Lenient Schema
 
-**Decision: Strict at top level, lenient within module settings.**
+**Decision: Strict everywhere except within module settings.**
 
-Unknown top-level keys are errors (catches typos like `conection` or `moduels`), and so are unknown keys directly under `modules.<name>` (`permision`). Unknown keys within `modules.*.settings`, and unknown module names, are warnings (allows modules to evolve their settings without the core schema needing updates).
+Unknown top-level keys are errors (catches typos like `conection` or `moduels`), and so are unknown keys in `connection`, `auth` and `logging` (`htps`, `verfy_ssl`, `pasword`, `levle`; #386) and directly under `modules.<name>` (`permision`). A dropped `htps: true` left `https` off, so the server logged in, password included, over plain HTTP while the user believed HTTPS was on. A validation error never echoes a value under `auth`, or under a key that names a credential (`password`, `token`, …), since a mistyped key there holds one. Unknown keys within `modules.*.settings`, and unknown module names, are warnings (allows modules to evolve their settings without the core schema needing updates).
 
 ### 2. Config File is Read-Only from Server Perspective
 

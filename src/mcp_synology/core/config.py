@@ -38,8 +38,13 @@ ENV_VAR_MAP: dict[str, str] = {
 }
 
 
-class ConnectionConfig(BaseModel):
-    """NAS connection settings."""
+class ConnectionConfig(BaseModel, extra="forbid"):
+    """NAS connection settings.
+
+    extra="forbid", as for every config section but module settings (#386): a typo
+    here is an error, not a dropped key. `htps: true` used to load with `https` false,
+    so the server logged in, password included, over plain HTTP.
+    """
 
     host: str
     port: int | None = None
@@ -48,8 +53,11 @@ class ConnectionConfig(BaseModel):
     timeout: int = Field(default=30, ge=1, le=600)
 
 
-class AuthConfig(BaseModel):
-    """Credentials that override the keyring; a password here is plaintext on disk."""
+class AuthConfig(BaseModel, extra="forbid"):
+    """Credentials that override the keyring; a password here is plaintext on disk.
+
+    extra="forbid" (#386): `pasword:` used to be dropped without a word.
+    """
 
     username: str | None = None
     password: str | None = None
@@ -70,8 +78,8 @@ class ModuleConfig(BaseModel, extra="forbid"):
     settings: dict[str, Any] = Field(default_factory=dict)
 
 
-class LoggingConfig(BaseModel):
-    """Logging configuration."""
+class LoggingConfig(BaseModel, extra="forbid"):
+    """Logging configuration. extra="forbid" (#386): `levle: debug` is an error."""
 
     level: Literal["debug", "info", "warning", "error"] = "info"
     file: str | None = None
@@ -318,6 +326,17 @@ def _synthesize_env_config() -> AppConfig | None:
     return config
 
 
+_SECRET_KEY = re.compile(r"pass|secret|token|otp|device_id|key", re.IGNORECASE)
+
+
+def _may_be_secret(loc_parts: list[str]) -> bool:
+    """Whether an error's value may be a credential, so it's never echoed: anything under
+    `auth:` (a typo such as `pasword:` holds the password, #386), or a key that names one."""
+    return bool(loc_parts) and (
+        loc_parts[0] == "auth" or any(_SECRET_KEY.search(part) for part in loc_parts)
+    )
+
+
 def format_validation_error(exc: Any) -> str:
     """Render a pydantic.ValidationError as a multi-line user-friendly block.
 
@@ -335,7 +354,10 @@ def format_validation_error(exc: Any) -> str:
         loc = ".".join(loc_parts) if loc_parts else "<root>"
         msg = err.get("msg", "validation error")
         input_value = err.get("input")
-        suffix = f" (got {input_value!r})" if input_value not in (None, "") else ""
+        if _may_be_secret(loc_parts):
+            suffix = ""
+        else:
+            suffix = f" (got {input_value!r})" if input_value not in (None, "") else ""
         lines.append(f"  - {loc}: {msg}{suffix}")
     return "\n".join(lines)
 
