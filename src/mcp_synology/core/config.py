@@ -375,8 +375,8 @@ _SECTION_MODELS: dict[str, type[BaseModel]] = {
     "logging": LoggingConfig,
 }
 
-# Conditional: pydantic's error doesn't say whether the key had a value, and only a valueless
-# one can come from a comma split (QA round 4 on #469).
+# Conditional: a comma split can leave a key with or without a value (`a,B: x` gives `B: x`),
+# so the hint says when it applies (QA rounds 4 and 5 on #469).
 _NOT_TEXT_KEY = (
     "<a key that isn't text, not shown: it may be part of a password; if a value with a "
     "comma inside {…} was split there, quote that value>"
@@ -443,11 +443,12 @@ def _shown_location(
         return (f"{where}." if where else "") + _NOT_TEXT_KEY
     if err.get("type") == "extra_forbidden" and loc_parts:
         key = loc_parts[-1]
-        # Only a key with no value can be a comma-split fragment of a value (QA round 4).
-        valueless = err.get("input") is None
-        suspect = valueless or loc_parts[0] == "auth"
+        suspect = err.get("input") is None or loc_parts[0] == "auth"
         valid = _section_keys(loc_parts)
         if suspect:
+            # A comma split can leave a fragment with a value too (`{password: a,B: x}` gives
+            # `B: x`), so the hint is conditional, never left out (QA rounds 4 and 5 on #469).
+            split = "if a comma inside {…} split a value there, quote that value"
             where = ".".join(loc_parts[:-1])
             by_lower = {k.lower(): k for k in valid}
             close = difflib.get_close_matches(key.lower(), list(by_lower), n=1, cutoff=0.75)
@@ -456,15 +457,12 @@ def _shown_location(
                 # `Password1`, close to `password` (QA round 2 on #469).
                 return (f"{where}." if where else "") + (
                     f'<an unknown key close to "{by_lower[close[0]]}", not shown since it may '
-                    "be part of a password (a misspelling"
-                    + (", or a comma inside {…} splitting a value: quote it" if valueless else "")
-                    + ")>"
+                    f"be part of a password (a misspelling, or, {split})>"
                 )
             return (
                 (f"{where}." if where else "")
-                + "<an unknown key, not shown since it may hold or be part of a password"
-                + (" (a comma inside {…} splits a value into a key)" if valueless else "")
-                + f"; valid keys here: {', '.join(sorted(valid))}>"
+                + "<an unknown key, not shown since it may hold or be part of a password; "
+                + f"{split}; valid keys here: {', '.join(sorted(valid))}>"
             )
     return loc
 

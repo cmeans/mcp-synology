@@ -148,11 +148,12 @@ class TestAppConfig:
         message = format_validation_error(exc.value)
         # An unknown key's value could be a misplaced credential: never echoed. Under
         # auth the key itself may be half a password: named by the real key it's close to
-        # (QA round 2 on #469). It has a value, so it can't be a comma-split fragment: no
-        # "quote it" hint (QA round 4).
+        # (QA round 2 on #469). The quoting hint is conditional: a comma split can leave a
+        # fragment with a value too (QA round 5).
         shown = (
             'auth.<an unknown key close to "password", not shown since it may be part of a '
-            "password (a misspelling)>"
+            "password (a misspelling, or, if a comma inside {…} split a value there, quote "
+            "that value)>"
             if section == "auth"
             else f"{section}.{key}"
         )
@@ -335,8 +336,8 @@ class TestAppConfig:
         message = format_validation_error(exc.value)
         assert "2x" not in message and "Hunter" not in message and "auth.y" not in message
         assert (
-            "auth.<an unknown key, not shown since it may hold or be part of a password (a "
-            "comma inside {…} splits a value into a key); valid keys here: device_id, "
+            "auth.<an unknown key, not shown since it may hold or be part of a password; if a "
+            "comma inside {…} split a value there, quote that value; valid keys here: device_id, "
             "password, username>" in message
         )
 
@@ -377,8 +378,8 @@ class TestAppConfig:
             AppConfig(**raw)
         assert (
             '  - modules.filestation.<an unknown key close to "permission", not shown since it '
-            "may be part of a password (a misspelling, or a comma inside {…} splitting a value: "
-            "quote it)>: Extra inputs are not permitted"
+            "may be part of a password (a misspelling, or, if a comma inside {…} split a value "
+            "there, quote that value)>: Extra inputs are not permitted"
         ) in (format_validation_error(exc.value))
 
     def test_a_near_miss_in_another_case_names_the_key_it_is_close_to(self) -> None:
@@ -393,26 +394,48 @@ class TestAppConfig:
             AppConfig(**raw)
         assert (
             '  - auth.<an unknown key close to "username", not shown since it may be part of a '
-            "password (a misspelling)>: Extra inputs are not permitted"
+            "password (a misspelling, or, if a comma inside {…} split a value there, quote "
+            "that value)>: Extra inputs are not permitted"
         ) in (format_validation_error(exc.value))
 
-    def test_an_auth_key_with_a_value_and_no_near_miss_gets_no_comma_hint(self) -> None:
-        """`pwd: x` has a value, so no comma split made it (QA round 4 on #469): the valid
-        keys, without the comma clause."""
+    @pytest.mark.parametrize(
+        ("auth", "shown"),
+        [
+            # A key with a value and no near-miss: the valid keys.
+            (
+                "{pwd: Hunter2x}",
+                "auth.<an unknown key, not shown since it may hold or be part of a password; if "
+                "a comma inside {…} split a value there, quote that value; valid keys here: "
+                "device_id, password, username>",
+            ),
+            # A comma split that leaves a fragment with a value (`Spring,Password1: x` gives
+            # `Password1: x`): the quoting hint still shows (QA round 5 on #469).
+            (
+                "{username: me, password: Spring,Password1: x}",
+                'auth.<an unknown key close to "password", not shown since it may be part of a '
+                "password (a misspelling, or, if a comma inside {…} split a value there, quote "
+                "that value)>",
+            ),
+        ],
+        ids=["no-near-miss", "split-with-a-value"],
+    )
+    def test_an_auth_key_with_a_value_gets_the_conditional_comma_hint(
+        self, auth: str, shown: str
+    ) -> None:
+        import yaml
         from pydantic import ValidationError
 
         from mcp_synology.core.config import format_validation_error
 
-        raw = _minimal_raw()
-        raw["auth"] = {"pwd": "Hunter2x"}
+        raw = yaml.safe_load(
+            "schema_version: 1\nconnection: {host: nas}\n"
+            f"auth: {auth}\nmodules: {{filestation: {{enabled: true}}}}\n"
+        )
         with pytest.raises(ValidationError) as exc:
             AppConfig(**raw)
         message = format_validation_error(exc.value)
-        assert (
-            "  - auth.<an unknown key, not shown since it may hold or be part of a password; "
-            "valid keys here: device_id, password, username>: Extra inputs are not permitted"
-        ) in message
-        assert "Hunter" not in message and "pwd" not in message
+        assert f"  - {shown}: Extra inputs are not permitted" in message
+        assert "Hunter" not in message and "pwd" not in message and "Password1" not in message
 
     @pytest.mark.parametrize(
         "modules",
