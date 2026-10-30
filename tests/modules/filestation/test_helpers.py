@@ -269,6 +269,48 @@ class TestMatchesPattern:
     def test_wildcard(self) -> None:
         assert matches_pattern("Severance.S02E10.mkv", "*Severance*")
 
+    def test_question_mark_is_one_character(self) -> None:
+        assert matches_pattern("ep1.mkv", "ep?.mkv")
+        assert not matches_pattern("ep10.mkv", "ep?.mkv")
+
+    def test_brackets_match_themselves(self) -> None:
+        # #396: fnmatch read [...] as a character class.
+        assert matches_pattern("[a]x.mkv", "[a]x.mkv")
+        assert not matches_pattern("ax.mkv", "*[a]*")
+        assert not matches_pattern("Show.1080.mkv", "*[1080p]*")
+        assert matches_pattern("Show [1080p].mkv", "*[1080p]*")
+
+    def test_other_regex_characters_match_themselves(self) -> None:
+        assert matches_pattern("a+b (1).txt", "a+b (1).txt")
+        assert not matches_pattern("aab (1).txt", "a+b (1).txt")
+        assert matches_pattern("x.y", "x.y")
+        assert not matches_pattern("xzy", "x.y")
+
+    def test_bare_word_matches_only_the_whole_name(self) -> None:
+        # The tool description says so: unlike DSM's `pattern`, no "anywhere" match.
+        assert not matches_pattern("Show.sample.mkv", "sample")
+        assert matches_pattern("sample", "SAMPLE")
+
+    def test_comma_is_one_pattern_not_alternatives(self) -> None:
+        assert not matches_pattern("a.nfo", "*.nfo,*.txt")
+        assert not matches_pattern("a.txt", "*.nfo,*.txt")
+        assert matches_pattern("a.nfo,b.txt", "*.nfo,*.txt")
+
+    def test_many_stars_do_not_backtrack(self) -> None:
+        # QA round 1 on #459: a regex with one `.*` per `*` took 427 ms per 100-character
+        # name for `*a*a*a*a*b`, and grows with each star; fnmatch's translation doesn't.
+        import time
+
+        # Sized so the old matcher fails in about 2 s instead of hanging (QA round 2).
+        start = time.perf_counter()
+        for _ in range(5):
+            assert not matches_pattern("a" * 100, "*a*a*a*a*b")
+        assert time.perf_counter() - start < 0.5
+
+    def test_star_spans_a_newline(self) -> None:
+        # As fnmatch did: a name with a newline still matches "*".
+        assert matches_pattern("a\nb.txt", "a*.txt")
+
 
 # ---------- Recycle-bin probe + self-correct (closes #37) ----------
 

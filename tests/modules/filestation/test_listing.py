@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import httpx
 import pytest
@@ -412,8 +412,194 @@ class TestListFiles:
             }
         )
         result = await list_files(mock_client, path="/video", hide_recycle=True)
-        assert "#recycle" not in result
+        assert "#recycle" not in result.replace("(#recycle hidden)", "")
         assert "real_file.txt" in result
+        # #389: the hidden entry isn't counted, and nothing more is promised.
+        assert "(1 items)" in result
+        assert "Showing 1 of 1 items (#recycle hidden)." in result
+        assert "offset=" not in result
+
+    @staticmethod
+    def _page(names: list[str], total: int) -> dict[str, Any]:
+        files = [{"name": n, "isdir": n == "#recycle", "additional": {}} for n in names]
+        return {"success": True, "data": {"files": files, "total": total}}
+
+    @classmethod
+    def _folder(cls, names: list[str], calls: list[str] | None = None) -> Any:
+        """A folder DSM pages by offset and limit, and answers getinfo on."""
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = request.url.params
+            if calls is not None:
+                calls.append(params["method"])
+            if params["method"] == "getinfo":
+                name = params["path"].rsplit("/", 1)[-1]
+                entry = {"name": name, "isdir": True} if name in names else {"code": 408}
+                return httpx.Response(200, json={"success": True, "data": {"files": [entry]}})
+            start, limit = int(params["offset"]), int(params["limit"])
+            page = names[start : start + limit] if limit else names[start:]
+            return httpx.Response(200, json=cls._page(page, total=len(names)))
+
+        return side_effect
+
+    async def _pages(self, client: DsmClient, limit: int, **kwargs: Any) -> list[str]:
+        """Follow the next-page hints to the end; return every reply."""
+        replies, offset = [], 0
+        while True:
+            reply = await list_files(client, path="/video", limit=limit, offset=offset, **kwargs)
+            replies.append(reply)
+            hint = re.search(r"Use offset=(\d+)", reply)
+            if not hint:
+                return replies
+            offset = int(hint.group(1))
+
+    @respx.mock
+    @pytest.mark.parametrize("limit", [1, 2, 3, 4, 5])
+    @pytest.mark.parametrize("where", [0, 2, 4])
+    async def test_hidden_recycle_pages_every_item_once(
+        self, mock_client: DsmClient, limit: int, where: int
+    ) -> None:
+        # #389: the next-page hint came one short (repeating an item), and a #recycle at
+        # the end of a page promised a page that turned out empty. The total said 5 on
+        # one page and 4 on another.
+        names = [f"f{i}.txt" for i in range(4)]
+        names.insert(where, "#recycle")
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._folder(names))
+        replies = await self._pages(mock_client, limit, hide_recycle=True)
+        seen = [n for r in replies for n in re.findall(r"f\d\.txt", r)]
+        assert seen == ["f0.txt", "f1.txt", "f2.txt", "f3.txt"]
+        assert all("(4 items)" in r and "of 4 items (#recycle hidden)" in r for r in replies)
+        assert all("#recycle" not in r.replace("(#recycle hidden)", "") for r in replies)
+        # Without a range, a later page says it's the last one (pre-QA on QA round 1).
+        if len(replies) > 1:
+            assert replies[-1].endswith("(#recycle hidden). Last page.")
+        assert all("Last page." not in r for r in replies[:-1])
+
+    @respx.mock
+    async def test_recycle_check_only_where_it_can_be(self, mock_client: DsmClient) -> None:
+        calls: list[str] = []
+        names = ["a.txt", "b.txt", "#recycle"]
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._folder(names, calls))
+        # Below the top level, filtered to files, or with a pattern #recycle can't match.
+        await list_files(mock_client, path="/video/sub", limit=1, hide_recycle=True)
+        await list_files(mock_client, path="/video", limit=1, filetype="file", hide_recycle=True)
+        await list_files(mock_client, path="/video", limit=1, pattern="*.txt", hide_recycle=True)
+        await list_files(mock_client, path="/video", limit=1)
+        assert calls == ["list"] * 4
+        result = await list_files(mock_client, path="/video", limit=1, hide_recycle=True)
+        assert calls[4:] == ["list", "getinfo"]
+        assert "Showing 1 of 2 items (#recycle hidden). Use offset=1 to see more." in result
+
+    @respx.mock
+    async def test_no_recycle_at_the_top_level(self, mock_client: DsmClient) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._folder(["a.txt", "b.txt", "c.txt"])
+        )
+        result = await list_files(mock_client, path="/video", limit=2, hide_recycle=True)
+        assert "Showing 1–2 of 3 items. Use offset=2 to see more." in result
+
+    @respx.mock
+    async def test_failed_recycle_check_still_lists(self, mock_client: DsmClient) -> None:
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            if request.url.params["method"] == "getinfo":
+                return httpx.Response(502)
+            return httpx.Response(200, json=self._page(["a.txt", "b.txt"], total=3))
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        result = await list_files(mock_client, path="/video", limit=1, hide_recycle=True)
+        assert "a.txt" in result and "b.txt" not in result
+        # A #recycle may be hidden, so no range: QA round 2 on #459.
+        assert result.endswith(
+            "Showing 1 of 3 items (the total may include a hidden #recycle: the check for it "
+            "failed). Use offset=1 to see more."
+        )
+
+    @respx.mock
+    @pytest.mark.parametrize("getinfo", ["502", "407"])
+    async def test_an_unknown_check_on_a_later_page(
+        self, mock_client: DsmClient, getinfo: str
+    ) -> None:
+        # Pre-QA on QA round 2: a failed check, or one that shows neither (a per-entry 407),
+        # gives the caveat on a later page too, never a range over DSM's total.
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = request.url.params
+            if params["method"] == "getinfo":
+                if getinfo == "502":
+                    return httpx.Response(502)
+                return httpx.Response(
+                    200, json={"success": True, "data": {"files": [{"code": 407}]}}
+                )
+            return httpx.Response(200, json=self._page(["c.txt"], total=4))
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        result = await list_files(mock_client, path="/video", offset=3, limit=5, hide_recycle=True)
+        assert result.endswith(
+            "Showing 1 of 4 items (the total may include a hidden #recycle: the check for it "
+            "failed). Last page."
+        )
+
+    @respx.mock
+    async def test_an_unknown_check_past_the_end(self, mock_client: DsmClient) -> None:
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            if request.url.params["method"] == "getinfo":
+                return httpx.Response(502)
+            return httpx.Response(200, json=self._page([], total=4))
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        result = await list_files(mock_client, path="/video", offset=9, hide_recycle=True)
+        assert result.endswith(
+            "No items from offset=9: there are 4 (the total may include a hidden #recycle: the "
+            "check for it failed)."
+        )
+
+    @respx.mock
+    async def test_only_recycle_is_an_empty_folder(self, mock_client: DsmClient) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._folder(["#recycle"]))
+        result = await list_files(mock_client, path="/video", limit=1, hide_recycle=True)
+        assert "(0 items)" in result and "offset=" not in result
+
+    @respx.mock
+    async def test_page_of_only_recycle_points_past_it(self, mock_client: DsmClient) -> None:
+        # /video/. reaches the top level without the extra entry, so a page can hold only
+        # the hidden #recycle: the empty page still points to the next one, after it.
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._folder(["#recycle", "a.txt", "b.txt"])
+        )
+        result = await list_files(mock_client, path="/video/.", limit=1, hide_recycle=True)
+        assert "Contents of /video/. (2 items)" in result
+        assert result.endswith("Use offset=1 to see more.")
+
+    @respx.mock
+    async def test_recycle_hidden_on_any_path_that_lists_it(self, mock_client: DsmClient) -> None:
+        # /video/. lists the share's top level; #recycle stays hidden there too.
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json=self._page(["#recycle", "a.txt"], total=2)
+        )
+        result = await list_files(mock_client, path="/video/.", hide_recycle=True)
+        assert "#recycle" not in result.replace("(#recycle hidden)", "")
+        assert "Showing 1 of 1 items (#recycle hidden)." in result
+
+    @respx.mock
+    async def test_offset_past_the_end_says_so(self, mock_client: DsmClient) -> None:
+        # #389: it used to be just "No items to display".
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(json=self._page([], total=5))
+        result = await list_files(mock_client, path="/video", offset=9)
+        assert "No items from offset=9: there are 5." in result
+        # The title gives the folder's total, as on every other page, not "(0 items)".
+        assert "Contents of /video (5 items)" in result
+
+    @respx.mock
+    async def test_negative_offset_is_clamped(self, mock_client: DsmClient) -> None:
+        captured: list[dict[str, str]] = []
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            captured.append(dict(request.url.params))
+            return httpx.Response(200, json=self._page(["a.txt", "b.txt"], total=5))
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        result = await list_files(mock_client, path="/video", offset=-1, limit=2)
+        assert captured[0]["offset"] == "0"
+        assert "Showing 1–2 of 5 items. Use offset=2 to see more." in result
 
     @respx.mock
     async def test_list_files_pagination(self, mock_client: DsmClient) -> None:

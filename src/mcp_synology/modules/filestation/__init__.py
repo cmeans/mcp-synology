@@ -664,8 +664,10 @@ def register(ctx: "RegisterContext") -> None:
                 Field(
                     description=(
                         "Wildcard pattern for names to leave out (`*.torrent`), case-insensitive. "
-                        "Applied to the results DSM returns, so a reply can hold fewer than "
-                        "`limit`."
+                        "Only `*` and `?` are wildcards: a bare word (`sample`) matches only that "
+                        "exact name, unlike `pattern`, and `[...]` and commas match themselves "
+                        "(`*.nfo,*.txt` is one pattern). Applied to the results DSM returns, so "
+                        "a reply can hold fewer than `limit`."
                     )
                 ),
             ] = None,
