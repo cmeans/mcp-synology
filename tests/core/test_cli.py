@@ -1284,10 +1284,19 @@ class TestCheckLogin:
                 "or invalidated on the NAS).",
                 {},
                 {"SYNOLOGY_DEVICE_ID": "envtoken"},
-                "The device token comes from SYNOLOGY_DEVICE_ID in the server's environment",
+                # check reads the shell's environment (QA round 3 on #461).
+                "The device token comes from SYNOLOGY_DEVICE_ID in this shell's environment, "
+                "which overrides the keyring",
+            ),
+            (
+                401,
+                "Disabled account",
+                {},
+                {},
+                "Authentication failed: Disabled account. Check username and password.",
             ),
         ],
-        ids=["400-keyring", "400-config", "403-config-token", "403-env-token"],
+        ids=["400-keyring", "400-config", "403-config-token", "403-env-token", "401"],
     )
     async def test_check_login_prints_dsm_s_own_refusal(
         self,

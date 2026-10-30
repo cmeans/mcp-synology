@@ -1389,6 +1389,42 @@ class TestRefusalSuggestion:
         sources = {"username": KEYRING, "password": "auth.password in the config file"}
         assert refusal_advice(code, first, {**sources, "device_id": None}) == expected
 
+    @pytest.mark.parametrize(
+        ("code", "first", "expected"),
+        [
+            (401, "Contact your NAS administrator", "Contact your NAS administrator"),
+            (401, "", "The account is disabled in DSM"),
+            (402, "Not allowed", "Not allowed"),
+            (None, "", "Check the credentials"),
+        ],
+    )
+    def test_cli_advice_has_no_server_sentences(
+        self, code: int | None, first: str, expected: str
+    ) -> None:
+        """`check` runs once: no "picks it up", no restart (QA round 3 on #461)."""
+        from mcp_synology.core.auth import KEYRING, refusal_advice
+
+        sources = {"username": KEYRING, "password": KEYRING, "device_id": None}
+        assert refusal_advice(code, first, sources, cli=True) == expected
+
+    @respx.mock
+    async def test_2fa_without_a_token_says_setup_once(self) -> None:
+        """The no-token 403's message leaves the fix to the suggestion, so the two don't
+        give two setup instructions (QA round 3 on #461)."""
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 403}}
+        )
+        async with _make_client() as client:
+            auth = AuthManager(_make_config(auth={"username": "a", "password": "b"}), client)
+            with (
+                patch.dict(os.environ, _clean_env(), clear=True),
+                patch("mcp_synology.core.auth.kr", _no_keyring()),
+                pytest.raises(AuthenticationError) as exc,
+            ):
+                await auth.login()
+        text = f"{exc.value} {exc.value.suggestion}"
+        assert text.count("mcp-synology setup") == 1
+
     def test_check_tests_the_login_once(self) -> None:
         """A model with a shell could loop on `check`, which has no remembered refusal:
         the suggestion says once, and why (pre-QA on QA round 2, #461)."""
@@ -1490,6 +1526,29 @@ class TestWaitersShareAFailedLogin:
             assert isinstance(kept, httpx.ConnectError)
             assert b"Hx7q" not in kept.request.read()
             assert (kept.request.method, kept.request.url) == (login.method, login.url)
+
+    async def test_a_failed_relogin_by_transport_is_logged(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Only the error's type: its text can quote the request (QA round 3 on #461)."""
+        import logging
+
+        async def failing_reauth() -> None:
+            raise httpx.ConnectError("refused to nas:5001 with secret-ish text")
+
+        async with _make_client() as client:
+            client.set_re_auth_callback(failing_reauth)
+            client.sid = "old-sid"
+            with (
+                caplog.at_level(logging.WARNING, logger="mcp_synology.core.client"),
+                pytest.raises(httpx.ConnectError),
+            ):
+                await client._re_authenticate(119, "SYNO.FileStation.List", "old-sid")
+        assert (
+            "Session error 119 on SYNO.FileStation.List; logging in again failed: ConnectError"
+            in caplog.text
+        )
+        assert "secret-ish" not in caplog.text
 
     async def test_a_canceled_login_leaves_waiters_to_try(self) -> None:
         # An earlier failure is not handed to requests that waited on a later, canceled

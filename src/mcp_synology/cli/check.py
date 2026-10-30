@@ -203,7 +203,7 @@ async def _check_login(config: object) -> None:
                     hint = refusal_advice(
                         dsm.code,
                         (dsm.suggestion or "").rstrip("."),
-                        credential_sources(config),
+                        credential_sources(config, cli=True),
                         cli=True,
                     )
                     e = dsm

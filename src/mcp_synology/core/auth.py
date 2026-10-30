@@ -168,7 +168,7 @@ def resolve_credentials(config: AppConfig) -> tuple[str, str, str | None]:
 KEYRING = "the keyring"
 
 
-def credential_sources(config: AppConfig) -> dict[str, str | None]:
+def credential_sources(config: AppConfig, *, cli: bool = False) -> dict[str, str | None]:
     """Where each credential comes from, in `resolve_credentials`' order: an environment
     variable, a config-file key, the keyring (``KEYRING``), or None for a device token
     that isn't set anywhere but the keyring. `setup` writes only the keyring, so a
@@ -182,7 +182,12 @@ def credential_sources(config: AppConfig) -> dict[str, str | None]:
         ("device_id", "SYNOLOGY_DEVICE_ID"),
     ):
         if _present_or_none(os.environ.get(var)):
-            sources[key] = f"{var} in the server's environment (the MCP client's config)"
+            # `check` reads the shell's environment, the server its MCP client's config.
+            sources[key] = (
+                f"{var} in this shell's environment"
+                if cli
+                else f"{var} in the server's environment (the MCP client's config)"
+            )
         elif _present_or_none(getattr(config.auth, key)):
             sources[key] = f"auth.{key} in the config file"
         else:
@@ -438,10 +443,8 @@ class AuthManager:
                     )
                 else:
                     logger.debug("Login failed: 2FA required but no device token available")
-                    message = (
-                        "2FA is required but no device token is available. "
-                        "Run 'mcp-synology setup' to complete 2FA bootstrap."
-                    )
+                    # The refusal's suggestion says to run setup (QA round 3 on #461).
+                    message = "2FA is required but no device token is available."
                 raise AuthenticationError(
                     message,
                     code=_ERROR_2FA_REQUIRED,
@@ -502,7 +505,7 @@ class AuthManager:
         """
         async with self._lock:
             # DEBUG: a remembered refusal answers without a login; a real one logs
-            # "Authenticated as" at INFO, and a failure is logged by the client.
+            # "Authenticated as" at INFO, and any other failure is logged by the client.
             logger.debug("Re-authenticating session '%s'.", self._session_name)
             await self.login()
             # NOTE: callbacks fire INSIDE `self._lock`. Per `add_on_reauth_callback`'s

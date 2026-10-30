@@ -343,6 +343,15 @@ class DsmClient:
                     logger.warning(
                         "Session error %d on %s; logging in again failed: %s", code, api, e
                     )
+                elif not isinstance(e, SynologyError):
+                    # A transport error or anything unexpected: its type only, since its
+                    # text can quote the request (QA round 3 on #461).
+                    logger.warning(
+                        "Session error %d on %s; logging in again failed: %s",
+                        code,
+                        api,
+                        type(e).__name__,
+                    )
                 raise
             finally:
                 self._login_attempts += 1
