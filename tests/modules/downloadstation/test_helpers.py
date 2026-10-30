@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from mcp.server.mcpserver.exceptions import ToolError
 
@@ -176,6 +178,25 @@ class TestNormalizeDestination:
     def test_no_share_left_is_invalid(self, given: str) -> None:
         with pytest.raises(ToolError, match="destination"):
             normalize_destination(given, operation="Edit download")
+
+    @pytest.mark.parametrize(
+        "given", ["writable/..", "/writable/../video", "./writable", "video/./x"]
+    )
+    def test_dot_parts_are_invalid(self, given: str) -> None:
+        # #449: as in File Station's paths.
+        with pytest.raises(ToolError) as exc_info:
+            normalize_destination(given, operation="Edit download", param="default_destination")
+        error = json.loads(str(exc_info.value))["error"]
+        assert (error["code"], error["param"], error["value"]) == (
+            "invalid_parameter",
+            "default_destination",
+            given,
+        )
+
+    def test_dots_inside_a_name_pass(self) -> None:
+        assert normalize_destination("video/.hidden/a..b", operation="Edit download") == (
+            "video/.hidden/a..b"
+        )
 
 
 class TestStatusGroups:

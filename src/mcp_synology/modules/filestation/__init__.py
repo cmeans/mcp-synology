@@ -551,7 +551,7 @@ def register(ctx: "RegisterContext") -> None:
             ] = 0,
         ) -> str:
             client = await _fs_client()
-            [share] = await ensure_known_shares(client, [share], known_shares)
+            [share] = await ensure_known_shares(client, [share], known_shares, "share")
             return _reply(
                 await list_recycle_bin(
                     client,
@@ -649,7 +649,9 @@ def register(ctx: "RegisterContext") -> None:
             ] = 500,
         ) -> str:
             client = await _fs_client()
-            [folder_path] = await ensure_known_shares(client, [folder_path], known_shares)
+            [folder_path] = await ensure_known_shares(
+                client, [folder_path], known_shares, "folder_path"
+            )
             return _reply(
                 await search_files(
                     client,
@@ -694,7 +696,7 @@ def register(ctx: "RegisterContext") -> None:
             ] = None,
         ) -> str:
             client = await _fs_client()
-            paths = await ensure_known_shares(client, paths, known_shares)
+            paths = await ensure_known_shares(client, paths, known_shares, "paths")
             return _reply(await get_file_info(client, paths=paths, additional=additional))
 
     if "get_dir_size" in ctx.allowed_tools:
@@ -819,7 +821,7 @@ def register(ctx: "RegisterContext") -> None:
             ] = True,
         ) -> str:
             client = await _fs_client()
-            paths = await ensure_known_shares(client, paths, known_shares)
+            paths = await ensure_known_shares(client, paths, known_shares, "paths")
             result = await create_folder(client, paths=paths, force_parent=force_parent)
             return _reply(result)
 
@@ -871,7 +873,10 @@ def register(ctx: "RegisterContext") -> None:
         ) -> str:
             client = await _fs_client()
             *paths, dest_folder = await ensure_known_shares(
-                client, [*paths, dest_folder], known_shares
+                client,
+                [*paths, dest_folder],
+                known_shares,
+                [*(["paths"] * len(paths)), "dest_folder"],
             )
             return _reply(
                 await copy_files(
@@ -913,7 +918,10 @@ def register(ctx: "RegisterContext") -> None:
         ) -> str:
             client = await _fs_client()
             *paths, dest_folder = await ensure_known_shares(
-                client, [*paths, dest_folder], known_shares
+                client,
+                [*paths, dest_folder],
+                known_shares,
+                [*(["paths"] * len(paths)), "dest_folder"],
             )
             return _reply(
                 await move_files(
@@ -956,7 +964,7 @@ def register(ctx: "RegisterContext") -> None:
             ] = True,
         ) -> str:
             client = await _fs_client()
-            paths = await ensure_known_shares(client, paths, known_shares)
+            paths = await ensure_known_shares(client, paths, known_shares, "paths")
             return _reply(
                 await delete_files(
                     client,
@@ -1032,7 +1040,9 @@ def register(ctx: "RegisterContext") -> None:
                 )
 
             client = await _fs_client()
-            [effective_dest] = await ensure_known_shares(client, [effective_dest], known_shares)
+            [effective_dest] = await ensure_known_shares(
+                client, [effective_dest], known_shares, "dest_folder"
+            )
 
             async def _progress(current: int, total: int | None) -> None:
                 await ctx.report_progress(float(current), float(total) if total else None)
@@ -1100,7 +1110,10 @@ def register(ctx: "RegisterContext") -> None:
         ) -> str:
             client = await _fs_client()
             share, *dest = await ensure_known_shares(
-                client, [share, *([dest_folder] if dest_folder else [])], known_shares
+                client,
+                [share, *([dest_folder] if dest_folder else [])],
+                known_shares,
+                ["share", *(["dest_folder"] if dest_folder else [])],
             )
             dest_folder = dest[0] if dest else None
             return _reply(

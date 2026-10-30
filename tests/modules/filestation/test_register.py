@@ -176,7 +176,7 @@ class TestFilestationToolInvocation:
         # These tests cover the closures' plumbing; share validation (#160) has its own.
         monkeypatch.setattr(
             "mcp_synology.modules.filestation.helpers.ensure_known_shares",
-            AsyncMock(side_effect=lambda _client, paths, _cache: list(paths)),
+            AsyncMock(side_effect=lambda _client, paths, _cache, *_params: list(paths)),
         )
 
     @staticmethod
@@ -635,7 +635,9 @@ async def test_tools_send_the_share_name_as_listed(
     """#353: every handler hands on the paths ensure_known_shares returns, in order."""
     from mcp_synology.modules.filestation.helpers import _with_listed_share_name
 
-    async def listed(_client: object, paths: list[str], _cache: set[str]) -> list[str]:
+    async def listed(
+        _client: object, paths: list[str], _cache: set[str], *_params: object
+    ) -> list[str]:
         return [_with_listed_share_name(p, {"video", "home"}) for p in paths]
 
     monkeypatch.setattr("mcp_synology.modules.filestation.helpers.ensure_known_shares", listed)
@@ -758,7 +760,7 @@ class TestFileTaskAndHandoff:
     def _shares_known(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
             "mcp_synology.modules.filestation.helpers.ensure_known_shares",
-            AsyncMock(side_effect=lambda _client, paths, _cache: list(paths)),
+            AsyncMock(side_effect=lambda _client, paths, _cache, *_params: list(paths)),
         )
 
     def test_file_task_registered_write_only(self) -> None:

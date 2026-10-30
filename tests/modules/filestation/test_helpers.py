@@ -534,6 +534,73 @@ class TestEnsureKnownShares:
         assert "list_shares" in body["error"]["message"]
 
     @respx.mock
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/writable/..",
+            "/writable/../testshare/x",
+            "/writable/.",
+            "/writable/./",
+            "writable/sub/../x",
+            "/..",
+            "/./writable",
+        ],
+    )
+    async def test_dot_parts_are_refused_before_dsm(
+        self, mock_client: DsmClient, path: str
+    ) -> None:
+        # #449: DSM refuses them too (418), but only after the share check, which read
+        # just the first part. Nothing is sent, even when the share list is cached.
+        calls: list[str] = []
+        self._route([["testshare", "writable"]], calls)
+        with pytest.raises(ToolError) as exc_info:
+            await ensure_known_shares(mock_client, ["/testshare/ok", path], set(), "paths")
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "invalid_parameter"
+        assert error["param"] == "paths"
+        assert error["value"] == path
+        assert error["message"] == f"Invalid path '{path}': '.' and '..' parts aren't allowed."
+        assert calls == []
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        "path", ["/writable/.hidden", "/writable/a..b", "/writable/...", "/writable/x."]
+    )
+    async def test_dots_inside_a_name_pass(self, mock_client: DsmClient, path: str) -> None:
+        calls: list[str] = []
+        self._route([["testshare", "writable"]], calls)
+        assert await ensure_known_shares(mock_client, [path], set()) == [path]
+
+    @respx.mock
+    async def test_errors_name_each_paths_argument(self, mock_client: DsmClient) -> None:
+        # copy_files and move_files check paths and dest_folder together: an error names
+        # the one at fault (not_found used to say "path" for every argument).
+        calls: list[str] = []
+        self._route([["testshare", "writable"], ["testshare", "writable"]], calls)
+        params = ["paths", "paths", "dest_folder"]
+        with pytest.raises(ToolError) as exc_info:
+            await ensure_known_shares(
+                mock_client, ["/testshare/a", "/writable/b", "/writable/../x"], set(), params
+            )
+        assert json.loads(str(exc_info.value))["error"]["param"] == "dest_folder"
+        with pytest.raises(ToolError) as exc_info:
+            await ensure_known_shares(
+                mock_client, ["/testshare/a", "/writable/b", "/nope/x"], set(), params
+            )
+        error = json.loads(str(exc_info.value))["error"]
+        assert (error["code"], error["param"]) == ("not_found", "dest_folder")
+
+    @respx.mock
+    async def test_dot_parts_refused_when_shares_cannot_be_listed(
+        self, mock_client: DsmClient
+    ) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 105}}
+        )
+        with pytest.raises(ToolError, match="'.' and '..' parts"):
+            await ensure_known_shares(mock_client, ["/video/.."], set())
+
+    @respx.mock
     async def test_known_share_passes_and_cache_is_reused(self, mock_client: DsmClient) -> None:
         calls: list[str] = []
         self._route([["testshare", "writable"]], calls)

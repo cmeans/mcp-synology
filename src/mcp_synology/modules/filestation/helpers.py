@@ -586,10 +586,37 @@ def _with_listed_share_name(path: str, known_shares: set[str]) -> str:
     return "/".join(["", listed, *parts[2:]])
 
 
+def refuse_dot_parts(path: str, param: str) -> None:
+    """Raise ``invalid_parameter`` for a NAS path with a ``.`` or ``..`` part (#449).
+
+    DSM refuses them itself (File Station answers 418 "Illegal name or path"; CreateFolder
+    1100, on DSM 7.1 through 7.4.1), but only after the share check, which reads just
+    the first part, so ``/video/../photo`` passed as a ``video`` path and anything keyed
+    on the share (the recycle-bin note after a delete, a hidden ``#recycle``) used the
+    wrong one.
+    """
+    if any(part in (".", "..") for part in normalize_path(path).split("/")):
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            f"Invalid path '{path}': '.' and '..' parts aren't allowed.",
+            retryable=False,
+            param=param,
+            value=path,
+            suggestion="Write the path out in full from the shared folder, e.g. /video/Movies.",
+        )
+
+
 async def ensure_known_shares(
-    client: DsmClient, paths: list[str], known_shares: set[str]
+    client: DsmClient,
+    paths: list[str],
+    known_shares: set[str],
+    params: str | list[str] = "path",
 ) -> list[str]:
-    """Raise ``not_found`` for a path whose first component isn't a shared folder (#160).
+    """Raise ``not_found`` for a path whose first component isn't a shared folder (#160),
+    and ``invalid_parameter`` for one with a ``.`` or ``..`` part (#449).
+
+    ``params`` is the tool argument each path came from (one name for all, or one per
+    path), so an error names the argument the caller passed.
 
     Returns ``paths`` in order, each with its share named as DSM lists it (#353): DSM
     takes an ordinary share in any case, but the home service only as ``home``.
@@ -602,6 +629,9 @@ async def ensure_known_shares(
     """
     if not paths:
         return []
+    names = [params] * len(paths) if isinstance(params, str) else params
+    for path, param in zip(paths, names, strict=True):
+        refuse_dot_parts(path, param)
 
     def _shares() -> set[str]:
         return {
@@ -613,14 +643,14 @@ async def ensure_known_shares(
         client, known_shares
     ):
         return list(paths)
-    for path in paths:
+    for path, param in zip(paths, names, strict=True):
         problem = validate_share_path(path, known_shares)
         if problem:
             error_response(
                 ErrorCode.NOT_FOUND,
                 problem,
                 retryable=False,
-                param="path",
+                param=param,
                 value=path,
                 suggestion="Call list_shares to see the shared folders on this NAS.",
             )

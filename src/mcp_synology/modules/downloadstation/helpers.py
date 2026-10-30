@@ -86,6 +86,15 @@ def normalize_destination(destination: str, *, operation: str, param: str = "des
     trailing ``/`` is dropped. ``param`` names the caller's argument in errors.
     """
     relative = destination.strip().strip("/")
+    if any(part in (".", "..") for part in relative.split("/")):
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            f"{operation} failed: {param} {destination!r} has a '.' or '..' part (#449).",
+            retryable=False,
+            param=param,
+            value=destination,
+            suggestion="Write the path out in full from the shared folder, e.g. 'video/Torrents'.",
+        )
     if not relative:
         error_response(
             ErrorCode.INVALID_PARAMETER,
