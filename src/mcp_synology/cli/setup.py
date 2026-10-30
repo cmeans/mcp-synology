@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import shutil
 import sys
@@ -15,6 +16,8 @@ import yaml
 
 from mcp_synology.cli.check import exit_on_connection_failure
 from mcp_synology.cli.logging_ import _configure_logging, _init_early_logging
+
+logger = logging.getLogger(__name__)
 
 _CONFIG_DIR = Path.home() / ".config" / "mcp-synology"
 
@@ -378,17 +381,18 @@ async def _connect_and_login(
             if not login_result["success"]:
                 return result
 
-            # Fetch NAS hostname
-            dsm_info = await client.fetch_dsm_info()
+            # Fetch NAS hostname. The logout runs whatever happens here, so a
+            # timeout or dropped connection doesn't leave the session open (#404).
+            try:
+                dsm_info = await client.fetch_dsm_info()
+            finally:
+                await _logout(client)
             nas_hostname = dsm_info.get("hostname") or ""
             if nas_hostname:
                 result["hostname"] = nas_hostname
             dsm_version = dsm_info.get("version_string", "")
             if dsm_version:
                 result["dsm_version"] = dsm_version
-
-            # Logout
-            await client.request("SYNO.API.Auth", "logout", version=6, params={})
 
             result["success"] = True
 
@@ -420,9 +424,26 @@ async def _setup_login(config: object, username: str, password: str, service: st
             if not login_result["success"]:
                 return
 
-            # Logout
+            # Logout, best effort as in _connect_and_login: the login worked (#404).
             if client.sid:
-                await client.request("SYNO.API.Auth", "logout", version=6, params={})
+                await _logout(client)
+
+
+async def _logout(client: Any) -> None:
+    """Log out, best effort and bounded by serve's shutdown limit (``LOGOUT_TIMEOUT``).
+
+    DSM ends the session on its own timeout, so a failure is only logged. The bound keeps
+    a NAS that stopped answering (the reason a hostname read just timed out) from doubling
+    setup's wait with the client's full timeout (#404, QA round 1 on #459).
+    """
+    from mcp_synology.server import LOGOUT_TIMEOUT
+
+    try:
+        await asyncio.wait_for(
+            client.request("SYNO.API.Auth", "logout", version=6, params={}), LOGOUT_TIMEOUT
+        )
+    except Exception as e:  # noqa: BLE001 - TimeoutError included; never fails setup
+        logger.debug("Setup logout failed: %s: %s", type(e).__name__, e)
 
 
 def _emit_claude_desktop_snippet(config: Any, config_path: Path) -> None:

@@ -213,6 +213,66 @@ class TestConnectAndLogin:
             result = await setup_mod._connect_and_login(config, "admin", "pw", "svc", verbose=False)
         assert result["success"] is False
 
+    async def test_connect_and_login_logs_out_when_dsm_info_fails(self) -> None:
+        # #404: a transport error from fetch_dsm_info used to skip the logout. Setup
+        # still exits with its connection message (exit_on_connection_failure).
+        import httpx
+
+        config = _make_test_app_config()
+        request = AsyncMock(side_effect=[{"sid": "test-sid"}, {}])
+        client = self._make_client_cm(request, {})
+        client.fetch_dsm_info = AsyncMock(side_effect=httpx.ReadTimeout("slow"))
+        with (
+            patch("mcp_synology.core.client.DsmClient", return_value=client),
+            pytest.raises(SystemExit),
+        ):
+            await setup_mod._connect_and_login(config, "admin", "pw", "svc", verbose=False)
+        assert [c.args[:2] for c in request.await_args_list] == [
+            ("SYNO.API.Auth", "login"),
+            ("SYNO.API.Auth", "logout"),
+        ]
+
+    async def test_connect_and_login_succeeds_when_logout_fails(self) -> None:
+        # The login and DSM info worked; a failed logout only leaves the session to time out.
+        from mcp_synology.core.errors import SynologyError
+
+        config = _make_test_app_config()
+        request = AsyncMock(side_effect=[{"sid": "test-sid"}, SynologyError("gone", code=119)])
+        client = self._make_client_cm(request, {"hostname": "MyNAS"})
+        with patch("mcp_synology.core.client.DsmClient", return_value=client):
+            result = await setup_mod._connect_and_login(config, "admin", "pw", "svc", verbose=False)
+        assert result["success"] is True
+        assert result["hostname"] == "MyNAS"
+
+    @pytest.mark.parametrize("where", ["dsm_info_fails", "setup_login"])
+    async def test_logout_is_bounded(self, where: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        """QA round 1 on #459: a NAS that stopped answering held the logout for the
+        client's whole timeout, doubling setup's wait. It's bounded by LOGOUT_TIMEOUT."""
+        import asyncio
+        import time
+
+        import httpx
+
+        monkeypatch.setattr("mcp_synology.server.LOGOUT_TIMEOUT", 0.05)
+
+        async def request(api: str, method: str, *args: object, **kwargs: object) -> dict[str, str]:
+            if method == "logout":
+                await asyncio.sleep(1)
+            return {"sid": "test-sid"}
+
+        config = _make_test_app_config()
+        client = self._make_client_cm(AsyncMock(side_effect=request), {})
+        start = time.perf_counter()
+        with patch("mcp_synology.core.client.DsmClient", return_value=client):
+            if where == "dsm_info_fails":
+                client.fetch_dsm_info = AsyncMock(side_effect=httpx.ReadTimeout("slow"))
+                with pytest.raises(SystemExit):
+                    await setup_mod._connect_and_login(config, "a", "pw", "s", verbose=False)
+            else:
+                client.sid = "test-sid"
+                await setup_mod._setup_login(config, "a", "pw", "s")
+        assert time.perf_counter() - start < 0.5
+
     async def test_connect_and_login_rejects_non_appconfig(self) -> None:
         with pytest.raises(RuntimeError, match="AppConfig"):
             await setup_mod._connect_and_login("not a config", "u", "p", "s", verbose=False)
@@ -245,6 +305,17 @@ class TestSetupLogin:
         with patch("mcp_synology.core.client.DsmClient", return_value=client):
             await setup_mod._setup_login(config, "admin", "pw", "svc")
         # Login + logout: 2 requests
+        assert request.await_count == 2
+
+    async def test_setup_login_survives_a_failed_logout(self) -> None:
+        # A timeout on the logout used to exit setup with a connection error (#404).
+        import httpx
+
+        config = _make_test_app_config()
+        request = AsyncMock(side_effect=[{"sid": "test-sid"}, httpx.ReadTimeout("slow")])
+        client = self._make_client_cm(request)
+        with patch("mcp_synology.core.client.DsmClient", return_value=client):
+            await setup_mod._setup_login(config, "admin", "pw", "svc")
         assert request.await_count == 2
 
     async def test_setup_login_failure_skips_logout(self) -> None:
