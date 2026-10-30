@@ -19,7 +19,12 @@ from mcp.server.mcpserver.exceptions import ToolError, UnexpectedToolError
 from mcp.types import CallToolResult, Icon, TextContent
 
 from mcp_synology import __version__
-from mcp_synology.core.auth import AuthManager
+from mcp_synology.core.auth import (
+    AuthManager,
+    LoginRefusals,
+    credentials_fingerprint,
+    resolve_credentials,
+)
 from mcp_synology.core.client import DsmClient, dsm_call_of
 from mcp_synology.core.errors import ErrorCode, SynologyError
 from mcp_synology.core.formatting import error_response, synology_error_response
@@ -461,44 +466,56 @@ class SharedClientManager:
         # to the AuthManager once it's lazily created in `get_client`. Modules
         # use `subscribe_on_reauth` to register cache invalidators (see #37).
         self._pending_reauth_callbacks: list[Callable[[], None]] = []
+        # Parallel first tool calls build one client and log in once (#359).
+        self._init_lock = asyncio.Lock()
+        # Kept across failed first logins, so refused credentials aren't sent again (#447).
+        self._login_refusals = LoginRefusals()
 
     async def get_client(self) -> DsmClient:
         """Lazily initialize and return the DSM client."""
         if self._client is None:
-            conn = self._config.connection
-            if conn is None:
-                raise RuntimeError("Server started without connection config")
-            protocol = "https" if conn.https else "http"
-            base_url = f"{protocol}://{conn.host}:{conn.port}"
-            client = DsmClient(
-                base_url=base_url,
-                verify_ssl=conn.verify_ssl,
-                timeout=conn.timeout,
-            )
-            await client.__aenter__()
-            try:
-                await client.query_api_info()
-                auth = AuthManager(self._config, client)
-                await auth.login()
-            except BaseException as e:
-                # Don't leak the half-open client; the next call starts fresh.
-                await client.__aexit__(None, None, None)
-                if isinstance(e, httpx.TransportError):
-                    _unreachable_error(base_url, conn.timeout, e)
-                raise
-
-            # Flush any reauth callbacks that modules queued during sync
-            # `register()` (before the AuthManager existed).
-            for cb in self._pending_reauth_callbacks:
-                auth.add_on_reauth_callback(cb)
-            self._pending_reauth_callbacks.clear()
-
-            self._client = client
-            self._auth = auth
-
+            async with self._init_lock:
+                if self._client is None:
+                    await self._init_client()
         if self._client is None:
             raise RuntimeError("Client initialization failed")
         return self._client
+
+    async def _init_client(self) -> None:
+        """Build the client, read the API list and log in; on failure leave nothing open."""
+        if self._login_refusals.any:
+            # Answer credentials DSM already refused without contacting DSM at all (#447).
+            self._login_refusals.check(credentials_fingerprint(*resolve_credentials(self._config)))
+        conn = self._config.connection
+        if conn is None:
+            raise RuntimeError("Server started without connection config")
+        protocol = "https" if conn.https else "http"
+        base_url = f"{protocol}://{conn.host}:{conn.port}"
+        client = DsmClient(
+            base_url=base_url,
+            verify_ssl=conn.verify_ssl,
+            timeout=conn.timeout,
+        )
+        await client.__aenter__()
+        try:
+            await client.query_api_info()
+            auth = AuthManager(self._config, client, self._login_refusals)
+            await auth.login()
+        except BaseException as e:
+            # Don't leak the half-open client; the next call starts fresh.
+            await client.__aexit__(None, None, None)
+            if isinstance(e, httpx.TransportError):
+                _unreachable_error(base_url, conn.timeout, e)
+            raise
+
+        # Flush any reauth callbacks that modules queued during sync
+        # `register()` (before the AuthManager existed).
+        for cb in self._pending_reauth_callbacks:
+            auth.add_on_reauth_callback(cb)
+        self._pending_reauth_callbacks.clear()
+
+        self._client = client
+        self._auth = auth
 
     def subscribe_on_reauth(self, cb: Callable[[], None]) -> None:
         """Register an on-reauth callback at any point in the lifecycle.

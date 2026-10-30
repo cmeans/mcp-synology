@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -11,10 +12,10 @@ import httpx
 import pytest
 import respx
 
-from mcp_synology.core.auth import AuthManager
+from mcp_synology.core.auth import AuthManager, LoginRefusals
 from mcp_synology.core.client import DsmClient
 from mcp_synology.core.config import AppConfig
-from mcp_synology.core.errors import AuthenticationError
+from mcp_synology.core.errors import AuthenticationError, SynologyError
 from mcp_synology.core.state import ApiInfoEntry
 
 BASE_URL = "http://nas:5000"
@@ -935,3 +936,245 @@ class TestLogout:
             client.sid = "expired-sid"
             await auth.logout()  # must not raise
             assert client.sid is None
+
+
+def _auth_routes(
+    login: list[httpx.Response] | Any, logins: list[httpx.Request] | None = None
+) -> None:
+    """Route the login POSTs to ``login`` (a list of replies, in order, or a side effect)
+    and answer File Station reads by session: 119 for ``old-sid``, success otherwise."""
+
+    def on_post(request: httpx.Request) -> httpx.Response:
+        if logins is not None:
+            logins.append(request)
+        reply = login(request) if callable(login) else login.pop(0)
+        assert isinstance(reply, httpx.Response)
+        return reply
+
+    def on_get(request: httpx.Request) -> httpx.Response:
+        if "id=old-sid" in request.headers.get("cookie", ""):
+            return httpx.Response(200, json={"success": False, "error": {"code": 119}})
+        return httpx.Response(200, json={"success": True, "data": {"shares": []}})
+
+    respx.post(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=on_post)
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=on_get)
+
+
+def _refused(code: int = 400) -> httpx.Response:
+    return httpx.Response(200, json={"success": False, "error": {"code": code}})
+
+
+def _granted(sid: str = "new-sid") -> httpx.Response:
+    return httpx.Response(200, json={"success": True, "data": {"sid": sid}})
+
+
+class TestLoginRefusals:
+    """#447: a login DSM refused isn't sent again, so DSM's Auto Block isn't tripped."""
+
+    @respx.mock
+    @pytest.mark.parametrize("code", [400, 401, 403, 404, 406])
+    async def test_refused_login_is_sent_once(self, code: int) -> None:
+        logins: list[httpx.Request] = []
+        _auth_routes([_refused(code)], logins)
+        config = _make_config(auth={"username": "admin", "password": "wrong"})
+        async with _make_client() as client:
+            auth = AuthManager(config, client)
+            with (
+                patch.dict(os.environ, _clean_env(), clear=True),
+                patch("mcp_synology.core.auth.kr", _no_keyring()),
+            ):
+                errors = []
+                for _ in range(5):
+                    with pytest.raises(AuthenticationError) as exc:
+                        await auth.login()
+                    errors.append(exc.value)
+        assert len(logins) == 1
+        assert {e.code for e in errors} == {code}
+        assert len({str(e) for e in errors}) == 1  # the same answer every time
+        message = str(errors[0])
+        assert message.startswith("DSM refused the login: ")
+        assert "Auto Block" in message and ".." not in message
+        assert "mcp-synology setup" in (errors[0].suggestion or "")
+        assert ".." not in (errors[0].suggestion or "")
+
+    @respx.mock
+    @pytest.mark.parametrize("code", [402, 407, 408])
+    async def test_other_login_errors_are_not_remembered(self, code: int) -> None:
+        # Not a verdict on the credentials (no permission for the service, a temporary
+        # lock or an IP block): the next call tries again.
+        logins: list[httpx.Request] = []
+        _auth_routes([_refused(code), _granted()], logins)
+        config = _make_config(auth={"username": "admin", "password": "secret"})
+        async with _make_client() as client:
+            auth = AuthManager(config, client)
+            with (
+                patch.dict(os.environ, _clean_env(), clear=True),
+                patch("mcp_synology.core.auth.kr", _no_keyring()),
+            ):
+                with pytest.raises(SynologyError) as exc:
+                    await auth.login()
+                assert not isinstance(exc.value, AuthenticationError)
+                assert await auth.login() == "new-sid"
+        assert len(logins) == 2
+
+    @respx.mock
+    async def test_transport_error_is_not_remembered(self) -> None:
+        logins: list[httpx.Request] = []
+        replies: list[Any] = [httpx.ConnectError("refused"), _granted()]
+
+        def login(request: httpx.Request) -> httpx.Response:
+            reply = replies.pop(0)
+            if isinstance(reply, Exception):
+                raise reply
+            assert isinstance(reply, httpx.Response)
+            return reply
+
+        _auth_routes(login, logins)
+        config = _make_config(auth={"username": "admin", "password": "secret"})
+        async with _make_client() as client:
+            auth = AuthManager(config, client)
+            with (
+                patch.dict(os.environ, _clean_env(), clear=True),
+                patch("mcp_synology.core.auth.kr", _no_keyring()),
+            ):
+                with pytest.raises(httpx.ConnectError):
+                    await auth.login()
+                assert await auth.login() == "new-sid"
+        assert len(logins) == 2
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        ("changed", "value"),
+        [("password", "fixed"), ("username", "other"), ("device_id", "dev-new")],
+    )
+    async def test_changed_credentials_are_tried(self, changed: str, value: str) -> None:
+        # `mcp-synology setup` writes new credentials to the keyring while the server runs.
+        logins: list[httpx.Request] = []
+        _auth_routes([_refused(), _granted()], logins)
+        stored = {"username": "admin", "password": "wrong", "device_id": "dev-old"}
+        config = _make_config()
+        async with _make_client() as client:
+            auth = AuthManager(config, client)
+            with patch.dict(os.environ, _clean_env(), clear=True):
+                with (
+                    patch("mcp_synology.core.auth.kr", _keyring_with(**stored)),
+                    pytest.raises(AuthenticationError),
+                ):
+                    await auth.login()
+                with (
+                    patch("mcp_synology.core.auth.kr", _keyring_with(**stored)),
+                    pytest.raises(AuthenticationError),
+                ):
+                    await auth.login()
+                assert len(logins) == 1
+                stored[changed] = value
+                with patch("mcp_synology.core.auth.kr", _keyring_with(**stored)):
+                    assert await auth.login() == "new-sid"
+        assert len(logins) == 2
+
+    @respx.mock
+    async def test_a_new_server_tries_again(self) -> None:
+        # The refusal lives in memory: a restart (a new LoginRefusals) sends the login.
+        logins: list[httpx.Request] = []
+        _auth_routes([_refused(), _refused()], logins)
+        config = _make_config(auth={"username": "admin", "password": "wrong"})
+        with (
+            patch.dict(os.environ, _clean_env(), clear=True),
+            patch("mcp_synology.core.auth.kr", _no_keyring()),
+        ):
+            for _ in range(2):
+                async with _make_client() as client:
+                    with pytest.raises(AuthenticationError):
+                        await AuthManager(config, client, LoginRefusals()).login()
+        assert len(logins) == 2
+
+    @respx.mock
+    async def test_relogin_after_a_session_error_uses_it(self) -> None:
+        # #447 and #448: a 119 whose re-login is refused says the login was refused, with
+        # its suggestion, and the next session error doesn't send the login again.
+        logins: list[httpx.Request] = []
+        _auth_routes([_refused()], logins)
+        config = _make_config(auth={"username": "admin", "password": "wrong"})
+        async with _make_client() as client:
+            AuthManager(config, client)
+            client.sid = "old-sid"
+            with (
+                patch.dict(os.environ, _clean_env(), clear=True),
+                patch("mcp_synology.core.auth.kr", _no_keyring()),
+            ):
+                for _ in range(3):
+                    with pytest.raises(AuthenticationError) as exc:
+                        await client.request("SYNO.FileStation.List", "list_share", version=2)
+                    assert exc.value.code == 400
+                    assert str(exc.value).startswith("DSM refused the login: ")
+                    assert "mcp-synology setup" in (exc.value.suggestion or "")
+            assert client.sid == "old-sid"
+        assert len(logins) == 1
+
+
+class TestConcurrentReauth:
+    """#359: requests that meet the same expired session log in once, not once each."""
+
+    @respx.mock
+    @pytest.mark.parametrize("n", [2, 5])
+    async def test_parallel_session_errors_log_in_once(self, n: int) -> None:
+        logins: list[httpx.Request] = []
+
+        async def slow_login(request: httpx.Request) -> httpx.Response:
+            logins.append(request)
+            await asyncio.sleep(0.01)  # the other requests meet 119 meanwhile
+            return _granted()
+
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=slow_login)
+
+        def on_get(request: httpx.Request) -> httpx.Response:
+            if "id=new-sid" in request.headers.get("cookie", ""):
+                return httpx.Response(200, json={"success": True, "data": {"shares": []}})
+            return httpx.Response(200, json={"success": False, "error": {"code": 119}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=on_get)
+        fired: list[int] = []
+        config = _make_config(auth={"username": "admin", "password": "secret"})
+        async with _make_client() as client:
+            auth = AuthManager(config, client)
+            auth.add_on_reauth_callback(lambda: fired.append(1))
+            client.sid = "old-sid"
+            with (
+                patch.dict(os.environ, _clean_env(), clear=True),
+                patch("mcp_synology.core.auth.kr", _no_keyring()),
+            ):
+                results = await asyncio.gather(
+                    *(
+                        client.request("SYNO.FileStation.List", "list_share", version=2)
+                        for _ in range(n)
+                    )
+                )
+        assert results == [{"shares": []}] * n
+        assert len(logins) == 1
+        assert fired == [1]
+        # The login itself never carries the session it replaces.
+        assert "cookie" not in logins[0].headers
+
+    @respx.mock
+    async def test_session_stays_until_the_new_one_exists(self) -> None:
+        # The expired session used to be cleared before the login, so a request sent
+        # meanwhile went with no session at all and queued its own re-login.
+        seen: list[str | None] = []
+        client = _make_client()
+
+        def login(request: httpx.Request) -> httpx.Response:
+            seen.append(client.sid)
+            return _granted()
+
+        _auth_routes(login)
+        config = _make_config(auth={"username": "admin", "password": "secret"})
+        async with client:
+            AuthManager(config, client)
+            client.sid = "old-sid"
+            with (
+                patch.dict(os.environ, _clean_env(), clear=True),
+                patch("mcp_synology.core.auth.kr", _no_keyring()),
+            ):
+                await client.request("SYNO.FileStation.List", "list_share", version=2)
+            assert client.sid == "new-sid"
+        assert seen == ["old-sid"]

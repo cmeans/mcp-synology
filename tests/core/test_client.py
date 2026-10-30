@@ -843,7 +843,8 @@ class TestRequestPostForm:
         assert data == {"sid": "new"}
         request = route.calls.last.request
         assert not request.url.params
-        assert request.headers["cookie"] == "id=the-sid"
+        # A login never sends the session it replaces (#359).
+        assert "cookie" not in request.headers
         assert "S3cret" not in str(request.url)
         assert dict(parse_qsl(request.content.decode())) == {
             "api": "SYNO.API.Auth",
@@ -1122,19 +1123,21 @@ class TestRequestFormPost:
                 await client.request_form_post("SYNO.DownloadStation2.Task", "create", version=2)
 
     @respx.mock
-    async def test_failed_reauth_raises_original_session_error(self) -> None:
+    async def test_failed_reauth_raises_the_login_error(self) -> None:
         client = make_client(make_api_cache())
+        failure = SynologyError("login failed")
 
         async def failing_reauth() -> None:
-            raise SynologyError("login failed")
+            raise failure
 
         client.set_re_auth_callback(failing_reauth)
         respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(
             json={"success": False, "error": {"code": 106}}
         )
         async with client:
-            with pytest.raises(SessionExpiredError):
+            with pytest.raises(SynologyError) as exc:
                 await client.request_form_post("SYNO.DownloadStation2.Task", "create", version=2)
+        assert exc.value is failure
 
     async def test_unknown_api_raises_api_not_found(self) -> None:
         client = make_client(make_api_cache())
@@ -1188,20 +1191,24 @@ class TestReauthProxyErrors:
                 await client.request_form_post("SYNO.DownloadStation2.Task", "create", version=2)
 
     @respx.mock
-    async def test_dsm_login_error_still_raises_the_session_error(self) -> None:
-        """A DSM verdict on the login (e.g. a changed password) keeps the old mapping."""
+    async def test_dsm_login_error_is_raised_not_the_session_error(self) -> None:
+        """#448: a DSM verdict on the login (a changed password) says so, with its
+        suggestion; it used to be replaced by the session error that led to the login."""
         client = make_client(make_api_cache())
+        refused = AuthenticationError("Login failed", code=400, suggestion="Run setup.")
 
         async def reauth() -> None:
-            raise AuthenticationError("Login failed", code=400)
+            raise refused
 
         client.set_re_auth_callback(reauth)
         respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
             json={"success": False, "error": {"code": 119}}
         )
         async with client:
-            with pytest.raises(SessionExpiredError):
+            with pytest.raises(AuthenticationError) as exc:
                 await client.request("SYNO.FileStation.Delete", "status", version=2)
+        assert exc.value is refused
+        assert exc.value.suggestion == "Run setup."
 
 
 class TestCreateDownloadTaskWithFile:
@@ -1458,21 +1465,23 @@ class TestUpload:
         assert route.call_count == 2
 
     @respx.mock
-    async def test_failed_reauth_raises_original_session_error(self, tmp_path: Path) -> None:
+    async def test_failed_reauth_raises_the_login_error(self, tmp_path: Path) -> None:
         client = make_client(make_api_cache())
         local = tmp_path / "a.txt"
         local.write_bytes(b"a")
+        failure = SynologyError("login failed")
 
         async def failing_reauth() -> None:
-            raise SynologyError("login failed")
+            raise failure
 
         client.set_re_auth_callback(failing_reauth)
         route = respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(
             json={"success": False, "error": {"code": 106}}
         )
         async with client:
-            with pytest.raises(SessionExpiredError):
+            with pytest.raises(SynologyError) as exc:
                 await client.upload("/video", local, "a.txt")
+        assert exc.value is failure
         assert route.call_count == 1
 
     @respx.mock

@@ -2204,3 +2204,82 @@ class TestUpdateNoticeEdges:
             await manager.take_update_notice()
         assert manager._update_notice == "Update!"
         assert manager._announced_version is None
+
+
+class TestFirstLogin:
+    """The first tool calls' login: once for parallel calls (#359), and a refused one is
+    never sent again (#447)."""
+
+    @pytest.fixture(autouse=True)
+    def creds(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SYNOLOGY_USERNAME", "chris")
+        monkeypatch.setenv("SYNOLOGY_PASSWORD", "pw")
+
+    @respx.mock
+    async def test_parallel_first_calls_build_one_client(self) -> None:
+        info = respx.get(f"{BASE_URL}/webapi/query.cgi").respond(json=TestNoSecretsInErrors._INFO)
+
+        async def slow_login(request: httpx.Request) -> httpx.Response:
+            await asyncio.sleep(0.01)
+            return httpx.Response(200, json={"success": True, "data": {"sid": "sid"}})
+
+        login = respx.post(f"{BASE_URL}/webapi/auth.cgi").mock(side_effect=slow_login)
+        manager = SharedClientManager(make_test_config())
+        clients = await asyncio.gather(*(manager.get_client() for _ in range(4)))
+        try:
+            assert len({id(c) for c in clients}) == 1
+            assert info.call_count == 1
+            assert login.call_count == 1
+        finally:
+            await manager.aclose()
+
+    @respx.mock
+    async def test_refused_first_login_is_not_sent_again(self) -> None:
+        info = respx.get(f"{BASE_URL}/webapi/query.cgi").respond(json=TestNoSecretsInErrors._INFO)
+        login = respx.post(f"{BASE_URL}/webapi/auth.cgi").respond(
+            json={"success": False, "error": {"code": 400}}
+        )
+        server = create_server(make_test_config())
+        async with Client(server) as client:
+            replies = [await client.call_tool("list_shares", {}) for _ in range(5)]
+        assert login.call_count == 1
+        assert info.call_count == 1  # later calls don't contact DSM at all
+        texts = {" ".join(getattr(c, "text", "") for c in r.content) for r in replies}
+        assert all(r.is_error for r in replies)
+        assert len(texts) == 1
+        err = json.loads(texts.pop().removeprefix("Error executing tool list_shares: "))["error"]
+        assert err["code"] == "auth_failed"
+        assert err["message"] == (
+            "list_shares failed (DSM error 400): DSM refused the login: No such account or "
+            "incorrect password. mcp-synology won't send these credentials again until they "
+            "change or the server restarts, because repeated failed logins can trip DSM's Auto "
+            "Block, which blocks this computer's IP address from the NAS."
+        )
+        assert err["suggestion"] == (
+            "Check username and password. Then store the corrected credentials with "
+            "'mcp-synology setup' (or update the config or environment and restart the "
+            "server); 'mcp-synology check' tests the login."
+        )
+
+    @respx.mock
+    async def test_changed_credentials_are_tried(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        respx.get(f"{BASE_URL}/webapi/query.cgi").respond(json=TestNoSecretsInErrors._INFO)
+        login = respx.post(f"{BASE_URL}/webapi/auth.cgi").mock(
+            side_effect=[
+                httpx.Response(200, json={"success": False, "error": {"code": 400}}),
+                httpx.Response(200, json={"success": True, "data": {"sid": "sid"}}),
+            ]
+        )
+        manager = SharedClientManager(make_test_config())
+        from mcp_synology.core.errors import AuthenticationError
+
+        for _ in range(2):
+            with pytest.raises(AuthenticationError):
+                await manager.get_client()
+        assert login.call_count == 1
+        monkeypatch.setenv("SYNOLOGY_PASSWORD", "fixed")
+        try:
+            await manager.get_client()
+            assert login.call_count == 2
+        finally:
+            await manager.aclose()
