@@ -281,7 +281,7 @@ Search for files by name, type, size, or modification date within a given scope.
 | `size_to` | `str \| int` | No | `None` | Maximum file size. Same format as `size_from`. |
 | `mtime_from` | `str` | No | `None` | Modified at or after this time (ISO 8601, `YYYY-MM-DD` or epoch seconds). Inclusive, in whole seconds: a file modified at exactly this time matches, and one at T+0.9 s counts as T, so it doesn't match `mtime_from=T+1` (DSM 7.2.2 and 7.3.2, #306). |
 | `mtime_to` | `str` | No | `None` | Modified before this time. **Exclusive**: a file modified at exactly this time doesn't match (DSM 7.2.2 and 7.3.2, #306). |
-| `exclude_pattern` | `str` | No | `None` | Wildcard pattern to exclude from results (e.g., `*.torrent`), case-insensitive, matched against the whole name. Only `*` and `?` are wildcards; `[...]` matches itself, as in DSM's patterns (#396). Applied client-side to the (at most `limit`) results DSM returns, so a reply can hold fewer than `limit`. |
+| `exclude_pattern` | `str` | No | `None` | Wildcard pattern to exclude from results (e.g., `*.torrent`), case-insensitive, matched against the whole name. Only `*` and `?` are wildcards; `[...]` and commas match themselves (#396). Unlike DSM's own `pattern`, a word without wildcards matches only the whole name, and a comma doesn't separate alternatives. Applied client-side to the (at most `limit`) results DSM returns, so a reply can hold fewer than `limit`. |
 | `recursive` | `bool` | No | `true` | Search subdirectories; `false` searches only `folder_path` itself. |
 | `limit` | `int` | No | `500` | Max results to return. When DSM found more, the reply says so. |
 

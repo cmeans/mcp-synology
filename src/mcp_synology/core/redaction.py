@@ -42,9 +42,18 @@ _MAGNET_URL_KEYS = frozenset({"tr", "ws", "as", "xs"})
 # Magnet parameters shown as they are: info hash, name, length, keywords.
 _MAGNET_SAFE_KEYS = frozenset({"xt", "dn", "xl", "kt"})
 
-# A URL or magnet inside free text. Commas end a match because v1 Task.create
-# takes a comma-separated URI list; quotes end it for DS2's JSON-encoded list.
-_URL_IN_TEXT = re.compile(r"""magnet:\?[^\s,"'<>]+|[A-Za-z][A-Za-z0-9+.-]*://[^\s,"'<>]+""")
+# A URL or magnet inside free text. A comma ends a match only where another URI
+# starts after it, as create_download splits its list (#397): a comma inside a URL
+# (`/a,b.iso?token=…`) is part of it, and v1 Task.create's list is comma-separated.
+# Quotes end a match for DS2's JSON-encoded list; a comma at the end of a match (a
+# URL in prose: "see https://…, then") is left out of it.
+_URL_CHAR = (
+    r"""(?:[^\s,"'<>]"""
+    r"""|,(?!\s*(?:[A-Za-z][A-Za-z0-9+.-]*://|(?:magnet|ed2k|thunder|flashget|qqdl):)))"""
+)
+_URL_IN_TEXT = re.compile(
+    rf"""(?:magnet:\?|[A-Za-z][A-Za-z0-9+.-]*://){_URL_CHAR}+(?<!,)""", re.IGNORECASE
+)
 
 
 # A query item or path parameter glued to a title: ``?key=value``, ``&key=value``

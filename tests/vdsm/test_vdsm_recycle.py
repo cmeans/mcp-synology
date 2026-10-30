@@ -118,8 +118,7 @@ async def test_listings_say_dsm_sorts_folders_and_files_separately(
 
 async def test_hidden_recycle_pages_every_item_once(nas_client: Any) -> None:
     """#389: with #recycle hidden, paging /home visits every other entry exactly once,
-    in both sort directions (#recycle comes first ascending, last descending), and
-    every page gives the same total."""
+    in both sort directions, and every page gives the same total."""
     import re
 
     client: DsmClient = nas_client[0]
@@ -136,9 +135,20 @@ async def test_hidden_recycle_pages_every_item_once(nas_client: Any) -> None:
         assert "#recycle" in names, names
         expected = sorted(n for n in names if n != "#recycle")
 
-        # limit=len(expected) puts a descending listing's #recycle right after the
-        # only page: it must not promise a second, empty one.
-        for limit in (2, len(expected)):
+        # A page that ends just before #recycle must not promise one that turns out
+        # empty: for each direction, a limit equal to #recycle's position puts it right
+        # after the first page, wherever DSM sorts it.
+        positions = {}
+        for direction in ("asc", "desc"):
+            ordered = await client.request(
+                "SYNO.FileStation.List",
+                "list",
+                version=2,
+                params={"folder_path": "/home", "sort_direction": direction},
+            )
+            positions[direction] = [f["name"] for f in ordered["files"]].index("#recycle")
+        limits = {2, len(expected), *(p for p in positions.values() if p > 0)}
+        for limit in sorted(limits):
             for direction in ("asc", "desc"):
                 seen: list[str] = []
                 offset = 0
