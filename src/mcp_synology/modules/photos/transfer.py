@@ -71,7 +71,9 @@ def _dest_name(item: dict[str, Any], size: str, used: set[str]) -> str:
     taken too, by an item really named so (``a_9.jpg``): then a counter follows the ID
     (``a_9_2.jpg``) until the name is free (#450). Names depend only on the items and
     their order, so the same call names each item the same way again and the overwrite
-    rule then applies to each file on its own. Names compare as ``_name_key`` does, so
+    rule then applies to each file on its own, as long as the same items are found (an
+    item not found gets no name, so a later item can take the one it would have had).
+    Names compare as ``_name_key`` does, so
     two that are one file on Windows or macOS count as the same name.
     """
     item_id = item.get("id")
@@ -150,7 +152,7 @@ async def download_photos(
         synology_error_response(op, e)
     found = {int(i["id"]): i for i in data.get("list", [])}
     lines: list[str] = []
-    done = 0
+    done = kept = 0
     used: set[str] = set()
     for n, item_id in enumerate(unique):
         item = found.get(item_id)
@@ -173,24 +175,37 @@ async def download_photos(
             if rest:
                 lines.append(f"  not tried: {', '.join(str(i) for i in rest)}")
             break
-        if result.startswith("not downloaded"):
+        if result == _EXISTS and len(unique) > 1:
+            # Most likely written by an earlier run of this same call (the retry the advice
+            # below asks for), so it's kept without suggesting overwrite=true (#462).
+            kept += 1
+            lines.append(
+                f"  {item_id}  {name}: not downloaded: a file with this name is already "
+                "there (kept; after a retry of this same call, it's this item's)"
+            )
+        elif result.startswith("not downloaded"):
             lines.append(f"  {item_id}  {name}: {result}")
         else:
             done += 1
             lines.append(f"  {item_id}  {name}  {result}")
-    if len(unique) > 1 and done < len(found):
+    if len(unique) > 1 and done + kept < len(unique):
         # A name depends on every item in the call, so retrying only the ones that failed
         # can give one of them another item's file name and, with overwrite=true, replace
-        # it (#467).
+        # it (#467). A file already there doesn't call for a retry: after one, every item
+        # is either downloaded or already there, and this line goes away.
         lines.append(
             "To retry, repeat this call with the same ids in the same order (overwrite=false "
-            "keeps the files already written): names depend on every item in the call."
+            "keeps the files already written): names depend on every item in the call, and "
+            "shift if an item that wasn't found is found then."
         )
     what = "original" if size == "original" else f"{size} preview"
     head = (
         f"Downloaded {done:,} of {len(unique):,} item(s) to {local_dir} ({what}, {space_label(sp)})"
     )
     return "\n".join([head, *lines])
+
+
+_EXISTS = "not downloaded: the file exists (overwrite=true replaces it)"
 
 
 async def _download_one(
@@ -200,7 +215,7 @@ async def _download_one(
     if dest.is_dir() and not dest.is_symlink():
         return "not downloaded: a folder has that name"
     if os.path.lexists(dest) and not overwrite:
-        return "not downloaded: the file exists (overwrite=true replaces it)"
+        return _EXISTS
     if size == "original":
         api, method, version = ph.api("Download"), "download", 1
         params = {"item_id": json.dumps([int(item["id"])]), "force_download": "true"}

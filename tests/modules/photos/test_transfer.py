@@ -248,7 +248,8 @@ class TestOriginals:
         assert "not tried: 16" in out
         assert out.endswith(
             "To retry, repeat this call with the same ids in the same order (overwrite=false "
-            "keeps the files already written): names depend on every item in the call."
+            "keeps the files already written): names depend on every item in the call, and "
+            "shift if an item that wasn't found is found then."
         )
         assert len(fake.of("SYNO.Foto.Download")) == 2
 
@@ -1291,6 +1292,61 @@ class TestRetryAdvice:
                 client, ids=[12, 15], dest_folder=str(tmp_path), allowed_roots=[tmp_path]
             )
         assert "Downloaded 2 of 2" in out and self.ADVICE not in out
+
+    @respx.mock
+    async def test_the_advised_retry_ends_without_the_advice(self, tmp_path: Path) -> None:
+        """QA round 2 on #462: repeating the call exactly, as advised, finds the files the
+        first run wrote; they're kept without suggesting overwrite=true, and the advice
+        goes away once every item is downloaded or already there."""
+
+        def timeout(_params: dict[str, Any]) -> httpx.Response:
+            raise httpx.ReadTimeout("timed out")
+
+        items = _items("ready", "ready")
+        third = json.loads(json.dumps(items["list"][1]))
+        third["id"] = 16
+        items["list"].append(third)
+        for item, name in zip(items["list"], ["a.jpg", "a.jpg", "b.jpg"], strict=True):
+            item["filename"] = name
+        fake = FakePhotos().on(ITEM, "get", 2, items)
+        fake.on("SYNO.Foto.Download", "download", 1, binary(b"one"), timeout)
+        install(fake)
+        client = make_client()
+        async with client:
+            first = await download_photos(
+                client, ids=[12, 15, 16], dest_folder=str(tmp_path), allowed_roots=[tmp_path]
+            )
+        assert self.ADVICE in first
+
+        fake = FakePhotos().on(ITEM, "get", 2, items)
+        fake.on("SYNO.Foto.Download", "download", 1, binary(b"two"), binary(b"three"))
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await download_photos(
+                client, ids=[12, 15, 16], dest_folder=str(tmp_path), allowed_roots=[tmp_path]
+            )
+        assert out.startswith("Downloaded 2 of 3")
+        assert (
+            "12  a.jpg: not downloaded: a file with this name is already there (kept; after "
+            "a retry of this same call, it's this item's)" in out
+        )
+        assert "overwrite=true" not in out and self.ADVICE not in out
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["a.jpg", "a_15.jpg", "b.jpg"]
+        assert (tmp_path / "a.jpg").read_bytes() == b"one"
+
+    @respx.mock
+    async def test_an_item_not_found_gets_the_advice(self, tmp_path: Path) -> None:
+        fake = FakePhotos().on(ITEM, "get", 2, {"list": _items("ready")["list"][:1]})
+        fake.on("SYNO.Foto.Download", "download", 1, binary(b"one"))
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await download_photos(
+                client, ids=[12, 99], dest_folder=str(tmp_path), allowed_roots=[tmp_path]
+            )
+        assert "99  not downloaded: not found" in out
+        assert self.ADVICE in out
 
     @respx.mock
     async def test_no_advice_for_a_single_item(self, tmp_path: Path) -> None:
