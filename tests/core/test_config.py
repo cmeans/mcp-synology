@@ -441,6 +441,26 @@ class TestAppConfig:
             line.startswith("  - modules.<a key that isn't text, not shown") for line in lines
         )
 
+    def test_an_error_below_a_non_text_module_key_names_its_field(self) -> None:
+        """The key is hidden, the field under it still named (#469 pre-QA)."""
+        import yaml
+        from pydantic import ValidationError
+
+        from mcp_synology.core.config import format_validation_error
+
+        raw = yaml.safe_load(
+            "schema_version: 1\nconnection: {host: nas}\n"
+            "modules: {filestation: {enabled: true}, 7319: {permission: nope}}\n"
+        )
+        with pytest.raises(ValidationError) as exc:
+            AppConfig(**raw)
+        message = format_validation_error(exc.value)
+        assert "7319" not in message
+        assert (
+            "  - modules.<a key that isn't text, not shown: it may be part of a password; if a "
+            "value with a comma inside {…} was split there, quote that value>.permission: "
+        ) in message
+
     def test_a_list_position_is_still_named(self) -> None:
         """Only a mapping's non-text key is hidden: a list's position (an int in pydantic's
         location) is named as before."""
@@ -622,7 +642,8 @@ class TestAppConfig:
             "The instance_id derived from connection.host contains invalid characters. Only "
             "lowercase alphanumeric characters and hyphens are allowed: write connection.host "
             "as a bare host name or IPv4 address (no https://, user name or port), or set "
-            "instance_id (lowercase letters, digits and hyphens), which an IPv6 address needs."
+            "instance_id (lowercase letters, digits and hyphens), which an IPv6 address or a "
+            "host name with other characters needs."
         ) in str(exc.value)
 
     def test_yaml_error_without_a_location(self) -> None:

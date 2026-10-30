@@ -194,7 +194,8 @@ class AppConfig(BaseModel, extra="forbid"):
                     + (
                         ": write connection.host as a bare host name or IPv4 address (no "
                         "https://, user name or port), or set instance_id (lowercase letters, "
-                        "digits and hyphens), which an IPv6 address needs."
+                        "digits and hyphens), which an IPv6 address or a host name with "
+                        "other characters needs."
                         if derived
                         else "."
                     )
@@ -374,9 +375,11 @@ _SECTION_MODELS: dict[str, type[BaseModel]] = {
     "logging": LoggingConfig,
 }
 
+# Conditional: pydantic's error doesn't say whether the key had a value, and only a valueless
+# one can come from a comma split (QA round 4 on #469).
 _NOT_TEXT_KEY = (
-    "<a key that isn't text, not shown: it may be part of a password; quote a value with a "
-    "comma inside {…}>"
+    "<a key that isn't text, not shown: it may be part of a password; if a value with a "
+    "comma inside {…} was split there, quote that value>"
 )
 
 
@@ -428,9 +431,10 @@ def _shown_location(
         if tuple(raw_loc[: len(hidden)]) == hidden:
             # Another error about that same key (`modules: {…, 7319}` also fails as
             # `modules.7319`, "should be a dictionary"): it isn't named there either (#469
-            # QA round 4).
+            # QA round 4). The path below it still says which field failed.
             where = ".".join(str(p) for p in hidden[:-1])
-            return (f"{where}." if where else "") + _NOT_TEXT_KEY
+            below = "".join(f".{p}" for p in raw_loc[len(hidden) :])
+            return (f"{where}." if where else "") + _NOT_TEXT_KEY + below
     if err.get("type") == "invalid_key" and loc_parts:
         # A key YAML read as a number or a date (`{password: Summer,2024}` splits into a
         # key 2024): never a real config key, and possibly part of a password (#469 QA
