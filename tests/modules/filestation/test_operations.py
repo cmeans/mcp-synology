@@ -3032,6 +3032,9 @@ class TestShareRootRefused:
             "/video/x/ /",
             "/video/x/\u00a0",
             "/video/x/\t/",
+            # A NUL: whether DSM cuts the path there (leaving /video/) is unprobed (pre-QA).
+            "/video/\x00",
+            "/video/x/\x00",
         ],
     )
     def test_a_spelling_of_one_is_refused(self, path: str) -> None:
@@ -3041,7 +3044,9 @@ class TestShareRootRefused:
             refuse_share_roots([path])
         error = json.loads(str(exc.value))["error"]
         assert error["code"] == "invalid_parameter"
-        assert "'.', '..', empty and whitespace-only parts aren't allowed" in error["message"]
+        assert (
+            "'.', '..', empty and whitespace-only parts, and NUL characters, aren't allowed"
+        ) in error["message"]
         assert error["value"] == path
 
     @pytest.mark.parametrize(

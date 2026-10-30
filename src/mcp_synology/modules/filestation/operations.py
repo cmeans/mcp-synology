@@ -274,27 +274,25 @@ def _collapse_overlaps(paths: list[str], *, drop_nested: bool = True) -> list[st
     return out
 
 
-def refuse_share_roots(paths: list[str]) -> None:
-    """Refuse a path that names a whole shared folder (#451).
+def refuse_bad_parts(paths: list[str]) -> None:
+    """Refuse a ``.``, ``..``, empty or whitespace-only part, or a NUL, in a delete path.
 
-    On DSM 7.2.2, 7.3.2 and 7.4.1, File Station's Delete on ``/<share>`` deletes the shared
-    folder itself, for any account with write access, and the recycle bin, inside the
-    share, can't bring it back; DSM 7.1 refuses it. Emptying a share safely is #484. A
-    ``.``, ``..``, empty or whitespace-only part is refused too: ``/video/.``,
-    ``/video/x/..`` and ``//video`` (when DSM won't list shares) name the share as well.
-    A whitespace-only last part is read from the path as given: ``normalize_path`` strips
-    the whole path, so ``/video/x/ `` would otherwise be sent as ``/video/x``, deleting
-    the folder (QA round 2 on #480; the same stripping in other tools is #488).
+    ``/video/.``, ``/video/x/..`` and ``//video`` (when DSM won't list shares) name the
+    share itself (#451). Checked on the paths as given, before the share check rewrites
+    them: ``normalize_path`` strips the whole path, so ``/video/x/ `` would be sent as
+    ``/video/x``, deleting the folder (QA round 2 on #480; the same stripping in other tools
+    is #488). A NUL is refused rather than sent: whether DSM cuts the path there (leaving
+    ``/video/``) is unprobed, and no file name holds one (pre-QA on #480; #472).
     """
     for path in paths:
         parts = normalize_path(path).split("/")[1:]
         body = path.rstrip("/")
         blank_last = not body.rsplit("/", 1)[-1].strip()
-        if blank_last or any(part.strip() in ("", ".", "..") for part in parts):
+        if blank_last or "\x00" in path or any(part.strip() in ("", ".", "..") for part in parts):
             error_response(
                 ErrorCode.INVALID_PARAMETER,
-                f"Delete files refused: '.', '..', empty and whitespace-only parts aren't "
-                f"allowed ({path}). Nothing was deleted.",
+                f"Delete files refused: '.', '..', empty and whitespace-only parts, and NUL "
+                f"characters, aren't allowed ({path!r}). Nothing was deleted.",
                 retryable=False,
                 param="paths",
                 value=path,
@@ -302,6 +300,21 @@ def refuse_share_roots(paths: list[str]) -> None:
                 "/video/Movies. An item whose name is only whitespace can't be reached "
                 "this way: delete it in DSM's File Station.",
             )
+
+
+def refuse_share_roots(paths: list[str]) -> None:
+    """Refuse a path that names a whole shared folder (#451), and any `refuse_bad_parts`
+    path.
+
+    On DSM 7.2.2, 7.3.2 and 7.4.1, File Station's Delete on ``/<share>`` deletes the shared
+    folder itself, for any account with write access, and the recycle bin, inside the
+    share, can't bring it back; DSM 7.1 refuses it. Emptying a share safely is #484. The
+    tool calls this after the share check, so a one-part path that isn't a share (a typo)
+    gets "unknown shared folder", not this (pre-QA on #480).
+    """
+    refuse_bad_parts(paths)
+    for path in paths:
+        parts = normalize_path(path).split("/")[1:]
         if len(parts) == 1:
             error_response(
                 ErrorCode.INVALID_PARAMETER,

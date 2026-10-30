@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import inspect
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -1073,32 +1073,61 @@ class TestShareRootDeleteRefused:
     """#451: the registered delete_files refuses a whole shared folder before any delete is
     sent (on DSM 7.2.2 to 7.4.1, tested, Delete on /<share> deletes the shared folder)."""
 
-    @pytest.mark.parametrize("path", ["/WRITABLE/x/ ", "/Writable/x/\t", "WRITABLE/x/  "])
-    async def test_a_blank_last_part_is_refused_before_the_share_name_is_rewritten(
-        self, monkeypatch: pytest.MonkeyPatch, path: str
-    ) -> None:
-        """The share-name rewrite normalizes the path, which strips a whitespace-only last
-        part: `/WRITABLE/x/ ` became `/writable/x`, deleting the folder (pre-QA on #480)."""
-        from mcp_synology.modules.filestation.helpers import normalize_path
+    @staticmethod
+    def _tool_with_real_share_check(monkeypatch: pytest.MonkeyPatch) -> tuple[Any, AsyncMock]:
+        """The registered tool with the real ensure_known_shares, over a NAS whose only
+        share is `writable`; delete_files itself is mocked."""
 
-        def rewrite(_c: object, p: list[str], *_a: object, **_kw: object) -> list[str]:
-            # As ensure_known_shares does for a share named in another case.
-            return [normalize_path(x).replace("/WRITABLE", "/writable", 1) for x in p]
+        async def refresh(_client: object, known: set[str]) -> bool:
+            known.clear()
+            known.add("writable")
+            return True
 
         monkeypatch.setattr(
-            "mcp_synology.modules.filestation.helpers.ensure_known_shares",
-            AsyncMock(side_effect=lambda c, p, *a, **kw: rewrite(c, p)),
+            "mcp_synology.modules.filestation.helpers._refresh_known_shares", refresh
         )
         delete = AsyncMock(return_value="[+] Deleted")
         monkeypatch.setattr("mcp_synology.modules.filestation.operations.delete_files", delete)
         server, manager, ctx = _make_ctx()
         manager.get_client = AsyncMock(return_value=MagicMock())
         register(ctx)
+        return server._tool_manager._tools["delete_files"].fn, delete
+
+    @pytest.mark.parametrize("path", ["/WRITABLE/x/ ", "/Writable/x/\t", "WRITABLE/x/  "])
+    async def test_a_blank_last_part_is_refused_before_the_share_name_is_rewritten(
+        self, monkeypatch: pytest.MonkeyPatch, path: str
+    ) -> None:
+        """The share-name rewrite normalizes the path, which strips a whitespace-only last
+        part: `/WRITABLE/x/ ` became `/writable/x`, deleting the folder (pre-QA on #480)."""
+        fn, delete = self._tool_with_real_share_check(monkeypatch)
         with pytest.raises(ToolError) as exc:
-            await server._tool_manager._tools["delete_files"].fn(ctx=_fake_mcp_ctx(), paths=[path])
+            await fn(ctx=_fake_mcp_ctx(), paths=[path])
         error = json.loads(str(exc.value))["error"]
         assert (error["code"], error["value"]) == ("invalid_parameter", path)
         delete.assert_not_awaited()
+
+    @pytest.mark.parametrize("path", ["/vidoe", "/vidoe/", "/#recycle"])
+    async def test_a_one_part_path_that_isnt_a_share_is_an_unknown_share(
+        self, monkeypatch: pytest.MonkeyPatch, path: str
+    ) -> None:
+        """Not "a whole shared folder": the share check answers first (pre-QA on #480)."""
+        fn, delete = self._tool_with_real_share_check(monkeypatch)
+        with pytest.raises(ToolError) as exc:
+            await fn(ctx=_fake_mcp_ctx(), paths=[path])
+        error = json.loads(str(exc.value))["error"]
+        assert error["code"] == "not_found"
+        assert "whole shared folder" not in error["message"]
+        delete.assert_not_awaited()
+
+    async def test_a_share_in_another_case_is_still_refused_and_a_path_below_it_passes(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        fn, delete = self._tool_with_real_share_check(monkeypatch)
+        with pytest.raises(ToolError, match="is a whole shared folder"):
+            await fn(ctx=_fake_mcp_ctx(), paths=["/WRITABLE"])
+        delete.assert_not_awaited()
+        await fn(ctx=_fake_mcp_ctx(), paths=["/WRITABLE/x"])
+        assert delete.await_args.kwargs["paths"] == ["/writable/x"]
 
     @pytest.mark.parametrize("paths", [["/writable"], ["/writable/a", "writable/"], ["//writable"]])
     async def test_refused_before_any_delete(

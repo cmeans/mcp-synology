@@ -300,6 +300,7 @@ def register(ctx: "RegisterContext") -> None:
         create_folder,
         delete_files,
         move_files,
+        refuse_bad_parts,
         refuse_share_roots,
         rename,
         restore_from_recycle_bin,
@@ -960,11 +961,14 @@ def register(ctx: "RegisterContext") -> None:
             ] = True,
         ) -> str:
             client = await _fs_client()
-            # On the paths as given: the share-name rewrite below normalizes a path, which
-            # strips a whitespace-only last part (`/VIDEO/x/ ` -> `/video/x`; pre-QA on #480).
-            # delete_files checks the rewritten paths too.
-            refuse_share_roots(paths)
+            # The part checks on the paths as given: the share-name rewrite below normalizes
+            # a path, which strips a whitespace-only last part (`/VIDEO/x/ ` -> `/video/x`).
+            # The share-root check after the share check, so a typo (`/vidoe`) is an unknown
+            # share, not "a whole shared folder" (pre-QA on #480). delete_files checks both
+            # again on the rewritten paths.
+            refuse_bad_parts(paths)
             paths = await ensure_known_shares(client, paths, known_shares)
+            refuse_share_roots(paths)
             return _reply(
                 await delete_files(
                     client,
