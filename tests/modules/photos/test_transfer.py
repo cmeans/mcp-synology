@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
 from typing import TYPE_CHECKING, Any, ClassVar
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -95,8 +98,9 @@ class TestOriginals:
                 client, ids=[12], dest_folder=str(tmp_path), allowed_roots=[tmp_path]
             )
         assert (
-            "12  forest-trail.jpg: not downloaded: another file has this name "
-            "(overwrite=true replaces it, or choose another folder)" in out
+            "12  forest-trail.jpg: not downloaded: another file has this name (if it's "
+            "another item's, from a call with more ids, repeat that whole call instead; "
+            "otherwise overwrite=true replaces it, or choose another folder)" in out
         )
         assert (tmp_path / "forest-trail.jpg").read_bytes() == b"mine"
 
@@ -111,9 +115,10 @@ class TestOriginals:
             out = await download_photos(
                 client, ids=[12], dest_folder=str(tmp_path), allowed_roots=[tmp_path]
             )
+        assert out.startswith("Downloaded 0 of 1 item(s)") and ", 1 already there)" in out
         assert (
-            "12  forest-trail.jpg: not downloaded: a file with this name and this item's size "
-            "is already there, most likely this item from an earlier run (kept)" in out
+            "12  forest-trail.jpg: already there: a file with this name and this item's size, "
+            "most likely this item from an earlier run (kept)" in out
         )
         assert "overwrite=true" not in out
 
@@ -1348,10 +1353,10 @@ class TestRetryAdvice:
             out = await download_photos(
                 client, ids=[12, 15, 16], dest_folder=str(tmp_path), allowed_roots=[tmp_path]
             )
-        assert out.startswith("Downloaded 2 of 3")
+        assert out.startswith("Downloaded 2 of 3") and ", 1 already there)" in out
         assert (
-            "12  a.jpg: not downloaded: a file with this name and this item's size is already "
-            "there, most likely this item from an earlier run (kept)" in out
+            "12  a.jpg: already there: a file with this name and this item's size, most "
+            "likely this item from an earlier run (kept)" in out
         )
         assert "overwrite=true" not in out and self.ADVICE not in out
         assert sorted(p.name for p in tmp_path.iterdir()) == ["a.jpg", "a_15.jpg", "b.jpg"]
@@ -1400,6 +1405,67 @@ class TestRetryAdvice:
             )
         assert "12  a.jpg: not downloaded: another file has this name" in out
         assert (tmp_path / "a.jpg").read_bytes() == b"two"
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        ("answer", "advice"),
+        [
+            ({"success": False, "error": {"code": 105}}, False),  # permission: not retryable
+            (httpx.Response(502), True),  # a proxy's 5xx: retryable
+            ("enospc", True),
+            ("eacces", False),
+        ],
+        ids=["dsm-105", "http-502", "enospc", "eacces"],
+    )
+    async def test_advice_follows_whether_a_retry_can_help(
+        self, tmp_path: Path, answer: Any, advice: bool
+    ) -> None:
+        """Pre-QA on QA round 2 (#462): DSM's own retryable flag decides, and of local
+        errors only a full disk is worth a retry."""
+        import errno
+
+        fake = FakePhotos().on(ITEM, "get", 2, _items("ready", "ready"))
+        if isinstance(answer, str):
+            fake.on("SYNO.Foto.Download", "download", 1, binary(b"x"), binary(b"y"))
+            code = errno.ENOSPC if answer == "enospc" else errno.EACCES
+            patcher = patch(
+                "mcp_synology.core.client.DsmClient.download_binary",
+                AsyncMock(side_effect=OSError(code, os.strerror(code))),
+            )
+        else:
+            response = (
+                answer if isinstance(answer, httpx.Response) else httpx.Response(200, json=answer)
+            )
+
+            def reply(_p: dict[str, Any]) -> httpx.Response:
+                return response
+
+            fake.on("SYNO.Foto.Download", "download", 1, reply, reply)
+            patcher = contextlib.nullcontext()
+        install(fake)
+        client = make_client()
+        with patcher:
+            async with client:
+                out = await download_photos(
+                    client, ids=[12, 15], dest_folder=str(tmp_path), allowed_roots=[tmp_path]
+                )
+        assert "Downloaded 0 of 2" in out
+        assert (self.ADVICE in out) is advice
+
+    @respx.mock
+    async def test_an_existing_preview_says_both_cases(self, tmp_path: Path) -> None:
+        (tmp_path / "forest-trail_m.jpg").write_bytes(b"x")
+        install(FakePhotos().on(ITEM, "get", 2, _items("ready", "ready")))
+        client = make_client()
+        async with client:
+            out = await download_photos(
+                client, ids=[12], size="m", dest_folder=str(tmp_path), allowed_roots=[tmp_path]
+            )
+        assert (
+            "12  forest-trail_m.jpg: not downloaded: a file with this name is already there "
+            "(if an earlier run of this call wrote it, nothing to do; otherwise overwrite=true "
+            "replaces it, or choose another folder)" in out
+        )
 
     @respx.mock
     async def test_no_advice_for_a_single_item(self, tmp_path: Path) -> None:

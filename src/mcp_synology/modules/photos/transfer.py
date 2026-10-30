@@ -152,7 +152,7 @@ async def download_photos(
         synology_error_response(op, e)
     found = {int(i["id"]): i for i in data.get("list", [])}
     lines: list[str] = []
-    done = 0
+    done = kept = 0
     retry = False  # a failure that can succeed on a later call
     used: set[str] = set()
     for n, item_id in enumerate(unique):
@@ -180,7 +180,10 @@ async def download_photos(
             retry = True
             break
         retry = retry or retryable
-        if result.startswith("not downloaded"):
+        if result.startswith(_ALREADY_THERE):
+            kept += 1
+            lines.append(f"  {item_id}  {name}: {result}")
+        elif result.startswith("not downloaded"):
             lines.append(f"  {item_id}  {name}: {result}")
         else:
             done += 1
@@ -197,10 +200,15 @@ async def download_photos(
             "shift if an item that wasn't found is found then."
         )
     what = "original" if size == "original" else f"{size} preview"
+    there = f", {kept:,} already there" if kept else ""
     head = (
-        f"Downloaded {done:,} of {len(unique):,} item(s) to {local_dir} ({what}, {space_label(sp)})"
+        f"Downloaded {done:,} of {len(unique):,} item(s) to {local_dir} "
+        f"({what}, {space_label(sp)}{there})"
     )
     return "\n".join([head, *lines])
+
+
+_ALREADY_THERE = "already there"
 
 
 def _existing(dest: Path, item: dict[str, Any], size: str) -> str:
@@ -224,12 +232,13 @@ def _existing(dest: Path, item: dict[str, Any], size: str) -> str:
             same = False
         if same:
             return (
-                "not downloaded: a file with this name and this item's size is already "
-                "there, most likely this item from an earlier run (kept)"
+                f"{_ALREADY_THERE}: a file with this name and this item's size, most likely "
+                "this item from an earlier run (kept)"
             )
         return (
-            "not downloaded: another file has this name (overwrite=true replaces it, or "
-            "choose another folder)"
+            "not downloaded: another file has this name (if it's another item's, from a "
+            "call with more ids, repeat that whole call instead; otherwise overwrite=true "
+            "replaces it, or choose another folder)"
         )
     return (
         "not downloaded: a file with this name is already there (if an earlier run of "
@@ -278,11 +287,12 @@ async def _download_one(
         )
     except SynologyError as e:
         code = f" (DSM error {e.code})" if e.code else ""
-        return f"not downloaded: {e}{code}", True
+        return f"not downloaded: {e}{code}", e.retryable
     except OSError as e:
         if e.errno == errno.ENOSPC:
             return "not downloaded: no space left on the local disk", True
-        return f"not downloaded: couldn't write the file ({e.strerror or e})", True
+        # A permission or read-only folder doesn't change by repeating the call.
+        return f"not downloaded: couldn't write the file ({e.strerror or e})", False
     return format_size(written), False
 
 
