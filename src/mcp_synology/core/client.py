@@ -6,6 +6,7 @@ about specific APIs (File Station, Download Station, etc.).
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import errno
 import json
@@ -27,8 +28,10 @@ from mcp_synology.core.errors import (
     DsmReplyError,
     DsmTimeoutError,
     DsmUnavailableError,
+    RememberedRefusalError,
     RequestTooLongError,
     SynologyError,
+    detached_copy,
     error_detail,
     error_from_code,
 )
@@ -247,6 +250,13 @@ class DsmClient:
         self._api_cache: dict[str, ApiInfoEntry] = {}
         self._sid: str | None = None
         self._re_auth_callback: ReAuthCallback | None = None
+        # One re-login at a time; a request that waited on it retries with the new
+        # session instead of logging in again (#359).
+        self._re_auth_lock = asyncio.Lock()
+        # Re-logins attempted so far, and how the last one failed: requests that were
+        # already waiting when it failed get the same error instead of each logging in.
+        self._login_attempts = 0
+        self._login_failure: Exception | None = None
         logger.debug(
             "DsmClient created: base_url=%s, verify_ssl=%s, timeout=%d",
             self._base_url,
@@ -289,26 +299,62 @@ class DsmClient:
         cookies = [f"{c.name}={c.value}" for c in jar if c.name != "id"]
         return {"Cookie": "; ".join([f"id={self._sid}", *cookies])}
 
+    def _session(self) -> tuple[str | None, dict[str, str]]:
+        """The session a request is about to use, and its headers: a session error on
+        that request names this session to ``_re_authenticate`` (#359)."""
+        return self._sid, self._session_headers()
+
     def set_re_auth_callback(self, callback: ReAuthCallback) -> None:
         """Set callback for transparent re-authentication on session errors."""
         self._re_auth_callback = callback
 
-    async def _re_authenticate(self, code: int, api: str) -> None:
-        """Log in again after session error ``code``; raise if the login fails.
+    async def _re_authenticate(self, code: int, api: str, failed_sid: str | None) -> None:
+        """Log in again after session error ``code`` on session ``failed_sid``; raise if
+        the login fails.
 
-        A DSM or auth error from the login (e.g. a changed password) is raised as the
-        original session error. A proxy's answer to the login (an HTTP error status, a
-        page that isn't DSM's, a 414) is raised as it is: it isn't DSM's verdict, and a
-        task poll must hand the task off on it, not stop the task (#321).
+        One re-login runs at a time. A request that waited for it finds the session
+        already replaced and just retries with the new one: parallel calls that meet the
+        same expired session log in once, not once each (#359). If that re-login failed
+        (an unreachable NAS, a proxy error, a refusal), the requests that were waiting get
+        its error rather than each trying again; a later request tries afresh.
+
+        The login's own error is raised (#448): a changed password, a disabled account
+        or a 2FA prompt says so, with its suggestion, rather than reading as the session
+        error that led to the login. A proxy's answer to the login (an HTTP error status,
+        a page that isn't DSM's, a 414) is raised as it is too: it isn't DSM's verdict,
+        and a task poll must hand the task off on it, not stop the task (#321).
         """
         if self._re_auth_callback is None:
             raise error_from_code(code, api)
-        try:
-            await self._re_auth_callback()
-        except (DsmHttpError, DsmReplyError, RequestTooLongError):
-            raise
-        except SynologyError:
-            raise error_from_code(code, api) from None
+        attempt = self._login_attempts
+        async with self._re_auth_lock:
+            if self._sid is not None and self._sid != failed_sid:
+                logger.debug("Session already replaced by another request's re-login.")
+                return
+            if self._login_attempts != attempt and self._login_failure is not None:
+                logger.debug("Re-login failed while this request waited; not repeating it.")
+                raise detached_copy(self._login_failure) or self._login_failure
+            self._login_failure = None
+            try:
+                await self._re_auth_callback()
+            except Exception as e:
+                self._login_failure = detached_copy(e)
+                if isinstance(e, SynologyError) and not isinstance(e, RememberedRefusalError):
+                    logger.warning(
+                        "Session error %d on %s; logging in again failed: %s", code, api, e
+                    )
+                elif not isinstance(e, SynologyError):
+                    # A transport error or anything unexpected: its type only, since its
+                    # text can quote the request (QA round 3 on #461).
+                    logger.warning(
+                        "Session error %d on %s; logging in again failed: %s",
+                        code,
+                        api,
+                        type(e).__name__,
+                    )
+                raise
+            finally:
+                self._login_attempts += 1
 
     async def __aenter__(self) -> Self:
         logger.debug("Opening HTTP client connection to %s", self._base_url)
@@ -572,7 +618,14 @@ class DsmClient:
             if read_timeout is None
             else httpx.Timeout(self._timeout, read=read_timeout)
         )
-        headers = self._session_headers()
+        # Login never sends a session: a re-login keeps the expired one in place
+        # until the new one exists (#359).
+        sent_sid: str | None
+        headers: dict[str, str]
+        if api == "SYNO.API.Auth" and method == "login":
+            sent_sid, headers = None, {}
+        else:
+            sent_sid, headers = self._session()
 
         def send(client: httpx.AsyncClient) -> Awaitable[httpx.Response]:
             if post_form:
@@ -622,7 +675,7 @@ class DsmClient:
         # Transparent re-auth on session errors (one retry)
         if code in _SESSION_ERROR_CODES and not _is_retry and self._reauth_allowed(api):
             logger.info("Session error %d on %s/%s, attempting re-auth.", code, api, method)
-            await self._re_authenticate(code, api)
+            await self._re_authenticate(code, api, sent_sid)
             return await self.request(
                 api,
                 method,
@@ -679,9 +732,10 @@ class DsmClient:
         retry_tag = " (retry)" if _is_retry else ""
         logger.debug("DSM POST%s: %s/%s v%d — %s", retry_tag, api, method, version, log_data)
 
+        sent_sid, headers = self._session()
         resp = await _guarded_post(
             f"{api}/{method}",
-            lambda: http.post(url, data=form_data, headers=self._session_headers()),
+            lambda: http.post(url, data=form_data, headers=headers),
         )
         body = _read_json(resp, f"{api}/{method}", may_have_applied=True)
 
@@ -695,7 +749,7 @@ class DsmClient:
 
         if code in _SESSION_ERROR_CODES and not _is_retry and self._reauth_allowed(api):
             logger.info("Session error %d on %s/%s, attempting re-auth.", code, api, method)
-            await self._re_authenticate(code, api)
+            await self._re_authenticate(code, api, sent_sid)
             return await self.request_form_post(api, method, version, params, _is_retry=True)
 
         raise error_from_code(code, api)
@@ -804,10 +858,11 @@ class DsmClient:
             return open(file_path, "rb")  # noqa: SIM115
 
         fh = _open_file()
+        sent_sid, headers = self._session()
         try:
             resp = await http.post(
                 url,
-                headers=self._session_headers(),
+                headers=headers,
                 data=form_data,
                 files={file_field: (filename, fh, content_type)},
                 timeout=httpx.Timeout(timeout),
@@ -839,7 +894,7 @@ class DsmClient:
         # Re-auth on session errors (file must be re-opened on retry)
         if code in _SESSION_ERROR_CODES and not _is_retry and self._re_auth_callback:
             logger.info("Session error %d on %s/%s, attempting re-auth.", code, api, method)
-            await self._re_authenticate(code, api)
+            await self._re_authenticate(code, api, sent_sid)
             return await self.upload_multipart(
                 api,
                 method,
@@ -911,12 +966,13 @@ class DsmClient:
             return open(file_path, "rb")  # noqa: SIM115
 
         fh = _open_file()
+        sent_sid, headers = self._session()
         try:
             resp = await _guarded_post(
                 f"{api}/create",
                 lambda: http.post(
                     url,
-                    headers=self._session_headers(),
+                    headers=headers,
                     data=form_data,
                     files={"torrent": (filename, fh, "application/x-bittorrent")},
                     timeout=httpx.Timeout(timeout),
@@ -938,7 +994,7 @@ class DsmClient:
         # Re-auth on session errors (file must be re-opened on retry)
         if code in _SESSION_ERROR_CODES and not _is_retry and self._re_auth_callback:
             logger.info("Session error %d on %s/create, attempting re-auth.", code, api)
-            await self._re_authenticate(code, api)
+            await self._re_authenticate(code, api, sent_sid)
             return await self.create_download_task_with_file(
                 file_path,
                 filename,
@@ -1044,11 +1100,12 @@ class DsmClient:
             log_params,
         )
 
+        sent_sid, headers = self._session()
         async with http.stream(
             "GET",
             url,
             params=req_params,
-            headers=self._session_headers(),
+            headers=headers,
             timeout=httpx.Timeout(timeout),
         ) as resp:
             # Check for HTTP-level errors (502, 404, etc.) before reading body.
@@ -1090,7 +1147,7 @@ class DsmClient:
 
                 if code in _SESSION_ERROR_CODES and not _is_retry and self._re_auth_callback:
                     logger.info("Session error %d on %s/%s, attempting re-auth.", code, api, method)
-                    await self._re_authenticate(code, api)
+                    await self._re_authenticate(code, api, sent_sid)
                     return await self.download_binary(
                         api,
                         method,
