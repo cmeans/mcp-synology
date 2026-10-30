@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import secrets
 import time
@@ -873,6 +874,8 @@ async def delete_files(
     timeout: float = 120.0,
     records: TaskRecords | None = None,
     on_progress: ProgressCallback | None = None,
+    deadline: float | None = None,
+    listed: frozenset[str] = frozenset(),
 ) -> str:
     """Delete files or folders.
 
@@ -905,8 +908,10 @@ async def delete_files(
 
     # Refuse the whole call if any path is missing (#162): DSM "deletes" a missing path
     # without an error, and a partial delete of a mistyped list is worse than none.
+    # Items just read from a share's own listing (a share-root delete, #451) aren't
+    # checked one getinfo each: they exist, and there can be thousands.
     try:
-        missing = await find_missing_paths(client, normalized)
+        missing = await find_missing_paths(client, [p for p in normalized if p not in listed])
     except SynologyError as e:
         synology_error_response("Delete files", e)
     if missing:
@@ -926,6 +931,10 @@ async def delete_files(
 
     deleted: list[str] = []
     for i, p in enumerate(normalized):
+        if deadline is not None and deleted and time.monotonic() >= deadline:
+            # A share-root delete is one task per item: past the call's wait, stop
+            # starting new ones rather than outlast the client's time limit (#451).
+            return _stopped_at_deadline(deleted, normalized[i:])
         running = await running_task(client, api="SYNO.FileStation.Delete", path=p)
         handoff: Handoff | None
         if running is not None:
@@ -1029,7 +1038,7 @@ async def _delete_summary(
     verb = "Deleted" if has_recycle else "Permanently deleted"
 
     lines = [format_status(f"{verb} {len(normalized):,} item(s):")]
-    lines.extend(f"  {p}" for p in normalized)
+    lines.extend(_listed_paths(normalized))
 
     lines.extend(
         f"\nRecycle bin is enabled on /{share} \u2014 "
@@ -1062,6 +1071,34 @@ async def _delete_summary(
     )
 
     return "\n".join(lines)
+
+
+_LISTED_AT_MOST = 50
+
+
+def _listed_paths(paths: Sequence[str]) -> list[str]:
+    """Indented path lines, at most ``_LISTED_AT_MOST`` of them and a count of the rest:
+    a share's contents can be thousands of items (#451)."""
+    lines = [f"  {p}" for p in paths[:_LISTED_AT_MOST]]
+    if len(paths) > _LISTED_AT_MOST:
+        lines.append(f"  … and {len(paths) - _LISTED_AT_MOST:,} more")
+    return lines
+
+
+def _stopped_at_deadline(done: list[str], rest: list[str]) -> str:
+    """The reply when a long delete stopped starting new items at its deadline."""
+    return "\n".join(
+        [
+            format_status(
+                f"Deleted {len(done):,} of {len(done) + len(rest):,} item(s); stopped "
+                "before the time limit, so the rest weren't started:",
+                success=False,
+            ),
+            *_listed_paths(rest),
+            "\nNothing is running on the NAS. To go on, call delete_files again: on the "
+            "shared folder (a new preview counts what's left), or on the paths above.",
+        ]
+    )
 
 
 def _as_restore(text: str, share_name: str) -> str:
@@ -1247,6 +1284,11 @@ def share_roots(paths: Sequence[str]) -> list[str]:
     return roots
 
 
+def _path_key(paths: Sequence[str]) -> tuple[str, ...]:
+    """The paths a token covers, in any order."""
+    return tuple(sorted({normalize_path(p) for p in paths}))
+
+
 class ShareRootTokens:
     """One-time tokens a share-root preview hands out, for clients without elicitation.
 
@@ -1261,7 +1303,7 @@ class ShareRootTokens:
         now = time.monotonic()
         self._tokens = {t: v for t, v in self._tokens.items() if v[1] > now}
         token = secrets.token_hex(4)
-        self._tokens[token] = (tuple(normalize_path(p) for p in paths), now + SHARE_ROOT_TOKEN_TTL)
+        self._tokens[token] = (_path_key(paths), now + SHARE_ROOT_TOKEN_TTL)
         return token
 
     def redeem(self, token: str, paths: Sequence[str]) -> bool:
@@ -1269,10 +1311,16 @@ class ShareRootTokens:
         if entry is None:
             return False
         covered, expires = entry
-        return expires > time.monotonic() and covered == tuple(normalize_path(p) for p in paths)
+        return expires > time.monotonic() and covered == _path_key(paths)
 
 
-async def share_root_preview(client: DsmClient, roots: Sequence[str], *, timeout: float) -> str:
+async def share_root_preview(
+    client: DsmClient,
+    roots: Sequence[str],
+    *,
+    timeout: float,
+    recycle_bin_status: dict[str, bool] | None = None,
+) -> str:
     """What deleting each share's contents would delete: files, folders and size.
 
     DSM's DirSize counts the share's ``#recycle`` too, which isn't deleted, so its
@@ -1285,19 +1333,26 @@ async def share_root_preview(client: DsmClient, roots: Sequence[str], *, timeout
         try:
             size, files, folders = await dir_size_totals(client, path=root, timeout=timeout)
         except ToolError as e:
-            # get_dir_size's own error names its `timeout` argument and suggests a
-            # subdirectory; for delete_files, say what the preview needs.
+            # get_dir_size's error, said for delete_files: keep its code, retryable flag and
+            # suggestion, except a timeout's, which names get_dir_size's own argument.
+            try:
+                error = json.loads(str(e))["error"]
+            except (ValueError, KeyError, TypeError):
+                error = {}
+            timed_out = error.get("code") == ErrorCode.TIMEOUT.value
             error_response(
-                ErrorCode.TIMEOUT if "timed out" in str(e) else ErrorCode.FILESTATION_ERROR,
+                ErrorCode(error.get("code", ErrorCode.FILESTATION_ERROR.value)),
                 f"Delete files refused: couldn't size {root} for the preview, so nothing was "
-                "deleted.",
-                retryable=False,
+                f"deleted: {error.get('message', str(e))}",
+                retryable=False if timed_out else bool(error.get("retryable", False)),
                 param="paths",
                 value=root,
                 suggestion=(
                     "A large share can take longer than dir_size_timeout in the File Station "
                     "settings: raise it, or delete the share's folders by their own paths "
                     "(list_files lists them)."
+                    if timed_out
+                    else error.get("suggestion")
                 ),
             )
         note = ""
@@ -1314,7 +1369,7 @@ async def share_root_preview(client: DsmClient, roots: Sequence[str], *, timeout
             note = " (these totals may include its recycle bin, which isn't deleted)"
         lines.append(
             f"  {root}: {max(files, 0):,} file(s) and {max(folders, 0):,} folder(s), "
-            f"{format_size(max(size, 0))}{note}"
+            f"{format_size(max(size, 0))}{note}{await _bin_note(client, root, recycle_bin_status)}"
         )
     return "\n".join(
         [
@@ -1323,6 +1378,22 @@ async def share_root_preview(client: DsmClient, roots: Sequence[str], *, timeout
             *lines,
         ]
     )
+
+
+async def _bin_note(
+    client: DsmClient, root: str, recycle_bin_status: dict[str, bool] | None
+) -> str:
+    """Whether the preview's delete can be undone, so the user knows before saying yes."""
+    if recycle_bin_status is None:
+        return ""
+    try:
+        enabled = await ensure_recycle_status(client, root.strip("/"), recycle_bin_status)
+    except Exception as e:  # noqa: BLE001 - the preview stands without it
+        logger.debug("Recycle-bin check on %s failed: %s: %s", root, type(e).__name__, e)
+        return "; whether its recycle bin is on couldn't be checked"
+    if enabled:
+        return "; into its recycle bin (restore_from_recycle_bin brings items back)"
+    return "; \u26a0 no recycle bin: deleted permanently"
 
 
 async def share_contents(client: DsmClient, root: str) -> list[str]:

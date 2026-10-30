@@ -262,11 +262,12 @@ modules:
 **Not covered:** compress and extract, share links, favorites, thumbnails, MD5 checksums, permissions and ownership changes, mounting remote folders.
 
 <details>
-<summary><b>Good to know:</b> long operations, client timeouts, folder downloads</summary>
+<summary><b>Good to know:</b> long operations, client timeouts, folder downloads, emptying a shared folder</summary>
 
 - **Long operations hand off.** For delete, copy, move and restore, the timeout is **how long a call waits before handing off**, not a limit on the operation. An operation that finishes within the wait returns its result as usual. One that's still running is left running on the NAS, and the reply gives a handle, such as `delete:FileStation_…`, to use with `file_task`: check its progress or final result, or stop it. `file_task` with no handle lists the operations still running. The wait is capped at 600 s whatever the setting, because an MCP client that gives up on a call cancels it, and a canceled call stops the operation.
 - **Client timeouts.** The MCP client has its own time limits. Claude Code aborts a tool call that sends no result and no progress notification for an idle window: 30 minutes by default for a stdio server like this one (5 minutes for HTTP servers). Raise it with the `CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT` environment variable (milliseconds; `0` turns the check off), or for this server only with a `timeout` field (milliseconds) in its MCP config entry, which also sets a hard limit per call. See [Claude Code's MCP docs](https://code.claude.com/docs/en/mcp). Delete, copy, move and restore send progress notifications while they wait, so they don't hit the idle limit. `get_dir_size` and `search_files` don't send progress yet (#252), so one that runs longer than the idle window can be aborted by the client; raise the client's limit, or narrow the path.
 - **Folder downloads.** `download_file` of a folder saves DSM's ZIP of it as `<folder>.zip` (or under `filename`, when given). A whole shared folder can't be downloaded this way (DSM doesn't send one), so it's refused.
+- **Emptying a shared folder.** `delete_files` on a whole shared folder (`/video`) deletes what's in it, never the shared folder itself (on DSM 7.2.2 and later, File Station's own delete of `/<share>` removes the shared folder, and its recycle bin can't bring it back). It first shows how many files and folders, how much, and whether they go into the recycle bin, and deletes only after the user confirms: in a dialog from the MCP client when the client supports that (MCP elicitation), otherwise by the model passing back a one-time token after asking the user. Deleting a shared folder itself is left to DSM's Control Panel.
 
 </details>
 

@@ -1224,6 +1224,34 @@ class TestShareRootDelete:
         out = await fn(ctx=self._mcp_ctx(False), paths=["/writable", "/other/x"])
         assert "\nAlso deleted in this call:\n  /other/x\n" in out
 
+    async def test_a_blank_confirm_is_absent(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        delete, _, fn = self._setup(monkeypatch)
+        out = await fn(ctx=self._mcp_ctx(False), paths=["/writable/a"], confirm=" ")
+        assert out.startswith("[+] Deleted")
+        delete.assert_awaited_once()
+
+    async def test_not_recursive_on_a_share_root_is_refused(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        delete, preview, fn = self._setup(monkeypatch)
+        with pytest.raises(ToolError) as exc:
+            await fn(ctx=self._mcp_ctx(False), paths=["/writable"], recursive=False)
+        assert json.loads(str(exc.value))["error"]["param"] == "recursive"
+        preview.assert_not_awaited()
+        delete.assert_not_awaited()
+
+    async def test_a_confirmed_delete_has_a_deadline(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from mcp.server.elicitation import AcceptedElicitation
+
+        from mcp_synology.modules.filestation import _ConfirmShareDelete
+
+        delete, _, fn = self._setup(monkeypatch)
+        mcp_ctx = self._mcp_ctx(True, AcceptedElicitation(data=_ConfirmShareDelete(delete=True)))
+        await fn(ctx=mcp_ctx, paths=["/writable", "/other/x"])
+        kwargs = delete.await_args.kwargs
+        assert kwargs["deadline"] is not None
+        assert kwargs["listed"] == frozenset({"/writable/a", "/writable/b"})  # not /other/x
+
     async def test_confirm_without_a_share_root_is_refused(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1357,6 +1385,6 @@ class TestShareRootDeleteOverMcp:
         async with Client(server, elicitation_callback=on_elicit, mode="legacy") as client:
             result = await client.call_tool("delete_files", {"paths": ["/writable"]})
         text = " ".join(getattr(c, "text", "") for c in result.content)
-        assert text.endswith("Nothing deleted: the user didn't confirm.")
+        assert "Nothing deleted: the confirmation didn't complete" in text
         assert 'confirm="' not in text
         delete.assert_not_awaited()

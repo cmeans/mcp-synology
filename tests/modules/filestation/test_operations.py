@@ -3018,6 +3018,8 @@ class TestShareRootHelpers:
         a = tokens.issue(["/video", "/x/y"])
         b = tokens.issue(["/video"])
         assert a != b
+        d = tokens.issue(["/video", "/x/y"])
+        assert tokens.redeem(d, ["/x/y", "video/"])  # any order
         assert not tokens.redeem(a, ["/video"])  # other paths: refused, and spent
         assert not tokens.redeem(a, ["/video", "/x/y"])
         assert tokens.redeem(f" {b} ", ["video/"])  # same paths, normalized
@@ -3100,3 +3102,107 @@ class TestShareRootHelpers:
         assert error["retryable"] is False
         assert error["message"].startswith("Delete files refused: couldn't size /video")
         assert "dir_size_timeout" in error["suggestion"]
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        ("enabled", "tail"),
+        [
+            (True, "; into its recycle bin (restore_from_recycle_bin brings items back)"),
+            (False, "; \u26a0 no recycle bin: deleted permanently"),
+        ],
+    )
+    async def test_preview_says_whether_it_can_be_undone(
+        self, mock_client: DsmClient, enabled: bool, tail: str
+    ) -> None:
+        from mcp_synology.modules.filestation import operations
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "mcp_synology.modules.filestation.metadata.dir_size_totals",
+                AsyncMock(return_value=(1024, 1, 0)),
+            )
+            mp.setattr(operations, "path_exists", AsyncMock(return_value=False))
+            out = await operations.share_root_preview(
+                mock_client, ["/video"], timeout=5, recycle_bin_status={"video": enabled}
+            )
+        assert out.endswith(f"  /video: 1 file(s) and 0 folder(s), 1 KiB{tail}")
+
+    @respx.mock
+    async def test_preview_keeps_a_dsm_errors_own_code(self, mock_client: DsmClient) -> None:
+        from mcp_synology.core.errors import ErrorCode
+        from mcp_synology.core.formatting import error_response
+        from mcp_synology.modules.filestation import operations
+
+        def denied(*_a: object, **_k: object) -> None:
+            error_response(
+                ErrorCode.PERMISSION_DENIED,
+                "Get directory size failed: /video (DSM error 407)",
+                retryable=False,
+                suggestion="Check the folder's permissions.",
+            )
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "mcp_synology.modules.filestation.metadata.dir_size_totals",
+                AsyncMock(side_effect=denied),
+            )
+            with pytest.raises(ToolError) as exc:
+                await operations.share_root_preview(mock_client, ["/video"], timeout=5)
+        error = json.loads(str(exc.value))["error"]
+        assert error["code"] == "permission_denied"
+        assert error["suggestion"] == "Check the folder's permissions."
+        assert error["message"].startswith("Delete files refused: couldn't size /video")
+
+
+class TestDeleteDeadlineAndListed:
+    """#451: a share-root delete's items: no getinfo each, a deadline, a short reply."""
+
+    @staticmethod
+    def _route(calls: list[str]) -> None:
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            p = request.url.params
+            calls.append(f"{p.get('api')}/{p.get('method')}")
+            method = p.get("method")
+            if method == "getinfo":
+                return httpx.Response(
+                    200, json={"success": True, "data": {"files": [{"isdir": True}]}}
+                )
+            if method == "list" and p.get("api") == "SYNO.FileStation.BackgroundTask":
+                return httpx.Response(200, json={"success": True, "data": {"tasks": []}})
+            if method == "start":
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "t"}})
+            if method == "status":
+                return httpx.Response(200, json={"success": True, "data": {"finished": True}})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+
+    @respx.mock
+    async def test_listed_items_get_no_getinfo(self, mock_client: DsmClient) -> None:
+        calls: list[str] = []
+        self._route(calls)
+        items = [f"/video/i{n}" for n in range(3)]
+        await delete_files(
+            mock_client, paths=[*items, "/other/x"], listed=frozenset(items), timeout=5
+        )
+        assert calls.count("SYNO.FileStation.List/getinfo") == 1  # /other/x only
+
+    @respx.mock
+    async def test_the_deadline_stops_starting_items(self, mock_client: DsmClient) -> None:
+        calls: list[str] = []
+        self._route(calls)
+        items = [f"/video/i{n}" for n in range(3)]
+        out = await delete_files(mock_client, paths=items, deadline=0.0, timeout=5)
+        assert calls.count("SYNO.FileStation.Delete/start") == 1  # the first always runs
+        assert out.startswith("[!] Deleted 1 of 3 item(s); stopped before the time limit")
+        assert "  /video/i1\n  /video/i2" in out
+        assert "Nothing is running on the NAS." in out
+
+    @respx.mock
+    async def test_a_long_list_is_summarized(self, mock_client: DsmClient) -> None:
+        calls: list[str] = []
+        self._route(calls)
+        items = [f"/video/i{n:03}" for n in range(60)]
+        out = await delete_files(mock_client, paths=items, listed=frozenset(items), timeout=5)
+        assert "  /video/i049\n  … and 10 more" in out
+        assert "/video/i050" not in out

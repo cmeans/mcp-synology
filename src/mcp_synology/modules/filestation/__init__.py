@@ -6,6 +6,7 @@
 # handler is defined (rc6 live test; see core.local_paths.roots_for_description).
 
 import logging
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Literal
 
@@ -994,13 +995,31 @@ def register(ctx: "RegisterContext") -> None:
                 ),
             ] = None,
         ) -> str:
+            confirm = (confirm or "").strip() or None  # a blank optional string is absent
             client = await _fs_client()
             paths = await ensure_known_shares(client, paths, known_shares)
             roots = share_roots(paths)
+            listed: frozenset[str] = frozenset()
+            deadline: float | None = None
             if roots:
+                if not recursive:
+                    error_response(
+                        ErrorCode.INVALID_PARAMETER,
+                        "Delete files refused: a shared folder's contents are deleted with "
+                        "everything in them; recursive=false doesn't apply to "
+                        + ", ".join(roots)
+                        + ".",
+                        retryable=False,
+                        param="recursive",
+                        value=recursive,
+                        suggestion="Leave recursive at its default (true), or delete the "
+                        "share's items by their own paths.",
+                    )
                 expanded = await _confirm_share_roots(ctx, client, paths, roots, confirm)
                 if isinstance(expanded, str):
                     return _reply(expanded)
+                listed = frozenset(p for p in expanded if p not in paths)
+                deadline = time.monotonic() + delete_wait
                 paths = expanded
             elif confirm is not None:
                 error_response(
@@ -1021,6 +1040,8 @@ def register(ctx: "RegisterContext") -> None:
                     timeout=delete_wait,
                     records=records,
                     on_progress=_progress_cb(ctx),
+                    deadline=deadline,
+                    listed=listed,
                 )
             )
 
@@ -1046,7 +1067,9 @@ def register(ctx: "RegisterContext") -> None:
                     suggestion="Call delete_files again without confirm for a new preview.",
                 )
         else:
-            preview = await share_root_preview(client, roots, timeout=dir_size_timeout)
+            preview = await share_root_preview(
+                client, roots, timeout=dir_size_timeout, recycle_bin_status=recycle_status
+            )
             others = [p for p in paths if normalize_path(p) not in roots]
             if others:
                 # A yes covers the whole call, so the user sees all of it.
@@ -1065,8 +1088,15 @@ def register(ctx: "RegisterContext") -> None:
                 except Exception as e:  # noqa: BLE001 - the user may have closed it: no delete
                     # A dismissed dialog, a client error or an answer that doesn't fit is
                     # not a yes, and never becomes a token the model could use alone.
-                    logger.debug("Elicitation failed: %s: %s", type(e).__name__, e)
-                    return f"{preview}\n\nNothing deleted: the user didn't confirm."
+                    logger.warning(
+                        "Confirmation of a shared-folder delete failed: %s: %s",
+                        type(e).__name__,
+                        e,
+                    )
+                    return (
+                        f"{preview}\n\nNothing deleted: the confirmation didn't complete "
+                        f"({type(e).__name__}). Ask the user, then call delete_files again."
+                    )
             if asked:
                 if answer.action != "accept" or not answer.data.delete:
                     return f"{preview}\n\nNothing deleted: the user didn't confirm."
