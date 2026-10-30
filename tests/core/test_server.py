@@ -1520,7 +1520,8 @@ class TestToolErrorDetail:
 
         text = await self._call(
             AuthenticationError(
-                "No credentials found.", suggestion="Run 'mcp-synology setup' to store them."
+                "No credentials found.",
+                suggestion="Run 'mcp-synology setup' to store them.",
             )
         )
         err = self._structured(text)
@@ -2295,7 +2296,8 @@ class TestFirstLogin:
             "client's config): correct it there and restart the server ('mcp-synology setup' "
             "writes only the keyring). If the username is wrong, it comes from "
             "SYNOLOGY_USERNAME in the server's environment (the MCP client's config): correct "
-            "it there. After the fix, 'mcp-synology check' tests the login once (each failed "
+            "it there. After the fix, 'mcp-synology check --config <your config file>' tests the "
+            "login once (each failed "
             "check counts toward Auto Block)."
         )
 

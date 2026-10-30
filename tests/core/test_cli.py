@@ -1256,7 +1256,7 @@ class TestCheckLogin:
                 {},
                 {},
                 "Authentication failed: No such account or incorrect password. Run "
-                "'mcp-synology setup' to store the right password.",
+                "'mcp-synology setup --config <your config file>' to store the right password.",
             ),
             (
                 400,
@@ -1275,7 +1275,8 @@ class TestCheckLogin:
                 {"device_id": "cfgtoken"},
                 {},
                 "The device token comes from auth.device_id in the config file, which "
-                "overrides the keyring: remove it there, then run 'mcp-synology setup' to sign "
+                "overrides the keyring: remove it there, then run 'mcp-synology setup --config "
+                "<your config file>' to sign "
                 "in with a new 2FA code.",
             ),
             (
@@ -1293,7 +1294,8 @@ class TestCheckLogin:
                 "Disabled account",
                 {},
                 {},
-                "Authentication failed: Disabled account. Check username and password.",
+                "Authentication failed: Disabled account. This account is disabled in DSM. "
+                "Contact your NAS administrator.",
             ),
         ],
         ids=["400-keyring", "400-config", "403-config-token", "403-env-token", "401"],
@@ -1322,7 +1324,10 @@ class TestCheckLogin:
             monkeypatch.delenv(var, raising=False)
         for var, value in env.items():
             monkeypatch.setenv(var, value)
-        dsm = AuthenticationError(message, code=code, suggestion="Check username and password.")
+        from mcp_synology.core.errors import AUTH_ERROR_CODES
+
+        # DSM's own suggestion for the code, as error_from_code gives it.
+        dsm = AuthenticationError(message, code=code, suggestion=AUTH_ERROR_CODES[code][1])
         refusal = LoginRefusals().refuse("fp", dsm)
         refusal.__cause__ = dsm
         fake_auth = MagicMock()

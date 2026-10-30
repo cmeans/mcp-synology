@@ -1251,8 +1251,14 @@ class TestRefusalSuggestion:
     the config file where it's set there."""
 
     ENV = "in the server's environment (the MCP client's config)"
-    SETUP_PW = "Run 'mcp-synology setup' to store the right password; the running server"
-    SETUP_2FA = "Run 'mcp-synology setup' to sign in with a new 2FA code; the running server"
+    SETUP_PW = (
+        "Run 'mcp-synology setup --config <your config file>' to store the right password; "
+        "the running server"
+    )
+    SETUP_2FA = (
+        "Run 'mcp-synology setup --config <your config file>' to sign in with a new 2FA "
+        "code; the running server"
+    )
 
     @respx.mock
     @pytest.mark.parametrize(
@@ -1302,7 +1308,8 @@ class TestRefusalSuggestion:
                 {"device_id": "old"},
                 {},
                 "The device token comes from auth.device_id in the config file, which "
-                "overrides the keyring: remove it there, then run 'mcp-synology setup' to sign "
+                "overrides the keyring: remove it there, then run 'mcp-synology setup --config "
+                "<your config file>' to sign "
                 "in with a new 2FA code, and restart the server.",
                 "picks it up",
             ),
@@ -1311,7 +1318,8 @@ class TestRefusalSuggestion:
                 {},
                 {},
                 "Admin requires 2FA. Enable 2FA in DSM > Personal > Security. Then: run "
-                "'mcp-synology setup' to sign in with a new 2FA code; the running server picks "
+                "'mcp-synology setup --config <your config file>' to sign in with a new 2FA "
+                "code; the running server picks "
                 "it up.",
                 "password",
             ),
@@ -1366,14 +1374,16 @@ class TestRefusalSuggestion:
                 402,
                 "Not allowed",
                 "Not allowed. mcp-synology tries again once the credentials change "
-                "('mcp-synology setup' stores new ones in the keyring; the running server picks "
+                "('mcp-synology setup --config <your config file>' stores new ones in the "
+                "keyring; the running server picks "
                 "it up); auth.password in the config file overrides the keyring: change it "
                 "there and restart the server",
             ),
             (
                 None,
                 "",
-                "mcp-synology tries again once the credentials change ('mcp-synology setup' "
+                "mcp-synology tries again once the credentials change ('mcp-synology setup "
+                "--config <your config file>' "
                 "stores new ones in the keyring; the running server picks it up); "
                 "auth.password in the config file overrides the keyring: change it there and "
                 "restart the server",
@@ -1432,7 +1442,8 @@ class TestRefusalSuggestion:
             "fp", AuthenticationError("No such account", code=400, suggestion="Check.")
         )
         assert (refusal.suggestion or "").endswith(
-            "After the fix, 'mcp-synology check' tests the login once (each failed check "
+            "After the fix, 'mcp-synology check --config <your config file>' tests the login "
+            "once (each failed check "
             "counts toward Auto Block)."
         )
 

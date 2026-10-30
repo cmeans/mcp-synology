@@ -196,6 +196,10 @@ def credential_sources(config: AppConfig, *, cli: bool = False) -> dict[str, str
 
 
 _SETUP_PICKED_UP = "the running server picks it up"
+# The config file a user set up is usually `<instance_id>.yaml`, which `setup` and `check`
+# don't find on their own (pre-QA on QA round 3, #461).
+_SETUP = "'mcp-synology setup --config <your config file>'"
+_CHECK = "'mcp-synology check --config <your config file>'"
 _TWO_FA = (403, 404, 406)
 
 
@@ -211,7 +215,7 @@ def refusal_advice(
     if code == 400:
         password, username = sources.get("password"), sources.get("username")
         if password == KEYRING:
-            advice = f"Run 'mcp-synology setup' to store the right password{picked}"
+            advice = f"Run {_SETUP} to store the right password{picked}"
         else:
             advice = (
                 f"The password comes from {password}: correct it there{restart} "
@@ -225,11 +229,11 @@ def refusal_advice(
     if code in _TWO_FA:
         device = sources.get("device_id")
         if device is None:
-            advice = f"Run 'mcp-synology setup' to sign in with a new 2FA code{picked}"
+            advice = f"Run {_SETUP} to sign in with a new 2FA code{picked}"
         else:
             advice = (
                 f"The device token comes from {device}, which overrides the keyring: remove "
-                "it there, then run 'mcp-synology setup' to sign in with a new 2FA code"
+                f"it there, then run {_SETUP} to sign in with a new 2FA code"
                 + ("" if cli else ", and restart the server")
             )
         return f"{first}. Then: {advice[0].lower()}{advice[1:]}" if code == 406 else advice
@@ -245,7 +249,8 @@ def refusal_advice(
         return first or "Check the credentials"
     explicit = sorted({v for k, v in sources.items() if v and v != KEYRING})
     where = (
-        "mcp-synology tries again once the credentials change ('mcp-synology setup' stores "
+        "mcp-synology tries again once the credentials change ("
+        f"{_SETUP} stores "
         f"new ones in the keyring; {_SETUP_PICKED_UP})"
     )
     if explicit:
@@ -311,7 +316,7 @@ class LoginRefusals:
             "from the NAS.",
             code=error.code,
             suggestion=(
-                f"{where}. After the fix, 'mcp-synology check' tests the login once (each "
+                f"{where}. After the fix, {_CHECK} tests the login once (each "
                 "failed check counts toward Auto Block)."
             ),
         )
