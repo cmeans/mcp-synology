@@ -557,9 +557,11 @@ def test_list_never_shows_a_mistagged_password(tmp_path: Path) -> None:
     config_dir.mkdir()
     (config_dir / "a.yaml").write_text("schema_version: 1\nauth: {password: !!int Hunter2x}\n")
     (config_dir / "b.yaml").write_text("schema_version: 1\nauth: {password: !!bool Hunter2x}\n")
+    (config_dir / "c.yaml").write_bytes(b"schema_version: 1\nauth: {password: Hunter2x\xff}\n")
     with patch("mcp_synology.cli.setup._CONFIG_DIR", config_dir):
         result = CliRunner().invoke(main, ["setup", "--list"])
     assert result.exit_code == 0, result.output
     assert "hunter" not in result.output.casefold()
     assert "a.yaml  (could not parse)" in result.output
     assert "b.yaml  (could not parse)" in result.output
+    assert "c.yaml  (could not parse)" in result.output  # not UTF-8: a ValueError

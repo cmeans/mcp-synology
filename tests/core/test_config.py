@@ -164,6 +164,13 @@ class TestAppConfig:
             ({"schema_version": 9, "auth": {"password": "hunter2"}}, "hunter2"),
             ({"connection": {"passwd": "hunter2"}}, "hunter2"),
             ({"modules": {}, "auth": {"device_id": "dev-tok"}}, "dev-tok"),
+            # A section given a plain value: a "should be a dictionary" error.
+            ({"connection": "https://admin:hunter2@nas"}, "hunter2"),
+            ({"logging": "hunter2"}, "hunter2"),
+            ({"modules": {"filestation": "hunter2"}}, "hunter2"),
+            ({"modules": {"filestation": {"settings": "hunter2"}}}, "hunter2"),
+            # An unknown key with a value under auth: the key may be the password.
+            ({"auth": {"hunter2": "y"}}, "hunter2"),
         ],
     )
     def test_validation_error_never_echoes_a_credential(
@@ -345,6 +352,19 @@ class TestAppConfig:
         message = format_validation_error(exc.value)
         assert "Hunter" not in message
         assert "<an unknown key, not shown: it may be part of a password" in message
+
+    def test_a_valueless_near_miss_under_a_module_is_named(self) -> None:
+        from pydantic import ValidationError
+
+        from mcp_synology.core.config import format_validation_error
+
+        raw = _minimal_raw()
+        raw["modules"] = {"filestation": {"permision": None}}
+        with pytest.raises(ValidationError) as exc:
+            AppConfig(**raw)
+        assert "  - modules.filestation.permision: Extra inputs are not permitted" in (
+            format_validation_error(exc.value)
+        )
 
     def test_an_unknown_key_with_a_value_is_still_named(self) -> None:
         from pydantic import ValidationError

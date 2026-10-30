@@ -348,7 +348,9 @@ def _may_show(err: Any, loc_parts: list[str]) -> bool:
     never shown."""
     if not isinstance(err.get("input"), str | int | float | bool):
         return False
-    if err.get("type") == "extra_forbidden":
+    # An unknown key's value, or a section given a plain value (`connection: https://
+    # admin:…@nas` is a "should be a dictionary" error carrying that text).
+    if err.get("type") in ("extra_forbidden", "model_type", "dict_type", "model_attributes_type"):
         return False
     return not (loc_parts and loc_parts[0] == "auth")
 
