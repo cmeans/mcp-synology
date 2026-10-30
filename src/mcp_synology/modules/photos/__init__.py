@@ -134,9 +134,9 @@ MODULE_INFO = ModuleInfo(
                 "files or JPEG previews, one file per item, named after the original. Only "
                 "writes inside the allowed local folders, and never replaces an existing file "
                 "unless overwrite=true. Items that share a name get their id added; to retry "
-                "part of a call, repeat it with the same ids, since names depend on all of "
-                "them. For files outside Photos, use File Station's download_file when that "
-                "module is enabled."
+                "part of a call, repeat it with the same ids in the same order, since names "
+                "depend on all of them. For files outside Photos, use File Station's "
+                "download_file when that module is enabled."
             ),
             permission_tier=PermissionTier.READ,
             annotations=_ANNO_LOCAL_WRITE,

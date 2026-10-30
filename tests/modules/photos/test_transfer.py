@@ -10,7 +10,12 @@ import pytest
 import respx
 from mcp.server.mcpserver.exceptions import ToolError
 
-from mcp_synology.modules.photos.transfer import _dest_name, download_photos, upload_photos
+from mcp_synology.modules.photos.transfer import (
+    _dest_name,
+    _name_key,
+    download_photos,
+    upload_photos,
+)
 from tests.modules.photos.dsm import FakePhotos, binary, captured, install, make_client
 
 if TYPE_CHECKING:
@@ -240,8 +245,10 @@ class TestOriginals:
             )
         assert out.startswith("Downloaded 1 of 3")
         assert "15  beach-sunset_1.jpg: not downloaded: couldn't reach DSM (ReadTimeout)" in out
-        assert (
-            "not tried: 16. To finish, repeat this call with the same ids in the same order" in out
+        assert "not tried: 16" in out
+        assert out.endswith(
+            "To retry, repeat this call with the same ids in the same order (overwrite=false "
+            "keeps the files already written): names depend on every item in the call."
         )
         assert len(fake.of("SYNO.Foto.Download")) == 2
 
@@ -1193,12 +1200,12 @@ class TestDestName:
     ) -> None:
         names = self._names(items, size)
         assert names == expected
-        assert len({n.casefold() for n in names}) == len(names)
+        assert len({_name_key(n) for n in names}) == len(names)
 
     def test_many_repeats(self) -> None:
         items = [(7, "x.jpg")] * 2 + [(1, f"x_7_{n}.jpg") for n in range(2, 5)] + [(7, "x.jpg")]
         names = self._names(items, "original")
-        assert len({n.casefold() for n in names}) == len(names)
+        assert len({_name_key(n) for n in names}) == len(names)
 
 
 class TestDestNameAcrossFilesystems:
@@ -1233,3 +1240,70 @@ class TestDestNameAcrossFilesystems:
 
     def test_only_dots_and_spaces_fall_back(self) -> None:
         assert self._names([(7, ". ."), (8, "...")]) == ["item-7", "item-8"]
+
+
+class TestRetryAdvice:
+    """#467 (pre-QA on QA round 1): any item of a multi-item call that isn't downloaded,
+    not only items left after DSM stops answering, gets the whole-call retry advice."""
+
+    ADVICE = "To retry, repeat this call with the same ids in the same order"
+
+    @respx.mock
+    async def test_a_preview_not_ready_gets_the_advice(self, tmp_path: Path) -> None:
+        items = _items("ready", "converting")
+        for item in items["list"]:
+            item["filename"] = "a.jpg"
+        fake = FakePhotos().on(ITEM, "get", 2, items)
+        fake.on("SYNO.Foto.Thumbnail", "get", 2, binary(b"jpeg"))
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await download_photos(
+                client, ids=[12, 15], size="m", dest_folder=str(tmp_path), allowed_roots=[tmp_path]
+            )
+        assert "15  a_m_15.jpg: not downloaded" in out
+        assert self.ADVICE in out
+
+    @respx.mock
+    async def test_dsm_stopping_on_the_last_item_gets_the_advice(self, tmp_path: Path) -> None:
+        def timeout(_params: dict[str, Any]) -> httpx.Response:
+            raise httpx.ReadTimeout("timed out")
+
+        fake = FakePhotos().on(ITEM, "get", 2, _items("ready", "ready"))
+        fake.on("SYNO.Foto.Download", "download", 1, binary(b"one"), timeout)
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await download_photos(
+                client, ids=[12, 15], dest_folder=str(tmp_path), allowed_roots=[tmp_path]
+            )
+        assert "not tried" not in out
+        assert self.ADVICE in out
+
+    @respx.mock
+    async def test_no_advice_when_all_were_downloaded(self, tmp_path: Path) -> None:
+        fake = FakePhotos().on(ITEM, "get", 2, _items("ready", "ready"))
+        fake.on("SYNO.Foto.Download", "download", 1, binary(b"one"), binary(b"two"))
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await download_photos(
+                client, ids=[12, 15], dest_folder=str(tmp_path), allowed_roots=[tmp_path]
+            )
+        assert "Downloaded 2 of 2" in out and self.ADVICE not in out
+
+    @respx.mock
+    async def test_no_advice_for_a_single_item(self, tmp_path: Path) -> None:
+        install(FakePhotos().on(ITEM, "get", 2, {"list": _items("converting")["list"][:1]}))
+        client = make_client()
+        async with client:
+            out = await download_photos(
+                client, ids=[12], size="m", dest_folder=str(tmp_path), allowed_roots=[tmp_path]
+            )
+        assert "not downloaded" in out and self.ADVICE not in out
+
+
+def test_name_key_is_a_canonical_caseless_match() -> None:
+    # U+0390 and U+0399 U+0308 U+0301 are one name under Unicode's canonical caseless
+    # match; NFC-then-casefold alone keyed them apart.
+    assert _name_key("ΐ.jpg") == _name_key("Ϊ́.jpg")

@@ -57,8 +57,9 @@ def _safe_name(name: str, fallback: str) -> str:
 
 def _name_key(name: str) -> str:
     """Names that are one file on some filesystem compare equal: case (Windows, macOS) and
-    Unicode normalization (macOS treats NFC and NFD as one name; QA round 1 on #462)."""
-    return unicodedata.normalize("NFC", name).casefold()
+    Unicode normalization (macOS treats NFC and NFD as one name; QA round 1 on #462), as
+    Unicode's canonical caseless match does (NFD, casefold, then NFC for a stable key)."""
+    return unicodedata.normalize("NFC", unicodedata.normalize("NFD", name).casefold())
 
 
 def _dest_name(item: dict[str, Any], size: str, used: set[str]) -> str:
@@ -170,18 +171,21 @@ async def download_photos(
             )
             rest = unique[n + 1 :]
             if rest:
-                lines.append(
-                    f"  not tried: {', '.join(str(i) for i in rest)}. To finish, repeat this "
-                    "call with the same ids in the same order (overwrite=false keeps the files "
-                    "already written): a name depends on every item in the call, so a call "
-                    "with only some of them can give an item another item's file name (#467)."
-                )
+                lines.append(f"  not tried: {', '.join(str(i) for i in rest)}")
             break
         if result.startswith("not downloaded"):
             lines.append(f"  {item_id}  {name}: {result}")
         else:
             done += 1
             lines.append(f"  {item_id}  {name}  {result}")
+    if len(unique) > 1 and done < len(found):
+        # A name depends on every item in the call, so retrying only the ones that failed
+        # can give one of them another item's file name and, with overwrite=true, replace
+        # it (#467).
+        lines.append(
+            "To retry, repeat this call with the same ids in the same order (overwrite=false "
+            "keeps the files already written): names depend on every item in the call."
+        )
     what = "original" if size == "original" else f"{size} preview"
     head = (
         f"Downloaded {done:,} of {len(unique):,} item(s) to {local_dir} ({what}, {space_label(sp)})"
