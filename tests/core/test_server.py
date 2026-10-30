@@ -1794,7 +1794,9 @@ class TestInstructionComments:
 # carries only its one-line "not enabled" entry in PERMISSIONS (about 160 characters).
 # +72 in QA round 1: list_snapshots' offset and limit say they page the shared folders
 # when no folder is given.
-PAYLOAD_BUDGET_CHARS = 55_483
+# +396 by #451: delete_files says a shared folder itself means its contents, deleted
+# after a preview the user confirms, and gains `confirm` for the one-time token.
+PAYLOAD_BUDGET_CHARS = 55_879
 
 
 class TestPayloadBudget:

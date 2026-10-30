@@ -2997,3 +2997,82 @@ class TestCountsSeparateThousands:
         paths = [f"/video/Downloads/f{i}.mkv" for i in range(1_200)]
         result = await delete_files(mock_client, paths=paths, recycle_bin_status={"video": True})
         assert result.startswith("[+] Deleted 1,200 item(s):")
+
+
+class TestShareRootHelpers:
+    """#451: the helpers behind delete_files on a shared folder."""
+
+    def test_share_roots(self) -> None:
+        from mcp_synology.modules.filestation.operations import share_roots
+
+        assert share_roots(["/video", "music/", " /video ", "/video/a", "/", "x/y"]) == [
+            "/video",
+            "/music",
+        ]
+
+    def test_tokens(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from mcp_synology.modules.filestation import operations
+        from mcp_synology.modules.filestation.operations import ShareRootTokens
+
+        tokens = ShareRootTokens()
+        a = tokens.issue(["/video", "/x/y"])
+        b = tokens.issue(["/video"])
+        assert a != b
+        assert not tokens.redeem(a, ["/video"])  # other paths: refused, and spent
+        assert not tokens.redeem(a, ["/video", "/x/y"])
+        assert tokens.redeem(f" {b} ", ["video/"])  # same paths, normalized
+        c = tokens.issue(["/video"])
+        now = operations.time.monotonic()
+        monkeypatch.setattr(operations.time, "monotonic", lambda: now + 301)
+        assert not tokens.redeem(c, ["/video"])
+
+    @respx.mock
+    async def test_preview_leaves_out_the_recycle_bin(self, mock_client: DsmClient) -> None:
+        from mcp_synology.modules.filestation import operations
+
+        sizes = {"/video": (10_240, 7, 3), "/video/#recycle": (2_048, 2, 1)}
+        monkeypatch_totals = AsyncMock(side_effect=lambda _c, *, path, timeout: sizes[path])
+        exists = AsyncMock(return_value=True)
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "mcp_synology.modules.filestation.metadata.dir_size_totals", monkeypatch_totals
+            )
+            mp.setattr(operations, "path_exists", exists)
+            out = await operations.share_root_preview(mock_client, ["/video"], timeout=5)
+        # 7 - 2 files; 3 - 1 - 1 folders (#recycle itself is one); 10 - 2 KiB.
+        assert out.endswith("  /video: 5 file(s) and 1 folder(s), 8 KiB")
+
+    @respx.mock
+    async def test_contents_pages_and_skips_the_recycle_bin(self, mock_client: DsmClient) -> None:
+        from mcp_synology.modules.filestation.operations import share_contents
+
+        names = ["#recycle", *(f"f{i}" for i in range(1500))]
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            p = request.url.params
+            start, limit = int(p["offset"]), int(p["limit"])
+            page = [{"name": n, "path": f"/video/{n}"} for n in names[start : start + limit]]
+            return httpx.Response(
+                200, json={"success": True, "data": {"files": page, "total": len(names)}}
+            )
+
+        route = respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        items = await share_contents(mock_client, "/video")
+        assert items == [f"/video/f{i}" for i in range(1500)]
+        assert route.call_count == 2
+
+    @respx.mock
+    async def test_preview_survives_a_failed_bin_check(self, mock_client: DsmClient) -> None:
+        from mcp_synology.modules.filestation import operations
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "mcp_synology.modules.filestation.metadata.dir_size_totals",
+                AsyncMock(return_value=(1024, 1, 0)),
+            )
+            mp.setattr(operations, "path_exists", AsyncMock(side_effect=httpx.ReadTimeout("x")))
+            out = await operations.share_root_preview(mock_client, ["/video"], timeout=5)
+        assert out.endswith(
+            "  /video: 1 file(s) and 0 folder(s), 1 KiB (these totals may include its recycle "
+            "bin, which isn't deleted)"
+        )

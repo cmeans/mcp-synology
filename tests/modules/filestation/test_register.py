@@ -1067,3 +1067,169 @@ class TestDiscoveryAtFirstConnection:
         discover.assert_not_awaited()
         assert await fn() == "SHARES"
         discover.assert_awaited_once()
+
+
+class TestShareRootDelete:
+    """#451: a shared folder itself means its contents, deleted only after a preview the
+    user confirms: through elicitation, or with a one-time token."""
+
+    PREVIEW = "This would delete everything in these shared folders"
+
+    @staticmethod
+    def _setup(
+        monkeypatch: pytest.MonkeyPatch, contents: list[str] | None = None
+    ) -> tuple[AsyncMock, AsyncMock, object]:
+        monkeypatch.setattr(
+            "mcp_synology.modules.filestation.helpers.ensure_known_shares",
+            AsyncMock(side_effect=lambda _c, paths, _k, *_a, **_kw: list(paths)),
+        )
+        preview = AsyncMock(
+            return_value=TestShareRootDelete.PREVIEW + ":\n  /writable: 2 file(s), 1 KiB"
+        )
+        monkeypatch.setattr(
+            "mcp_synology.modules.filestation.operations.share_root_preview", preview
+        )
+        monkeypatch.setattr(
+            "mcp_synology.modules.filestation.operations.share_contents",
+            AsyncMock(
+                return_value=["/writable/a", "/writable/b"] if contents is None else contents
+            ),
+        )
+        delete = AsyncMock(return_value="[+] Deleted")
+        monkeypatch.setattr("mcp_synology.modules.filestation.operations.delete_files", delete)
+        server, _, ctx = _make_ctx()
+        register(ctx)
+        return delete, preview, server._tool_manager._tools["delete_files"].fn
+
+    @staticmethod
+    def _mcp_ctx(elicits: bool, answer: object = None) -> MagicMock:
+        fake = _fake_mcp_ctx()
+        fake.request_context.session.check_client_capability = MagicMock(return_value=elicits)
+        fake.elicit = AsyncMock(return_value=answer)
+        return fake
+
+    async def test_elicitation_accepted_deletes_the_contents(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from mcp.server.elicitation import AcceptedElicitation
+
+        from mcp_synology.modules.filestation import _ConfirmShareDelete
+
+        delete, _, fn = self._setup(monkeypatch)
+        mcp_ctx = self._mcp_ctx(True, AcceptedElicitation(data=_ConfirmShareDelete(delete=True)))
+        out = await fn(ctx=mcp_ctx, paths=["/writable", "/other/x"])
+        assert out.startswith("[+] Deleted")
+        message = mcp_ctx.elicit.await_args.kwargs["message"]
+        assert message.startswith(self.PREVIEW) and message.endswith("Delete all of it?")
+        assert delete.await_args.kwargs["paths"] == ["/writable/a", "/writable/b", "/other/x"]
+
+    @pytest.mark.parametrize("answer", ["decline", "cancel", "no"])
+    async def test_elicitation_not_accepted_deletes_nothing(
+        self, monkeypatch: pytest.MonkeyPatch, answer: str
+    ) -> None:
+        from mcp.server.elicitation import (
+            AcceptedElicitation,
+            CancelledElicitation,
+            DeclinedElicitation,
+        )
+
+        from mcp_synology.modules.filestation import _ConfirmShareDelete
+
+        result = {
+            "decline": DeclinedElicitation(),
+            "cancel": CancelledElicitation(),
+            "no": AcceptedElicitation(data=_ConfirmShareDelete(delete=False)),
+        }[answer]
+        delete, _, fn = self._setup(monkeypatch)
+        out = await fn(ctx=self._mcp_ctx(True, result), paths=["/writable"])
+        assert out.endswith("Nothing deleted: the user didn't confirm.")
+        delete.assert_not_awaited()
+
+    async def test_without_elicitation_a_token_then_the_delete(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import re
+
+        delete, preview, fn = self._setup(monkeypatch)
+        first = await fn(ctx=self._mcp_ctx(False), paths=["/writable"])
+        delete.assert_not_awaited()
+        assert first.startswith(self.PREVIEW)
+        token = re.search(r'confirm="([0-9a-f]{8})"', first)
+        assert token is not None
+        assert "good once, for 5 minutes" in first
+        out = await fn(ctx=self._mcp_ctx(False), paths=["/writable"], confirm=token.group(1))
+        assert out.startswith("[+] Deleted")
+        assert delete.await_args.kwargs["paths"] == ["/writable/a", "/writable/b"]
+        assert preview.await_count == 1  # no second preview on the confirmed call
+        # Good once.
+        with pytest.raises(ToolError, match="confirm token isn't valid"):
+            await fn(ctx=self._mcp_ctx(False), paths=["/writable"], confirm=token.group(1))
+
+    @pytest.mark.parametrize(
+        ("confirm_paths", "token_case"),
+        [(["/other"], "other paths"), (["/writable"], "made up")],
+    )
+    async def test_a_token_only_for_its_preview(
+        self, monkeypatch: pytest.MonkeyPatch, confirm_paths: list[str], token_case: str
+    ) -> None:
+        import re
+
+        delete, _, fn = self._setup(monkeypatch)
+        first = await fn(ctx=self._mcp_ctx(False), paths=["/writable"])
+        token = re.search(r'confirm="([0-9a-f]{8})"', first)
+        assert token is not None
+        value = token.group(1) if token_case == "other paths" else "deadbeef"
+        with pytest.raises(ToolError) as exc:
+            await fn(ctx=self._mcp_ctx(False), paths=confirm_paths, confirm=value)
+        error = json.loads(str(exc.value))["error"]
+        assert (error["code"], error["param"]) == ("invalid_parameter", "confirm")
+        delete.assert_not_awaited()
+
+    async def test_an_expired_token_is_refused(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import re
+
+        delete, _, fn = self._setup(monkeypatch)
+        first = await fn(ctx=self._mcp_ctx(False), paths=["/writable"])
+        token = re.search(r'confirm="([0-9a-f]{8})"', first)
+        assert token is not None
+        monkeypatch.setattr("mcp_synology.modules.filestation.operations.SHARE_ROOT_TOKEN_TTL", 0)
+        import time as time_module
+
+        real = time_module.monotonic
+        monkeypatch.setattr(
+            "mcp_synology.modules.filestation.operations.time.monotonic", lambda: real() + 301
+        )
+        with pytest.raises(ToolError, match="confirm token isn't valid"):
+            await fn(ctx=self._mcp_ctx(False), paths=["/writable"], confirm=token.group(1))
+        delete.assert_not_awaited()
+
+    async def test_confirm_without_a_share_root_is_refused(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        delete, _, fn = self._setup(monkeypatch)
+        with pytest.raises(ToolError) as exc:
+            await fn(ctx=self._mcp_ctx(False), paths=["/writable/a"], confirm="deadbeef")
+        assert json.loads(str(exc.value))["error"]["param"] == "confirm"
+        delete.assert_not_awaited()
+
+    async def test_an_empty_share_deletes_nothing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from mcp.server.elicitation import AcceptedElicitation
+
+        from mcp_synology.modules.filestation import _ConfirmShareDelete
+
+        delete, _, fn = self._setup(monkeypatch, contents=[])
+        mcp_ctx = self._mcp_ctx(True, AcceptedElicitation(data=_ConfirmShareDelete(delete=True)))
+        out = await fn(ctx=mcp_ctx, paths=["/writable"])
+        assert out == "Nothing to delete: /writable has nothing in it."
+        delete.assert_not_awaited()
+
+    async def test_the_share_root_path_is_never_sent(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from mcp.server.elicitation import AcceptedElicitation
+
+        from mcp_synology.modules.filestation import _ConfirmShareDelete
+
+        delete, _, fn = self._setup(monkeypatch)
+        mcp_ctx = self._mcp_ctx(True, AcceptedElicitation(data=_ConfirmShareDelete(delete=True)))
+        await fn(ctx=mcp_ctx, paths=["writable/", " /writable ", "/x/a"])
+        sent = delete.await_args.kwargs["paths"]
+        assert sent == ["/writable/a", "/writable/b", "/x/a"]

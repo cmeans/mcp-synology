@@ -691,8 +691,9 @@ Delete files or folders.
 > a share with a recycle bin, deleted items go to the bin: list_recycle_bin shows them and
 > restore_from_recycle_bin brings them back. Without a bin, and for anything inside a bin
 > (`/<share>/#recycle`), deletion is permanent. Paths are exact, not wildcard patterns, and if any
-> path is missing nothing is deleted. A long delete keeps running on the NAS and returns a handle
-> for file_task.
+> path is missing nothing is deleted. A shared folder itself (`/video`) means its contents: the call
+> first shows how many files and how much would go, and deletes only after the user confirms. A long
+> delete keeps running on the NAS and returns a handle for file_task.
 
 **Parameters:**
 
@@ -700,6 +701,14 @@ Delete files or folders.
 |------|------|----------|---------|-------------|
 | `paths` | `list[str]` | **Yes** | — | File/folder paths to delete. Exact paths: wildcards aren't expanded, and a missing path refuses the whole call. |
 | `recursive` | `bool` | No | `true` | Delete non-empty folders recursively. With `false`, a folder that isn't empty is refused and left in place. |
+| `confirm` | `str` | No | `None` | Only for a whole shared folder's contents: the one-time token from that call's preview, when the client can't ask the user directly. |
+
+**A shared folder itself (`/video`) means its contents (#451).** On DSM 7.2.2, 7.3.2 and 7.4.1, File Station's `Delete` on `/<share>` deletes the shared folder itself, for any account with write access (admin or not), and it disappears from `list_share` for everyone; the recycle bin, inside the share, can't bring it back. DSM 7.1 refuses it (900 for a non-admin, 407 for admin). Verified on vdsm, DSM 7.1.1-42962 Update 9, 7.2.2-72806 Update 10, 7.3.2-86009 Update 5 and 7.4.1-90080 Update 1. So `delete_files` never sends that path; it deletes the share's top-level items instead (into the recycle bin when it's on), and only after a preview is confirmed (maintainer decision 2026-10-30):
+- **Preview:** DSM's DirSize on the share, less its `#recycle`: `This would delete everything in these shared folders (their recycle bins and the shared folders themselves are kept):` then `  /video: 1,234 file(s) and 56 folder(s), 18.2 GiB`.
+- **Confirmation by the user, through MCP elicitation,** when the client declares that capability: the preview is shown with `Delete all of it?` and a yes/no field. Anything but an accepted yes deletes nothing (`Nothing deleted: the user didn't confirm.`).
+- **Otherwise a one-time token:** the reply is the preview and `Nothing deleted yet. Show this to the user, and only if they agree, call delete_files again with the same paths and confirm="<token>" (good once, for 5 minutes).` A token is good once, for `SHARE_ROOT_TOKEN_TTL` (5 minutes), and only for the same paths; anything else is `invalid_parameter` naming `confirm`. `confirm` with no shared-folder path is `invalid_parameter` too. A token shows a preview was given, not that the user agreed: the description asks the model to get the user's OK.
+- A share with nothing in it (`#recycle` left out) answers `Nothing to delete: /video has nothing in it.`
+- Deleting a shared folder itself is `SYNO.Core.Share` `delete` (administrator-only, with `validate_delete`), not a File Station call; it's not exposed. A share's own `#recycle` is unchanged: what DSM does with it is unprobed (#451).
 
 **Response shape (recycle bin enabled):**
 

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import secrets
+import time
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -1220,3 +1222,109 @@ async def _recreate_missing_folders(client: DsmClient, folders: list[str]) -> li
             synology_error_response("Restore files", e)
         created.append(path)
     return sorted(created)
+
+
+# -- delete_files on a share root (#451) --------------------------------------------
+#
+# On DSM 7.2.2 and later, File Station's Delete on `/<share>` deletes the shared folder
+# itself, for any account with write access, and the recycle bin (inside the share) can't
+# bring it back; DSM 7.1 refuses it (vdsm probes, #451). delete_files instead deletes a
+# share's contents, its top-level items, and only after a preview (counts and size) is
+# confirmed: by the user through MCP elicitation where the client supports it, otherwise
+# with a one-time token from the preview.
+
+SHARE_ROOT_TOKEN_TTL = 300.0  # seconds a preview's token stays valid
+
+
+def share_roots(paths: Sequence[str]) -> list[str]:
+    """The paths that name a shared folder itself (``/video``), normalized."""
+    roots = []
+    for path in paths:
+        normalized = normalize_path(path)
+        if normalized != "/" and "/" not in normalized[1:] and normalized not in roots:
+            roots.append(normalized)
+    return roots
+
+
+class ShareRootTokens:
+    """One-time tokens a share-root preview hands out, for clients without elicitation.
+
+    A token is valid once, for ``SHARE_ROOT_TOKEN_TTL`` seconds, and only for the same
+    paths the preview covered, so a delete can only follow a preview of what it deletes.
+    """
+
+    def __init__(self) -> None:
+        self._tokens: dict[str, tuple[tuple[str, ...], float]] = {}
+
+    def issue(self, paths: Sequence[str]) -> str:
+        now = time.monotonic()
+        self._tokens = {t: v for t, v in self._tokens.items() if v[1] > now}
+        token = secrets.token_hex(4)
+        self._tokens[token] = (tuple(normalize_path(p) for p in paths), now + SHARE_ROOT_TOKEN_TTL)
+        return token
+
+    def redeem(self, token: str, paths: Sequence[str]) -> bool:
+        entry = self._tokens.pop(token.strip(), None)
+        if entry is None:
+            return False
+        covered, expires = entry
+        return expires > time.monotonic() and covered == tuple(normalize_path(p) for p in paths)
+
+
+async def share_root_preview(client: DsmClient, roots: Sequence[str], *, timeout: float) -> str:
+    """What deleting each share's contents would delete: files, folders and size.
+
+    DSM's DirSize counts the share's ``#recycle`` too, which isn't deleted, so its
+    totals are taken off when the folder exists.
+    """
+    from mcp_synology.modules.filestation.metadata import dir_size_totals
+
+    lines = []
+    for root in roots:
+        size, files, folders = await dir_size_totals(client, path=root, timeout=timeout)
+        note = ""
+        try:
+            has_bin = await path_exists(client, f"{root}/#recycle") is True
+            if has_bin:
+                b_size, b_files, b_folders = await dir_size_totals(
+                    client, path=f"{root}/#recycle", timeout=timeout
+                )
+                # The #recycle folder itself is one of the share's folders.
+                size, files, folders = size - b_size, files - b_files, folders - b_folders - 1
+        except Exception as e:  # noqa: BLE001 - the totals stand, with a note
+            logger.debug("Couldn't size %s/#recycle: %s", root, e)
+            note = " (these totals may include its recycle bin, which isn't deleted)"
+        lines.append(
+            f"  {root}: {max(files, 0):,} file(s) and {max(folders, 0):,} folder(s), "
+            f"{format_size(max(size, 0))}{note}"
+        )
+    return "\n".join(
+        [
+            "This would delete everything in these shared folders (their recycle bins and "
+            "the shared folders themselves are kept):",
+            *lines,
+        ]
+    )
+
+
+async def share_contents(client: DsmClient, root: str) -> list[str]:
+    """The paths of a share's top-level items, its ``#recycle`` left out."""
+    items: list[str] = []
+    offset = 0
+    while True:
+        try:
+            data = await client.request(
+                "SYNO.FileStation.List",
+                "list",
+                params={"folder_path": root, "offset": offset, "limit": 1000, "filetype": "all"},
+            )
+        except SynologyError as e:
+            synology_error_response("Delete files", e)
+        files = data.get("files") or []
+        for entry in files:
+            name = str(entry.get("name", ""))
+            if name and name != "#recycle":
+                items.append(str(entry.get("path") or f"{root}/{name}"))
+        offset += len(files)
+        if not files or offset >= int(data.get("total", 0) or 0):
+            return items
