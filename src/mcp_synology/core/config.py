@@ -9,6 +9,7 @@ Four-step loading:
 
 from __future__ import annotations
 
+import difflib
 import logging
 import os
 import re
@@ -38,8 +39,13 @@ ENV_VAR_MAP: dict[str, str] = {
 }
 
 
-class ConnectionConfig(BaseModel):
-    """NAS connection settings."""
+class ConnectionConfig(BaseModel, extra="forbid"):
+    """NAS connection settings.
+
+    extra="forbid", as for every config section but module settings (#386): a typo
+    here is an error, not a dropped key. `htps: true` used to load with `https` false,
+    so the server logged in, password included, over plain HTTP.
+    """
 
     host: str
     port: int | None = None
@@ -48,8 +54,11 @@ class ConnectionConfig(BaseModel):
     timeout: int = Field(default=30, ge=1, le=600)
 
 
-class AuthConfig(BaseModel):
-    """Credentials that override the keyring; a password here is plaintext on disk."""
+class AuthConfig(BaseModel, extra="forbid"):
+    """Credentials that override the keyring; a password here is plaintext on disk.
+
+    extra="forbid" (#386): `pasword:` used to be dropped without a word.
+    """
 
     username: str | None = None
     password: str | None = None
@@ -70,8 +79,8 @@ class ModuleConfig(BaseModel, extra="forbid"):
     settings: dict[str, Any] = Field(default_factory=dict)
 
 
-class LoggingConfig(BaseModel):
-    """Logging configuration."""
+class LoggingConfig(BaseModel, extra="forbid"):
+    """Logging configuration. extra="forbid" (#386): `levle: debug` is an error."""
 
     level: Literal["debug", "info", "warning", "error"] = "info"
     file: str | None = None
@@ -164,16 +173,32 @@ class AppConfig(BaseModel, extra="forbid"):
             self.connection.port = 5001 if self.connection.https else 5000
 
         # Derive instance_id from host if not set
-        if self.instance_id is None:
+        derived = self.instance_id is None
+        if derived:
             self.instance_id = _derive_instance_id(self.connection.host)
 
         # Normalize and validate instance_id format
         if self.instance_id:
             self.instance_id = self.instance_id.lower()
             if not re.match(r"^[a-z0-9-]+$", self.instance_id):
+                # A derived one isn't quoted: a host written as a URL can carry a password
+                # (`https://admin:…@nas`, #386).
+                what = (
+                    "The instance_id derived from connection.host"
+                    if derived
+                    else f"instance_id '{self.instance_id}'"
+                )
                 msg = (
-                    f"instance_id '{self.instance_id}' contains invalid characters. "
-                    "Only lowercase alphanumeric characters and hyphens are allowed."
+                    f"{what} contains invalid characters. Only lowercase alphanumeric "
+                    "characters and hyphens are allowed"
+                    + (
+                        ": write connection.host as a bare host name or IPv4 address (no "
+                        "https://, user name or port), or set instance_id (lowercase letters, "
+                        "digits and hyphens), which an IPv6 address or a host name with "
+                        "other characters needs."
+                        if derived
+                        else "."
+                    )
                 )
                 raise ValueError(msg)
 
@@ -318,6 +343,227 @@ def _synthesize_env_config() -> AppConfig | None:
     return config
 
 
+def _may_show(err: Any, loc_parts: list[str]) -> bool:
+    """Whether an error's rejected value may be shown: only a plain value (text, a number,
+    true or false) outside `auth:`, and never an unknown key's (`pasword:` holds the
+    password wherever it's misplaced, #386). A section or the whole config, which a root or
+    missing-field error carries as its input (`auth` and env-var overrides included), is
+    never shown."""
+    if not isinstance(err.get("input"), str | int | float | bool):
+        return False
+    # A mapping key that failed (`settings.2024.[key]`): the input is the key itself.
+    if "[key]" in err.get("loc", ()):
+        return False
+    # An unknown key's value, or a section given a plain value (`connection: https://
+    # admin:…@nas` is a "should be a dictionary" error carrying that text).
+    if err.get("type") in (
+        "extra_forbidden",
+        "invalid_key",
+        "model_type",
+        "dict_type",
+        "model_attributes_type",
+    ):
+        return False
+    return not (loc_parts and loc_parts[0] == "auth")
+
+
+# The sections whose keys are checked: both the near-miss rule and the YAML-error key names
+# read them from here.
+_SECTION_MODELS: dict[str, type[BaseModel]] = {
+    "connection": ConnectionConfig,
+    "auth": AuthConfig,
+    "logging": LoggingConfig,
+}
+
+# Conditional: a comma split can leave a key with or without a value (`a,B: x` gives `B: x`),
+# so the hint says when it applies (QA rounds 4 and 5 on #469). One wording for every message.
+# Which comma: every flow mapping has commas between its entries (QA round 6 on #469).
+_SPLIT_HINT = (
+    "if a value inside {…} has a comma of its own (not the one between entries), quote that value"
+)
+_NOT_TEXT_KEY = f"<a key that isn't text, not shown: it may be part of a password; {_SPLIT_HINT}>"
+
+
+def _section_keys(loc_parts: list[str]) -> list[str]:
+    """The keys the config section holding this location defines."""
+    if len(loc_parts) == 1:
+        model: type[BaseModel] = AppConfig
+    elif loc_parts[0] == "modules" and len(loc_parts) == 3:
+        model = ModuleConfig
+    else:
+        model = _SECTION_MODELS.get(loc_parts[0], AppConfig)
+    return list(model.model_fields)
+
+
+def _non_text_keys(errors: list[Any]) -> set[tuple[Any, ...]]:
+    """The mappings' keys pydantic reported as not text (`modules.7319.[key]`), as the
+    location of the key itself (`("modules", 7319)`)."""
+    return {
+        tuple(raw[: raw.index("[key]")])
+        for raw in (tuple(err.get("loc", ())) for err in errors)
+        if "[key]" in raw
+    }
+
+
+def _shown_location(
+    err: Any, loc_parts: list[str], non_text_keys: set[tuple[Any, ...]] | None = None
+) -> str:
+    """The error's location, except an unknown key that may be part of a password.
+
+    YAML splits a value with a comma inside a flow mapping (`{password: a,Hunter2x}`): the
+    second half arrives as a key with no value, in any section (#386). So an unknown key
+    isn't named when it has no value, or when it's under `auth`; a near-miss of a key its
+    section defines names that key instead (`pasword` reads `<an unknown key close to
+    "password", …>`), since `Spring,Password1` splits off `Password1`. An unknown key with a
+    value elsewhere (`totally_unknown: x`) is named, as before. A near-miss is matched in
+    any case (`USERNAME`). A key YAML read as something other than text (`{password:
+    Summer,2024}` splits off a key 2024), anywhere, module settings included, is never
+    named: only the mapping it's in.
+    """
+    loc = ".".join(loc_parts) if loc_parts else "<root>"
+    raw_loc = err.get("loc", ())
+    if "[key]" in raw_loc:
+        # A key of a free-form mapping (module settings) that isn't text: `{x: Hunter,2024}`
+        # fails as `<settings>.2024.[key]`. Name the mapping, not the key.
+        cut = raw_loc.index("[key]") - 1
+        where = ".".join(str(p) for p in raw_loc[:cut])
+        return (f"{where}." if where else "") + _NOT_TEXT_KEY
+    for hidden in non_text_keys or ():
+        if tuple(raw_loc[: len(hidden)]) == hidden:
+            # Another error about that same key (`modules: {…, 7319}` also fails as
+            # `modules.7319`, "should be a dictionary"): it isn't named there either (#469
+            # QA round 4). The path below it still says which field failed.
+            where = ".".join(str(p) for p in hidden[:-1])
+            below = "".join(f".{p}" for p in raw_loc[len(hidden) :])
+            return (f"{where}." if where else "") + _NOT_TEXT_KEY + below
+    if err.get("type") == "invalid_key" and loc_parts:
+        # A key YAML read as a number or a date (`{password: Summer,2024}` splits into a
+        # key 2024): never a real config key, and possibly part of a password (#469 QA
+        # round 1).
+        where = ".".join(loc_parts[:-1])
+        return (f"{where}." if where else "") + _NOT_TEXT_KEY
+    if err.get("type") == "extra_forbidden" and loc_parts:
+        key = loc_parts[-1]
+        suspect = err.get("input") is None or loc_parts[0] == "auth"
+        valid = _section_keys(loc_parts)
+        if suspect:
+            # A comma split can leave a fragment with a value too (`{password: a,B: x}` gives
+            # `B: x`), so the hint is conditional, never left out (QA rounds 4 and 5 on #469).
+            split = _SPLIT_HINT
+            where = ".".join(loc_parts[:-1])
+            by_lower = {k.lower(): k for k in valid}
+            close = difflib.get_close_matches(key.lower(), list(by_lower), n=1, cutoff=0.75)
+            if close:
+                # A typo's help without its text: `Spring,Password1` splits off a key
+                # `Password1`, close to `password` (QA round 2 on #469).
+                return (f"{where}." if where else "") + (
+                    f'<an unknown key close to "{by_lower[close[0]]}", not shown since it may '
+                    f"be, or hold, part of a password: fix its spelling, or, {split}>"
+                )
+            return (
+                (f"{where}." if where else "")
+                + "<an unknown key, not shown since it may be, or hold, part of a password; "
+                + f"{split}; valid keys here: {', '.join(sorted(valid))}>"
+            )
+    return loc
+
+
+_YAML_KEY = re.compile(r"\s*-?\s*[\"']?([A-Za-z_][A-Za-z0-9_]*)[\"']?\s*:")
+
+
+class ConfigValueError(yaml.YAMLError):
+    """A value PyYAML parsed but couldn't build: a tag that doesn't fit it, such as
+    `!!int Hunter2x`. PyYAML raises ValueError or AttributeError there, with the value in
+    the message (#386). ``kind`` names the error PyYAML raised (``RecursionError`` for a
+    file nested too deeply)."""
+
+    kind: str = ""
+
+
+def parse_config_text(text: str) -> Any:
+    """`yaml.safe_load`, with any error building a value raised as `ConfigValueError`.
+
+    A tag that doesn't fit its value makes PyYAML raise ValueError (`!!int Hunter2x`),
+    KeyError (`!!bool Hunter2x`), AttributeError (`!!timestamp Hunter2x`) and so on, each
+    naming the value (#386). Every loader of a config file goes through here.
+    """
+    try:
+        return yaml.safe_load(text)
+    except yaml.YAMLError:
+        raise
+    except Exception as e:  # noqa: BLE001 - any constructor error; its text names the value
+        error = ConfigValueError(type(e).__name__)
+        error.kind = type(e).__name__
+        raise error from None
+
+
+def _config_keys() -> set[str]:
+    """Every key the config's own sections define: the only ones a YAML error may name,
+    so a password's text on its own line is never mistaken for a key (#386)."""
+    models: list[type[BaseModel]] = [AppConfig, ModuleConfig, *_SECTION_MODELS.values()]
+    return {name for model in models for name in model.model_fields}
+
+
+def _key_on_line(mark: Any) -> str | None:
+    buffer = getattr(mark, "buffer", None)
+    if not isinstance(buffer, str):
+        return None
+    lines = buffer.splitlines()
+    if mark.line >= len(lines):
+        return None
+    # A BOM (Windows Notepad's default) starts the first line.
+    key = _YAML_KEY.match(lines[mark.line].lstrip("\ufeff"))
+    return key.group(1) if key and key.group(1) in _config_keys() else None
+
+
+def format_yaml_error(exc: yaml.YAMLError) -> str:
+    """Say where a config file isn't valid YAML, without quoting it (#386).
+
+    PyYAML's own message quotes the offending line, and its problem text can quote the
+    value (`found undefined alias 'Hunter2x'` for `password: *Hunter2x`), so a password
+    with a YAML-special character would be printed. This names the line and column, where
+    the broken value starts when PyYAML only notices at the end of the file (an
+    unterminated quote or bracket), and the config key on that line, never the text.
+    """
+    hint = (
+        "The text there isn't shown, since it may be a password: check its quoting (a "
+        "value starting with a YAML special character, such as * ! @ % & ` | > [ { or a "
+        "quote, or containing ': ' or ' #', needs quotes; inside double quotes a backslash "
+        "starts an escape, so write a Windows path in single quotes, 'C:\\Users\\me', or "
+        "double each backslash) and indentation."
+    )
+    if isinstance(exc, ConfigValueError) and exc.kind == "RecursionError":
+        return (
+            "The config file is nested too deeply for YAML to read. Check its brackets and "
+            "indentation."
+        )
+    if isinstance(exc, ConfigValueError):
+        return (
+            "The config file has a value YAML can't build, such as one tagged !!int or "
+            f"!!timestamp that doesn't fit the tag. {hint}"
+        )
+    mark = getattr(exc, "problem_mark", None)
+    if mark is None:
+        position = getattr(exc, "position", None)  # a ReaderError: a character YAML refuses
+        if isinstance(exc, yaml.reader.ReaderError) and isinstance(position, int):
+            return (
+                f"The config file has a character YAML doesn't accept (character "
+                f"{position + 1} of the file). {hint}"
+            )
+        return f"The config file isn't valid YAML. {hint}"
+    where = f"line {mark.line + 1}, column {mark.column + 1}"
+    start = getattr(exc, "context_mark", None)
+    context = str(getattr(exc, "context", "") or "")
+    # PyYAML notices an unclosed quote or bracket only at the end of the file; its context
+    # then marks where that value starts. A block context marks the whole document.
+    if start is not None and start.line != mark.line and ("quoted" in context or "flow" in context):
+        where += f" (in the value that starts at line {start.line + 1})"
+        mark = start
+    if key := _key_on_line(mark):
+        where += f", on the `{key}` line"
+    return f"The config file isn't valid YAML at {where}. {hint}"
+
+
 def format_validation_error(exc: Any) -> str:
     """Render a pydantic.ValidationError as a multi-line user-friendly block.
 
@@ -330,12 +576,15 @@ def format_validation_error(exc: Any) -> str:
     if not errors:
         return f"Configuration validation failed: {exc}"
     lines = [f"Configuration validation failed ({len(errors)} error(s)):"]
+    non_text_keys = _non_text_keys(errors)
     for err in errors:
         loc_parts = [str(p) for p in err.get("loc", ())]
-        loc = ".".join(loc_parts) if loc_parts else "<root>"
+        loc = _shown_location(err, loc_parts, non_text_keys)
         msg = err.get("msg", "validation error")
         input_value = err.get("input")
-        suffix = f" (got {input_value!r})" if input_value not in (None, "") else ""
+        suffix = ""
+        if _may_show(err, loc_parts):
+            suffix = f" (got {input_value!r})" if input_value not in (None, "") else ""
         lines.append(f"  - {loc}: {msg}{suffix}")
     return "\n".join(lines)
 
@@ -362,8 +611,16 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         raise
 
     logger.debug("Loading config from %s", config_path)
-    raw_text = config_path.read_text(encoding="utf-8")
-    raw: dict[str, Any] = yaml.safe_load(raw_text) or {}
+    try:
+        raw_text = config_path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as e:
+        # Its message quotes the byte, which may be one of a password's (QA round 2 on #469).
+        line = e.object[: e.start].count(b"\n") + 1
+        raise ValueError(
+            f"The config file isn't valid UTF-8 (line {line}). Save it as UTF-8 (in Notepad: "
+            "File > Save as, Encoding: UTF-8)."
+        ) from None
+    raw: dict[str, Any] = parse_config_text(raw_text) or {}
 
     raw = _merge_env_overrides(raw)
 

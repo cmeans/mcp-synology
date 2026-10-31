@@ -446,7 +446,7 @@ connection:
   timeout: 30            # seconds per request, 1 to 600 (default 30)
 ```
 
-Use `https: true` unless the NAS is on a network you trust: with plain HTTP, the login and every request travel unencrypted, and the server logs a warning saying so. `setup` writes `https: true` unless you decline. [docs/https.md](docs/https.md) covers DSM's self-signed certificate and how to get a trusted one. If DSM uses its own self-signed certificate, set `verify_ssl: false` (the server warns that verification is off), or install a certificate the machine trusts and keep it `true`.
+Use `https: true` unless the NAS is on a network you trust: with plain HTTP, the login and every request travel unencrypted, and the server logs a warning saying so. `setup` writes `https: true` unless you decline. [docs/https.md](docs/https.md) covers DSM's self-signed certificate and how to get a trusted one. If DSM uses its own self-signed certificate, set `verify_ssl: false` (the server warns that verification is off), or install a certificate the machine trusts and keep it `true`. A misspelled key in `connection`, `auth` or `logging` (`htps`, `verfy_ssl`) stops the server with an error naming it, rather than being ignored and leaving HTTPS off. When the key may be part of a password (any unknown key under `auth`, or one with no value), the error names the real key it's close to instead, or lists the valid keys.
 
 ### Multi-NAS
 

@@ -324,7 +324,7 @@ jobs:
 - Full config with all optional fields
 - Env var override merging (two-phase validation)
 - Default derivation (port from https, instance_id from host)
-- Strict top-level validation (unknown keys → error)
+- Strict validation at the top level, in `connection`/`auth`/`logging` and directly under `modules.<name>` (unknown keys → error)
 - Lenient module settings (unknown keys → warning)
 - Schema version checking
 - Pydantic validation for module settings schemas
