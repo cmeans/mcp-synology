@@ -220,24 +220,34 @@ class TestRefuseBadName:
             ("a\u2028b", "contains a line or paragraph separator"),
             ("\u200b", "has no visible character"),
             ("\ufeff\u200b", "has no visible character"),
-            # Invisible padding is padding (maintainer, 2026-10-31).
-            ("report.pdf\u200b", "starts or ends with an invisible character"),
-            ("\ufeffreport.pdf", "starts or ends with an invisible character"),
-            ("report.pdf\u3164", "starts or ends with an invisible character"),
-            ("\u200dx", "starts or ends with an invisible character"),
-            ("report.pdf\u00ad", "starts or ends with an invisible character"),
-            ("report.pdf\u2060", "starts or ends with an invisible character"),
-            ("x\u200d", "starts or ends with an invisible character"),
-            # A mark or joiner that belongs to no letter (pre-QA on #515).
-            ("report.pdf\ufe0f", "starts or ends with an invisible character"),
-            ("report.pdf\u034f", "starts or ends with an invisible character"),
-            ("report.pdf\U000e007f", "starts or ends with an invisible character"),
-            ("rep\u200dort.pdf", "has an invisible character that belongs to no letter"),
-            ("ab\u200ccd", "has an invisible character that belongs to no letter"),
-            ("rep\ufe0fort.pdf", "has an invisible character that belongs to no letter"),
-            ("report.\u0301pdf", "has an invisible character that belongs to no letter"),
-            ("report.pdf.\u0301", "starts or ends with an invisible character"),
-            ("rep\u034fort.pdf\u034f", "starts or ends with an invisible character"),
+            # An invisible character at an end is padding (maintainer, 2026-10-31).
+            ("report.pdf\u200b", "contains an invisible character (U+200B)"),
+            ("\ufeffreport.pdf", "contains an invisible character (U+FEFF)"),
+            ("report.pdf\u3164", "contains an invisible character (U+3164)"),
+            ("\u200dx", "contains an invisible character (U+200D)"),
+            ("report.pdf\u00ad", "contains an invisible character (U+00AD)"),
+            ("report.pdf\u2060", "contains an invisible character (U+2060)"),
+            ("x\u200d", "contains an invisible character (U+200D)"),
+            # Or anywhere Unicode doesn't use one (default-ignorable, UTS #39/#51; #515):
+            # a ZWNJ between Latin letters, a ZWJ before a dependent vowel, VS16 after ASCII.
+            ("rep\u200bort.pdf", "contains an invisible character (U+200B)"),
+            ("rep\u00adort.pdf", "contains an invisible character (U+00AD)"),
+            ("rep\u2060ort.pdf", "contains an invisible character (U+2060)"),
+            ("re\u3164port.pdf", "contains an invisible character (U+3164)"),
+            ("rep\u034fort.pdf", "contains an invisible character (U+034F)"),
+            ("re\u17b4port.pdf", "contains an invisible character (U+17B4)"),
+            ("x\U0001d173y", "contains an invisible character (U+1D173)"),
+            ("rep\u200dort.pdf", "contains an invisible character (U+200D)"),
+            ("ab\u200ccd", "contains an invisible character (U+200C)"),
+            ("rep\ufe0fort.pdf", "contains an invisible character (U+FE0F)"),
+            ("report.pdf\ufe0f", "contains an invisible character (U+FE0F)"),
+            ("report.pdf\u034f", "contains an invisible character (U+034F)"),
+            ("report.pdf\U000e007f", "contains an invisible character (U+E007F)"),
+            ("\u0915\u094d\u200d\u093e", "contains an invisible character (U+200D)"),
+            ("\u0301abc", "starts with a combining mark, which has no character to go on"),
+            ("Cafe\u0301\u0301", "repeats a combining mark (U+0301), which draws as one"),
+            ("\u2800report", "starts or ends with a blank character (U+2800)"),
+            ("report\u2800", "starts or ends with a blank character (U+2800)"),
         ],
     )
     def test_refused(self, name: str, problem: str) -> None:
@@ -303,9 +313,19 @@ class TestRefuseBadName:
             "\U0001f3f3\ufe0f\u200d\U0001f308",
             "\u5b57\U000e0100",
             "\U0001f3f4\U000e0067\U000e0062\U000e0073\U000e0063\U000e0074\U000e007f",
-            # Joiners stay: emoji sequences and several scripts use them.
+            # Joiners where Unicode uses them: emoji sequences and words (UTS #39 3.1.1.1).
             "\U0001f468\u200d\U0001f469\u200d\U0001f467",
+            "\U0001f3f3\ufe0f\u200d\u26a7\ufe0f",
             "\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645",  # Persian, a ZWNJ inside a word
+            "\u0915\u094d\u200c\u0937",  # Devanagari, ZWNJ after a virama
+            "\u0915\u094d\u200d\u0937",  # a half form: ZWJ after a virama
+            "\u0d23\u0d4d\u200d",  # Malayalam chillu, old spelling, at the end
+            "\u0d15\u0d23\u0d4d\u200d\u0d15",  # and inside a word
+            # Other variation selectors after what they vary; newer emoji (Unicode 15+).
+            "\u1820\u180b",  # Mongolian free variation selector
+            "\U0001fae9 shaking face",
+            "x\u2800y",  # the Braille blank inside a name, like a space
+            "\u05e9\u05c1\u05b8",  # Hebrew, two different marks
         ],
     )
     def test_ordinary_names_pass(self, name: str) -> None:

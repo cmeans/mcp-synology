@@ -266,8 +266,9 @@ Common causes:
   local file's name, `create_folder`'s new folder) starts or ends with whitespace (#488:
   DSM keeps it exactly, making `report.pdf ` a different file), has a control character
   other than a tab, a direction-changing character or a line or paragraph separator, no visible
-  character, or an invisible character that belongs to no letter (a zero-width space or
-  BOM at an end, `report.pdf` followed by a variation selector), or is `#recycle` directly in a shared folder or a user's home folder
+  character, an invisible character where Unicode doesn't use one (a zero-width space, a
+  soft hyphen or a BOM anywhere, `report.pdf` followed by a variation selector), a
+  combining mark at its start or the same one twice in a row, or is `#recycle` directly in a shared folder or a user's home folder
   (#510); or a copy, move or restore would put a folder named `#recycle` there; or an
   upload or `create_folder` would create a missing parent folder under such a name. Give
   a plain name. Paths themselves are taken exactly, so an existing item named with such

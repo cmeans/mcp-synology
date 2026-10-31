@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from typing import Any, NoReturn
 
 import httpx
+import regex
 
 from mcp_synology.core.client import DsmClient
 from mcp_synology.core.errors import ErrorCode, SynologyError
@@ -203,103 +204,110 @@ def strip_padding(path: str) -> str:
     return unpadded if unpadded.startswith("/") else path
 
 
-# Letters that draw nothing (U+3164 Hangul filler is a well-known blank-looking name).
-_BLANK_LETTERS = frozenset("\u115f\u1160\u3164\uffa0\u2800")
+# -- invisible characters (#510) ----------------------------------------------------------
+# Built on Unicode's own definitions, not a list of our own (maintainer, 2026-10-31, after
+# prior-art research on #515): Default_Ignorable_Code_Point (DerivedCoreProperties.txt) is
+# Unicode's set of characters that draw nothing; UTS #39 section 3.1.1.1 says where the
+# zero-width joiner and non-joiner belong in words; UTS #51 says where emoji sequences use
+# a joiner, a variation selector or tag characters; UTS #39 section 5.4 flags a repeated
+# combining mark. The `regex` package carries current Unicode data (Python 3.11's
+# `unicodedata` is Unicode 14, which calls newer emoji unassigned).
 
+_IGNORABLE = regex.compile(r"\p{Default_Ignorable_Code_Point}")
+_MARK = regex.compile(r"[\p{Mn}\p{Me}]")
+_NOT_PRINTED = regex.compile(r"[\p{Cc}\p{Cs}\p{Co}\p{Cn}\p{Zl}\p{Zp}]")
+_BRAILLE_BLANK = "\u2800"  # draws nothing, but Unicode doesn't call it default-ignorable
 
-def draws_nothing(c: str) -> bool:
-    """A character that draws nothing on its own: whitespace, a format character (zero
-    width, BOM, bidi control), a combining mark, or a blank filler letter (#510). Shared by
-    `shown` and the new-name rules, so what's refused as invisible is shown quoted."""
-    return c.isspace() or unicodedata.category(c) in ("Cf", "Zs", "Mn", "Me") or c in _BLANK_LETTERS
-
-
-_JOINERS = frozenset("\u200c\u200d")
-_CGJ = "\u034f"  # combining grapheme joiner: default-ignorable, draws nothing
+# UTS #39 section 3.1.1.1, on NFC text. $M1 is a nonspacing mark with a nonzero combining
+# class. Not applied: the rule's single-script condition (a letter of another script
+# beside the joiner); mixed-script look-alikes are a separate check (#516).
+_M1 = r"(?:(?!\p{ccc=0})\p{Mn})"
+_ZWNJ_A1 = regex.compile(r"(?<=[\p{jt=D}\p{jt=L}]\p{jt=T}*)\u200c(?=[\p{jt=D}\p{jt=R}])")
+_ZWNJ_A2 = regex.compile(rf"(?<=\p{{L}}\p{{Mn}}*\p{{ccc=Virama}}{_M1}*)\u200c(?={_M1}*\p{{L}})")
+_ZWJ_B = regex.compile(
+    rf"(?<=\p{{L}}\p{{Mn}}*\p{{ccc=Virama}}{_M1}*)\u200d(?!\p{{Indic_Syllabic_Category=Vowel_Dependent}})"
+)
+# UTS #51: a joiner between two emoji (👨‍👩‍👧, 🏳️‍🌈); VS15/VS16 after an emoji, or after
+# a keycap base when the keycap follows (1️⃣); the other variation selectors after the
+# characters they vary (CJK ideographs, Mongolian letters, math symbols).
+_EMOJI_ZWJ = regex.compile(
+    r"(?<=[\p{Extended_Pictographic}\p{Emoji_Modifier}\ufe0f])\u200d(?=\p{Extended_Pictographic})"
+)
+_EMOJI_VS = regex.compile(
+    r"(?<=(?![\x00-\x7f])\p{Emoji})[\ufe0e\ufe0f]|(?<=[0-9#*])[\ufe0e\ufe0f](?=\u20e3)"
+)
+_OTHER_VS = regex.compile(
+    r"(?<=(?![\x00-\x7f])[\p{L}\p{N}\p{S}\p{P}])[\ufe00-\ufe0d]"
+    r"|(?<=\p{Ideographic})[\U000e0100-\U000e01ef]"
+    r"|(?<=\p{scx=Mong})[\u180b-\u180d\u180f]"
+    r"|(?<=\p{scx=Mong})\u180e(?=\p{scx=Mong})"
+)
 _FLAG = "\U0001f3f4"  # waving black flag: the base of a subdivision flag's tag sequence
 _CANCEL_TAG = "\U000e007f"  # ends that tag sequence (the Scotland flag)
-_KEYCAP_BASES = frozenset("0123456789#*")
-
-
-def _is_variation_selector(c: str) -> bool:
-    o = ord(c)
-    return 0xFE00 <= o <= 0xFE0F or 0xE0100 <= o <= 0xE01EF or 0x180B <= o <= 0x180F
 
 
 def _is_tag(c: str) -> bool:
     return 0xE0020 <= ord(c) <= 0xE007F
 
 
-def _misplaced_mark(text: str, i: int) -> bool:
-    """Whether ``text[i]``, a mark or joiner that draws nothing itself, sits where it can't
-    belong to the character before it, so it hides (QA round 1 and pre-QA on #515):
-    - a joiner (ZWJ, ZWNJ) belongs between two non-ASCII characters (emoji sequences,
-      Indic and Persian spelling), never at an edge or beside ASCII;
-    - a variation selector after an emoji, a symbol or a CJK character, or VS15/VS16 after a
-      keycap base (`1️⃣`), never after another ASCII character;
-    - a tag character only in a subdivision flag (🏴 + tags + the closing tag);
-    - a combining grapheme joiner never at the end;
-    - any other combining mark after a letter, a digit or another mark (NFD `Café`,
-      `नमस्ते`), not after punctuation, a space or nothing.
-    Other characters return False."""
-    c = text[i]
-    prev = text[i - 1] if i > 0 else ""
-    nxt = text[i + 1] if i + 1 < len(text) else ""
-    if c in _JOINERS:
-        return not prev or not nxt or prev.isascii() or nxt.isascii()
-    if _is_tag(c):
-        start = i
-        while start > 0 and _is_tag(text[start - 1]):
-            start -= 1
-        end = i
-        while end + 1 < len(text) and _is_tag(text[end + 1]):
-            end += 1
-        return not (start > 0 and text[start - 1] == _FLAG and text[end] == _CANCEL_TAG)
-    if _is_variation_selector(c):
-        if not prev:
-            return True
-        return prev.isascii() and not (c in "\ufe0e\ufe0f" and prev in _KEYCAP_BASES)
-    if c == _CGJ:
-        return not prev or not nxt
-    if unicodedata.category(c) in ("Mn", "Me"):
-        return not prev or unicodedata.category(prev)[0] not in ("L", "M", "N", "S")
-    return False
+def _in_flag(text: str, i: int) -> bool:
+    """Whether the tag character ``text[i]`` is part of a subdivision flag: 🏴, tags, and
+    the closing tag."""
+    start = i
+    while start > 0 and _is_tag(text[start - 1]):
+        start -= 1
+    end = i
+    while end + 1 < len(text) and _is_tag(text[end + 1]):
+        end += 1
+    return start > 0 and text[start - 1] == _FLAG and text[end] == _CANCEL_TAG
 
 
-def pads(c: str) -> bool:
-    """A character that pads a name invisibly on its own, wherever it is: whitespace, a
-    blank filler letter, or a format character other than a joiner or a tag (zero width
-    space, BOM, word joiner, soft hyphen). Joiners, tags and marks depend on their
-    neighbors: `_misplaced_mark`."""
-    return (
-        c.isspace()
-        or c in _BLANK_LETTERS
-        or (unicodedata.category(c) == "Cf" and c not in _JOINERS and not _is_tag(c))
-    )
+def _ignorable_belongs(text: str, i: int) -> bool:
+    """Whether ``text[i]``, a default-ignorable character, is where Unicode uses one: a
+    joiner in a word (UTS #39) or an emoji sequence, a variation selector after the
+    character it varies, a tag in a flag (UTS #51). Every other one (a zero-width space,
+    a soft hyphen, a word joiner, a BOM, a filler, a combining grapheme joiner) hides."""
+    patterns = (_ZWNJ_A1, _ZWNJ_A2, _ZWJ_B, _EMOJI_ZWJ, _EMOJI_VS, _OTHER_VS)
+    if any(p.match(text, i) for p in patterns):
+        return True
+    return _is_tag(text[i]) and _in_flag(text, i)
 
 
-def misplaced_invisible(text: str) -> int | None:
-    """The index of the first character in ``text`` (one name) that's invisible where it
-    sits: padding at either end (`pads`, `draws_nothing` at the start), or a mark or joiner
-    that can't belong to the character before it (`_misplaced_mark`); None if there's
-    none. One rule for new names and `shown` (#510)."""
-    if not text:
+def draws_nothing(c: str) -> bool:
+    """A character that draws nothing on its own: whitespace, a default-ignorable
+    character, a combining mark, or the Braille blank (#510). A name of only these has no
+    visible character."""
+    return c.isspace() or bool(_IGNORABLE.match(c) or _MARK.match(c)) or c == _BRAILLE_BLANK
+
+
+def invisible_problem(name: str) -> str | None:
+    """Why ``name`` (one path part) hides a character, or None: a default-ignorable
+    character where Unicode doesn't use one (`_ignorable_belongs`), the Braille blank at an
+    end, a combining mark with no character to go on, or the same combining mark twice in
+    a row (UTS #39 section 5.4: it draws as one). One rule for new names and `shown`
+    (#510)."""
+    if not name:
         return None
-    if draws_nothing(text[0]) and not text[0].isspace():
-        return 0
-    if pads(text[-1]) and not text[-1].isspace():
-        return len(text) - 1
-    for i in range(len(text)):
-        if _misplaced_mark(text, i):
-            return i
+    text = unicodedata.normalize("NFC", name)
+    for i, c in enumerate(text):
+        if _IGNORABLE.match(c) and not _ignorable_belongs(text, i):
+            return f"contains an invisible character (U+{ord(c):04X})"
+    if _BRAILLE_BLANK in (text[0], text[-1]):
+        return "starts or ends with a blank character (U+2800)"
+    if _MARK.match(text[0]):
+        return "starts with a combining mark, which has no character to go on"
+    decomposed = unicodedata.normalize("NFD", name)
+    for a, b in zip(decomposed, decomposed[1:], strict=False):
+        if a == b and _MARK.match(a):
+            return f"repeats a combining mark (U+{ord(a):04X}), which draws as one"
     return None
 
 
 def _hides(c: str) -> bool:
-    """A character inside a path that a plain message would hide or mangle on its own."""
-    if unicodedata.category(c) in ("Cc", "Cs", "Co", "Cn", "Zl", "Zp"):
-        return True
-    return c != " " and pads(c)
+    """A character inside a path that a plain message would hide or mangle on its own: a
+    control, unassigned or private-use character, a line separator, or whitespace other
+    than a plain space (a tab, a no-break space)."""
+    return bool(_NOT_PRINTED.match(c)) or (c != " " and c.isspace())
 
 
 def shown(path: str) -> str:
@@ -314,10 +322,10 @@ def shown(path: str) -> str:
     for part in path.split("/"):
         if not part:
             continue
-        if part != part.strip() or misplaced_invisible(part) is not None or any(map(_hides, part)):
+        if part != part.strip() or invisible_problem(part) is not None or any(map(_hides, part)):
             return repr(path)
-    # Marks and joiners that belong to their letters show as written (`नमस्ते`, `Café`,
-    # 👨‍👩‍👧); one between ASCII letters, or at an edge, is quoted (`rep<ZWJ>ort.pdf`).
+    # Marks, joiners and variation selectors where Unicode uses them show as written
+    # (`नमस्ते`, NFD `Café`, 👨‍👩‍👧, ❤️); anywhere else they're quoted (`rep<ZWJ>ort.pdf`).
     return path
 
 

@@ -27,7 +27,7 @@ from mcp_synology.modules.filestation import helpers
 from mcp_synology.modules.filestation.helpers import (
     _is_dot,
     draws_nothing,
-    misplaced_invisible,
+    invisible_problem,
     normalize_path,
     path_exists,
     shown,
@@ -371,7 +371,7 @@ def _refuse(message: str, param: str, value: str, suggestion: str) -> None:
 
 # Bidirectional controls (U+202E makes `invoice<RLO>txt.exe` show as `invoiceexe.txt`) and
 # line/paragraph separators: refused in new names (maintainer, 2026-10-31). The zero-width
-# joiner and non-joiner stay allowed: emoji sequences and several scripts' spelling use them.
+# joiner and non-joiner are allowed where Unicode uses them: `invisible_problem`.
 # Unicode's Bidi_Control set: U+061C (Arabic letter mark) is the Arabic counterpart of
 # U+200F (pre-QA r4).
 _BIDI = frozenset("\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069")
@@ -392,16 +392,13 @@ def name_problem(name: str, parent: str | None = None) -> str | None:
         return "has no visible character"
     if name != name.strip():
         return "starts or ends with whitespace"
-    # Invisible padding at an end (a zero-width space, a BOM, a filler) makes a look-alike
-    # `report.pdf`, as a trailing space would (maintainer, 2026-10-31); so does a mark or
-    # joiner that can't belong to the letter before it (`report.pdf<VS16>`,
-    # `rep<ZWJ>ort.pdf`), while one that finishes its letter is ordinary (`नमस्ते`, NFD
-    # `Café`, `❤️`, `1️⃣`, 🏴󠁧󠁢󠁳󠁣󠁴󠁿; QA round 1 and pre-QA on #515).
-    at = misplaced_invisible(name)
-    if at is not None:
-        if at in (0, len(name) - 1):
-            return "starts or ends with an invisible character"
-        return "has an invisible character that belongs to no letter"
+    # An invisible character where Unicode doesn't use one makes a look-alike name
+    # (`report.pdf<ZWSP>`, `rep<soft hyphen>ort.pdf`), as a trailing space would
+    # (maintainer, 2026-10-31); one where it does is ordinary (`नमस्ते`, NFD `Café`, a
+    # Persian ZWNJ, `❤️`, `1️⃣`, 🏴󠁧󠁢󠁳󠁣󠁴󠁿): `invisible_problem`.
+    problem = invisible_problem(name)
+    if problem:
+        return problem
     if name == "#recycle" and parent is not None and makes_a_bin(parent):
         return "is '#recycle', the name of a recycle bin there"
     return None

@@ -182,8 +182,9 @@ MODULE_INFO = ModuleInfo(
                 "Create one or more folders, each given as a full path starting with its shared "
                 "folder (`/video/TV Shows/New Show`). By default (`force_parent=true`), missing "
                 "folders above it are created too, and a folder that already exists is not an "
-                "error. A new folder's name can't have whitespace or invisible padding at its "
-                "ends, control or direction-changing characters, or be `#recycle` at a shared or "
+                "error. A new folder's name can't have whitespace at its ends, an invisible "
+                "character where Unicode doesn't use one (a zero-width space, a soft hyphen), "
+                "control or direction-changing characters, or be `#recycle` at a shared or "
                 "home folder's top."
             ),
             permission_tier=PermissionTier.WRITE,
@@ -864,8 +865,9 @@ def register(ctx: "RegisterContext") -> None:
                 Field(
                     description=(
                         "The new name only, not a path, `.` or `..` (`Severance`); no whitespace "
-                        "or invisible padding at its ends, no control or direction-changing "
-                        "characters, and not `#recycle` at a shared or home folder's top."
+                        "at its ends, no invisible character where Unicode doesn't use one, no "
+                        "control or direction-changing characters, and not `#recycle` at a "
+                        "shared or home folder's top."
                     )
                 ),
             ],
@@ -1032,9 +1034,9 @@ def register(ctx: "RegisterContext") -> None:
                 str | None,
                 Field(
                     description="Name for the file on the NAS, not a path (default: the local "
-                    "file's name); no whitespace or invisible padding at its ends, no control or "
-                    "direction-changing characters, and not `#recycle` at a shared or home "
-                    "folder's top."
+                    "file's name); no whitespace at its ends, no invisible character where "
+                    "Unicode doesn't use one, no control or direction-changing characters, and "
+                    "not `#recycle` at a shared or home folder's top."
                 ),
             ] = None,
             overwrite: Annotated[

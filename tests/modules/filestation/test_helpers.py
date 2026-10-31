@@ -105,12 +105,49 @@ class TestShown:
             ("/video/report.pdf\ufe0f", repr("/video/report.pdf\ufe0f")),
             ("/video/1\ufe0f\u20e3", "/video/1\ufe0f\u20e3"),
             ("/video/\u2800x", repr("/video/\u2800x")),
+            # The same Unicode-based rule as new names (#515): an invisible character inside a
+            # name is quoted; one where Unicode uses it isn't; newer emoji aren't unassigned.
+            ("/video/rep\u00adort.pdf", repr("/video/rep\u00adort.pdf")),
+            ("/video/rep\u200bort.pdf", repr("/video/rep\u200bort.pdf")),
+            ("/video/ab\u200ccd", repr("/video/ab\u200ccd")),
+            ("/video/\u0d23\u0d4d\u200d", "/video/\u0d23\u0d4d\u200d"),
+            ("/video/\U0001fae9", "/video/\U0001fae9"),
+            ("/video/\U000f0000", repr("/video/\U000f0000")),
         ],
     )
     def test_shown(self, path: str, expected: str) -> None:
         from mcp_synology.modules.filestation.helpers import shown
 
         assert shown(path) == expected
+
+
+class TestInvisibleProblem:
+    """#515: Unicode's own definitions decide what hides (Default_Ignorable_Code_Point,
+    UTS #39 joiner contexts, UTS #51 emoji sequences), not a list of ours."""
+
+    @pytest.mark.parametrize(
+        ("name", "expected"),
+        [
+            ("", None),
+            ("plain", None),
+            # A tag belongs only to a complete subdivision flag.
+            ("\U0001f3f4\U000e0067\U000e0062", "contains an invisible character (U+E0067)"),
+            ("x\U000e0067\U000e007f", "contains an invisible character (U+E0067)"),
+            # VS16 after a keycap base only when the keycap follows.
+            ("1\ufe0f", "contains an invisible character (U+FE0F)"),
+            # An ideographic variation selector only after an ideograph.
+            ("a\U000e0100", "contains an invisible character (U+E0100)"),
+            # A Mongolian vowel separator only between Mongolian letters.
+            ("\u1820\u180e\u1821", None),
+            ("a\u180eb", "contains an invisible character (U+180E)"),
+            # NFC first: a precomposed letter plus the same mark is still a repeat.
+            ("\u00e9\u0301", "repeats a combining mark (U+0301), which draws as one"),
+        ],
+    )
+    def test_invisible_problem(self, name: str, expected: str | None) -> None:
+        from mcp_synology.modules.filestation.helpers import invisible_problem
+
+        assert invisible_problem(name) == expected
 
 
 class TestValidateSharePath:
