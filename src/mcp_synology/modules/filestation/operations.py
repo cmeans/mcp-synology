@@ -1444,8 +1444,9 @@ async def restore_from_recycle_bin(
         head, _, rest = p.lstrip("/").partition("/")
         if head.casefold() == share_name.casefold() and in_bin(rest):
             full_paths.append(normalize_path(f"/{share_name}/{rest}"))
-        elif in_bin(p):
-            full_paths.append(normalize_path(f"/{share_name}/{p}"))
+        elif in_bin(p.lstrip("/")):
+            # `/#recycle/x` too, as a leading `/` on any bin-relative item is (pre-QA).
+            full_paths.append(normalize_path(f"/{share_name}/{p.lstrip('/')}"))
         else:
             full_paths.append(normalize_path(f"/{share_name}/#recycle/{p.lstrip('/')}"))
         if any(part and not part.strip() for part in item.split("/")[1:]):

@@ -3370,7 +3370,7 @@ class TestShareRootSourcesRefused:
     @respx.mock
     @pytest.mark.parametrize(
         "item",
-        ["", " ", "/", "#recycle", "#recycle/", "/video/#recycle", "/Video/#recycle/"],
+        ["", " ", "/", "#recycle", "#recycle/", "/#recycle", "/video/#recycle", "/Video/#recycle/"],
     )
     async def test_restore_refuses_an_item_naming_the_whole_bin(
         self, mock_client: DsmClient, item: str
@@ -3431,6 +3431,8 @@ class TestShareRootSourcesRefused:
             ("video", "/video/#recycle/video"),
             # A leading slash on a bin-relative item: no `#recycle//Shows`.
             ("/Shows/Ep1.mkv", "/video/#recycle/Shows/Ep1.mkv"),
+            # ... and on one that names the bin itself: not `#recycle/#recycle/…` (pre-QA).
+            ("/#recycle/Shows/Ep1.mkv", "/video/#recycle/Shows/Ep1.mkv"),
         ],
     )
     async def test_restore_lookalikes_stay_in_the_bin(
