@@ -41,12 +41,24 @@ Fix:
    and reports which step fails (lookup → request → response).
 2. If 2FA is required, or DSM rejected the stored device token, run
    `mcp-synology setup` and complete the OTP exchange. This stores a new device
-   token in the keyring so subsequent runs do not need the OTP code.
+   token in the keyring so subsequent runs do not need the OTP code. A `device_id`
+   set in the environment or the config file overrides the keyring: remove it there
+   first (the error's suggestion says where it comes from).
 3. If the IP is auto-blocked, sign in to DSM directly and clear the entry at
    **Control Panel → Security → Account → Auto Block → Allow / Block List**.
 4. Verify the account has access to FileStation: **Control Panel → User & Group
    → [account] → Edit → Applications**. The account must be allowed to use
    File Station.
+
+When DSM refuses the credentials, the server doesn't send them again: every later
+tool call gets the same error, so a model's retries can't trip DSM's Auto Block.
+It tries again once the credentials change or the server restarts. `mcp-synology
+setup` stores new ones in the keyring, and the running server picks them up; a
+value set in `SYNOLOGY_USERNAME`, `SYNOLOGY_PASSWORD` or `SYNOLOGY_DEVICE_ID`, or
+in the config file's `auth:` section, overrides the keyring and must be changed
+there (then restart the server). The error's suggestion names where the refused
+credential comes from: the password for a wrong one (400), the device token for a
+2FA refusal (403, 404, 406); a disabled account (401) needs an administrator.
 
 `auth_failed` is **not** retryable. mcp-synology will not auto-retry on this
 code — fix the underlying credential or 2FA state before re-running.
@@ -234,9 +246,22 @@ operation.**
 Common causes:
 
 - A filename contains a forbidden character: `/ \ : * ? " < > |`.
-- The `new_name` argument to `rename` contains `/` (path separators are not
-  allowed in rename — use copy/move to relocate a file).
+- The `new_name` argument to `rename`, or `upload_file`'s `filename`, contains `/`
+  or a NUL, is blank, or is `.` or `..` (padded with spaces too); the message says which
+  (path separators are not allowed in a name — use copy/move to relocate a file).
+  With no `filename` (or an empty one), the local file's own name is checked the same way
+  and reported as `local_path`.
+- A bad configured `default_upload_dir` (a `.` or `..` part here, an unknown share
+  under `not_found`) is named as `param: default_upload_dir`: fix the setting or pass
+  `dest_folder`.
 - A path is empty, all whitespace, or has no share component.
+- A File Station path, a `restore_from_recycle_bin` item, or a Download Station
+  destination has a `.` or `..` part (`/video/../photo`, `video/./x`).
+- `delete_files` on a whole shared folder (`/video`): a shared folder isn't deleted or
+  emptied this way (#451; emptying one with the user's confirmation is #484). Delete a
+  shared folder's items by path, or the shared folder itself in DSM's Control Panel.
+- `delete_files` on a path with a `.`, `..`, empty or whitespace-only part, or a NUL:
+  write the path out in full.
 - `upload_file` or `download_file` was called without `dest_folder`, and no
   default is configured (`default_upload_dir` or `default_download_dir` in the
   `filestation` module settings). The error's `param` is `dest_folder`.
@@ -265,7 +290,8 @@ Fix:
   allows a character, DSM may not.
 - For `rename`: pass only the new base name, not a path. To move a file across
   directories, use the copy or move tool.
-- For paths: ensure the first component is a real share name from `list_shares`.
+- For paths: ensure the first component is a real share name from `list_shares`,
+  and write the path out in full from the shared folder, with no `.` or `..` parts.
 - For a missing destination: pass `dest_folder` (a NAS folder for
   `upload_file`; for `download_file`, a local folder in
   `allowed_local_paths`), or set the matching default in the `filestation`

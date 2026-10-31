@@ -269,6 +269,48 @@ class TestMatchesPattern:
     def test_wildcard(self) -> None:
         assert matches_pattern("Severance.S02E10.mkv", "*Severance*")
 
+    def test_question_mark_is_one_character(self) -> None:
+        assert matches_pattern("ep1.mkv", "ep?.mkv")
+        assert not matches_pattern("ep10.mkv", "ep?.mkv")
+
+    def test_brackets_match_themselves(self) -> None:
+        # #396: fnmatch read [...] as a character class.
+        assert matches_pattern("[a]x.mkv", "[a]x.mkv")
+        assert not matches_pattern("ax.mkv", "*[a]*")
+        assert not matches_pattern("Show.1080.mkv", "*[1080p]*")
+        assert matches_pattern("Show [1080p].mkv", "*[1080p]*")
+
+    def test_other_regex_characters_match_themselves(self) -> None:
+        assert matches_pattern("a+b (1).txt", "a+b (1).txt")
+        assert not matches_pattern("aab (1).txt", "a+b (1).txt")
+        assert matches_pattern("x.y", "x.y")
+        assert not matches_pattern("xzy", "x.y")
+
+    def test_bare_word_matches_only_the_whole_name(self) -> None:
+        # The tool description says so: unlike DSM's `pattern`, no "anywhere" match.
+        assert not matches_pattern("Show.sample.mkv", "sample")
+        assert matches_pattern("sample", "SAMPLE")
+
+    def test_comma_is_one_pattern_not_alternatives(self) -> None:
+        assert not matches_pattern("a.nfo", "*.nfo,*.txt")
+        assert not matches_pattern("a.txt", "*.nfo,*.txt")
+        assert matches_pattern("a.nfo,b.txt", "*.nfo,*.txt")
+
+    def test_many_stars_do_not_backtrack(self) -> None:
+        # QA round 1 on #459: a regex with one `.*` per `*` took 427 ms per 100-character
+        # name for `*a*a*a*a*b`, and grows with each star; fnmatch's translation doesn't.
+        import time
+
+        # Sized so the old matcher fails in about 2 s instead of hanging (QA round 2).
+        start = time.perf_counter()
+        for _ in range(5):
+            assert not matches_pattern("a" * 100, "*a*a*a*a*b")
+        assert time.perf_counter() - start < 0.5
+
+    def test_star_spans_a_newline(self) -> None:
+        # As fnmatch did: a name with a newline still matches "*".
+        assert matches_pattern("a\nb.txt", "a*.txt")
+
 
 # ---------- Recycle-bin probe + self-correct (closes #37) ----------
 
@@ -525,7 +567,7 @@ class TestEnsureKnownShares:
         calls: list[str] = []
         self._route([["testshare", "writable"], ["testshare", "writable"]], calls)
         with pytest.raises(ToolError) as exc_info:
-            await ensure_known_shares(mock_client, ["/video/downloads/*"], set())
+            await ensure_known_shares(mock_client, ["/video/downloads/*"], set(), "path")
         body = json.loads(str(exc_info.value))
         assert body["error"]["code"] == "not_found"
         assert body["error"]["retryable"] is False
@@ -534,12 +576,80 @@ class TestEnsureKnownShares:
         assert "list_shares" in body["error"]["message"]
 
     @respx.mock
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/writable/..",
+            "/writable/../testshare/x",
+            "/writable/.",
+            "/writable/./",
+            "writable/sub/../x",
+            "/..",
+            "/./writable",
+            "/writable/ .. /x",  # padded: DSM's trimming is unprobed (pre-QA, #470)
+        ],
+    )
+    async def test_dot_parts_are_refused_before_dsm(
+        self, mock_client: DsmClient, path: str
+    ) -> None:
+        # #449: DSM refuses them too (418), but only after the share check, which read
+        # just the first part. Nothing is sent, even when the share list is cached.
+        calls: list[str] = []
+        self._route([["testshare", "writable"]], calls)
+        with pytest.raises(ToolError) as exc_info:
+            await ensure_known_shares(mock_client, ["/testshare/ok", path], set(), "paths")
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "invalid_parameter"
+        assert error["param"] == "paths"
+        assert error["value"] == path
+        assert error["message"] == f"Invalid path '{path}': '.' and '..' parts aren't allowed."
+        assert calls == []
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        "path", ["/writable/.hidden", "/writable/a..b", "/writable/...", "/writable/x."]
+    )
+    async def test_dots_inside_a_name_pass(self, mock_client: DsmClient, path: str) -> None:
+        calls: list[str] = []
+        self._route([["testshare", "writable"]], calls)
+        assert await ensure_known_shares(mock_client, [path], set(), "path") == [path]
+
+    @respx.mock
+    async def test_errors_name_each_paths_argument(self, mock_client: DsmClient) -> None:
+        # copy_files and move_files check paths and dest_folder together: an error names
+        # the one at fault (not_found used to say "path" for every argument).
+        calls: list[str] = []
+        self._route([["testshare", "writable"], ["testshare", "writable"]], calls)
+        params = ["paths", "paths", "dest_folder"]
+        with pytest.raises(ToolError) as exc_info:
+            await ensure_known_shares(
+                mock_client, ["/testshare/a", "/writable/b", "/writable/../x"], set(), params
+            )
+        assert json.loads(str(exc_info.value))["error"]["param"] == "dest_folder"
+        with pytest.raises(ToolError) as exc_info:
+            await ensure_known_shares(
+                mock_client, ["/testshare/a", "/writable/b", "/nope/x"], set(), params
+            )
+        error = json.loads(str(exc_info.value))["error"]
+        assert (error["code"], error["param"]) == ("not_found", "dest_folder")
+
+    @respx.mock
+    async def test_dot_parts_refused_when_shares_cannot_be_listed(
+        self, mock_client: DsmClient
+    ) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 105}}
+        )
+        with pytest.raises(ToolError, match="'.' and '..' parts"):
+            await ensure_known_shares(mock_client, ["/video/.."], set(), "path")
+
+    @respx.mock
     async def test_known_share_passes_and_cache_is_reused(self, mock_client: DsmClient) -> None:
         calls: list[str] = []
         self._route([["testshare", "writable"]], calls)
         cache: set[str] = set()
-        await ensure_known_shares(mock_client, ["/writable/a", "writable/b"], cache)
-        await ensure_known_shares(mock_client, ["/testshare/c"], cache)
+        await ensure_known_shares(mock_client, ["/writable/a", "writable/b"], cache, "path")
+        await ensure_known_shares(mock_client, ["/testshare/c"], cache, "path")
         assert cache == {"testshare", "writable"}
         assert calls.count("list_share") == 1
 
@@ -548,7 +658,7 @@ class TestEnsureKnownShares:
         calls: list[str] = []
         self._route([["writable", "media"]], calls)
         cache = {"writable"}  # filled before "media" existed
-        await ensure_known_shares(mock_client, ["/media/x"], cache)
+        await ensure_known_shares(mock_client, ["/media/x"], cache, "path")
         assert "media" in cache
         assert calls.count("list_share") == 1
 
@@ -558,7 +668,9 @@ class TestEnsureKnownShares:
             json={"success": False, "error": {"code": 105}}
         )
         cache: set[str] = set()
-        await ensure_known_shares(mock_client, ["/whatever/x"], cache)  # DSM decides instead
+        await ensure_known_shares(
+            mock_client, ["/whatever/x"], cache, "path"
+        )  # DSM decides instead
         assert cache == set()
 
     @respx.mock
@@ -567,7 +679,7 @@ class TestEnsureKnownShares:
         calls: list[str] = []
         self._route([["writable"]], calls)
         cache: set[str] = set()
-        assert await ensure_known_shares(mock_client, [], cache) == []
+        assert await ensure_known_shares(mock_client, [], cache, "path") == []
         assert calls == [] and cache == set()
 
     @respx.mock
@@ -577,7 +689,9 @@ class TestEnsureKnownShares:
         calls: list[str] = []
         self._route([["testshare", "writable"]], calls)
         cache = {"testshare", "writable"}
-        out = await ensure_known_shares(mock_client, ["/TESTSHARE/Documents", "/Writable/x"], cache)
+        out = await ensure_known_shares(
+            mock_client, ["/TESTSHARE/Documents", "/Writable/x"], cache, "path"
+        )
         assert calls == []
         # Sent as listed (#353): DSM takes /TESTSHARE, but not /Home for the home service.
         assert out == ["/testshare/Documents", "/writable/x"]
@@ -591,6 +705,7 @@ class TestEnsureKnownShares:
             mock_client,
             ["Home", "/HOME/docs/a.txt", "homes/x/", "/backups", "/Backups/y", "home/z"],
             set(),
+            "paths",
         )
         # Changed only where the share name differs; anything else is left as given.
         assert out == ["/home", "/home/docs/a.txt", "homes/x/", "/Backups", "/Backups/y", "home/z"]
@@ -602,11 +717,11 @@ class TestEnsureKnownShares:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
             json={"success": False, "error": {"code": 105}}
         )
-        assert await ensure_known_shares(mock_client, ["/Home/x"], set()) == ["/Home/x"]
+        assert await ensure_known_shares(mock_client, ["/Home/x"], set(), "path") == ["/Home/x"]
 
     @respx.mock
     async def test_recycle_as_share_is_rejected(self, mock_client: DsmClient) -> None:
         calls: list[str] = []
         self._route([["writable"]], calls)
         with pytest.raises(ToolError):
-            await ensure_known_shares(mock_client, ["/#recycle/x"], {"writable"})
+            await ensure_known_shares(mock_client, ["/#recycle/x"], {"writable"}, "path")

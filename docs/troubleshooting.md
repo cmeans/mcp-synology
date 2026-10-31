@@ -68,7 +68,10 @@ as your file (#282, #283, #292). See [unavailable](error-codes.md#unavailable).
 was removed in **Personal → Security → Sign-in Activity**. The message says DSM rejected the
 token (see [auth_failed](error-codes.md#auth_failed)).
 
-**What to do:** run `mcp-synology setup` and enter a new one-time code.
+**What to do:** run `mcp-synology setup` and enter a new one-time code. If `device_id` is set in
+the environment (`SYNOLOGY_DEVICE_ID`) or the config file, it overrides the keyring `setup`
+writes: remove it there first, and restart the server after `setup`. The error's suggestion
+says where the token comes from.
 
 ---
 
@@ -248,7 +251,9 @@ indexing`.
 HTML error page (verified on DSM 7.1 and 7.2.2; Photos spec, `download_photos`), so
 mcp-synology checks first and skips that item.
 
-**What to do:** try again shortly.
+**What to do:** try again shortly, with the same call (the same ids, in the same order): a file
+name depends on every item in the call, so a call with only the skipped item can name it onto
+another item's file.
 
 ### A taken-time change reads back as the old date
 

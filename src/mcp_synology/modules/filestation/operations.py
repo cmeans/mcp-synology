@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 from typing import TYPE_CHECKING, Any
 
 import httpx
+from mcp.server.mcpserver.exceptions import ToolError
 
 from mcp_synology.core.errors import (
     FILESTATION_ERROR_CODES,
@@ -20,6 +23,7 @@ from mcp_synology.core.formatting import (
     synology_error_response,
 )
 from mcp_synology.modules.filestation.helpers import (
+    describe_transport_error,
     dsm_str,
     ensure_recycle_status,
     find_missing_paths,
@@ -27,6 +31,8 @@ from mcp_synology.modules.filestation.helpers import (
     normalize_path,
     path_exists,
     paths_isdir,
+    refuse_bad_name,
+    refuse_dot_parts,
 )
 from mcp_synology.modules.filestation.tasks import (
     Handle,
@@ -106,9 +112,9 @@ async def _explain_rename_1200(client: DsmClient, path: str, original: str, new_
     parent, _, name = path.rpartition("/")
     target = f"{parent}/{new_name}"
     # The new path can't stand for a taken name when it's the source itself (its own
-    # name), a folder rather than an entry in it ("." or ".."), or when the source is a
-    # share root (no parent folder to look in).
-    can_be_taken = bool(parent) and new_name not in (name, ".", "..")
+    # name), or when the source is a share root (no parent folder to look in). `rename`
+    # refuses "." and ".." before getting here (#449).
+    can_be_taken = bool(parent) and new_name != name
     try:
         source = await path_exists(client, path)
         taken = source is True and can_be_taken and await path_exists(client, target) is True
@@ -146,16 +152,16 @@ async def rename(
     """Rename a file or folder."""
     normalized = normalize_path(path)
 
-    # Validate new_name is just a name, not a path
-    if "/" in new_name:
-        error_response(
-            ErrorCode.INVALID_PARAMETER,
-            "Rename failed: new_name should be just a filename, not a path.",
-            retryable=False,
-            param="new_name",
-            value=new_name,
-            suggestion="Use move_files to relocate files to a different directory.",
-        )
+    # new_name is just a name: not a path, nor `.` or `..`, as #449 refuses in paths
+    relocates = "/" in new_name or new_name.strip(" ") in (".", "..")
+    refuse_bad_name(
+        "Rename",
+        new_name,
+        "new_name",
+        "Use move_files to relocate files to a different directory."
+        if relocates
+        else "Pass the new name only, e.g. Severance.",
+    )
 
     try:
         data = await client.request(
@@ -269,6 +275,143 @@ def _collapse_overlaps(paths: list[str], *, drop_nested: bool = True) -> list[st
             continue
         out.append(p)
     return out
+
+
+def refuse_bad_parts(paths: list[str]) -> None:
+    """Refuse a ``.``, ``..``, empty or whitespace-only part, or a NUL, in a delete path.
+
+    ``/video/.``, ``/video/x/..`` and ``//video`` (when DSM won't list shares) name the
+    share itself (#451). Checked on the paths as given, before the share check rewrites
+    them: ``normalize_path`` strips the whole path, so ``/video/x/ `` would be sent as
+    ``/video/x``, deleting the folder (QA round 2 on #480; the same stripping in other tools
+    is #488). A NUL is refused rather than sent: whether DSM cuts the path there (leaving
+    ``/video/``) is unprobed, and no file name holds one (pre-QA on #480; #472). A plain
+    ``.`` or ``..`` part gets #470's message, as in every other tool; the rest are the cases
+    only a delete refuses.
+    """
+    for path in paths:
+        refuse_dot_parts(path, "paths")
+        parts = normalize_path(path).split("/")[1:]
+        body = path.rstrip("/")
+        blank_last = not body.rsplit("/", 1)[-1].strip()
+        if blank_last or "\x00" in path or any(part.strip() in ("", ".", "..") for part in parts):
+            error_response(
+                ErrorCode.INVALID_PARAMETER,
+                f"Delete files refused: '.', '..', empty and whitespace-only parts, and NUL "
+                f"characters, aren't allowed ({path!r}). Nothing was deleted.",
+                retryable=False,
+                param="paths",
+                value=path,
+                suggestion="Write the path out in full from the shared folder, e.g. "
+                "/video/Movies. An item whose name is only whitespace can't be reached "
+                "this way: delete it in DSM's File Station.",
+            )
+
+
+def refuse_share_roots(paths: list[str]) -> None:
+    """Refuse a path that names a whole shared folder (#451), and any `refuse_bad_parts`
+    path.
+
+    On DSM 7.2.2, 7.3.2 and 7.4.1, File Station's Delete on ``/<share>`` deletes the shared
+    folder itself, for any account with write access, and the recycle bin, inside the
+    share, can't bring it back; DSM 7.1 refuses it. Emptying a share safely is #484. The
+    tool calls this after the share check, so a one-part path that isn't a share (a typo)
+    gets "unknown shared folder", not this (pre-QA on #480).
+    """
+    refuse_bad_parts(paths)
+    for path in paths:
+        parts = normalize_path(path).split("/")[1:]
+        if len(parts) == 1:
+            error_response(
+                ErrorCode.INVALID_PARAMETER,
+                f"Delete files refused: {path!r} is a whole shared folder. delete_files "
+                "doesn't delete or empty a shared folder: on DSM 7.2.2 to 7.4.1 (tested), "
+                "and likely later, that would delete the shared folder itself, beyond the "
+                "recycle bin's reach. "
+                "Nothing was deleted.",
+                retryable=False,
+                param="paths",
+                value=path,
+                suggestion="To empty it, list it with list_files and delete its items by "
+                "their own paths (leaving out its #recycle), after the user agrees; to delete "
+                "the shared folder itself, use DSM's Control Panel > Shared Folder.",
+            )
+
+
+def _unstop(message: str) -> str:
+    """``message`` without its final period, and only that one: a path can end in dots."""
+    return message[:-1] if message.endswith(".") else message
+
+
+# Advice that already says to check with list_files (a start with no answer, a path not
+# found when the delete ran),
+# not advice that only mentions it (408's "Use list_files or search_files to find …").
+_CHECKS_WITH_LIST_FILES = re.compile(r"\bcheck\b[^.]*\bwith list_files\b", re.IGNORECASE)
+
+
+def _names_path(message: str, path: str) -> bool:
+    """Whether ``message`` names ``path`` itself: after the start, a space, ":" or "(",
+    and followed by the end, a sentence's period, or " (" (as in
+    ``/video/b (DSM error 900)``); not a path ending in it (``/video/b/x/video/b``)."""
+    pattern = r"(?<![^\s:(])" + re.escape(path) + r"(?=$|\.$|\.\s|\s\()"
+    return re.search(pattern, message) is not None
+
+
+def _with_progress_so_far(
+    error: ToolError, failed: str, done: list[str], rest: list[str]
+) -> ToolError:
+    """A delete's error, saying which path failed, what was already deleted and what
+    wasn't started, so the user can tell what's left after a failure partway (QA round 1
+    on #480)."""
+    if not done and not rest:
+        return error
+    try:
+        body = json.loads(str(error))
+        message = body["error"]["message"]
+    except (ValueError, KeyError, TypeError):
+        return error
+    # A DSM error on a start or a status request names no path (QA round 5 on #480); one
+    # that names a path inside the item, or a sibling starting with the same characters
+    # (/video/a.txt, /video/a b), doesn't name the item either.
+    if not _names_path(message, failed):
+        message = _unstop(message) + f". Failed on: {failed}."
+    body["error"]["param"] = "paths"
+    body["error"]["value"] = failed
+    # The delete loop is the one place that adds these: _delete_result doesn't (pre-QA on
+    # #480; a check for the words in the message missed a path containing them).
+    if done:
+        message = _unstop(message) + _already_done("Delete", done) + "."
+        # The same call again is refused (the deleted paths are missing): only the items not
+        # deleted can be retried (QA round 2 on #480).
+        body["error"]["retryable"] = False
+        # Added to the cause's own advice (free space, permissions, check before deleting
+        # again), never in place of it (QA round 3 on #480).
+        # A note that reads after any advice, or alone (QA round 4): no "Then", no second
+        # "retry", and a check first, since the failed path may be gone already (a 599),
+        # unless the advice already says to check with list_files (QA round 5).
+        original = str(body["error"].get("suggestion") or "").strip()
+        if _CHECKS_WITH_LIST_FILES.search(original):
+            retry = (
+                "When retrying, leave out the paths already deleted (the same call would be "
+                "refused)."
+            )
+        else:
+            retry = (
+                "When retrying, leave out the paths already deleted (the same call would be "
+                f"refused), and check {failed} with list_files first."
+            )
+        if not original:
+            body["error"]["suggestion"] = retry
+        elif original[-1] in ".!?)":
+            body["error"]["suggestion"] = f"{original} {retry}"
+        else:
+            # Advice that ends in a list (418's characters to avoid) goes last, so no
+            # punctuation is read as part of it.
+            body["error"]["suggestion"] = f"{retry} {original}"
+    if rest:
+        message = _unstop(message) + f". Not started: {', '.join(rest)}."
+    body["error"]["message"] = message
+    return ToolError(json.dumps(body))
 
 
 def _already_done(operation: str, done: list[str] | None) -> str:
@@ -751,7 +894,6 @@ async def _delete_one_path(
     recursive: bool,
     delete_version: int,
     timeout: float,
-    done: list[str] | None = None,
     on_progress: ProgressCallback | None = None,
 ) -> Handoff | None:
     """Delete a single path via DSM async-task pattern.
@@ -796,22 +938,21 @@ async def _delete_one_path(
         stall = result.error if result.outcome == "stalled" else None
         return Handoff(Handle("delete", taskid), status, stall)
 
-    _delete_result(status, path, recursive=recursive, done=done)
+    _delete_result(status, path, recursive=recursive)
     return None
 
 
-def _delete_result(
-    status: dict[str, Any], path: str, *, recursive: bool, done: list[str] | None = None
-) -> None:
+def _delete_result(status: dict[str, Any], path: str, *, recursive: bool) -> None:
     """Raise ToolError if a finished Delete status reports a failure; else return."""
     if "error" in status:
         err = status["error"]
         err_code = err.get("code", 0) if isinstance(err, dict) else err
-        err_path = status.get("path", path)
+        # An empty path (as in DSM's nothing-found status) names nothing: use ours (pre-QA).
+        err_path = status.get("path") or path
         mapped = error_from_code(err_code, "SYNO.FileStation.Delete")
         error_response(
             mapped.error_code,
-            f"Delete files failed: DSM error code {err_code} on path: {err_path}",
+            f"Delete files failed: DSM error code {err_code} on path: {err_path}.",
             retryable=mapped.retryable,
             suggestion=(
                 mapped.suggestion
@@ -840,7 +981,7 @@ def _delete_result(
             mapped.error_code,
             "Delete files failed: "
             + "; ".join(f"{p} (DSM error {code})" for p, code in failed)
-            + _already_done("Delete", done),
+            + ".",
             retryable=mapped.retryable,
             param="paths",
             value=path,
@@ -852,8 +993,10 @@ def _delete_result(
         # pre-check saw the path, so it disappeared before the task ran.
         error_response(
             ErrorCode.NOT_FOUND,
-            f"Delete files failed: {path} was not found when the delete ran, so nothing "
-            "was deleted for it" + (_already_done("Delete", done) or "."),
+            # The path ends the sentence, so a partial failure's "Failed on" sees it named
+            # (QA round 6 on #480).
+            "Delete files failed: the path wasn't found when the delete ran, so nothing was "
+            f"deleted for {path}.",
             retryable=False,
             param="paths",
             value=path,
@@ -896,6 +1039,9 @@ async def delete_files(
             suggestion="Pass at least one path.",
         )
 
+    # Here too, not only in the tool: a caller that skips the tool mustn't delete a shared
+    # folder (pre-QA on #480).
+    refuse_share_roots(paths)
     normalized = _collapse_overlaps([normalize_path(p) for p in paths])
     # One progress token per tool call: keep its values increasing across paths (#245).
     on_progress = MonotonicProgress.wrap(on_progress)
@@ -929,15 +1075,36 @@ async def delete_files(
             # Never start a second delete of a path that already has one running (#245).
             handoff = Handoff(Handle("delete", str(running["taskid"])), running)
         else:
-            handoff = await _delete_one_path(
-                client,
-                p,
-                recursive=recursive,
-                delete_version=delete_version,
-                timeout=timeout,
-                done=deleted,
-                on_progress=on_progress,
-            )
+            try:
+                handoff = await _delete_one_path(
+                    client,
+                    p,
+                    recursive=recursive,
+                    delete_version=delete_version,
+                    timeout=timeout,
+                    on_progress=on_progress,
+                )
+            except ToolError as e:
+                raise _with_progress_so_far(e, p, deleted, normalized[i + 1 :]) from None
+            except httpx.TransportError as e:
+                if not deleted and not normalized[i + 1 :]:
+                    raise  # nothing to add: the server's usual timeout or connection error
+                # The start got no answer (a status with none hands the item off in
+                # poll_task): it may have started. Say so, with what was done and what
+                # wasn't started (QA round 1 on #480).
+                try:
+                    error_response(
+                        ErrorCode.TIMEOUT
+                        if isinstance(e, httpx.TimeoutException)
+                        else ErrorCode.UNAVAILABLE,
+                        f"Delete files failed: DSM didn't answer for {p} "
+                        f"({describe_transport_error(e)}); its delete may have started.",
+                        retryable=False,
+                        suggestion="Check with list_files, or file_task with no handle, "
+                        "before deleting again.",
+                    )
+                except ToolError as err:
+                    raise _with_progress_so_far(err, p, deleted, normalized[i + 1 :]) from None
         if handoff is not None:
             handle = handoff.handle
             # No DSM request between the handoff and the reply: a recycle-bin probe to a

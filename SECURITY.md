@@ -81,9 +81,9 @@ a private channel.
   log output, error messages, or persisted state would be in scope.
 - Path-traversal or share-validation issues in File Station tool
   handlers (`src/mcp_synology/modules/filestation/`) — paths are
-  normalized and the first component is validated against the cached
-  share list; bypasses that let a tool reach outside a share would
-  be in scope.
+  normalized, `.` and `..` parts are refused (#449), and the first
+  component is validated against the cached share list; bypasses that
+  let a tool reach outside a share would be in scope.
 - Argument-injection or unsafe parameter encoding in
   `src/mcp_synology/core/client.py` — comma/backslash escaping in
   multi-path params, query-string construction for DSM API calls.
@@ -94,9 +94,10 @@ a private channel.
   DirSize, CopyMove, Delete) that could leak session resources or
   leave orphan tasks consuming CPU on the NAS — `try/finally` cleanup
   must always call stop/clean.
-- Config-loading issues — strict top-level validation, lenient
-  module-settings validation, env-var override precedence, and the
-  read-only-from-server-perspective invariant. Anything that lets a
+- Config-loading issues — strict validation everywhere except module
+  settings (which are lenient), config errors that show a credential,
+  env-var override precedence, and the read-only-from-server-perspective
+  invariant. Anything that lets a
   malformed config escalate beyond a clean error message is in scope.
 - Supply-chain or packaging issues affecting published wheels or
   sdists on PyPI (trusted publishing, sdist contents, lockfile

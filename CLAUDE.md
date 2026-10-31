@@ -93,6 +93,7 @@ uv run pytest -n auto --cov=mcp_synology   # Tests with coverage
 - Credential lookup: env vars → config file → keyring, each value resolved separately (explicit sources override the keyring default). Only a password in the config file gets the plaintext warning; a config username with the password in the keyring is the recommended setup (#167)
 - DSM session name format: `MCPSynology_{instance_id}_{unique_id}`
 - Lazy keepalive (re-auth on next request, no proactive pings)
+- One login at a time: parallel first calls share one client and login, and requests that meet the same expired session share one re-login; the expired session stays until the new one exists (#359). A login DSM refused (`AuthenticationError`: 400, 401, 403, 404, 406) isn't sent again until the resolved credentials change or the server restarts, so retries can't trip DSM's Auto Block (#447); a failed re-login raises the login's own error, not the session error (#448)
 
 ### DSM API Client
 - Thin wrapper — knows DSM request/response conventions, nothing about specific APIs
@@ -112,13 +113,13 @@ uv run pytest -n auto --cov=mcp_synology   # Tests with coverage
 ### Config
 - Config is read-only from the server's perspective — never write to it
 - Runtime state goes in `~/.local/state/mcp-synology/{instance_id}/state.yaml`
-- Strict validation at top level (unknown keys = error), lenient within module settings (unknown keys = warning)
+- Strict validation everywhere but module settings: unknown keys at the top level, in `connection`/`auth`/`logging` (#386) and directly under `modules.<name>` are errors; unknown keys within module settings are warnings. Config errors never echo a credential's value: `format_validation_error` shows only plain values outside `auth`, never an unknown key's, and never names an unknown key under `auth`, or one with no value outside module settings and module names (a near-miss names the real key it's close to instead); a file that isn't UTF-8 is reported by line, never its bytes; `format_yaml_error` never quotes the file; config files are parsed only through `parse_config_text`
 - Two-phase loading: parse YAML → merge env var overrides → apply defaults → validate with Pydantic
 
 ### Path Handling (File Station)
 - Accept paths with or without leading `/`; normalize internally
 - Always return fully-qualified paths: `/shared_folder/...`
-- Validate first path component against cached share list
+- Validate first path component against cached share list; refuse any `.` or `..` part first (DSM answers 418, but the share check would read `/video/../photo` as `video`, #449)
 
 ### Search (File Station)
 - Always pass `filetype=all` — DSM defaults to `"file"` if omitted, excluding directories from results

@@ -230,8 +230,9 @@ MODULE_INFO = ModuleInfo(
                 "list_recycle_bin shows them and restore_from_recycle_bin brings them back. "
                 "Without a bin, and for anything inside a bin (`/<share>/#recycle`), deletion is "
                 "permanent. Paths are exact, not wildcard patterns, and if any path is missing "
-                "nothing is deleted. A long delete keeps running on the NAS and returns a handle "
-                "for file_task."
+                "nothing is deleted. A whole shared folder (`/video`) is refused: delete its items "
+                "by path. So is a path with a `.`, `..`, empty or whitespace-only part, or a NUL. "
+                "A long delete keeps running on the NAS and returns a handle for file_task."
             ),
             permission_tier=PermissionTier.WRITE,
             annotations=_ANNO_DESTRUCTIVE,
@@ -287,7 +288,7 @@ def register(ctx: "RegisterContext") -> None:
     from mcp_synology.core import local_paths
     from mcp_synology.core.errors import ErrorCode
     from mcp_synology.core.formatting import error_response
-    from mcp_synology.modules.filestation.helpers import ensure_known_shares
+    from mcp_synology.modules.filestation.helpers import ensure_known_shares, refuse_dot_parts
     from mcp_synology.modules.filestation.listing import (
         list_files,
         list_recycle_bin,
@@ -299,6 +300,8 @@ def register(ctx: "RegisterContext") -> None:
         create_folder,
         delete_files,
         move_files,
+        refuse_bad_parts,
+        refuse_share_roots,
         rename,
         restore_from_recycle_bin,
     )
@@ -487,7 +490,7 @@ def register(ctx: "RegisterContext") -> None:
             ] = 200,
         ) -> str:
             client = await _fs_client()
-            [path] = await ensure_known_shares(client, [path], known_shares)
+            [path] = await ensure_known_shares(client, [path], known_shares, "path")
             return _reply(
                 await list_files(
                     client,
@@ -551,7 +554,7 @@ def register(ctx: "RegisterContext") -> None:
             ] = 0,
         ) -> str:
             client = await _fs_client()
-            [share] = await ensure_known_shares(client, [share], known_shares)
+            [share] = await ensure_known_shares(client, [share], known_shares, "share")
             return _reply(
                 await list_recycle_bin(
                     client,
@@ -629,8 +632,10 @@ def register(ctx: "RegisterContext") -> None:
                 Field(
                     description=(
                         "Wildcard pattern for names to leave out (`*.torrent`), case-insensitive. "
-                        "Applied to the results DSM returns, so a reply can hold fewer than "
-                        "`limit`."
+                        "Only `*` and `?` are wildcards: a bare word (`sample`) matches only that "
+                        "exact name, unlike `pattern`, and `[...]` and commas match themselves "
+                        "(`*.nfo,*.txt` is one pattern). Applied to the results DSM returns, so "
+                        "a reply can hold fewer than `limit`."
                     )
                 ),
             ] = None,
@@ -649,7 +654,9 @@ def register(ctx: "RegisterContext") -> None:
             ] = 500,
         ) -> str:
             client = await _fs_client()
-            [folder_path] = await ensure_known_shares(client, [folder_path], known_shares)
+            [folder_path] = await ensure_known_shares(
+                client, [folder_path], known_shares, "folder_path"
+            )
             return _reply(
                 await search_files(
                     client,
@@ -694,7 +701,7 @@ def register(ctx: "RegisterContext") -> None:
             ] = None,
         ) -> str:
             client = await _fs_client()
-            paths = await ensure_known_shares(client, paths, known_shares)
+            paths = await ensure_known_shares(client, paths, known_shares, "paths")
             return _reply(await get_file_info(client, paths=paths, additional=additional))
 
     if "get_dir_size" in ctx.allowed_tools:
@@ -711,7 +718,7 @@ def register(ctx: "RegisterContext") -> None:
             ],
         ) -> str:
             client = await _fs_client()
-            [path] = await ensure_known_shares(client, [path], known_shares)
+            [path] = await ensure_known_shares(client, [path], known_shares, "path")
             result = await get_dir_size(client, path=path, timeout=dir_size_timeout)
             return _reply(result)
 
@@ -773,7 +780,7 @@ def register(ctx: "RegisterContext") -> None:
                 )
 
             client = await _fs_client()
-            [path] = await ensure_known_shares(client, [path], known_shares)
+            [path] = await ensure_known_shares(client, [path], known_shares, "path")
 
             async def _progress(current: int, total: int | None) -> None:
                 await ctx.report_progress(float(current), float(total) if total else None)
@@ -819,7 +826,7 @@ def register(ctx: "RegisterContext") -> None:
             ] = True,
         ) -> str:
             client = await _fs_client()
-            paths = await ensure_known_shares(client, paths, known_shares)
+            paths = await ensure_known_shares(client, paths, known_shares, "paths")
             result = await create_folder(client, paths=paths, force_parent=force_parent)
             return _reply(result)
 
@@ -836,11 +843,12 @@ def register(ctx: "RegisterContext") -> None:
                 Field(description="The file or folder to rename (`/video/TV Shows/Severence`)."),
             ],
             new_name: Annotated[
-                str, Field(description="The new name only, not a path (`Severance`).")
+                str,
+                Field(description="The new name only, not a path, `.` or `..` (`Severance`)."),
             ],
         ) -> str:
             client = await _fs_client()
-            [path] = await ensure_known_shares(client, [path], known_shares)
+            [path] = await ensure_known_shares(client, [path], known_shares, "path")
             return _reply(await rename(client, path=path, new_name=new_name))
 
     if "copy_files" in ctx.allowed_tools:
@@ -871,7 +879,10 @@ def register(ctx: "RegisterContext") -> None:
         ) -> str:
             client = await _fs_client()
             *paths, dest_folder = await ensure_known_shares(
-                client, [*paths, dest_folder], known_shares
+                client,
+                [*paths, dest_folder],
+                known_shares,
+                [*(["paths"] * len(paths)), "dest_folder"],
             )
             return _reply(
                 await copy_files(
@@ -913,7 +924,10 @@ def register(ctx: "RegisterContext") -> None:
         ) -> str:
             client = await _fs_client()
             *paths, dest_folder = await ensure_known_shares(
-                client, [*paths, dest_folder], known_shares
+                client,
+                [*paths, dest_folder],
+                known_shares,
+                [*(["paths"] * len(paths)), "dest_folder"],
             )
             return _reply(
                 await move_files(
@@ -956,7 +970,14 @@ def register(ctx: "RegisterContext") -> None:
             ] = True,
         ) -> str:
             client = await _fs_client()
-            paths = await ensure_known_shares(client, paths, known_shares)
+            # The part checks on the paths as given: the share-name rewrite below normalizes
+            # a path, which strips a whitespace-only last part (`/VIDEO/x/ ` -> `/video/x`).
+            # The share-root check after the share check, so a typo (`/vidoe`) is an unknown
+            # share, not "a whole shared folder" (pre-QA on #480). delete_files checks both
+            # again on the rewritten paths.
+            refuse_bad_parts(paths)
+            paths = await ensure_known_shares(client, paths, known_shares, "paths")
+            refuse_share_roots(paths)
             return _reply(
                 await delete_files(
                     client,
@@ -995,7 +1016,10 @@ def register(ctx: "RegisterContext") -> None:
             ] = None,
             filename: Annotated[
                 str | None,
-                Field(description="Name for the file on the NAS (default: the local file's name)."),
+                Field(
+                    description="Name for the file on the NAS, not a path (default: the local "
+                    "file's name)."
+                ),
             ] = None,
             overwrite: Annotated[
                 bool,
@@ -1032,7 +1056,17 @@ def register(ctx: "RegisterContext") -> None:
                 )
 
             client = await _fs_client()
-            [effective_dest] = await ensure_known_shares(client, [effective_dest], known_shares)
+            # Name the setting when the path came from it, not an argument the caller
+            # never passed (QA round 1 on #470).
+            [effective_dest] = await ensure_known_shares(
+                client,
+                [effective_dest],
+                known_shares,
+                "dest_folder" if dest_folder else "default_upload_dir",
+                None
+                if dest_folder
+                else "Fix default_upload_dir in the filestation settings, or pass dest_folder.",
+            )
 
             async def _progress(current: int, total: int | None) -> None:
                 await ctx.report_progress(float(current), float(total) if total else None)
@@ -1098,9 +1132,20 @@ def register(ctx: "RegisterContext") -> None:
                 ),
             ] = False,
         ) -> str:
+            # The items are relative to the bin (or full paths into it), not share paths,
+            # so they skip the share check; a dot part would still escape the bin (#449).
+            for item in paths:
+                refuse_dot_parts(
+                    item,
+                    "paths",
+                    "Give the item as list_recycle_bin shows it, e.g. Shows/Ep1.mkv.",
+                )
             client = await _fs_client()
             share, *dest = await ensure_known_shares(
-                client, [share, *([dest_folder] if dest_folder else [])], known_shares
+                client,
+                [share, *([dest_folder] if dest_folder else [])],
+                known_shares,
+                ["share", *(["dest_folder"] if dest_folder else [])],
             )
             dest_folder = dest[0] if dest else None
             return _reply(

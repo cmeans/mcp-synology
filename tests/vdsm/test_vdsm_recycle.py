@@ -116,6 +116,64 @@ async def test_listings_say_dsm_sorts_folders_and_files_separately(
         await _clean(client, top.rsplit("/", 1)[1])
 
 
+async def test_hidden_recycle_pages_every_item_once(nas_client: Any) -> None:
+    """#389: with #recycle hidden, paging /home visits every other entry exactly once,
+    in both sort directions, and every page gives the same total."""
+    import re
+
+    client: DsmClient = nas_client[0]
+    top = f"t389-{uuid.uuid4().hex[:8]}"
+    try:
+        # Something in the bin, so /home/#recycle exists; entries to page through.
+        await create_folder(client, paths=[f"/home/{top}-{n}" for n in ("a", "b", "c", "gone")])
+        await delete_files(client, paths=[f"/home/{top}-gone"], recycle_bin_status={})
+
+        raw = await client.request(
+            "SYNO.FileStation.List", "list", version=2, params={"folder_path": "/home"}
+        )
+        names = [f["name"] for f in raw["files"]]
+        assert "#recycle" in names, names
+        expected = sorted(n for n in names if n != "#recycle")
+
+        # A page that ends just before #recycle must not promise one that turns out
+        # empty: for each direction, a limit equal to #recycle's position puts it right
+        # after the first page, wherever DSM sorts it.
+        positions = {}
+        for direction in ("asc", "desc"):
+            ordered = await client.request(
+                "SYNO.FileStation.List",
+                "list",
+                version=2,
+                params={"folder_path": "/home", "sort_by": "name", "sort_direction": direction},
+            )
+            positions[direction] = [f["name"] for f in ordered["files"]].index("#recycle")
+        limits = {2, len(expected), *(p for p in positions.values() if p > 0)}
+        for limit in sorted(limits):
+            for direction in ("asc", "desc"):
+                seen: list[str] = []
+                offset = 0
+                while True:
+                    out = await list_files(
+                        client,
+                        path="/home",
+                        limit=limit,
+                        offset=offset,
+                        sort_direction=direction,
+                        hide_recycle=True,
+                    )
+                    assert f"({len(expected)} items)" in out, out
+                    assert "#recycle" not in out.replace("(#recycle hidden)", ""), out
+                    seen += [n for n in expected if re.search(rf"\s{re.escape(n)}/?\s", out)]
+                    hint = re.search(r"Use offset=(\d+)", out)
+                    if not hint:
+                        break
+                    offset = int(hint.group(1))
+                assert sorted(seen) == expected, (limit, direction, seen)
+    finally:
+        for name in ("a", "b", "c", "gone"):
+            await _clean(client, f"{top}-{name}")
+
+
 async def _home_takes_only_its_listed_name(client: DsmClient, tmp_path: Path) -> None:
     """#353: DSM takes an ordinary share in any case, but the home service only as /home.
 
@@ -126,7 +184,7 @@ async def _home_takes_only_its_listed_name(client: DsmClient, tmp_path: Path) ->
     with pytest.raises(ToolError, match="408"):
         await list_files(client, path="/Home")
     known: set[str] = set()
-    assert await ensure_known_shares(client, ["/Home/x", "Testshare"], known) == [
+    assert await ensure_known_shares(client, ["/Home/x", "Testshare"], known, "paths") == [
         "/home/x",
         "/testshare",
     ]
@@ -150,7 +208,7 @@ async def _home_takes_only_its_listed_name(client: DsmClient, tmp_path: Path) ->
             )
             assert len(data["files"]) == count and data["total"] == 2, (limit, data)
         await delete_files(client, paths=[f"/home/{top}"], recycle_bin_status={})
-        [share] = await ensure_known_shares(client, ["Home"], known)
+        [share] = await ensure_known_shares(client, ["Home"], known, "share")
         found = await list_recycle_bin(client, share=share, pattern=top)
         assert f"{top}/" in found, found
         status: dict[str, bool] = {}

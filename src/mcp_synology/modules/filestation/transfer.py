@@ -26,7 +26,7 @@ from mcp_synology.core.formatting import (
     synology_error_response,
 )
 from mcp_synology.core.local_paths import refuse_outside_roots
-from mcp_synology.modules.filestation.helpers import normalize_path
+from mcp_synology.modules.filestation.helpers import normalize_path, refuse_bad_name
 
 if TYPE_CHECKING:
     from mcp_synology.core.client import DsmClient, ProgressCallback
@@ -114,6 +114,19 @@ async def upload_file(
             suggestion="Check the file path and try again.",
         )
 
+    if filename:
+        refuse_bad_name("Upload", filename, "filename", "Pass a plain file name, e.g. report.pdf.")
+    else:
+        # The local file's own name too: ` .. ` is a valid local name (pre-QA on #470). It
+        # isn't `filename`, which the caller didn't pass (QA round 3).
+        refuse_bad_name(
+            "Upload",
+            local.name,
+            "local_path",
+            "Pass filename with a plain name for the file on the NAS.",
+            label=f"the local file's name ({local.name!r})",
+            value=local_path,
+        )
     file_size = local.stat().st_size
     dest = normalize_path(dest_folder)
     effective_name = filename or local.name
@@ -127,6 +140,7 @@ async def upload_file(
             ErrorCode.ALREADY_EXISTS,
             f"Upload failed: File '{effective_name}' already exists in {dest}.",
             retryable=False,
+            # The conflict is the file name, passed or not, as download_file reports it (#189).
             param="filename",
             value=effective_name,
             suggestion="Use overwrite=true to replace the existing file.",
