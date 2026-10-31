@@ -231,6 +231,30 @@ class TestRefuseBadName:
             f"Rename failed: new_name should be just a file name, but it {problem}."
         )
 
+    @pytest.mark.parametrize(
+        "char",
+        sorted("\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069"),
+    )
+    def test_every_direction_changing_character(self, char: str) -> None:
+        with pytest.raises(ToolError) as exc:
+            refuse_bad_name("Rename", f"a{char}b", "new_name", "x")
+        assert "changes text direction" in _error(exc)["message"]
+
+    @pytest.mark.parametrize("char", ["\u2028", "\u2029"])
+    def test_line_and_paragraph_separators(self, char: str) -> None:
+        with pytest.raises(ToolError) as exc:
+            refuse_bad_name("Rename", f"a{char}b", "new_name", "x")
+        assert "line or paragraph separator" in _error(exc)["message"]
+
+    @pytest.mark.parametrize(
+        "name", ["\u3164", "\uffa0", "\u115f\u1160", "\u2800", "\u034f", "\ufe0f", "\u200b\u3164"]
+    )
+    def test_names_that_draw_nothing(self, name: str) -> None:
+        """Blank fillers and lone combining marks look empty too (pre-QA r4)."""
+        with pytest.raises(ToolError) as exc:
+            refuse_bad_name("Rename", name, "new_name", "x")
+        assert "has no visible character" in _error(exc)["message"]
+
     @pytest.mark.parametrize("parent", ["/video", "/video/", "video", "/homes/alice"])
     def test_recycle_where_it_would_be_a_bin(self, parent: str) -> None:
         """DSM lets `#recycle` be created where a share has no bin (#494 probe); the tools
@@ -444,11 +468,25 @@ class TestResolvePaths:
     @pytest.mark.parametrize(
         ("tool", "param", "path", "problem"),
         [
-            ("create_folder", "paths", "/video/#recycle/sub", "as '#recycle'"),
-            ("create_folder", "paths", "/homes/bob/#recycle/sub", "as '#recycle'"),
-            ("create_folder", "paths", "/video/new\x1bdir/sub", "with a control character"),
-            ("upload_file", "dest_folder", "/video/#recycle", "as '#recycle'"),
-            ("upload_file", "dest_folder", "/video/a\nb/c", "with a control character"),
+            ("create_folder", "paths", "/video/#recycle/sub", "is '#recycle'"),
+            ("create_folder", "paths", "/homes/bob/#recycle/sub", "is '#recycle'"),
+            ("create_folder", "paths", "/video/new\x1bdir/sub", "contains a control character"),
+            ("upload_file", "dest_folder", "/video/#recycle", "is '#recycle'"),
+            ("upload_file", "dest_folder", "/video/a\nb/c", "contains a control character"),
+            # The invisible-character rules too (pre-QA r4: untested before).
+            (
+                "upload_file",
+                "dest_folder",
+                "/video/a\u202eb/x",
+                "contains a character that changes text direction",
+            ),
+            ("create_folder", "paths", "/video/\u200b/sub", "has no visible character"),
+            (
+                "create_folder",
+                "paths",
+                "/video/a\u2028b/sub",
+                "contains a line or paragraph separator",
+            ),
         ],
     )
     async def test_a_created_parent_gets_the_new_name_rules(
@@ -464,7 +502,7 @@ class TestResolvePaths:
                 [path],
                 creates_parents=True,  # type: ignore[arg-type]
             )
-        assert f"would be created {problem}" in _error(exc)["message"]
+        assert f"would be created, but its name {problem}" in _error(exc)["message"]
 
     async def test_an_existing_parent_with_such_a_name_is_used(self) -> None:
         """A bin (or an odd name) that already exists is taken as it is; no request is made
@@ -765,7 +803,8 @@ def test_every_path_argument_is_registered() -> None:
     unregistered = []
     for name, fn in tools.items():
         for param in inspect.signature(fn).parameters:
-            if param.endswith("name") and not _words(param) & _PATHLIKE:
+            namelike = param.endswith(("name", "names")) or _words(param) & {"name", "names"}
+            if namelike and not _words(param) & _PATHLIKE:
                 # A name a tool creates must be a NAME_PARAMS entry (refuse_bad_name).
                 if NAME_PARAMS.get(name) != param and param not in LOCAL_PARAMS.get(name, set()):
                     unregistered.append(f"{name}.{param} (a name: NAME_PARAMS)")

@@ -361,18 +361,38 @@ def _refuse(message: str, param: str, value: str, suggestion: str) -> None:
 # Bidirectional controls (U+202E makes `invoice<RLO>txt.exe` show as `invoiceexe.txt`) and
 # line/paragraph separators: refused in new names (maintainer, 2026-10-31). The zero-width
 # joiner and non-joiner stay allowed: emoji sequences and several scripts' spelling use them.
-_BIDI = frozenset("\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069\u200e\u200f")
+# Unicode's Bidi_Control set: U+061C (Arabic letter mark) is the Arabic counterpart of
+# U+200F (pre-QA r4).
+_BIDI = frozenset("\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069")
 _LINE_BREAKS = frozenset("\u2028\u2029")
+# Letters that draw nothing (U+3164 Hangul filler is a well-known blank-looking name).
+_BLANK_LETTERS = frozenset("\u115f\u1160\u3164\uffa0\u2800")
 
 
-def _invisible_problem(name: str) -> str | None:
-    """Why a new name's invisible characters make it misleading, or None."""
+def _shows_nothing(c: str) -> bool:
+    """A character that draws nothing on its own: whitespace, a format character (zero
+    width, BOM), a combining mark, or a blank filler letter."""
+    return (
+        c.isspace() or unicodedata.category(c) in ("Cf", "Zs", "Mn", "Me") or (c in _BLANK_LETTERS)
+    )
+
+
+def name_problem(name: str, parent: str | None = None) -> str | None:
+    """Why a name a tool would create (a new name, or a parent folder it creates) isn't
+    one, beyond the structural checks only whole names get (empty, ``/``, NUL, dots); or
+    None. One list, so a new name and a created parent can't drift apart (pre-QA r4)."""
+    if any(unicodedata.category(c) == "Cc" and c != "\t" for c in name):
+        return "contains a control character"
     if any(c in _BIDI for c in name):
         return "contains a character that changes text direction"
     if any(c in _LINE_BREAKS for c in name):
         return "contains a line or paragraph separator"
-    if all(unicodedata.category(c) in ("Cf", "Zs") or c.isspace() for c in name):
+    if all(_shows_nothing(c) for c in name):
         return "has no visible character"
+    if name != name.strip():
+        return "starts or ends with whitespace"
+    if name == "#recycle" and parent is not None and makes_a_bin(parent):
+        return "is '#recycle', the name of a recycle bin there"
     return None
 
 
@@ -389,7 +409,7 @@ def refuse_bad_name(
     """Raise ``invalid_parameter`` for a name a tool would create that isn't one: empty,
     blank, a ``/``, a NUL or another control character (a tab inside the name is fine: DSM
     keeps it, maintainer 2026-10-31), a direction-changing character or a line separator, or
-    no visible character at all (`_invisible_problem`), ``.`` or ``..`` (#449), whitespace
+    no visible character at all (`name_problem`), ``.`` or ``..`` (#449), whitespace
     at its start or end (#488: DSM would keep it, and it's almost never meant), or
     ``#recycle`` where it would be taken for a bin: directly in a shared folder or in a
     user's home folder (``/homes/<user>``) (#510: DSM lets one be created where there's no
@@ -407,15 +427,7 @@ def refuse_bad_name(
         if "\0" in name
         else "is '.' or '..'"
         if _is_dot(name)
-        else "contains a control character"
-        if any(unicodedata.category(c) == "Cc" and c != "\t" for c in name)
-        else _invisible_problem(name)
-        if _invisible_problem(name)
-        else "starts or ends with whitespace"
-        if name != name.strip()
-        else "is '#recycle', the name of a recycle bin there"
-        if name == "#recycle" and parent is not None and makes_a_bin(parent)
-        else None
+        else name_problem(name, parent)
     )
     if problem:
         error_response(
@@ -431,21 +443,6 @@ def refuse_bad_name(
 # -- the entry point -----------------------------------------------------------------------
 
 
-def _created_part_problem(part: str, parent: str) -> str | None:
-    """Why a folder named ``part`` mustn't be created in ``parent`` (the new-name rules of
-    `refuse_bad_name` that a path part can break), or None."""
-    if any(unicodedata.category(c) == "Cc" and c != "\t" for c in part):
-        return "with a control character in its name"
-    invisible = _invisible_problem(part)
-    if invisible:
-        return f"with a name that {invisible}"
-    if part != part.strip():
-        return "with whitespace at its start or end"
-    if part == "#recycle" and makes_a_bin(parent):
-        return "as '#recycle', where it would be taken for the recycle bin"
-    return None
-
-
 async def _refuse_bad_created_parents(
     client: DsmClient,
     raw: str,
@@ -455,21 +452,24 @@ async def _refuse_bad_created_parents(
     suggestion: str | None = None,
 ) -> None:
     """Refuse a path whose missing parent folder the tool would create (``create_parents``,
-    ``force_parent``) under a name the new-name rules refuse: padded (DSM makes
+    ``force_parent``) under a name `name_problem` refuses: padded (DSM makes
     ``/video/Uploads `` beside ``Uploads`` and reports success; vdsm DSM 7.1 and 7.4.1),
-    with a control character, or ``#recycle`` where it would be a bin (pre-QA on #510).
-    Only such parts are looked up, so an ordinary path costs no request."""
+    with a control or invisible character, or ``#recycle`` where it would be a bin (pre-QA
+    on #510). Only such parts are looked up, so an ordinary path costs no request; the
+    parent is built as the walk goes, so a deep path stays linear (pre-QA r4)."""
     parts = normalized.split("/")[1:]
+    parent = "/" + parts[0] if parts else "/"
     for i in range(1, min(upto, len(parts))):
-        problem = _created_part_problem(parts[i], "/" + "/".join(parts[:i]))
+        problem = name_problem(parts[i], parent)
+        prefix = f"{parent}/{parts[i]}"
+        parent = prefix
         if problem is None:
             continue
-        prefix = "/" + "/".join(parts[: i + 1])
         # Only a definite 408: an unreadable answer leaves it to DSM.
         if await path_exists(client, prefix) is False:
             _refuse(
                 f"Invalid path {raw!r}: the folder {shown(prefix)} doesn't exist, and would be "
-                f"created {problem}. Nothing was created.",
+                f"created, but its name {problem}. Nothing was created.",
                 param,
                 raw,
                 suggestion
