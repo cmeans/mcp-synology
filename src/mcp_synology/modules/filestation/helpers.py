@@ -370,6 +370,21 @@ def invisible_problem(name: str) -> str | None:
     return None
 
 
+# How every `invisible_problem` reason starts: callers pick their advice by it without
+# running the check again on an argument another check already refused (pre-QA on #515).
+_INVISIBLE_REASONS = (
+    "contains an invisible character",
+    "starts or ends with a blank character",
+    "starts with a combining mark",
+    "repeats a combining mark",
+)
+
+
+def is_invisible_problem(problem: str) -> bool:
+    """Whether ``problem`` is a reason `invisible_problem` gives."""
+    return problem.startswith(_INVISIBLE_REASONS)
+
+
 def _hides(c: str) -> bool:
     """A character inside a path that a plain message would hide or mangle on its own: a
     control, unassigned or private-use character, a line separator, or whitespace other

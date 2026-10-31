@@ -168,6 +168,10 @@ class TestInvisibleProblem:
             ),
             ("\u1820" + "\u180e" * 500 + "\u1820", "contains an invisible character (U+180E)"),
             ("\u1802\u180b", "contains an invisible character (U+180B)"),
+            # The vowel separator needs a Mongolian letter on both sides.
+            ("\u1820\u180e", "contains an invisible character (U+180E)"),
+            ("report \u1820\u180e.pdf", "contains an invisible character (U+180E)"),
+            ("\u1802\u180e\u1820", "contains an invisible character (U+180E)"),
             (
                 "report \u1802" + "\u180e\u180b\u180e\u180c" * 40 + "\u1802.pdf",
                 "contains an invisible character (U+180E)",

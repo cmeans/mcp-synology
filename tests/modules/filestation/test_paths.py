@@ -364,6 +364,10 @@ class TestRefuseBadName:
             # ZWNJ between dual-joining letters in other cursive scripts (UTS #39 A1).
             "\u0710\u0712\u200c\u0712\u0710",  # Syriac
             "\u07ca\u07cb\u200c\u07cc\u07cd",  # N'Ko
+            # Marks between the letter and the joiner (pre-QA on #515: pins `_MARKS`).
+            "\u0915\u093c\u094d\u200c\u0937",  # NFD Devanagari, nukta + virama + ZWNJ
+            "\u062f\u0650\u200c\u0647\u0627",  # Persian, a kasra before the ZWNJ
+            "\u09b0\u09bc\u200d\u09cd\u09af",  # Bengali ra-phala after a nukta
             # Emoji ZWJ sequences with skin tones.
             "\U0001f468\U0001f3fe\u200d\U0001f9b1",
             "\U0001f9d1\U0001f3fb\u200d\U0001f91d\u200d\U0001f9d1\U0001f3ff",

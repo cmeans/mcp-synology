@@ -30,6 +30,7 @@ from mcp_synology.modules.filestation.helpers import (
     _is_dot,
     draws_nothing,
     invisible_problem,
+    is_invisible_problem,
     normalize_path,
     path_exists,
     shown,
@@ -460,7 +461,7 @@ def refuse_bad_name(
             retryable=False,
             param=param,
             value=name if value is None else value,
-            suggestion=_UNICODE_ADVICE if problem == invisible_problem(name) else suggestion,
+            suggestion=_UNICODE_ADVICE if is_invisible_problem(problem) else suggestion,
         )
 
 
@@ -500,7 +501,7 @@ async def _refuse_bad_created_parents(
                 or (
                     "Retype the folder's name without the character the message names, or "
                     "pick an existing folder (list_files shows them)."
-                    if problem == invisible_problem(parts[i])
+                    if is_invisible_problem(problem)
                     else "Give the folder a plain name, or pick an existing folder (list_files "
                     "shows them)."
                 ),
