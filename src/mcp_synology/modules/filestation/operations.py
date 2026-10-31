@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -342,6 +343,17 @@ def _unstop(message: str) -> str:
     return message[:-1] if message.endswith(".") else message
 
 
+# Advice that already says to check with list_files (a start with no answer, DSM's 1200),
+# not advice that only mentions it (408's "Use list_files or search_files to find …").
+_CHECKS_WITH_LIST_FILES = re.compile(r"\bcheck\b[^.]*\bwith list_files\b", re.IGNORECASE)
+
+
+def _names_path(message: str, path: str) -> bool:
+    """Whether ``message`` names ``path`` itself: followed by the end, a sentence's
+    period, or " (" (as in ``/video/b (DSM error 900)``)."""
+    return re.search(re.escape(path) + r"(?=$|\.$|\.\s|\s\()", message) is not None
+
+
 def _with_progress_so_far(
     error: ToolError, failed: str, done: list[str], rest: list[str]
 ) -> ToolError:
@@ -355,12 +367,13 @@ def _with_progress_so_far(
         message = body["error"]["message"]
     except (ValueError, KeyError, TypeError):
         return error
-    # A DSM error on a start or a status request names no path (QA round 5 on #480).
-    if failed not in message:
+    # A DSM error on a start or a status request names no path (QA round 5 on #480); one
+    # that names a path inside the item, or a sibling starting with the same characters
+    # (/video/a.txt, /video/a b), doesn't name the item either.
+    if not _names_path(message, failed):
         message = _unstop(message) + f". Failed on: {failed}."
-    if body["error"].get("param") is None:
-        body["error"]["param"] = "paths"
-        body["error"]["value"] = failed
+    body["error"]["param"] = "paths"
+    body["error"]["value"] = failed
     # The delete loop is the one place that adds these: _delete_result doesn't (pre-QA on
     # #480; a check for the words in the message missed a path containing them).
     if done:
@@ -374,11 +387,16 @@ def _with_progress_so_far(
         # "retry", and a check first, since the failed path may be gone already (a 599),
         # unless the advice already says to check with list_files (QA round 5).
         original = str(body["error"].get("suggestion") or "").strip()
-        retry = "When retrying, leave out the paths already deleted (the same call would be "
-        if "list_files" in original:
-            retry += "refused)."
+        if _CHECKS_WITH_LIST_FILES.search(original):
+            retry = (
+                "When retrying, leave out the paths already deleted (the same call would be "
+                "refused)."
+            )
         else:
-            retry += f"refused), and check {failed} with list_files first."
+            retry = (
+                "When retrying, leave out the paths already deleted (the same call would be "
+                f"refused), and check {failed} with list_files first."
+            )
         if not original:
             body["error"]["suggestion"] = retry
         elif original[-1] in ".!?)":

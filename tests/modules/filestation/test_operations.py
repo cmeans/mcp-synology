@@ -3260,6 +3260,8 @@ class TestDeleteFailurePartway:
             (418, f'{_RETRY_NOTE} Avoid characters: / \\ : * ? " < > |'),
             # The task may have finished: the note says to check the failed path first.
             (599, f"Background task not found (may have already completed). {_RETRY_NOTE}"),
+            # Mentioning list_files isn't saying to check with it: the check stays (pre-QA).
+            (408, f"Use list_files or search_files to find the correct path. {_RETRY_NOTE}"),
         ],
     )
     async def test_a_dsm_error_partway_keeps_its_advice(
@@ -3314,6 +3316,36 @@ class TestDeleteFailurePartway:
         message = json.loads(str(exc.value))["error"]["message"]
         assert "Failed on" not in message
         assert message.count("/video/b") == 1
+
+    @respx.mock
+    async def test_a_path_inside_the_item_doesnt_name_it(self, mock_client: DsmClient) -> None:
+        """An error naming a path inside the failed item still gets 'Failed on' (pre-QA)."""
+        self._route(2, status={"finished": True, "errors": [{"code": 408, "path": "/video/b/s"}]})
+        with pytest.raises(ToolError) as exc:
+            await delete_files(mock_client, paths=["/video/a", "/video/b", "/video/c"], timeout=5)
+        message = json.loads(str(exc.value))["error"]["message"]
+        assert message == (
+            "Delete files failed: /video/b/s (DSM error 408). Failed on: /video/b. Already "
+            "deleted before this failure: /video/a. Not started: /video/c."
+        )
+
+    @pytest.mark.parametrize(
+        ("message", "named"),
+        [
+            ("DSM error code 407 on path: /video/a.", True),
+            ("DSM error code 407 on path: /video/a", True),
+            ("Failed: /video/a (DSM error 900).", True),
+            ("Failed: /video/a. More.", True),
+            # A sibling starting with the same characters, or a path inside it.
+            ("DSM error code 407 on path: /video/a b.", False),
+            ("DSM error code 407 on path: /video/a.txt.", False),
+            ("DSM error code 407 on path: /video/a/x.", False),
+        ],
+    )
+    def test_names_path(self, message: str, named: bool) -> None:
+        from mcp_synology.modules.filestation.operations import _names_path
+
+        assert _names_path(message, "/video/a") is named
 
     @respx.mock
     async def test_a_lone_start_with_no_answer_is_unchanged(self, mock_client: DsmClient) -> None:
