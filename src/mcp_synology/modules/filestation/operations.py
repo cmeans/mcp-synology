@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import TYPE_CHECKING, Any, NamedTuple
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 
 import httpx
 from mcp.server.mcpserver.exceptions import ToolError
@@ -113,7 +113,7 @@ async def _explain_rename_1200(client: DsmClient, path: str, original: str, new_
     target = f"{parent}/{new_name}"
     # The new path can't stand for a taken name when it's the source itself (its own
     # name), or when the source is a share root (no parent folder to look in; `rename`
-    # refuses one before sending it since #479, so this only guards other callers). `rename`
+    # refuses one before sending it since #479, so this is a defensive guard). `rename`
     # refuses "." and ".." before getting here (#449).
     can_be_taken = bool(parent) and new_name != name
     try:
@@ -407,7 +407,7 @@ def _whole_bin_words(parts: list[str]) -> _BinWords:
             "list_files",
             shared=False,
         )
-    if parts[0] == "home":
+    if parts[0].casefold() == "home":
         return _BinWords(
             "your home folder's whole recycle bin",
             "your deleted items",
@@ -422,7 +422,7 @@ def _whole_bin_words(parts: list[str]) -> _BinWords:
     )
 
 
-def _refuse_share_root_source(operation: str, path: str, param: str) -> None:
+def _refuse_share_root_source(operation: Literal["Move", "Rename"], path: str, param: str) -> None:
     """Refuse a whole shared folder, or a share's whole recycle bin, as what a move moves or
     a rename renames (#479).
 

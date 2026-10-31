@@ -3471,22 +3471,26 @@ class TestShareRootSourcesRefused:
         assert starts[0]["dest_folder_path"] == "/video/a/video/#recycle"
 
     @respx.mock
-    async def test_own_home_bin_is_worded_as_the_callers_own(self, mock_client: DsmClient) -> None:
+    # Any case: when DSM won't list shares, /Home isn't rewritten to /home first (QA r1).
+    @pytest.mark.parametrize("path", ["/home/#recycle", "/Home/#recycle"])
+    async def test_own_home_bin_is_worded_as_the_callers_own(
+        self, mock_client: DsmClient, path: str
+    ) -> None:
         """/home/#recycle holds only the caller's deleted items (pre-QA round 3)."""
         with pytest.raises(ToolError) as exc:
-            await delete_files(mock_client, paths=["/home/#recycle"])
+            await delete_files(mock_client, paths=[path])
         error = json.loads(str(exc.value))["error"]
         assert error["message"] == (
-            "Delete files refused: '/home/#recycle' is your home folder's whole recycle bin. "
+            f"Delete files refused: {path!r} is your home folder's whole recycle bin. "
             "Deleting it would permanently remove everything in the bin. Nothing was deleted."
         )
         assert "Control Panel" not in error["suggestion"]
         assert "list_recycle_bin" in error["suggestion"]
         with pytest.raises(ToolError) as exc:
-            await move_files(mock_client, paths=["/home/#recycle"], dest_folder="/photo")
+            await move_files(mock_client, paths=[path], dest_folder="/photo")
         error = json.loads(str(exc.value))["error"]
         assert error["message"] == (
-            "Move files refused: '/home/#recycle' is your home folder's whole recycle bin. "
+            f"Move files refused: {path!r} is your home folder's whole recycle bin. "
             "Moving it would take your deleted items out of the bin. Nothing was moved."
         )
 
