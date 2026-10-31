@@ -260,13 +260,17 @@ Common causes:
 - `delete_files` on a whole shared folder (`/video`): a shared folder isn't deleted or
   emptied this way (#451; emptying one with the user's confirmation is #484). Delete a
   shared folder's items by path, or the shared folder itself in DSM's Control Panel.
-- `delete_files` on a path with a `.`, `..` or empty part, or a NUL: write the path out
-  in full.
-- A name a tool would create starts or ends with whitespace (`rename`'s `new_name`,
-  `upload_file`'s `filename` or the local file's name, `create_folder`'s new folder)
-  (#488): DSM keeps it exactly, making `report.pdf ` a different file. Give the name
-  without the padding. Paths themselves are taken exactly, so an existing item named
-  with such whitespace is still reached by its exact path.
+- Any File Station path with a NUL (#510: DSM cuts a path at a NUL, so the request would
+  act on another item) or an empty part (`/video//x`): write the path out in full.
+- A name a tool would create (`rename`'s `new_name`, `upload_file`'s `filename` or the
+  local file's name, `create_folder`'s new folder) starts or ends with whitespace (#488:
+  DSM keeps it exactly, making `report.pdf ` a different file), has a control character
+  other than a tab, or is `#recycle` directly in a shared folder (#510). Give a plain
+  name. Paths themselves are taken exactly, so an existing item named with such
+  whitespace is still reached by its exact path.
+- `create_folder` given a shared folder itself (`/video`), or an upload or `create_folder`
+  that would create a missing parent folder whose name starts or ends with whitespace
+  (#510): give the full path of a folder inside a shared folder, without the padding.
 - `move_files` with a whole shared folder as a source, or `rename` of one (#479): DSM
   takes it out of its shared folders. Move its items by path, copy it with `copy_files`,
   or move or rename it in DSM's Control Panel.
@@ -274,6 +278,9 @@ Common causes:
   `/<share>/#recycle`, or a user's home bin (`/home/#recycle`, or `/homes/<user>/#recycle`
   as an administrator sees it) (#479). Work with the bin's items by their own paths, or
   restore them with `restore_from_recycle_bin`.
+- `delete_files`, `move_files` or `rename` on a user's whole home folder
+  (`/homes/<user>`) (#510): doing that through File Station breaks the user's home.
+  Work with its items by path, or manage the user's home in DSM's Control Panel.
 - A `restore_from_recycle_bin` item that names the whole bin (`""`, `"/"`, `#recycle`)
   (#479): give each item as `list_recycle_bin` shows it.
 - `upload_file` or `download_file` was called without `dest_folder`, and no

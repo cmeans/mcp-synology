@@ -116,10 +116,16 @@ uv run pytest -n auto --cov=mcp_synology   # Tests with coverage
 - Strict validation everywhere but module settings: unknown keys at the top level, in `connection`/`auth`/`logging` (#386) and directly under `modules.<name>` are errors; unknown keys within module settings are warnings. Config errors never echo a credential's value: `format_validation_error` shows only plain values outside `auth`, never an unknown key's, and never names an unknown key under `auth`, or one with no value outside module settings and module names (a near-miss names the real key it's close to instead); a file that isn't UTF-8 is reported by line, never its bytes; `format_yaml_error` never quotes the file; config files are parsed only through `parse_config_text`
 - Two-phase loading: parse YAML → merge env var overrides → apply defaults → validate with Pydantic
 
+### Class entry points
+A class of bug is fixed once, in one place, with a guard test that keeps it fixed (maintainer, 2026-10-31; class issues #510-#514, ranked in #170). New code goes through the entry point; a new rule goes in the entry point's table, never inline in one tool. A change that bypasses one fails its guard test.
+- **File Station paths: `filestation/paths.py` `resolve_paths` (#510).** Every path argument of every File Station tool goes through it, with a role in `PATH_PARAMS` (READ, WRITE_TARGET, DEST, NEW_FOLDER, SHARE); restore's bin items through `resolve_bin_items`; new names through `refuse_bad_name`. Operations take `ResolvedPath`, so `mypy src/` rejects an unchecked string. Guards: `tests/modules/filestation/test_paths.py` (`test_every_path_argument_is_registered`, the hostile-spelling matrix over every tool and path argument) and `tests/vdsm/test_vdsm_paths.py`
+
 ### Path Handling (File Station)
-- Accept paths with or without leading `/`; normalize internally
-- Always return fully-qualified paths: `/shared_folder/...`
-- Validate first path component against cached share list; refuse any `.` or `..` part first (DSM answers 418, but the share check would read `/video/../photo` as `video`, #449)
+- All of it is in `filestation/paths.py` (above). Accept paths with or without leading `/`; always return fully-qualified paths: `/shared_folder/...`
+- **Paths are taken exactly (#488):** only whitespace before a leading `/` is dropped. DSM keeps whitespace in a name (`foo `, ` foo`, `" "` are names beside `foo`), so stripping acted on another item
+- Refused in every path: a NUL (DSM cuts the path there: Delete of `a<NUL>x` deleted `a`), an empty part (`//`), a `.` or `..` part, padded too (#449). Then the share check (DSM's spelling of the share, #353), then the role: a WRITE_TARGET can't be a shared folder, a whole bin (`/<share>/#recycle`, `/homes/<user>/#recycle`) or a user's home folder (`/homes/<user>`); a destination's padded part must exist when the tool creates parents
+- A name a tool creates can't be blank, have a `/`, a control character other than a tab inside it, whitespace at its start or end, or be `#recycle` directly in a shared folder
+- Errors quote a refused argument with `!r`; a path the server names in an error or list goes through `shown()` (quoted only when padding or an unprintable character would be invisible)
 
 ### Search (File Station)
 - Always pass `filetype=all` — DSM defaults to `"file"` if omitted, excluding directories from results

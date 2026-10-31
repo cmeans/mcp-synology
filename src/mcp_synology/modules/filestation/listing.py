@@ -28,6 +28,7 @@ from mcp_synology.modules.filestation.helpers import (
     path_exists,
     probe_recycle_status,
 )
+from mcp_synology.modules.filestation.paths import ResolvedPath
 
 logger = logging.getLogger(__name__)
 
@@ -248,7 +249,7 @@ async def list_shares(
 async def list_files(
     client: DsmClient,
     *,
-    path: str,
+    path: ResolvedPath,
     pattern: str | None = None,
     filetype: str = "all",
     sort_by: str = "name",
@@ -447,7 +448,7 @@ async def _not_enabled(
 async def list_recycle_bin(
     client: DsmClient,
     *,
-    share: str,
+    share: ResolvedPath,
     pattern: str | None = None,
     sort_by: str = "mtime",
     sort_direction: str = "desc",
@@ -474,7 +475,7 @@ async def list_recycle_bin(
                 definite=recycle_bin_status.get(share_name) is False,
             )
 
-    recycle_path = f"/{share_name}/#recycle"
+    recycle_path = ResolvedPath(f"/{share_name}/#recycle")
 
     try:
         if pattern:

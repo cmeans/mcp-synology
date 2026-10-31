@@ -23,6 +23,7 @@ from mcp_synology.core.formatting import (
 from mcp_synology.modules.filestation.helpers import (
     missing_paths_suggestion,
     normalize_path,
+    shown,
     task_request,
     unanswered_status_response,
     validate_additional,
@@ -30,6 +31,7 @@ from mcp_synology.modules.filestation.helpers import (
 
 if TYPE_CHECKING:
     from mcp_synology.core.client import DsmClient
+    from mcp_synology.modules.filestation.paths import ResolvedPath
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +53,7 @@ async def _stop_dirsize_task(client: DsmClient, taskid: str) -> None:
 async def get_file_info(
     client: DsmClient,
     *,
-    paths: list[str],
+    paths: list[ResolvedPath],
     additional: list[str] | None = None,
 ) -> str:
     """Get detailed metadata for specific files or folders.
@@ -119,7 +121,7 @@ async def get_file_info(
         error_response(
             mapped.error_code,
             "Get file info failed: "
-            + "; ".join(f"{path} (DSM error {code})" for path, code in missing),
+            + "; ".join(f"{shown(path)} (DSM error {code})" for path, code in missing),
             retryable=False,
             param="paths",
             value=paths,
@@ -127,7 +129,7 @@ async def get_file_info(
         )
 
     notes = "".join(
-        "\n" + format_status(f"Not found: {path} (DSM error {code})", success=False)
+        "\n" + format_status(f"Not found: {shown(path)} (DSM error {code})", success=False)
         for path, code in missing
     )
 
@@ -215,7 +217,7 @@ def _refuse_path(normalized: str, path: str, code: int, missing: list[tuple[str,
     if code == 408:
         error_response(
             ErrorCode.NOT_FOUND,
-            f"Get directory size failed: {normalized} doesn't exist on the NAS.",
+            f"Get directory size failed: {shown(normalized)} doesn't exist on the NAS.",
             retryable=False,
             param="path",
             value=path,
@@ -224,7 +226,7 @@ def _refuse_path(normalized: str, path: str, code: int, missing: list[tuple[str,
     if code == 407:  # no permission for it
         error_response(
             ErrorCode.PERMISSION_DENIED,
-            f"Get directory size failed: no permission to read {normalized} on the NAS.",
+            f"Get directory size failed: no permission to read {shown(normalized)} on the NAS.",
             retryable=False,
             param="path",
             value=path,
@@ -288,7 +290,7 @@ def _read_denied(entry: dict[str, Any]) -> bool:
 async def get_dir_size(
     client: DsmClient,
     *,
-    path: str,
+    path: ResolvedPath,
     timeout: float = 120.0,
 ) -> str:
     """Calculate the total size of a directory."""

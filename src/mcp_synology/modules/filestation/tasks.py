@@ -485,8 +485,10 @@ class RunningTask:
 
 
 def _in_recycle_bin(path: str) -> bool:
-    parts = path.split("/")
-    return len(parts) > 2 and parts[2] == "#recycle"
+    # The one bin rule (#510): /homes/<user>/#recycle is a bin too.
+    from mcp_synology.modules.filestation.paths import in_bin
+
+    return in_bin(path)
 
 
 def _task_kind(api: Any, params: dict[str, Any], paths: list[str]) -> HandleKind | None:
@@ -720,7 +722,7 @@ def _generic_final(handle: Handle, status: dict[str, Any]) -> str:
             (str(e.get("path") or "item"), e.get("code", 0)) for e in errors if isinstance(e, dict)
         )
     if failed:
-        text = "; ".join(f"{p} ({_code_text(c)})" for p, c in failed)
+        text = "; ".join(f"{shown(p)} ({_code_text(c)})" for p, c in failed)
         if handle.kind != "delete":
             # No record of the source here, so a 408 can't be told apart: say it anyway.
             text += _partial_note(status, failed, handle.kind.capitalize(), None, None)

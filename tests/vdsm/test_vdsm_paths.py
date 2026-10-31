@@ -1,4 +1,4 @@
-"""Paths are taken exactly (#488), against a real DSM.
+"""Paths are taken exactly (#488), and `resolve_paths`' rules hold (#510), against a real DSM.
 
 DSM keeps whitespace in a name: ``foo `` and ``" "`` are names beside ``foo``. The tools used
 to strip a path's ends, so ``…/foo `` reached ``…/foo`` and ``…/ `` the folder above. These
@@ -21,7 +21,8 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp_synology.modules.filestation.helpers import dsm_str
 from mcp_synology.modules.filestation.listing import list_files
 from mcp_synology.modules.filestation.metadata import get_file_info
-from mcp_synology.modules.filestation.operations import delete_files, rename
+from mcp_synology.modules.filestation.operations import create_folder, delete_files, rename
+from mcp_synology.modules.filestation.paths import resolve_paths
 
 if TYPE_CHECKING:
     from mcp_synology.core.client import DsmClient
@@ -85,3 +86,84 @@ async def test_paths_are_taken_exactly(nas_client: Any) -> None:
 
 async def test_paths_are_taken_exactly_admin(admin_client: Any) -> None:
     await _exact_paths(admin_client[0])
+
+
+async def _raw_delete(client: DsmClient, path: str) -> dict[str, Any]:
+    import asyncio
+
+    started = await client.request(
+        "SYNO.FileStation.Delete", "start", version=2, params={"path": path, "recursive": "true"}
+    )
+    task = dsm_str(started["taskid"])
+    for _ in range(40):
+        status = await client.request(
+            "SYNO.FileStation.Delete", "status", version=2, params={"taskid": task}
+        )
+        if status.get("finished"):
+            return dict(status)
+        await asyncio.sleep(0.5)
+    pytest.fail(f"DSM's delete of {path!r} didn't finish")
+
+
+def _code(exc: pytest.ExceptionInfo[ToolError]) -> str:
+    return str(json.loads(str(exc.value))["error"]["code"])
+
+
+async def test_resolve_paths_rules_hold_on_dsm(nas_client: Any, tmp_path: Any) -> None:
+    """#510: what the rules guard against is what DSM does (probes on #472 and #494)."""
+    client: DsmClient = nas_client[0]
+    known: set[str] = set()
+    root = f"/writable/t510-{uuid.uuid4().hex[:8]}"
+    await _mk(client, "/writable", root.rsplit("/", 1)[1])
+    try:
+        # NUL: DSM cuts the path there, so a raw Delete of `a<NUL>x` deletes `a`. Refused.
+        for name in ("a", "b"):
+            await _mk(client, root, name)
+        await _raw_delete(client, f"{root}/a\x00x")
+        assert await _names(client, root) == {"b"}
+        with pytest.raises(ToolError) as exc:
+            await resolve_paths(client, known, "delete_files", "paths", [f"{root}/b\x00x"])
+        assert _code(exc) == "invalid_parameter"
+        assert await _names(client, root) == {"b"}
+
+        # An item " " at a share's top that doesn't exist: taken exactly, DSM says 408 and
+        # deletes nothing; the shared folder stays.
+        [blank] = await resolve_paths(client, known, "delete_files", "paths", ["/writable/ "])
+        with pytest.raises(ToolError) as exc:
+            await delete_files(client, paths=[blank], recycle_bin_status={})
+        assert _code(exc) == "not_found"
+        assert root.rsplit("/", 1)[1] in await _names(client, "/writable")
+
+        # A padded upload destination that doesn't exist would be created padded: refused.
+        with pytest.raises(ToolError) as exc:
+            await resolve_paths(
+                client, known, "upload_file", "dest_folder", [f"{root}/up "], creates_parents=True
+            )
+        assert _code(exc) == "invalid_parameter"
+        assert await _names(client, root) == {"b"}
+
+        # `#recycle` can't be created at a share's top (DSM would allow it), but deeper it's
+        # an ordinary name; a tab inside a new name is created as given.
+        with pytest.raises(ToolError) as exc:
+            await resolve_paths(client, known, "create_folder", "paths", ["/writable/#recycle"])
+        assert _code(exc) == "invalid_parameter"
+        assert "#recycle" not in await _names(client, "/writable")
+        made = await resolve_paths(
+            client, known, "create_folder", "paths", [f"{root}/#recycle", f"{root}/a\tb"]
+        )
+        await create_folder(client, paths=made)
+        assert await _names(client, root) == {"b", "#recycle", "a\tb"}
+    finally:
+        with contextlib.suppress(ToolError):
+            await delete_files(client, paths=[root], recycle_bin_status={})
+
+
+async def test_a_users_home_folder_is_refused_as_a_write_target(admin_client: Any) -> None:
+    """An admin's Rename of /homes/<user> orphans that user's home (probe on #494)."""
+    client: DsmClient = admin_client[0]
+    known: set[str] = set()
+    for tool, param in (("rename", "path"), ("move_files", "paths"), ("delete_files", "paths")):
+        with pytest.raises(ToolError) as exc:
+            await resolve_paths(client, known, tool, param, ["/homes/mcpfresh"])
+        assert "whole home folder" in json.loads(str(exc.value))["error"]["message"]
+    assert "mcpfresh" in await _names(client, "/homes")

@@ -205,7 +205,12 @@ def strip_padding(path: str) -> str:
 def shown(path: str) -> str:
     """``path`` for a message: as is, or quoted with ``repr`` when a part has whitespace at
     its start or end or the path holds a character that doesn't print (a tab, a no-break
-    space), so a stray space is visible once paths are taken exactly (#488, #489)."""
+    space), so a stray space is visible once paths are taken exactly (#488, #489).
+
+    The rule (#510): a refusal of an argument as given quotes it with ``!r`` (the caller's
+    own text, shown exactly); an error or list that names a path the server checked or got
+    from DSM uses ``shown`` (plain unless something would be invisible). Successful
+    replies and listings show paths as DSM does."""
     if path.isprintable() and all(part == part.strip() for part in path.split("/")):
         return path
     return repr(path)
@@ -621,55 +626,9 @@ def _with_listed_share_name(path: str, known_shares: set[str]) -> str:
 
 
 def _is_dot(part: str) -> bool:
-    """``.`` or ``..``, surrounding spaces ignored: whether DSM trims `` .. `` to ``..`` is
-    unprobed, so a padded form is refused too (#449). Only spaces: a tab or newline beside a
-    dot is a different Linux name, and DSM's handling of it is unprobed too (QA round 2 on
-    #470). Photos also refuses padded folder names, though it strips all whitespace."""
-    return part.strip(" ") in (".", "..")
-
-
-def refuse_bad_name(
-    op: str,
-    name: str,
-    param: str,
-    suggestion: str,
-    label: str | None = None,
-    value: str | None = None,
-) -> None:
-    """Raise ``invalid_parameter`` for a NAS file name that isn't one: blank, a ``/``, a
-    NUL, or ``.`` or ``..`` (#449), naming which. ``label`` names it in the message when it
-    isn't ``param`` itself (an upload's local file name).
-
-    A name the tool would create with whitespace at its start or end is refused too (#488):
-    DSM keeps it exactly, so ``report.pdf `` would be a different file from ``report.pdf``,
-    which a model almost never means, and SMB and Windows clients handle such names badly.
-    Existing items with such names are still reached by their exact paths."""
-    problem = (
-        # Blank is any whitespace (a tab, a no-break space); only the dot rule is spaces
-        # only (QA round 3 on #470).
-        "is empty"
-        if not name
-        else "is blank"
-        if not name.strip()
-        else "contains '/'"
-        if "/" in name
-        else "contains a NUL character"
-        if "\0" in name
-        else "is '.' or '..'"
-        if _is_dot(name)
-        else f"starts or ends with whitespace ({name!r})"
-        if name != name.strip()
-        else None
-    )
-    if problem:
-        error_response(
-            ErrorCode.INVALID_PARAMETER,
-            f"{op} failed: {label or param} should be just a file name, but it {problem}.",
-            retryable=False,
-            param=param,
-            value=name if value is None else value,
-            suggestion=suggestion,
-        )
+    """``.`` or ``..``, padded with any whitespace: whether DSM trims padding beside a dot
+    is unprobed, so every padded form is refused (#449, #510)."""
+    return part.strip() in (".", "..")
 
 
 def refuse_dot_parts(

@@ -1,0 +1,787 @@
+"""Tests for modules/filestation/paths.py: the one entry point for path arguments (#510).
+
+Three layers:
+- the rules, one function at a time;
+- the hostile-spelling matrix: every File Station tool × every path argument × a shared
+  table of spellings, through the registered tools, asserting a refusal naming the argument
+  or the exact path the domain function gets;
+- the structural test: a tool with a path argument missing from `PATH_PARAMS` fails.
+"""
+
+from __future__ import annotations
+
+import inspect
+import json
+from typing import Annotated, Any, get_args, get_origin
+from unittest.mock import AsyncMock
+
+import pytest
+from mcp.server.mcpserver.exceptions import ToolError
+
+from mcp_synology.core.errors import ErrorCode
+from mcp_synology.modules.filestation import MODULE_INFO, register
+from mcp_synology.modules.filestation.paths import (
+    BIN_ITEM_PARAMS,
+    LOCAL_PARAMS,
+    NAME_PARAMS,
+    PATH_PARAMS,
+    PathRole,
+    ResolvedPath,
+    bin_index,
+    check_parts,
+    refuse_bad_name,
+    refuse_write_target,
+    resolve_bin_items,
+    resolve_paths,
+)
+from tests.modules.filestation.test_register import _fake_mcp_ctx, _make_ctx
+
+
+def _error(exc: pytest.ExceptionInfo[ToolError]) -> dict[str, Any]:
+    return json.loads(str(exc.value))["error"]  # type: ignore[no-any-return]
+
+
+# -- part rules ----------------------------------------------------------------------------
+
+
+class TestCheckParts:
+    @pytest.mark.parametrize(
+        ("raw", "normalized"),
+        [
+            ("/video/a", "/video/a"),
+            ("video/a/", "/video/a"),
+            (" /video/a", "/video/a"),
+            # Taken exactly (#488): DSM keeps whitespace in a name.
+            ("/video/x/ ", "/video/x/ "),
+            ("/video/x/foo ", "/video/x/foo "),
+            ("/video/ /x", "/video/ /x"),
+            ("/video/a\tb", "/video/a\tb"),
+            # A backslash is an ordinary character on DSM (408 as a separator; #472).
+            ("/video/a\\b", "/video/a\\b"),
+            ("/video/.hidden", "/video/.hidden"),
+            ("/video/a..b", "/video/a..b"),
+            ("/video/#recycle2/a", "/video/#recycle2/a"),
+        ],
+    )
+    def test_passes_exactly(self, raw: str, normalized: str) -> None:
+        assert check_parts(raw, "path") == normalized
+
+    def test_nul_is_refused(self) -> None:
+        """DSM cuts a path at a NUL: Delete of `<dir>/a<NUL>x` deleted `a` (#472)."""
+        with pytest.raises(ToolError) as exc:
+            check_parts("/video/a\x00x", "paths")
+        error = _error(exc)
+        assert (error["code"], error["param"], error["value"]) == (
+            "invalid_parameter",
+            "paths",
+            "/video/a\x00x",
+        )
+        assert error["message"] == (
+            "Invalid path '/video/a\\x00x': a NUL character isn't allowed. DSM cuts a path at "
+            "a NUL, so the request would act on another item."
+        )
+
+    @pytest.mark.parametrize(
+        "raw", ["/video/.", "/video/x/..", "/video/ .. /x", "/video/x/..\t", "/video/\t./x"]
+    )
+    def test_dot_parts_are_refused(self, raw: str) -> None:
+        with pytest.raises(ToolError) as exc:
+            check_parts(raw, "path")
+        assert _error(exc)["message"] == f"Invalid path {raw!r}: '.' and '..' parts aren't allowed."
+
+    @pytest.mark.parametrize("raw", ["//video", "/video//x", "/video/x//y"])
+    def test_an_empty_part_is_refused(self, raw: str) -> None:
+        """DSM doesn't collapse `//`: `<dir>//a` answers 408 (#510 probe)."""
+        with pytest.raises(ToolError) as exc:
+            check_parts(raw, "path")
+        assert (
+            _error(exc)["message"] == f"Invalid path {raw!r}: an empty part (`//`) isn't allowed."
+        )
+
+
+# -- WRITE_TARGET --------------------------------------------------------------------------
+
+
+class TestRefuseWriteTarget:
+    @pytest.mark.parametrize("operation", ["Delete", "Move", "Rename"])
+    @pytest.mark.parametrize("path", ["/video", "/home", "/homes"])
+    def test_a_shared_folder(self, operation: Any, path: str) -> None:
+        with pytest.raises(ToolError) as exc:
+            refuse_write_target(operation, path, "paths")
+        assert f"{path!r} is a whole shared folder" in _error(exc)["message"]
+
+    def test_delete_message_for_a_shared_folder(self) -> None:
+        with pytest.raises(ToolError) as exc:
+            refuse_write_target("Delete", "/video", "paths")
+        error = _error(exc)
+        assert error["message"] == (
+            "Delete files refused: '/video' is a whole shared folder. delete_files doesn't "
+            "delete or empty a shared folder: on DSM 7.2.2 to 7.4.1 (tested), and likely later, "
+            "that would delete the shared folder itself, beyond the recycle bin's reach. "
+            "Nothing was deleted."
+        )
+        assert "list_files" in error["suggestion"] and "Control Panel" in error["suggestion"]
+
+    @pytest.mark.parametrize(
+        ("path", "whose"),
+        [
+            ("/video/#recycle", "the shared folder's whole recycle bin"),
+            ("/home/#recycle", "your home folder's whole recycle bin"),
+            ("/Home/#recycle", "your home folder's whole recycle bin"),
+            (
+                "/homes/alice/#recycle",
+                "the whole recycle bin of alice's home folder (alice's /home/#recycle)",
+            ),
+            (
+                "/HOMES/alice/#recycle",
+                "the whole recycle bin of alice's home folder (alice's /home/#recycle)",
+            ),
+        ],
+    )
+    @pytest.mark.parametrize("operation", ["Delete", "Move", "Rename"])
+    def test_a_whole_bin(self, operation: Any, path: str, whose: str) -> None:
+        with pytest.raises(ToolError) as exc:
+            refuse_write_target(operation, path, "path")
+        error = _error(exc)
+        assert error["message"].startswith(
+            f"{operation}{'' if operation == 'Rename' else ' files'} refused: {path!r} is {whose}."
+        )
+        if operation == "Delete" and path == "/video/#recycle":
+            assert error["message"].endswith(
+                "Deleting it would permanently remove everything in the bin, other users' "
+                "deleted items included. Nothing was deleted."
+            )
+            assert "Empty Recycle Bin" in error["suggestion"]
+        if path.casefold().startswith("/home/"):
+            assert "other users'" not in error["message"]
+            assert "Control Panel" not in error["suggestion"]
+
+    @pytest.mark.parametrize("operation", ["Delete", "Move", "Rename"])
+    @pytest.mark.parametrize("path", ["/homes/alice", "/Homes/alice"])
+    def test_a_users_home_folder(self, operation: Any, path: str) -> None:
+        """An admin's Rename of /homes/<user> orphaned that user's home (#494 probe)."""
+        with pytest.raises(ToolError) as exc:
+            refuse_write_target(operation, path, "paths")
+        error = _error(exc)
+        assert f"{path!r} is alice's whole home folder." in error["message"]
+        assert "Control Panel > User" in error["suggestion"]
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/video/a",
+            "/video/#recycle/x",
+            "/video/x/#recycle",
+            "/video/#recycled",
+            "/video/#RECYCLE",
+            "/homes/alice/x",
+            "/homes/alice/#recycle/x",
+            "/video/alice/#recycle",
+            "/video/ ",
+        ],
+    )
+    @pytest.mark.parametrize("operation", ["Delete", "Move", "Rename"])
+    def test_items_inside_pass(self, operation: Any, path: str) -> None:
+        refuse_write_target(operation, path, "paths")  # doesn't raise
+
+
+def test_bin_index() -> None:
+    assert bin_index(["video", "#recycle", "x"]) == 1
+    assert bin_index(["homes", "alice", "#recycle"]) == 2
+    assert bin_index(["video", "#RECYCLE"]) is None  # DSM matches #recycle exactly
+    assert bin_index(["video", "alice", "#recycle"]) is None
+
+
+# -- new names -----------------------------------------------------------------------------
+
+
+class TestRefuseBadName:
+    @pytest.mark.parametrize(
+        ("name", "problem"),
+        [
+            ("", "is empty"),
+            ("   ", "is blank"),
+            ("a/b", "contains '/'"),
+            ("a\x00b", "contains a NUL character"),
+            ("..", "is '.' or '..'"),
+            (" .. ", "is '.' or '..'"),
+            (".\t", "is '.' or '..'"),
+            ("a\nb", "contains a control character"),
+            ("a\rb", "contains a control character"),
+            ("a\x1b[31mb", "contains a control character"),
+            ("a\t", "starts or ends with whitespace"),
+            ("report.pdf ", "starts or ends with whitespace"),
+            (" report.pdf", "starts or ends with whitespace"),
+            ("report ", "starts or ends with whitespace"),
+        ],
+    )
+    def test_refused(self, name: str, problem: str) -> None:
+        with pytest.raises(ToolError) as exc:
+            refuse_bad_name("Rename", name, "new_name", "x")
+        error = _error(exc)
+        assert (error["param"], error["value"]) == ("new_name", name)
+        assert error["message"] == (
+            f"Rename failed: new_name should be just a file name, but it {problem}."
+        )
+
+    @pytest.mark.parametrize("parent", ["/video", "/video/", "video"])
+    def test_recycle_at_a_shares_top(self, parent: str) -> None:
+        """DSM lets `#recycle` be created where a share has no bin (#494 probe); the tools
+        would take it for the bin."""
+        with pytest.raises(ToolError) as exc:
+            refuse_bad_name("Rename", "#recycle", "new_name", "x", parent=parent)
+        assert "is '#recycle', a shared folder's recycle bin" in _error(exc)["message"]
+
+    @pytest.mark.parametrize("name", ["Severance", "a b", "a\tb", "#recycled", ".hidden", "a..b"])
+    def test_ordinary_names_pass(self, name: str) -> None:
+        refuse_bad_name("Rename", name, "new_name", "x", parent="/video")
+        refuse_bad_name("Rename", "#recycle", "new_name", "x", parent="/video/sub")
+
+
+# -- bin items -----------------------------------------------------------------------------
+
+
+class TestResolveBinItems:
+    @pytest.mark.parametrize(
+        ("item", "full"),
+        [
+            ("Shows/Ep1.mkv", "/video/#recycle/Shows/Ep1.mkv"),
+            ("/Shows/Ep1.mkv", "/video/#recycle/Shows/Ep1.mkv"),
+            ("#recycle/Shows/Ep1.mkv", "/video/#recycle/Shows/Ep1.mkv"),
+            ("/#recycle/Shows/Ep1.mkv", "/video/#recycle/Shows/Ep1.mkv"),
+            ("/video/#recycle/Shows/Ep1.mkv", "/video/#recycle/Shows/Ep1.mkv"),
+            ("/Video/#recycle/Shows/Ep1.mkv", "/video/#recycle/Shows/Ep1.mkv"),
+            # Beside the bin is not in it (#479).
+            ("#recycled/x", "/video/#recycle/#recycled/x"),
+            # Taken exactly (#488).
+            ("Shows/ ", "/video/#recycle/Shows/ "),
+            ("Shows/Ep1.mkv ", "/video/#recycle/Shows/Ep1.mkv "),
+            (" /Shows/Ep1.mkv", "/video/#recycle/Shows/Ep1.mkv"),
+        ],
+    )
+    def test_resolves(self, item: str, full: str) -> None:
+        assert resolve_bin_items("video", [item]) == [full]
+
+    @pytest.mark.parametrize("item", ["", " ", "/", "#recycle", "#recycle/", "/#recycle"])
+    def test_the_whole_bin_is_refused(self, item: str) -> None:
+        with pytest.raises(ToolError) as exc:
+            resolve_bin_items("video", [item])
+        assert _error(exc)["message"] == (
+            f"Restore refused: {item!r} names the whole recycle bin of /video, not an item in "
+            "it. Nothing was restored."
+        )
+
+    @pytest.mark.parametrize(
+        ("item", "message"),
+        [
+            ("Shows/../x", "'.' and '..' parts aren't allowed"),
+            ("a\x00b", "a NUL character isn't allowed"),
+            ("Shows//x", "has an empty part"),
+        ],
+    )
+    def test_part_rules(self, item: str, message: str) -> None:
+        with pytest.raises(ToolError) as exc:
+            resolve_bin_items("video", [item])
+        assert message in _error(exc)["message"]
+
+
+# -- resolve_paths (roles) -----------------------------------------------------------------
+
+
+class _FakeClient:
+    """Answers list_share with fixed shares; getinfo says nothing exists unless listed."""
+
+    def __init__(self, existing: set[str] | None = None) -> None:
+        self.existing = existing or set()
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    def negotiate_version(self, *_args: Any, **_kwargs: Any) -> int:
+        return 2
+
+    async def request(self, api: str, method: str, **kwargs: Any) -> dict[str, Any]:
+        params = kwargs.get("params") or {}
+        self.calls.append((method, params))
+        if method == "list_share":
+            return {"shares": [{"name": n} for n in ("video", "home", "homes")]}
+        if method == "getinfo":
+            paths = (
+                json.loads(params["path"]) if params["path"].startswith("[") else [params["path"]]
+            )
+            return {
+                "files": [
+                    {"path": p, "isdir": True} if p in self.existing else {"path": p, "code": 408}
+                    for p in paths
+                ]
+            }
+        return {}
+
+
+class TestResolvePaths:
+    async def test_returns_resolved_paths_with_dsms_spelling(self) -> None:
+        got = await resolve_paths(
+            _FakeClient(),
+            set(),
+            "get_file_info",
+            "paths",
+            ["/VIDEO/a", "video/b/"],  # type: ignore[arg-type]
+        )
+        assert got == ["/video/a", "/video/b"]
+        assert all(isinstance(p, ResolvedPath) for p in got)
+
+    async def test_a_padded_destination_part_that_doesnt_exist_is_refused(self) -> None:
+        """DSM creates `Uploads ` beside `Uploads` when parents are created (#510 probe)."""
+        with pytest.raises(ToolError) as exc:
+            await resolve_paths(
+                _FakeClient(),  # type: ignore[arg-type]
+                set(),
+                "upload_file",
+                "dest_folder",
+                ["/video/Uploads /x"],
+                creates_parents=True,
+            )
+        error = _error(exc)
+        assert (error["param"], error["value"]) == ("dest_folder", "/video/Uploads /x")
+        assert "the folder '/video/Uploads ' doesn't exist" in error["message"]
+
+    async def test_a_padded_destination_part_that_exists_passes(self) -> None:
+        client = _FakeClient({"/video/Uploads "})
+        got = await resolve_paths(
+            client,  # type: ignore[arg-type]
+            set(),
+            "upload_file",
+            "dest_folder",
+            ["/video/Uploads "],
+            creates_parents=True,
+        )
+        assert got == ["/video/Uploads "]
+
+    async def test_without_creating_parents_a_padded_destination_is_sent(self) -> None:
+        client = _FakeClient()
+        got = await resolve_paths(
+            client,
+            set(),
+            "move_files",
+            "dest_folder",
+            ["/video/Uploads "],  # type: ignore[arg-type]
+        )
+        assert got == ["/video/Uploads "]
+        assert [m for m, _ in client.calls] == ["list_share"]
+
+    async def test_the_error_names_the_setting(self) -> None:
+        with pytest.raises(ToolError) as exc:
+            await resolve_paths(
+                _FakeClient(),  # type: ignore[arg-type]
+                set(),
+                "upload_file",
+                "dest_folder",
+                ["/video/../x"],
+                error_param="default_upload_dir",
+                suggestion="Fix default_upload_dir.",
+            )
+        error = _error(exc)
+        assert (error["param"], error["suggestion"]) == (
+            "default_upload_dir",
+            "Fix default_upload_dir.",
+        )
+
+    @pytest.mark.parametrize(
+        ("path", "message"),
+        [
+            ("/video", "is a shared folder, not a new folder in one"),
+            ("/video/new ", "starts or ends with whitespace"),
+            ("/video/#recycle", "is '#recycle', a shared folder's recycle bin"),
+        ],
+    )
+    async def test_new_folder_names(self, path: str, message: str) -> None:
+        with pytest.raises(ToolError) as exc:
+            await resolve_paths(
+                _FakeClient(),
+                set(),
+                "create_folder",
+                "paths",
+                [path],  # type: ignore[arg-type]
+            )
+        assert message in _error(exc)["message"]
+
+    async def test_a_padded_parent_of_a_new_folder(self) -> None:
+        with pytest.raises(ToolError) as exc:
+            await resolve_paths(
+                _FakeClient(),  # type: ignore[arg-type]
+                set(),
+                "create_folder",
+                "paths",
+                ["/video/Projects /2024"],
+                creates_parents=True,
+            )
+        assert "the folder '/video/Projects ' doesn't exist" in _error(exc)["message"]
+        got = await resolve_paths(
+            _FakeClient(),  # type: ignore[arg-type]
+            set(),
+            "create_folder",
+            "paths",
+            ["/video/Projects /2024"],
+            creates_parents=False,
+        )
+        assert got == ["/video/Projects /2024"]
+
+
+# -- the hostile-spelling matrix -----------------------------------------------------------
+
+# Outcomes: a path is what the domain function gets; INVALID / NOT_FOUND a refusal naming
+# the argument. Keys: the role, with DEST split by whether the tool creates parents.
+INVALID, NOT_FOUND = "invalid_parameter", "not_found"
+READ, WRITE, DEST, DEST_CREATES, NEW, SHARE = (
+    "READ",
+    "WRITE",
+    "DEST",
+    "DEST_CREATES",
+    "NEW",
+    "SHARE",
+)
+
+
+def _row(**outcomes: str) -> dict[str, str]:
+    return outcomes
+
+
+def _all(outcome: str) -> dict[str, str]:
+    return dict.fromkeys((READ, WRITE, DEST, DEST_CREATES, NEW, SHARE), outcome)
+
+
+SPELLINGS: dict[str, dict[str, str]] = {
+    "/video": _row(
+        READ="/video",
+        WRITE=INVALID,
+        DEST="/video",
+        DEST_CREATES="/video",
+        NEW=INVALID,
+        SHARE="/video",
+    ),
+    "/video/": _row(
+        READ="/video",
+        WRITE=INVALID,
+        DEST="/video",
+        DEST_CREATES="/video",
+        NEW=INVALID,
+        SHARE="/video",
+    ),
+    "video/": _row(
+        READ="/video",
+        WRITE=INVALID,
+        DEST="/video",
+        DEST_CREATES="/video",
+        NEW=INVALID,
+        SHARE="/video",
+    ),
+    "//video": _all(INVALID),
+    "/VIDEO/x": _row(
+        READ="/video/x",
+        WRITE="/video/x",
+        DEST="/video/x",
+        DEST_CREATES="/video/x",
+        NEW="/video/x",
+        SHARE=INVALID,
+    ),
+    "/video/.": _all(INVALID),
+    "/video/x/..": _all(INVALID),
+    "/video/x/ ": _row(
+        READ="/video/x/ ",
+        WRITE="/video/x/ ",
+        DEST="/video/x/ ",
+        DEST_CREATES=INVALID,
+        NEW=INVALID,
+        SHARE=INVALID,
+    ),
+    "/video/x/foo ": _row(
+        READ="/video/x/foo ",
+        WRITE="/video/x/foo ",
+        DEST="/video/x/foo ",
+        DEST_CREATES=INVALID,
+        NEW=INVALID,
+        SHARE=INVALID,
+    ),
+    "/video/ ": _row(
+        READ="/video/ ",
+        WRITE="/video/ ",
+        DEST="/video/ ",
+        DEST_CREATES=INVALID,
+        NEW=INVALID,
+        SHARE=INVALID,
+    ),
+    "/video/x/\x00": _all(INVALID),
+    "/video/#recycle": _row(
+        READ="/video/#recycle",
+        WRITE=INVALID,
+        DEST="/video/#recycle",
+        DEST_CREATES="/video/#recycle",
+        NEW=INVALID,
+        SHARE=INVALID,
+    ),
+    "/homes/alice": _row(
+        READ="/homes/alice",
+        WRITE=INVALID,
+        DEST="/homes/alice",
+        DEST_CREATES="/homes/alice",
+        NEW="/homes/alice",
+        SHARE=INVALID,
+    ),
+    "/homes/alice/#recycle": _row(
+        READ="/homes/alice/#recycle",
+        WRITE=INVALID,
+        DEST="/homes/alice/#recycle",
+        DEST_CREATES="/homes/alice/#recycle",
+        NEW="/homes/alice/#recycle",
+        SHARE=INVALID,
+    ),
+    "#recycle": _all(NOT_FOUND),
+    "#recyclebin/a": _all(NOT_FOUND),
+    "/video/#recycle2/a": _row(
+        READ="/video/#recycle2/a",
+        WRITE="/video/#recycle2/a",
+        DEST="/video/#recycle2/a",
+        DEST_CREATES="/video/#recycle2/a",
+        NEW="/video/#recycle2/a",
+        SHARE=INVALID,
+    ),
+    "/video/#snapshot": _row(
+        READ="/video/#snapshot",
+        WRITE="/video/#snapshot",  # unprobed (needs a real NAS): #491
+        DEST="/video/#snapshot",
+        DEST_CREATES="/video/#snapshot",
+        NEW="/video/#snapshot",
+        SHARE=INVALID,
+    ),
+    "": _all(NOT_FOUND),
+}
+
+_DOMAIN = {
+    "list_files": "listing.list_files",
+    "list_recycle_bin": "listing.list_recycle_bin",
+    "search_files": "search.search_files",
+    "get_file_info": "metadata.get_file_info",
+    "get_dir_size": "metadata.get_dir_size",
+    "download_file": "transfer.download_file",
+    "create_folder": "operations.create_folder",
+    "rename": "operations.rename",
+    "copy_files": "operations.copy_files",
+    "move_files": "operations.move_files",
+    "delete_files": "operations.delete_files",
+    "upload_file": "transfer.upload_file",
+    "restore_from_recycle_bin": "operations.restore_from_recycle_bin",
+}
+# Values for a tool's other required arguments.
+_OTHER: dict[str, dict[str, Any]] = {
+    "copy_files": {"paths": ["/video/a"], "dest_folder": "/video/d"},
+    "move_files": {"paths": ["/video/a"], "dest_folder": "/video/d"},
+    "rename": {"new_name": "n"},
+    "download_file": {"dest_folder": "/tmp"},
+    "upload_file": {"local_path": "/tmp/f"},
+    "restore_from_recycle_bin": {"share": "video", "paths": ["x"]},
+}
+# An empty optional destination means "not given": upload then needs default_upload_dir
+# (refused: none configured here), restore puts items back where they were (None).
+_OVERRIDES: dict[tuple[str, str, str], str | None] = {
+    ("upload_file", "dest_folder", ""): INVALID,
+    ("restore_from_recycle_bin", "dest_folder", ""): None,
+}
+# Tools that create missing parent folders by default (upload's create_parents,
+# create_folder's force_parent).
+_CREATES_PARENTS = {"upload_file", "create_folder"}
+
+
+def _role_key(tool: str, role: PathRole) -> str:
+    if role is PathRole.DEST:
+        return DEST_CREATES if tool in _CREATES_PARENTS else DEST
+    return {
+        PathRole.READ: READ,
+        PathRole.WRITE_TARGET: WRITE,
+        PathRole.NEW_FOLDER: NEW,
+        PathRole.SHARE: SHARE,
+    }[role]
+
+
+MATRIX = [
+    (tool, param, role, spelling)
+    for tool, params in PATH_PARAMS.items()
+    for param, role in params.items()
+    for spelling in SPELLINGS
+]
+
+
+def _takes_a_list(annotation: Any) -> bool:
+    """Whether a tool argument's type (``Annotated[...]`` or not) is a list."""
+    inner = get_args(annotation)[0] if get_origin(annotation) is Annotated else annotation
+    return get_origin(inner) is list
+
+
+@pytest.mark.parametrize(
+    ("tool", "param", "role", "spelling"),
+    MATRIX,
+    ids=[f"{t}.{p}[{s!r}]" for t, p, _, s in MATRIX],
+)
+async def test_hostile_spelling_matrix(
+    monkeypatch: pytest.MonkeyPatch, tool: str, param: str, role: PathRole, spelling: str
+) -> None:
+    """Every tool and path argument: a refusal naming the argument, or the exact path."""
+    expected = _OVERRIDES.get((tool, param, spelling), SPELLINGS[spelling][_role_key(tool, role)])
+    domain = AsyncMock(return_value="ok")
+    monkeypatch.setattr(f"mcp_synology.modules.filestation.{_DOMAIN[tool]}", domain)
+    server, manager, ctx = _make_ctx(shared_paths=["/tmp"])
+    manager.get_client = AsyncMock(return_value=_FakeClient({"/video/x", "/video/d"}))
+    register(ctx)
+    fn = server._tool_manager._tools[tool].fn
+    is_list = _takes_a_list(inspect.signature(fn).parameters[param].annotation)
+    kwargs: dict[str, Any] = {**_OTHER.get(tool, {}), param: [spelling] if is_list else spelling}
+    if "ctx" in inspect.signature(fn).parameters:
+        kwargs["ctx"] = _fake_mcp_ctx()
+    if expected in (INVALID, NOT_FOUND):
+        with pytest.raises(ToolError) as exc:
+            await fn(**kwargs)
+        error = _error(exc)
+        assert (error["code"], error["param"]) == (expected, param), error
+        domain.assert_not_awaited()
+        return
+    await fn(**kwargs)
+    sent = domain.await_args.kwargs[param]
+    assert (sent[0] if is_list else sent) == expected
+
+
+# -- the structural test -------------------------------------------------------------------
+
+_PATHLIKE = ("path", "folder", "share", "dest")
+
+
+def test_every_path_argument_is_registered() -> None:
+    """A tool argument that names a NAS path must have a role in PATH_PARAMS (or be a bin
+    item, a new name or a local path): a new tool or argument can't skip resolve_paths."""
+    server, _, ctx = _make_ctx(shared_paths=["/tmp"])
+    register(ctx)
+    tools = {name: t.fn for name, t in server._tool_manager._tools.items()}
+    assert {t.name for t in MODULE_INFO.tools} == set(tools)
+    unregistered = []
+    for name, fn in tools.items():
+        for param in inspect.signature(fn).parameters:
+            if not any(word in param for word in _PATHLIKE):
+                continue
+            known = (
+                param in PATH_PARAMS.get(name, {})
+                or BIN_ITEM_PARAMS.get(name) == param
+                or NAME_PARAMS.get(name) == param
+                or param in LOCAL_PARAMS.get(name, set())
+            )
+            if not known:
+                unregistered.append(f"{name}.{param}")
+    assert not unregistered, f"path arguments with no role in PATH_PARAMS: {unregistered}"
+    for name, params in PATH_PARAMS.items():
+        assert set(params) <= set(inspect.signature(tools[name]).parameters), name
+
+
+# -- padded paths in messages (#489) -------------------------------------------------------
+
+PADDED = "/video/x/foo "
+QUOTED = repr(PADDED)
+
+
+class TestPaddedPathsAreShownQuoted:
+    """Every error that names a path shows a padded one quoted (`shown`), so the stray
+    space is visible; a plain path is shown as is."""
+
+    async def test_get_file_info_not_found(self) -> None:
+        from mcp_synology.modules.filestation.metadata import get_file_info
+
+        with pytest.raises(ToolError) as exc:
+            await get_file_info(_FakeClient(), paths=[PADDED])  # type: ignore[arg-type]
+        assert QUOTED in _error(exc)["message"]
+
+    async def test_get_dir_size_not_found(self) -> None:
+        from mcp_synology.modules.filestation.metadata import get_dir_size
+
+        with pytest.raises(ToolError) as exc:
+            await get_dir_size(_FakeClient(), path=PADDED)  # type: ignore[arg-type]
+        assert _error(exc)["message"].startswith(f"Get directory size failed: {QUOTED} doesn't")
+
+    async def test_download_not_found(self, tmp_path: Any) -> None:
+        from mcp_synology.modules.filestation.transfer import download_file
+
+        with pytest.raises(ToolError) as exc:
+            await download_file(
+                _FakeClient(),  # type: ignore[arg-type]
+                path=PADDED,
+                dest_folder=str(tmp_path),
+                allowed_roots=[tmp_path],
+            )
+        assert _error(exc)["message"] == f"Download failed: {QUOTED} doesn't exist on the NAS."
+
+    async def test_rename_1200_not_found(self) -> None:
+        from mcp_synology.modules.filestation.operations import _explain_rename_1200
+
+        with pytest.raises(ToolError) as exc:
+            await _explain_rename_1200(_FakeClient(), PADDED, PADDED, "n")  # type: ignore[arg-type]
+        assert QUOTED in _error(exc)["message"]
+
+    async def test_rename_1200_taken(self) -> None:
+        from mcp_synology.modules.filestation.operations import _explain_rename_1200
+
+        client = _FakeClient({"/video/a", "/video/b "})
+        with pytest.raises(ToolError) as exc:
+            await _explain_rename_1200(client, "/video/a", "/video/a", "b ")  # type: ignore[arg-type]
+        assert repr("/video/b ") in _error(exc)["message"]
+
+    async def test_missing_destination(self) -> None:
+        from mcp_synology.modules.filestation.operations import _refuse_missing_destination
+
+        with pytest.raises(ToolError) as exc:
+            await _refuse_missing_destination(_FakeClient(), "Move", PADDED)  # type: ignore[arg-type]
+        assert QUOTED in _error(exc)["message"]
+
+    def test_delete_result_not_found(self) -> None:
+        from mcp_synology.modules.filestation.operations import _delete_result
+
+        with pytest.raises(ToolError) as exc:
+            _delete_result({"finished": True, "total": -1}, PADDED, recursive=True)
+        assert _error(exc)["message"].endswith(f"deleted for {QUOTED}.")
+
+    def test_partial_delete_lists(self) -> None:
+        from mcp_synology.core.formatting import error_response
+        from mcp_synology.modules.filestation.operations import _with_progress_so_far
+
+        try:
+            error_response(
+                ErrorCode.DSM_ERROR, "Delete files failed: DSM error 900.", retryable=False
+            )
+        except ToolError as e:
+            error = e
+        out = _error_of(_with_progress_so_far(error, PADDED, ["/video/a "], ["/video/b\t"]))
+        assert f"Failed on: {QUOTED}." in out["message"]
+        assert repr("/video/a ") in out["message"]
+        assert repr("/video/b\t") in out["message"]
+        assert f"check {QUOTED} with list_files" in out["suggestion"]
+
+    def test_a_named_padded_path_isnt_repeated(self) -> None:
+        """`_names_path` sees the quoted form, so no redundant "Failed on" (#480)."""
+        from mcp_synology.modules.filestation.operations import _names_path
+
+        assert _names_path(f"Delete files failed: not found for {QUOTED}.", PADDED)
+
+    def test_handoff_lists(self) -> None:
+        from mcp_synology.modules.filestation.tasks import Handle, handoff_reply
+
+        reply = handoff_reply(
+            verb="Still deleting",
+            path="/video/c",
+            handle=Handle("delete", "T1"),
+            status={"finished": False},
+            done=["/video/a "],
+            not_started=["/video/b "],
+        )
+        assert f"Already deleted: {repr('/video/a ')}." in reply
+        assert f"Not started: {repr('/video/b ')}." in reply
+
+    def test_plain_paths_stay_plain(self) -> None:
+        from mcp_synology.modules.filestation.operations import _already_done
+
+        assert _already_done("Delete", ["/video/a b"]).endswith(": /video/a b")
+
+
+def _error_of(err: ToolError) -> dict[str, Any]:
+    return json.loads(str(err))["error"]  # type: ignore[no-any-return]

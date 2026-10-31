@@ -76,7 +76,7 @@ class TestUploadFile:
         assert error["suggestion"] == "Pass filename with a plain name for the file on the NAS."
         assert error["value"] == str(local_file)  # the argument named, as passed
 
-    @pytest.mark.parametrize("filename", ["report.pdf ", " report.pdf", "report.pdf\t"])
+    @pytest.mark.parametrize("filename", ["report.pdf ", " report.pdf", "report.pdf\u00a0"])
     async def test_upload_refuses_a_padded_filename(
         self, mock_client: DsmClient, tmp_path: Path, filename: str
     ) -> None:
@@ -91,7 +91,7 @@ class TestUploadFile:
         assert (error["param"], error["value"]) == ("filename", filename)
         assert error["message"] == (
             "Upload failed: filename should be just a file name, but it starts or ends with "
-            f"whitespace ({filename!r})."
+            "whitespace."
         )
 
     async def test_upload_refuses_a_padded_local_name_without_filename(
@@ -105,7 +105,10 @@ class TestUploadFile:
             await upload_file(mock_client, local_path=str(local_file), dest_folder="/video/up")
         error = json.loads(str(exc.value))["error"]
         assert (error["param"], error["value"]) == ("local_path", str(local_file))
-        assert "starts or ends with whitespace ('report.pdf ')" in error["message"]
+        assert error["message"] == (
+            "Upload failed: the local file's name ('report.pdf ') should be just a file name, "
+            "but it starts or ends with whitespace."
+        )
         assert error["suggestion"] == "Pass filename with a plain name for the file on the NAS."
 
     @pytest.mark.parametrize(
