@@ -6,6 +6,7 @@ FILE STATION (the files and folders in the NAS's shared folders):
 
 PATH FORMAT:
 All file paths start with a shared folder name: /video/..., /music/..., etc.
+Write them out in full: `.` and `..` parts are refused.
 Call list_shares first to discover available shared folders.
 
 DOWNLOADING:

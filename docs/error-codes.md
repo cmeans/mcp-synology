@@ -246,9 +246,17 @@ operation.**
 Common causes:
 
 - A filename contains a forbidden character: `/ \ : * ? " < > |`.
-- The `new_name` argument to `rename` contains `/` (path separators are not
-  allowed in rename — use copy/move to relocate a file).
+- The `new_name` argument to `rename`, or `upload_file`'s `filename`, contains `/`
+  or a NUL, is blank, or is `.` or `..` (padded with spaces too); the message says which
+  (path separators are not allowed in a name — use copy/move to relocate a file).
+  With no `filename` (or an empty one), the local file's own name is checked the same way
+  and reported as `local_path`.
+- A bad configured `default_upload_dir` (a `.` or `..` part here, an unknown share
+  under `not_found`) is named as `param: default_upload_dir`: fix the setting or pass
+  `dest_folder`.
 - A path is empty, all whitespace, or has no share component.
+- A File Station path, a `restore_from_recycle_bin` item, or a Download Station
+  destination has a `.` or `..` part (`/video/../photo`, `video/./x`).
 - `upload_file` or `download_file` was called without `dest_folder`, and no
   default is configured (`default_upload_dir` or `default_download_dir` in the
   `filestation` module settings). The error's `param` is `dest_folder`.
@@ -277,7 +285,8 @@ Fix:
   allows a character, DSM may not.
 - For `rename`: pass only the new base name, not a path. To move a file across
   directories, use the copy or move tool.
-- For paths: ensure the first component is a real share name from `list_shares`.
+- For paths: ensure the first component is a real share name from `list_shares`,
+  and write the path out in full from the shared folder, with no `.` or `..` parts.
 - For a missing destination: pass `dest_folder` (a NAS folder for
   `upload_file`; for `download_file`, a local folder in
   `allowed_local_paths`), or set the matching default in the `filestation`

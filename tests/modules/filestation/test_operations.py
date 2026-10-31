@@ -170,6 +170,58 @@ class TestRename:
         assert body["error"]["code"] == "invalid_parameter"
         assert body["error"]["param"] == "new_name"
 
+    @pytest.mark.parametrize(
+        ("name", "why"),
+        [
+            (".", "is '.' or '..'"),
+            ("..", "is '.' or '..'"),
+            (" .. ", "is '.' or '..'"),  # DSM's trimming is unprobed: refused too
+            ("a\0b", "contains a NUL character"),
+            ("a/b", "contains '/'"),
+            ("", "is empty"),  # QA round 2 on #470: DSM's 1200 then read as "already exists"
+            ("   ", "is blank"),
+            ("\t", "is blank"),  # any whitespace (QA round 3 on #470)
+            ("\xa0", "is blank"),
+        ],
+    )
+    async def test_rename_rejects_dot_names(
+        self, mock_client: DsmClient, name: str, why: str
+    ) -> None:
+        # QA round 1 on #470: `.`/`..` are refused in paths, and as Photos folder names.
+        with pytest.raises(ToolError) as exc:
+            await rename(mock_client, path="/video/a.txt", new_name=name)
+        error = json.loads(str(exc.value))["error"]
+        assert (error["code"], error["param"]) == ("invalid_parameter", "new_name")
+        assert (
+            error["message"] == f"Rename failed: new_name should be just a file name, but it {why}."
+        )
+
+    @pytest.mark.parametrize(
+        ("name", "suggestion"),
+        [
+            ("a/b", "Use move_files to relocate files to a different directory."),
+            ("..", "Use move_files to relocate files to a different directory."),
+            ("", "Pass the new name only, e.g. Severance."),
+            ("a\0b", "Pass the new name only, e.g. Severance."),
+        ],
+    )
+    async def test_rename_suggestion_fits_the_problem(
+        self, mock_client: DsmClient, name: str, suggestion: str
+    ) -> None:
+        # move_files only for a name that would relocate (pre-QA on QA round 3, #470).
+        with pytest.raises(ToolError) as exc:
+            await rename(mock_client, path="/video/a.txt", new_name=name)
+        assert json.loads(str(exc.value))["error"]["suggestion"] == suggestion
+
+    @pytest.mark.parametrize("name", [".\t", "\t..", "..\n"])
+    def test_a_name_with_other_whitespace_passes(self, name: str) -> None:
+        """Only spaces pad a dot name: a tab or a newline beside it makes a different, valid
+        Linux name (QA round 2 on #470), in a name and in a path part."""
+        from mcp_synology.modules.filestation.helpers import refuse_bad_name, refuse_dot_parts
+
+        refuse_bad_name("Rename", name, "new_name", "x")  # doesn't raise
+        refuse_dot_parts(f"/video/{name}/x", "path")  # doesn't raise
+
     @respx.mock
     async def test_rename_error(self, mock_client: DsmClient) -> None:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
@@ -258,9 +310,8 @@ class TestRename:
         ("path", "new_name"),
         [
             ("/video/a", "a"),  # its own name: the "existing" new path is the source
-            ("/video/a", "."),  # a folder, not an entry in it
-            ("/video/a", ".."),
             ("/video", "music"),  # a share root: no parent folder to look in
+            # `.` and `..` no longer reach DSM: test_rename_rejects_dot_names
         ],
     )
     async def test_rename_1200_claims_no_taken_name_it_cant_know(

@@ -595,10 +595,88 @@ def _with_listed_share_name(path: str, known_shares: set[str]) -> str:
     return "/".join(["", listed, *parts[2:]])
 
 
+def _is_dot(part: str) -> bool:
+    """``.`` or ``..``, surrounding spaces ignored: whether DSM trims `` .. `` to ``..`` is
+    unprobed, so a padded form is refused too (#449). Only spaces: a tab or newline beside a
+    dot is a different Linux name, and DSM's handling of it is unprobed too (QA round 2 on
+    #470). Photos also refuses padded folder names, though it strips all whitespace."""
+    return part.strip(" ") in (".", "..")
+
+
+def refuse_bad_name(
+    op: str,
+    name: str,
+    param: str,
+    suggestion: str,
+    label: str | None = None,
+    value: str | None = None,
+) -> None:
+    """Raise ``invalid_parameter`` for a NAS file name that isn't one: blank, a ``/``, a
+    NUL, or ``.`` or ``..`` (#449), naming which. ``label`` names it in the message when it
+    isn't ``param`` itself (an upload's local file name)."""
+    problem = (
+        # Blank is any whitespace (a tab, a no-break space); only the dot rule is spaces
+        # only (QA round 3 on #470).
+        "is empty"
+        if not name
+        else "is blank"
+        if not name.strip()
+        else "contains '/'"
+        if "/" in name
+        else "contains a NUL character"
+        if "\0" in name
+        else "is '.' or '..'"
+        if _is_dot(name)
+        else None
+    )
+    if problem:
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            f"{op} failed: {label or param} should be just a file name, but it {problem}.",
+            retryable=False,
+            param=param,
+            value=name if value is None else value,
+            suggestion=suggestion,
+        )
+
+
+def refuse_dot_parts(
+    path: str,
+    param: str,
+    suggestion: str = "Write the path out in full from the shared folder, e.g. /video/Movies.",
+) -> None:
+    """Raise ``invalid_parameter`` for a NAS path with a ``.`` or ``..`` part (#449).
+
+    DSM refuses them itself (File Station answers 418 "Illegal name or path"; CreateFolder
+    1100, on DSM 7.1 through 7.4.1), but only after the share check, which reads just
+    the first part, so ``/video/../photo`` passed as a ``video`` path and anything keyed
+    on the share (the recycle-bin note after a delete, a hidden ``#recycle``) used the
+    wrong one.
+    """
+    if any(_is_dot(part) for part in normalize_path(path).split("/") if part):
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            f"Invalid path '{path}': '.' and '..' parts aren't allowed.",
+            retryable=False,
+            param=param,
+            value=path,
+            suggestion=suggestion,
+        )
+
+
 async def ensure_known_shares(
-    client: DsmClient, paths: list[str], known_shares: set[str]
+    client: DsmClient,
+    paths: list[str],
+    known_shares: set[str],
+    params: str | list[str],
+    suggestion: str | None = None,
 ) -> list[str]:
-    """Raise ``not_found`` for a path whose first component isn't a shared folder (#160).
+    """Raise ``not_found`` for a path whose first component isn't a shared folder (#160),
+    and ``invalid_parameter`` for one with a ``.`` or ``..`` part (#449).
+
+    ``params`` is the tool argument each path came from (one name for all, or one per
+    path), so an error names the argument the caller passed. ``suggestion`` replaces both
+    errors' suggestions (a path from a setting is fixed in the config, not the call).
 
     Returns ``paths`` in order, each with its share named as DSM lists it (#353): DSM
     takes an ordinary share in any case, but the home service only as ``home``.
@@ -611,6 +689,12 @@ async def ensure_known_shares(
     """
     if not paths:
         return []
+    names = [params] * len(paths) if isinstance(params, str) else params
+    for path, param in zip(paths, names, strict=True):
+        if suggestion:
+            refuse_dot_parts(path, param, suggestion)
+        else:
+            refuse_dot_parts(path, param)
 
     def _shares() -> set[str]:
         return {
@@ -622,15 +706,15 @@ async def ensure_known_shares(
         client, known_shares
     ):
         return list(paths)
-    for path in paths:
+    for path, param in zip(paths, names, strict=True):
         problem = validate_share_path(path, known_shares)
         if problem:
             error_response(
                 ErrorCode.NOT_FOUND,
                 problem,
                 retryable=False,
-                param="path",
+                param=param,
                 value=path,
-                suggestion="Call list_shares to see the shared folders on this NAS.",
+                suggestion=suggestion or "Call list_shares to see the shared folders on this NAS.",
             )
     return [_with_listed_share_name(path, known_shares) for path in paths]
