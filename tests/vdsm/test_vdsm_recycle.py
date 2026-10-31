@@ -21,10 +21,9 @@ from mcp_synology.modules.filestation.listing import list_files, list_recycle_bi
 from mcp_synology.modules.filestation.operations import (
     create_folder,
     delete_files,
-    move_files,
-    rename,
     restore_from_recycle_bin,
 )
+from mcp_synology.modules.filestation.paths import resolve_paths
 from mcp_synology.modules.filestation.transfer import upload_file
 
 if TYPE_CHECKING:
@@ -309,8 +308,9 @@ async def _bin_folder_deleted(client: DsmClient, tmp_path: Path) -> None:
         )
         # delete_files refuses the bin itself since #479; DSM's own Delete still removes it
         # (as the test user and as admin), which is what #409 is about.
+        # The tool refuses it through resolve_paths (#510); DSM's own Delete still removes it.
         with pytest.raises(ToolError, match="whole recycle bin"):
-            await delete_files(client, paths=["/home/#recycle"], recycle_bin_status=status)
+            await resolve_paths(client, set(), "delete_files", "paths", ["/home/#recycle"])
         await _raw_delete(client, "/home/#recycle")
         out = await list_recycle_bin(client, share="home", recycle_bin_status=status)
         assert "cannot be recovered" not in out, out
@@ -356,12 +356,10 @@ async def test_a_users_home_bin_is_homes_user_recycle(
         # The same folder: what the user deleted into /home/#recycle is in the admin's view.
         assert f"{top}/" in await list_files(admin, path=user_bin)
 
-        with pytest.raises(ToolError, match="whole recycle bin of"):
-            await delete_files(admin, paths=[user_bin], recycle_bin_status={})
-        with pytest.raises(ToolError, match="whole recycle bin of"):
-            await move_files(admin, paths=[user_bin], dest_folder="/testshare")
-        with pytest.raises(ToolError, match="whole recycle bin of"):
-            await rename(admin, path=user_bin, new_name="old-bin")
+        # Refused by the tools' entry point (#510), for each tool that writes to its target.
+        for tool, param in (("delete_files", "paths"), ("move_files", "paths"), ("rename", "path")):
+            with pytest.raises(ToolError, match="whole recycle bin of"):
+                await resolve_paths(admin, set(), tool, param, [user_bin])
         assert f"{top}/" in await list_files(admin, path=user_bin)
 
         out = await delete_files(admin, paths=[f"{user_bin}/{top}"], recycle_bin_status={})
