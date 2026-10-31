@@ -3086,6 +3086,10 @@ class TestShareRootRefused:
             # A NUL: whether DSM cuts the path there (leaving /video/) is unprobed (pre-QA).
             "/video/\x00",
             "/video/x/\x00",
+            # A padded dot at the end: normalizing strips the padding, so it's a plain dot
+            # with #470's message; in the middle it gets the delete's own (pre-QA on #480).
+            "/video/x/..\t",
+            "/video/.\t/x",
         ],
     )
     def test_a_spelling_of_one_is_refused(self, path: str) -> None:
