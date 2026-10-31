@@ -503,7 +503,8 @@ Restore files from a shared folder's recycle bin.
 **Tool description (LLM-facing):**
 > Restore deleted files or folders from one shared folder's recycle bin. Check what's there first
 > with list_recycle_bin: every path must be in that share's bin, or nothing is restored; an empty
-> item, naming the whole bin, is refused. Without `dest_folder`, each item goes back to its original
+> item, naming the whole bin, is refused, and so is one with a whitespace-only part. Without
+> `dest_folder`, each item goes back to its original
 > folder, which is re-created if it's gone. An item already at the destination is skipped and stays
 > in the bin, unless `overwrite=true`, which replaces the existing one. A long restore keeps running
 > on the NAS and returns a handle for file_task.
