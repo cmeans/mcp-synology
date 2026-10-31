@@ -3124,7 +3124,9 @@ class TestDeleteFailurePartway:
     what wasn't started."""
 
     @staticmethod
-    def _route(fail_on: int, *, transport: bool = False, status: dict | None = None) -> None:
+    def _route(
+        fail_on: int, *, transport: bool = False, status: dict | None = None, code: int = 407
+    ) -> None:
         starts: list[str] = []
 
         def side_effect(request: httpx.Request) -> httpx.Response:
@@ -3140,7 +3142,7 @@ class TestDeleteFailurePartway:
                 if len(starts) == fail_on and status is None:
                     if transport:
                         raise httpx.ReadTimeout("")
-                    return httpx.Response(200, json={"success": False, "error": {"code": 407}})
+                    return httpx.Response(200, json={"success": False, "error": {"code": code}})
                 return httpx.Response(200, json={"success": True, "data": {"taskid": "t"}})
             if method == "status":
                 data = status if status and len(starts) == fail_on else {"finished": True}
@@ -3211,6 +3213,24 @@ class TestDeleteFailurePartway:
         suggestion = json.loads(str(exc.value))["error"]["suggestion"]
         own, _, note = suggestion.partition(" Then retry only the paths not deleted")
         assert own and note
+
+    @respx.mock
+    async def test_a_full_nas_partway_keeps_its_advice(self, mock_client: DsmClient) -> None:
+        """A 416 (no space) on a later item still says to free space (QA round 3 on #480)."""
+        self._route(2, code=416)
+        with pytest.raises(ToolError) as exc:
+            await delete_files(mock_client, paths=["/video/a", "/video/b", "/video/c"], timeout=5)
+        error = json.loads(str(exc.value))["error"]
+        assert "free" in error["suggestion"].split(" Then retry only")[0].casefold()
+        assert error["suggestion"].endswith("so it would be refused.")
+        assert error["retryable"] is False
+
+    def test_a_suggestion_without_a_final_period_gets_one(self) -> None:
+        from mcp_synology.modules.filestation.operations import _with_progress_so_far
+
+        body = {"error": {"code": "x", "message": "x.", "suggestion": "Avoid: / \\ |"}}
+        done = _with_progress_so_far(ToolError(json.dumps(body)), ["/video/a"], [])
+        assert json.loads(str(done))["error"]["suggestion"].startswith("Avoid: / \\ |. Then")
 
     @respx.mock
     async def test_a_start_with_no_answer_partway(self, mock_client: DsmClient) -> None:

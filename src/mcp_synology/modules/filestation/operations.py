@@ -366,6 +366,8 @@ def _with_progress_so_far(error: ToolError, done: list[str], rest: list[str]) ->
             "gone, so it would be refused."
         )
         original = str(body["error"].get("suggestion") or "").strip()
+        if original and original[-1] not in ".!?)":
+            original += "."  # 418's ends in its list of characters
         body["error"]["suggestion"] = f"{original} {retry}" if original else retry
     if rest:
         message = _unstop(message) + f". Not started: {', '.join(rest)}."
