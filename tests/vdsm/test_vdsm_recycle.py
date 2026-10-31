@@ -21,6 +21,8 @@ from mcp_synology.modules.filestation.listing import list_files, list_recycle_bi
 from mcp_synology.modules.filestation.operations import (
     create_folder,
     delete_files,
+    move_files,
+    rename,
     restore_from_recycle_bin,
 )
 from mcp_synology.modules.filestation.transfer import upload_file
@@ -270,15 +272,26 @@ async def _raw_delete(client: DsmClient, path: str) -> None:
         params={"path": path, "recursive": "true"},
     )
     task = dsm_str(started["taskid"])
-    for _ in range(60):
-        status = await client.request(
-            "SYNO.FileStation.Delete", "status", version=2, params={"taskid": task}
-        )
-        if status.get("finished"):
-            assert not status.get("error") and not status.get("errors"), status
-            return
-        await asyncio.sleep(0.5)
-    pytest.fail(f"DSM's delete of {path} didn't finish")
+    finished = False
+    try:
+        for _ in range(60):
+            status = await client.request(
+                "SYNO.FileStation.Delete", "status", version=2, params={"taskid": task}
+            )
+            if status.get("finished"):
+                finished = True
+                assert not status.get("error") and not status.get("errors"), status
+                return
+            await asyncio.sleep(0.5)
+        pytest.fail(f"DSM's delete of {path} didn't finish")
+    finally:
+        if not finished:
+            # A finished Delete is already released (stop answers 401, #162); an unfinished
+            # one would keep running into later tests.
+            with contextlib.suppress(Exception):
+                await client.request(
+                    "SYNO.FileStation.Delete", "stop", version=2, params={"taskid": task}
+                )
 
 
 async def _bin_folder_deleted(client: DsmClient, tmp_path: Path) -> None:
@@ -320,3 +333,42 @@ async def test_bin_folder_deleted_bin_still_on(nas_client: Any, tmp_path: Path) 
 
 async def test_bin_folder_deleted_bin_still_on_admin(admin_client: Any, tmp_path: Path) -> None:
     await _bin_folder_deleted(admin_client[0], tmp_path)
+
+
+async def test_a_users_home_bin_is_homes_user_recycle(
+    nas_client: Any, admin_client: Any, nas_persona: Any, tmp_path: Path
+) -> None:
+    """Pre-QA on #479: the test user's /home/#recycle is /homes/<user>/#recycle to an
+    administrator, so delete_files, move_files and rename refuse that path as a whole bin,
+    and deleting inside it is reported as permanent."""
+    user: DsmClient = nas_client[0]
+    admin: DsmClient = admin_client[0]
+    top = f"t479h-{uuid.uuid4().hex[:8]}"
+    user_bin = f"/homes/{nas_persona.username}/#recycle"
+    local = tmp_path / "f.txt"
+    local.write_text("deleted by the user, seen by the admin through /homes")
+    try:
+        await create_folder(user, paths=[f"/home/{top}"])
+        await upload_file(
+            user, local_path=str(local), dest_folder=f"/home/{top}", allowed_roots=[tmp_path]
+        )
+        await delete_files(user, paths=[f"/home/{top}"], recycle_bin_status={})
+        # The same folder: what the user deleted into /home/#recycle is in the admin's view.
+        assert f"{top}/" in await list_files(admin, path=user_bin)
+
+        for refused in (
+            delete_files(admin, paths=[user_bin], recycle_bin_status={}),
+            move_files(admin, paths=[user_bin], dest_folder="/testshare"),
+            rename(admin, path=user_bin, new_name="old-bin"),
+        ):
+            with pytest.raises(ToolError, match="whole recycle bin of"):
+                await refused
+        assert f"{top}/" in await list_files(admin, path=user_bin)
+
+        out = await delete_files(admin, paths=[f"{user_bin}/{top}"], recycle_bin_status={})
+        assert out.startswith("[+] Permanently deleted 1 item(s):"), out
+        assert "can be recovered" not in out, out
+        left = await list_recycle_bin(user, share="home", pattern=f"{top}*")
+        assert "(0 found in" in left, left
+    finally:
+        await _clean(user, top)
