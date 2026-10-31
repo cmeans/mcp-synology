@@ -359,10 +359,14 @@ def _with_progress_so_far(error: ToolError, done: list[str], rest: list[str]) ->
         # The same call again is refused (the deleted paths are missing): only the items not
         # deleted can be retried (QA round 2 on #480).
         body["error"]["retryable"] = False
-        body["error"]["suggestion"] = (
-            "Don't repeat the same call: retry only the paths not deleted (the one that "
-            "failed and any not started), once the cause is fixed."
+        # Added to the cause's own advice (free space, permissions, check before deleting
+        # again), never in place of it (QA round 3 on #480).
+        retry = (
+            "Then retry only the paths not deleted, not the same call: the deleted ones are "
+            "gone, so it would be refused."
         )
+        original = str(body["error"].get("suggestion") or "").strip()
+        body["error"]["suggestion"] = f"{original} {retry}" if original else retry
     if rest:
         message = _unstop(message) + f". Not started: {', '.join(rest)}."
     body["error"]["message"] = message

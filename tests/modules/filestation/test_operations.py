@@ -3207,6 +3207,10 @@ class TestDeleteFailurePartway:
         assert message.endswith(
             "Already deleted before this failure: /video/a. Not started: /video/c."
         )
+        # The cause's own advice is kept, with the retry note after it (QA round 3 on #480).
+        suggestion = json.loads(str(exc.value))["error"]["suggestion"]
+        own, _, note = suggestion.partition(" Then retry only the paths not deleted")
+        assert own and note
 
     @respx.mock
     async def test_a_start_with_no_answer_partway(self, mock_client: DsmClient) -> None:
@@ -3219,6 +3223,12 @@ class TestDeleteFailurePartway:
             "Delete files failed: DSM didn't answer for /video/b (ReadTimeout); its delete "
             "may have started. Already deleted before this failure: /video/a. Not started: "
             "/video/c."
+        )
+        # Its own advice, then the retry note (QA round 3 on #480).
+        assert error["suggestion"] == (
+            "Check with list_files, or file_task with no handle, before deleting again. Then "
+            "retry only the paths not deleted, not the same call: the deleted ones are gone, "
+            "so it would be refused."
         )
 
     @respx.mock
@@ -3233,12 +3243,23 @@ class TestDeleteFailurePartway:
         from mcp_synology.modules.filestation.operations import _with_progress_so_far
 
         def error(retryable: bool) -> ToolError:
-            body = {"error": {"code": "unavailable", "message": "x.", "retryable": retryable}}
+            body = {
+                "error": {
+                    "code": "unavailable",
+                    "message": "x.",
+                    "retryable": retryable,
+                    "suggestion": "Free space on the NAS.",
+                }
+            }
             return ToolError(json.dumps(body))
 
         done = _with_progress_so_far(error(True), ["/video/a"], ["/video/c"])
         assert json.loads(str(done))["error"]["retryable"] is False
-        assert json.loads(str(done))["error"]["suggestion"].startswith("Don't repeat the same")
+        # The retry note is added to the cause's own advice, not in place of it (QA round 3).
+        assert json.loads(str(done))["error"]["suggestion"] == (
+            "Free space on the NAS. Then retry only the paths not deleted, not the same call: "
+            "the deleted ones are gone, so it would be refused."
+        )
         # Nothing deleted yet: the same call can be retried, so the flag stays.
         first = _with_progress_so_far(error(True), [], ["/video/b"])
         assert json.loads(str(first))["error"]["retryable"] is True
