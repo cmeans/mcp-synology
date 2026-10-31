@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 import httpx
 from mcp.server.mcpserver.exceptions import ToolError
@@ -332,23 +332,26 @@ def refuse_share_roots(paths: list[str]) -> None:
         parts = normalize_path(path).split("/")[1:]
         at = _bin_index(parts)
         if at is not None and len(parts) == at + 1:
-            whose, lister = _whole_bin_words(parts)
-            lost = (
-                "everything in the bin"
-                if at == 2
-                else "everything in the bin, other users' deleted items included"
+            words = _whole_bin_words(parts)
+            lost = "everything in the bin" + (
+                ", other users' deleted items included" if words.shared else ""
+            )
+            empty = (
+                "; to empty the whole bin, use DSM's Control Panel > Shared Folder > Action > "
+                "Empty Recycle Bin"
+                if words.shared
+                else ""
             )
             error_response(
                 ErrorCode.INVALID_PARAMETER,
-                f"Delete files refused: {path!r} is {whose}. Deleting it would permanently "
-                f"remove {lost}. Nothing was deleted.",
+                f"Delete files refused: {path!r} is {words.whose}. Deleting it would "
+                f"permanently remove {lost}. Nothing was deleted.",
                 retryable=False,
                 param="paths",
                 value=path,
-                suggestion=f"To delete items from the bin for good, list them with {lister} "
-                f"and delete each by its own path (/{'/'.join(parts)}/<item>), after the "
-                "user agrees; to empty the whole bin, use DSM's Control Panel > Shared "
-                "Folder > Action > Empty Recycle Bin.",
+                suggestion=f"To delete items from the bin for good, list them with "
+                f"{words.lister} and delete each by its own path (/{'/'.join(parts)}/<item>), "
+                f"after the user agrees{empty}.",
             )
         if len(parts) == 1:
             error_response(
@@ -382,14 +385,41 @@ def _bin_index(parts: list[str]) -> int | None:
     return None
 
 
-def _whole_bin_words(parts: list[str]) -> tuple[str, str]:
-    """What a whole bin is called in a refusal, and the tool that lists its items."""
+class _BinWords(NamedTuple):
+    whose: str  # what the bin is called in a refusal
+    items: str  # whose deleted items are in it
+    lister: str  # the tool that lists its items
+    shared: bool  # a shared folder's bin, holding every user's deleted items
+
+
+def _whole_bin_words(parts: list[str]) -> _BinWords:
+    """How a refusal names the whole bin ``parts`` leads to (`_bin_index`).
+
+    A shared folder's bin holds every user's deleted items; a home folder's holds only
+    its user's: the caller's own as ``/home/#recycle`` (pre-QA round 3), another user's
+    as an administrator's ``/homes/<user>/#recycle``.
+    """
     if _bin_index(parts) == 2:
-        return (
-            f"the whole recycle bin of {parts[1]}'s home folder ({parts[1]}'s /home/#recycle)",
+        user = parts[1]
+        return _BinWords(
+            f"the whole recycle bin of {user}'s home folder ({user}'s /home/#recycle)",
+            f"{user}'s deleted items",
             "list_files",
+            shared=False,
         )
-    return "the shared folder's whole recycle bin", "list_recycle_bin"
+    if parts[0] == "home":
+        return _BinWords(
+            "your home folder's whole recycle bin",
+            "your deleted items",
+            "list_recycle_bin",
+            shared=False,
+        )
+    return _BinWords(
+        "the shared folder's whole recycle bin",
+        "every user's deleted items",
+        "list_recycle_bin",
+        shared=True,
+    )
 
 
 def _refuse_share_root_source(operation: str, path: str, param: str) -> None:
@@ -401,35 +431,35 @@ def _refuse_share_root_source(operation: str, path: str, param: str) -> None:
     can write there, and the reply read as a skip (admin wasn't probed). Rename on
     ``/<share>`` made it vanish from the list for an administrator, under its new name too;
     a non-admin got 1200. Copying a shared folder only copies its contents into a new
-    folder, so ``copy_files`` takes one. Moving or renaming ``/<share>/#recycle`` (or a user's
-    ``/homes/<user>/#recycle``) would take the deleted items out of the bin, which restore refuses for the same reason
-    (unprobed: refused on what the request names). Empty parts are dropped first:
-    ``//video`` gets past the share check when DSM won't list shares, and Rename has no
-    missing-path check (pre-QA). Called after the share check, as `refuse_share_roots` is.
+    folder, so ``copy_files`` takes one. Moving or renaming ``/<share>/#recycle`` (or a
+    user's ``/homes/<user>/#recycle``) would take the deleted items out of the bin, which
+    restore refuses for the same reason (unprobed: refused on what the request names).
+    Empty parts are dropped first: ``//video`` gets past the share check when DSM won't
+    list shares, and Rename has no missing-path check (pre-QA). Called after the share
+    check, as `refuse_share_roots` is.
     """
     parts = [part for part in normalize_path(path).split("/") if part]
     past = "moved" if operation == "Move" else "renamed"
     head = f"{operation} {'files ' if operation == 'Move' else ''}refused: {path!r} is"
     at = _bin_index(parts)
     if at is not None and len(parts) == at + 1:
-        whose, _lister = _whole_bin_words(parts)
+        words = _whole_bin_words(parts)
         acting = "Moving" if operation == "Move" else "Renaming"
         if at == 2:
-            items = "that user's deleted items"
             suggestion = (
                 f"To bring items back, {parts[1]} can use restore_from_recycle_bin with "
                 f"share='home'; to move some elsewhere, move each by its own path "
                 f"(/{'/'.join(parts)}/<item>)."
             )
         else:
-            items = "every user's deleted items"
             suggestion = (
                 "To bring items back, use restore_from_recycle_bin with the items "
                 "list_recycle_bin shows; to move some elsewhere, restore them with dest_folder."
             )
         error_response(
             ErrorCode.INVALID_PARAMETER,
-            f"{head} {whose}. {acting} it would take {items} out of the bin. Nothing was {past}.",
+            f"{head} {words.whose}. {acting} it would take {words.items} out of the bin. "
+            f"Nothing was {past}.",
             retryable=False,
             param=param,
             value=path,
@@ -1418,11 +1448,12 @@ async def restore_from_recycle_bin(
             full_paths.append(normalize_path(f"/{share_name}/{p}"))
         else:
             full_paths.append(normalize_path(f"/{share_name}/#recycle/{p.lstrip('/')}"))
-        if any(part and not part.strip() for part in full_paths[-1].split("/")):
-            # `_copy_move` normalizes the path again, which strips a whitespace-only last
-            # part: `#recycle/ /` would be checked as `/video/#recycle/ ` and sent as the
-            # bin itself, `Shows/ /` as the folder `Shows` (pre-QA; the same stripping is
-            # #488). Refused, as delete_files refuses one.
+        if any(part and not part.strip() for part in item.split("/")[1:]):
+            # A whitespace-only part after the first, checked on the item as given: the
+            # strip above drops a last one (`Shows/ ` restored the folder `Shows`), and
+            # `_copy_move` normalizes again, which strips one before a trailing slash
+            # (`#recycle/ /` checked as an item, sent as the bin itself) (pre-QA; the same
+            # stripping elsewhere is #488). Refused, as delete_files refuses one.
             error_response(
                 ErrorCode.INVALID_PARAMETER,
                 f"Restore refused: whitespace-only parts aren't allowed ({item!r}). Nothing "
@@ -1452,7 +1483,9 @@ async def restore_from_recycle_bin(
             restore_destinations.append(dest_folder)
         else:
             # /video/#recycle/Shows/Ep1.mkv -> /video/Shows/
-            original = full_paths[-1].replace(f"/{share_name}/#recycle", f"/{share_name}")
+            # Only the leading bin prefix: the item's own path may hold the same text again
+            # (`a/video/#recycle/b.txt` came from /video/a/video/#recycle; #479).
+            original = f"/{share_name}" + full_paths[-1][len(bin_root) :]
             restore_destinations.append("/".join(original.split("/")[:-1]) or f"/{share_name}")
 
     await _refuse_missing_sources(client, "Restore", full_paths, paths)

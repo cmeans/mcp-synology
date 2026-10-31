@@ -2164,6 +2164,35 @@ class TestStallHandoff:
         assert records.get(Handle("delete", "FileStation_BIG")) is not None
 
     @respx.mock
+    @pytest.mark.parametrize(
+        ("path", "kept"),
+        [
+            # Inside a user's home bin through /homes: permanent, so no share status kept
+            # (pre-QA on #479).
+            ("/homes/alice/#recycle/big", {}),
+            ("/s/#recycle/big", {}),
+            ("/homes/alice/big", {"homes": True}),
+        ],
+    )
+    async def test_handoff_keeps_bin_status_only_outside_a_bin(
+        self, mock_client: DsmClient, path: str, kept: dict[str, bool]
+    ) -> None:
+        calls: list[dict[str, str]] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._dsm(calls, httpx.ReadTimeout(""))
+        )
+        records = TaskRecords()
+        await delete_files(
+            mock_client,
+            paths=[path],
+            recycle_bin_status={"homes": True, "s": True},
+            records=records,
+        )
+        record = records.get(Handle("delete", "FileStation_BIG"))
+        assert record is not None
+        assert record.recycle == kept
+
+    @respx.mock
     async def test_dsm_error_code_still_fails_and_stops(self, mock_client: DsmClient) -> None:
         calls: list[dict[str, str]] = []
 
@@ -3296,7 +3325,7 @@ class TestShareRootSourcesRefused:
         assert (error["param"], error["value"]) == ("paths", path)
         assert error["message"] == (
             f"Move files refused: {path!r} is the whole recycle bin of alice's home folder "
-            "(alice's /home/#recycle). Moving it would take that user's deleted items out of "
+            "(alice's /home/#recycle). Moving it would take alice's deleted items out of "
             "the bin. Nothing was moved."
         )
         assert "alice can use restore_from_recycle_bin with share='home'" in error["suggestion"]
@@ -3307,7 +3336,7 @@ class TestShareRootSourcesRefused:
         assert (error["param"], error["value"]) == ("path", path)
         assert error["message"].startswith(f"Rename refused: {path!r} is the whole recycle bin")
         assert error["message"].endswith(
-            "Renaming it would take that user's deleted items out of the bin. Nothing was renamed."
+            "Renaming it would take alice's deleted items out of the bin. Nothing was renamed."
         )
 
     @respx.mock
@@ -3360,7 +3389,20 @@ class TestShareRootSourcesRefused:
         )
 
     @respx.mock
-    @pytest.mark.parametrize("item", ["#recycle/ /", "/ /", "Shows/ /", "Shows/ /Ep1.mkv"])
+    @pytest.mark.parametrize(
+        "item",
+        [
+            "#recycle/ /",
+            "/ /",
+            "Shows/ /",
+            "Shows/ /Ep1.mkv",
+            # A last one too: the item's own strip dropped it, restoring `Shows` (pre-QA r3).
+            "Shows/ ",
+            "Shows/\t",
+            "Shows/\u00a0",
+            "/video/#recycle/Shows/ ",
+        ],
+    )
     async def test_restore_refuses_a_whitespace_only_part(
         self, mock_client: DsmClient, item: str
     ) -> None:
@@ -3408,6 +3450,45 @@ class TestShareRootSourcesRefused:
         with pytest.raises(ToolError, match="not found"):
             await restore_from_recycle_bin(mock_client, share="video", paths=[item])
         assert looked_up == [checked]
+
+    @respx.mock
+    async def test_restore_strips_only_the_leading_bin_prefix(self, mock_client: DsmClient) -> None:
+        """An item whose own path holds `/video/#recycle` again goes back where it came from,
+        /video/a/video/#recycle, not /video/a/video (#479)."""
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_async_task_side_effect())
+        sent: list[dict[str, str]] = []
+        route = respx.routes[0]
+        route.side_effect = lambda request: (
+            sent.append(dict(request.url.params)),
+            _async_task_side_effect()(request),  # type: ignore[operator]
+        )[1]
+        await restore_from_recycle_bin(
+            mock_client, share="video", paths=["a/video/#recycle/b.txt"], dest_folder=None
+        )
+        starts = [p for p in sent if p.get("method") == "start"]
+        assert starts, sent
+        assert starts[0]["path"] == "/video/#recycle/a/video/#recycle/b.txt"
+        assert starts[0]["dest_folder_path"] == "/video/a/video/#recycle"
+
+    @respx.mock
+    async def test_own_home_bin_is_worded_as_the_callers_own(self, mock_client: DsmClient) -> None:
+        """/home/#recycle holds only the caller's deleted items (pre-QA round 3)."""
+        with pytest.raises(ToolError) as exc:
+            await delete_files(mock_client, paths=["/home/#recycle"])
+        error = json.loads(str(exc.value))["error"]
+        assert error["message"] == (
+            "Delete files refused: '/home/#recycle' is your home folder's whole recycle bin. "
+            "Deleting it would permanently remove everything in the bin. Nothing was deleted."
+        )
+        assert "Control Panel" not in error["suggestion"]
+        assert "list_recycle_bin" in error["suggestion"]
+        with pytest.raises(ToolError) as exc:
+            await move_files(mock_client, paths=["/home/#recycle"], dest_folder="/photo")
+        error = json.loads(str(exc.value))["error"]
+        assert error["message"] == (
+            "Move files refused: '/home/#recycle' is your home folder's whole recycle bin. "
+            "Moving it would take your deleted items out of the bin. Nothing was moved."
+        )
 
 
 _RETRY_NOTE = (

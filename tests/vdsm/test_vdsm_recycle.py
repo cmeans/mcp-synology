@@ -356,13 +356,12 @@ async def test_a_users_home_bin_is_homes_user_recycle(
         # The same folder: what the user deleted into /home/#recycle is in the admin's view.
         assert f"{top}/" in await list_files(admin, path=user_bin)
 
-        for refused in (
-            delete_files(admin, paths=[user_bin], recycle_bin_status={}),
-            move_files(admin, paths=[user_bin], dest_folder="/testshare"),
-            rename(admin, path=user_bin, new_name="old-bin"),
-        ):
-            with pytest.raises(ToolError, match="whole recycle bin of"):
-                await refused
+        with pytest.raises(ToolError, match="whole recycle bin of"):
+            await delete_files(admin, paths=[user_bin], recycle_bin_status={})
+        with pytest.raises(ToolError, match="whole recycle bin of"):
+            await move_files(admin, paths=[user_bin], dest_folder="/testshare")
+        with pytest.raises(ToolError, match="whole recycle bin of"):
+            await rename(admin, path=user_bin, new_name="old-bin")
         assert f"{top}/" in await list_files(admin, path=user_bin)
 
         out = await delete_files(admin, paths=[f"{user_bin}/{top}"], recycle_bin_status={})
