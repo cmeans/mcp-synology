@@ -27,8 +27,8 @@ from mcp_synology.modules.filestation import helpers
 from mcp_synology.modules.filestation.helpers import (
     _is_dot,
     draws_nothing,
+    misplaced_invisible,
     normalize_path,
-    pads,
     path_exists,
     shown,
     strip_padding,
@@ -101,8 +101,7 @@ _PLANTED_ADVICE = {
     "subfolder.",
     "move_files": "Move the folder's contents (its items by path) instead, or move it into a "
     "subfolder.",
-    "restore_from_recycle_bin": "Restore it into a subfolder with dest_folder, or restore its "
-    "items (each by its path in the bin) instead.",
+    "restore_from_recycle_bin": "Restore it into a subfolder with dest_folder.",
 }
 _OP_WORDS = {
     "copy_files": "Copy files",
@@ -393,12 +392,16 @@ def name_problem(name: str, parent: str | None = None) -> str | None:
         return "has no visible character"
     if name != name.strip():
         return "starts or ends with whitespace"
-    # The start: nothing invisible; the end: padding only, since a combining mark or a
-    # variation selector finishes the character before it (QA round 1 on #515).
-    if draws_nothing(name[0]) or pads(name[-1]):
-        # Invisible padding (a zero-width space, a BOM, a filler): another look-alike
-        # `report.pdf`, as a trailing space would make (maintainer, 2026-10-31).
-        return "starts or ends with an invisible character"
+    # Invisible padding at an end (a zero-width space, a BOM, a filler) makes a look-alike
+    # `report.pdf`, as a trailing space would (maintainer, 2026-10-31); so does a mark or
+    # joiner that can't belong to the letter before it (`report.pdf<VS16>`,
+    # `rep<ZWJ>ort.pdf`), while one that finishes its letter is ordinary (`नमस्ते`, NFD
+    # `Café`, `❤️`, `1️⃣`, 🏴󠁧󠁢󠁳󠁣󠁴󠁿; QA round 1 and pre-QA on #515).
+    at = misplaced_invisible(name)
+    if at is not None:
+        if at in (0, len(name) - 1):
+            return "starts or ends with an invisible character"
+        return "has an invisible character that belongs to no letter"
     if name == "#recycle" and parent is not None and makes_a_bin(parent):
         return "is '#recycle', the name of a recycle bin there"
     return None
@@ -559,6 +562,23 @@ def bin_item_origin(share_name: str, item: str) -> str:
     text again (#479). One helper for the restore and its planted-bin check (QA r1 on #515)."""
     original = f"/{share_name}" + item[len(f"/{share_name}/#recycle") :]
     return "/".join(original.split("/")[:-1]) or f"/{share_name}"
+
+
+def refuse_restore_into_a_bin(given: Sequence[str], items: Sequence[str], share_name: str) -> None:
+    """Refuse a restore, with no ``dest_folder``, of an item whose original folder is
+    itself inside a bin (an item of a folder named ``#recycle`` deleted from a share's top:
+    ``#recycle/#recycle/x``): it would go back into the bin while the reply said
+    "Restored" (pre-QA on #515)."""
+    for raw, item in zip(given, items, strict=True):
+        origin = bin_item_origin(share_name, item)
+        if in_bin(origin):
+            _refuse(
+                f"Restore refused: {raw!r} would go back to {shown(origin)}, inside the "
+                "recycle bin. Nothing was restored.",
+                "paths",
+                raw,
+                "Restore it with dest_folder, a folder outside the bin.",
+            )
 
 
 def resolve_bin_items(share: str, items: list[str], param: str = "paths") -> list[ResolvedPath]:

@@ -182,8 +182,9 @@ MODULE_INFO = ModuleInfo(
                 "Create one or more folders, each given as a full path starting with its shared "
                 "folder (`/video/TV Shows/New Show`). By default (`force_parent=true`), missing "
                 "folders above it are created too, and a folder that already exists is not an "
-                "error. A new folder's name can't have whitespace at its ends, control or "
-                "direction-changing characters, or be `#recycle` in a shared folder."
+                "error. A new folder's name can't have whitespace or invisible padding at its "
+                "ends, control or direction-changing characters, or be `#recycle` at a shared or "
+                "home folder's top."
             ),
             permission_tier=PermissionTier.WRITE,
             annotations=_ANNO_IDEMPOTENT,
@@ -313,6 +314,7 @@ def register(ctx: "RegisterContext") -> None:
     from mcp_synology.modules.filestation.paths import (
         bin_item_origin,
         refuse_planted_bin,
+        refuse_restore_into_a_bin,
         resolve_bin_items,
         resolve_paths,
     )
@@ -862,7 +864,8 @@ def register(ctx: "RegisterContext") -> None:
                 Field(
                     description=(
                         "The new name only, not a path, `.` or `..` (`Severance`); no whitespace "
-                        "at its ends, and no control or direction-changing characters."
+                        "or invisible padding at its ends, no control or direction-changing "
+                        "characters, and not `#recycle` at a shared or home folder's top."
                     )
                 ),
             ],
@@ -1029,8 +1032,9 @@ def register(ctx: "RegisterContext") -> None:
                 str | None,
                 Field(
                     description="Name for the file on the NAS, not a path (default: the local "
-                    "file's name); no whitespace at its ends, and no control or "
-                    "direction-changing characters."
+                    "file's name); no whitespace or invisible padding at its ends, no control or "
+                    "direction-changing characters, and not `#recycle` at a shared or home "
+                    "folder's top."
                 ),
             ] = None,
             overwrite: Annotated[
@@ -1168,6 +1172,8 @@ def register(ctx: "RegisterContext") -> None:
                 if dest_folder
                 else None
             )
+            if dest is None:
+                refuse_restore_into_a_bin(paths, items, bin_share.strip("/"))
             # Each item goes to dest, or back to the folder it was deleted from.
             refuse_planted_bin(
                 "restore_from_recycle_bin",

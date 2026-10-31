@@ -1846,7 +1846,8 @@ class TestInstructionComments:
 # +114 by #510: rename, move_files and delete_files say a user's home folder is refused.
 # +286 by #510 (QA round 1): rename's new_name, upload_file's filename and create_folder
 # name the new-name rules.
-PAYLOAD_BUDGET_CHARS = 56_823
+# +175 by #510 (pre-QA): ... invisible padding and #recycle at a shared or home folder's top.
+PAYLOAD_BUDGET_CHARS = 56_998
 
 
 class TestPayloadBudget:

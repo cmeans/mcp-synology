@@ -148,17 +148,19 @@ async def test_resolve_paths_rules_hold_on_dsm(nas_client: Any, tmp_path: Any) -
             await resolve_paths(client, known, "create_folder", "paths", ["/writable/#recycle"])
         assert _code(exc) == "invalid_parameter"
         assert "#recycle" not in await _names(client, "/writable")
-        # Joiners (an emoji ZWJ sequence, a ZWNJ) are allowed in new names: DSM keeps them.
+        # Joiners (an emoji ZWJ sequence, a ZWNJ in a Persian word) are allowed in new names:
+        # DSM keeps them.
         family = "\U0001f468\u200d\U0001f469\u200d\U0001f467"
+        persian = "\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645"
         made = await resolve_paths(
             client,
             known,
             "create_folder",
             "paths",
-            [f"{root}/#recycle", f"{root}/a\tb", f"{root}/{family}", f"{root}/ab\u200ccd"],
+            [f"{root}/#recycle", f"{root}/a\tb", f"{root}/{family}", f"{root}/{persian}"],
         )
         await create_folder(client, paths=made)
-        assert await _names(client, root) == {"b", "#recycle", "a\tb", family, "ab\u200ccd"}
+        assert await _names(client, root) == {"b", "#recycle", "a\tb", family, persian}
         # A direction-changing character is refused before DSM sees it.
         with pytest.raises(ToolError) as exc:
             await resolve_paths(

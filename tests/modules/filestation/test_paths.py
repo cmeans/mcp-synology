@@ -228,6 +228,16 @@ class TestRefuseBadName:
             ("report.pdf\u00ad", "starts or ends with an invisible character"),
             ("report.pdf\u2060", "starts or ends with an invisible character"),
             ("x\u200d", "starts or ends with an invisible character"),
+            # A mark or joiner that belongs to no letter (pre-QA on #515).
+            ("report.pdf\ufe0f", "starts or ends with an invisible character"),
+            ("report.pdf\u034f", "starts or ends with an invisible character"),
+            ("report.pdf\U000e007f", "starts or ends with an invisible character"),
+            ("rep\u200dort.pdf", "has an invisible character that belongs to no letter"),
+            ("ab\u200ccd", "has an invisible character that belongs to no letter"),
+            ("rep\ufe0fort.pdf", "has an invisible character that belongs to no letter"),
+            ("report.\u0301pdf", "has an invisible character that belongs to no letter"),
+            ("report.pdf.\u0301", "starts or ends with an invisible character"),
+            ("rep\u034fort.pdf\u034f", "starts or ends with an invisible character"),
         ],
     )
     def test_refused(self, name: str, problem: str) -> None:
@@ -288,10 +298,14 @@ class TestRefuseBadName:
             "Cafe\u0301",  # NFD Café, as macOS writes it
             "Favorites \u2764\ufe0f",
             "1\ufe0f\u20e3",
+            "#\ufe0f\u20e3",
+            "\U0001f44d\U0001f3fd",
+            "\U0001f3f3\ufe0f\u200d\U0001f308",
+            "\u5b57\U000e0100",
             "\U0001f3f4\U000e0067\U000e0062\U000e0073\U000e0063\U000e0074\U000e007f",
             # Joiners stay: emoji sequences and several scripts use them.
             "\U0001f468\u200d\U0001f469\u200d\U0001f467",
-            "ab\u200ccd",
+            "\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645",  # Persian, a ZWNJ inside a word
         ],
     )
     def test_ordinary_names_pass(self, name: str) -> None:
@@ -1311,3 +1325,15 @@ def test_bin_item_origin(item: str, origin: str) -> None:
     from mcp_synology.modules.filestation.paths import bin_item_origin
 
     assert bin_item_origin("video", item) == origin
+
+
+async def test_a_restore_back_into_a_bin_is_refused() -> None:
+    """An item of a folder named #recycle deleted from a share's top would go back into the
+    bin while the reply said "Restored" (pre-QA on #515); with dest_folder it's fine."""
+    fn = await _tool("restore_from_recycle_bin")
+    with pytest.raises(ToolError) as exc:
+        await fn(ctx=_fake_mcp_ctx(), share="video", paths=["#recycle/#recycle/x"])
+    error = _error(exc)
+    assert (error["param"], error["value"]) == ("paths", "#recycle/#recycle/x")
+    assert "inside the recycle bin" in error["message"]
+    assert "dest_folder" in error["suggestion"]

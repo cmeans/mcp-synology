@@ -100,6 +100,10 @@ class TestShown:
             ("/video/\U0001f468\u200d\U0001f469", "/video/\U0001f468\u200d\U0001f469"),
             ("/video/a\u200b", repr("/video/a\u200b")),
             ("/video/a\u202eb", repr("/video/a\u202eb")),
+            ("/video/x\u200d", repr("/video/x\u200d")),
+            ("/video/rep\u200dort.pdf", repr("/video/rep\u200dort.pdf")),
+            ("/video/report.pdf\ufe0f", repr("/video/report.pdf\ufe0f")),
+            ("/video/1\ufe0f\u20e3", "/video/1\ufe0f\u20e3"),
             ("/video/\u2800x", repr("/video/\u2800x")),
         ],
     )

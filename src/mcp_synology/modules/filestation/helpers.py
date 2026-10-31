@@ -215,30 +215,91 @@ def draws_nothing(c: str) -> bool:
 
 
 _JOINERS = frozenset("\u200c\u200d")
-_CANCEL_TAG = "\U000e007f"  # ends a subdivision flag's tag sequence (the Scotland flag)
+_CGJ = "\u034f"  # combining grapheme joiner: default-ignorable, draws nothing
+_FLAG = "\U0001f3f4"  # waving black flag: the base of a subdivision flag's tag sequence
+_CANCEL_TAG = "\U000e007f"  # ends that tag sequence (the Scotland flag)
+_KEYCAP_BASES = frozenset("0123456789#*")
 
 
-def _in_sequence(c: str) -> bool:
-    """A format character that belongs to a visible sequence: a joiner, or a flag's tag."""
-    return c in _JOINERS or 0xE0020 <= ord(c) <= 0xE007F
+def _is_variation_selector(c: str) -> bool:
+    o = ord(c)
+    return 0xFE00 <= o <= 0xFE0F or 0xE0100 <= o <= 0xE01EF or 0x180B <= o <= 0x180F
+
+
+def _is_tag(c: str) -> bool:
+    return 0xE0020 <= ord(c) <= 0xE007F
+
+
+def _misplaced_mark(text: str, i: int) -> bool:
+    """Whether ``text[i]``, a mark or joiner that draws nothing itself, sits where it can't
+    belong to the character before it, so it hides (QA round 1 and pre-QA on #515):
+    - a joiner (ZWJ, ZWNJ) belongs between two non-ASCII characters (emoji sequences,
+      Indic and Persian spelling), never at an edge or beside ASCII;
+    - a variation selector after an emoji, a symbol or a CJK character, or VS15/VS16 after a
+      keycap base (`1️⃣`), never after another ASCII character;
+    - a tag character only in a subdivision flag (🏴 + tags + the closing tag);
+    - a combining grapheme joiner never at the end;
+    - any other combining mark after a letter, a digit or another mark (NFD `Café`,
+      `नमस्ते`), not after punctuation, a space or nothing.
+    Other characters return False."""
+    c = text[i]
+    prev = text[i - 1] if i > 0 else ""
+    nxt = text[i + 1] if i + 1 < len(text) else ""
+    if c in _JOINERS:
+        return not prev or not nxt or prev.isascii() or nxt.isascii()
+    if _is_tag(c):
+        start = i
+        while start > 0 and _is_tag(text[start - 1]):
+            start -= 1
+        end = i
+        while end + 1 < len(text) and _is_tag(text[end + 1]):
+            end += 1
+        return not (start > 0 and text[start - 1] == _FLAG and text[end] == _CANCEL_TAG)
+    if _is_variation_selector(c):
+        if not prev:
+            return True
+        return prev.isascii() and not (c in "\ufe0e\ufe0f" and prev in _KEYCAP_BASES)
+    if c == _CGJ:
+        return not prev or not nxt
+    if unicodedata.category(c) in ("Mn", "Me"):
+        return not prev or unicodedata.category(prev)[0] not in ("L", "M", "N", "S")
+    return False
 
 
 def pads(c: str) -> bool:
-    """A character that pads a name invisibly at its end: whitespace, a blank filler
-    letter, or a format character (zero width, BOM, joiner) other than a flag's closing
-    tag. Unlike `draws_nothing`, not a combining mark or variation selector: those finish
-    the character before them (Hindi `नमस्ते`, NFD `Café`, `❤️`, `1️⃣`; QA round 1 on
-    #515)."""
+    """A character that pads a name invisibly on its own, wherever it is: whitespace, a
+    blank filler letter, or a format character other than a joiner or a tag (zero width
+    space, BOM, word joiner, soft hyphen). Joiners, tags and marks depend on their
+    neighbors: `_misplaced_mark`."""
     return (
-        c.isspace() or c in _BLANK_LETTERS or (unicodedata.category(c) == "Cf" and c != _CANCEL_TAG)
+        c.isspace()
+        or c in _BLANK_LETTERS
+        or (unicodedata.category(c) == "Cf" and c not in _JOINERS and not _is_tag(c))
     )
 
 
+def misplaced_invisible(text: str) -> int | None:
+    """The index of the first character in ``text`` (one name) that's invisible where it
+    sits: padding at either end (`pads`, `draws_nothing` at the start), or a mark or joiner
+    that can't belong to the character before it (`_misplaced_mark`); None if there's
+    none. One rule for new names and `shown` (#510)."""
+    if not text:
+        return None
+    if draws_nothing(text[0]) and not text[0].isspace():
+        return 0
+    if pads(text[-1]) and not text[-1].isspace():
+        return len(text) - 1
+    for i in range(len(text)):
+        if _misplaced_mark(text, i):
+            return i
+    return None
+
+
 def _hides(c: str) -> bool:
-    """A character inside a path that a plain message would hide or mangle."""
+    """A character inside a path that a plain message would hide or mangle on its own."""
     if unicodedata.category(c) in ("Cc", "Cs", "Co", "Cn", "Zl", "Zp"):
         return True
-    return c != " " and pads(c) and not _in_sequence(c)
+    return c != " " and pads(c)
 
 
 def shown(path: str) -> str:
@@ -253,10 +314,10 @@ def shown(path: str) -> str:
     for part in path.split("/"):
         if not part:
             continue
-        edge_padded = part != part.strip() or draws_nothing(part[0]) or pads(part[-1])
-        if edge_padded or all(draws_nothing(c) for c in part) or any(map(_hides, part)):
+        if part != part.strip() or misplaced_invisible(part) is not None or any(map(_hides, part)):
             return repr(path)
-    # Combining marks and joiners inside a word show as written (`नमस्ते`, `Café`, 👨‍👩‍👧).
+    # Marks and joiners that belong to their letters show as written (`नमस्ते`, `Café`,
+    # 👨‍👩‍👧); one between ASCII letters, or at an edge, is quoted (`rep<ZWJ>ort.pdf`).
     return path
 
 
