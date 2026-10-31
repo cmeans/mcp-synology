@@ -193,13 +193,38 @@ _VIDEO_EXTENSIONS = frozenset(
 )
 
 
+def strip_padding(path: str) -> str:
+    """``path`` without padding: whitespace before a leading ``/``, or the whole of a path
+    that is only whitespace (#488). Anything else is part of the path, kept exactly."""
+    if not path.strip():
+        return ""
+    unpadded = path.lstrip()
+    return unpadded if unpadded.startswith("/") else path
+
+
+def shown(path: str) -> str:
+    """``path`` for a message: as is, or quoted with ``repr`` when a part has whitespace at
+    its start or end or the path holds a character that doesn't print (a tab, a no-break
+    space), so a stray space is visible once paths are taken exactly (#488, #489)."""
+    if path.isprintable() and all(part == part.strip() for part in path.split("/")):
+        return path
+    return repr(path)
+
+
 def normalize_path(path: str) -> str:
     """Normalize a file path for the DSM API.
 
+    - Drop whitespace before a leading ``/`` (padding around the path, not part of it)
     - Prepend `/` if missing
     - Strip trailing `/` (unless root)
+
+    Nothing else is stripped (#488): DSM keeps whitespace in a name exactly (``foo ``,
+    `` foo``, ``foo<TAB>``, ``foo<NBSP>`` and ``" "`` are names beside ``foo``; getinfo,
+    List, Rename and Delete act on exactly the named one; vdsm DSM 7.1, 7.2.2, 7.3.2 and
+    7.4.1, admin and not). Stripping sent ``/video/x/foo `` as ``/video/x/foo``, a different
+    item, and ``/video/x/ `` as its parent. A path of whitespace only is empty.
     """
-    path = path.strip()
+    path = strip_padding(path)
     if not path.startswith("/"):
         path = "/" + path
     if len(path) > 1:
@@ -216,19 +241,19 @@ def validate_share_path(path: str, known_shares: set[str]) -> str | None:
     parts = normalized.split("/")
     # parts[0] is empty string (before leading /), parts[1] is the share name
     if len(parts) < 2 or not parts[1]:
-        return f"Invalid path '{path}': must start with a shared folder name."
+        return f"Invalid path {path!r}: must start with a shared folder name."
 
     share = parts[1]
     # Strip #recycle if present — user might be browsing recycle bin
     if share == "#recycle":
-        return f"Invalid path '{path}': must start with a shared folder name, not #recycle."
+        return f"Invalid path {path!r}: must start with a shared folder name, not #recycle."
 
     # DSM takes an ordinary share in any case: /TESTSHARE/... works for share "testshare"
     # (DSM 7.1 and 7.2.2; QA R1 on #173). The user home service doesn't: /Home is 408 (#353).
     if share.casefold() not in {s.casefold() for s in known_shares}:
         available = ", ".join(sorted(known_shares)) if known_shares else "(none)"
         return (
-            f"Unknown shared folder '{share}'. "
+            f"Unknown shared folder {share!r}. "
             f"Available shares: {available}. "
             f"Use list_shares to see all shared folders."
         )
@@ -613,7 +638,12 @@ def refuse_bad_name(
 ) -> None:
     """Raise ``invalid_parameter`` for a NAS file name that isn't one: blank, a ``/``, a
     NUL, or ``.`` or ``..`` (#449), naming which. ``label`` names it in the message when it
-    isn't ``param`` itself (an upload's local file name)."""
+    isn't ``param`` itself (an upload's local file name).
+
+    A name the tool would create with whitespace at its start or end is refused too (#488):
+    DSM keeps it exactly, so ``report.pdf `` would be a different file from ``report.pdf``,
+    which a model almost never means, and SMB and Windows clients handle such names badly.
+    Existing items with such names are still reached by their exact paths."""
     problem = (
         # Blank is any whitespace (a tab, a no-break space); only the dot rule is spaces
         # only (QA round 3 on #470).
@@ -627,6 +657,8 @@ def refuse_bad_name(
         if "\0" in name
         else "is '.' or '..'"
         if _is_dot(name)
+        else f"starts or ends with whitespace ({name!r})"
+        if name != name.strip()
         else None
     )
     if problem:
@@ -656,7 +688,7 @@ def refuse_dot_parts(
     if any(_is_dot(part) for part in normalize_path(path).split("/") if part):
         error_response(
             ErrorCode.INVALID_PARAMETER,
-            f"Invalid path '{path}': '.' and '..' parts aren't allowed.",
+            f"Invalid path {path!r}: '.' and '..' parts aren't allowed.",
             retryable=False,
             param=param,
             value=path,

@@ -1841,7 +1841,9 @@ class TestInstructionComments:
 # +329 by #479: move_files and rename say a whole shared folder or recycle bin is refused,
 # delete_files a whole recycle bin and that empty folders aren't kept, restore an item naming
 # the bin or with a whitespace-only part after its first.
-PAYLOAD_BUDGET_CHARS = 56_499
+# -76 by #488: paths are taken exactly, so delete_files and restore no longer refuse a
+# whitespace-only part.
+PAYLOAD_BUDGET_CHARS = 56_423
 
 
 class TestPayloadBudget:

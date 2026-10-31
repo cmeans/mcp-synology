@@ -30,6 +30,8 @@ from mcp_synology.modules.filestation.helpers import (
 from tests.conftest import BASE_URL
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from mcp_synology.core.client import DsmClient
 
 
@@ -46,8 +48,48 @@ class TestNormalizePath:
     def test_root_path(self) -> None:
         assert normalize_path("/") == "/"
 
-    def test_strips_whitespace(self) -> None:
-        assert normalize_path("  /video  ") == "/video"
+    @pytest.mark.parametrize(
+        ("path", "normalized"),
+        [
+            # Padding before a leading slash goes; nothing else is stripped (#488): DSM
+            # keeps whitespace in a name exactly.
+            ("  /video", "/video"),
+            ("  /video  ", "/video  "),
+            ("/video/x/ ", "/video/x/ "),
+            ("/video/x/ /", "/video/x/ "),
+            ("/video/foo ", "/video/foo "),
+            ("/video/\tfoo\u00a0", "/video/\tfoo\u00a0"),
+            # No leading slash: the whitespace is part of the first name.
+            ("  video/x", "/  video/x"),
+            ("   ", "/"),
+            ("", "/"),
+        ],
+    )
+    def test_takes_the_path_exactly(self, path: str, normalized: str) -> None:
+        assert normalize_path(path) == normalized
+
+
+class TestShown:
+    """#489: a path in a message is shown as is, or with repr when padding or a character
+    that doesn't print would otherwise be invisible."""
+
+    @pytest.mark.parametrize(
+        ("path", "expected"),
+        [
+            ("/video/a b.mkv", "/video/a b.mkv"),
+            ("/video/x", "/video/x"),
+            ("/video/x/foo ", "'/video/x/foo '"),
+            ("/video/ x/a", "'/video/ x/a'"),
+            ("/video/x/ ", "'/video/x/ '"),
+            ("/video/a\tb", "'/video/a\\tb'"),
+            ("/video/a\u00a0b", "'/video/a\\xa0b'"),
+            ("/video/\x1b[31m", "'/video/\\x1b[31m'"),
+        ],
+    )
+    def test_shown(self, path: str, expected: str) -> None:
+        from mcp_synology.modules.filestation.helpers import shown
+
+        assert shown(path) == expected
 
 
 class TestValidateSharePath:
@@ -74,6 +116,16 @@ class TestValidateSharePath:
         result = validate_share_path("/video/test", set())
         assert result is not None
         assert "none" in result
+
+    def test_messages_quote_with_repr(self) -> None:
+        """A padded or tabbed name shows its whitespace once the JSON is decoded (#489);
+        paths are taken exactly, so `/video /x` names a share "video " (#488)."""
+        result = validate_share_path("/video /x", {"video"})
+        assert result is not None
+        assert result.startswith("Unknown shared folder 'video '. ")
+        assert validate_share_path("/#recycle/\tx", {"video"}) == (
+            "Invalid path '/#recycle/\\tx': must start with a shared folder name, not #recycle."
+        )
 
 
 class TestParseHumanSize:
@@ -602,7 +654,7 @@ class TestEnsureKnownShares:
         assert error["code"] == "invalid_parameter"
         assert error["param"] == "paths"
         assert error["value"] == path
-        assert error["message"] == f"Invalid path '{path}': '.' and '..' parts aren't allowed."
+        assert error["message"] == f"Invalid path {path!r}: '.' and '..' parts aren't allowed."
         assert calls == []
 
     @respx.mock
@@ -725,3 +777,93 @@ class TestEnsureKnownShares:
         self._route([["writable"]], calls)
         with pytest.raises(ToolError):
             await ensure_known_shares(mock_client, ["/#recycle/x"], {"writable"}, "path")
+
+
+class TestPathsTakenExactly:
+    """#488: every File Station tool sends a path exactly as given, so `…/foo ` (a name with
+    a trailing space) and `…/ ` (a name " ") reach the item they name on DSM, never `…/foo`
+    or the folder above. DSM keeps such names exactly (vdsm DSM 7.1 to 7.4.1, probe on
+    #488). Each request is answered 408, so the call stops after its first lookup."""
+
+    @staticmethod
+    def _sent(calls: list[str], exact: str) -> None:
+        # A JSON-quoted list (getinfo) escapes nothing in these paths, so the exact path
+        # appears verbatim in the request if, and only if, it was sent unstripped.
+        assert any(exact in c for c in calls), calls
+
+    @staticmethod
+    def _record(calls: list[str]) -> None:
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            calls.append(str(request.url.params) + request.content.decode("latin-1"))
+            if request.url.params.get("path") in ('["/video/a"]', "/video/a"):
+                # move_dest's source exists, so the destination is looked up next.
+                files = [{"path": "/video/a", "name": "a", "isdir": False}]
+                return httpx.Response(200, json={"success": True, "data": {"files": files}})
+            return httpx.Response(200, json={"success": False, "error": {"code": 408}})
+
+        respx.route().mock(side_effect=side_effect)
+
+    @respx.mock
+    @pytest.mark.parametrize("exact", ["/video/x/foo ", "/video/x/ ", "/video/x/\tfoo"])
+    @pytest.mark.parametrize(
+        "tool",
+        [
+            "list_files",
+            "get_file_info",
+            "get_dir_size",
+            "search_files",
+            "rename",
+            "copy_source",
+            "move_source",
+            "move_dest",
+            "delete_files",
+            "download_file",
+            "upload_file",
+        ],
+    )
+    async def test_tool_sends_the_path_exactly(
+        self, mock_client: DsmClient, tmp_path: Path, tool: str, exact: str
+    ) -> None:
+        from urllib.parse import unquote_plus
+
+        from mcp_synology.modules.filestation import (
+            listing,
+            metadata,
+            operations,
+            search,
+            transfer,
+        )
+
+        calls: list[str] = []
+        self._record(calls)
+        local = tmp_path / "f.txt"
+        local.write_text("x")
+        run = {
+            "list_files": lambda: listing.list_files(mock_client, path=exact),
+            "get_file_info": lambda: metadata.get_file_info(mock_client, paths=[exact]),
+            "get_dir_size": lambda: metadata.get_dir_size(mock_client, path=exact),
+            "search_files": lambda: search.search_files(
+                mock_client, folder_path=exact, pattern="*.mkv"
+            ),
+            "rename": lambda: operations.rename(mock_client, path=exact, new_name="n"),
+            "copy_source": lambda: operations.copy_files(
+                mock_client, paths=[exact], dest_folder="/video/d"
+            ),
+            "move_source": lambda: operations.move_files(
+                mock_client, paths=[exact], dest_folder="/video/d"
+            ),
+            "move_dest": lambda: operations.move_files(
+                mock_client, paths=["/video/a"], dest_folder=exact
+            ),
+            "delete_files": lambda: operations.delete_files(mock_client, paths=[exact]),
+            "download_file": lambda: transfer.download_file(
+                mock_client, path=exact, dest_folder=str(tmp_path), allowed_roots=[tmp_path]
+            ),
+            "upload_file": lambda: transfer.upload_file(
+                mock_client, local_path=str(local), dest_folder=exact, allowed_roots=[tmp_path]
+            ),
+        }[tool]
+        with pytest.raises(ToolError):
+            await run()
+        sent = [unquote_plus(c) for c in calls]
+        self._sent(sent, exact)

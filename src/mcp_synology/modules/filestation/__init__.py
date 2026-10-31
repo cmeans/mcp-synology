@@ -236,7 +236,7 @@ MODULE_INFO = ModuleInfo(
                 "is permanent. Paths are exact, not wildcard patterns, and if any path is missing "
                 "nothing is deleted. A whole shared folder (`/video`) or recycle bin "
                 "(`/video/#recycle`) is refused: delete its items by path. So is a path with a "
-                "`.`, `..`, empty or whitespace-only part, or a NUL. "
+                "`.`, `..` or empty part, or a NUL. "
                 "A long delete keeps running on the NAS and returns a handle for file_task."
             ),
             permission_tier=PermissionTier.WRITE,
@@ -257,8 +257,7 @@ MODULE_INFO = ModuleInfo(
             description=(
                 "Restore deleted files or folders from one shared folder's recycle bin. Check "
                 "what's there first with list_recycle_bin: every path must be in that share's "
-                "bin, or nothing is restored; an empty item, naming the whole bin, is refused, "
-                "and so is one with a whitespace-only part after its first. "
+                "bin, or nothing is restored; an empty item, naming the whole bin, is refused. "
                 "Without `dest_folder`, each item goes back to its "
                 "original folder, which is re-created if it's gone. An item already at the "
                 "destination is skipped and stays in the bin, unless `overwrite=true`, which "
@@ -977,8 +976,7 @@ def register(ctx: "RegisterContext") -> None:
             ] = True,
         ) -> str:
             client = await _fs_client()
-            # The part checks on the paths as given: the share-name rewrite below normalizes
-            # a path, which strips a whitespace-only last part (`/VIDEO/x/ ` -> `/video/x`).
+            # The part checks on the paths as given, before the share-name rewrite below.
             # The share-root check after the share check, so a typo (`/vidoe`) is an unknown
             # share, not "a whole shared folder" (pre-QA on #480). delete_files checks both
             # again on the rewritten paths.

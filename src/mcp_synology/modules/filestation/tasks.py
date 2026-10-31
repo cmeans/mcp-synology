@@ -28,7 +28,7 @@ from mcp_synology.core.formatting import (
     format_timestamp,
     synology_error_response,
 )
-from mcp_synology.modules.filestation.helpers import describe_transport_error, dsm_str
+from mcp_synology.modules.filestation.helpers import describe_transport_error, dsm_str, shown
 
 if TYPE_CHECKING:
     from mcp_synology.core.client import DsmClient
@@ -448,10 +448,11 @@ def handoff_reply(
         'action="stop" (it may then be partly done).',
     ]
     if done:
-        lines.append(f"Already {past}: {', '.join(done)}.")
+        lines.append(f"Already {past}: {', '.join(map(shown, done))}.")
     if not_started:
         lines.append(
-            f"Not started: {', '.join(not_started)}. Run them again once this one finishes."
+            f"Not started: {', '.join(map(shown, not_started))}. Run them again once this one "
+            "finishes."
         )
     return "\n".join(lines)
 

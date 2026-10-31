@@ -33,6 +33,8 @@ from mcp_synology.modules.filestation.helpers import (
     paths_isdir,
     refuse_bad_name,
     refuse_dot_parts,
+    shown,
+    strip_padding,
 )
 from mcp_synology.modules.filestation.tasks import (
     Handle,
@@ -73,6 +75,22 @@ async def create_folder(
     which is fine for typical small-N usage and trivially correct.
     """
     normalized = [normalize_path(p) for p in paths]
+    for given, p in zip(paths, normalized, strict=True):
+        # The new folder's own name, exactly as it would be created (#488): a padded name
+        # is a different folder on DSM, and almost never meant. Parents are taken as given,
+        # since they may exist already.
+        name = p.split("/")[-1]
+        if name and name != name.strip():
+            error_response(
+                ErrorCode.INVALID_PARAMETER,
+                f"Create folder refused: the new folder's name {name!r} starts or ends with "
+                "whitespace. Nothing was created.",
+                retryable=False,
+                param="paths",
+                value=given,
+                suggestion="Give the folder's name without leading or trailing spaces, e.g. "
+                "/video/Movies.",
+            )
 
     folders: list[dict[str, Any]] = []
     for p in normalized:
@@ -282,33 +300,29 @@ def _collapse_overlaps(paths: list[str], *, drop_nested: bool = True) -> list[st
 
 
 def refuse_bad_parts(paths: list[str]) -> None:
-    """Refuse a ``.``, ``..``, empty or whitespace-only part, or a NUL, in a delete path.
+    """Refuse a ``.`` or ``..`` part (padded with any whitespace), an empty part, or a NUL,
+    in a delete path.
 
     ``/video/.``, ``/video/x/..`` and ``//video`` (when DSM won't list shares) name the
-    share itself (#451). Checked on the paths as given, before the share check rewrites
-    them: ``normalize_path`` strips the whole path, so ``/video/x/ `` would be sent as
-    ``/video/x``, deleting the folder (QA round 2 on #480; the same stripping in other tools
-    is #488). A NUL is refused rather than sent: whether DSM cuts the path there (leaving
-    ``/video/``) is unprobed, and no file name holds one (pre-QA on #480; #472). A plain
-    ``.`` or ``..`` part gets #470's message, as in every other tool; the rest are the cases
-    only a delete refuses.
+    share itself (#451). A NUL is refused rather than sent: whether DSM cuts the path there
+    (leaving ``/video/``) is unprobed, and no file name holds one (pre-QA on #480; #472). A
+    plain ``.`` or ``..`` part gets #470's message, as in every other tool; the rest are the
+    cases only a delete refuses. A whitespace-only part is a name like any other since paths
+    are taken exactly (#488): ``/video/x/ `` names an item ``" "`` in ``/video/x``, never
+    ``/video/x`` itself.
     """
     for path in paths:
         refuse_dot_parts(path, "paths")
         parts = normalize_path(path).split("/")[1:]
-        body = path.rstrip("/")
-        blank_last = not body.rsplit("/", 1)[-1].strip()
-        if blank_last or "\x00" in path or any(part.strip() in ("", ".", "..") for part in parts):
+        if "\x00" in path or any(not part or part.strip() in (".", "..") for part in parts):
             error_response(
                 ErrorCode.INVALID_PARAMETER,
-                f"Delete files refused: '.', '..', empty and whitespace-only parts, and NUL "
-                f"characters, aren't allowed ({path!r}). Nothing was deleted.",
+                f"Delete files refused: '.', '..' and empty parts, and NUL characters, aren't "
+                f"allowed ({path!r}). Nothing was deleted.",
                 retryable=False,
                 param="paths",
                 value=path,
-                suggestion="Write the path out in full from the shared folder, e.g. "
-                "/video/Movies. An item whose name is only whitespace can't be reached "
-                "this way: delete it in DSM's File Station.",
+                suggestion="Write the path out in full from the shared folder, e.g. /video/Movies.",
             )
 
 
@@ -529,7 +543,7 @@ def _with_progress_so_far(
     # that names a path inside the item, or a sibling starting with the same characters
     # (/video/a.txt, /video/a b), doesn't name the item either.
     if not _names_path(message, failed):
-        message = _unstop(message) + f". Failed on: {failed}."
+        message = _unstop(message) + f". Failed on: {shown(failed)}."
     body["error"]["param"] = "paths"
     body["error"]["value"] = failed
     # The delete loop is the one place that adds these: _delete_result doesn't (pre-QA on
@@ -553,7 +567,7 @@ def _with_progress_so_far(
         else:
             retry = (
                 "When retrying, leave out the paths already deleted (the same call would be "
-                f"refused), and check {failed} with list_files first."
+                f"refused), and check {shown(failed)} with list_files first."
             )
         if not original:
             body["error"]["suggestion"] = retry
@@ -564,7 +578,7 @@ def _with_progress_so_far(
             # punctuation is read as part of it.
             body["error"]["suggestion"] = f"{retry} {original}"
     if rest:
-        message = _unstop(message) + f". Not started: {', '.join(rest)}."
+        message = _unstop(message) + f". Not started: {', '.join(map(shown, rest))}."
     body["error"]["message"] = message
     return ToolError(json.dumps(body))
 
@@ -574,7 +588,7 @@ def _already_done(operation: str, done: list[str] | None) -> str:
     if not done:
         return ""
     return f". Already {_PAST_TENSE.get(operation, 'processed')} before this failure: " + ", ".join(
-        done
+        map(shown, done)
     )
 
 
@@ -590,7 +604,7 @@ async def _refuse_missing_sources(
         error_response(
             ErrorCode.NOT_FOUND,
             f"{operation} files refused: not found: "
-            + "; ".join(f"{p} (DSM error {code})" for p, code in missing)
+            + "; ".join(f"{shown(p)} (DSM error {code})" for p, code in missing)
             + f". Nothing was {_PAST_TENSE.get(operation, 'processed')}.",
             retryable=False,
             param="paths",
@@ -1135,7 +1149,7 @@ def _delete_result(status: dict[str, Any], path: str, *, recursive: bool) -> Non
         error_response(
             mapped.error_code,
             "Delete files failed: "
-            + "; ".join(f"{p} (DSM error {code})" for p, code in failed)
+            + "; ".join(f"{shown(p)} (DSM error {code})" for p, code in failed)
             + ".",
             retryable=mapped.retryable,
             param="paths",
@@ -1211,7 +1225,7 @@ async def delete_files(
         error_response(
             ErrorCode.NOT_FOUND,
             "Delete files refused: not found: "
-            + "; ".join(f"{p} (DSM error {code})" for p, code in missing)
+            + "; ".join(f"{shown(p)} (DSM error {code})" for p, code in missing)
             + ". Nothing was deleted.",
             retryable=False,
             param="paths",
@@ -1437,7 +1451,8 @@ async def restore_from_recycle_bin(
 
     bin_root = f"/{share_name}/#recycle"
     for item in paths:
-        p = item.strip()
+        # Only padding is dropped; the rest is the item's exact path (#488).
+        p = strip_padding(item)
         # Ensure the path is within #recycle. A full path may spell the share in another case;
         # it's re-rooted on the share as given, which the handler has set to the listed
         # spelling (#353).
@@ -1449,23 +1464,6 @@ async def restore_from_recycle_bin(
             full_paths.append(normalize_path(f"/{share_name}/{p.lstrip('/')}"))
         else:
             full_paths.append(normalize_path(f"/{share_name}/#recycle/{p.lstrip('/')}"))
-        if any(part and not part.strip() for part in item.split("/")[1:]):
-            # A whitespace-only part after the first, checked on the item as given: the
-            # strip above drops a last one (`Shows/ ` restored the folder `Shows`), and
-            # `_copy_move` normalizes again, which strips one before a trailing slash
-            # (`#recycle/ /` checked as an item, sent as the bin itself) (pre-QA; the same
-            # stripping elsewhere is #488). Refused, as delete_files refuses one.
-            error_response(
-                ErrorCode.INVALID_PARAMETER,
-                f"Restore refused: whitespace-only parts aren't allowed ({item!r}). Nothing "
-                "was restored.",
-                retryable=False,
-                param="paths",
-                value=item,
-                suggestion="Give each item as list_recycle_bin shows it, e.g. Shows/Ep1.mkv. "
-                "An item whose name is only whitespace can't be reached this way: restore it "
-                "in DSM's File Station.",
-            )
         if full_paths[-1] == bin_root:
             # An empty item ("", "/", "#recycle") names the bin itself: restoring it would
             # move the whole bin out (#479).

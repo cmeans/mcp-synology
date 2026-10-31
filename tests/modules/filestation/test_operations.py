@@ -142,6 +142,68 @@ class TestCreateFolder:
         assert "Created 2 folder(s)" in result
 
 
+class TestNewNamesWithPadding:
+    """#488 (C): a name the tool would create with whitespace at its start or end is
+    refused. DSM keeps it exactly, so `report.pdf ` would be a different file, which a model
+    almost never means. Nothing is sent to DSM (respx refuses an unmatched request)."""
+
+    @respx.mock
+    @pytest.mark.parametrize("name", ["Severance ", " Severance", "Severance\t", "Sev\u00a0"])
+    async def test_rename_refuses_a_padded_new_name(
+        self, mock_client: DsmClient, name: str
+    ) -> None:
+        with pytest.raises(ToolError) as exc:
+            await rename(mock_client, path="/video/a.mkv", new_name=name)
+        error = json.loads(str(exc.value))["error"]
+        assert (error["code"], error["param"], error["value"]) == (
+            "invalid_parameter",
+            "new_name",
+            name,
+        )
+        assert error["message"] == (
+            "Rename failed: new_name should be just a file name, but it starts or ends with "
+            f"whitespace ({name!r})."
+        )
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        "path", ["/video/new ", "/video/ new", "/video/a/new\t", "/video/new /"]
+    )
+    async def test_create_folder_refuses_a_padded_name(
+        self, mock_client: DsmClient, path: str
+    ) -> None:
+        with pytest.raises(ToolError) as exc:
+            await create_folder(mock_client, paths=["/video/ok", path])
+        error = json.loads(str(exc.value))["error"]
+        assert (error["code"], error["param"], error["value"]) == (
+            "invalid_parameter",
+            "paths",
+            path,
+        )
+        name = path.rstrip("/").rsplit("/", 1)[-1]
+        assert error["message"] == (
+            f"Create folder refused: the new folder's name {name!r} starts or ends with "
+            "whitespace. Nothing was created."
+        )
+
+    @respx.mock
+    async def test_create_folder_takes_a_padded_parent_as_given(
+        self, mock_client: DsmClient
+    ) -> None:
+        """Only the new folder's own name: a parent may exist already, named exactly so."""
+        sent: list[dict[str, str]] = []
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            sent.append(dict(request.url.params))
+            folder = {"path": "/video/old /new", "name": "new", "isdir": True}
+            return httpx.Response(200, json={"success": True, "data": {"folders": [folder]}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        await create_folder(mock_client, paths=["/video/old /new"])
+        assert sent[0]["folder_path"] == "/video/old "
+        assert sent[0]["name"] == '"new"'
+
+
 class TestRename:
     @respx.mock
     async def test_rename_success(self, mock_client: DsmClient) -> None:
@@ -214,13 +276,19 @@ class TestRename:
         assert json.loads(str(exc.value))["error"]["suggestion"] == suggestion
 
     @pytest.mark.parametrize("name", [".\t", "\t..", "..\n"])
-    def test_a_name_with_other_whitespace_passes(self, name: str) -> None:
+    def test_a_dot_with_other_whitespace_isnt_a_dot(self, name: str) -> None:
         """Only spaces pad a dot name: a tab or a newline beside it makes a different, valid
-        Linux name (QA round 2 on #470), in a name and in a path part."""
+        Linux name (QA round 2 on #470), so a path part like it passes the dot check. As a
+        new name it's refused for its whitespace at the start or end (#488)."""
         from mcp_synology.modules.filestation.helpers import refuse_bad_name, refuse_dot_parts
 
-        refuse_bad_name("Rename", name, "new_name", "x")  # doesn't raise
         refuse_dot_parts(f"/video/{name}/x", "path")  # doesn't raise
+        with pytest.raises(ToolError) as exc:
+            refuse_bad_name("Rename", name, "new_name", "x")
+        assert json.loads(str(exc.value))["error"]["message"] == (
+            f"Rename failed: new_name should be just a file name, but it starts or ends with "
+            f"whitespace ({name!r})."
+        )
 
     @respx.mock
     async def test_rename_error(self, mock_client: DsmClient) -> None:
@@ -3098,7 +3166,7 @@ class TestShareRootRefused:
     """#451: delete_files never sends a whole shared folder (or a spelling of one) to DSM.
     On DSM 7.2.2 to 7.4.1 (tested), Delete on /<share> deletes the shared folder itself."""
 
-    @pytest.mark.parametrize("path", ["/video", "video/", " /video ", "/video//"])
+    @pytest.mark.parametrize("path", ["/video", "video/", " /video", "/video//"])
     def test_a_share_root_is_refused(self, path: str) -> None:
         from mcp_synology.modules.filestation.operations import refuse_share_roots
 
@@ -3120,18 +3188,10 @@ class TestShareRootRefused:
             "/video/x/..",
             "//video",
             "/video/ .. /x",
-            "/video/ /x",
-            # A whitespace-only last part: normalizing alone would send /video/x, deleting
-            # the folder (QA round 2 on #480).
-            "/video/x/ ",
-            "/video/x/ /",
-            "/video/x/\u00a0",
-            "/video/x/\t/",
             # A NUL: whether DSM cuts the path there (leaving /video/) is unprobed (pre-QA).
             "/video/\x00",
             "/video/x/\x00",
-            # A padded dot at the end: normalizing strips the padding, so it's a plain dot
-            # with #470's message; in the middle it gets the delete's own (pre-QA on #480).
+            # A dot padded with a tab or a no-break space: the delete's own (pre-QA on #480).
             "/video/x/..\t",
             "/video/.\t/x",
             # Padding before the dot isn't stripped: the delete's own (QA round 5 on #480).
@@ -3158,13 +3218,27 @@ class TestShareRootRefused:
         expected = (
             "'.' and '..' parts aren't allowed"
             if plain_dot
-            else "'.', '..', empty and whitespace-only parts, and NUL characters, aren't allowed"
+            else "'.', '..' and empty parts, and NUL characters, aren't allowed"
         )
         assert expected in error["message"]
 
     @pytest.mark.parametrize(
         "path",
-        ["/video/a", "/video/.hidden", "/video/a..b", "/video/a/", "/video/x//", " /video/x "],
+        [
+            "/video/a",
+            "/video/.hidden",
+            "/video/a..b",
+            "/video/a/",
+            "/video/x//",
+            " /video/x ",
+            # A whitespace-only part is a name like any other: /video/x/ names an item " "
+            # in /video/x, never /video/x itself, since paths are taken exactly (#488).
+            "/video/ /x",
+            "/video/x/ ",
+            "/video/x/ /",
+            "/video/x/\u00a0",
+            "/video/x/\t/",
+        ],
     )
     def test_ordinary_paths_pass(self, path: str) -> None:
         from mcp_synology.modules.filestation.operations import refuse_share_roots
@@ -3179,7 +3253,7 @@ class TestShareRootSourcesRefused:
     for an administrator, and a deleted #recycle takes the whole bin with it."""
 
     @pytest.mark.parametrize(
-        "path", ["/video/#recycle", "video/#recycle/", " /video/#recycle ", "/video/#recycle//"]
+        "path", ["/video/#recycle", "video/#recycle/", " /video/#recycle", "/video/#recycle//"]
     )
     def test_a_whole_bin_is_refused_for_delete(self, path: str) -> None:
         from mcp_synology.modules.filestation.operations import refuse_share_roots
@@ -3390,36 +3464,46 @@ class TestShareRootSourcesRefused:
 
     @respx.mock
     @pytest.mark.parametrize(
-        "item",
+        ("item", "checked"),
         [
-            "#recycle/ /",
-            "/ /",
-            "Shows/ /",
-            "Shows/ /Ep1.mkv",
-            # A last one too: the item's own strip dropped it, restoring `Shows` (pre-QA r3).
-            "Shows/ ",
-            "Shows/\t",
-            "Shows/\u00a0",
-            "/video/#recycle/Shows/ ",
+            # Taken exactly (#488): a whitespace-only part names an item " ", never the
+            # folder above it or the bin itself (before, `Shows/ ` restored all of `Shows`).
+            ("#recycle/ /", "/video/#recycle/ "),
+            ("/ /", "/video/#recycle/ "),
+            ("Shows/ /", "/video/#recycle/Shows/ "),
+            ("Shows/ /Ep1.mkv", "/video/#recycle/Shows/ /Ep1.mkv"),
+            ("Shows/ ", "/video/#recycle/Shows/ "),
+            ("Shows/\t", "/video/#recycle/Shows/\t"),
+            ("Shows/Ep1.mkv ", "/video/#recycle/Shows/Ep1.mkv "),
+            ("/video/#recycle/Shows/ ", "/video/#recycle/Shows/ "),
+            # Padding before a leading slash isn't part of the item.
+            (" /Shows/Ep1.mkv", "/video/#recycle/Shows/Ep1.mkv"),
         ],
     )
-    async def test_restore_refuses_a_whitespace_only_part(
-        self, mock_client: DsmClient, item: str
+    async def test_restore_takes_items_exactly(
+        self, mock_client: DsmClient, item: str, checked: str
     ) -> None:
-        """The move normalizes again, so `#recycle/ /` would be sent as the bin itself and
-        `Shows/ /` as the folder `Shows` (pre-QA)."""
+        looked_up: list[str] = []
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            p = request.url.params
+            if p.get("method") == "getinfo":
+                looked_up.append(p.get("path", ""))
+                files = [{"path": p.get("path", ""), "code": 408}]
+                return httpx.Response(200, json={"success": True, "data": {"files": files}})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
         with pytest.raises(ToolError) as exc:
             await restore_from_recycle_bin(mock_client, share="video", paths=[item])
-        error = json.loads(str(exc.value))["error"]
-        assert (error["code"], error["param"], error["value"]) == (
-            "invalid_parameter",
-            "paths",
-            item,
-        )
-        assert error["message"] == (
-            f"Restore refused: whitespace-only parts aren't allowed ({item!r}). Nothing was "
-            "restored."
-        )
+        assert looked_up == [checked]
+        message = json.loads(str(exc.value))["error"]["message"]
+        # A padded path is shown quoted, so the stray whitespace is visible (#489).
+        if all(part == part.strip() for part in checked.split("/")) and checked.isprintable():
+            shown = checked
+        else:
+            shown = repr(checked)
+        assert f"not found: {shown} (DSM error 408)" in message
 
     @respx.mock
     @pytest.mark.parametrize(

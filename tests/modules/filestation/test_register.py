@@ -1248,18 +1248,23 @@ class TestShareRootDeleteRefused:
         register(ctx)
         return server._tool_manager._tools["delete_files"].fn, delete
 
-    @pytest.mark.parametrize("path", ["/WRITABLE/x/ ", "/Writable/x/\t", "WRITABLE/x/  "])
-    async def test_a_blank_last_part_is_refused_before_the_share_name_is_rewritten(
-        self, monkeypatch: pytest.MonkeyPatch, path: str
+    @pytest.mark.parametrize(
+        ("path", "sent"),
+        [
+            ("/WRITABLE/x/ ", "/writable/x/ "),
+            ("/Writable/x/\t", "/writable/x/\t"),
+            ("WRITABLE/x/  ", "/writable/x/  "),
+        ],
+    )
+    async def test_the_share_name_rewrite_keeps_a_blank_last_part(
+        self, monkeypatch: pytest.MonkeyPatch, path: str, sent: str
     ) -> None:
-        """The share-name rewrite normalizes the path, which strips a whitespace-only last
-        part: `/WRITABLE/x/ ` became `/writable/x`, deleting the folder (pre-QA on #480)."""
+        """The rewrite normalizes the path, which used to strip a whitespace-only last part:
+        `/WRITABLE/x/ ` became `/writable/x`, deleting the folder (pre-QA on #480). Taken
+        exactly now (#488), it names an item " " in /writable/x."""
         fn, delete = self._tool_with_real_share_check(monkeypatch)
-        with pytest.raises(ToolError) as exc:
-            await fn(ctx=_fake_mcp_ctx(), paths=[path])
-        error = json.loads(str(exc.value))["error"]
-        assert (error["code"], error["value"]) == ("invalid_parameter", path)
-        delete.assert_not_awaited()
+        await fn(ctx=_fake_mcp_ctx(), paths=[path])
+        assert delete.await_args.kwargs["paths"] == [sent]
 
     @pytest.mark.parametrize("path", ["/vidoe", "/vidoe/", "/#recycle"])
     async def test_a_one_part_path_that_isnt_a_share_is_an_unknown_share(
@@ -1324,7 +1329,7 @@ class TestShareRootSourcesRefusedByTools:
         register(ctx)
         return server._tool_manager._tools, client
 
-    @pytest.mark.parametrize("path", ["/WRITABLE", "writable/", " /writable "])
+    @pytest.mark.parametrize("path", ["/WRITABLE", "writable/", " /writable"])
     async def test_move_refuses_a_share_root(
         self, monkeypatch: pytest.MonkeyPatch, path: str
     ) -> None:

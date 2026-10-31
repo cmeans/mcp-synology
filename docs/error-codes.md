@@ -260,8 +260,13 @@ Common causes:
 - `delete_files` on a whole shared folder (`/video`): a shared folder isn't deleted or
   emptied this way (#451; emptying one with the user's confirmation is #484). Delete a
   shared folder's items by path, or the shared folder itself in DSM's Control Panel.
-- `delete_files` on a path with a `.`, `..`, empty or whitespace-only part, or a NUL:
-  write the path out in full.
+- `delete_files` on a path with a `.`, `..` or empty part, or a NUL: write the path out
+  in full.
+- A name a tool would create starts or ends with whitespace (`rename`'s `new_name`,
+  `upload_file`'s `filename` or the local file's name, `create_folder`'s new folder)
+  (#488): DSM keeps it exactly, making `report.pdf ` a different file. Give the name
+  without the padding. Paths themselves are taken exactly, so an existing item named
+  with such whitespace is still reached by its exact path.
 - `move_files` with a whole shared folder as a source, or `rename` of one (#479): DSM
   takes it out of its shared folders. Move its items by path, copy it with `copy_files`,
   or move or rename it in DSM's Control Panel.
@@ -269,9 +274,8 @@ Common causes:
   `/<share>/#recycle`, or a user's home bin (`/home/#recycle`, or `/homes/<user>/#recycle`
   as an administrator sees it) (#479). Work with the bin's items by their own paths, or
   restore them with `restore_from_recycle_bin`.
-- A `restore_from_recycle_bin` item that names the whole bin (`""`, `"/"`, `#recycle`) or
-  has a whitespace-only part after its first (`Shows/ `) (#479): give each item as
-  `list_recycle_bin` shows it.
+- A `restore_from_recycle_bin` item that names the whole bin (`""`, `"/"`, `#recycle`)
+  (#479): give each item as `list_recycle_bin` shows it.
 - `upload_file` or `download_file` was called without `dest_folder`, and no
   default is configured (`default_upload_dir` or `default_download_dir` in the
   `filestation` module settings). The error's `param` is `dest_folder`.
