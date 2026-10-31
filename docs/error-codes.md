@@ -265,7 +265,7 @@ Common causes:
 - A name a tool would create (`rename`'s `new_name`, `upload_file`'s `filename` or the
   local file's name, `create_folder`'s new folder) starts or ends with whitespace (#488:
   DSM keeps it exactly, making `report.pdf ` a different file), has a control character
-  other than a tab, a direction-changing character or a line separator, or no visible
+  other than a tab, a direction-changing character or a line or paragraph separator, or no visible
   character, or is `#recycle` directly in a shared folder or a user's home folder
   (#510); or a copy, move or restore would put a folder named `#recycle` there; or an
   upload or `create_folder` would create a missing parent folder under such a name. Give

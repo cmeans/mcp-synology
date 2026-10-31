@@ -504,6 +504,33 @@ class TestResolvePaths:
             )
         assert f"would be created, but its name {problem}" in _error(exc)["message"]
 
+    async def test_the_walk_checks_the_right_folder_at_depth(self) -> None:
+        """Each part is checked in its own parent, not the share's (pre-QA r5 on #510)."""
+        client = _FakeClient()
+        with pytest.raises(ToolError):
+            await resolve_paths(
+                client,  # type: ignore[arg-type]
+                set(),
+                "upload_file",
+                "dest_folder",
+                ["/video/a/b /x"],
+                creates_parents=True,
+            )
+        looked_up = [p["path"] for m, p in client.calls if m == "getinfo"]
+        assert looked_up == ["/video/a/b "]
+        # #recycle deeper down isn't a bin: nothing to refuse, nothing looked up.
+        deep = _FakeClient()
+        got = await resolve_paths(
+            deep,  # type: ignore[arg-type]
+            set(),
+            "upload_file",
+            "dest_folder",
+            ["/video/a/#recycle/x"],
+            creates_parents=True,
+        )
+        assert got == ["/video/a/#recycle/x"]
+        assert [m for m, _ in deep.calls] == ["list_share"]
+
     async def test_an_existing_parent_with_such_a_name_is_used(self) -> None:
         """A bin (or an odd name) that already exists is taken as it is; no request is made
         for an ordinary part."""

@@ -26,6 +26,7 @@ from mcp_synology.core.formatting import error_response
 from mcp_synology.modules.filestation import helpers
 from mcp_synology.modules.filestation.helpers import (
     _is_dot,
+    draws_nothing,
     normalize_path,
     path_exists,
     shown,
@@ -365,16 +366,6 @@ def _refuse(message: str, param: str, value: str, suggestion: str) -> None:
 # U+200F (pre-QA r4).
 _BIDI = frozenset("\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069")
 _LINE_BREAKS = frozenset("\u2028\u2029")
-# Letters that draw nothing (U+3164 Hangul filler is a well-known blank-looking name).
-_BLANK_LETTERS = frozenset("\u115f\u1160\u3164\uffa0\u2800")
-
-
-def _shows_nothing(c: str) -> bool:
-    """A character that draws nothing on its own: whitespace, a format character (zero
-    width, BOM), a combining mark, or a blank filler letter."""
-    return (
-        c.isspace() or unicodedata.category(c) in ("Cf", "Zs", "Mn", "Me") or (c in _BLANK_LETTERS)
-    )
 
 
 def name_problem(name: str, parent: str | None = None) -> str | None:
@@ -387,7 +378,7 @@ def name_problem(name: str, parent: str | None = None) -> str | None:
         return "contains a character that changes text direction"
     if any(c in _LINE_BREAKS for c in name):
         return "contains a line or paragraph separator"
-    if all(_shows_nothing(c) for c in name):
+    if all(draws_nothing(c) for c in name):
         return "has no visible character"
     if name != name.strip():
         return "starts or ends with whitespace"
@@ -456,7 +447,7 @@ async def _refuse_bad_created_parents(
     ``/video/Uploads `` beside ``Uploads`` and reports success; vdsm DSM 7.1 and 7.4.1),
     with a control or invisible character, or ``#recycle`` where it would be a bin (pre-QA
     on #510). Only such parts are looked up, so an ordinary path costs no request; the
-    parent is built as the walk goes, so a deep path stays linear (pre-QA r4)."""
+    parent is built as the walk goes, not re-joined for every part (pre-QA r4)."""
     parts = normalized.split("/")[1:]
     parent = "/" + parts[0] if parts else "/"
     for i in range(1, min(upto, len(parts))):

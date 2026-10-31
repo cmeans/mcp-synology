@@ -87,6 +87,10 @@ class TestShown:
             ("/video/a\tb", "'/video/a\\tb'"),
             ("/video/a\u00a0b", "'/video/a\\xa0b'"),
             ("/video/\x1b[31m", "'/video/\\x1b[31m'"),
+            # What the new-name rules call invisible is quoted too (pre-QA r5 on #510).
+            ("/video/\u3164", repr("/video/\u3164")),
+            ("/video/a\u0301", repr("/video/a\u0301")),
+            ("/video/\u2800x", repr("/video/\u2800x")),
         ],
     )
     def test_shown(self, path: str, expected: str) -> None:

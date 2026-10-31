@@ -3220,12 +3220,11 @@ class TestShareRootSourcesRefused:
             await restore_from_recycle_bin(mock_client, share="video", paths=[item])
         assert looked_up == [checked]
         message = json.loads(str(exc.value))["error"]["message"]
-        # A padded path is shown quoted, so the stray whitespace is visible (#489).
-        if all(part == part.strip() for part in checked.split("/")) and checked.isprintable():
-            shown = checked
-        else:
-            shown = repr(checked)
-        assert f"not found: {shown} (DSM error 408)" in message
+        # A padded path is shown quoted, so the stray whitespace is visible (#489); the
+        # quoting rule itself is tested in test_helpers (TestShown).
+        from mcp_synology.modules.filestation.helpers import shown
+
+        assert f"not found: {shown(checked)} (DSM error 408)" in message
 
     @respx.mock
     @pytest.mark.parametrize(

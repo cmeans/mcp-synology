@@ -6,6 +6,7 @@ import fnmatch
 import json
 import logging
 import re
+import unicodedata
 from datetime import UTC, datetime
 from typing import Any, NoReturn
 
@@ -202,6 +203,17 @@ def strip_padding(path: str) -> str:
     return unpadded if unpadded.startswith("/") else path
 
 
+# Letters that draw nothing (U+3164 Hangul filler is a well-known blank-looking name).
+_BLANK_LETTERS = frozenset("\u115f\u1160\u3164\uffa0\u2800")
+
+
+def draws_nothing(c: str) -> bool:
+    """A character that draws nothing on its own: whitespace, a format character (zero
+    width, BOM, bidi control), a combining mark, or a blank filler letter (#510). Shared by
+    `shown` and the new-name rules, so what's refused as invisible is shown quoted."""
+    return c.isspace() or unicodedata.category(c) in ("Cf", "Zs", "Mn", "Me") or c in _BLANK_LETTERS
+
+
 def shown(path: str) -> str:
     """``path`` for a message: as is, or quoted with ``repr`` when a part has whitespace at
     its start or end or the path holds a character that doesn't print (a tab, a no-break
@@ -211,7 +223,11 @@ def shown(path: str) -> str:
     own text, shown exactly); an error or list that names a path the server checked or got
     from DSM uses ``shown`` (plain unless something would be invisible). Successful
     replies and listings show paths as DSM does."""
-    if path.isprintable() and all(part == part.strip() for part in path.split("/")):
+    if (
+        path.isprintable()
+        and all(part == part.strip() for part in path.split("/"))
+        and not any(draws_nothing(c) and c != " " for c in path)
+    ):
         return path
     return repr(path)
 
