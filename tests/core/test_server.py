@@ -1838,7 +1838,9 @@ class TestInstructionComments:
 # +62 by #480 (QA round 2): delete_files says a path with a `.`, `..`, empty or
 # whitespace-only part is refused too.
 # +10 by #480 (QA round 4): ... or a NUL.
-PAYLOAD_BUDGET_CHARS = 56_170
+# +238 by #479: move_files and rename say a whole shared folder is refused, delete_files a
+# whole recycle bin and that empty folders aren't kept, restore an item naming the bin.
+PAYLOAD_BUDGET_CHARS = 56_408
 
 
 class TestPayloadBudget:

@@ -1301,3 +1301,61 @@ class TestShareRootDeleteRefused:
             await server._tool_manager._tools["delete_files"].fn(ctx=_fake_mcp_ctx(), paths=paths)
         assert json.loads(str(exc.value))["error"]["code"] == "invalid_parameter"
         delete.assert_not_awaited()
+
+
+class TestShareRootSourcesRefusedByTools:
+    """#479: the registered move_files and rename refuse a whole shared folder, after the
+    share check (a typo is an unknown share), before any request to DSM."""
+
+    @staticmethod
+    def _tools(monkeypatch: pytest.MonkeyPatch) -> tuple[dict[str, Any], MagicMock]:
+        async def refresh(_client: object, known: set[str]) -> bool:
+            known.clear()
+            known.update({"writable", "photo"})
+            return True
+
+        monkeypatch.setattr(
+            "mcp_synology.modules.filestation.helpers._refresh_known_shares", refresh
+        )
+        client = MagicMock()
+        client.request = AsyncMock(return_value={})
+        server, manager, ctx = _make_ctx()
+        manager.get_client = AsyncMock(return_value=client)
+        register(ctx)
+        return server._tool_manager._tools, client
+
+    @pytest.mark.parametrize("path", ["/WRITABLE", "writable/", " /writable "])
+    async def test_move_refuses_a_share_root(
+        self, monkeypatch: pytest.MonkeyPatch, path: str
+    ) -> None:
+        tools, client = self._tools(monkeypatch)
+        with pytest.raises(ToolError) as exc:
+            await tools["move_files"].fn(ctx=_fake_mcp_ctx(), paths=[path], dest_folder="/photo")
+        error = json.loads(str(exc.value))["error"]
+        assert (error["code"], error["param"]) == ("invalid_parameter", "paths")
+        assert "is a whole shared folder" in error["message"]
+        sent = [c.args[0] for c in client.request.await_args_list]
+        assert not {"SYNO.FileStation.CopyMove", "SYNO.FileStation.Rename"} & set(sent), sent
+
+    @pytest.mark.parametrize("path", ["/WRITABLE", "writable/"])
+    async def test_rename_refuses_a_share_root(
+        self, monkeypatch: pytest.MonkeyPatch, path: str
+    ) -> None:
+        tools, client = self._tools(monkeypatch)
+        with pytest.raises(ToolError) as exc:
+            await tools["rename"].fn(path=path, new_name="renamed")
+        error = json.loads(str(exc.value))["error"]
+        assert (error["code"], error["param"]) == ("invalid_parameter", "path")
+        assert "is a whole shared folder" in error["message"]
+        sent = [c.args[0] for c in client.request.await_args_list]
+        assert not {"SYNO.FileStation.CopyMove", "SYNO.FileStation.Rename"} & set(sent), sent
+
+    async def test_a_typo_is_an_unknown_share(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        tools, _ = self._tools(monkeypatch)
+        with pytest.raises(ToolError) as exc:
+            await tools["move_files"].fn(
+                ctx=_fake_mcp_ctx(), paths=["/writabel"], dest_folder="/photo"
+            )
+        error = json.loads(str(exc.value))["error"]
+        assert error["code"] == "not_found"
+        assert "whole shared folder" not in error["message"]

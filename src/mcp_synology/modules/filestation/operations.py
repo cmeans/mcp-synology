@@ -112,7 +112,8 @@ async def _explain_rename_1200(client: DsmClient, path: str, original: str, new_
     parent, _, name = path.rpartition("/")
     target = f"{parent}/{new_name}"
     # The new path can't stand for a taken name when it's the source itself (its own
-    # name), or when the source is a share root (no parent folder to look in). `rename`
+    # name), or when the source is a share root (no parent folder to look in; `rename`
+    # refuses one before sending it since #479, so this only guards other callers). `rename`
     # refuses "." and ".." before getting here (#449).
     can_be_taken = bool(parent) and new_name != name
     try:
@@ -151,6 +152,7 @@ async def rename(
 ) -> str:
     """Rename a file or folder."""
     normalized = normalize_path(path)
+    _refuse_share_root_source("Rename", path, "path")
 
     # new_name is just a name: not a path, nor `.` or `..`, as #449 refuses in paths
     relocates = "/" in new_name or new_name.strip(" ") in (".", "..")
@@ -223,6 +225,8 @@ async def move_files(
     on_progress: ProgressCallback | None = None,
 ) -> str:
     """Move files or folders to a new location."""
+    for p in paths:
+        _refuse_share_root_source("Move", p, "paths")
     text, _ = await _copy_move(
         client,
         paths=paths,
@@ -309,18 +313,36 @@ def refuse_bad_parts(paths: list[str]) -> None:
 
 
 def refuse_share_roots(paths: list[str]) -> None:
-    """Refuse a path that names a whole shared folder (#451), and any `refuse_bad_parts`
-    path.
+    """Refuse a path that names a whole shared folder (#451) or a share's whole recycle bin
+    (#479), and any `refuse_bad_parts` path.
 
     On DSM 7.2.2, 7.3.2 and 7.4.1, File Station's Delete on ``/<share>`` deletes the shared
     folder itself, for any account with write access, and the recycle bin, inside the
     share, can't bring it back; DSM 7.1 refuses it. Emptying a share safely is #484. The
     tool calls this after the share check, so a one-part path that isn't a share (a typo)
     gets "unknown shared folder", not this (pre-QA on #480).
+
+    Delete on ``/<share>/#recycle`` removes the whole bin folder, every user's deleted items
+    with it, for an administrator and for a non-admin with write access alike (seska, DSM
+    7.1.1; #479); DSM re-creates an empty bin at the share's next delete.
     """
     refuse_bad_parts(paths)
     for path in paths:
         parts = normalize_path(path).split("/")[1:]
+        if parts[1:] == ["#recycle"]:
+            error_response(
+                ErrorCode.INVALID_PARAMETER,
+                f"Delete files refused: {path!r} is the shared folder's whole recycle bin. "
+                "Deleting it would permanently remove everything in the bin, other users' "
+                "deleted items included. Nothing was deleted.",
+                retryable=False,
+                param="paths",
+                value=path,
+                suggestion="To delete items from the bin for good, list them with "
+                "list_recycle_bin and delete each by its own path "
+                f"(/{parts[0]}/#recycle/<item>), after the user agrees; to empty the whole "
+                "bin, use DSM's Control Panel > Shared Folder > Action > Empty Recycle Bin.",
+            )
         if len(parts) == 1:
             error_response(
                 ErrorCode.INVALID_PARAMETER,
@@ -336,6 +358,47 @@ def refuse_share_roots(paths: list[str]) -> None:
                 "their own paths (leaving out its #recycle), after the user agrees; to delete "
                 "the shared folder itself, use DSM's Control Panel > Shared Folder.",
             )
+
+
+def _refuse_share_root_source(operation: str, path: str, param: str) -> None:
+    """Refuse a whole shared folder as what a move moves or a rename renames (#479).
+
+    On DSM 7.1, 7.2.2, 7.3.2 and 7.4.1 (vdsm, admin and non-admin), CopyMove with
+    ``remove_src`` on ``/<share>`` takes the shared folder itself out of DSM's share list
+    for any account with write access, and the reply reads as a skip. Rename on
+    ``/<share>`` makes it vanish from the list for an administrator, under its new name
+    too; a non-admin gets 1200. Copying a shared folder only copies its contents into a
+    new folder, so ``copy_files`` takes one. Called after the share check, as
+    `refuse_share_roots` is.
+    """
+    if len(normalize_path(path).split("/")[1:]) != 1:
+        return
+    if operation == "Move":
+        detail = (
+            "Moving one would remove the shared folder itself from DSM, for any account "
+            "with write access, beyond the recycle bin's reach (tested on DSM 7.1 to 7.4.1)."
+        )
+        suggestion = (
+            "To move what's in it, list it with list_files and move its items by their own "
+            "paths (leaving out its #recycle); to keep it and copy it, use copy_files; to "
+            "move or rename the shared folder itself, use DSM's Control Panel > Shared Folder."
+        )
+    else:
+        detail = (
+            "Renaming one through File Station makes it disappear from DSM's shared folders, "
+            "under its new name too (tested on DSM 7.1 to 7.4.1)."
+        )
+        suggestion = "Rename a shared folder in DSM's Control Panel > Shared Folder."
+    past = "moved" if operation == "Move" else "renamed"
+    error_response(
+        ErrorCode.INVALID_PARAMETER,
+        f"{operation} {'files ' if operation == 'Move' else ''}refused: {path!r} is a whole "
+        f"shared folder. {detail} Nothing was {past}.",
+        retryable=False,
+        param=param,
+        value=path,
+        suggestion=suggestion,
+    )
 
 
 def _unstop(message: str) -> str:
@@ -1195,10 +1258,14 @@ async def _delete_summary(
     lines = [format_status(f"{verb} {len(normalized):,} item(s):")]
     lines.extend(f"  {p}" for p in normalized)
 
+    # DSM keeps no empty folder in the bin, not even one deleted on its own (seska DSM
+    # 7.1.1; vdsm 7.1 and 7.3.2 for one inside a deleted folder), so the note doesn't
+    # promise one back (#479).
     lines.extend(
         f"\nRecycle bin is enabled on /{share} \u2014 "
         f"files can be recovered with list_recycle_bin and restore_from_recycle_bin"
         + (", except the items deleted from the recycle bin itself." if share in in_bin else ".")
+        + " Empty folders aren't kept in the bin."
         for share in sorted(shares_with_recycle)
     )
     for share, bin_paths in sorted(in_bin.items()):
@@ -1265,18 +1332,35 @@ async def restore_from_recycle_bin(
     full_paths: list[str] = []
     restore_destinations: list[str] = []
 
-    for p in paths:
-        p = p.strip()
+    def in_bin(rel: str) -> bool:
+        # `#recycle` itself or a path inside it; not `#recycled/…`, a folder beside it.
+        return rel == "#recycle" or rel.startswith("#recycle/")
+
+    bin_root = f"/{share_name}/#recycle"
+    for item in paths:
+        p = item.strip()
         # Ensure the path is within #recycle. A full path may spell the share in another case;
         # it's re-rooted on the share as given, which the handler has set to the listed
         # spelling (#353).
         head, _, rest = p.lstrip("/").partition("/")
-        if head.casefold() == share_name.casefold() and rest.startswith("#recycle"):
+        if head.casefold() == share_name.casefold() and in_bin(rest):
             full_paths.append(normalize_path(f"/{share_name}/{rest}"))
-        elif p.startswith("#recycle"):
+        elif in_bin(p):
             full_paths.append(normalize_path(f"/{share_name}/{p}"))
         else:
-            full_paths.append(normalize_path(f"/{share_name}/#recycle/{p}"))
+            full_paths.append(normalize_path(f"/{share_name}/#recycle/{p.lstrip('/')}"))
+        if full_paths[-1] == bin_root:
+            # An empty item ("", "/", "#recycle") names the bin itself: restoring it would
+            # move the whole bin out (#479).
+            error_response(
+                ErrorCode.INVALID_PARAMETER,
+                f"Restore refused: {item!r} names the whole recycle bin of /{share_name}, "
+                "not an item in it. Nothing was restored.",
+                retryable=False,
+                param="paths",
+                value=item,
+                suggestion="Give each item as list_recycle_bin shows it, e.g. Shows/Ep1.mkv.",
+            )
 
         # Infer original path by stripping #recycle
         if dest_folder:
