@@ -230,8 +230,9 @@ MODULE_INFO = ModuleInfo(
                 "list_recycle_bin shows them and restore_from_recycle_bin brings them back. "
                 "Without a bin, and for anything inside a bin (`/<share>/#recycle`), deletion is "
                 "permanent. Paths are exact, not wildcard patterns, and if any path is missing "
-                "nothing is deleted. A long delete keeps running on the NAS and returns a handle "
-                "for file_task."
+                "nothing is deleted. A whole shared folder (`/video`) is refused: delete its items "
+                "by path. So is a path with a `.`, `..`, empty or whitespace-only part, or a NUL. "
+                "A long delete keeps running on the NAS and returns a handle for file_task."
             ),
             permission_tier=PermissionTier.WRITE,
             annotations=_ANNO_DESTRUCTIVE,
@@ -299,6 +300,8 @@ def register(ctx: "RegisterContext") -> None:
         create_folder,
         delete_files,
         move_files,
+        refuse_bad_parts,
+        refuse_share_roots,
         rename,
         restore_from_recycle_bin,
     )
@@ -967,7 +970,14 @@ def register(ctx: "RegisterContext") -> None:
             ] = True,
         ) -> str:
             client = await _fs_client()
+            # The part checks on the paths as given: the share-name rewrite below normalizes
+            # a path, which strips a whitespace-only last part (`/VIDEO/x/ ` -> `/video/x`).
+            # The share-root check after the share check, so a typo (`/vidoe`) is an unknown
+            # share, not "a whole shared folder" (pre-QA on #480). delete_files checks both
+            # again on the rewritten paths.
+            refuse_bad_parts(paths)
             paths = await ensure_known_shares(client, paths, known_shares, "paths")
+            refuse_share_roots(paths)
             return _reply(
                 await delete_files(
                     client,

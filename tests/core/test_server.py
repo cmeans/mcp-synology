@@ -1833,7 +1833,12 @@ class TestInstructionComments:
 # added, and that a retry repeats the whole call with the same ids in the same order (#467).
 # +81 by #449 (QA round 2 on #470): the File Station instructions say `.` and `..` path parts
 # are refused, and rename's new_name and upload_file's filename say they aren't paths.
-PAYLOAD_BUDGET_CHARS = 56_027
+# +71 by #451 (#480): delete_files says a whole shared folder is refused, and to delete its
+# items by path.
+# +62 by #480 (QA round 2): delete_files says a path with a `.`, `..`, empty or
+# whitespace-only part is refused too.
+# +10 by #480 (QA round 4): ... or a NUL.
+PAYLOAD_BUDGET_CHARS = 56_170
 
 
 class TestPayloadBudget:

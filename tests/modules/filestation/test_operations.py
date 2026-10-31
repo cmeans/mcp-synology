@@ -3048,3 +3048,400 @@ class TestCountsSeparateThousands:
         paths = [f"/video/Downloads/f{i}.mkv" for i in range(1_200)]
         result = await delete_files(mock_client, paths=paths, recycle_bin_status={"video": True})
         assert result.startswith("[+] Deleted 1,200 item(s):")
+
+
+class TestShareRootRefused:
+    """#451: delete_files never sends a whole shared folder (or a spelling of one) to DSM.
+    On DSM 7.2.2 to 7.4.1 (tested), Delete on /<share> deletes the shared folder itself."""
+
+    @pytest.mark.parametrize("path", ["/video", "video/", " /video ", "/video//"])
+    def test_a_share_root_is_refused(self, path: str) -> None:
+        from mcp_synology.modules.filestation.operations import refuse_share_roots
+
+        with pytest.raises(ToolError) as exc:
+            refuse_share_roots(["/video/ok", path])
+        error = json.loads(str(exc.value))["error"]
+        assert (error["code"], error["param"], error["value"]) == (
+            "invalid_parameter",
+            "paths",
+            path,
+        )
+        assert "is a whole shared folder" in error["message"]
+        assert "list_files" in error["suggestion"] and "Control Panel" in error["suggestion"]
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/video/.",
+            "/video/x/..",
+            "//video",
+            "/video/ .. /x",
+            "/video/ /x",
+            # A whitespace-only last part: normalizing alone would send /video/x, deleting
+            # the folder (QA round 2 on #480).
+            "/video/x/ ",
+            "/video/x/ /",
+            "/video/x/\u00a0",
+            "/video/x/\t/",
+            # A NUL: whether DSM cuts the path there (leaving /video/) is unprobed (pre-QA).
+            "/video/\x00",
+            "/video/x/\x00",
+            # A padded dot at the end: normalizing strips the padding, so it's a plain dot
+            # with #470's message; in the middle it gets the delete's own (pre-QA on #480).
+            "/video/x/..\t",
+            "/video/.\t/x",
+            # Padding before the dot isn't stripped: the delete's own (QA round 5 on #480).
+            "/video/x/\t..",
+        ],
+    )
+    def test_a_spelling_of_one_is_refused(self, path: str) -> None:
+        from mcp_synology.modules.filestation.operations import refuse_share_roots
+
+        with pytest.raises(ToolError) as exc:
+            refuse_share_roots([path])
+        error = json.loads(str(exc.value))["error"]
+        assert (error["code"], error["param"], error["value"]) == (
+            "invalid_parameter",
+            "paths",
+            path,
+        )
+        # A plain dot part gets #470's message, as in every other tool; the rest are the
+        # delete's own refusal.
+        from mcp_synology.modules.filestation.helpers import normalize_path
+
+        # As refuse_dot_parts reads it: after normalizing (QA round 4).
+        plain_dot = any(p.strip(" ") in (".", "..") for p in normalize_path(path).split("/"))
+        expected = (
+            "'.' and '..' parts aren't allowed"
+            if plain_dot
+            else "'.', '..', empty and whitespace-only parts, and NUL characters, aren't allowed"
+        )
+        assert expected in error["message"]
+
+    @pytest.mark.parametrize(
+        "path",
+        ["/video/a", "/video/.hidden", "/video/a..b", "/video/a/", "/video/x//", " /video/x "],
+    )
+    def test_ordinary_paths_pass(self, path: str) -> None:
+        from mcp_synology.modules.filestation.operations import refuse_share_roots
+
+        refuse_share_roots([path])  # doesn't raise
+
+
+_RETRY_NOTE = (
+    "When retrying, leave out the paths already deleted (the same call would be refused), and "
+    "check /video/b with list_files first."
+)
+# When the cause's own advice already says to check with list_files (QA round 5 on #480).
+_SHORT_RETRY_NOTE = (
+    "When retrying, leave out the paths already deleted (the same call would be refused)."
+)
+
+
+class TestDeleteFailurePartway:
+    """QA round 1 on #480: a delete that fails partway says what was already deleted and
+    what wasn't started."""
+
+    @staticmethod
+    def _route(
+        fail_on: int,
+        *,
+        transport: bool = False,
+        status: dict | None = None,
+        code: int = 407,
+        status_code: int | None = None,
+    ) -> None:
+        starts: list[str] = []
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            p = request.url.params
+            method, api = p.get("method"), p.get("api")
+            if method == "getinfo":
+                files = [{"path": x, "isdir": True} for x in p.get("path", "").split(",")]
+                return httpx.Response(200, json={"success": True, "data": {"files": files}})
+            if method == "list" and api == "SYNO.FileStation.BackgroundTask":
+                return httpx.Response(200, json={"success": True, "data": {"tasks": []}})
+            if method == "start":
+                starts.append(p.get("path", ""))
+                if len(starts) == fail_on and status is None and status_code is None:
+                    if transport:
+                        raise httpx.ReadTimeout("")
+                    return httpx.Response(200, json={"success": False, "error": {"code": code}})
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "t"}})
+            if method == "status":
+                if status_code is not None and len(starts) == fail_on:
+                    error = {"code": status_code}
+                    return httpx.Response(200, json={"success": False, "error": error})
+                data = status if status and len(starts) == fail_on else {"finished": True}
+                return httpx.Response(200, json={"success": True, "data": data})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        ("status", "ends"),
+        [
+            # The task's own error, on a path ending in a dot (pre-QA on #480).
+            (
+                {"finished": True, "error": {"code": 407}, "path": "/video/v1."},
+                # The path's own dot, then the sentence's period.
+                "DSM error code 407 on path: /video/v1.. Already deleted before this failure: "
+                "/video/a. Not started: /video/c.",
+            ),
+            # Per-item errors: listed once, never twice (pre-QA on #480).
+            (
+                {"finished": True, "errors": [{"code": 900, "path": "/video/v1."}]},
+                "/video/v1. (DSM error 900). Already deleted before this failure: /video/a. "
+                "Not started: /video/c.",
+            ),
+        ],
+        ids=["task-error", "errors-list"],
+    )
+    async def test_a_task_error_partway(
+        self, mock_client: DsmClient, status: dict, ends: str
+    ) -> None:
+        self._route(2, status=status)
+        with pytest.raises(ToolError) as exc:
+            await delete_files(mock_client, paths=["/video/a", "/video/v1.", "/video/c"], timeout=5)
+        message = json.loads(str(exc.value))["error"]["message"]
+        assert message.endswith(ends)
+        assert message.count("Already deleted") == 1
+
+    @respx.mock
+    async def test_a_path_named_like_the_note_doesnt_hide_it(self, mock_client: DsmClient) -> None:
+        """The note was skipped when the message already held its words (pre-QA on #480)."""
+        self._route(2, status={"finished": True, "error": {"code": 407}})
+        with pytest.raises(ToolError) as exc:
+            await delete_files(
+                mock_client,
+                paths=["/video/a", "/video/Already deleted stuff", "/video/c"],
+                timeout=5,
+            )
+        message = json.loads(str(exc.value))["error"]["message"]
+        assert "Already deleted before this failure: /video/a." in message
+
+    async def test_delete_files_itself_refuses_a_share_root(self, mock_client: DsmClient) -> None:
+        """Not only the tool: a caller of delete_files can't send a share root either."""
+        with pytest.raises(ToolError, match="is a whole shared folder"):
+            await delete_files(mock_client, paths=["/video"])
+
+    @respx.mock
+    async def test_a_dsm_error_partway(self, mock_client: DsmClient) -> None:
+        self._route(2)
+        with pytest.raises(ToolError) as exc:
+            await delete_files(mock_client, paths=["/video/a", "/video/b", "/video/c"], timeout=5)
+        message = json.loads(str(exc.value))["error"]["message"]
+        assert message.startswith("Delete files failed (DSM error 407)")
+        # DSM's error names no path, so the delete names the one that failed (QA round 5).
+        assert message.endswith(
+            "Failed on: /video/b. Already deleted before this failure: /video/a. "
+            "Not started: /video/c."
+        )
+        error = json.loads(str(exc.value))["error"]
+        assert (error["param"], error["value"]) == ("paths", "/video/b")
+        # The cause's own advice is kept, with the retry note after it (QA round 3 on #480).
+        suggestion = json.loads(str(exc.value))["error"]["suggestion"]
+        own, _, rest = suggestion.partition(" When retrying, leave out the paths already deleted")
+        assert own and rest
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        ("code", "suggestion"),
+        [
+            # No advice of its own: the note alone (QA round 4 on #480).
+            (403, _RETRY_NOTE),
+            # Its own advice first, then the note (QA round 3).
+            (416, f"Free space on the NAS. {_RETRY_NOTE}"),
+            # Advice that already says to check with list_files: no second check (QA round
+            # 5). 1200 is rename's code; DSM answering it to a Delete is uncaptured, but it's
+            # the one table entry whose advice says so.
+            (1200, f"Check both with list_files, then retry. {_SHORT_RETRY_NOTE}"),
+            # Advice ending in a list goes last, so no period reads as one of the characters.
+            (418, f'{_RETRY_NOTE} Avoid characters: / \\ : * ? " < > |'),
+            # The task may have finished: the note says to check the failed path first.
+            (599, f"Background task not found (may have already completed). {_RETRY_NOTE}"),
+            # Mentioning list_files isn't saying to check with it: the check stays (pre-QA).
+            (408, f"Use list_files or search_files to find the correct path. {_RETRY_NOTE}"),
+        ],
+    )
+    async def test_a_dsm_error_partway_keeps_its_advice(
+        self, mock_client: DsmClient, code: int, suggestion: str
+    ) -> None:
+        self._route(2, code=code)
+        with pytest.raises(ToolError) as exc:
+            await delete_files(mock_client, paths=["/video/a", "/video/b", "/video/c"], timeout=5)
+        error = json.loads(str(exc.value))["error"]
+        assert error["suggestion"] == suggestion
+        assert error["retryable"] is False
+
+    @respx.mock
+    async def test_a_start_with_no_answer_partway(self, mock_client: DsmClient) -> None:
+        self._route(2, transport=True)
+        with pytest.raises(ToolError) as exc:
+            await delete_files(mock_client, paths=["/video/a", "/video/b", "/video/c"], timeout=5)
+        error = json.loads(str(exc.value))["error"]
+        assert error["code"] == "timeout"  # as the server's own timeout error says it
+        assert error["message"] == (
+            "Delete files failed: DSM didn't answer for /video/b (ReadTimeout); its delete "
+            "may have started. Already deleted before this failure: /video/a. Not started: "
+            "/video/c."
+        )
+        # Its own advice, then the retry note (QA round 3 on #480).
+        assert error["suggestion"] == (
+            f"Check with list_files, or file_task with no handle, before deleting again. "
+            f"{_SHORT_RETRY_NOTE}"
+        )
+
+    @respx.mock
+    @pytest.mark.parametrize("fail_on", [1, 2], ids=["first", "later"])
+    async def test_a_status_error_names_the_path(
+        self, mock_client: DsmClient, fail_on: int
+    ) -> None:
+        """A DSM error on a status request names no path either (QA round 5 on #480)."""
+        self._route(fail_on, status_code=599)
+        paths = ["/video/a", "/video/b", "/video/c"]
+        with pytest.raises(ToolError) as exc:
+            await delete_files(mock_client, paths=paths, timeout=5)
+        error = json.loads(str(exc.value))["error"]
+        failed = paths[fail_on - 1]
+        assert f"Failed on: {failed}." in error["message"]
+        assert (error["param"], error["value"]) == ("paths", failed)
+
+    @respx.mock
+    async def test_a_named_path_isnt_named_twice(self, mock_client: DsmClient) -> None:
+        """The task's own error already names it: no 'Failed on' (QA round 5 on #480)."""
+        self._route(2, status={"finished": True, "error": {"code": 407}, "path": "/video/b"})
+        with pytest.raises(ToolError) as exc:
+            await delete_files(mock_client, paths=["/video/a", "/video/b", "/video/c"], timeout=5)
+        message = json.loads(str(exc.value))["error"]["message"]
+        assert "Failed on" not in message
+        assert message.count("/video/b") == 1
+
+    def test_a_task_error_with_an_empty_path_names_ours(self) -> None:
+        """A task error whose path is empty names the path deleted, not '' (pre-QA)."""
+        from mcp_synology.modules.filestation.operations import _delete_result
+
+        status = {"finished": True, "error": {"code": 900}, "path": ""}
+        with pytest.raises(ToolError) as exc:
+            _delete_result(status, "/video/b", recursive=True)
+        assert json.loads(str(exc.value))["error"]["message"].endswith(
+            "DSM error code 900 on path: /video/b."
+        )
+
+    @respx.mock
+    async def test_a_path_gone_when_its_delete_ran(self, mock_client: DsmClient) -> None:
+        """DSM's nothing-found signature on a later item: the path is named once, and its
+        advice already says to check with list_files (QA round 6 on #480)."""
+        self._route(2, status={"finished": True, "total": -1, "path": ""})
+        with pytest.raises(ToolError) as exc:
+            await delete_files(mock_client, paths=["/video/a", "/video/b", "/video/c"], timeout=5)
+        error = json.loads(str(exc.value))["error"]
+        assert error["message"] == (
+            "Delete files failed: the path wasn't found when the delete ran, so nothing was "
+            "deleted for /video/b. Already deleted before this failure: /video/a. Not "
+            "started: /video/c."
+        )
+        assert error["suggestion"].endswith(f" {_SHORT_RETRY_NOTE}")
+
+    @respx.mock
+    async def test_a_path_inside_the_item_doesnt_name_it(self, mock_client: DsmClient) -> None:
+        """An error naming a path inside the failed item still gets 'Failed on' (pre-QA)."""
+        self._route(2, status={"finished": True, "errors": [{"code": 408, "path": "/video/b/s"}]})
+        with pytest.raises(ToolError) as exc:
+            await delete_files(mock_client, paths=["/video/a", "/video/b", "/video/c"], timeout=5)
+        message = json.loads(str(exc.value))["error"]["message"]
+        assert message == (
+            "Delete files failed: /video/b/s (DSM error 408). Failed on: /video/b. Already "
+            "deleted before this failure: /video/a. Not started: /video/c."
+        )
+
+    @pytest.mark.parametrize(
+        ("message", "named"),
+        [
+            ("DSM error code 407 on path: /video/a.", True),
+            ("DSM error code 407 on path: /video/a", True),
+            ("Failed: /video/a (DSM error 900).", True),
+            ("Failed: /video/a. More.", True),
+            # A sibling starting with the same characters, or a path inside it.
+            ("DSM error code 407 on path: /video/a b.", False),
+            ("DSM error code 407 on path: /video/a.txt.", False),
+            ("DSM error code 407 on path: /video/a/x.", False),
+            # A path inside it that ends with the same characters (pre-QA).
+            ("Failed: /video/a/x/video/a (DSM error 408).", False),
+        ],
+    )
+    def test_names_path(self, message: str, named: bool) -> None:
+        from mcp_synology.modules.filestation.operations import _names_path
+
+        assert _names_path(message, "/video/a") is named
+
+    @respx.mock
+    async def test_a_lone_start_with_no_answer_is_unchanged(self, mock_client: DsmClient) -> None:
+        self._route(1, transport=True)
+        with pytest.raises(httpx.ReadTimeout):
+            await delete_files(mock_client, paths=["/video/a"], timeout=5)
+
+    def test_partway_is_not_retryable_once_something_was_deleted(self) -> None:
+        """The same call again is refused (the deleted paths are missing), so a retryable
+        DSM error partway comes back not retryable (QA round 2 on #480)."""
+        from mcp_synology.modules.filestation.operations import _with_progress_so_far
+
+        def error(retryable: bool) -> ToolError:
+            body = {
+                "error": {
+                    "code": "unavailable",
+                    "message": "x.",
+                    "retryable": retryable,
+                    "suggestion": "Free space on the NAS.",
+                }
+            }
+            return ToolError(json.dumps(body))
+
+        done = _with_progress_so_far(error(True), "/video/b", ["/video/a"], ["/video/c"])
+        assert json.loads(str(done))["error"]["retryable"] is False
+        # The retry note is added to the cause's own advice, not in place of it (QA round 3).
+        assert json.loads(str(done))["error"]["suggestion"] == (
+            f"Free space on the NAS. {_RETRY_NOTE}"
+        )
+        # Nothing deleted yet: the same call can be retried, so the flag stays.
+        first = _with_progress_so_far(error(True), "/video/a", [], ["/video/b"])
+        assert json.loads(str(first))["error"]["retryable"] is True
+
+    @pytest.mark.parametrize(
+        ("advice", "suggestion"),
+        [
+            # Advice ending in a parenthesis is a sentence's end: the note goes after it.
+            ("Free space (or ask an admin)", f"Free space (or ask an admin) {_RETRY_NOTE}"),
+            # "Recheck" isn't "check": the note keeps its own check.
+            ("Recheck with list_files.", f"Recheck with list_files. {_RETRY_NOTE}"),
+            ("Check with list_files.", f"Check with list_files. {_SHORT_RETRY_NOTE}"),
+        ],
+    )
+    def test_where_the_note_goes(self, advice: str, suggestion: str) -> None:
+        from mcp_synology.modules.filestation.operations import _with_progress_so_far
+
+        body = {"error": {"code": "x", "message": "x.", "suggestion": advice}}
+        out = _with_progress_so_far(
+            ToolError(json.dumps(body)), "/video/b", ["/video/a"], ["/video/c"]
+        )
+        assert json.loads(str(out))["error"]["suggestion"] == suggestion
+
+    def test_a_path_ending_in_dots_keeps_them(self) -> None:
+        from mcp_synology.modules.filestation.operations import _with_progress_so_far
+
+        error = ToolError(json.dumps({"status": "error", "error": {"message": "Failed."}}))
+        out = _with_progress_so_far(
+            error, "/video/x..", ["/video/notes..."], ["/video/v1.", "/video/b"]
+        )
+        assert json.loads(str(out))["error"]["message"] == (
+            "Failed. Failed on: /video/x... Already deleted before this failure: "
+            "/video/notes.... Not started: /video/v1., /video/b."
+        )
+
+    def test_an_error_that_isnt_the_envelope_is_kept(self) -> None:
+        from mcp_synology.modules.filestation.operations import _with_progress_so_far
+
+        error = ToolError("plain text")
+        assert _with_progress_so_far(error, "/video/x", ["/video/a"], ["/video/b"]) is error
+        assert _with_progress_so_far(error, "/video/x", [], []) is error
