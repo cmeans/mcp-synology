@@ -260,6 +260,23 @@ class TestRefuseBadName:
         )
 
     @pytest.mark.parametrize(
+        "name", ["rep\u200bort.pdf", "Cafe\u0301\u0301", "\u0301abc", "\u2800report"]
+    )
+    def test_unicode_refusals_say_what_to_change(self, name: str) -> None:
+        """The caller already passed only a name: the advice names the fix (pre-QA on
+        #515)."""
+        with pytest.raises(ToolError) as exc:
+            refuse_bad_name("Rename", name, "new_name", "Pass the new name only.")
+        assert _error(exc)["suggestion"] == (
+            "Retype the name without the character the message names: DSM would keep it as is."
+        )
+
+    def test_other_refusals_keep_the_callers_advice(self) -> None:
+        with pytest.raises(ToolError) as exc:
+            refuse_bad_name("Rename", "a/b", "new_name", "Pass the new name only.")
+        assert _error(exc)["suggestion"] == "Pass the new name only."
+
+    @pytest.mark.parametrize(
         "char",
         sorted("\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069"),
     )
@@ -326,6 +343,15 @@ class TestRefuseBadName:
             "\U0001fae9 shaking face",
             "x\u2800y",  # the Braille blank inside a name, like a space
             "\u05e9\u05c1\u05b8",  # Hebrew, two different marks
+            # The Unicode core spec's own uses (pre-QA on #515): Bengali ra-phala (ZWJ
+            # before a virama), a Persian ZWNJ after a right-joining letter.
+            "\u09b0\u200d\u09cd\u09af\u09be\u09b2\u09bf",  # র‍্যালি
+            "\u062f\u0631\u200c\u0647\u0627",  # در‌ها
+            # Emoji ZWJ sequences with skin tones.
+            "\U0001f468\U0001f3fe\u200d\U0001f9b1",
+            "\U0001f9d1\U0001f3fb\u200d\U0001f91d\u200d\U0001f9d1\U0001f3ff",
+            # Tibetan stacks more than four marks: no limit on different marks (maintainer).
+            "\u0f40\u0fb5\u0fa8\u0fb1\u0f71\u0f72",
         ],
     )
     def test_ordinary_names_pass(self, name: str) -> None:
@@ -554,6 +580,27 @@ class TestResolvePaths:
                 creates_parents=True,  # type: ignore[arg-type]
             )
         assert f"would be created, but its name {problem}" in _error(exc)["message"]
+
+    @pytest.mark.parametrize(
+        ("path", "advice"),
+        [
+            ("/video/a\u200bb/sub", "Retype the folder's name without the character"),
+            ("/video/a\x1bb/sub", "Give the folder a plain name"),
+        ],
+    )
+    async def test_a_created_parents_advice_fits_its_problem(self, path: str, advice: str) -> None:
+        """An invisible character gets 'retype without it', not 'a plain name' (pre-QA on
+        #515)."""
+        with pytest.raises(ToolError) as exc:
+            await resolve_paths(
+                _FakeClient(),
+                set(),
+                "create_folder",
+                "paths",
+                [path],
+                creates_parents=True,  # type: ignore[arg-type]
+            )
+        assert _error(exc)["suggestion"].startswith(advice)
 
     @pytest.mark.parametrize("name", ["Trip \u2708\ufe0f", "\u0ba4\u0bae\u0bbf\u0bb4\u0bcd"])
     async def test_an_ordinary_created_parent_passes(self, name: str) -> None:

@@ -126,6 +126,7 @@ dependencies = [
     "keyring>=25.0",           # OS-native credential storage
     "pydantic>=2.0",           # Config and settings validation
     "click>=8.0",              # CLI framework (serve, setup, check)
+    "regex>=2024.11.6",        # Current Unicode properties for File Station's new-name rules
 ]
 
 [project.optional-dependencies]
@@ -187,6 +188,7 @@ addopts = "-m 'not integration'"
 - **`pydantic>=2.0`**: Config validation, module settings schemas, type coercion.
 - **`pyyaml>=6.0`**: Config file parsing. Always `yaml.safe_load()` — never `yaml.load()`.
 - **`click>=8.0`**: CLI framework. Three subcommands: `serve` (MCP server mode), `setup` (interactive credential bootstrap), `check` (validate credentials). Click handles prompts, password masking, and colored output for the interactive `setup` flow — things that would be tedious with argparse.
+- **`regex>=2024.11.6`**: Unicode properties the standard library lacks or has only in an old version: `Default_Ignorable_Code_Point`, joining type, combining class, Indic syllabic category, emoji properties and scripts, for File Station's rules on the names a tool creates (#515). Python 3.11's `unicodedata` is Unicode 14; `regex` follows current Unicode and ships wheels for every platform. Its stubs, `types-regex`, are a dev dependency.
 - **`respx>=0.22`** (dev): httpx-native mock library. Much cleaner than `unittest.mock.patch` for HTTP testing.
 
 ### Python Version

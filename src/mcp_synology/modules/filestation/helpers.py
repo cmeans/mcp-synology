@@ -227,6 +227,12 @@ _ZWNJ_A2 = regex.compile(rf"(?<=\p{{L}}\p{{Mn}}*\p{{ccc=Virama}}{_M1}*)\u200c(?=
 _ZWJ_B = regex.compile(
     rf"(?<=\p{{L}}\p{{Mn}}*\p{{ccc=Virama}}{_M1}*)\u200d(?!\p{{Indic_Syllabic_Category=Vowel_Dependent}})"
 )
+# Two uses the Unicode core spec documents beyond UTS #39's patterns (pre-QA on #515): a ZWJ
+# between a letter and a virama (Bengali ra-phala, `র‍্যালি`, chapter 12), and a ZWNJ between
+# two Arabic-script letters whatever their joining type (Persian writes `در‌ها` with one after
+# a right-joining letter, chapter 9; maintainer, 2026-10-31: real names come first).
+_ZWJ_BEFORE_VIRAMA = regex.compile(r"(?<=\p{L}\p{Mn}*)\u200d(?=\p{ccc=Virama})")
+_ZWNJ_ARABIC = regex.compile(r"(?<=(?=\p{scx=Arab})\p{L}\p{jt=T}*)\u200c(?=(?=\p{scx=Arab})\p{L})")
 # UTS #51: a joiner between two emoji (👨‍👩‍👧, 🏳️‍🌈); VS15/VS16 after an emoji, or after
 # a keycap base when the keycap follows (1️⃣); the other variation selectors after the
 # characters they vary (CJK ideographs, Mongolian letters, math symbols).
@@ -250,34 +256,48 @@ def _is_tag(c: str) -> bool:
     return 0xE0020 <= ord(c) <= 0xE007F
 
 
-def _in_flag(text: str, i: int) -> bool:
-    """Whether the tag character ``text[i]`` is part of a subdivision flag: 🏴, tags, and
-    the closing tag."""
-    start = i
-    while start > 0 and _is_tag(text[start - 1]):
-        start -= 1
+def _tag_run_end(text: str, i: int) -> int:
+    """The index just past the run of tag characters starting at ``text[i]``."""
     end = i
-    while end + 1 < len(text) and _is_tag(text[end + 1]):
+    while end < len(text) and _is_tag(text[end]):
         end += 1
-    return start > 0 and text[start - 1] == _FLAG and text[end] == _CANCEL_TAG
+    return end
 
 
 def _ignorable_belongs(text: str, i: int) -> bool:
     """Whether ``text[i]``, a default-ignorable character, is where Unicode uses one: a
     joiner in a word (UTS #39) or an emoji sequence, a variation selector after the
     character it varies, a tag in a flag (UTS #51). Every other one (a zero-width space,
-    a soft hyphen, a word joiner, a BOM, a filler, a combining grapheme joiner) hides."""
-    patterns = (_ZWNJ_A1, _ZWNJ_A2, _ZWJ_B, _EMOJI_ZWJ, _EMOJI_VS, _OTHER_VS)
-    if any(p.match(text, i) for p in patterns):
-        return True
-    return _is_tag(text[i]) and _in_flag(text, i)
+    a soft hyphen, a word joiner, a BOM, a filler, a combining grapheme joiner) hides.
+    Tags are judged a run at a time by `invisible_problem`."""
+    return any(p.match(text, i) for p in _BELONGS)
+
+
+_BELONGS = (
+    _ZWNJ_A1,
+    _ZWNJ_A2,
+    _ZWJ_B,
+    _ZWJ_BEFORE_VIRAMA,
+    _ZWNJ_ARABIC,
+    _EMOJI_ZWJ,
+    _EMOJI_VS,
+    _OTHER_VS,
+)
+# Interlinear annotation characters: format characters that draw nothing, though Unicode
+# doesn't call them default-ignorable (pre-QA on #515).
+_ANNOTATION = frozenset("\ufff9\ufffa\ufffb")
 
 
 def draws_nothing(c: str) -> bool:
     """A character that draws nothing on its own: whitespace, a default-ignorable
     character, a combining mark, or the Braille blank (#510). A name of only these has no
     visible character."""
-    return c.isspace() or bool(_IGNORABLE.match(c) or _MARK.match(c)) or c == _BRAILLE_BLANK
+    return (
+        c.isspace()
+        or bool(_IGNORABLE.match(c) or _MARK.match(c))
+        or c == _BRAILLE_BLANK
+        or c in _ANNOTATION
+    )
 
 
 def invisible_problem(name: str) -> str | None:
@@ -291,9 +311,20 @@ def invisible_problem(name: str) -> str | None:
     # UTS #39 states its joiner contexts on NFC text; the patterns take any number of
     # marks, so they read decomposed text the same, and the name is checked as given.
     text = name
-    for i, c in enumerate(text):
-        if _IGNORABLE.match(c) and not _ignorable_belongs(text, i):
+    i = 0
+    while i < len(text):
+        c = text[i]
+        if _is_tag(c):
+            # A run of tags belongs only to a subdivision flag: 🏴, tags, the closing tag.
+            # One look per run keeps a long run linear (pre-QA on #515).
+            end = _tag_run_end(text, i)
+            if not (i > 0 and text[i - 1] == _FLAG and text[end - 1] == _CANCEL_TAG):
+                return f"contains an invisible character (U+{ord(c):04X})"
+            i = end
+            continue
+        if c in _ANNOTATION or (_IGNORABLE.match(c) and not _ignorable_belongs(text, i)):
             return f"contains an invisible character (U+{ord(c):04X})"
+        i += 1
     if _BRAILLE_BLANK in (text[0], text[-1]):
         return "starts or ends with a blank character (U+2800)"
     if _MARK.match(text[0]):
@@ -312,10 +343,24 @@ def _hides(c: str) -> bool:
     return bool(_NOT_PRINTED.match(c)) or (c != " " and c.isspace())
 
 
+def _escaped_repr(path: str) -> str:
+    """``repr(path)``, with every character that draws nothing written as ``\\uXXXX`` too
+    (``repr`` leaves U+3164 or VS16 as is), so the quoted path shows what's hiding."""
+    out = []
+    for c in repr(path):
+        if _IGNORABLE.match(c) or c == _BRAILLE_BLANK:
+            o = ord(c)
+            out.append(f"\\u{o:04x}" if o <= 0xFFFF else f"\\U{o:08x}")
+        else:
+            out.append(c)
+    return "".join(out)
+
+
 def shown(path: str) -> str:
-    """``path`` for a message: as is, or quoted with ``repr`` when a part has whitespace at
-    its start or end or the path holds a character that doesn't print (a tab, a no-break
-    space), so a stray space is visible once paths are taken exactly (#488, #489).
+    """``path`` for a message: as is, or quoted (`_escaped_repr`) when a part has whitespace
+    at its start or end, a character that doesn't print (a tab, a no-break space) or one
+    `invisible_problem` refuses, so a stray space or a hidden character is visible once
+    paths are taken exactly (#488, #489, #515).
 
     The rule (#510): a refusal of an argument as given quotes it with ``!r`` (the caller's
     own text, shown exactly); an error or list that names a path the server checked or got
@@ -325,7 +370,7 @@ def shown(path: str) -> str:
         if not part:
             continue
         if part != part.strip() or invisible_problem(part) is not None or any(map(_hides, part)):
-            return repr(path)
+            return _escaped_repr(path)
     # Marks, joiners and variation selectors where Unicode uses them show as written
     # (`नमस्ते`, NFD `Café`, 👨‍👩‍👧, ❤️); anywhere else they're quoted (`rep<ZWJ>ort.pdf`).
     return path

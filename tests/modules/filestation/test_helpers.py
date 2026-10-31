@@ -88,7 +88,7 @@ class TestShown:
             ("/video/a\u00a0b", "'/video/a\\xa0b'"),
             ("/video/\x1b[31m", "'/video/\\x1b[31m'"),
             # What the new-name rules call invisible is quoted too (pre-QA r5 on #510).
-            ("/video/\u3164", repr("/video/\u3164")),
+            ("/video/\u3164", "'/video/\\u3164'"),
             # A combining mark after a letter is part of it (NFD `á`): plain (QA r1 on #515).
             ("/video/a\u0301", "/video/a\u0301"),
             ("/video/\u0301a", repr("/video/\u0301a")),
@@ -102,9 +102,9 @@ class TestShown:
             ("/video/a\u202eb", repr("/video/a\u202eb")),
             ("/video/x\u200d", repr("/video/x\u200d")),
             ("/video/rep\u200dort.pdf", repr("/video/rep\u200dort.pdf")),
-            ("/video/report.pdf\ufe0f", repr("/video/report.pdf\ufe0f")),
+            ("/video/report.pdf\ufe0f", "'/video/report.pdf\\ufe0f'"),
             ("/video/1\ufe0f\u20e3", "/video/1\ufe0f\u20e3"),
-            ("/video/\u2800x", repr("/video/\u2800x")),
+            ("/video/\u2800x", "'/video/\\u2800x'"),
             # The same Unicode-based rule as new names (#515): an invisible character inside a
             # name is quoted; one where Unicode uses it isn't; newer emoji aren't unassigned.
             ("/video/rep\u00adort.pdf", repr("/video/rep\u00adort.pdf")),
@@ -113,6 +113,11 @@ class TestShown:
             ("/video/\u0d23\u0d4d\u200d", "/video/\u0d23\u0d4d\u200d"),
             ("/video/\U0001fae9", "/video/\U0001fae9"),
             ("/video/\U000f0000", repr("/video/\U000f0000")),
+            # Quoted, a character that draws nothing is written out, which repr alone
+            # leaves as is (pre-QA on #515); interlinear annotation characters count.
+            ("/video/report\u3164.pdf", "'/video/report\\u3164.pdf'"),
+            ("/video/a\U000e0067", "'/video/a\\U000e0067'"),
+            ("/video/x\ufffa", "'/video/x\\ufffa'"),
         ],
     )
     def test_shown(self, path: str, expected: str) -> None:
@@ -145,12 +150,26 @@ class TestInvisibleProblem:
             ("a\u180eb", "contains an invisible character (U+180E)"),
             # NFC first: a precomposed letter plus the same mark is still a repeat.
             ("\u00e9\u0301", "repeats a combining mark (U+0301), which draws as one"),
+            # Interlinear annotation characters draw nothing, though not default-ignorable.
+            ("re\ufffaport", "contains an invisible character (U+FFFA)"),
         ],
     )
     def test_invisible_problem(self, name: str, expected: str | None) -> None:
         from mcp_synology.modules.filestation.helpers import invisible_problem
 
         assert invisible_problem(name) == expected
+
+    def test_a_long_tag_run_is_linear(self) -> None:
+        """Each tag used to rescan its run: 10,000 tags took 10 s (pre-QA on #515)."""
+        import time
+
+        from mcp_synology.modules.filestation.helpers import invisible_problem, shown
+
+        flag = "\U0001f3f4" + "\U000e0067" * 50_000 + "\U000e007f"
+        start = time.monotonic()
+        assert invisible_problem(flag) is None
+        assert shown("/video/" + flag) == "/video/" + flag
+        assert time.monotonic() - start < 2
 
 
 class TestValidateSharePath:

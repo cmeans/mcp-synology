@@ -404,6 +404,13 @@ def name_problem(name: str, parent: str | None = None) -> str | None:
     return None
 
 
+# Advice for a name `invisible_problem` refuses: the caller already passed just a name, so
+# "pass a plain name" doesn't say what to change (pre-QA on #515).
+_UNICODE_ADVICE = (
+    "Retype the name without the character the message names: DSM would keep it as is."
+)
+
+
 def refuse_bad_name(
     op: str,
     name: str,
@@ -444,7 +451,7 @@ def refuse_bad_name(
             retryable=False,
             param=param,
             value=name if value is None else value,
-            suggestion=suggestion,
+            suggestion=_UNICODE_ADVICE if problem == invisible_problem(name) else suggestion,
         )
 
 
@@ -481,8 +488,13 @@ async def _refuse_bad_created_parents(
                 param,
                 raw,
                 suggestion
-                or "Give the folder a plain name, or pick an existing folder (list_files shows "
-                "them).",
+                or (
+                    "Retype the folder's name without the character the message names, or "
+                    "pick an existing folder (list_files shows them)."
+                    if problem == invisible_problem(parts[i])
+                    else "Give the folder a plain name, or pick an existing folder (list_files "
+                    "shows them)."
+                ),
             )
 
 
