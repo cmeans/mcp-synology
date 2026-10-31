@@ -358,6 +358,24 @@ def _refuse(message: str, param: str, value: str, suggestion: str) -> None:
 # -- new names -----------------------------------------------------------------------------
 
 
+# Bidirectional controls (U+202E makes `invoice<RLO>txt.exe` show as `invoiceexe.txt`) and
+# line/paragraph separators: refused in new names (maintainer, 2026-10-31). The zero-width
+# joiner and non-joiner stay allowed: emoji sequences and several scripts' spelling use them.
+_BIDI = frozenset("\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069\u200e\u200f")
+_LINE_BREAKS = frozenset("\u2028\u2029")
+
+
+def _invisible_problem(name: str) -> str | None:
+    """Why a new name's invisible characters make it misleading, or None."""
+    if any(c in _BIDI for c in name):
+        return "contains a character that changes text direction"
+    if any(c in _LINE_BREAKS for c in name):
+        return "contains a line or paragraph separator"
+    if all(unicodedata.category(c) in ("Cf", "Zs") or c.isspace() for c in name):
+        return "has no visible character"
+    return None
+
+
 def refuse_bad_name(
     op: str,
     name: str,
@@ -370,7 +388,8 @@ def refuse_bad_name(
 ) -> None:
     """Raise ``invalid_parameter`` for a name a tool would create that isn't one: empty,
     blank, a ``/``, a NUL or another control character (a tab inside the name is fine: DSM
-    keeps it, maintainer 2026-10-31), ``.`` or ``..`` (#449), whitespace
+    keeps it, maintainer 2026-10-31), a direction-changing character or a line separator, or
+    no visible character at all (`_invisible_problem`), ``.`` or ``..`` (#449), whitespace
     at its start or end (#488: DSM would keep it, and it's almost never meant), or
     ``#recycle`` where it would be taken for a bin: directly in a shared folder or in a
     user's home folder (``/homes/<user>``) (#510: DSM lets one be created where there's no
@@ -390,6 +409,8 @@ def refuse_bad_name(
         if _is_dot(name)
         else "contains a control character"
         if any(unicodedata.category(c) == "Cc" and c != "\t" for c in name)
+        else _invisible_problem(name)
+        if _invisible_problem(name)
         else "starts or ends with whitespace"
         if name != name.strip()
         else "is '#recycle', the name of a recycle bin there"
@@ -415,6 +436,9 @@ def _created_part_problem(part: str, parent: str) -> str | None:
     `refuse_bad_name` that a path part can break), or None."""
     if any(unicodedata.category(c) == "Cc" and c != "\t" for c in part):
         return "with a control character in its name"
+    invisible = _invisible_problem(part)
+    if invisible:
+        return f"with a name that {invisible}"
     if part != part.strip():
         return "with whitespace at its start or end"
     if part == "#recycle" and makes_a_bin(parent):

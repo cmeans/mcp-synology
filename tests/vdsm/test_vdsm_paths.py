@@ -148,11 +148,23 @@ async def test_resolve_paths_rules_hold_on_dsm(nas_client: Any, tmp_path: Any) -
             await resolve_paths(client, known, "create_folder", "paths", ["/writable/#recycle"])
         assert _code(exc) == "invalid_parameter"
         assert "#recycle" not in await _names(client, "/writable")
+        # Joiners (an emoji ZWJ sequence, a ZWNJ) are allowed in new names: DSM keeps them.
+        family = "\U0001f468\u200d\U0001f469\u200d\U0001f467"
         made = await resolve_paths(
-            client, known, "create_folder", "paths", [f"{root}/#recycle", f"{root}/a\tb"]
+            client,
+            known,
+            "create_folder",
+            "paths",
+            [f"{root}/#recycle", f"{root}/a\tb", f"{root}/{family}", f"{root}/ab\u200ccd"],
         )
         await create_folder(client, paths=made)
-        assert await _names(client, root) == {"b", "#recycle", "a\tb"}
+        assert await _names(client, root) == {"b", "#recycle", "a\tb", family, "ab\u200ccd"}
+        # A direction-changing character is refused before DSM sees it.
+        with pytest.raises(ToolError) as exc:
+            await resolve_paths(
+                client, known, "create_folder", "paths", [f"{root}/invoice\u202etxt.exe"]
+            )
+        assert _code(exc) == "invalid_parameter"
     finally:
         with contextlib.suppress(ToolError):
             await delete_files(client, paths=[root], recycle_bin_status={})

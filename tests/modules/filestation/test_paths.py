@@ -214,6 +214,12 @@ class TestRefuseBadName:
             ("report.pdf ", "starts or ends with whitespace"),
             (" report.pdf", "starts or ends with whitespace"),
             ("report ", "starts or ends with whitespace"),
+            # Invisible characters that mislead (maintainer, 2026-10-31).
+            ("invoice\u202etxt.exe", "contains a character that changes text direction"),
+            ("a\u2066b", "contains a character that changes text direction"),
+            ("a\u2028b", "contains a line or paragraph separator"),
+            ("\u200b", "has no visible character"),
+            ("\ufeff\u200b", "has no visible character"),
         ],
     )
     def test_refused(self, name: str, problem: str) -> None:
@@ -233,7 +239,20 @@ class TestRefuseBadName:
             refuse_bad_name("Rename", "#recycle", "new_name", "x", parent=parent)
         assert "is '#recycle', the name of a recycle bin there" in _error(exc)["message"]
 
-    @pytest.mark.parametrize("name", ["Severance", "a b", "a\tb", "#recycled", ".hidden", "a..b"])
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "Severance",
+            "a b",
+            "a\tb",
+            "#recycled",
+            ".hidden",
+            "a..b",
+            # Joiners stay: emoji sequences and several scripts use them.
+            "\U0001f468\u200d\U0001f469\u200d\U0001f467",
+            "ab\u200ccd",
+        ],
+    )
     def test_ordinary_names_pass(self, name: str) -> None:
         refuse_bad_name("Rename", name, "new_name", "x", parent="/video")
         refuse_bad_name("Rename", "#recycle", "new_name", "x", parent="/video/sub")
