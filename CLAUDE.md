@@ -113,7 +113,7 @@ uv run pytest -n auto --cov=mcp_synology   # Tests with coverage
 ### Config
 - Config is read-only from the server's perspective — never write to it
 - Runtime state goes in `~/.local/state/mcp-synology/{instance_id}/state.yaml`
-- Strict validation at top level (unknown keys = error), lenient within module settings (unknown keys = warning)
+- Strict validation everywhere but module settings: unknown keys at the top level, in `connection`/`auth`/`logging` (#386) and directly under `modules.<name>` are errors; unknown keys within module settings are warnings. Config errors never echo a credential's value: `format_validation_error` shows only plain values outside `auth`, never an unknown key's, and never names an unknown key under `auth`, or one with no value outside module settings and module names (a near-miss names the real key it's close to instead); a file that isn't UTF-8 is reported by line, never its bytes; `format_yaml_error` never quotes the file; config files are parsed only through `parse_config_text`
 - Two-phase loading: parse YAML → merge env var overrides → apply defaults → validate with Pydantic
 
 ### Path Handling (File Station)

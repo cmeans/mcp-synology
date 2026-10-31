@@ -125,6 +125,605 @@ class TestAppConfig:
             AppConfig(**raw)
         assert "modules.filestation.permision" in format_validation_error(exc.value)
 
+    @pytest.mark.parametrize(
+        ("section", "key", "value"),
+        [
+            ("connection", "htps", True),
+            ("connection", "verfy_ssl", False),
+            ("auth", "pasword", "secret"),
+            ("logging", "levle", "debug"),
+        ],
+    )
+    def test_unknown_key_in_a_section_rejected(self, section: str, key: str, value: Any) -> None:
+        """#386: a typo inside connection, auth or logging is an error naming the key. It
+        was dropped: `htps: true` left `https` false, so the login went over plain HTTP."""
+        from pydantic import ValidationError
+
+        from mcp_synology.core.config import format_validation_error
+
+        raw = _minimal_raw()
+        raw.setdefault(section, {})[key] = value
+        with pytest.raises(ValidationError) as exc:
+            AppConfig(**raw)
+        message = format_validation_error(exc.value)
+        # An unknown key's value could be a misplaced credential: never echoed. Under
+        # auth the key itself may be half a password: named by the real key it's close to
+        # (QA round 2 on #469). The quoting hint is conditional: a comma split can leave a
+        # fragment with a value too (QA round 5).
+        shown = (
+            'auth.<an unknown key close to "password", not shown since it may be, or hold, part '
+            "of a password: fix its spelling, or, if a value inside {…} has a comma of its own "
+            "(not the one between entries), quote that value>"
+            if section == "auth"
+            else f"{section}.{key}"
+        )
+        assert f"  - {shown}: Extra inputs are not permitted\n" in message + "\n"
+        assert "(got " not in message and (section != "auth" or key not in message)
+
+    @pytest.mark.parametrize(
+        ("raw_update", "secret"),
+        [
+            ({"auth": {"password": 12345678}}, "12345678"),
+            ({"auth": {"passwd": "hunter2"}}, "hunter2"),
+            ({"password": "hunter2"}, "hunter2"),
+            ({"connection": {"host": "nas", "api_token": "tok-1"}}, "tok-1"),
+            ({"connection": {"host": "nas", "pasword": "hunter2"}}, "hunter2"),
+            ({"pasword": "hunter2"}, "hunter2"),
+            # Root and missing-field errors carry the whole mapping as their input.
+            ({"instance_id": "my_nas", "auth": {"password": "hunter2"}}, "hunter2"),
+            ({"schema_version": 9, "auth": {"password": "hunter2"}}, "hunter2"),
+            ({"connection": {"passwd": "hunter2"}}, "hunter2"),
+            ({"modules": {}, "auth": {"device_id": "dev-tok"}}, "dev-tok"),
+            # A section given a plain value: a "should be a dictionary" error.
+            ({"connection": "https://admin:hunter2@nas"}, "hunter2"),
+            ({"logging": "hunter2"}, "hunter2"),
+            ({"modules": {"filestation": "hunter2"}}, "hunter2"),
+            ({"modules": {"filestation": {"settings": "hunter2"}}}, "hunter2"),
+            # An unknown key with a value under auth: the key may be the password.
+            ({"auth": {"hunter2": "y"}}, "hunter2"),
+        ],
+    )
+    def test_validation_error_never_echoes_a_credential(
+        self, raw_update: dict[str, Any], secret: str
+    ) -> None:
+        from pydantic import ValidationError
+
+        from mcp_synology.core.config import format_validation_error
+
+        raw = {**_minimal_raw(), **raw_update}
+        with pytest.raises(ValidationError) as exc:
+            AppConfig(**raw)
+        assert secret not in format_validation_error(exc.value)
+
+    def test_env_password_never_echoed(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+    ) -> None:
+        """SYNOLOGY_PASSWORD is merged into the config before validation; a root error
+        (here, no module enabled) used to print the whole mapping with it."""
+        from pydantic import ValidationError
+
+        from mcp_synology.core.config import format_validation_error, load_config
+
+        path = tmp_path / "c.yaml"
+        path.write_text(
+            "schema_version: 1\nconnection: {host: nas}\nmodules: {filestation: {enabled: false}}\n"
+        )
+        monkeypatch.setenv("SYNOLOGY_PASSWORD", "env-secret")
+        monkeypatch.setenv("SYNOLOGY_DEVICE_ID", "dev-tok")
+        with pytest.raises(ValidationError) as exc:
+            load_config(path)
+        message = format_validation_error(exc.value)
+        assert "env-secret" not in message and "dev-tok" not in message
+        assert "<root>" in message
+
+    @pytest.mark.parametrize(
+        "password",
+        ["*Hunter2x", "!Hunter2x", "@Hunter2x", "`Hunter2x", '"Hunter2x', "Hunt: er2x"],
+    )
+    def test_yaml_error_never_quotes_the_line(self, tmp_path: Any, password: str) -> None:
+        """PyYAML quotes the offending line, and its problem text can quote the value."""
+        import yaml
+
+        from mcp_synology.core.config import format_yaml_error, load_config
+
+        path = tmp_path / "c.yaml"
+        path.write_text(
+            "schema_version: 1\nconnection: {host: nas}\n"
+            f"auth:\n  username: me\n  password: {password}\n"
+            "modules: {filestation: {enabled: true}}\n"
+        )
+        with pytest.raises(yaml.YAMLError) as exc:
+            load_config(path)
+        assert "Hunt" in str(exc.value)  # PyYAML's own text would show it
+        message = format_yaml_error(exc.value)
+        assert "Hunt" not in message
+        assert message.startswith("The config file isn't valid YAML at line ")
+
+    def test_yaml_error_names_the_line_and_key(self, tmp_path: Any) -> None:
+        import yaml
+
+        from mcp_synology.core.config import format_yaml_error, load_config
+
+        path = tmp_path / "c.yaml"
+        path.write_text("schema_version: 1\nconnection:\n  host: nas\n  port: *x\n")
+        with pytest.raises(yaml.YAMLError) as exc:
+            load_config(path)
+        assert format_yaml_error(exc.value).startswith(
+            "The config file isn't valid YAML at line 4, column 9, on the `port` line. "
+        )
+
+    @pytest.mark.parametrize(
+        "auth",
+        [
+            "auth:\n  username: me\n  password:\n    Hunter2x: @x\n",
+            "auth:\n  username: me\n  password: abc\n   Hunter2x: ghi\n",
+        ],
+    )
+    def test_a_password_line_is_never_taken_for_a_key(self, tmp_path: Any, auth: str) -> None:
+        """Only the config's own keys are named: a password continued on its own line
+        (`Hunter2x: …`) is text, not a key."""
+        import yaml
+
+        from mcp_synology.core.config import format_yaml_error, load_config
+
+        path = tmp_path / "c.yaml"
+        path.write_text("schema_version: 1\nconnection: {host: nas}\n" + auth)
+        with pytest.raises(yaml.YAMLError) as exc:
+            load_config(path)
+        assert "Hunter" not in format_yaml_error(exc.value)
+
+    @pytest.mark.parametrize(
+        "value", ["!!int Hunter2x", "!!float Hunter2x", "!!timestamp Hunter2x", "!!bool Hunter2x"]
+    )
+    def test_a_tag_that_does_not_fit_is_never_quoted(self, tmp_path: Any, value: str) -> None:
+        """PyYAML raises ValueError or AttributeError there, with the value in it."""
+        import yaml
+
+        from mcp_synology.core.config import ConfigValueError, format_yaml_error, load_config
+
+        path = tmp_path / "c.yaml"
+        path.write_text(
+            "schema_version: 1\nconnection: {host: nas}\n"
+            f"auth:\n  username: me\n  password: {value}\n"
+        )
+        with pytest.raises(ConfigValueError) as exc:
+            load_config(path)
+        assert isinstance(exc.value, yaml.YAMLError)
+        assert exc.value.__cause__ is None and exc.value.__suppress_context__
+        message = format_yaml_error(exc.value)
+        assert "hunter" not in message.casefold()
+        assert message.startswith("The config file has a value YAML can't build")
+
+    @pytest.mark.parametrize("value", ['"Hunter2x', "[Hunter2x", "{Hunter2x"])
+    def test_an_unclosed_value_names_where_it_starts(self, tmp_path: Any, value: str) -> None:
+        import yaml
+
+        from mcp_synology.core.config import format_yaml_error, load_config
+
+        path = tmp_path / "c.yaml"
+        path.write_text(
+            "schema_version: 1\nconnection: {host: nas}\n"
+            f"auth:\n  username: me\n  password: {value}\n"
+        )
+        with pytest.raises(yaml.YAMLError) as exc:
+            load_config(path)
+        message = format_yaml_error(exc.value)
+        assert "(in the value that starts at line 5), on the `password` line. " in message
+        assert "Hunter" not in message
+
+    @pytest.mark.parametrize(
+        "auth",
+        [
+            "{username: me, password: a,Hunter2x}",
+            "{username: me, password: x,y,Hunter2x}",
+            "{username: me, password: Hunter,2x}",
+        ],
+    )
+    def test_a_password_split_by_a_comma_is_not_shown(self, auth: str) -> None:
+        """YAML splits `password: a,Hunter2x` in a flow mapping at the comma; the second
+        half arrives as an unknown key under auth, and isn't named."""
+        import yaml
+        from pydantic import ValidationError
+
+        from mcp_synology.core.config import format_validation_error
+
+        raw = yaml.safe_load(
+            "schema_version: 1\nconnection: {host: nas}\n"
+            f"auth: {auth}\nmodules: {{filestation: {{enabled: true}}}}\n"
+        )
+        with pytest.raises(ValidationError) as exc:
+            AppConfig(**raw)
+        message = format_validation_error(exc.value)
+        assert "2x" not in message and "Hunter" not in message and "auth.y" not in message
+        assert (
+            "auth.<an unknown key, not shown since it may be, or hold, part of a password; if a "
+            "value inside {…} has a comma of its own (not the one between entries), quote that "
+            "value; valid keys here: device_id, password, username>" in message
+        )
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            "connection: {host: nas, password: a,Hunter2x}\nmodules: {filestation: {}}\n",
+            "connection: {host: nas}\nmodules: {filestation: {}}\nlogging: {level: info}\n"
+            "auth: {username: a}\nextra: {password: a,Hunter2x}\n",
+            "connection: {host: nas}\nmodules: {filestation: {}}\nlogging: {file: a,Hunter2x}\n",
+            "connection: {host: nas}\nmodules: {filestation: {enabled: true, x: a,Hunter2x}}\n",
+        ],
+        ids=["connection", "top-level", "logging", "module"],
+    )
+    def test_a_comma_split_value_is_not_named_in_any_section(self, body: str) -> None:
+        import yaml
+        from pydantic import ValidationError
+
+        from mcp_synology.core.config import format_validation_error
+
+        raw = yaml.safe_load("schema_version: 1\n" + body)
+        if "extra" in raw:  # a whole flow-style document: `{…, password: a,Hunter2x}`
+            raw.update(raw.pop("extra"))
+        with pytest.raises(ValidationError) as exc:
+            AppConfig(**raw)
+        message = format_validation_error(exc.value)
+        assert "Hunter" not in message
+        assert "<an unknown key, not shown since it may be, or hold, part of a password" in message
+
+    def test_a_valueless_near_miss_under_a_module_names_the_key_it_is_close_to(self) -> None:
+        from pydantic import ValidationError
+
+        from mcp_synology.core.config import format_validation_error
+
+        raw = _minimal_raw()
+        raw["modules"] = {"filestation": {"permision": None}}
+        with pytest.raises(ValidationError) as exc:
+            AppConfig(**raw)
+        assert (
+            '  - modules.filestation.<an unknown key close to "permission", not shown since it may '
+            "be, or hold, part of a password: fix its spelling, or, if a value inside {…} has a "
+            "comma of its own (not the one between entries), quote that value>: Extra inputs are "
+            "not permitted"
+        ) in (format_validation_error(exc.value))
+
+    def test_a_near_miss_in_another_case_names_the_key_it_is_close_to(self) -> None:
+        """`USERNAME` under auth is a near-miss of `username` in any case: that key is named."""
+        from pydantic import ValidationError
+
+        from mcp_synology.core.config import format_validation_error
+
+        raw = _minimal_raw()
+        raw["auth"] = {"USERNAME": "me"}
+        with pytest.raises(ValidationError) as exc:
+            AppConfig(**raw)
+        assert (
+            '  - auth.<an unknown key close to "username", not shown since it may be, or hold, '
+            "part of a password: fix its spelling, or, if a value inside {…} has a comma of its "
+            "own (not the one between entries), quote that value>: Extra inputs are not permitted"
+        ) in (format_validation_error(exc.value))
+
+    @pytest.mark.parametrize(
+        ("auth", "shown"),
+        [
+            # A key with a value and no near-miss: the valid keys.
+            (
+                "{pwd: Hunter2x}",
+                "auth.<an unknown key, not shown since it may be, or hold, part of a password; if "
+                "a value inside {…} has a comma of its own (not the one between entries), quote "
+                "that value; valid keys here: device_id, password, username>",
+            ),
+            # A comma split that leaves a fragment with a value (`Spring,Password1: x` gives
+            # `Password1: x`): the quoting hint still shows (QA round 5 on #469).
+            (
+                "{username: me, password: Spring,Password1: x}",
+                'auth.<an unknown key close to "password", not shown since it may be, or hold, '
+                "part of a password: fix its spelling, or, if a value inside {…} has a comma of "
+                "its own (not the one between entries), quote that value>",
+            ),
+        ],
+        ids=["no-near-miss", "split-with-a-value"],
+    )
+    def test_an_auth_key_with_a_value_gets_the_conditional_comma_hint(
+        self, auth: str, shown: str
+    ) -> None:
+        import yaml
+        from pydantic import ValidationError
+
+        from mcp_synology.core.config import format_validation_error
+
+        raw = yaml.safe_load(
+            "schema_version: 1\nconnection: {host: nas}\n"
+            f"auth: {auth}\nmodules: {{filestation: {{enabled: true}}}}\n"
+        )
+        with pytest.raises(ValidationError) as exc:
+            AppConfig(**raw)
+        message = format_validation_error(exc.value)
+        assert f"  - {shown}: Extra inputs are not permitted" in message
+        assert "Hunter" not in message and "pwd" not in message and "Password1" not in message
+
+    @pytest.mark.parametrize(
+        "modules",
+        [
+            "{filestation: {enabled: true}, 7319}",
+            "{filestation: {enabled: true}, 2024-01-01}",
+            "{filestation: {enabled: true}, 7319: Hunter2x}",
+        ],
+        ids=["int", "date", "int-with-value"],
+    )
+    def test_a_non_text_key_under_modules_is_never_named(self, modules: str) -> None:
+        """`modules: {…, 7319}` fails twice for the same key: not text (`[key]`) and not a
+        module's mapping. Neither error names it (QA round 4 on #469)."""
+        import yaml
+        from pydantic import ValidationError
+
+        from mcp_synology.core.config import format_validation_error
+
+        raw = yaml.safe_load(f"schema_version: 1\nconnection: {{host: nas}}\nmodules: {modules}\n")
+        with pytest.raises(ValidationError) as exc:
+            AppConfig(**raw)
+        message = format_validation_error(exc.value)
+        assert "7319" not in message and "2024" not in message and "Hunter" not in message
+        lines = message.splitlines()[1:]
+        assert lines and all(
+            line.startswith("  - modules.<a key that isn't text, not shown") for line in lines
+        )
+
+    def test_an_error_below_a_non_text_module_key_names_its_field(self) -> None:
+        """The key is hidden, the field under it still named (#469 pre-QA)."""
+        import yaml
+        from pydantic import ValidationError
+
+        from mcp_synology.core.config import format_validation_error
+
+        raw = yaml.safe_load(
+            "schema_version: 1\nconnection: {host: nas}\n"
+            "modules: {filestation: {enabled: true}, 7319: {permission: nope}}\n"
+        )
+        with pytest.raises(ValidationError) as exc:
+            AppConfig(**raw)
+        message = format_validation_error(exc.value)
+        assert "7319" not in message
+        assert (
+            "  - modules.<a key that isn't text, not shown: it may be part of a password; if a "
+            "value inside {…} has a comma of its own (not the one between entries), quote that "
+            "value>.permission: "
+        ) in message
+
+    def test_a_list_position_is_still_named(self) -> None:
+        """Only a mapping's non-text key is hidden: a list's position (an int in pydantic's
+        location) is named as before."""
+        from pydantic import ValidationError
+
+        from mcp_synology.core.config import format_validation_error
+
+        raw = _minimal_raw()
+        raw["allowed_local_paths"] = ["/a", 5]
+        with pytest.raises(ValidationError) as exc:
+            AppConfig(**raw)
+        assert "  - allowed_local_paths.1: Input should be a valid string" in (
+            format_validation_error(exc.value)
+        )
+
+    def test_a_non_text_key_in_module_settings_is_not_shown(self) -> None:
+        """`{x: Hunter,2024}` in settings splits into a key 2024, which pydantic reports as
+        `settings.2024.[key]`: the mapping is named, never the key."""
+        import yaml
+        from pydantic import ValidationError
+
+        from mcp_synology.core.config import format_validation_error
+
+        raw = yaml.safe_load(
+            "schema_version: 1\nconnection: {host: nas}\n"
+            "modules: {filestation: {settings: {x: Hunter,2024}}}\n"
+        )
+        with pytest.raises(ValidationError) as exc:
+            AppConfig(**raw)
+        message = format_validation_error(exc.value)
+        assert "2024" not in message and "Hunter" not in message
+        assert "modules.filestation.settings.<a key that isn't text, not shown" in message
+
+    @pytest.mark.parametrize(
+        "line",
+        ["\ufeffschema_version: *x\n", '"schema_version": *x\n', "'schema_version': *x\n"],
+        ids=["bom", "double-quoted", "single-quoted"],
+    )
+    def test_yaml_error_names_a_bom_or_quoted_key(self, tmp_path: Any, line: str) -> None:
+        import yaml
+
+        from mcp_synology.core.config import format_yaml_error, load_config
+
+        path = tmp_path / "c.yaml"
+        path.write_text(line + "connection: {host: nas}\n", encoding="utf-8")
+        with pytest.raises(yaml.YAMLError) as exc:
+            load_config(path)
+        assert "on the `schema_version` line. " in format_yaml_error(exc.value)
+
+    def test_an_unknown_key_with_a_value_is_still_named(self) -> None:
+        from pydantic import ValidationError
+
+        from mcp_synology.core.config import format_validation_error
+
+        raw = _minimal_raw()
+        raw["totally_unknown"] = "x"
+        raw["connection"]["proxy"] = "http://p"
+        with pytest.raises(ValidationError) as exc:
+            AppConfig(**raw)
+        message = format_validation_error(exc.value)
+        assert "  - totally_unknown: Extra inputs are not permitted" in message
+        assert "  - connection.proxy: Extra inputs are not permitted" in message
+
+    @pytest.mark.parametrize("fragment", ["20245678", "3.14159", "2024-01-02"])
+    @pytest.mark.parametrize("section", ["auth", "connection", "logging"])
+    def test_a_fragment_that_isnt_text_is_not_named(self, fragment: str, section: str) -> None:
+        """QA round 1: YAML reads `{password: Summer,2024}`'s second half as a number or a
+        date key, which pydantic reports as `invalid_key`, not as an unknown key."""
+        import yaml
+        from pydantic import ValidationError
+
+        from mcp_synology.core.config import format_validation_error
+
+        body = {
+            "auth": "auth: {username: u, password: Summer,%s}\nconnection: {host: nas}\n",
+            "connection": "connection: {host: nas, password: Summer,%s}\n",
+            "logging": "connection: {host: nas}\nlogging: {file: Summer,%s}\n",
+        }[section] % fragment
+        raw = yaml.safe_load("schema_version: 1\nmodules: {filestation: {}}\n" + body)
+        with pytest.raises(ValidationError) as exc:
+            AppConfig(**raw)
+        message = format_validation_error(exc.value)
+        assert fragment not in message and "2024" not in message and "3.14" not in message
+        assert "<a key that isn't text, not shown" in message
+
+    def test_a_misspelled_auth_key_names_the_key_it_is_close_to(self) -> None:
+        """The typo's help without its text (QA round 2 on #469)."""
+        from pydantic import ValidationError
+
+        from mcp_synology.core.config import format_validation_error
+
+        raw = _minimal_raw()
+        raw["auth"] = {"usrname": "me", "pasword": "x", "device_ids": "y"}
+        with pytest.raises(ValidationError) as exc:
+            AppConfig(**raw)
+        message = format_validation_error(exc.value)
+        for real in ("username", "password", "device_id"):
+            assert f'auth.<an unknown key close to "{real}", not shown' in message
+        assert "usrname" not in message and "pasword" not in message
+
+    def test_a_password_fragment_like_a_key_is_not_shown(self) -> None:
+        """`Spring,Password1` splits off a key `Password1`, close to `password`: it used to
+        be printed (QA round 2 on #469)."""
+        import yaml
+        from pydantic import ValidationError
+
+        from mcp_synology.core.config import format_validation_error
+
+        raw = yaml.safe_load(
+            "schema_version: 1\nconnection: {host: nas}\n"
+            "auth: {username: me, password: Spring,Password1}\n"
+            "modules: {filestation: {enabled: true}}\n"
+        )
+        with pytest.raises(ValidationError) as exc:
+            AppConfig(**raw)
+        message = format_validation_error(exc.value)
+        assert "Password1" not in message and "Spring" not in message
+        assert 'auth.<an unknown key close to "password", not shown' in message
+
+    def test_a_config_that_isnt_utf8_names_the_line_not_the_byte(self, tmp_path: Any) -> None:
+        """A cp1252 file (old Notepad's default) failed with Python's decode error, which
+        quotes the byte (QA round 2 on #469)."""
+        from mcp_synology.core.config import load_config
+
+        path = tmp_path / "c.yaml"
+        path.write_bytes(b"schema_version: 1\nauth:\n  password: Hunt\xe9r9x\n")
+        with pytest.raises(ValueError) as exc:
+            load_config(path)
+        assert str(exc.value) == (
+            "The config file isn't valid UTF-8 (line 3). Save it as UTF-8 (in Notepad: File > "
+            "Save as, Encoding: UTF-8)."
+        )
+        assert "xe9" not in str(exc.value)
+
+    def test_a_block_context_does_not_point_to_line_1(self, tmp_path: Any) -> None:
+        # A misindented key: PyYAML's context is the whole document's block mapping.
+        import yaml
+
+        from mcp_synology.core.config import format_yaml_error, load_config
+
+        path = tmp_path / "c.yaml"
+        path.write_text(
+            "schema_version: 1\nconnection: {host: nas}\nauth:\n  username: me\n"
+            " password: Hunter2x\n"
+        )
+        with pytest.raises(yaml.YAMLError) as exc:
+            load_config(path)
+        message = format_yaml_error(exc.value)
+        assert "starts at line 1" not in message and "Hunter" not in message
+        assert message.startswith("The config file isn't valid YAML at line 5")
+
+    def test_a_refused_character_says_where(self, tmp_path: Any) -> None:
+        import yaml
+
+        from mcp_synology.core.config import format_yaml_error, load_config
+
+        path = tmp_path / "c.yaml"
+        path.write_text("schema_version: 1\nauth:\n  password: Hun\x07ter2x\n")
+        with pytest.raises(yaml.YAMLError) as exc:
+            load_config(path)
+        message = format_yaml_error(exc.value)
+        assert "ter2x" not in message
+        assert "(character 40 of the file)" in message
+
+    def test_a_derived_instance_id_is_not_quoted(self) -> None:
+        """A host written as a URL can carry a password; the instance_id derived from it
+        isn't quoted."""
+        raw: dict[str, Any] = {
+            "schema_version": 1,
+            "connection": {"host": "https://admin:Hunter2x@nas"},
+            "modules": {"filestation": {"enabled": True}},
+        }
+        with pytest.raises(ValueError) as exc:
+            AppConfig(**raw)
+        assert "hunter" not in str(exc.value).casefold()
+        # The whole advice: what a derivable host looks like, and when instance_id is needed
+        # (QA round 4 on #469).
+        assert (
+            "The instance_id derived from connection.host contains invalid characters. Only "
+            "lowercase alphanumeric characters and hyphens are allowed: write connection.host "
+            "as a bare host name or IPv4 address (no https://, user name or port), or set "
+            "instance_id (lowercase letters, digits and hyphens), which an IPv6 address or a "
+            "host name with other characters needs."
+        ) in str(exc.value)
+
+    def test_yaml_error_without_a_location(self) -> None:
+        import yaml
+
+        from mcp_synology.core.config import format_yaml_error
+
+        assert format_yaml_error(yaml.YAMLError("Hunter2x")).startswith(
+            "The config file isn't valid YAML. The text there isn't shown"
+        )
+
+    def test_yaml_key_lookup_without_text_or_past_the_end(self) -> None:
+        from types import SimpleNamespace
+
+        from mcp_synology.core.config import _key_on_line
+
+        assert _key_on_line(SimpleNamespace(buffer=None, line=0)) is None
+        assert _key_on_line(SimpleNamespace(buffer="a: 1\n", line=5)) is None
+
+    def test_too_deep_a_config(self, tmp_path: Any) -> None:
+        import yaml
+
+        from mcp_synology.core.config import format_yaml_error, load_config
+
+        path = tmp_path / "c.yaml"
+        path.write_text("a: " + "[" * 20000 + "]" * 20000 + "\n")
+        with pytest.raises(yaml.YAMLError) as exc:
+            load_config(path)
+        assert format_yaml_error(exc.value).startswith(
+            "The config file is nested too deeply for YAML to read."
+        )
+
+    def test_a_set_is_not_shown(self) -> None:
+        from pydantic import ValidationError
+
+        from mcp_synology.core.config import format_validation_error
+
+        raw = _minimal_raw()
+        raw["connection"] = {"hunter2"}
+        with pytest.raises(ValidationError) as exc:
+            AppConfig(**raw)
+        assert "hunter2" not in format_validation_error(exc.value)
+
+    def test_a_plain_value_is_still_shown(self) -> None:
+        from pydantic import ValidationError
+
+        from mcp_synology.core.config import format_validation_error
+
+        raw = _minimal_raw()
+        raw["connection"]["timeout"] = 9999
+        with pytest.raises(ValidationError) as exc:
+            AppConfig(**raw)
+        assert "connection.timeout:" in format_validation_error(exc.value)
+        assert "(got 9999)" in format_validation_error(exc.value)
+
     def test_invalid_instance_id_characters(self) -> None:
         raw = _minimal_raw()
         raw["instance_id"] = "bad_chars!"
@@ -376,3 +975,21 @@ class TestUpdateNotices:
             "    enabled: true\n"
         )
         assert load_config(config_file).update_notices == expected
+
+
+def test_a_double_quoted_windows_path_gets_the_backslash_hint(tmp_path: Any) -> None:
+    """`"C:\\Users\\me"` is a YAML escape error; the text isn't shown, so the hint says why
+    (pre-QA on QA round 3, #469)."""
+    from mcp_synology.core.config import format_yaml_error, load_config
+
+    path = tmp_path / "c.yaml"
+    path.write_text(
+        'schema_version: 1\nconnection: {host: nas}\nallowed_local_paths: ["C:\\Data\\mine"]\n'
+    )
+    with pytest.raises(yaml.YAMLError) as exc:
+        load_config(path)
+    message = format_yaml_error(exc.value)
+    assert "Data" not in message and "mine" not in message
+    assert "write a Windows path in single quotes, 'C:\\Users\\me', or double each backslash" in (
+        message
+    )
