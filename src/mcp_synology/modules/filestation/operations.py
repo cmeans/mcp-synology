@@ -342,9 +342,12 @@ def _unstop(message: str) -> str:
     return message[:-1] if message.endswith(".") else message
 
 
-def _with_progress_so_far(error: ToolError, done: list[str], rest: list[str]) -> ToolError:
-    """A delete's error, saying what was already deleted and what wasn't started, so the
-    user can tell what's left after a failure partway (QA round 1 on #480)."""
+def _with_progress_so_far(
+    error: ToolError, failed: str, done: list[str], rest: list[str]
+) -> ToolError:
+    """A delete's error, saying which path failed, what was already deleted and what
+    wasn't started, so the user can tell what's left after a failure partway (QA round 1
+    on #480)."""
     if not done and not rest:
         return error
     try:
@@ -352,6 +355,12 @@ def _with_progress_so_far(error: ToolError, done: list[str], rest: list[str]) ->
         message = body["error"]["message"]
     except (ValueError, KeyError, TypeError):
         return error
+    # A DSM error on a start or a status request names no path (QA round 5 on #480).
+    if failed not in message:
+        message = _unstop(message) + f". Failed on: {failed}."
+    if body["error"].get("param") is None:
+        body["error"]["param"] = "paths"
+        body["error"]["value"] = failed
     # The delete loop is the one place that adds these: _delete_result doesn't (pre-QA on
     # #480; a check for the words in the message missed a path containing them).
     if done:
@@ -362,12 +371,14 @@ def _with_progress_so_far(error: ToolError, done: list[str], rest: list[str]) ->
         # Added to the cause's own advice (free space, permissions, check before deleting
         # again), never in place of it (QA round 3 on #480).
         # A note that reads after any advice, or alone (QA round 4): no "Then", no second
-        # "retry", and a check first, since the failed path may be gone already (a 599).
-        retry = (
-            "When retrying, leave out the paths already deleted (the same call would be "
-            "refused), and check the one that failed with list_files first."
-        )
+        # "retry", and a check first, since the failed path may be gone already (a 599),
+        # unless the advice already says to check with list_files (QA round 5).
         original = str(body["error"].get("suggestion") or "").strip()
+        retry = "When retrying, leave out the paths already deleted (the same call would be "
+        if "list_files" in original:
+            retry += "refused)."
+        else:
+            retry += f"refused), and check {failed} with list_files first."
         if not original:
             body["error"]["suggestion"] = retry
         elif original[-1] in ".!?)":
@@ -1050,7 +1061,7 @@ async def delete_files(
                     on_progress=on_progress,
                 )
             except ToolError as e:
-                raise _with_progress_so_far(e, deleted, normalized[i + 1 :]) from None
+                raise _with_progress_so_far(e, p, deleted, normalized[i + 1 :]) from None
             except httpx.TransportError as e:
                 if not deleted and not normalized[i + 1 :]:
                     raise  # nothing to add: the server's usual timeout or connection error
@@ -1069,7 +1080,7 @@ async def delete_files(
                         "before deleting again.",
                     )
                 except ToolError as err:
-                    raise _with_progress_so_far(err, deleted, normalized[i + 1 :]) from None
+                    raise _with_progress_so_far(err, p, deleted, normalized[i + 1 :]) from None
         if handoff is not None:
             handle = handoff.handle
             # No DSM request between the handoff and the reply: a recycle-bin probe to a

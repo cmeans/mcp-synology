@@ -3090,6 +3090,8 @@ class TestShareRootRefused:
             # with #470's message; in the middle it gets the delete's own (pre-QA on #480).
             "/video/x/..\t",
             "/video/.\t/x",
+            # Padding before the dot isn't stripped: the delete's own (QA round 5 on #480).
+            "/video/x/\t..",
         ],
     )
     def test_a_spelling_of_one_is_refused(self, path: str) -> None:
@@ -3128,7 +3130,11 @@ class TestShareRootRefused:
 
 _RETRY_NOTE = (
     "When retrying, leave out the paths already deleted (the same call would be refused), and "
-    "check the one that failed with list_files first."
+    "check /video/b with list_files first."
+)
+# When the cause's own advice already says to check with list_files (QA round 5 on #480).
+_SHORT_RETRY_NOTE = (
+    "When retrying, leave out the paths already deleted (the same call would be refused)."
 )
 
 
@@ -3138,7 +3144,12 @@ class TestDeleteFailurePartway:
 
     @staticmethod
     def _route(
-        fail_on: int, *, transport: bool = False, status: dict | None = None, code: int = 407
+        fail_on: int,
+        *,
+        transport: bool = False,
+        status: dict | None = None,
+        code: int = 407,
+        status_code: int | None = None,
     ) -> None:
         starts: list[str] = []
 
@@ -3152,12 +3163,15 @@ class TestDeleteFailurePartway:
                 return httpx.Response(200, json={"success": True, "data": {"tasks": []}})
             if method == "start":
                 starts.append(p.get("path", ""))
-                if len(starts) == fail_on and status is None:
+                if len(starts) == fail_on and status is None and status_code is None:
                     if transport:
                         raise httpx.ReadTimeout("")
                     return httpx.Response(200, json={"success": False, "error": {"code": code}})
                 return httpx.Response(200, json={"success": True, "data": {"taskid": "t"}})
             if method == "status":
+                if status_code is not None and len(starts) == fail_on:
+                    error = {"code": status_code}
+                    return httpx.Response(200, json={"success": False, "error": error})
                 data = status if status and len(starts) == fail_on else {"finished": True}
                 return httpx.Response(200, json={"success": True, "data": data})
             return httpx.Response(200, json={"success": True, "data": {}})
@@ -3219,9 +3233,13 @@ class TestDeleteFailurePartway:
             await delete_files(mock_client, paths=["/video/a", "/video/b", "/video/c"], timeout=5)
         message = json.loads(str(exc.value))["error"]["message"]
         assert message.startswith("Delete files failed (DSM error 407)")
+        # DSM's error names no path, so the delete names the one that failed (QA round 5).
         assert message.endswith(
-            "Already deleted before this failure: /video/a. Not started: /video/c."
+            "Failed on: /video/b. Already deleted before this failure: /video/a. "
+            "Not started: /video/c."
         )
+        error = json.loads(str(exc.value))["error"]
+        assert (error["param"], error["value"]) == ("paths", "/video/b")
         # The cause's own advice is kept, with the retry note after it (QA round 3 on #480).
         suggestion = json.loads(str(exc.value))["error"]["suggestion"]
         own, _, rest = suggestion.partition(" When retrying, leave out the paths already deleted")
@@ -3235,7 +3253,9 @@ class TestDeleteFailurePartway:
             (403, _RETRY_NOTE),
             # Its own advice first, then the note (QA round 3).
             (416, f"Free space on the NAS. {_RETRY_NOTE}"),
-            (1200, f"Check both with list_files, then retry. {_RETRY_NOTE}"),
+            # Its own advice already says to check with list_files: no second check (QA
+            # round 5).
+            (1200, f"Check both with list_files, then retry. {_SHORT_RETRY_NOTE}"),
             # Advice ending in a list goes last, so no period reads as one of the characters.
             (418, f'{_RETRY_NOTE} Avoid characters: / \\ : * ? " < > |'),
             # The task may have finished: the note says to check the failed path first.
@@ -3267,8 +3287,33 @@ class TestDeleteFailurePartway:
         # Its own advice, then the retry note (QA round 3 on #480).
         assert error["suggestion"] == (
             f"Check with list_files, or file_task with no handle, before deleting again. "
-            f"{_RETRY_NOTE}"
+            f"{_SHORT_RETRY_NOTE}"
         )
+
+    @respx.mock
+    @pytest.mark.parametrize("fail_on", [1, 2], ids=["first", "later"])
+    async def test_a_status_error_names_the_path(
+        self, mock_client: DsmClient, fail_on: int
+    ) -> None:
+        """A DSM error on a status request names no path either (QA round 5 on #480)."""
+        self._route(fail_on, status_code=599)
+        paths = ["/video/a", "/video/b", "/video/c"]
+        with pytest.raises(ToolError) as exc:
+            await delete_files(mock_client, paths=paths, timeout=5)
+        error = json.loads(str(exc.value))["error"]
+        failed = paths[fail_on - 1]
+        assert f"Failed on: {failed}." in error["message"]
+        assert (error["param"], error["value"]) == ("paths", failed)
+
+    @respx.mock
+    async def test_a_named_path_isnt_named_twice(self, mock_client: DsmClient) -> None:
+        """The task's own error already names it: no 'Failed on' (QA round 5 on #480)."""
+        self._route(2, status={"finished": True, "error": {"code": 407}, "path": "/video/b"})
+        with pytest.raises(ToolError) as exc:
+            await delete_files(mock_client, paths=["/video/a", "/video/b", "/video/c"], timeout=5)
+        message = json.loads(str(exc.value))["error"]["message"]
+        assert "Failed on" not in message
+        assert message.count("/video/b") == 1
 
     @respx.mock
     async def test_a_lone_start_with_no_answer_is_unchanged(self, mock_client: DsmClient) -> None:
@@ -3292,29 +3337,31 @@ class TestDeleteFailurePartway:
             }
             return ToolError(json.dumps(body))
 
-        done = _with_progress_so_far(error(True), ["/video/a"], ["/video/c"])
+        done = _with_progress_so_far(error(True), "/video/b", ["/video/a"], ["/video/c"])
         assert json.loads(str(done))["error"]["retryable"] is False
         # The retry note is added to the cause's own advice, not in place of it (QA round 3).
         assert json.loads(str(done))["error"]["suggestion"] == (
             f"Free space on the NAS. {_RETRY_NOTE}"
         )
         # Nothing deleted yet: the same call can be retried, so the flag stays.
-        first = _with_progress_so_far(error(True), [], ["/video/b"])
+        first = _with_progress_so_far(error(True), "/video/a", [], ["/video/b"])
         assert json.loads(str(first))["error"]["retryable"] is True
 
     def test_a_path_ending_in_dots_keeps_them(self) -> None:
         from mcp_synology.modules.filestation.operations import _with_progress_so_far
 
         error = ToolError(json.dumps({"status": "error", "error": {"message": "Failed."}}))
-        out = _with_progress_so_far(error, ["/video/notes..."], ["/video/v1.", "/video/b"])
+        out = _with_progress_so_far(
+            error, "/video/x..", ["/video/notes..."], ["/video/v1.", "/video/b"]
+        )
         assert json.loads(str(out))["error"]["message"] == (
-            "Failed. Already deleted before this failure: /video/notes.... Not started: "
-            "/video/v1., /video/b."
+            "Failed. Failed on: /video/x... Already deleted before this failure: "
+            "/video/notes.... Not started: /video/v1., /video/b."
         )
 
     def test_an_error_that_isnt_the_envelope_is_kept(self) -> None:
         from mcp_synology.modules.filestation.operations import _with_progress_so_far
 
         error = ToolError("plain text")
-        assert _with_progress_so_far(error, ["/video/a"], ["/video/b"]) is error
-        assert _with_progress_so_far(error, [], []) is error
+        assert _with_progress_so_far(error, "/video/x", ["/video/a"], ["/video/b"]) is error
+        assert _with_progress_so_far(error, "/video/x", [], []) is error
