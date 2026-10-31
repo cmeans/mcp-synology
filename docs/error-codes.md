@@ -247,7 +247,7 @@ Common causes:
 
 - A filename contains a forbidden character: `/ \ : * ? " < > |`.
 - The `new_name` argument to `rename`, or `upload_file`'s `filename`, contains `/`
-  or a NUL, is blank, or is `.` or `..` (padded with spaces too); the message says which
+  or a NUL, is blank, or is `.` or `..` (padded with any whitespace too); the message says which
   (path separators are not allowed in a name — use copy/move to relocate a file).
   With no `filename` (or an empty one), the local file's own name is checked the same way
   and reported as `local_path`.

@@ -25,6 +25,7 @@ from mcp_synology.modules.filestation.paths import (
     LOCAL_PARAMS,
     NAME_PARAMS,
     PATH_PARAMS,
+    PLANTED_BIN_TOOLS,
     PathRole,
     ResolvedPath,
     bin_index,
@@ -716,7 +717,23 @@ async def test_hostile_spelling_matrix(
 
 # -- the structural test -------------------------------------------------------------------
 
-_PATHLIKE = ("path", "folder", "share", "dest")
+# Whole words of an argument's name (`sort_direction` isn't a dir).
+_PATHLIKE = {
+    "path",
+    "paths",
+    "folder",
+    "share",
+    "dest",
+    "source",
+    "sources",
+    "target",
+    "src",
+    "dir",
+}
+
+
+def _words(param: str) -> set[str]:
+    return set(param.split("_"))
 
 
 def test_every_path_argument_is_registered() -> None:
@@ -729,7 +746,12 @@ def test_every_path_argument_is_registered() -> None:
     unregistered = []
     for name, fn in tools.items():
         for param in inspect.signature(fn).parameters:
-            if not any(word in param for word in _PATHLIKE):
+            if param.endswith("name") and not _words(param) & _PATHLIKE:
+                # A name a tool creates must be a NAME_PARAMS entry (refuse_bad_name).
+                if NAME_PARAMS.get(name) != param and param not in LOCAL_PARAMS.get(name, set()):
+                    unregistered.append(f"{name}.{param} (a name: NAME_PARAMS)")
+                continue
+            if not _words(param) & _PATHLIKE:
                 continue
             known = (
                 param in PATH_PARAMS.get(name, {})
@@ -1048,3 +1070,92 @@ def test_task_kind_reads_any_bin(paths: list[str], kind: str) -> None:
     from mcp_synology.modules.filestation.tasks import _task_kind
 
     assert _task_kind("SYNO.FileStation.CopyMove", {"remove_src": True}, paths) == kind
+
+
+def test_every_tool_with_sources_and_a_destination_refuses_a_planted_bin() -> None:
+    """Structural: a tool that puts sources into a DEST must be in PLANTED_BIN_TOOLS (and the
+    wiring tests below run each one)."""
+    with_dest = {
+        tool
+        for tool, params in PATH_PARAMS.items()
+        if any(role is PathRole.DEST for role in params.values())
+        and (len(params) > 1 or tool in BIN_ITEM_PARAMS)
+    }
+    assert with_dest == set(PLANTED_BIN_TOOLS)
+
+
+_PLANTING = {
+    "copy_files": {"paths": ["/video/sub/#recycle"], "dest_folder": "/video"},
+    "move_files": {"paths": ["/video/sub/#recycle"], "dest_folder": "/video"},
+    "restore_from_recycle_bin": {
+        "share": "video",
+        "paths": ["sub/#recycle"],
+        "dest_folder": "/video",
+    },
+}
+
+
+@pytest.mark.parametrize("tool", sorted(PLANTED_BIN_TOOLS))
+async def test_planted_bin_wiring(tool: str) -> None:
+    fn = await _tool(tool, _FakeClient({"/video/sub/#recycle", "/video/#recycle/sub/#recycle"}))
+    with pytest.raises(ToolError) as exc:
+        await fn(ctx=_fake_mcp_ctx(), **_PLANTING[tool])
+    assert "the name of its recycle bin" in _error(exc)["message"]
+
+
+@pytest.mark.parametrize(
+    ("name", "problem"),
+    [
+        (" x", "starts or ends with whitespace"),
+        ("a\x1b", "control character"),
+        ("#recycle", "recycle bin"),
+    ],
+)
+@pytest.mark.parametrize("tool", sorted(NAME_PARAMS))
+async def test_every_name_argument_goes_through_refuse_bad_name(
+    tmp_path: Any, tool: str, name: str, problem: str
+) -> None:
+    """Each NAME_PARAMS entry, through its tool, into a shared folder's top."""
+    fn = await _tool(tool, _FakeClient({"/video/x"}))
+    local = tmp_path / "f.txt"
+    local.write_text("x")
+    kwargs: dict[str, Any] = {
+        "rename": {"path": "/video/x"},
+        "upload_file": {"ctx": _fake_mcp_ctx(), "local_path": str(local), "dest_folder": "/video"},
+    }[tool]
+    with pytest.raises(ToolError) as exc:
+        await fn(**kwargs, **{NAME_PARAMS[tool]: name})
+    error = _error(exc)
+    assert (error["param"], problem in error["message"]) == (NAME_PARAMS[tool], True)
+
+
+async def test_an_unreadable_parent_answer_is_left_to_dsm() -> None:
+    """Only a definite 408 refuses a padded created parent; a 407 or an unreadable answer
+    leaves it to DSM (pre-QA r3 on #510)."""
+    got = await resolve_paths(
+        _FakeClient(codes={"/video/Uploads ": 407}),  # type: ignore[arg-type]
+        set(),
+        "upload_file",
+        "dest_folder",
+        ["/video/Uploads "],
+        creates_parents=True,
+    )
+    assert got == ["/video/Uploads "]
+
+
+@pytest.mark.parametrize("stall", [None, "timeout"])
+def test_handoff_lead_line_quotes_a_padded_path(stall: str | None) -> None:
+    import httpx
+
+    from mcp_synology.modules.filestation.tasks import Handle, handoff_reply
+
+    reply = handoff_reply(
+        verb="Still deleting",
+        path=PADDED,
+        handle=Handle("delete", "T1"),
+        status={"finished": False},
+        done=[],
+        not_started=[],
+        stall=httpx.ReadTimeout("x") if stall else None,
+    )
+    assert QUOTED in reply.split("\n")[0]

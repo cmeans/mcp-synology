@@ -80,9 +80,15 @@ PATH_PARAMS: dict[str, dict[str, PathRole]] = {
 # bin-relative items (`resolve_bin_items`).
 NAME_PARAMS: dict[str, str] = {"rename": "new_name", "upload_file": "filename"}
 BIN_ITEM_PARAMS: dict[str, str] = {"restore_from_recycle_bin": "paths"}
+# Tools that put sources into a destination; each calls `refuse_planted_bin` (a source named
+# `#recycle` landing where it would be a bin). test_paths.py runs each through it, and fails
+# if a tool with sources and a DEST isn't listed here.
+PLANTED_BIN_TOOLS: frozenset[str] = frozenset(
+    {"copy_files", "move_files", "restore_from_recycle_bin"}
+)
 # Paths on this machine, not the NAS (checked against allowed_local_paths instead).
 LOCAL_PARAMS: dict[str, set[str]] = {
-    "download_file": {"dest_folder"},
+    "download_file": {"dest_folder", "filename"},
     "upload_file": {"local_path"},
 }
 
