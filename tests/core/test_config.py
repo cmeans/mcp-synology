@@ -926,6 +926,54 @@ class TestLoadConfig:
         assert "filestation" in config.modules
 
 
+@pytest.mark.parametrize("raw", ["some-text", ["x"], 12345678, False])
+def test_load_rejects_non_mapping_yaml(tmp_path: Path, raw: Any) -> None:
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(yaml.safe_dump(raw))
+    with pytest.raises(ValueError, match="YAML mapping"):
+        load_config(config_file)
+
+
+def test_load_validates_non_string_keys(tmp_path: Path) -> None:
+    raw = _minimal_raw()
+    raw[12345678] = "value"
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(yaml.safe_dump(raw))
+    with pytest.raises(ValidationError, match="Keys should be strings"):
+        load_config(config_file)
+
+
+@pytest.mark.parametrize(
+    ("section", "env_var", "value"),
+    [
+        ("auth", "SYNOLOGY_PASSWORD", "test-password"),
+        ("connection", "SYNOLOGY_HOST", "nas.example"),
+        ("logging", "SYNOLOGY_LOG_LEVEL", "debug"),
+    ],
+)
+def test_env_override_fills_empty_section(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, section: str, env_var: str, value: str
+) -> None:
+    raw = _minimal_raw()
+    raw[section] = None
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(yaml.safe_dump(raw))
+    monkeypatch.setenv(env_var, value)
+    config = load_config(config_file)
+    assert getattr(config, section).model_dump()[env_var.rsplit("_", 1)[-1].lower()] == value
+
+
+@pytest.mark.parametrize("value", ["not-a-mapping", ["x"], 42, False])
+def test_env_override_rejects_non_mapping_section(
+    monkeypatch: pytest.MonkeyPatch, value: Any
+) -> None:
+    raw = _minimal_raw()
+    raw["auth"] = value
+    monkeypatch.setenv("SYNOLOGY_PASSWORD", "test-password")
+    with pytest.raises(ValueError, match="auth.*mapping"):
+        _merge_env_overrides(raw)
+
+
 class TestTopLevelAllowedLocalPaths:
     """#257: one allowed_local_paths for every module, at the top level."""
 
