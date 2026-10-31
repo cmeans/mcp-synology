@@ -382,6 +382,10 @@ def name_problem(name: str, parent: str | None = None) -> str | None:
         return "has no visible character"
     if name != name.strip():
         return "starts or ends with whitespace"
+    if draws_nothing(name[0]) or draws_nothing(name[-1]):
+        # Invisible padding (a zero-width space, a BOM, a filler): another look-alike
+        # `report.pdf`, as a trailing space would make (maintainer, 2026-10-31).
+        return "starts or ends with an invisible character"
     if name == "#recycle" and parent is not None and makes_a_bin(parent):
         return "is '#recycle', the name of a recycle bin there"
     return None

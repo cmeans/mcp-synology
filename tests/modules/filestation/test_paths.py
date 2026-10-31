@@ -220,6 +220,11 @@ class TestRefuseBadName:
             ("a\u2028b", "contains a line or paragraph separator"),
             ("\u200b", "has no visible character"),
             ("\ufeff\u200b", "has no visible character"),
+            # Invisible padding is padding (maintainer, 2026-10-31).
+            ("report.pdf\u200b", "starts or ends with an invisible character"),
+            ("\ufeffreport.pdf", "starts or ends with an invisible character"),
+            ("report.pdf\u3164", "starts or ends with an invisible character"),
+            ("\u200dx", "starts or ends with an invisible character"),
         ],
     )
     def test_refused(self, name: str, problem: str) -> None:
