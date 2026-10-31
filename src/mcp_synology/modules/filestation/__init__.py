@@ -192,7 +192,8 @@ MODULE_INFO = ModuleInfo(
             description=(
                 "Rename a file or folder in place. If the new name is already taken in that "
                 "folder, DSM refuses and nothing is replaced. To move something to another "
-                "folder, use move_files."
+                "folder, use move_files. A whole shared folder (`/video`) or recycle bin is "
+                "refused."
             ),
             permission_tier=PermissionTier.WRITE,
         ),
@@ -216,8 +217,10 @@ MODULE_INFO = ModuleInfo(
                 "in it, and the sources are removed. To keep the sources, use copy_files. "
                 "`dest_folder` must already exist; it isn't created. With `overwrite=false` "
                 "(default), items already at the destination are skipped, listed and left at the "
-                "source. If any source is missing, nothing is moved. A long move keeps running on"
-                " the NAS and returns a handle for file_task."
+                "source. If any source is missing, nothing is moved. A whole shared folder "
+                "(`/video`) or recycle bin is refused as a source: move its items by path. A "
+                "long move keeps "
+                "running on the NAS and returns a handle for file_task."
             ),
             permission_tier=PermissionTier.WRITE,
             annotations=_ANNO_DESTRUCTIVE,
@@ -226,12 +229,14 @@ MODULE_INFO = ModuleInfo(
             name="delete_files",
             description=(
                 "Delete files or folders. A folder is deleted with everything in it (`recursive`,"
-                " default true). On a share with a recycle bin, deleted items go to the bin: "
+                " default true). On a share with a recycle bin, deleted items go to the bin "
+                "(empty folders aren't kept): "
                 "list_recycle_bin shows them and restore_from_recycle_bin brings them back. "
-                "Without a bin, and for anything inside a bin (`/<share>/#recycle`), deletion is "
-                "permanent. Paths are exact, not wildcard patterns, and if any path is missing "
-                "nothing is deleted. A whole shared folder (`/video`) is refused: delete its items "
-                "by path. So is a path with a `.`, `..`, empty or whitespace-only part, or a NUL. "
+                "Without a bin, and for anything inside a bin (`/<share>/#recycle/…`), deletion "
+                "is permanent. Paths are exact, not wildcard patterns, and if any path is missing "
+                "nothing is deleted. A whole shared folder (`/video`) or recycle bin "
+                "(`/video/#recycle`) is refused: delete its items by path. So is a path with a "
+                "`.`, `..`, empty or whitespace-only part, or a NUL. "
                 "A long delete keeps running on the NAS and returns a handle for file_task."
             ),
             permission_tier=PermissionTier.WRITE,
@@ -252,7 +257,9 @@ MODULE_INFO = ModuleInfo(
             description=(
                 "Restore deleted files or folders from one shared folder's recycle bin. Check "
                 "what's there first with list_recycle_bin: every path must be in that share's "
-                "bin, or nothing is restored. Without `dest_folder`, each item goes back to its "
+                "bin, or nothing is restored; an empty item, naming the whole bin, is refused, "
+                "and so is one with a whitespace-only part after its first. "
+                "Without `dest_folder`, each item goes back to its "
                 "original folder, which is re-created if it's gone. An item already at the "
                 "destination is skipped and stays in the bin, unless `overwrite=true`, which "
                 "replaces the existing one. A long restore keeps running on the NAS and returns a"

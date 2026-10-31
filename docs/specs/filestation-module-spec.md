@@ -502,18 +502,19 @@ Restore files from a shared folder's recycle bin.
 
 **Tool description (LLM-facing):**
 > Restore deleted files or folders from one shared folder's recycle bin. Check what's there first
-> with list_recycle_bin: every path must be in that share's bin, or nothing is restored. Without
-> `dest_folder`, each item goes back to its original folder, which is re-created if it's gone. An
-> item already at the destination is skipped and stays in the bin, unless `overwrite=true`, which
-> replaces the existing one. A long restore keeps running on the NAS and returns a handle for
-> file_task.
+> with list_recycle_bin: every path must be in that share's bin, or nothing is restored; an empty
+> item, naming the whole bin, is refused, and so is one with a whitespace-only part after its first.
+> Without `dest_folder`, each item goes back to its original
+> folder, which is re-created if it's gone. An item already at the destination is skipped and stays
+> in the bin, unless `overwrite=true`, which replaces the existing one. A long restore keeps running
+> on the NAS and returns a handle for file_task.
 
 **Parameters:**
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
 | `share` | `str` | **Yes** | — | Shared folder name (e.g., `video`) or path (`/video`). |
-| `paths` | `list[str]` | **Yes** | — | Paths within the recycle bin to restore: relative to `#recycle`, as `list_recycle_bin` shows them (`Shows/Ep1.mkv`), starting with `#recycle/`, or full (`/video/#recycle/Shows/Ep1.mkv`). Any path not in the bin refuses the whole call before anything moves. |
+| `paths` | `list[str]` | **Yes** | — | Paths within the recycle bin to restore: relative to `#recycle`, as `list_recycle_bin` shows them (`Shows/Ep1.mkv`), starting with `#recycle/`, or full (`/video/#recycle/Shows/Ep1.mkv`). Any path not in the bin refuses the whole call before anything moves. An item that names the bin itself is refused (below). |
 | `dest_folder` | `str` | No | `None` | Destination folder; it must exist, and every item goes there flat. If omitted, restores to original location (inferred from `#recycle` directory structure), re-creating it if it's gone. |
 | `overwrite` | `bool` | No | `false` | Overwrite if a file already exists at the restore destination. With `false`, it's skipped and stays in the bin. |
 
@@ -530,7 +531,8 @@ Restore files from a shared folder's recycle bin.
 - Original location inferred by stripping the `#recycle` path component: `/video/#recycle/Shows/Ep1.mkv` → `/video/Shows/Ep1.mkv`.
 - If `dest_folder` is specified, all files go there flat.
 - **If the original folder no longer exists, it's re-created first (#333).** A file restored out of a folder that was deleted along with it has nowhere to go, and DSM refuses the move with 1002 "Destination error" (vdsm DSM 7.1 and 7.3.2). Before #333 this was promised here but not done. The tool checks each inferred destination with `getinfo`, creates the missing ones with `CreateFolder` `force_parent=true` (deepest first, so a parent made along the way isn't created twice), and the reply ends `Re-created <folders> (no longer there) to restore into.` If a `CreateFolder` fails partway, its error is returned and any folders already made stay. An explicit `dest_folder` that doesn't exist is never created: it's refused as `not_found` before anything moves (#344; see `copy_files`).
-- DSM's recycle bin doesn't keep an empty folder: deleting `a/` with an empty `a/empty/` leaves no `empty` in the bin (vdsm DSM 7.1 and 7.3.2). A folder that holds a file is kept.
+- DSM's recycle bin doesn't keep an empty folder: deleting `a/` with an empty `a/empty/` leaves no `empty` in the bin (vdsm, all four versions: `test_pattern_finds_a_file_deleted_from_a_subfolder` checks it), and an empty folder deleted on its own isn't kept either (seska, DSM 7.1.1, 2026-10-31; on its own, not checked on vdsm). A folder that holds a file is kept. `delete_files`' recycle-bin note says so (#479).
+- **An item that names the whole bin is refused (#479).** An empty item (`""`, `"/"`, a blank one), `#recycle` or `/<share>/#recycle` resolves to the bin folder itself, and restoring it would send `CopyMove start` on `/<share>/#recycle` with `remove_src=true`, moving the whole bin out. It's refused as `invalid_parameter`, `param: paths`, before anything is checked or moved: `Restore refused: '' names the whole recycle bin of /video, not an item in it. Nothing was restored.` An item counts as in the bin only when it is `#recycle` or starts with `#recycle/`: `#recycled/x` is an item named `#recycled` inside the bin, not a folder beside it. An item with a whitespace-only part after its first (`Shows/ `, `Shows/\t`, `#recycle/ /`, `Shows/ /Ep1.mkv`) is refused too, checked on the item as given (`Restore refused: whitespace-only parts aren't allowed (…). Nothing was restored.`): the item's own strip dropped a last one, so `Shows/ ` restored the whole folder `Shows`, and the move normalizes the path again, which strips one before a trailing slash, so `#recycle/ /` would be checked as an item but sent as the bin itself (pre-QA; the same stripping elsewhere is #488). Each item's destination drops only the leading `/<share>/#recycle`: `a/video/#recycle/b.txt` goes back to `/video/a/video/#recycle`.
 - **Long operations (#245):** hands off after the capped wait instead of stopping (see "Async Operations"); the reply's handle works with `file_task`.
 
 ---
@@ -576,17 +578,20 @@ Rename a file or folder.
 
 **DSM's 1200 is told apart (#188).** DSM answers 1200, "Failed to rename", both for a name already taken in that folder and for a source that doesn't exist (vdsm DSM 7.1, 7.2.2, 7.3.2 and 7.4.1). After a 1200, `getinfo` says which, and only on positive evidence: a source it reports missing (408) is `not_found` ("… doesn't exist on the NAS", `param: path`), and when it shows both the source and the new path exist, `already_exists` ("… already exists. Rename doesn't replace an existing file or folder.", `param: new_name`). `already_exists` is never claimed for a rename to the item's own name or of a share root (no parent folder to look in); a `new_name` of `.` or `..` is refused before the rename request (the share check may list shares first, and an unknown share is reported first; #449). Anything else is reported as the 1200 with its table message, which names both causes: a reply with no entry, another code such as 407, or a check that fails (a DSM error or no answer at all; logged at WARNING). Each path takes one `getinfo`. The check runs only after a failure, so a rename that works costs nothing extra.
 
+**A whole shared folder is refused (#479).** DSM's `Rename` on `/<share>`, as an administrator, answers success with the new path, and the shared folder then disappears from `list_share`, under its new name too, so every path and client config that names it breaks; a non-admin gets 1200 (vdsm DSM 7.1.1-42962 Update 9, 7.2.2-72806 Update 10, 7.3.2-86009 Update 5 and 7.4.1-90080 Update 1; probe results on #479). So `rename` refuses a `path` that names a whole shared folder as `invalid_parameter`, `param: path`, before the rename request: `Rename refused: '/video' is a whole shared folder. Renaming one through File Station makes it disappear from DSM's shared folders, under its new name too (tested on DSM 7.1 to 7.4.1). Nothing was renamed.`, suggesting DSM's Control Panel. The check runs after the share check, so a one-part path that isn't a share is an unknown share; empty parts are dropped first, so `//video`, which gets past the share check when DSM won't list shares and which Rename (with no missing-path check) would send, is refused too (pre-QA). A share's whole bin, `/<share>/#recycle`, is refused as well, as for `move_files` (below).
+
 **DSM API:** `SYNO.FileStation.Rename` / `rename`
 
 **Tool description (LLM-facing):**
 > Rename a file or folder in place. If the new name is already taken in that folder, DSM refuses and
-> nothing is replaced. To move something to another folder, use move_files.
+> nothing is replaced. To move something to another folder, use move_files. A whole shared folder
+> (`/video`) or recycle bin is refused.
 
 **Parameters:**
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `path` | `str` | **Yes** | — | Full path to the file or folder to rename. |
+| `path` | `str` | **Yes** | — | Full path to the file or folder to rename. A whole shared folder or recycle bin is refused (below). |
 | `new_name` | `str` | **Yes** | — | New name (filename/folder name only, not a full path; an empty or blank name, a `/`, a NUL, or `.` or `..` is refused with `invalid_parameter`, a padded ` .. ` too (spaces only: a tab beside a dot is a different Linux name; DSM's handling of either is unprobed); the message names which). A name already taken in the folder is refused by DSM (1200) and nothing is replaced. |
 
 **Response shape:**
@@ -651,14 +656,15 @@ Move files or folders to a new location. **Source files are removed after succes
 > Move files or folders into a destination folder; a folder moves with everything in it, and the
 > sources are removed. To keep the sources, use copy_files. `dest_folder` must already exist; it
 > isn't created. With `overwrite=false` (default), items already at the destination are skipped,
-> listed and left at the source. If any source is missing, nothing is moved. A long move keeps
+> listed and left at the source. If any source is missing, nothing is moved. A whole shared folder
+> (`/video`) or recycle bin is refused as a source: move its items by path. A long move keeps
 > running on the NAS and returns a handle for file_task.
 
 **Parameters:**
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `paths` | `list[str]` | **Yes** | — | Source file/folder paths to move. |
+| `paths` | `list[str]` | **Yes** | — | Source file/folder paths to move. A whole shared folder or recycle bin is refused (below). |
 | `dest_folder` | `str` | **Yes** | — | Destination folder path (must exist). |
 | `overwrite` | `bool` | No | `false` | Overwrite existing files at destination. With `false`, items already there are skipped and listed (see Async Operations). |
 
@@ -674,6 +680,7 @@ Source files have been removed from /video/Downloads/.
 
 **Design notes:**
 - **Long operations (#245):** hands off after the capped wait instead of stopping (see "Async Operations"); the reply's handle works with `file_task`.
+- **A whole shared folder is refused as a source (#479).** DSM's `CopyMove` with `remove_src=true` on `/<share>` takes the shared folder itself out of `list_share` for an account with write access (the non-admin test user on `/writable`; admin wasn't probed, since the admin share had been renamed away by then), and the reply read as a skip (`Moved 0 of 1 item(s) … 1 skipped in whole or in part`); the recycle bin, inside the share, can't bring it back (vdsm DSM 7.1, 7.2.2, 7.3.2 and 7.4.1; probe results on #479). So `move_files` refuses a source that names a whole shared folder as `invalid_parameter`, `param: paths`, before anything is checked or moved: `Move files refused: '/video' is a whole shared folder. Moving one would remove the shared folder itself from DSM, beyond the recycle bin's reach (tested on DSM 7.1 to 7.4.1, as a non-admin with write access). Nothing was moved.`, suggesting moving its items by path (leaving out its `#recycle`), `copy_files` to keep it, or DSM's Control Panel. The check runs after the share check, with empty parts dropped, so `//video` gets this refusal too (before, the missing-path check refused it with 408); #470 refuses a `.` part. A share's whole bin, `/<share>/#recycle`, is refused the same way for `move_files` and `rename` (`… is the shared folder's whole recycle bin. Moving it would take every user's deleted items out of the bin. Nothing was moved.`, suggesting `restore_from_recycle_bin`), for the reason a restore of the bin itself is refused; what DSM does with it is unprobed. Items inside the bin aren't refused here. `copy_files` takes a shared folder: DSM copies its contents into a new folder of that name, and the share stays.
 
 ---
 
@@ -689,21 +696,24 @@ Delete files or folders.
 
 **Tool description (LLM-facing):**
 > Delete files or folders. A folder is deleted with everything in it (`recursive`, default true). On
-> a share with a recycle bin, deleted items go to the bin: list_recycle_bin shows them and
-> restore_from_recycle_bin brings them back. Without a bin, and for anything inside a bin
-> (`/<share>/#recycle`), deletion is permanent. Paths are exact, not wildcard patterns, and if any
-> path is missing nothing is deleted. A whole shared folder (`/video`) is refused: delete its items
-> by path. So is a path with a `.`, `..`, empty or whitespace-only part, or a NUL. A long delete
-> keeps running on the NAS and returns a handle for file_task.
+> a share with a recycle bin, deleted items go to the bin (empty folders aren't kept):
+> list_recycle_bin shows them and restore_from_recycle_bin brings them back. Without a bin, and for
+> anything inside a bin (`/<share>/#recycle/…`), deletion is permanent. Paths are exact, not wildcard
+> patterns, and if any path is missing nothing is deleted. A whole shared folder (`/video`) or
+> recycle bin (`/video/#recycle`) is refused: delete its items by path. So is a path with a `.`,
+> `..`, empty or whitespace-only part, or a NUL. A long delete keeps running on the NAS and returns
+> a handle for file_task.
 
 **Parameters:**
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `paths` | `list[str]` | **Yes** | — | File/folder paths to delete. Exact paths: wildcards aren't expanded, and a missing path refuses the whole call. A whole shared folder, or a path with a `.`, `..`, empty or whitespace-only part or a NUL, is refused (below). |
+| `paths` | `list[str]` | **Yes** | — | File/folder paths to delete. Exact paths: wildcards aren't expanded, and a missing path refuses the whole call. A whole shared folder or recycle bin, or a path with a `.`, `..`, empty or whitespace-only part or a NUL, is refused (below). |
 | `recursive` | `bool` | No | `true` | Delete non-empty folders recursively. With `false`, a folder that isn't empty is refused and left in place. |
 
 **A whole shared folder is refused (#451).** On DSM 7.2.2, 7.3.2 and 7.4.1, File Station's `Delete` on `/<share>` deletes the shared folder itself, for any account with write access (admin or not): it disappears from `list_share` for everyone, and the recycle bin, which lives inside the share, can't bring it back. DSM 7.1 refuses it (900 for a non-admin, 407 for admin). Verified on vdsm, DSM 7.1.1-42962 Update 9, 7.2.2-72806 Update 10, 7.3.2-86009 Update 5 and 7.4.1-90080 Update 1 (probe results on #451). So `delete_files` refuses a path that names a whole shared folder (`/video`, `video/`, ` /video `, `/video//`) as `invalid_parameter`, `param: paths`, before any delete is sent (the tool may first refresh the share list): `Delete files refused: '/video' is a whole shared folder. …` (the message says DSM 7.2.2 to 7.4.1, tested, and likely later), suggesting `list_files` and deleting its items by their own paths (leaving out its `#recycle`, #479) after the user agrees, or DSM's Control Panel to delete the shared folder itself (`SYNO.Core.Share` `delete`, administrator-only, isn't exposed). A path with a `.`, `..`, empty or whitespace-only part (`/video/.`, `/video/x/..`, `//video`, `/video/ .. /x`, and a whitespace-only last part, `/video/x/ ` or `/video/x/\t/`, which the path normalization would otherwise strip, sending `/video/x`: QA round 2) is refused too, since it names the share or another folder than the one meant: a plain `.` or `..` part with #470's message (`Invalid path '…': '.' and '..' parts aren't allowed.`), as in every other tool, and the rest (a dot padded with a tab or a no-break space inside the path, an empty or whitespace-only part, a blank last part) with the delete's own, `Delete files refused: '.', '..', empty and whitespace-only parts, and NUL characters, aren't allowed (…). Nothing was deleted.` (padding after a dot at the end of the path is stripped by normalizing, so `/video/x/..\t` is a plain dot and gets #470's message, while `/video/x/\t..` gets the delete's own); and so is a NUL (whether DSM cuts the path there, leaving `/video/`, is unprobed: #472). These part checks run on the paths as given, before the share check rewrites them (a share named in another case is renamed through the same normalization); the whole-shared-folder check runs after it, so a one-part path that isn't a share (`/vidoe`) is an unknown share, not a shared folder (`//video` gets past the share check only when DSM won't list shares). DSM refuses `.` and `..` itself (a whitespace-only last part never reached DSM: it was sent as its parent), but the refusal doesn't rest on it: on vdsm (all four versions, 2026-10-30; output on #451), `delete_files` before this change refused `/writable/.` and `/writable/probe-sub/..` (an existing folder) through its missing-path check, since `getinfo` answers 418, as the test user; and a raw `Delete start` on `/writable/.` failed with a File Station error ("Unexpected server error"), as the test user and as admin. The shared folder stayed every time. Emptying a shared folder safely, with the user's confirmation, is #484 (a first design, in #480, was dropped for this refusal; the issue keeps its lessons).
+
+**A whole recycle bin is refused (#479).** File Station's `Delete` on `/<share>/#recycle` removes the bin folder itself, with everything in it, other users' deleted items included, for an administrator and for a non-admin with write access to the share alike; the share's bin setting stays on, and the next delete on that share re-creates `#recycle` (owner root, mode 777) with the deleted item in it (seska, DSM 7.1.1-42962 Update 9, 2026-10-31, two test shares; probe results on #479; and on vdsm, all four versions, in `/home`'s bin, the only vdsm share with one: #409's test, `tests/vdsm/test_vdsm_recycle.py`, which now removes the bin with a raw `Delete` and checks that `delete_files` refuses it). So `delete_files` refuses `/<share>/#recycle` (any spelling that normalizes to it) as `invalid_parameter`, `param: paths`: `Delete files refused: '/video/#recycle' is the shared folder's whole recycle bin. Deleting it would permanently remove everything in the bin, other users' deleted items included. Nothing was deleted.`, suggesting deleting the items `list_recycle_bin` lists by their own paths after the user agrees, or DSM's Control Panel to empty the bin. Items inside the bin are still deleted, permanently, as before. **A user's home bin too (pre-QA):** the user home service gives each user a bin, which the user sees as `/home/#recycle` and an administrator as `/homes/<user>/#recycle`, the same folder (vdsm, all four versions: what the test user deletes into `/home/#recycle` is listed under `/homes/mcptest/#recycle`, `test_a_users_home_bin_is_homes_user_recycle`). A home folder's bin holds only its user's items, so its refusals say so: the caller's own `/home/#recycle` is `your home folder's whole recycle bin` (deleting it would `permanently remove everything in the bin`; moving it `would take your deleted items out of the bin`), with no Control Panel advice. And `/homes/<user>/#recycle` is refused the same way, by `delete_files`, `move_files` and `rename`: `Delete files refused: '/homes/alice/#recycle' is the whole recycle bin of alice's home folder (alice's /home/#recycle). Deleting it would permanently remove everything in the bin. Nothing was deleted.`, suggesting `list_files` and deleting its items by their own paths.
 
 **A failure partway (#480).** A multi-path delete that fails partway (a DSM error on a later item's start, status or task) gets `param: paths` and the failed path as `value`, appends `Failed on: <path>.` when the message doesn't already name that path itself (DSM's error on a start or a status request names no path, and one naming a path inside it doesn't name it), then `Already deleted before this failure: …` and `Not started: …`, and isn't retryable once something was deleted (the same call again is refused, since the deleted paths are missing): the suggestion keeps the cause's own advice and adds to retry only the paths not deleted, checking the failed one with `list_files` first unless that advice already says to check with `list_files` (a start with no answer, a path not found when the delete ran). A start that gets no answer (a transport error) when other paths were deleted or are still to come is `timeout` (for a timeout) or `unavailable`, not retryable: `Delete files failed: DSM didn't answer for /video/b (ReadTimeout); its delete may have started.`, with the same two lists; alone, it surfaces as the server's usual timeout or connection error, as before. (A status with no answer hands the item off, as any delete does.) Copy, move and restore are #482.
 
@@ -715,7 +725,7 @@ Delete files or folders.
   📄 /video/Downloads/old_video.srt (38 KiB)
   📁 /video/Downloads/temp/ (3 items, 156 MiB)
 
-Recycle bin is enabled on /video — files can be recovered with list_recycle_bin and restore_from_recycle_bin.
+Recycle bin is enabled on /video — files can be recovered with list_recycle_bin and restore_from_recycle_bin. Empty folders aren't kept in the bin.
 ```
 
 **Response shape (no recycle bin):**
@@ -744,7 +754,7 @@ When the same call also deletes paths outside the bin, the header says `Deleted`
 - Response adapts based on cached recycle bin status of the target share.
 - User treats delete as done either way — the recycle bin note is a safety net, not a required step.
 - If paths span shares with different recycle bin statuses, group the response accordingly.
-- **Deleting from the bin is permanent (#220):** a path inside `/<share>/#recycle` (or the bin folder itself) is treated as permanent whatever the share's setting, because DSM keeps no second copy (seen on DSM 7.1.1: `list_recycle_bin` showed 0 items afterward). Such a share isn't probed for its recycle status unless the call also deletes paths outside its bin.
+- **Deleting from the bin is permanent (#220):** a path inside `/<share>/#recycle`, or inside a user's home bin as an administrator reaches it (`/homes/<user>/#recycle`, #479), is treated as permanent whatever the share's setting, because DSM keeps no second copy (seen on DSM 7.1.1: `list_recycle_bin` showed 0 items afterward). Such a share isn't probed for its recycle status unless the call also deletes paths outside its bin.
 - **Missing paths (#162):** every path is checked with `getinfo` before anything is deleted. Any missing path refuses the whole call with `not_found` naming the missing paths and saying nothing was deleted. When a missing path contains `*` or `?`, the suggestion explains that paths aren't wildcard patterns and points to `search_files`. DSM itself finishes a Delete task for a missing path without an error (`total: -1`, empty `path`), so that status is also treated as not found, which covers a path that disappears between the check and the delete.
 - **Per-item errors and overlaps:** a Delete task can finish with an `errors` list and no `error` key, e.g. 900 for a non-recursive delete of a non-empty folder, which DSM leaves in place. That is a structured error (with a `recursive=true` hint), never "Deleted". Paths listed twice, or inside another listed path, are collapsed before any task runs (delete, move and restore), and a later failure names the paths already deleted. Copy collapses only paths listed twice: copying a folder and a path inside it is two copies (`dest/a` and `dest/b`).
 - **Task cleanup:** DSM releases a finished Delete task itself and answers `stop` with error 401 (DSM 7.1 and 7.2.2), so `stop` runs only for a task that didn't finish (a DSM error while polling, cancellation). A task still running when the wait ends, or whose status request DSM doesn't answer, is handed off, not stopped (#245).

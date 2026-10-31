@@ -262,6 +262,16 @@ Common causes:
   shared folder's items by path, or the shared folder itself in DSM's Control Panel.
 - `delete_files` on a path with a `.`, `..`, empty or whitespace-only part, or a NUL:
   write the path out in full.
+- `move_files` with a whole shared folder as a source, or `rename` of one (#479): DSM
+  takes it out of its shared folders. Move its items by path, copy it with `copy_files`,
+  or move or rename it in DSM's Control Panel.
+- `delete_files`, `move_files` or `rename` on a whole recycle bin: a share's
+  `/<share>/#recycle`, or a user's home bin (`/home/#recycle`, or `/homes/<user>/#recycle`
+  as an administrator sees it) (#479). Work with the bin's items by their own paths, or
+  restore them with `restore_from_recycle_bin`.
+- A `restore_from_recycle_bin` item that names the whole bin (`""`, `"/"`, `#recycle`) or
+  has a whitespace-only part after its first (`Shows/ `) (#479): give each item as
+  `list_recycle_bin` shows it.
 - `upload_file` or `download_file` was called without `dest_folder`, and no
   default is configured (`default_upload_dir` or `default_download_dir` in the
   `filestation` module settings). The error's `param` is `dest_folder`.
