@@ -3253,8 +3253,9 @@ class TestDeleteFailurePartway:
             (403, _RETRY_NOTE),
             # Its own advice first, then the note (QA round 3).
             (416, f"Free space on the NAS. {_RETRY_NOTE}"),
-            # Its own advice already says to check with list_files: no second check (QA
-            # round 5).
+            # Advice that already says to check with list_files: no second check (QA round
+            # 5). 1200 is rename's code; DSM answering it to a Delete is uncaptured, but it's
+            # the one table entry whose advice says so.
             (1200, f"Check both with list_files, then retry. {_SHORT_RETRY_NOTE}"),
             # Advice ending in a list goes last, so no period reads as one of the characters.
             (418, f'{_RETRY_NOTE} Avoid characters: / \\ : * ? " < > |'),
@@ -3340,6 +3341,8 @@ class TestDeleteFailurePartway:
             ("DSM error code 407 on path: /video/a b.", False),
             ("DSM error code 407 on path: /video/a.txt.", False),
             ("DSM error code 407 on path: /video/a/x.", False),
+            # A path inside it that ends with the same characters (pre-QA).
+            ("Failed: /video/a/x/video/a (DSM error 408).", False),
         ],
     )
     def test_names_path(self, message: str, named: bool) -> None:
@@ -3378,6 +3381,25 @@ class TestDeleteFailurePartway:
         # Nothing deleted yet: the same call can be retried, so the flag stays.
         first = _with_progress_so_far(error(True), "/video/a", [], ["/video/b"])
         assert json.loads(str(first))["error"]["retryable"] is True
+
+    @pytest.mark.parametrize(
+        ("advice", "suggestion"),
+        [
+            # Advice ending in a parenthesis is a sentence's end: the note goes after it.
+            ("Free space (or ask an admin)", f"Free space (or ask an admin) {_RETRY_NOTE}"),
+            # "Recheck" isn't "check": the note keeps its own check.
+            ("Recheck with list_files.", f"Recheck with list_files. {_RETRY_NOTE}"),
+            ("Check with list_files.", f"Check with list_files. {_SHORT_RETRY_NOTE}"),
+        ],
+    )
+    def test_where_the_note_goes(self, advice: str, suggestion: str) -> None:
+        from mcp_synology.modules.filestation.operations import _with_progress_so_far
+
+        body = {"error": {"code": "x", "message": "x.", "suggestion": advice}}
+        out = _with_progress_so_far(
+            ToolError(json.dumps(body)), "/video/b", ["/video/a"], ["/video/c"]
+        )
+        assert json.loads(str(out))["error"]["suggestion"] == suggestion
 
     def test_a_path_ending_in_dots_keeps_them(self) -> None:
         from mcp_synology.modules.filestation.operations import _with_progress_so_far

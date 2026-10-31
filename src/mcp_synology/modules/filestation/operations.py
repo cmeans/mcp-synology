@@ -343,15 +343,17 @@ def _unstop(message: str) -> str:
     return message[:-1] if message.endswith(".") else message
 
 
-# Advice that already says to check with list_files (a start with no answer, DSM's 1200),
+# Advice that already says to check with list_files (a start with no answer),
 # not advice that only mentions it (408's "Use list_files or search_files to find …").
 _CHECKS_WITH_LIST_FILES = re.compile(r"\bcheck\b[^.]*\bwith list_files\b", re.IGNORECASE)
 
 
 def _names_path(message: str, path: str) -> bool:
-    """Whether ``message`` names ``path`` itself: followed by the end, a sentence's
-    period, or " (" (as in ``/video/b (DSM error 900)``)."""
-    return re.search(re.escape(path) + r"(?=$|\.$|\.\s|\s\()", message) is not None
+    """Whether ``message`` names ``path`` itself: after the start, a space, ":" or "(",
+    and followed by the end, a sentence's period, or " (" (as in
+    ``/video/b (DSM error 900)``); not a path ending in it (``/video/b/x/video/b``)."""
+    pattern = r"(?<![^\s:(])" + re.escape(path) + r"(?=$|\.$|\.\s|\s\()"
+    return re.search(pattern, message) is not None
 
 
 def _with_progress_so_far(
