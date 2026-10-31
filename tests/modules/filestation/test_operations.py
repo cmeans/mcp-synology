@@ -3282,6 +3282,26 @@ class TestShareRootSourcesRefused:
         )
 
     @respx.mock
+    @pytest.mark.parametrize("item", ["#recycle/ /", "/ /", "Shows/ /", "Shows/ /Ep1.mkv"])
+    async def test_restore_refuses_a_whitespace_only_part(
+        self, mock_client: DsmClient, item: str
+    ) -> None:
+        """The move normalizes again, so `#recycle/ /` would be sent as the bin itself and
+        `Shows/ /` as the folder `Shows` (pre-QA)."""
+        with pytest.raises(ToolError) as exc:
+            await restore_from_recycle_bin(mock_client, share="video", paths=[item])
+        error = json.loads(str(exc.value))["error"]
+        assert (error["code"], error["param"], error["value"]) == (
+            "invalid_parameter",
+            "paths",
+            item,
+        )
+        assert error["message"] == (
+            f"Restore refused: whitespace-only parts aren't allowed ({item!r}). Nothing was "
+            "restored."
+        )
+
+    @respx.mock
     @pytest.mark.parametrize(
         ("item", "checked"),
         [

@@ -8,6 +8,7 @@ Run: ``uv run pytest tests/vdsm -m vdsm --dsm-version 7.2.2 -k vdsm_recycle``
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import uuid
 from typing import TYPE_CHECKING, Any
@@ -15,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from mcp.server.mcpserver.exceptions import ToolError
 
-from mcp_synology.modules.filestation.helpers import ensure_known_shares
+from mcp_synology.modules.filestation.helpers import dsm_str, ensure_known_shares
 from mcp_synology.modules.filestation.listing import list_files, list_recycle_bin, list_shares
 from mcp_synology.modules.filestation.operations import (
     create_folder,
@@ -260,6 +261,26 @@ async def test_list_shares_shows_every_shares_bin_admin(admin_client: Any) -> No
     await _every_shares_bin(admin_client[0], admin=True)
 
 
+async def _raw_delete(client: DsmClient, path: str) -> None:
+    """Delete ``path`` with DSM's own Delete task, past delete_files' refusals."""
+    started = await client.request(
+        "SYNO.FileStation.Delete",
+        "start",
+        version=2,
+        params={"path": path, "recursive": "true"},
+    )
+    task = dsm_str(started["taskid"])
+    for _ in range(60):
+        status = await client.request(
+            "SYNO.FileStation.Delete", "status", version=2, params={"taskid": task}
+        )
+        if status.get("finished"):
+            assert not status.get("error") and not status.get("errors"), status
+            return
+        await asyncio.sleep(0.5)
+    pytest.fail(f"DSM's delete of {path} didn't finish")
+
+
 async def _bin_folder_deleted(client: DsmClient, tmp_path: Path) -> None:
     """#409: after /home/#recycle itself is deleted, the bin is still on. The next delete
     re-creates it, and the same session (one shared cache) says so and lists the file."""
@@ -273,7 +294,11 @@ async def _bin_folder_deleted(client: DsmClient, tmp_path: Path) -> None:
         await upload_file(
             client, local_path=str(local), dest_folder=f"/home/{top}", allowed_roots=[tmp_path]
         )
-        await delete_files(client, paths=["/home/#recycle"], recycle_bin_status=status)
+        # delete_files refuses the bin itself since #479; DSM's own Delete still removes it
+        # (as the test user and as admin), which is what #409 is about.
+        with pytest.raises(ToolError, match="whole recycle bin"):
+            await delete_files(client, paths=["/home/#recycle"], recycle_bin_status=status)
+        await _raw_delete(client, "/home/#recycle")
         out = await list_recycle_bin(client, share="home", recycle_bin_status=status)
         assert "cannot be recovered" not in out, out
         out = await delete_files(client, paths=[f"/home/{top}/{name}"], recycle_bin_status=status)

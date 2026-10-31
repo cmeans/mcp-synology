@@ -1221,7 +1221,7 @@ async def _delete_summary(
     recycle_bin_status: dict[str, bool] | None,
 ) -> str:
     """The result text of a finished delete_files call."""
-    # A path inside a share's bin (/<share>/#recycle, or the bin itself) is gone for
+    # A path inside a share's bin (/<share>/#recycle/…) is gone for
     # good whatever the share's setting: DSM keeps no second copy (#220).
     in_bin: dict[str, list[str]] = {}
     outside_bin: list[str] = []
@@ -1366,6 +1366,22 @@ async def restore_from_recycle_bin(
             full_paths.append(normalize_path(f"/{share_name}/{p}"))
         else:
             full_paths.append(normalize_path(f"/{share_name}/#recycle/{p.lstrip('/')}"))
+        if any(part and not part.strip() for part in full_paths[-1].split("/")):
+            # `_copy_move` normalizes the path again, which strips a whitespace-only last
+            # part: `#recycle/ /` would be checked as `/video/#recycle/ ` and sent as the
+            # bin itself, `Shows/ /` as the folder `Shows` (pre-QA; the same stripping is
+            # #488). Refused, as delete_files refuses one.
+            error_response(
+                ErrorCode.INVALID_PARAMETER,
+                f"Restore refused: whitespace-only parts aren't allowed ({item!r}). Nothing "
+                "was restored.",
+                retryable=False,
+                param="paths",
+                value=item,
+                suggestion="Give each item as list_recycle_bin shows it, e.g. Shows/Ep1.mkv. "
+                "An item whose name is only whitespace can't be reached this way: restore it "
+                "in DSM's File Station.",
+            )
         if full_paths[-1] == bin_root:
             # An empty item ("", "/", "#recycle") names the bin itself: restoring it would
             # move the whole bin out (#479).
