@@ -23,7 +23,7 @@
 
 ### Fixed
 
-- Config loading reports malformed YAML roots and env-overridden sections as configuration errors; empty sections can receive environment overrides (closes #475, #463).
+- **Malformed config shapes report configuration errors** (#477) — closes #463; refs #475. Empty sections can receive environment overrides; non-mapping roots and sections are rejected before merging settings.
 
 - **`upload_photos` works for an account that has never used Synology Photos** (#440) — closes #436. Such an account has no `homes/<user>/Photos` folder yet, and every upload to its personal root failed with 117 ("Photos found no such item, folder or task"), retried once to no effect. The Photos web app never meets this because it calls `SYNO.Foto.Setting.User get` at sign-in, which creates the folder for a user with no photos. Creating the user, granting the Photos privilege, logging in and the web app's other start-up reads don't; creating a Photos folder does. Now, after a 117 on an upload to the personal root, `upload_photos` makes that call once and resends the file. Verified on vdsm DSM 7.1, 7.2.2, 7.3.2 and 7.4.1. If the folder is still missing, the row says why and what to do. A 117 is no longer retried after 2 s, which never helped
 - **The docs no longer call only Download Station and Photos "opt-in"** (#437) — closes #426. Every module, File Station and System included, loads only when it's listed under `modules:`, and `setup` writes File Station only; the README, CLAUDE.md and the Download Station and Photos specs now say so for every module
