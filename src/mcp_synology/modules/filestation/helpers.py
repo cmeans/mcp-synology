@@ -66,7 +66,7 @@ def unanswered_status_response(
     note = f" {task_note}" if task_note else ""
     error_response(
         ErrorCode.TIMEOUT if timed_out else ErrorCode.UNAVAILABLE,
-        f"{operation} failed: DSM {what} a status request on path: {path}"
+        f"{operation} failed: DSM {what} a status request on path: {shown(path)}"
         f" ({describe_transport_error(exc)}).{note}{already}",
         retryable=True,
         param="path",

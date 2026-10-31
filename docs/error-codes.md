@@ -265,8 +265,9 @@ Common causes:
 - A name a tool would create (`rename`'s `new_name`, `upload_file`'s `filename` or the
   local file's name, `create_folder`'s new folder) starts or ends with whitespace (#488:
   DSM keeps it exactly, making `report.pdf ` a different file), has a control character
-  other than a tab, or is `#recycle` directly in a shared folder (#510). Give a plain
-  name. Paths themselves are taken exactly, so an existing item named with such
+  other than a tab, or is `#recycle` directly in a shared folder or a user's home folder
+  (#510); or a copy, move or restore would put a folder named `#recycle` there. Give a
+  plain name. Paths themselves are taken exactly, so an existing item named with such
   whitespace is still reached by its exact path.
 - `create_folder` given a shared folder itself (`/video`), or an upload or `create_folder`
   that would create a missing parent folder whose name starts or ends with whitespace

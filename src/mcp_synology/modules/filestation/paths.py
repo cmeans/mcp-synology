@@ -33,6 +33,8 @@ from mcp_synology.modules.filestation.helpers import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from mcp_synology.core.client import DsmClient
 
 DEFAULT_SUGGESTION = "Write the path out in full from the shared folder, e.g. /video/Movies."
@@ -84,6 +86,11 @@ LOCAL_PARAMS: dict[str, set[str]] = {
     "upload_file": {"local_path"},
 }
 
+_OP_WORDS = {
+    "copy_files": "Copy files",
+    "move_files": "Move files",
+    "restore_from_recycle_bin": "Restore",
+}
 _WRITE_OPS: dict[str, Literal["Delete", "Move", "Rename"]] = {
     "delete_files": "Delete",
     "move_files": "Move",
@@ -156,6 +163,36 @@ def in_bin(path: str) -> bool:
     return bin_index(path.split("/")[1:]) is not None
 
 
+def makes_a_bin(parent: str) -> bool:
+    """Whether a folder named ``#recycle`` in ``parent`` would be a recycle bin to the tools
+    (`bin_index`): ``parent`` is a shared folder or a user's home folder ``/homes/<user>``."""
+    parts = normalize_path(parent).split("/")[1:]
+    return bin_index([*parts, "#recycle"]) == len(parts)
+
+
+def refuse_planted_bin(
+    tool: str,
+    given: Sequence[str],
+    resolved: Sequence[str],
+    dests: Sequence[str],
+    param: str = "paths",
+) -> None:
+    """Refuse a copy, move or restore that would put a folder named ``#recycle`` where the
+    tools would take it for a recycle bin (`makes_a_bin`), as `refuse_bad_name` refuses
+    creating one there (pre-QA on #510; DSM allows it, probe on #494). ``given`` are the
+    caller's own values (quoted in the refusal), ``resolved`` the checked paths, ``dests``
+    where each would land."""
+    for raw, path, dest in zip(given, resolved, dests, strict=True):
+        if normalize_path(path).rsplit("/", 1)[-1] == "#recycle" and makes_a_bin(dest):
+            _refuse(
+                f"{_OP_WORDS.get(tool, tool)} refused: {raw!r} would land in {shown(dest)} "
+                "as '#recycle', the name of its recycle bin. Nothing was changed.",
+                param,
+                raw,
+                "Copy or move the folder's contents instead, or rename it first.",
+            )
+
+
 class BinWords(NamedTuple):
     whose: str  # what the bin is called in a refusal
     items: str  # whose deleted items are in it
@@ -197,7 +234,7 @@ def whole_bin_words(parts: list[str]) -> BinWords:
 
 
 def refuse_write_target(
-    operation: Literal["Delete", "Move", "Rename"], path: str, param: str
+    operation: Literal["Delete", "Move", "Rename"], path: str, param: str, given: str | None = None
 ) -> None:
     """Refuse a whole shared folder, a whole recycle bin or a user's home folder as what a
     delete deletes, a move moves or a rename renames.
@@ -217,12 +254,14 @@ def refuse_write_target(
       orphaned (vdsm DSM 7.1 and 7.4.1).
 
     Called after the share check, so a one-part path that isn't a share (a typo) is an
-    unknown share, not this (pre-QA on #480).
+    unknown share, not this (pre-QA on #480). ``path`` is the checked path; ``given`` the
+    caller's own text, which the refusal quotes and returns (#489's rule).
     """
     parts = normalize_path(path).split("/")[1:]
+    raw = path if given is None else given
     past = {"Delete": "deleted", "Move": "moved", "Rename": "renamed"}[operation]
     acting = {"Delete": "Deleting", "Move": "Moving", "Rename": "Renaming"}[operation]
-    head = f"{operation}{'' if operation == 'Rename' else ' files'} refused: {path!r} is"
+    head = f"{operation}{'' if operation == 'Rename' else ' files'} refused: {raw!r} is"
     at = bin_index(parts)
     if at is not None and len(parts) == at + 1:
         words = whole_bin_words(parts)
@@ -256,14 +295,14 @@ def refuse_write_target(
                     "list_recycle_bin shows; to move some elsewhere, restore them with "
                     "dest_folder."
                 )
-        _refuse(f"{message} Nothing was {past}.", param, path, suggestion)
+        _refuse(f"{message} Nothing was {past}.", param, raw, suggestion)
     if len(parts) == 2 and parts[0].casefold() == "homes":
         _refuse(
             f"{head} {parts[1]}'s whole home folder. {acting} it through File Station "
             "breaks that user's home: DSM makes them a new, empty one at their next write, "
             f"and their files stay behind (tested on DSM 7.1 and 7.4.1). Nothing was {past}.",
             param,
-            path,
+            raw,
             f"Work with the items in it by their own paths ({path.rstrip('/')}/<item>), or "
             "manage the user's home in DSM's Control Panel > User.",
         )
@@ -296,7 +335,7 @@ def refuse_write_target(
             "under its new name too (tested on DSM 7.1 to 7.4.1)."
         )
         suggestion = "Rename a shared folder in DSM's Control Panel > Shared Folder."
-    _refuse(f"{head} a whole shared folder. {detail} Nothing was {past}.", param, path, suggestion)
+    _refuse(f"{head} a whole shared folder. {detail} Nothing was {past}.", param, raw, suggestion)
 
 
 def _refuse(message: str, param: str, value: str, suggestion: str) -> None:
@@ -327,8 +366,9 @@ def refuse_bad_name(
     blank, a ``/``, a NUL or another control character (a tab inside the name is fine: DSM
     keeps it, maintainer 2026-10-31), ``.`` or ``..`` (#449), whitespace
     at its start or end (#488: DSM would keep it, and it's almost never meant), or
-    ``#recycle`` directly in a shared folder (#510: DSM lets one be created where a share
-    has no bin, and it would be taken for the bin). ``label`` names it in the message when
+    ``#recycle`` where it would be taken for a bin: directly in a shared folder or in a
+    user's home folder (``/homes/<user>``) (#510: DSM lets one be created where there's no
+    bin folder yet). ``label`` names it in the message when
     it isn't ``param`` itself (an upload's local file name); ``parent`` is the folder it
     goes in, when known."""
     problem = (
@@ -346,8 +386,8 @@ def refuse_bad_name(
         if any(unicodedata.category(c) == "Cc" and c != "\t" for c in name)
         else "starts or ends with whitespace"
         if name != name.strip()
-        else "is '#recycle', a shared folder's recycle bin"
-        if name == "#recycle" and parent is not None and len(normalize_path(parent).split("/")) == 2
+        else "is '#recycle', the name of a recycle bin there"
+        if name == "#recycle" and parent is not None and makes_a_bin(parent)
         else None
     )
     if problem:
@@ -365,7 +405,12 @@ def refuse_bad_name(
 
 
 async def _refuse_padded_parent(
-    client: DsmClient, raw: str, normalized: str, param: str, upto: int
+    client: DsmClient,
+    raw: str,
+    normalized: str,
+    param: str,
+    upto: int,
+    suggestion: str | None = None,
 ) -> None:
     """Refuse a destination whose padded part doesn't exist yet, when the tool would create
     it (``create_parents``, ``force_parent``): DSM makes ``/video/Uploads `` beside
@@ -382,7 +427,8 @@ async def _refuse_padded_parent(
                     "created.",
                     param,
                     raw,
-                    "Give the folder's name without leading or trailing spaces, or pick an "
+                    suggestion
+                    or "Give the folder's name without leading or trailing spaces, or pick an "
                     "existing folder (list_files shows them).",
                 )
 
@@ -415,7 +461,7 @@ async def resolve_paths(
     resolved = [ResolvedPath(normalize_path(p)) for p in shared]
     for raw, path in zip(raws, resolved, strict=True):
         if role is PathRole.WRITE_TARGET:
-            refuse_write_target(_WRITE_OPS[tool], path, named)
+            refuse_write_target(_WRITE_OPS[tool], path, named, raw)
         elif role is PathRole.SHARE and len(path.split("/")) != 2:
             _refuse(
                 f"Invalid shared folder {raw!r}: give the shared folder's name only.",
@@ -444,9 +490,13 @@ async def resolve_paths(
                 parent=parent or "/",
             )
             if creates_parents:
-                await _refuse_padded_parent(client, raw, path, named, len(path.split("/")) - 2)
+                await _refuse_padded_parent(
+                    client, raw, path, named, len(path.split("/")) - 2, suggestion
+                )
         elif role is PathRole.DEST and creates_parents:
-            await _refuse_padded_parent(client, raw, path, named, len(path.split("/")) - 1)
+            await _refuse_padded_parent(
+                client, raw, path, named, len(path.split("/")) - 1, suggestion
+            )
     return resolved
 
 

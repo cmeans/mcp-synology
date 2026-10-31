@@ -24,6 +24,7 @@ from mcp_synology.core.formatting import (
     synology_error_response,
 )
 from mcp_synology.modules.filestation.helpers import (
+    _is_dot,
     describe_transport_error,
     dsm_str,
     ensure_recycle_status,
@@ -159,7 +160,7 @@ async def rename(
     normalized = normalize_path(path)
 
     # new_name is just a name: not a path, nor `.` or `..`, as #449 refuses in paths
-    relocates = "/" in new_name or new_name.strip(" ") in (".", "..")
+    relocates = "/" in new_name or _is_dot(new_name)
     refuse_bad_name(
         "Rename",
         new_name,
@@ -533,7 +534,7 @@ def _partial_note(
         else ""
     )
     return (
-        f". Part of it may already be in {dest}{gone}: DSM doesn't say how much was "
+        f". Part of it may already be in {shown(dest)}{gone}: DSM doesn't say how much was "
         f"{past} before it stopped, so check there before trying again"
     )
 

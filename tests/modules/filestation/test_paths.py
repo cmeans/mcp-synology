@@ -224,18 +224,19 @@ class TestRefuseBadName:
             f"Rename failed: new_name should be just a file name, but it {problem}."
         )
 
-    @pytest.mark.parametrize("parent", ["/video", "/video/", "video"])
-    def test_recycle_at_a_shares_top(self, parent: str) -> None:
+    @pytest.mark.parametrize("parent", ["/video", "/video/", "video", "/homes/alice"])
+    def test_recycle_where_it_would_be_a_bin(self, parent: str) -> None:
         """DSM lets `#recycle` be created where a share has no bin (#494 probe); the tools
         would take it for the bin."""
         with pytest.raises(ToolError) as exc:
             refuse_bad_name("Rename", "#recycle", "new_name", "x", parent=parent)
-        assert "is '#recycle', a shared folder's recycle bin" in _error(exc)["message"]
+        assert "is '#recycle', the name of a recycle bin there" in _error(exc)["message"]
 
     @pytest.mark.parametrize("name", ["Severance", "a b", "a\tb", "#recycled", ".hidden", "a..b"])
     def test_ordinary_names_pass(self, name: str) -> None:
         refuse_bad_name("Rename", name, "new_name", "x", parent="/video")
         refuse_bad_name("Rename", "#recycle", "new_name", "x", parent="/video/sub")
+        refuse_bad_name("Rename", "#recycle", "new_name", "x", parent="/homes/alice/sub")
 
 
 # -- bin items -----------------------------------------------------------------------------
@@ -291,9 +292,19 @@ class TestResolveBinItems:
 class _FakeClient:
     """Answers list_share with fixed shares; getinfo says nothing exists unless listed."""
 
-    def __init__(self, existing: set[str] | None = None) -> None:
+    def __init__(
+        self,
+        existing: set[str] | None = None,
+        codes: dict[str, int] | None = None,
+        methods: dict[str, Any] | None = None,
+    ) -> None:
         self.existing = existing or set()
+        self.codes = codes or {}
+        self.methods = methods or {}
         self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def upload(self, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return {"blSkip": True}
 
     def negotiate_version(self, *_args: Any, **_kwargs: Any) -> int:
         return 2
@@ -301,6 +312,11 @@ class _FakeClient:
     async def request(self, api: str, method: str, **kwargs: Any) -> dict[str, Any]:
         params = kwargs.get("params") or {}
         self.calls.append((method, params))
+        if method in self.methods:
+            answer = self.methods[method]
+            if isinstance(answer, BaseException):
+                raise answer
+            return answer  # type: ignore[no-any-return]
         if method == "list_share":
             return {"shares": [{"name": n} for n in ("video", "home", "homes")]}
         if method == "getinfo":
@@ -309,7 +325,9 @@ class _FakeClient:
             )
             return {
                 "files": [
-                    {"path": p, "isdir": True} if p in self.existing else {"path": p, "code": 408}
+                    {"path": p, "isdir": True}
+                    if p in self.existing
+                    else {"path": p, "code": self.codes.get(p, 408)}
                     for p in paths
                 ]
             }
@@ -389,7 +407,7 @@ class TestResolvePaths:
         [
             ("/video", "is a shared folder, not a new folder in one"),
             ("/video/new ", "starts or ends with whitespace"),
-            ("/video/#recycle", "is '#recycle', a shared folder's recycle bin"),
+            ("/video/#recycle", "is '#recycle', the name of a recycle bin there"),
         ],
     )
     async def test_new_folder_names(self, path: str, message: str) -> None:
@@ -530,7 +548,7 @@ SPELLINGS: dict[str, dict[str, str]] = {
         WRITE=INVALID,
         DEST="/homes/alice/#recycle",
         DEST_CREATES="/homes/alice/#recycle",
-        NEW="/homes/alice/#recycle",
+        NEW=INVALID,
         SHARE=INVALID,
     ),
     "#recycle": _all(NOT_FOUND),
@@ -785,3 +803,198 @@ class TestPaddedPathsAreShownQuoted:
 
 def _error_of(err: ToolError) -> dict[str, Any]:
     return json.loads(str(err))["error"]  # type: ignore[no-any-return]
+
+
+class TestMoreShownSites:
+    """The rest of `shown`'s call sites (pre-QA on #510: reverting these failed nothing)."""
+
+    async def test_dir_size_407(self) -> None:
+        from mcp_synology.modules.filestation.metadata import get_dir_size
+
+        with pytest.raises(ToolError) as exc:
+            await get_dir_size(_FakeClient(codes={PADDED: 407}), path=PADDED)  # type: ignore[arg-type]
+        assert f"no permission to read {QUOTED}" in _error(exc)["message"]
+
+    async def test_destination_407(self) -> None:
+        from mcp_synology.modules.filestation.operations import _refuse_missing_destination
+
+        with pytest.raises(ToolError) as exc:
+            await _refuse_missing_destination(_FakeClient(codes={PADDED: 407}), "Move", PADDED)  # type: ignore[arg-type]
+        assert f"destination folder {QUOTED}." in _error(exc)["message"]
+
+    async def test_download_407(self, tmp_path: Any) -> None:
+        from mcp_synology.modules.filestation.transfer import download_file
+
+        with pytest.raises(ToolError) as exc:
+            await download_file(
+                _FakeClient(codes={PADDED: 407}),  # type: ignore[arg-type]
+                path=PADDED,
+                dest_folder=str(tmp_path),
+                allowed_roots=[tmp_path],
+            )
+        assert f"no permission to read {QUOTED}" in _error(exc)["message"]
+
+    def test_copy_move_failed_list_and_partial_note(self) -> None:
+        from mcp_synology.modules.filestation.operations import _copy_move_result
+
+        status = {"finished": True, "errors": [{"code": 900, "path": PADDED}]}
+        with pytest.raises(ToolError) as exc:
+            _copy_move_result(status, PADDED, "Copy", dest="/video/Up ")
+        message = _error(exc)["message"]
+        assert f"Copy files failed: {QUOTED} (" in message
+        assert f"already be in {repr('/video/Up ')}" in message
+
+    def test_delete_failed_list(self) -> None:
+        from mcp_synology.modules.filestation.operations import _delete_result
+
+        status = {"finished": True, "errors": [{"code": 900, "path": PADDED}]}
+        with pytest.raises(ToolError) as exc:
+            _delete_result(status, PADDED, recursive=True)
+        assert QUOTED in _error(exc)["message"]
+
+    async def test_delete_start_with_no_answer(self) -> None:
+        import httpx
+
+        from mcp_synology.modules.filestation.operations import delete_files
+
+        client = _FakeClient(
+            existing={PADDED, "/video/b"}, methods={"start": httpx.ReadTimeout("x")}
+        )
+        with pytest.raises(ToolError) as exc:
+            await delete_files(client, paths=[PADDED, "/video/b"], recycle_bin_status={})  # type: ignore[arg-type]
+        assert f"DSM didn't answer for {QUOTED}" in _error(exc)["message"]
+
+    def test_status_request_with_no_answer(self) -> None:
+        import httpx
+
+        from mcp_synology.modules.filestation.helpers import unanswered_status_response
+
+        with pytest.raises(ToolError) as exc:
+            unanswered_status_response("Get directory size", PADDED, httpx.ReadTimeout("x"))
+        assert f"on path: {QUOTED} (" in _error(exc)["message"]
+
+    def test_file_task_failed_list(self) -> None:
+        from mcp_synology.modules.filestation.tasks import Handle, _generic_final
+
+        text = _generic_final(
+            Handle("copy", "T1"),
+            {"finished": True, "errors": [{"code": 900, "path": PADDED}]},
+        )
+        assert QUOTED in text
+
+    async def test_search_lost_task(self) -> None:
+        from mcp_synology.modules.filestation.search import search_files
+
+        client = _FakeClient(methods={"start": {"taskid": "T1"}, "list": {"finished": True}})
+        with pytest.raises(ToolError) as exc:
+            await search_files(client, folder_path=PADDED, pattern="x")  # type: ignore[arg-type]
+        assert f"lost the search task for {QUOTED}" in _error(exc)["message"]
+
+    async def test_upload_already_exists(self, tmp_path: Any) -> None:
+        from mcp_synology.modules.filestation.transfer import upload_file
+
+        local = tmp_path / "f.txt"
+        local.write_text("x")
+        with pytest.raises(ToolError) as exc:
+            await upload_file(
+                _FakeClient(),  # type: ignore[arg-type]
+                local_path=str(local),
+                dest_folder="/video/Up ",
+                allowed_roots=[tmp_path],
+            )
+        assert f"already exists in {repr('/video/Up ')}." in _error(exc)["message"]
+
+
+# -- the tools' wiring (pre-QA on #510) ---------------------------------------------------
+
+
+async def _tool(tool: str, client: _FakeClient | None = None, **settings: Any) -> Any:
+    server, manager, ctx = _make_ctx(shared_paths=["/tmp"], settings=settings or None)
+    manager.get_client = AsyncMock(return_value=client or _FakeClient())
+    register(ctx)
+    return server._tool_manager._tools[tool].fn
+
+
+class TestToolWiring:
+    async def test_rename_to_recycle_at_a_shares_top(self) -> None:
+        fn = await _tool("rename")
+        with pytest.raises(ToolError) as exc:
+            await fn(path="/video/x", new_name="#recycle")
+        assert "the name of a recycle bin there" in _error(exc)["message"]
+        with pytest.raises(ToolError) as exc:
+            await fn(path="/homes/alice/x", new_name="#recycle")
+        assert "the name of a recycle bin there" in _error(exc)["message"]
+
+    @pytest.mark.parametrize("dest", ["/video", "/homes/alice"])
+    async def test_upload_as_recycle(self, tmp_path: Any, dest: str) -> None:
+        local = tmp_path / "#recycle"
+        local.write_text("x")
+        fn = await _tool("upload_file")
+        for kwargs in ({"filename": "#recycle"}, {}):
+            with pytest.raises(ToolError) as exc:
+                await fn(ctx=_fake_mcp_ctx(), local_path=str(local), dest_folder=dest, **kwargs)
+            assert "the name of a recycle bin there" in _error(exc)["message"]
+
+    @pytest.mark.parametrize("tool", ["copy_files", "move_files"])
+    @pytest.mark.parametrize("dest", ["/video", "/homes/alice"])
+    async def test_copy_or_move_a_recycle_folder_where_it_would_be_a_bin(
+        self, tool: str, dest: str
+    ) -> None:
+        fn = await _tool(tool)
+        with pytest.raises(ToolError) as exc:
+            await fn(ctx=_fake_mcp_ctx(), paths=["/video/sub/#recycle"], dest_folder=dest)
+        error = _error(exc)
+        assert (error["param"], error["value"]) == ("paths", "/video/sub/#recycle")
+        assert "would land in" in error["message"]
+
+    async def test_restore_a_recycle_folder_back_to_a_shares_top(self) -> None:
+        fn = await _tool("restore_from_recycle_bin")
+        with pytest.raises(ToolError) as exc:
+            await fn(ctx=_fake_mcp_ctx(), share="video", paths=["#recycle/#recycle"])
+        assert "would land in /video" in _error(exc)["message"]
+
+    async def test_a_recycle_folder_deeper_down_is_fine(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        domain = AsyncMock(return_value="ok")
+        monkeypatch.setattr("mcp_synology.modules.filestation.operations.copy_files", domain)
+        fn = await _tool("copy_files")
+        await fn(ctx=_fake_mcp_ctx(), paths=["/video/sub/#recycle"], dest_folder="/video/d")
+        domain.assert_awaited_once()
+
+    @pytest.mark.parametrize("given", [" /video", "video/", "/VIDEO"])
+    async def test_a_write_refusal_quotes_the_callers_text(self, given: str) -> None:
+        fn = await _tool("delete_files")
+        with pytest.raises(ToolError) as exc:
+            await fn(ctx=_fake_mcp_ctx(), paths=[given])
+        error = _error(exc)
+        assert error["value"] == given
+        assert error["message"].startswith(f"Delete files refused: {given!r} is a whole")
+
+    async def test_a_padded_default_upload_dir_gets_the_settings_advice(
+        self, tmp_path: Any
+    ) -> None:
+        local = tmp_path / "f.txt"
+        local.write_text("x")
+        fn = await _tool("upload_file", default_upload_dir="/video/Up ")
+        with pytest.raises(ToolError) as exc:
+            await fn(ctx=_fake_mcp_ctx(), local_path=str(local))
+        error = _error(exc)
+        assert error["param"] == "default_upload_dir"
+        assert "default_upload_dir" in error["suggestion"]
+
+
+@pytest.mark.parametrize(
+    ("paths", "kind"),
+    [
+        (["/video/#recycle/x"], "restore"),
+        (["/homes/alice/#recycle/x"], "restore"),
+        (["/video/x"], "move"),
+    ],
+)
+def test_task_kind_reads_any_bin(paths: list[str], kind: str) -> None:
+    """A discovered CopyMove out of any bin, a user's home bin included, is a restore (one
+    bin rule, #510)."""
+    from mcp_synology.modules.filestation.tasks import _task_kind
+
+    assert _task_kind("SYNO.FileStation.CopyMove", {"remove_src": True}, paths) == kind

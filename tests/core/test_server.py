@@ -1843,7 +1843,8 @@ class TestInstructionComments:
 # the bin or with a whitespace-only part after its first.
 # -76 by #488: paths are taken exactly, so delete_files and restore no longer refuse a
 # whitespace-only part.
-PAYLOAD_BUDGET_CHARS = 56_423
+# +114 by #510: rename, move_files and delete_files say a user's home folder is refused.
+PAYLOAD_BUDGET_CHARS = 56_537
 
 
 class TestPayloadBudget:

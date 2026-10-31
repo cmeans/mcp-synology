@@ -192,8 +192,8 @@ MODULE_INFO = ModuleInfo(
             description=(
                 "Rename a file or folder in place. If the new name is already taken in that "
                 "folder, DSM refuses and nothing is replaced. To move something to another "
-                "folder, use move_files. A whole shared folder (`/video`) or recycle bin is "
-                "refused."
+                "folder, use move_files. A whole shared folder (`/video`), recycle bin or user's "
+                "home folder (`/homes/<user>`) is refused."
             ),
             permission_tier=PermissionTier.WRITE,
         ),
@@ -218,8 +218,8 @@ MODULE_INFO = ModuleInfo(
                 "`dest_folder` must already exist; it isn't created. With `overwrite=false` "
                 "(default), items already at the destination are skipped, listed and left at the "
                 "source. If any source is missing, nothing is moved. A whole shared folder "
-                "(`/video`) or recycle bin is refused as a source: move its items by path. A "
-                "long move keeps "
+                "(`/video`), recycle bin or user's home folder (`/homes/<user>`) is refused as a "
+                "source: move its items by path. A long move keeps "
                 "running on the NAS and returns a handle for file_task."
             ),
             permission_tier=PermissionTier.WRITE,
@@ -234,8 +234,9 @@ MODULE_INFO = ModuleInfo(
                 "list_recycle_bin shows them and restore_from_recycle_bin brings them back. "
                 "Without a bin, and for anything inside a bin (`/<share>/#recycle/…`), deletion "
                 "is permanent. Paths are exact, not wildcard patterns, and if any path is missing "
-                "nothing is deleted. A whole shared folder (`/video`) or recycle bin "
-                "(`/video/#recycle`) is refused: delete its items by path. So is a path with a "
+                "nothing is deleted. A whole shared folder (`/video`), recycle bin "
+                "(`/video/#recycle`) or user's home folder (`/homes/<user>`) is refused: delete "
+                "its items by path. So is a path with a "
                 "`.`, `..` or empty part, or a NUL. "
                 "A long delete keeps running on the NAS and returns a handle for file_task."
             ),
@@ -308,7 +309,11 @@ def register(ctx: "RegisterContext") -> None:
         rename,
         restore_from_recycle_bin,
     )
-    from mcp_synology.modules.filestation.paths import resolve_bin_items, resolve_paths
+    from mcp_synology.modules.filestation.paths import (
+        refuse_planted_bin,
+        resolve_bin_items,
+        resolve_paths,
+    )
     from mcp_synology.modules.filestation.search import search_files
     from mcp_synology.modules.filestation.tasks import (
         DiscoveryNote,
@@ -890,6 +895,7 @@ def register(ctx: "RegisterContext") -> None:
             [dest] = await resolve_paths(
                 client, known_shares, "copy_files", "dest_folder", [dest_folder]
             )
+            refuse_planted_bin("copy_files", paths, sources, [dest] * len(sources))
             return _reply(
                 await copy_files(
                     client,
@@ -933,6 +939,7 @@ def register(ctx: "RegisterContext") -> None:
             [dest] = await resolve_paths(
                 client, known_shares, "move_files", "dest_folder", [dest_folder]
             )
+            refuse_planted_bin("move_files", paths, sources, [dest] * len(sources))
             return _reply(
                 await move_files(
                     client,
@@ -1139,7 +1146,7 @@ def register(ctx: "RegisterContext") -> None:
                 client, known_shares, "restore_from_recycle_bin", "share", [share]
             )
             # Before any other request; the operation resolves them the same way.
-            resolve_bin_items(bin_share, paths)
+            items = resolve_bin_items(bin_share, paths)
             dest = (
                 (
                     await resolve_paths(
@@ -1152,6 +1159,13 @@ def register(ctx: "RegisterContext") -> None:
                 )[0]
                 if dest_folder
                 else None
+            )
+            # Each item goes to dest, or back to the folder it was deleted from.
+            refuse_planted_bin(
+                "restore_from_recycle_bin",
+                paths,
+                items,
+                [dest or item.replace("/#recycle", "", 1).rsplit("/", 1)[0] for item in items],
             )
             return _reply(
                 await restore_from_recycle_bin(

@@ -147,7 +147,7 @@ async def upload_file(
     def already_exists() -> NoReturn:
         error_response(
             ErrorCode.ALREADY_EXISTS,
-            f"Upload failed: File '{effective_name}' already exists in {dest}.",
+            f"Upload failed: File '{effective_name}' already exists in {shown(dest)}.",
             retryable=False,
             # The conflict is the file name, passed or not, as download_file reports it (#189).
             param="filename",
@@ -409,9 +409,9 @@ async def download_file(
             # or proxy error, not DSM's answer for a missing file (#324). Once the NAS
             # answers again, a missing file is reported as not found.
             where = (
-                f"for {nas_path}, which exists."
+                f"for {shown(nas_path)}, which exists."
                 if exists
-                else f"and the check of {nas_path} before it got no DSM answer either."
+                else f"and the check of {shown(nas_path)} before it got no DSM answer either."
             )
             error_response(
                 ErrorCode.UNAVAILABLE,
