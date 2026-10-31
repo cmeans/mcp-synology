@@ -3101,7 +3101,10 @@ class TestShareRootRefused:
         )
         # A plain dot part gets #470's message, as in every other tool; the rest are the
         # delete's own refusal.
-        plain_dot = any(p.strip(" ") in (".", "..") for p in path.split("/"))
+        from mcp_synology.modules.filestation.helpers import normalize_path
+
+        # As refuse_dot_parts reads it: after normalizing (QA round 4).
+        plain_dot = any(p.strip(" ") in (".", "..") for p in normalize_path(path).split("/"))
         expected = (
             "'.' and '..' parts aren't allowed"
             if plain_dot
@@ -3117,6 +3120,12 @@ class TestShareRootRefused:
         from mcp_synology.modules.filestation.operations import refuse_share_roots
 
         refuse_share_roots([path])  # doesn't raise
+
+
+_RETRY_NOTE = (
+    "When retrying, leave out the paths already deleted (the same call would be refused), and "
+    "check the one that failed with list_files first."
+)
 
 
 class TestDeleteFailurePartway:
@@ -3211,26 +3220,33 @@ class TestDeleteFailurePartway:
         )
         # The cause's own advice is kept, with the retry note after it (QA round 3 on #480).
         suggestion = json.loads(str(exc.value))["error"]["suggestion"]
-        own, _, note = suggestion.partition(" Then retry only the paths not deleted")
-        assert own and note
+        own, _, rest = suggestion.partition(" When retrying, leave out the paths already deleted")
+        assert own and rest
 
     @respx.mock
-    async def test_a_full_nas_partway_keeps_its_advice(self, mock_client: DsmClient) -> None:
-        """A 416 (no space) on a later item still says to free space (QA round 3 on #480)."""
-        self._route(2, code=416)
+    @pytest.mark.parametrize(
+        ("code", "suggestion"),
+        [
+            # No advice of its own: the note alone (QA round 4 on #480).
+            (403, _RETRY_NOTE),
+            # Its own advice first, then the note (QA round 3).
+            (416, f"Free space on the NAS. {_RETRY_NOTE}"),
+            (1200, f"Check both with list_files, then retry. {_RETRY_NOTE}"),
+            # Advice ending in a list goes last, so no period reads as one of the characters.
+            (418, f'{_RETRY_NOTE} Avoid characters: / \\ : * ? " < > |'),
+            # The task may have finished: the note says to check the failed path first.
+            (599, f"Background task not found (may have already completed). {_RETRY_NOTE}"),
+        ],
+    )
+    async def test_a_dsm_error_partway_keeps_its_advice(
+        self, mock_client: DsmClient, code: int, suggestion: str
+    ) -> None:
+        self._route(2, code=code)
         with pytest.raises(ToolError) as exc:
             await delete_files(mock_client, paths=["/video/a", "/video/b", "/video/c"], timeout=5)
         error = json.loads(str(exc.value))["error"]
-        assert "free" in error["suggestion"].split(" Then retry only")[0].casefold()
-        assert error["suggestion"].endswith("so it would be refused.")
+        assert error["suggestion"] == suggestion
         assert error["retryable"] is False
-
-    def test_a_suggestion_without_a_final_period_gets_one(self) -> None:
-        from mcp_synology.modules.filestation.operations import _with_progress_so_far
-
-        body = {"error": {"code": "x", "message": "x.", "suggestion": "Avoid: / \\ |"}}
-        done = _with_progress_so_far(ToolError(json.dumps(body)), ["/video/a"], [])
-        assert json.loads(str(done))["error"]["suggestion"].startswith("Avoid: / \\ |. Then")
 
     @respx.mock
     async def test_a_start_with_no_answer_partway(self, mock_client: DsmClient) -> None:
@@ -3246,9 +3262,8 @@ class TestDeleteFailurePartway:
         )
         # Its own advice, then the retry note (QA round 3 on #480).
         assert error["suggestion"] == (
-            "Check with list_files, or file_task with no handle, before deleting again. Then "
-            "retry only the paths not deleted, not the same call: the deleted ones are gone, "
-            "so it would be refused."
+            f"Check with list_files, or file_task with no handle, before deleting again. "
+            f"{_RETRY_NOTE}"
         )
 
     @respx.mock
@@ -3277,8 +3292,7 @@ class TestDeleteFailurePartway:
         assert json.loads(str(done))["error"]["retryable"] is False
         # The retry note is added to the cause's own advice, not in place of it (QA round 3).
         assert json.loads(str(done))["error"]["suggestion"] == (
-            "Free space on the NAS. Then retry only the paths not deleted, not the same call: "
-            "the deleted ones are gone, so it would be refused."
+            f"Free space on the NAS. {_RETRY_NOTE}"
         )
         # Nothing deleted yet: the same call can be retried, so the flag stays.
         first = _with_progress_so_far(error(True), [], ["/video/b"])

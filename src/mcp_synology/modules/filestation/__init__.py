@@ -231,8 +231,8 @@ MODULE_INFO = ModuleInfo(
                 "Without a bin, and for anything inside a bin (`/<share>/#recycle`), deletion is "
                 "permanent. Paths are exact, not wildcard patterns, and if any path is missing "
                 "nothing is deleted. A whole shared folder (`/video`) is refused: delete its items "
-                "by path. So is a path with a `.`, `..`, empty or whitespace-only part. A long "
-                "delete keeps running on the NAS and returns a handle for file_task."
+                "by path. So is a path with a `.`, `..`, empty or whitespace-only part, or a NUL. "
+                "A long delete keeps running on the NAS and returns a handle for file_task."
             ),
             permission_tier=PermissionTier.WRITE,
             annotations=_ANNO_DESTRUCTIVE,

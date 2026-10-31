@@ -361,14 +361,21 @@ def _with_progress_so_far(error: ToolError, done: list[str], rest: list[str]) ->
         body["error"]["retryable"] = False
         # Added to the cause's own advice (free space, permissions, check before deleting
         # again), never in place of it (QA round 3 on #480).
+        # A note that reads after any advice, or alone (QA round 4): no "Then", no second
+        # "retry", and a check first, since the failed path may be gone already (a 599).
         retry = (
-            "Then retry only the paths not deleted, not the same call: the deleted ones are "
-            "gone, so it would be refused."
+            "When retrying, leave out the paths already deleted (the same call would be "
+            "refused), and check the one that failed with list_files first."
         )
         original = str(body["error"].get("suggestion") or "").strip()
-        if original and original[-1] not in ".!?)":
-            original += "."  # 418's ends in its list of characters
-        body["error"]["suggestion"] = f"{original} {retry}" if original else retry
+        if not original:
+            body["error"]["suggestion"] = retry
+        elif original[-1] in ".!?)":
+            body["error"]["suggestion"] = f"{original} {retry}"
+        else:
+            # Advice that ends in a list (418's characters to avoid) goes last, so no
+            # punctuation is read as part of it.
+            body["error"]["suggestion"] = f"{retry} {original}"
     if rest:
         message = _unstop(message) + f". Not started: {', '.join(rest)}."
     body["error"]["message"] = message

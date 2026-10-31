@@ -1837,7 +1837,8 @@ class TestInstructionComments:
 # items by path.
 # +62 by #480 (QA round 2): delete_files says a path with a `.`, `..`, empty or
 # whitespace-only part is refused too.
-PAYLOAD_BUDGET_CHARS = 56_160
+# +10 by #480 (QA round 4): ... or a NUL.
+PAYLOAD_BUDGET_CHARS = 56_170
 
 
 class TestPayloadBudget:
