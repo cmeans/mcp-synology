@@ -30,6 +30,8 @@ from mcp_synology.modules.filestation.helpers import (
     normalize_path,
     path_exists,
     paths_isdir,
+    refuse_bad_name,
+    refuse_dot_parts,
 )
 from mcp_synology.modules.filestation.tasks import (
     Handle,
@@ -109,9 +111,9 @@ async def _explain_rename_1200(client: DsmClient, path: str, original: str, new_
     parent, _, name = path.rpartition("/")
     target = f"{parent}/{new_name}"
     # The new path can't stand for a taken name when it's the source itself (its own
-    # name), a folder rather than an entry in it ("." or ".."), or when the source is a
-    # share root (no parent folder to look in).
-    can_be_taken = bool(parent) and new_name not in (name, ".", "..")
+    # name), or when the source is a share root (no parent folder to look in). `rename`
+    # refuses "." and ".." before getting here (#449).
+    can_be_taken = bool(parent) and new_name != name
     try:
         source = await path_exists(client, path)
         taken = source is True and can_be_taken and await path_exists(client, target) is True
@@ -149,16 +151,16 @@ async def rename(
     """Rename a file or folder."""
     normalized = normalize_path(path)
 
-    # Validate new_name is just a name, not a path
-    if "/" in new_name:
-        error_response(
-            ErrorCode.INVALID_PARAMETER,
-            "Rename failed: new_name should be just a filename, not a path.",
-            retryable=False,
-            param="new_name",
-            value=new_name,
-            suggestion="Use move_files to relocate files to a different directory.",
-        )
+    # new_name is just a name: not a path, nor `.` or `..`, as #449 refuses in paths
+    relocates = "/" in new_name or new_name.strip(" ") in (".", "..")
+    refuse_bad_name(
+        "Rename",
+        new_name,
+        "new_name",
+        "Use move_files to relocate files to a different directory."
+        if relocates
+        else "Pass the new name only, e.g. Severance.",
+    )
 
     try:
         data = await client.request(
@@ -282,9 +284,12 @@ def refuse_bad_parts(paths: list[str]) -> None:
     them: ``normalize_path`` strips the whole path, so ``/video/x/ `` would be sent as
     ``/video/x``, deleting the folder (QA round 2 on #480; the same stripping in other tools
     is #488). A NUL is refused rather than sent: whether DSM cuts the path there (leaving
-    ``/video/``) is unprobed, and no file name holds one (pre-QA on #480; #472).
+    ``/video/``) is unprobed, and no file name holds one (pre-QA on #480; #472). A plain
+    ``.`` or ``..`` part gets #470's message, as in every other tool; the rest are the cases
+    only a delete refuses.
     """
     for path in paths:
+        refuse_dot_parts(path, "paths")
         parts = normalize_path(path).split("/")[1:]
         body = path.rstrip("/")
         blank_last = not body.rsplit("/", 1)[-1].strip()

@@ -83,9 +83,20 @@ def normalize_destination(destination: str, *, operation: str, param: str = "des
 
     File Station shows paths as ``/share/...``; DS rejects that form (DSM 403
     "Destination doesn't exist" on create, error 100 on edit), so a leading or
-    trailing ``/`` is dropped. ``param`` names the caller's argument in errors.
+    trailing ``/`` is dropped, and a ``.`` or ``..`` part is refused, as in File Station
+    paths (#449). ``param`` names the caller's argument in errors.
     """
     relative = destination.strip().strip("/")
+    # Padded too (` .. `), as File Station refuses them (QA round 2 on #470).
+    if any(part.strip(" ") in (".", "..") for part in relative.split("/")):
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            f"{operation} failed: {param} {destination!r}: '.' and '..' parts aren't allowed.",
+            retryable=False,
+            param=param,
+            value=destination,
+            suggestion="Write the path out in full from the shared folder, e.g. 'video/Torrents'.",
+        )
     if not relative:
         error_response(
             ErrorCode.INVALID_PARAMETER,

@@ -119,7 +119,7 @@ uv run pytest -n auto --cov=mcp_synology   # Tests with coverage
 ### Path Handling (File Station)
 - Accept paths with or without leading `/`; normalize internally
 - Always return fully-qualified paths: `/shared_folder/...`
-- Validate first path component against cached share list
+- Validate first path component against cached share list; refuse any `.` or `..` part first (DSM answers 418, but the share check would read `/video/../photo` as `video`, #449)
 
 ### Search (File Station)
 - Always pass `filetype=all` — DSM defaults to `"file"` if omitted, excluding directories from results

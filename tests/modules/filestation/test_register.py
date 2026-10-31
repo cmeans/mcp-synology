@@ -176,7 +176,7 @@ class TestFilestationToolInvocation:
         # These tests cover the closures' plumbing; share validation (#160) has its own.
         monkeypatch.setattr(
             "mcp_synology.modules.filestation.helpers.ensure_known_shares",
-            AsyncMock(side_effect=lambda _client, paths, _cache: list(paths)),
+            AsyncMock(side_effect=lambda _client, paths, _cache, *_args, **_kwargs: list(paths)),
         )
 
     @staticmethod
@@ -635,7 +635,9 @@ async def test_tools_send_the_share_name_as_listed(
     """#353: every handler hands on the paths ensure_known_shares returns, in order."""
     from mcp_synology.modules.filestation.helpers import _with_listed_share_name
 
-    async def listed(_client: object, paths: list[str], _cache: set[str]) -> list[str]:
+    async def listed(
+        _client: object, paths: list[str], _cache: set[str], *_args: object, **_kwargs: object
+    ) -> list[str]:
         return [_with_listed_share_name(p, {"video", "home"}) for p in paths]
 
     monkeypatch.setattr("mcp_synology.modules.filestation.helpers.ensure_known_shares", listed)
@@ -673,6 +675,86 @@ SHARE_CASES = [
         "restore_from_recycle_bin",
         "operations.restore_from_recycle_bin",
         {"share": "nosuchshare", "paths": ["x"]},
+    ),
+]
+# The argument each SHARE_CASES error names (#449: it used to be "path" for every one).
+SHARE_PARAMS = {
+    "list_files": "path",
+    "list_recycle_bin": "share",
+    "search_files": "folder_path",
+    "get_file_info": "paths",
+    "get_dir_size": "path",
+    "download_file": "path",
+    "create_folder": "paths",
+    "rename": "path",
+    "copy_files": "dest_folder",
+    "move_files": "paths",
+    "delete_files": "paths",
+    "upload_file": "dest_folder",
+    "restore_from_recycle_bin": "share",
+}
+# #449: a . or .. part in each NAS path argument, refused before the tool runs.
+DOT_CASES = [
+    ("list_files", "listing.list_files", {"path": "/writable/.."}, "path"),
+    ("list_recycle_bin", "listing.list_recycle_bin", {"share": "writable/.."}, "share"),
+    ("search_files", "search.search_files", {"folder_path": "/writable/./x"}, "folder_path"),
+    (
+        "get_file_info",
+        "metadata.get_file_info",
+        {"paths": ["/writable/ok", "/writable/.."]},
+        "paths",
+    ),
+    ("get_dir_size", "metadata.get_dir_size", {"path": "/writable/../x"}, "path"),
+    (
+        "download_file",
+        "transfer.download_file",
+        {"path": "/writable/..", "dest_folder": "/tmp"},
+        "path",
+    ),
+    ("create_folder", "operations.create_folder", {"paths": ["/writable/a/../b"]}, "paths"),
+    ("rename", "operations.rename", {"path": "/writable/..", "new_name": "n"}, "path"),
+    (
+        "copy_files",
+        "operations.copy_files",
+        {"paths": ["/writable/.."], "dest_folder": "/writable"},
+        "paths",
+    ),
+    (
+        "copy_files",
+        "operations.copy_files",
+        {"paths": ["/writable/a"], "dest_folder": "/writable/.."},
+        "dest_folder",
+    ),
+    (
+        "move_files",
+        "operations.move_files",
+        {"paths": ["/writable/a"], "dest_folder": "/writable/./b"},
+        "dest_folder",
+    ),
+    ("delete_files", "operations.delete_files", {"paths": ["/writable/../x"]}, "paths"),
+    (
+        "upload_file",
+        "transfer.upload_file",
+        {"local_path": "/etc/hostname", "dest_folder": "/writable/.."},
+        "dest_folder",
+    ),
+    (
+        "restore_from_recycle_bin",
+        "operations.restore_from_recycle_bin",
+        {"share": "writable", "paths": ["../../other/x"]},
+        "paths",
+    ),
+    (
+        "restore_from_recycle_bin",
+        "operations.restore_from_recycle_bin",
+        {"share": "writable", "paths": ["/writable/#recycle/../x"]},
+        "paths",
+    ),
+    (
+        "restore_from_recycle_bin",
+        "operations.restore_from_recycle_bin",
+        {"share": "writable", "paths": ["a"], "dest_folder": "/writable/.."},
+        "dest_folder",
     ),
 ]
 NEEDS_CTX = {
@@ -728,7 +810,80 @@ class TestFilestationShareValidation:
         assert body["error"]["code"] == "not_found"
         assert "nosuchshare" in body["error"]["message"]
         assert "writable" in body["error"]["message"]
+        assert body["error"]["param"] == SHARE_PARAMS[tool]
         domain.assert_not_awaited()
+
+    @pytest.mark.parametrize(
+        ("tool", "target", "kwargs", "param"),
+        DOT_CASES,
+        ids=[f"{c[0]}-{c[3]}" for c in DOT_CASES],
+    )
+    async def test_dot_parts_refused_before_tool_runs(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tool: str,
+        target: str,
+        kwargs: dict[str, object],
+        param: str,
+    ) -> None:
+        domain = AsyncMock(return_value="ran")
+        monkeypatch.setattr(f"mcp_synology.modules.filestation.{target}", domain)
+        server, _, ctx = self._ctx_with_shares("writable", "other")
+        register(ctx)
+        fn = server._tool_manager._tools[tool].fn
+        extra: dict[str, object] = {}
+        if tool in NEEDS_CTX:
+            fake_mcp_ctx = MagicMock()
+            fake_mcp_ctx.report_progress = AsyncMock()
+            extra["ctx"] = fake_mcp_ctx
+        with pytest.raises(ToolError) as exc_info:
+            await fn(**extra, **kwargs)
+        error = json.loads(str(exc_info.value))["error"]
+        assert (error["code"], error["param"]) == ("invalid_parameter", param)
+        assert "'.' and '..' parts aren't allowed" in error["message"]
+        domain.assert_not_awaited()
+
+    @pytest.mark.parametrize(
+        ("setting", "code"),
+        [("/writable/../x", "invalid_parameter"), ("/nosuch/x", "not_found")],
+        ids=["dot-part", "unknown-share"],
+    )
+    async def test_a_bad_default_upload_dir_is_named(
+        self, tmp_path: Path, setting: str, code: str
+    ) -> None:
+        # QA round 1 on #470: the error names the setting, not `dest_folder`, which the
+        # caller never passed.
+        local = tmp_path / "file.txt"
+        local.write_text("x")
+        server, manager, ctx = _make_ctx(
+            allowed={"upload_file"},
+            settings={"default_upload_dir": setting},
+            shared_paths=[str(tmp_path)],
+        )
+        client = MagicMock()
+        client.request = AsyncMock(return_value={"shares": [{"name": "writable"}]})
+        manager.get_client = AsyncMock(return_value=client)
+        register(ctx)
+        with pytest.raises(ToolError) as exc:
+            await server._tool_manager._tools["upload_file"].fn(
+                ctx=_fake_mcp_ctx(), local_path=str(local)
+            )
+        error = json.loads(str(exc.value))["error"]
+        assert (error["code"], error["param"]) == (code, "default_upload_dir")
+        # The fix is in the config, or a dest_folder (pre-QA on QA round 1).
+        assert error["suggestion"] == (
+            "Fix default_upload_dir in the filestation settings, or pass dest_folder."
+        )
+
+    def test_every_path_tool_is_covered(self) -> None:
+        # A new File Station tool that takes a NAS path must go through the share and
+        # dot-part checks, and be listed here (#449).
+        server, _, ctx = self._ctx_with_shares("writable")
+        register(ctx)
+        tools = set(server._tool_manager._tools) - {"list_shares", "file_task"}
+        assert {c[0] for c in SHARE_CASES} == tools
+        assert {c[0] for c in DOT_CASES} == tools
+        assert set(SHARE_PARAMS) == tools
 
     async def test_known_share_reaches_the_tool(self, monkeypatch: pytest.MonkeyPatch) -> None:
         domain = AsyncMock(return_value="ran")
@@ -758,7 +913,7 @@ class TestFileTaskAndHandoff:
     def _shares_known(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
             "mcp_synology.modules.filestation.helpers.ensure_known_shares",
-            AsyncMock(side_effect=lambda _client, paths, _cache: list(paths)),
+            AsyncMock(side_effect=lambda _client, paths, _cache, *_args, **_kwargs: list(paths)),
         )
 
     def test_file_task_registered_write_only(self) -> None:

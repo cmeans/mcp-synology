@@ -53,6 +53,49 @@ class TestUploadFile:
         assert "test.txt" in result
         assert "/video/uploads/" in result
 
+    # An empty filename counts as none: the local name is used, and checked (pre-QA on #470).
+    @pytest.mark.parametrize("extra", [{}, {"filename": ""}], ids=["no-filename", "empty"])
+    async def test_upload_refuses_a_local_name_that_isnt_one(
+        self, mock_client: DsmClient, tmp_path: Path, extra: dict[str, str]
+    ) -> None:
+        """With no filename, the local file's own name follows the same rule (pre-QA on
+        #470): ` .. ` is a valid local name."""
+        local_file = tmp_path / " .. "
+        local_file.write_text("x")
+        with pytest.raises(ToolError) as exc:
+            await upload_file(
+                mock_client, local_path=str(local_file), dest_folder="/video/up", **extra
+            )
+        error = json.loads(str(exc.value))["error"]
+        # Named as the local file, not `filename`, which wasn't passed (QA round 3 on #470).
+        assert (error["code"], error["param"]) == ("invalid_parameter", "local_path")
+        assert error["message"] == (
+            "Upload failed: the local file's name (' .. ') should be just a file name, but it "
+            "is '.' or '..'."
+        )
+        assert error["suggestion"] == "Pass filename with a plain name for the file on the NAS."
+        assert error["value"] == str(local_file)  # the argument named, as passed
+
+    @pytest.mark.parametrize(
+        "filename", [".", "..", " .. ", "../x", "a/b", "/abs", "a\0b", "   ", "\t", "\xa0"]
+    )
+    async def test_upload_refuses_a_filename_that_isnt_a_name(
+        self, mock_client: DsmClient, tmp_path: Path, filename: str
+    ) -> None:
+        """`filename` is the name DSM writes in dest_folder: as with rename's new_name, no
+        path and no `.` or `..` (pre-QA on QA round 1, #470)."""
+        local_file = tmp_path / "test.txt"
+        local_file.write_text("x")
+        with pytest.raises(ToolError) as exc:
+            await upload_file(
+                mock_client,
+                local_path=str(local_file),
+                dest_folder="/video/uploads",
+                filename=filename,
+            )
+        error = json.loads(str(exc.value))["error"]
+        assert (error["code"], error["param"]) == ("invalid_parameter", "filename")
+
     async def test_upload_local_file_not_found(self, mock_client: DsmClient) -> None:
         with pytest.raises(ToolError) as exc_info:
             await upload_file(
@@ -85,6 +128,10 @@ class TestUploadFile:
         assert body["status"] == "error"
         assert body["error"]["code"] == "already_exists"
         assert "overwrite=true" in body["error"]["suggestion"]
+        # No filename was passed: the conflict is still the file name, as download_file
+        # reports it (#189), with the local file's name as the value.
+        assert body["error"]["param"] == "filename"
+        assert body["error"]["value"] == "test.txt"
 
     @respx.mock
     @pytest.mark.parametrize(("overwrite", "sent"), [(False, None), (True, "true")])

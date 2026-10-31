@@ -81,9 +81,9 @@ a private channel.
   log output, error messages, or persisted state would be in scope.
 - Path-traversal or share-validation issues in File Station tool
   handlers (`src/mcp_synology/modules/filestation/`) — paths are
-  normalized and the first component is validated against the cached
-  share list; bypasses that let a tool reach outside a share would
-  be in scope.
+  normalized, `.` and `..` parts are refused (#449), and the first
+  component is validated against the cached share list; bypasses that
+  let a tool reach outside a share would be in scope.
 - Argument-injection or unsafe parameter encoding in
   `src/mcp_synology/core/client.py` — comma/backslash escaping in
   multi-path params, query-string construction for DSM API calls.
