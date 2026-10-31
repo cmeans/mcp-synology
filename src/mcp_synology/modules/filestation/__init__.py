@@ -192,7 +192,8 @@ MODULE_INFO = ModuleInfo(
             description=(
                 "Rename a file or folder in place. If the new name is already taken in that "
                 "folder, DSM refuses and nothing is replaced. To move something to another "
-                "folder, use move_files. A whole shared folder (`/video`) is refused."
+                "folder, use move_files. A whole shared folder (`/video`) or recycle bin is "
+                "refused."
             ),
             permission_tier=PermissionTier.WRITE,
         ),
@@ -217,7 +218,8 @@ MODULE_INFO = ModuleInfo(
                 "`dest_folder` must already exist; it isn't created. With `overwrite=false` "
                 "(default), items already at the destination are skipped, listed and left at the "
                 "source. If any source is missing, nothing is moved. A whole shared folder "
-                "(`/video`) is refused as a source: move its items by path. A long move keeps "
+                "(`/video`) or recycle bin is refused as a source: move its items by path. A "
+                "long move keeps "
                 "running on the NAS and returns a handle for file_task."
             ),
             permission_tier=PermissionTier.WRITE,

@@ -3164,7 +3164,7 @@ class TestShareRootSourcesRefused:
             await delete_files(mock_client, paths=["/video/#recycle"])
 
     @respx.mock
-    @pytest.mark.parametrize("path", ["/video", "video/", " /video ", "/video//"])
+    @pytest.mark.parametrize("path", ["/video", "video/", " /video ", "/video//", "//video"])
     async def test_move_refuses_a_share_root(self, mock_client: DsmClient, path: str) -> None:
         with pytest.raises(ToolError) as exc:
             await move_files(mock_client, paths=["/video/ok", path], dest_folder="/photo")
@@ -3176,15 +3176,17 @@ class TestShareRootSourcesRefused:
         )
         assert error["message"] == (
             f"Move files refused: {path!r} is a whole shared folder. Moving one would remove "
-            "the shared folder itself from DSM, for any account with write access, beyond the "
-            "recycle bin's reach (tested on DSM 7.1 to 7.4.1). Nothing was moved."
+            "the shared folder itself from DSM, beyond the recycle bin's reach (tested on DSM "
+            "7.1 to 7.4.1, as a non-admin with write access). Nothing was moved."
         )
         assert "list_files" in error["suggestion"]
         assert "copy_files" in error["suggestion"]
         assert "Control Panel" in error["suggestion"]
 
     @respx.mock
-    @pytest.mark.parametrize("path", ["/video", "video/", " /video "])
+    # `//video` reaches here when DSM won't list shares, and Rename has no missing-path
+    # check: it was sent (pre-QA).
+    @pytest.mark.parametrize("path", ["/video", "video/", " /video ", "//video"])
     async def test_rename_refuses_a_share_root(self, mock_client: DsmClient, path: str) -> None:
         with pytest.raises(ToolError) as exc:
             await rename(mock_client, path=path, new_name="films")
@@ -3200,6 +3202,46 @@ class TestShareRootSourcesRefused:
             "(tested on DSM 7.1 to 7.4.1). Nothing was renamed."
         )
         assert "Control Panel" in error["suggestion"]
+
+    @respx.mock
+    @pytest.mark.parametrize("path", ["/video/#recycle", "video/#recycle/", "//video/#recycle"])
+    async def test_move_and_rename_refuse_a_whole_bin(
+        self, mock_client: DsmClient, path: str
+    ) -> None:
+        """Moving or renaming the bin would take every user's deleted items out of it, as a
+        restore of the bin itself would (pre-QA)."""
+        with pytest.raises(ToolError) as exc:
+            await move_files(mock_client, paths=[path], dest_folder="/photo")
+        error = json.loads(str(exc.value))["error"]
+        assert (error["code"], error["param"], error["value"]) == (
+            "invalid_parameter",
+            "paths",
+            path,
+        )
+        assert error["message"] == (
+            f"Move files refused: {path!r} is the shared folder's whole recycle bin. Moving it "
+            "would take every user's deleted items out of the bin. Nothing was moved."
+        )
+        assert "restore_from_recycle_bin" in error["suggestion"]
+        with pytest.raises(ToolError) as exc:
+            await rename(mock_client, path=path, new_name="old-bin")
+        error = json.loads(str(exc.value))["error"]
+        assert (error["param"], error["value"]) == ("path", path)
+        assert error["message"] == (
+            f"Rename refused: {path!r} is the shared folder's whole recycle bin. Renaming it "
+            "would take every user's deleted items out of the bin. Nothing was renamed."
+        )
+
+    @respx.mock
+    async def test_move_of_an_item_in_the_bin_isnt_refused_here(
+        self, mock_client: DsmClient
+    ) -> None:
+        """Only the bin itself: `/video/#recycle/x` goes on to the missing-path check."""
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": True, "data": {"files": [{"path": "/video/#recycle/x", "code": 408}]}}
+        )
+        with pytest.raises(ToolError, match="not found"):
+            await move_files(mock_client, paths=["/video/#recycle/x"], dest_folder="/photo")
 
     @respx.mock
     async def test_copy_still_takes_a_share_root(self, mock_client: DsmClient) -> None:

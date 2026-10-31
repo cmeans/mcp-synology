@@ -361,22 +361,41 @@ def refuse_share_roots(paths: list[str]) -> None:
 
 
 def _refuse_share_root_source(operation: str, path: str, param: str) -> None:
-    """Refuse a whole shared folder as what a move moves or a rename renames (#479).
+    """Refuse a whole shared folder, or a share's whole recycle bin, as what a move moves or
+    a rename renames (#479).
 
-    On DSM 7.1, 7.2.2, 7.3.2 and 7.4.1 (vdsm, admin and non-admin), CopyMove with
-    ``remove_src`` on ``/<share>`` takes the shared folder itself out of DSM's share list
-    for any account with write access, and the reply reads as a skip. Rename on
-    ``/<share>`` makes it vanish from the list for an administrator, under its new name
-    too; a non-admin gets 1200. Copying a shared folder only copies its contents into a
-    new folder, so ``copy_files`` takes one. Called after the share check, as
-    `refuse_share_roots` is.
+    On DSM 7.1, 7.2.2, 7.3.2 and 7.4.1 (vdsm), CopyMove with ``remove_src`` on ``/<share>``
+    took the shared folder itself out of DSM's share list for the non-admin test user, who
+    can write there, and the reply read as a skip (admin wasn't probed). Rename on
+    ``/<share>`` made it vanish from the list for an administrator, under its new name too;
+    a non-admin got 1200. Copying a shared folder only copies its contents into a new
+    folder, so ``copy_files`` takes one. Moving or renaming ``/<share>/#recycle`` would take
+    every user's deleted items out of the bin, which restore refuses for the same reason
+    (unprobed: refused on what the request names). Empty parts are dropped first:
+    ``//video`` gets past the share check when DSM won't list shares, and Rename has no
+    missing-path check (pre-QA). Called after the share check, as `refuse_share_roots` is.
     """
-    if len(normalize_path(path).split("/")[1:]) != 1:
+    parts = [part for part in normalize_path(path).split("/") if part]
+    past = "moved" if operation == "Move" else "renamed"
+    head = f"{operation} {'files ' if operation == 'Move' else ''}refused: {path!r} is"
+    if len(parts) == 2 and parts[1] == "#recycle":
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            f"{head} the shared folder's whole recycle bin. "
+            f"{'Moving' if operation == 'Move' else 'Renaming'} it would take every user's "
+            f"deleted items out of the bin. Nothing was {past}.",
+            retryable=False,
+            param=param,
+            value=path,
+            suggestion="To bring items back, use restore_from_recycle_bin with the items "
+            "list_recycle_bin shows; to move some elsewhere, restore them with dest_folder.",
+        )
+    if len(parts) != 1:
         return
     if operation == "Move":
         detail = (
-            "Moving one would remove the shared folder itself from DSM, for any account "
-            "with write access, beyond the recycle bin's reach (tested on DSM 7.1 to 7.4.1)."
+            "Moving one would remove the shared folder itself from DSM, beyond the recycle "
+            "bin's reach (tested on DSM 7.1 to 7.4.1, as a non-admin with write access)."
         )
         suggestion = (
             "To move what's in it, list it with list_files and move its items by their own "
@@ -389,11 +408,9 @@ def _refuse_share_root_source(operation: str, path: str, param: str) -> None:
             "under its new name too (tested on DSM 7.1 to 7.4.1)."
         )
         suggestion = "Rename a shared folder in DSM's Control Panel > Shared Folder."
-    past = "moved" if operation == "Move" else "renamed"
     error_response(
         ErrorCode.INVALID_PARAMETER,
-        f"{operation} {'files ' if operation == 'Move' else ''}refused: {path!r} is a whole "
-        f"shared folder. {detail} Nothing was {past}.",
+        f"{head} a whole shared folder. {detail} Nothing was {past}.",
         retryable=False,
         param=param,
         value=path,
