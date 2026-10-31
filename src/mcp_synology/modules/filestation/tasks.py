@@ -422,7 +422,7 @@ def handoff_reply(
     past = _PAST.get(gerund, "done")
     if stall is None:
         first = (
-            f"{verb} on the NAS: {path} ({progress_text(status)}). This operation keeps "
+            f"{verb} on the NAS: {shown(path)} ({progress_text(status)}). This operation keeps "
             "running after this reply, so nothing more needs to be done to finish it."
         )
     else:
@@ -438,7 +438,7 @@ def handoff_reply(
         else:
             what, why = "The NAS's status reply couldn't be read", type(stall).__name__
         first = (
-            f"{what} while {gerund} {path} ({why}{last}). It's probably still running "
+            f"{what} while {gerund} {shown(path)} ({why}{last}). It's probably still running "
             "there; don't start it again."
         )
     lines = [

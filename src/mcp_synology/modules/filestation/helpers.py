@@ -233,7 +233,8 @@ def normalize_path(path: str) -> str:
     if not path.startswith("/"):
         path = "/" + path
     if len(path) > 1:
-        path = path.rstrip("/")
+        # A path of slashes only is the root, not an empty string (pre-QA on #510).
+        path = path.rstrip("/") or "/"
     return path
 
 

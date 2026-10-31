@@ -404,7 +404,19 @@ def refuse_bad_name(
 # -- the entry point -----------------------------------------------------------------------
 
 
-async def _refuse_padded_parent(
+def _created_part_problem(part: str, parent: str) -> str | None:
+    """Why a folder named ``part`` mustn't be created in ``parent`` (the new-name rules of
+    `refuse_bad_name` that a path part can break), or None."""
+    if any(unicodedata.category(c) == "Cc" and c != "\t" for c in part):
+        return "with a control character in its name"
+    if part != part.strip():
+        return "with whitespace at its start or end"
+    if part == "#recycle" and makes_a_bin(parent):
+        return "as '#recycle', where it would be taken for the recycle bin"
+    return None
+
+
+async def _refuse_bad_created_parents(
     client: DsmClient,
     raw: str,
     normalized: str,
@@ -412,25 +424,28 @@ async def _refuse_padded_parent(
     upto: int,
     suggestion: str | None = None,
 ) -> None:
-    """Refuse a destination whose padded part doesn't exist yet, when the tool would create
-    it (``create_parents``, ``force_parent``): DSM makes ``/video/Uploads `` beside
-    ``Uploads`` and reports success (vdsm DSM 7.1 and 7.4.1; pre-QA on #510)."""
+    """Refuse a path whose missing parent folder the tool would create (``create_parents``,
+    ``force_parent``) under a name the new-name rules refuse: padded (DSM makes
+    ``/video/Uploads `` beside ``Uploads`` and reports success; vdsm DSM 7.1 and 7.4.1),
+    with a control character, or ``#recycle`` where it would be a bin (pre-QA on #510).
+    Only such parts are looked up, so an ordinary path costs no request."""
     parts = normalized.split("/")[1:]
     for i in range(1, min(upto, len(parts))):
-        if parts[i] != parts[i].strip():
-            prefix = "/" + "/".join(parts[: i + 1])
-            # Only a definite 408: an unreadable answer leaves it to DSM.
-            if await path_exists(client, prefix) is False:
-                _refuse(
-                    f"Invalid path {raw!r}: the folder {shown(prefix)} doesn't exist, and "
-                    "would be created with whitespace at its start or end. Nothing was "
-                    "created.",
-                    param,
-                    raw,
-                    suggestion
-                    or "Give the folder's name without leading or trailing spaces, or pick an "
-                    "existing folder (list_files shows them).",
-                )
+        problem = _created_part_problem(parts[i], "/" + "/".join(parts[:i]))
+        if problem is None:
+            continue
+        prefix = "/" + "/".join(parts[: i + 1])
+        # Only a definite 408: an unreadable answer leaves it to DSM.
+        if await path_exists(client, prefix) is False:
+            _refuse(
+                f"Invalid path {raw!r}: the folder {shown(prefix)} doesn't exist, and would be "
+                f"created {problem}. Nothing was created.",
+                param,
+                raw,
+                suggestion
+                or "Give the folder a plain name, or pick an existing folder (list_files shows "
+                "them).",
+            )
 
 
 async def resolve_paths(
@@ -490,11 +505,11 @@ async def resolve_paths(
                 parent=parent or "/",
             )
             if creates_parents:
-                await _refuse_padded_parent(
+                await _refuse_bad_created_parents(
                     client, raw, path, named, len(path.split("/")) - 2, suggestion
                 )
         elif role is PathRole.DEST and creates_parents:
-            await _refuse_padded_parent(
+            await _refuse_bad_created_parents(
                 client, raw, path, named, len(path.split("/")) - 1, suggestion
             )
     return resolved

@@ -266,12 +266,12 @@ Common causes:
   local file's name, `create_folder`'s new folder) starts or ends with whitespace (#488:
   DSM keeps it exactly, making `report.pdf ` a different file), has a control character
   other than a tab, or is `#recycle` directly in a shared folder or a user's home folder
-  (#510); or a copy, move or restore would put a folder named `#recycle` there. Give a
-  plain name. Paths themselves are taken exactly, so an existing item named with such
+  (#510); or a copy, move or restore would put a folder named `#recycle` there; or an
+  upload or `create_folder` would create a missing parent folder under such a name. Give
+  a plain name. Paths themselves are taken exactly, so an existing item named with such
   whitespace is still reached by its exact path.
-- `create_folder` given a shared folder itself (`/video`), or an upload or `create_folder`
-  that would create a missing parent folder whose name starts or ends with whitespace
-  (#510): give the full path of a folder inside a shared folder, without the padding.
+- `create_folder` given a shared folder itself (`/video`) (#510): give the full path of a
+  folder inside a shared folder.
 - `move_files` with a whole shared folder as a source, or `rename` of one (#479): DSM
   takes it out of its shared folders. Move its items by path, copy it with `copy_files`,
   or move or rename it in DSM's Control Panel.

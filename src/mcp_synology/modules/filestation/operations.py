@@ -261,9 +261,9 @@ def _already_running(operation: str, path: str, dest: str | None = None) -> str:
 
     ``dest`` names the running task's destination when it isn't the one asked for.
     """
-    to = f" (to {dest}/)" if dest else ""
+    to = f" (to {shown(dest)}/)" if dest else ""
     return (
-        f"A {operation.lower()} of {path}{to} was already running on the NAS, so no second "
+        f"A {operation.lower()} of {shown(path)}{to} was already running on the NAS, so no second "
         "one was started."
     )
 

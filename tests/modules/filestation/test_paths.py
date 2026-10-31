@@ -421,6 +421,55 @@ class TestResolvePaths:
             )
         assert message in _error(exc)["message"]
 
+    @pytest.mark.parametrize(
+        ("tool", "param", "path", "problem"),
+        [
+            ("create_folder", "paths", "/video/#recycle/sub", "as '#recycle'"),
+            ("create_folder", "paths", "/homes/bob/#recycle/sub", "as '#recycle'"),
+            ("create_folder", "paths", "/video/new\x1bdir/sub", "with a control character"),
+            ("upload_file", "dest_folder", "/video/#recycle", "as '#recycle'"),
+            ("upload_file", "dest_folder", "/video/a\nb/c", "with a control character"),
+        ],
+    )
+    async def test_a_created_parent_gets_the_new_name_rules(
+        self, tool: str, param: str, path: str, problem: str
+    ) -> None:
+        """A missing parent the tool would create is a new name too (pre-QA r2 on #510)."""
+        with pytest.raises(ToolError) as exc:
+            await resolve_paths(
+                _FakeClient(),
+                set(),
+                tool,
+                param,
+                [path],
+                creates_parents=True,  # type: ignore[arg-type]
+            )
+        assert f"would be created {problem}" in _error(exc)["message"]
+
+    async def test_an_existing_parent_with_such_a_name_is_used(self) -> None:
+        """A bin (or an odd name) that already exists is taken as it is; no request is made
+        for an ordinary part."""
+        client = _FakeClient({"/video/#recycle"})
+        got = await resolve_paths(
+            client,
+            set(),
+            "create_folder",
+            "paths",
+            ["/video/#recycle/sub"],
+            creates_parents=True,  # type: ignore[arg-type]
+        )
+        assert got == ["/video/#recycle/sub"]
+        plain = _FakeClient()
+        await resolve_paths(
+            plain,
+            set(),
+            "create_folder",
+            "paths",
+            ["/video/a/b/c"],
+            creates_parents=True,  # type: ignore[arg-type]
+        )
+        assert [m for m, _ in plain.calls] == ["list_share"]
+
     async def test_a_padded_parent_of_a_new_folder(self) -> None:
         with pytest.raises(ToolError) as exc:
             await resolve_paths(
@@ -531,7 +580,8 @@ SPELLINGS: dict[str, dict[str, str]] = {
         READ="/video/#recycle",
         WRITE=INVALID,
         DEST="/video/#recycle",
-        DEST_CREATES="/video/#recycle",
+        # Missing here, so creating it would plant a bin (pre-QA r2 on #510).
+        DEST_CREATES=INVALID,
         NEW=INVALID,
         SHARE=INVALID,
     ),
@@ -547,7 +597,7 @@ SPELLINGS: dict[str, dict[str, str]] = {
         READ="/homes/alice/#recycle",
         WRITE=INVALID,
         DEST="/homes/alice/#recycle",
-        DEST_CREATES="/homes/alice/#recycle",
+        DEST_CREATES=INVALID,
         NEW=INVALID,
         SHARE=INVALID,
     ),

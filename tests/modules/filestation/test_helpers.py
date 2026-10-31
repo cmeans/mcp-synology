@@ -63,6 +63,9 @@ class TestNormalizePath:
             ("  video/x", "/  video/x"),
             ("   ", "/"),
             ("", "/"),
+            # Slashes only: the root, not "" (pre-QA r2 on #510).
+            ("//", "/"),
+            ("///", "/"),
         ],
     )
     def test_takes_the_path_exactly(self, path: str, normalized: str) -> None:
