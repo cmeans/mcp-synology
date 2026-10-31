@@ -218,7 +218,7 @@ _MARK = regex.compile(r"[\p{Mn}\p{Me}]")
 _NOT_PRINTED = regex.compile(r"[\p{Cc}\p{Cs}\p{Co}\p{Cn}\p{Zl}\p{Zp}]")
 _BRAILLE_BLANK = "\u2800"  # draws nothing, but Unicode doesn't call it default-ignorable
 
-# UTS #39 section 3.1.1.1, on NFC text. $M1 is a nonspacing mark with a nonzero combining
+# UTS #39 section 3.1.1.1. $M1 is a nonspacing mark with a nonzero combining
 # class. Not applied: the rule's single-script condition (a letter of another script
 # beside the joiner); mixed-script look-alikes are a separate check (#516).
 _M1 = r"(?:(?!\p{ccc=0})\p{Mn})"
@@ -288,7 +288,9 @@ def invisible_problem(name: str) -> str | None:
     (#510)."""
     if not name:
         return None
-    text = unicodedata.normalize("NFC", name)
+    # UTS #39 states its joiner contexts on NFC text; the patterns take any number of
+    # marks, so they read decomposed text the same, and the name is checked as given.
+    text = name
     for i, c in enumerate(text):
         if _IGNORABLE.match(c) and not _ignorable_belongs(text, i):
             return f"contains an invisible character (U+{ord(c):04X})"

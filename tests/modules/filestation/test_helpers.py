@@ -133,6 +133,9 @@ class TestInvisibleProblem:
             # A tag belongs only to a complete subdivision flag.
             ("\U0001f3f4\U000e0067\U000e0062", "contains an invisible character (U+E0067)"),
             ("x\U000e0067\U000e007f", "contains an invisible character (U+E0067)"),
+            # A Persian ZWNJ needs a letter that joins on its far side too (UTS #39 A1).
+            ("\u0645\u06cc\u200c", "contains an invisible character (U+200C)"),
+            ("\u0645\u06cc\u200c.txt", "contains an invisible character (U+200C)"),
             # VS16 after a keycap base only when the keycap follows.
             ("1\ufe0f", "contains an invisible character (U+FE0F)"),
             # An ideographic variation selector only after an ideograph.
