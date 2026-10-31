@@ -1831,7 +1831,9 @@ class TestInstructionComments:
 # since a comma starts another URI only when a scheme follows it.
 # +151 by #450 (QA round 1): download_photos says that items sharing a name get their id
 # added, and that a retry repeats the whole call with the same ids in the same order (#467).
-PAYLOAD_BUDGET_CHARS = 55_946
+# +81 by #449 (QA round 2 on #470): the File Station instructions say `.` and `..` path parts
+# are refused, and rename's new_name and upload_file's filename say they aren't paths.
+PAYLOAD_BUDGET_CHARS = 56_027
 
 
 class TestPayloadBudget:
