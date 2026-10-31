@@ -21,6 +21,8 @@ import enum
 import unicodedata
 from typing import TYPE_CHECKING, Literal, NamedTuple
 
+import regex
+
 from mcp_synology.core.errors import ErrorCode
 from mcp_synology.core.formatting import error_response
 from mcp_synology.modules.filestation import helpers
@@ -374,8 +376,8 @@ def _refuse(message: str, param: str, value: str, suggestion: str) -> None:
 # joiner and non-joiner are allowed where Unicode uses them: `invisible_problem`.
 # Unicode's Bidi_Control set: U+061C (Arabic letter mark) is the Arabic counterpart of
 # U+200F (pre-QA r4).
-_BIDI = frozenset("\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069")
-_LINE_BREAKS = frozenset("\u2028\u2029")
+_BIDI = regex.compile(r"\p{Bidi_Control}")
+_LINE_BREAKS = regex.compile(r"[\p{Zl}\p{Zp}]")
 
 
 def name_problem(name: str, parent: str | None = None) -> str | None:
@@ -384,9 +386,9 @@ def name_problem(name: str, parent: str | None = None) -> str | None:
     None. One list, so a new name and a created parent can't drift apart (pre-QA r4)."""
     if any(unicodedata.category(c) == "Cc" and c != "\t" for c in name):
         return "contains a control character"
-    if any(c in _BIDI for c in name):
+    if _BIDI.search(name):
         return "contains a character that changes text direction"
-    if any(c in _LINE_BREAKS for c in name):
+    if _LINE_BREAKS.search(name):
         return "contains a line or paragraph separator"
     if all(draws_nothing(c) for c in name):
         return "has no visible character"
@@ -573,11 +575,28 @@ def bin_item_origin(share_name: str, item: str) -> str:
     return "/".join(original.split("/")[:-1]) or f"/{share_name}"
 
 
-def refuse_restore_into_a_bin(given: Sequence[str], items: Sequence[str], share_name: str) -> None:
-    """Refuse a restore, with no ``dest_folder``, of an item whose original folder is
-    itself inside a bin (an item of a folder named ``#recycle`` deleted from a share's top:
-    ``#recycle/#recycle/x``): it would go back into the bin while the reply said
-    "Restored" (pre-QA on #515)."""
+def refuse_restore_into_a_bin(
+    given: Sequence[str],
+    items: Sequence[str],
+    share_name: str,
+    dest: str | None = None,
+    dest_raw: str | None = None,
+) -> None:
+    """Refuse a restore that would put an item back inside a recycle bin while the reply
+    said "Restored" (pre-QA on #515): a ``dest_folder`` inside a bin, or, with none, an
+    item whose original folder is itself inside one (an item of a folder named
+    ``#recycle`` deleted from a share's top: ``#recycle/#recycle/x``)."""
+    if dest is not None:
+        if in_bin(dest):
+            _refuse(
+                f"Restore refused: dest_folder {dest_raw!r} is inside a recycle bin. Nothing "
+                "was restored.",
+                "dest_folder",
+                dest_raw or dest,
+                "Give a dest_folder outside the bin, or leave it out to restore each item "
+                "where it was deleted from.",
+            )
+        return
     for raw, item in zip(given, items, strict=True):
         origin = bin_item_origin(share_name, item)
         if in_bin(origin):

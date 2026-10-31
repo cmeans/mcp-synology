@@ -287,6 +287,9 @@ Common causes:
   Work with its items by path, or manage the user's home in DSM's Control Panel.
 - A `restore_from_recycle_bin` item that names the whole bin (`""`, `"/"`, `#recycle`)
   (#479): give each item as `list_recycle_bin` shows it.
+- A restore that would put an item back inside a recycle bin while saying "Restored"
+  (#515): a `dest_folder` inside a bin, or, with none, an item whose original folder is
+  itself in a bin (`#recycle/#recycle/x`). Give a `dest_folder` outside the bin.
 - `upload_file` or `download_file` was called without `dest_folder`, and no
   default is configured (`default_upload_dir` or `default_download_dir` in the
   `filestation` module settings). The error's `param` is `dest_folder`.

@@ -1174,8 +1174,7 @@ def register(ctx: "RegisterContext") -> None:
                 if dest_folder
                 else None
             )
-            if dest is None:
-                refuse_restore_into_a_bin(paths, items, bin_share.strip("/"))
+            refuse_restore_into_a_bin(paths, items, bin_share.strip("/"), dest, dest_folder or None)
             # Each item goes to dest, or back to the folder it was deleted from.
             refuse_planted_bin(
                 "restore_from_recycle_bin",

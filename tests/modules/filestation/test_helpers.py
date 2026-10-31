@@ -152,6 +152,14 @@ class TestInvisibleProblem:
             ("\u00e9\u0301", "repeats a combining mark (U+0301), which draws as one"),
             # Interlinear annotation characters draw nothing, though not default-ignorable.
             ("re\ufffaport", "contains an invisible character (U+FFFA)"),
+            # VS1-VS14 only after what StandardizedVariants.txt varies (pre-QA on #515).
+            ("caf\u00e9\ufe00.pdf", "contains an invisible character (U+FE00)"),
+            ("\u0434\ufe01oc", "contains an invisible character (U+FE01)"),
+            ("\u2229\ufe00", None),
+            # Pins the Unicode data of regex's floor: ★ stopped being Extended_Pictographic
+            # after 2024.11.6, so a ZWJ between two is refused (see the scaffolding spec).
+            ("\u2605\u200d\u2605", "contains an invisible character (U+200D)"),
+            ("\u5b57\ufe00", None),
         ],
     )
     def test_invisible_problem(self, name: str, expected: str | None) -> None:
@@ -165,11 +173,34 @@ class TestInvisibleProblem:
 
         from mcp_synology.modules.filestation.helpers import invisible_problem, shown
 
-        flag = "\U0001f3f4" + "\U000e0067" * 50_000 + "\U000e007f"
+        run = "\U0001f3f4" + "\U000e0067" * 50_000 + "\U000e007f"
         start = time.monotonic()
-        assert invisible_problem(flag) is None
-        assert shown("/video/" + flag) == "/video/" + flag
+        assert invisible_problem(run) == "contains an invisible character (U+E0067)"
+        assert shown("/video/" + run).startswith("'/video/")
         assert time.monotonic() - start < 2
+
+    @staticmethod
+    def _tags(text: str) -> str:
+        return "".join(chr(0xE0000 + ord(c)) for c in text)
+
+    @pytest.mark.parametrize("code", ["gbsct", "gbeng", "usca", "fr75c"])
+    def test_a_subdivision_flag_passes(self, code: str) -> None:
+        from mcp_synology.modules.filestation.helpers import invisible_problem
+
+        assert invisible_problem("\U0001f3f4" + self._tags(code) + "\U000e007f") is None
+
+    @pytest.mark.parametrize(
+        "code",
+        ["ignore previous", "GBSCT", "gb", "gbscotland", "gb-sct"],
+    )
+    def test_text_hidden_in_tags_is_refused(self, code: str) -> None:
+        """Only 3-7 lowercase letters or digits make a flag; anything else is text hidden
+        in the name ("ASCII smuggling", pre-QA on #515)."""
+        from mcp_synology.modules.filestation.helpers import invisible_problem, shown
+
+        name = "a\U0001f3f4" + self._tags(code) + "\U000e007f.pdf"
+        assert (invisible_problem(name) or "").startswith("contains an invisible character")
+        assert shown("/video/" + name).startswith("'/video/")
 
 
 class TestValidateSharePath:

@@ -292,7 +292,17 @@ class TestRefuseBadName:
         assert "line or paragraph separator" in _error(exc)["message"]
 
     @pytest.mark.parametrize(
-        "name", ["\u3164", "\uffa0", "\u115f\u1160", "\u2800", "\u034f", "\ufe0f", "\u200b\u3164"]
+        "name",
+        [
+            "\u3164",
+            "\uffa0",
+            "\u115f\u1160",
+            "\u2800",
+            "\u034f",
+            "\ufe0f",
+            "\u200b\u3164",
+            "\ufff9",
+        ],
     )
     def test_names_that_draw_nothing(self, name: str) -> None:
         """Blank fillers and lone combining marks look empty too (pre-QA r4)."""
@@ -850,6 +860,9 @@ _OTHER: dict[str, dict[str, Any]] = {
 _OVERRIDES: dict[tuple[str, str, str], str | None] = {
     ("upload_file", "dest_folder", ""): INVALID,
     ("restore_from_recycle_bin", "dest_folder", ""): None,
+    # A restore into a bin would say "Restored" with the item still in a bin (pre-QA on #515).
+    ("restore_from_recycle_bin", "dest_folder", "/video/#recycle"): INVALID,
+    ("restore_from_recycle_bin", "dest_folder", "/homes/alice/#recycle"): INVALID,
 }
 # Tools that create missing parent folders by default (upload's create_parents,
 # create_folder's force_parent).

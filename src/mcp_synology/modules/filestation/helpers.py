@@ -242,14 +242,17 @@ _EMOJI_ZWJ = regex.compile(
 _EMOJI_VS = regex.compile(
     r"(?<=(?![\x00-\x7f])\p{Emoji})[\ufe0e\ufe0f]|(?<=[0-9#*])[\ufe0e\ufe0f](?=\u20e3)"
 )
+# VS1-VS14 only after the kinds of character StandardizedVariants.txt gives variants for:
+# math and other symbols, CJK ideographs, and the Myanmar, Phags-pa, Manichaean and
+# Egyptian scripts; not after a Latin or Cyrillic letter, where one hides (pre-QA on #515).
 _OTHER_VS = regex.compile(
-    r"(?<=(?![\x00-\x7f])[\p{L}\p{N}\p{S}\p{P}])[\ufe00-\ufe0d]"
+    r"(?<=(?![\x00-\x7f])[\p{Sm}\p{So}\p{Ideographic}\p{scx=Mymr}\p{scx=Phag}\p{scx=Mani}"
+    r"\p{scx=Egyp}])[\ufe00-\ufe0d]"
     r"|(?<=\p{Ideographic})[\U000e0100-\U000e01ef]"
     r"|(?<=\p{scx=Mong})[\u180b-\u180d\u180f]"
     r"|(?<=\p{scx=Mong})\u180e(?=\p{scx=Mong})"
 )
 _FLAG = "\U0001f3f4"  # waving black flag: the base of a subdivision flag's tag sequence
-_CANCEL_TAG = "\U000e007f"  # ends that tag sequence (the Scotland flag)
 
 
 def _is_tag(c: str) -> bool:
@@ -262,6 +265,18 @@ def _tag_run_end(text: str, i: int) -> int:
     while end < len(text) and _is_tag(text[end]):
         end += 1
     return end
+
+
+# A subdivision flag's tags (UTS #51 ED-14a, a CLDR subdivision id such as `gbsct`): 3 to 7
+# lowercase letters or digits, then the cancel tag. Any other tag run is text hidden in a
+# name ("ASCII smuggling", pre-QA on #515).
+_FLAG_TAGS = regex.compile(r"[\U000e0030-\U000e0039\U000e0061-\U000e007a]{3,7}\U000e007f")
+
+
+def _is_flag_tags(text: str, start: int, end: int) -> bool:
+    """Whether ``text[start:end]``, a run of tags, makes a subdivision flag with the 🏴
+    before it."""
+    return start > 0 and text[start - 1] == _FLAG and bool(_FLAG_TAGS.fullmatch(text, start, end))
 
 
 def _ignorable_belongs(text: str, i: int) -> bool:
@@ -318,7 +333,7 @@ def invisible_problem(name: str) -> str | None:
             # A run of tags belongs only to a subdivision flag: 🏴, tags, the closing tag.
             # One look per run keeps a long run linear (pre-QA on #515).
             end = _tag_run_end(text, i)
-            if not (i > 0 and text[i - 1] == _FLAG and text[end - 1] == _CANCEL_TAG):
+            if not _is_flag_tags(text, i, end):
                 return f"contains an invisible character (U+{ord(c):04X})"
             i = end
             continue
