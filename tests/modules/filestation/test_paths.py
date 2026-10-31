@@ -211,6 +211,9 @@ class TestRefuseBadName:
             ("a\rb", "contains a control character"),
             ("a\x1b[31mb", "contains a control character"),
             ("a\t", "starts or ends with whitespace"),
+            # Longer than a name can be, before any Unicode check (QA round 2 on #515).
+            ("a" * 256, "is longer than 255 bytes in UTF-8, the most ext4 and Btrfs allow"),
+            ("\u00e9" * 128, "is longer than 255 bytes in UTF-8, the most ext4 and Btrfs allow"),
             ("report.pdf ", "starts or ends with whitespace"),
             (" report.pdf", "starts or ends with whitespace"),
             ("report ", "starts or ends with whitespace"),
@@ -322,6 +325,7 @@ class TestRefuseBadName:
         "name",
         [
             "Severance",
+            "a" * 255,  # the longest a name can be
             "a b",
             "a\tb",
             "#recycled",
@@ -357,6 +361,9 @@ class TestRefuseBadName:
             # before a virama), a Persian ZWNJ after a right-joining letter.
             "\u09b0\u200d\u09cd\u09af\u09be\u09b2\u09bf",  # র‍্যালি
             "\u062f\u0631\u200c\u0647\u0627",  # در‌ها
+            # ZWNJ between dual-joining letters in other cursive scripts (UTS #39 A1).
+            "\u0710\u0712\u200c\u0712\u0710",  # Syriac
+            "\u07ca\u07cb\u200c\u07cc\u07cd",  # N'Ko
             # Emoji ZWJ sequences with skin tones.
             "\U0001f468\U0001f3fe\u200d\U0001f9b1",
             "\U0001f9d1\U0001f3fb\u200d\U0001f91d\u200d\U0001f9d1\U0001f3ff",

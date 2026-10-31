@@ -221,18 +221,29 @@ _BRAILLE_BLANK = "\u2800"  # draws nothing, but Unicode doesn't call it default-
 # UTS #39 section 3.1.1.1. $M1 is a nonspacing mark with a nonzero combining
 # class. Not applied: the rule's single-script condition (a letter of another script
 # beside the joiner); mixed-script look-alikes are a separate check (#516).
+# Mark runs in the lookbehinds are bounded (`_MARKS`): unbounded, a long run of marks with
+# no letter before it made each joiner rescan it, quadratic (QA round 2 on #515). Real
+# letters carry a few marks, far below the bound.
+_MARKS = "{0,32}"
 _M1 = r"(?:(?!\p{ccc=0})\p{Mn})"
-_ZWNJ_A1 = regex.compile(r"(?<=[\p{jt=D}\p{jt=L}]\p{jt=T}*)\u200c(?=[\p{jt=D}\p{jt=R}])")
-_ZWNJ_A2 = regex.compile(rf"(?<=\p{{L}}\p{{Mn}}*\p{{ccc=Virama}}{_M1}*)\u200c(?={_M1}*\p{{L}})")
+_ZWNJ_A1 = regex.compile(
+    rf"(?<=[\p{{jt=D}}\p{{jt=L}}]\p{{jt=T}}{_MARKS})\u200c(?=[\p{{jt=D}}\p{{jt=R}}])"
+)
+_ZWNJ_A2 = regex.compile(
+    rf"(?<=\p{{L}}\p{{Mn}}{_MARKS}\p{{ccc=Virama}}{_M1}{_MARKS})\u200c(?={_M1}{_MARKS}\p{{L}})"
+)
 _ZWJ_B = regex.compile(
-    rf"(?<=\p{{L}}\p{{Mn}}*\p{{ccc=Virama}}{_M1}*)\u200d(?!\p{{Indic_Syllabic_Category=Vowel_Dependent}})"
+    rf"(?<=\p{{L}}\p{{Mn}}{_MARKS}\p{{ccc=Virama}}{_M1}{_MARKS})\u200d"
+    r"(?!\p{Indic_Syllabic_Category=Vowel_Dependent})"
 )
 # Two uses the Unicode core spec documents beyond UTS #39's patterns (pre-QA on #515): a ZWJ
 # between a letter and a virama (Bengali ra-phala, `র‍্যালি`, chapter 12), and a ZWNJ between
 # two Arabic-script letters whatever their joining type (Persian writes `در‌ها` with one after
 # a right-joining letter, chapter 9; maintainer, 2026-10-31: real names come first).
-_ZWJ_BEFORE_VIRAMA = regex.compile(r"(?<=\p{L}\p{Mn}*)\u200d(?=\p{ccc=Virama})")
-_ZWNJ_ARABIC = regex.compile(r"(?<=(?=\p{scx=Arab})\p{L}\p{jt=T}*)\u200c(?=(?=\p{scx=Arab})\p{L})")
+_ZWJ_BEFORE_VIRAMA = regex.compile(rf"(?<=\p{{L}}\p{{Mn}}{_MARKS})\u200d(?=\p{{ccc=Virama}})")
+_ZWNJ_ARABIC = regex.compile(
+    rf"(?<=(?=\p{{scx=Arab}})\p{{L}}\p{{jt=T}}{_MARKS})\u200c(?=(?=\p{{scx=Arab}})\p{{L}})"
+)
 # UTS #51: a joiner between two emoji (👨‍👩‍👧, 🏳️‍🌈); VS15/VS16 after an emoji, or after
 # a keycap base when the keycap follows (1️⃣); the other variation selectors after the
 # characters they vary (CJK ideographs, Mongolian letters, math symbols).
@@ -249,8 +260,12 @@ _OTHER_VS = regex.compile(
     r"(?<=(?![\x00-\x7f])[\p{Sm}\p{So}\p{Ideographic}\p{scx=Mymr}\p{scx=Phag}\p{scx=Mani}"
     r"\p{scx=Egyp}])[\ufe00-\ufe0d]"
     r"|(?<=\p{Ideographic})[\U000e0100-\U000e01ef]"
-    r"|(?<=\p{scx=Mong})[\u180b-\u180d\u180f]"
-    r"|(?<=\p{scx=Mong})\u180e(?=\p{scx=Mong})"
+    # A Mongolian selector after a Mongolian *letter*: the selectors are scx=Mong
+    # themselves, so "after a Mongolian character" let them chain into a hidden run of any
+    # length (QA round 2 on #515). The vowel separator sits between two letters, after
+    # at most one selector.
+    r"|(?<=(?=\p{scx=Mong})\p{L})[\u180b-\u180d\u180f]"
+    r"|(?<=(?=\p{scx=Mong})\p{L}[\u180b-\u180d\u180f]?)\u180e(?=(?=\p{scx=Mong})\p{L})"
 )
 _FLAG = "\U0001f3f4"  # waving black flag: the base of a subdivision flag's tag sequence
 
@@ -267,16 +282,20 @@ def _tag_run_end(text: str, i: int) -> int:
     return end
 
 
-# A subdivision flag's tags (UTS #51 ED-14a, a CLDR subdivision id such as `gbsct`): 3 to 7
-# lowercase letters or digits, then the cancel tag. Any other tag run is text hidden in a
-# name ("ASCII smuggling", pre-QA on #515).
-_FLAG_TAGS = regex.compile(r"[\U000e0030-\U000e0039\U000e0061-\U000e007a]{3,7}\U000e007f")
+# A subdivision flag's tags: only the three RGI ones (UTS #51; emoji-sequences.txt), England,
+# Scotland and Wales, each followed by the cancel tag. Any other tag run, even a well-formed
+# subdivision id, can spell words a model reads ("ASCII smuggling"; maintainer, 2026-10-31,
+# QA round 2 on #515); platforms don't draw other subdivision flags as flags anyway.
+_RGI_FLAG_TAGS = frozenset(
+    "".join(chr(0xE0000 + ord(c)) for c in code) + "\U000e007f"
+    for code in ("gbeng", "gbsct", "gbwls")
+)
 
 
 def _is_flag_tags(text: str, start: int, end: int) -> bool:
     """Whether ``text[start:end]``, a run of tags, makes a subdivision flag with the 🏴
     before it."""
-    return start > 0 and text[start - 1] == _FLAG and bool(_FLAG_TAGS.fullmatch(text, start, end))
+    return start > 0 and text[start - 1] == _FLAG and text[start:end] in _RGI_FLAG_TAGS
 
 
 def _ignorable_belongs(text: str, i: int) -> bool:

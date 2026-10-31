@@ -156,6 +156,22 @@ class TestInvisibleProblem:
             ("caf\u00e9\ufe00.pdf", "contains an invisible character (U+FE00)"),
             ("\u0434\ufe01oc", "contains an invisible character (U+FE01)"),
             ("\u2229\ufe00", None),
+            # A Mongolian selector needs a Mongolian letter before it: the selectors are
+            # Mongolian-script themselves and chained into hidden runs (QA round 2 on #515).
+            ("\u182e\u1823\u1829\u182d\u1823\u182f\u180b", None),
+            ("\u182c\u1820\u1837\u180e\u1820", None),
+            ("\u1820\u180b\u180e\u1820", None),
+            ("\u1820\u180b\u180c", "contains an invisible character (U+180C)"),
+            (
+                "\u1820" + "\u180b\u180c\u180d\u180f" * 50 + "\u1820",
+                "contains an invisible character (U+180C)",
+            ),
+            ("\u1820" + "\u180e" * 500 + "\u1820", "contains an invisible character (U+180E)"),
+            ("\u1802\u180b", "contains an invisible character (U+180B)"),
+            (
+                "report \u1802" + "\u180e\u180b\u180e\u180c" * 40 + "\u1802.pdf",
+                "contains an invisible character (U+180E)",
+            ),
             # Pins the Unicode data of regex's floor: ★ stopped being Extended_Pictographic
             # after 2024.11.6, so a ZWJ between two is refused (see the scaffolding spec).
             ("\u2605\u200d\u2605", "contains an invisible character (U+200D)"),
@@ -179,11 +195,31 @@ class TestInvisibleProblem:
         assert shown("/video/" + run).startswith("'/video/")
         assert time.monotonic() - start < 2
 
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "\u094d" * 40_000 + "\u200c\u0915",
+            "\u094d" * 40_000 + "\u200d",
+            "\u0644" + "\u064b" * 40_000 + "\u200c\u0644",
+        ],
+    )
+    def test_a_long_mark_run_before_a_joiner_is_linear(self, name: str) -> None:
+        """The joiner lookbehinds rescanned an unbounded run of marks: 40,000 took 9 s
+        (QA round 2 on #515)."""
+        import time
+
+        from mcp_synology.modules.filestation.helpers import invisible_problem, shown
+
+        start = time.monotonic()
+        invisible_problem(name)
+        shown("/video/" + name)
+        assert time.monotonic() - start < 1
+
     @staticmethod
     def _tags(text: str) -> str:
         return "".join(chr(0xE0000 + ord(c)) for c in text)
 
-    @pytest.mark.parametrize("code", ["gbsct", "gbeng", "usca", "fr75c"])
+    @pytest.mark.parametrize("code", ["gbsct", "gbeng", "gbwls"])
     def test_a_subdivision_flag_passes(self, code: str) -> None:
         from mcp_synology.modules.filestation.helpers import invisible_problem
 
@@ -198,10 +234,12 @@ class TestInvisibleProblem:
 
     @pytest.mark.parametrize(
         "code",
-        ["ignore previous", "GBSCT", "gb", "gbscotland", "gb-sct"],
+        # A well-formed subdivision id too: only the three RGI flags pass, or several
+        # flags could spell words (maintainer, QA round 2 on #515).
+        ["ignore previous", "GBSCT", "gb", "gbscotland", "gb-sct", "usca", "fr75c", "ignore"],
     )
     def test_text_hidden_in_tags_is_refused(self, code: str) -> None:
-        """Only 3-7 lowercase letters or digits make a flag; anything else is text hidden
+        """Only the three RGI subdivision flags count; any other tag run is text hidden
         in the name ("ASCII smuggling", pre-QA on #515)."""
         from mcp_synology.modules.filestation.helpers import invisible_problem, shown
 
