@@ -189,6 +189,13 @@ class TestInvisibleProblem:
 
         assert invisible_problem("\U0001f3f4" + self._tags(code) + "\U000e007f") is None
 
+    def test_flag_tags_need_the_flag(self) -> None:
+        """A valid code after anything but 🏴 is hidden text too."""
+        from mcp_synology.modules.filestation.helpers import invisible_problem
+
+        name = "x" + self._tags("gbsct") + "\U000e007f"
+        assert invisible_problem(name) == "contains an invisible character (U+E0067)"
+
     @pytest.mark.parametrize(
         "code",
         ["ignore previous", "GBSCT", "gb", "gbscotland", "gb-sct"],
