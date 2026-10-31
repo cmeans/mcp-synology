@@ -947,7 +947,8 @@ def _delete_result(status: dict[str, Any], path: str, *, recursive: bool) -> Non
     if "error" in status:
         err = status["error"]
         err_code = err.get("code", 0) if isinstance(err, dict) else err
-        err_path = status.get("path", path)
+        # An empty path (as in DSM's nothing-found status) names nothing: use ours (pre-QA).
+        err_path = status.get("path") or path
         mapped = error_from_code(err_code, "SYNO.FileStation.Delete")
         error_response(
             mapped.error_code,

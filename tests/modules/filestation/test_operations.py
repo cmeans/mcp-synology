@@ -3318,6 +3318,17 @@ class TestDeleteFailurePartway:
         assert "Failed on" not in message
         assert message.count("/video/b") == 1
 
+    def test_a_task_error_with_an_empty_path_names_ours(self) -> None:
+        """A task error whose path is empty names the path deleted, not '' (pre-QA)."""
+        from mcp_synology.modules.filestation.operations import _delete_result
+
+        status = {"finished": True, "error": {"code": 900}, "path": ""}
+        with pytest.raises(ToolError) as exc:
+            _delete_result(status, "/video/b", recursive=True)
+        assert json.loads(str(exc.value))["error"]["message"].endswith(
+            "DSM error code 900 on path: /video/b."
+        )
+
     @respx.mock
     async def test_a_path_gone_when_its_delete_ran(self, mock_client: DsmClient) -> None:
         """DSM's nothing-found signature on a later item: the path is named once, and its
