@@ -377,7 +377,10 @@ _SECTION_MODELS: dict[str, type[BaseModel]] = {
 
 # Conditional: a comma split can leave a key with or without a value (`a,B: x` gives `B: x`),
 # so the hint says when it applies (QA rounds 4 and 5 on #469). One wording for every message.
-_SPLIT_HINT = "if a comma inside {…} split a value there, quote that value"
+# Which comma: every flow mapping has commas between its entries (QA round 6 on #469).
+_SPLIT_HINT = (
+    "if a value inside {…} has a comma of its own (not the one between entries), quote that value"
+)
 _NOT_TEXT_KEY = f"<a key that isn't text, not shown: it may be part of a password; {_SPLIT_HINT}>"
 
 
@@ -455,11 +458,11 @@ def _shown_location(
                 # `Password1`, close to `password` (QA round 2 on #469).
                 return (f"{where}." if where else "") + (
                     f'<an unknown key close to "{by_lower[close[0]]}", not shown since it may '
-                    f"be part of a password (a misspelling, or, {split})>"
+                    f"be, or hold, part of a password: fix its spelling, or, {split}>"
                 )
             return (
                 (f"{where}." if where else "")
-                + "<an unknown key, not shown since it may hold or be part of a password; "
+                + "<an unknown key, not shown since it may be, or hold, part of a password; "
                 + f"{split}; valid keys here: {', '.join(sorted(valid))}>"
             )
     return loc

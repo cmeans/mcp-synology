@@ -151,9 +151,9 @@ class TestAppConfig:
         # (QA round 2 on #469). The quoting hint is conditional: a comma split can leave a
         # fragment with a value too (QA round 5).
         shown = (
-            'auth.<an unknown key close to "password", not shown since it may be part of a '
-            "password (a misspelling, or, if a comma inside {…} split a value there, quote "
-            "that value)>"
+            'auth.<an unknown key close to "password", not shown since it may be, or hold, part '
+            "of a password: fix its spelling, or, if a value inside {…} has a comma of its own "
+            "(not the one between entries), quote that value>"
             if section == "auth"
             else f"{section}.{key}"
         )
@@ -336,9 +336,9 @@ class TestAppConfig:
         message = format_validation_error(exc.value)
         assert "2x" not in message and "Hunter" not in message and "auth.y" not in message
         assert (
-            "auth.<an unknown key, not shown since it may hold or be part of a password; if a "
-            "comma inside {…} split a value there, quote that value; valid keys here: device_id, "
-            "password, username>" in message
+            "auth.<an unknown key, not shown since it may be, or hold, part of a password; if a "
+            "value inside {…} has a comma of its own (not the one between entries), quote that "
+            "value; valid keys here: device_id, password, username>" in message
         )
 
     @pytest.mark.parametrize(
@@ -365,7 +365,7 @@ class TestAppConfig:
             AppConfig(**raw)
         message = format_validation_error(exc.value)
         assert "Hunter" not in message
-        assert "<an unknown key, not shown since it may hold or be part of a password" in message
+        assert "<an unknown key, not shown since it may be, or hold, part of a password" in message
 
     def test_a_valueless_near_miss_under_a_module_names_the_key_it_is_close_to(self) -> None:
         from pydantic import ValidationError
@@ -377,9 +377,10 @@ class TestAppConfig:
         with pytest.raises(ValidationError) as exc:
             AppConfig(**raw)
         assert (
-            '  - modules.filestation.<an unknown key close to "permission", not shown since it '
-            "may be part of a password (a misspelling, or, if a comma inside {…} split a value "
-            "there, quote that value)>: Extra inputs are not permitted"
+            '  - modules.filestation.<an unknown key close to "permission", not shown since it may '
+            "be, or hold, part of a password: fix its spelling, or, if a value inside {…} has a "
+            "comma of its own (not the one between entries), quote that value>: Extra inputs are "
+            "not permitted"
         ) in (format_validation_error(exc.value))
 
     def test_a_near_miss_in_another_case_names_the_key_it_is_close_to(self) -> None:
@@ -393,9 +394,9 @@ class TestAppConfig:
         with pytest.raises(ValidationError) as exc:
             AppConfig(**raw)
         assert (
-            '  - auth.<an unknown key close to "username", not shown since it may be part of a '
-            "password (a misspelling, or, if a comma inside {…} split a value there, quote "
-            "that value)>: Extra inputs are not permitted"
+            '  - auth.<an unknown key close to "username", not shown since it may be, or hold, '
+            "part of a password: fix its spelling, or, if a value inside {…} has a comma of its "
+            "own (not the one between entries), quote that value>: Extra inputs are not permitted"
         ) in (format_validation_error(exc.value))
 
     @pytest.mark.parametrize(
@@ -404,17 +405,17 @@ class TestAppConfig:
             # A key with a value and no near-miss: the valid keys.
             (
                 "{pwd: Hunter2x}",
-                "auth.<an unknown key, not shown since it may hold or be part of a password; if "
-                "a comma inside {…} split a value there, quote that value; valid keys here: "
-                "device_id, password, username>",
+                "auth.<an unknown key, not shown since it may be, or hold, part of a password; if "
+                "a value inside {…} has a comma of its own (not the one between entries), quote "
+                "that value; valid keys here: device_id, password, username>",
             ),
             # A comma split that leaves a fragment with a value (`Spring,Password1: x` gives
             # `Password1: x`): the quoting hint still shows (QA round 5 on #469).
             (
                 "{username: me, password: Spring,Password1: x}",
-                'auth.<an unknown key close to "password", not shown since it may be part of a '
-                "password (a misspelling, or, if a comma inside {…} split a value there, quote "
-                "that value)>",
+                'auth.<an unknown key close to "password", not shown since it may be, or hold, '
+                "part of a password: fix its spelling, or, if a value inside {…} has a comma of "
+                "its own (not the one between entries), quote that value>",
             ),
         ],
         ids=["no-near-miss", "split-with-a-value"],
@@ -481,7 +482,8 @@ class TestAppConfig:
         assert "7319" not in message
         assert (
             "  - modules.<a key that isn't text, not shown: it may be part of a password; if a "
-            "comma inside {…} split a value there, quote that value>.permission: "
+            "value inside {…} has a comma of its own (not the one between entries), quote that "
+            "value>.permission: "
         ) in message
 
     def test_a_list_position_is_still_named(self) -> None:
