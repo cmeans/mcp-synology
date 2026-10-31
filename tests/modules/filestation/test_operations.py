@@ -3319,6 +3319,21 @@ class TestDeleteFailurePartway:
         assert message.count("/video/b") == 1
 
     @respx.mock
+    async def test_a_path_gone_when_its_delete_ran(self, mock_client: DsmClient) -> None:
+        """DSM's nothing-found signature on a later item: the path is named once, and its
+        advice already says to check with list_files (QA round 6 on #480)."""
+        self._route(2, status={"finished": True, "total": -1, "path": ""})
+        with pytest.raises(ToolError) as exc:
+            await delete_files(mock_client, paths=["/video/a", "/video/b", "/video/c"], timeout=5)
+        error = json.loads(str(exc.value))["error"]
+        assert error["message"] == (
+            "Delete files failed: the path wasn't found when the delete ran, so nothing was "
+            "deleted for /video/b. Already deleted before this failure: /video/a. Not "
+            "started: /video/c."
+        )
+        assert error["suggestion"].endswith(f" {_SHORT_RETRY_NOTE}")
+
+    @respx.mock
     async def test_a_path_inside_the_item_doesnt_name_it(self, mock_client: DsmClient) -> None:
         """An error naming a path inside the failed item still gets 'Failed on' (pre-QA)."""
         self._route(2, status={"finished": True, "errors": [{"code": 408, "path": "/video/b/s"}]})

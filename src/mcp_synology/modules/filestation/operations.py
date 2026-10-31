@@ -343,7 +343,8 @@ def _unstop(message: str) -> str:
     return message[:-1] if message.endswith(".") else message
 
 
-# Advice that already says to check with list_files (a start with no answer),
+# Advice that already says to check with list_files (a start with no answer, a path not
+# found when the delete ran),
 # not advice that only mentions it (408's "Use list_files or search_files to find …").
 _CHECKS_WITH_LIST_FILES = re.compile(r"\bcheck\b[^.]*\bwith list_files\b", re.IGNORECASE)
 
@@ -991,8 +992,10 @@ def _delete_result(status: dict[str, Any], path: str, *, recursive: bool) -> Non
         # pre-check saw the path, so it disappeared before the task ran.
         error_response(
             ErrorCode.NOT_FOUND,
-            f"Delete files failed: {path} was not found when the delete ran, so nothing "
-            "was deleted for it.",
+            # The path ends the sentence, so a partial failure's "Failed on" sees it named
+            # (QA round 6 on #480).
+            "Delete files failed: the path wasn't found when the delete ran, so nothing was "
+            f"deleted for {path}.",
             retryable=False,
             param="paths",
             value=path,
