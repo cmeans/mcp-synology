@@ -214,6 +214,33 @@ def draws_nothing(c: str) -> bool:
     return c.isspace() or unicodedata.category(c) in ("Cf", "Zs", "Mn", "Me") or c in _BLANK_LETTERS
 
 
+_JOINERS = frozenset("\u200c\u200d")
+_CANCEL_TAG = "\U000e007f"  # ends a subdivision flag's tag sequence (the Scotland flag)
+
+
+def _in_sequence(c: str) -> bool:
+    """A format character that belongs to a visible sequence: a joiner, or a flag's tag."""
+    return c in _JOINERS or 0xE0020 <= ord(c) <= 0xE007F
+
+
+def pads(c: str) -> bool:
+    """A character that pads a name invisibly at its end: whitespace, a blank filler
+    letter, or a format character (zero width, BOM, joiner) other than a flag's closing
+    tag. Unlike `draws_nothing`, not a combining mark or variation selector: those finish
+    the character before them (Hindi `नमस्ते`, NFD `Café`, `❤️`, `1️⃣`; QA round 1 on
+    #515)."""
+    return (
+        c.isspace() or c in _BLANK_LETTERS or (unicodedata.category(c) == "Cf" and c != _CANCEL_TAG)
+    )
+
+
+def _hides(c: str) -> bool:
+    """A character inside a path that a plain message would hide or mangle."""
+    if unicodedata.category(c) in ("Cc", "Cs", "Co", "Cn", "Zl", "Zp"):
+        return True
+    return c != " " and pads(c) and not _in_sequence(c)
+
+
 def shown(path: str) -> str:
     """``path`` for a message: as is, or quoted with ``repr`` when a part has whitespace at
     its start or end or the path holds a character that doesn't print (a tab, a no-break
@@ -223,13 +250,14 @@ def shown(path: str) -> str:
     own text, shown exactly); an error or list that names a path the server checked or got
     from DSM uses ``shown`` (plain unless something would be invisible). Successful
     replies and listings show paths as DSM does."""
-    if (
-        path.isprintable()
-        and all(part == part.strip() for part in path.split("/"))
-        and not any(draws_nothing(c) and c != " " for c in path)
-    ):
-        return path
-    return repr(path)
+    for part in path.split("/"):
+        if not part:
+            continue
+        edge_padded = part != part.strip() or draws_nothing(part[0]) or pads(part[-1])
+        if edge_padded or all(draws_nothing(c) for c in part) or any(map(_hides, part)):
+            return repr(path)
+    # Combining marks and joiners inside a word show as written (`नमस्ते`, `Café`, 👨‍👩‍👧).
+    return path
 
 
 def normalize_path(path: str) -> str:

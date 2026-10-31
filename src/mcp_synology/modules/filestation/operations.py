@@ -38,6 +38,7 @@ from mcp_synology.modules.filestation.helpers import (
 from mcp_synology.modules.filestation.paths import (
     ResolvedPath,
     bin_index,
+    bin_item_origin,
     refuse_bad_name,
     resolve_bin_items,
 )
@@ -1222,17 +1223,13 @@ async def restore_from_recycle_bin(
     # Each item as the full path of an item in the bin (#479, #488, #510).
     full_paths: list[str] = list(resolve_bin_items(share_name, paths))
     restore_destinations: list[str] = []
-    bin_root = f"/{share_name}/#recycle"
     for item in full_paths:
         # Infer original path by stripping #recycle
         if dest_folder:
             restore_destinations.append(dest_folder)
         else:
-            # /video/#recycle/Shows/Ep1.mkv -> /video/Shows/
-            # Only the leading bin prefix: the item's own path may hold the same text again
-            # (`a/video/#recycle/b.txt` came from /video/a/video/#recycle; #479).
-            original = f"/{share_name}" + item[len(bin_root) :]
-            restore_destinations.append("/".join(original.split("/")[:-1]) or f"/{share_name}")
+            # /video/#recycle/Shows/Ep1.mkv -> /video/Shows
+            restore_destinations.append(bin_item_origin(share_name, item))
 
     await _refuse_missing_sources(client, "Restore", full_paths, paths)
     recreated = [] if dest_folder else await _recreate_missing_folders(client, restore_destinations)

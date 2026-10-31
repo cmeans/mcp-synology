@@ -225,6 +225,9 @@ class TestRefuseBadName:
             ("\ufeffreport.pdf", "starts or ends with an invisible character"),
             ("report.pdf\u3164", "starts or ends with an invisible character"),
             ("\u200dx", "starts or ends with an invisible character"),
+            ("report.pdf\u00ad", "starts or ends with an invisible character"),
+            ("report.pdf\u2060", "starts or ends with an invisible character"),
+            ("x\u200d", "starts or ends with an invisible character"),
         ],
     )
     def test_refused(self, name: str, problem: str) -> None:
@@ -277,6 +280,15 @@ class TestRefuseBadName:
             "#recycled",
             ".hidden",
             "a..b",
+            # Names ending in a combining mark or a variation selector are ordinary: the
+            # mark finishes the letter before it (QA round 1 on #515).
+            "\u0928\u092e\u0938\u094d\u0924\u0947",  # नमस्ते
+            "\u0ba4\u0bae\u0bbf\u0bb4\u0bcd",  # தமிழ்
+            "\u0e17\u0e35\u0e48",  # ที่
+            "Cafe\u0301",  # NFD Café, as macOS writes it
+            "Favorites \u2764\ufe0f",
+            "1\ufe0f\u20e3",
+            "\U0001f3f4\U000e0067\U000e0062\U000e0073\U000e0063\U000e0074\U000e007f",
             # Joiners stay: emoji sequences and several scripts use them.
             "\U0001f468\u200d\U0001f469\u200d\U0001f467",
             "ab\u200ccd",
@@ -508,6 +520,22 @@ class TestResolvePaths:
                 creates_parents=True,  # type: ignore[arg-type]
             )
         assert f"would be created, but its name {problem}" in _error(exc)["message"]
+
+    @pytest.mark.parametrize("name", ["Trip \u2708\ufe0f", "\u0ba4\u0bae\u0bbf\u0bb4\u0bcd"])
+    async def test_an_ordinary_created_parent_passes(self, name: str) -> None:
+        """A parent ending in a variation selector or a vowel sign is no padding (QA r1 on
+        #515): created, not refused, and not even looked up."""
+        client = _FakeClient()
+        got = await resolve_paths(
+            client,  # type: ignore[arg-type]
+            set(),
+            "upload_file",
+            "dest_folder",
+            [f"/video/{name}/2026"],
+            creates_parents=True,
+        )
+        assert got == [f"/video/{name}/2026"]
+        assert [m for m, _ in client.calls] == ["list_share"]
 
     async def test_the_walk_checks_the_right_folder_at_depth(self) -> None:
         """Each part is checked in its own parent, not the share's (pre-QA r5 on #510)."""
@@ -1249,3 +1277,37 @@ def test_handoff_lead_line_quotes_a_padded_path(stall: str | None) -> None:
         stall=httpx.ReadTimeout("x") if stall else None,
     )
     assert QUOTED in reply.split("\n")[0]
+
+
+@pytest.mark.parametrize(
+    ("tool", "advice"),
+    [
+        ("copy_files", "copy it into a subfolder"),
+        ("move_files", "move it into a subfolder"),
+        ("restore_from_recycle_bin", "with dest_folder"),
+    ],
+)
+async def test_planted_bin_advice_fits_the_tool(tool: str, advice: str) -> None:
+    """A whole bin can't be renamed, and a restore can go elsewhere (QA round 1 on #515)."""
+    fn = await _tool(tool, _FakeClient({"/video/sub/#recycle", "/video/#recycle/sub/#recycle"}))
+    with pytest.raises(ToolError) as exc:
+        await fn(ctx=_fake_mcp_ctx(), **_PLANTING[tool])
+    suggestion = _error(exc)["suggestion"]
+    assert advice in suggestion
+    assert "rename it" not in suggestion
+
+
+@pytest.mark.parametrize(
+    ("item", "origin"),
+    [
+        ("/video/#recycle/Ep1.mkv", "/video"),
+        ("/video/#recycle/Shows/Ep1.mkv", "/video/Shows"),
+        ("/video/#recycle/a/video/#recycle/b.txt", "/video/a/video/#recycle"),
+        ("/video/#recycle/#recycle", "/video"),
+    ],
+)
+def test_bin_item_origin(item: str, origin: str) -> None:
+    """One helper for the restore and its planted-bin check (QA round 1 on #515)."""
+    from mcp_synology.modules.filestation.paths import bin_item_origin
+
+    assert bin_item_origin("video", item) == origin

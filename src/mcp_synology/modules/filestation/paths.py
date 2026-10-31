@@ -28,6 +28,7 @@ from mcp_synology.modules.filestation.helpers import (
     _is_dot,
     draws_nothing,
     normalize_path,
+    pads,
     path_exists,
     shown,
     strip_padding,
@@ -93,6 +94,16 @@ LOCAL_PARAMS: dict[str, set[str]] = {
     "upload_file": {"local_path"},
 }
 
+# What to do instead, per tool (QA round 1 on #515): a whole bin can't be renamed, and a
+# restore can go elsewhere with dest_folder.
+_PLANTED_ADVICE = {
+    "copy_files": "Copy the folder's contents (its items by path) instead, or copy it into a "
+    "subfolder.",
+    "move_files": "Move the folder's contents (its items by path) instead, or move it into a "
+    "subfolder.",
+    "restore_from_recycle_bin": "Restore it into a subfolder with dest_folder, or restore its "
+    "items (each by its path in the bin) instead.",
+}
 _OP_WORDS = {
     "copy_files": "Copy files",
     "move_files": "Move files",
@@ -196,7 +207,7 @@ def refuse_planted_bin(
                 "as '#recycle', the name of its recycle bin. Nothing was changed.",
                 param,
                 raw,
-                "Copy or move the folder's contents instead, or rename it first.",
+                _PLANTED_ADVICE.get(tool, "Copy or move the folder's contents instead."),
             )
 
 
@@ -382,7 +393,9 @@ def name_problem(name: str, parent: str | None = None) -> str | None:
         return "has no visible character"
     if name != name.strip():
         return "starts or ends with whitespace"
-    if draws_nothing(name[0]) or draws_nothing(name[-1]):
+    # The start: nothing invisible; the end: padding only, since a combining mark or a
+    # variation selector finishes the character before it (QA round 1 on #515).
+    if draws_nothing(name[0]) or pads(name[-1]):
         # Invisible padding (a zero-width space, a BOM, a filler): another look-alike
         # `report.pdf`, as a trailing space would make (maintainer, 2026-10-31).
         return "starts or ends with an invisible character"
@@ -538,6 +551,14 @@ async def resolve_paths(
                 client, raw, path, named, len(path.split("/")) - 1, suggestion
             )
     return resolved
+
+
+def bin_item_origin(share_name: str, item: str) -> str:
+    """The folder a bin item (a full path from `resolve_bin_items`) was deleted from: only
+    the leading ``/<share>/#recycle`` comes off, since the item's own path may hold the same
+    text again (#479). One helper for the restore and its planted-bin check (QA r1 on #515)."""
+    original = f"/{share_name}" + item[len(f"/{share_name}/#recycle") :]
+    return "/".join(original.split("/")[:-1]) or f"/{share_name}"
 
 
 def resolve_bin_items(share: str, items: list[str], param: str = "paths") -> list[ResolvedPath]:

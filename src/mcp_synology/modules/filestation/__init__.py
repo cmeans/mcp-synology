@@ -182,7 +182,8 @@ MODULE_INFO = ModuleInfo(
                 "Create one or more folders, each given as a full path starting with its shared "
                 "folder (`/video/TV Shows/New Show`). By default (`force_parent=true`), missing "
                 "folders above it are created too, and a folder that already exists is not an "
-                "error."
+                "error. A new folder's name can't have whitespace at its ends, control or "
+                "direction-changing characters, or be `#recycle` in a shared folder."
             ),
             permission_tier=PermissionTier.WRITE,
             annotations=_ANNO_IDEMPOTENT,
@@ -310,6 +311,7 @@ def register(ctx: "RegisterContext") -> None:
         restore_from_recycle_bin,
     )
     from mcp_synology.modules.filestation.paths import (
+        bin_item_origin,
         refuse_planted_bin,
         resolve_bin_items,
         resolve_paths,
@@ -857,7 +859,12 @@ def register(ctx: "RegisterContext") -> None:
             ],
             new_name: Annotated[
                 str,
-                Field(description="The new name only, not a path, `.` or `..` (`Severance`)."),
+                Field(
+                    description=(
+                        "The new name only, not a path, `.` or `..` (`Severance`); no whitespace "
+                        "at its ends, and no control or direction-changing characters."
+                    )
+                ),
             ],
         ) -> str:
             client = await _fs_client()
@@ -1022,7 +1029,8 @@ def register(ctx: "RegisterContext") -> None:
                 str | None,
                 Field(
                     description="Name for the file on the NAS, not a path (default: the local "
-                    "file's name)."
+                    "file's name); no whitespace at its ends, and no control or "
+                    "direction-changing characters."
                 ),
             ] = None,
             overwrite: Annotated[
@@ -1165,7 +1173,7 @@ def register(ctx: "RegisterContext") -> None:
                 "restore_from_recycle_bin",
                 paths,
                 items,
-                [dest or item.replace("/#recycle", "", 1).rsplit("/", 1)[0] for item in items],
+                [dest or bin_item_origin(bin_share.strip("/"), item) for item in items],
             )
             return _reply(
                 await restore_from_recycle_bin(

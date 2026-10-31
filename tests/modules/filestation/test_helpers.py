@@ -89,7 +89,17 @@ class TestShown:
             ("/video/\x1b[31m", "'/video/\\x1b[31m'"),
             # What the new-name rules call invisible is quoted too (pre-QA r5 on #510).
             ("/video/\u3164", repr("/video/\u3164")),
-            ("/video/a\u0301", repr("/video/a\u0301")),
+            # A combining mark after a letter is part of it (NFD `á`): plain (QA r1 on #515).
+            ("/video/a\u0301", "/video/a\u0301"),
+            ("/video/\u0301a", repr("/video/\u0301a")),
+            (
+                "/video/\u0928\u092e\u0938\u094d\u0924\u0947",
+                "/video/\u0928\u092e\u0938\u094d\u0924\u0947",
+            ),
+            ("/video/Favorites \u2764\ufe0f", "/video/Favorites \u2764\ufe0f"),
+            ("/video/\U0001f468\u200d\U0001f469", "/video/\U0001f468\u200d\U0001f469"),
+            ("/video/a\u200b", repr("/video/a\u200b")),
+            ("/video/a\u202eb", repr("/video/a\u202eb")),
             ("/video/\u2800x", repr("/video/\u2800x")),
         ],
     )

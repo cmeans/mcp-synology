@@ -1844,7 +1844,9 @@ class TestInstructionComments:
 # -76 by #488: paths are taken exactly, so delete_files and restore no longer refuse a
 # whitespace-only part.
 # +114 by #510: rename, move_files and delete_files say a user's home folder is refused.
-PAYLOAD_BUDGET_CHARS = 56_537
+# +286 by #510 (QA round 1): rename's new_name, upload_file's filename and create_folder
+# name the new-name rules.
+PAYLOAD_BUDGET_CHARS = 56_823
 
 
 class TestPayloadBudget:
