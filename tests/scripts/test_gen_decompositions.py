@@ -71,7 +71,8 @@ def test_render_keeps_only_characters_newer_than_python_311() -> None:
 
 
 def test_the_generated_module_is_current() -> None:
-    """The committed table is what the script renders for it: no hand edits."""
+    """The committed module is formatted as the script renders it. Its values are checked
+    against `unicodedata` by test_helpers on a Python that knows them (3.14: Unicode 16)."""
     gen = _load()
     from mcp_synology.modules.filestation.decompositions import NEW_DECOMPOSITIONS
 

@@ -162,8 +162,12 @@ class TestInvisibleProblem:
             ),
             (
                 "\U00016100\U0001611e\U0001611e\U0001611e\U0001611e",
-                "repeats a combining mark (U+16121), which draws as one",
+                "repeats a combining mark (U+16121, typed as U+1611E U+1611E), which draws as one",
             ),
+            # The longest decomposition at each point is the unit: U+16121 then U+16126 is
+            # two different vowel signs, not U+16121 twice (pre-QA on #515).
+            ("\U00016100\U00016121\U00016126", None),
+            ("\U00016100\U00016121\U00016121\U0001611f", None),
             # However it's typed: the same NFD, the same verdict (pre-QA on #515).
             ("a\U00016121\U0001611e\U0001611f", None),
             ("a\U0001611e\U00016126", None),
@@ -371,6 +375,12 @@ class TestInvisibleProblem:
                 a == b and helpers._MARK.match(a) for a, b in zip(parts, parts[1:], strict=False)
             ):
                 assert parts in helpers._REPEATING_DECOMPOSITIONS, hex(cp)
+        # Longest first: `_units` takes the first that matches.
+        assert list(helpers._REPEATING_DECOMPOSITIONS.values()) == [
+            "\U00016126",
+            "\U00016128",
+            "\U00016121",
+        ]
         assert helpers._REPEATING_DECOMPOSITIONS == {
             "\U0001611e\U0001611e\U0001611f": "\U00016126",
             "\U0001611e\U0001611e\U00016120": "\U00016128",

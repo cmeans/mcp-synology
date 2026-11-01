@@ -421,7 +421,8 @@ def name_problem(name: str, parent: str | None = None) -> str | None:
 # Advice for a name `invisible_problem` refuses: the caller already passed just a name, so
 # "pass a plain name" doesn't say what to change (pre-QA on #515).
 _UNICODE_ADVICE = (
-    "Retype the name without the character the message names: DSM would keep it as is."
+    "Retype the name without the character (or repeated marks) the message names: DSM would "
+    "keep it as is."
 )
 
 
@@ -449,9 +450,9 @@ def refuse_bad_name(
     at all, whitespace at its start or end (#488: DSM would keep it, and it's almost never
     meant), a character `invisible_problem` refuses (one that draws nothing where Unicode
     doesn't use one, U+FFF9-FFFB, the Braille blank at an end, a combining mark first or the
-    same one twice in a row, more than `SELECTOR_LIMIT` variation selectors: #515; its
-    advice is to retype the name without it, for the cap to write fewer variants, and for
-    the length to shorten it), or
+    same one, or run of them, twice in a row, more than `SELECTOR_LIMIT` variation
+    selectors: #515; its advice is to retype the name without it, for the cap to write
+    fewer variants, and for the length to shorten it), or
     ``#recycle`` where it would be taken for a bin: directly in a shared folder or in a
     user's home folder (``/homes/<user>``) (#510: DSM lets one be created where there's no
     bin folder yet). ``label`` names it in the message when
@@ -532,7 +533,8 @@ async def _refuse_bad_created_parents(
                     if problem.startswith(_TOO_LONG)
                     else _SELECTOR_ADVICE
                     if is_selector_problem(problem)
-                    else "Retype the folder's name without the character the message names, or "
+                    else "Retype the folder's name without the character (or repeated marks) the "
+                    "message names, or "
                     "pick an existing folder (list_files shows them)."
                     if is_invisible_problem(problem)
                     else "Give the folder a plain name, or pick an existing folder (list_files "

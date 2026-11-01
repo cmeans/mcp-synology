@@ -474,8 +474,13 @@ def _describe_repeat(name: str, copy: str, sources: list[int]) -> str:
     if len(copy) == 1:
         return f"repeats a combining mark (U+{ord(copy):04X}), which draws as one"
     if copy in _REPEATING_DECOMPOSITIONS:
+        # Name it as typed too when it was typed out: U+16121 isn't in the name then.
         char = _REPEATING_DECOMPOSITIONS[copy]
-        return f"repeats a combining mark (U+{ord(char):04X}), which draws as one"
+        typed = [name[i] for i in dict.fromkeys(sources)]
+        as_typed = (
+            "" if typed == [char] else ", typed as " + " ".join(f"U+{ord(c):04X}" for c in typed)
+        )
+        return f"repeats a combining mark (U+{ord(char):04X}{as_typed}), which draws as one"
     if len(set(sources)) == 1 and _decompose(name[sources[0]]) == copy:
         return f"repeats a combining mark (U+{ord(name[sources[0]]):04X}), which draws as one"
     codes = " ".join(f"U+{ord(c):04X}" for c in copy)
@@ -536,8 +541,8 @@ def _nfd_with_sources(name: str) -> list[tuple[str, int]]:
 
     NFD is each character's own decomposition (`_decompose`), then canonical ordering: a
     stable sort by combining class within each run of non-zero classes, with the classes
-    from `regex`. Both come from the Unicode version of `regex`'s data, so the result is
-    the same on every Python.
+    from the installed `regex`. The decompositions don't depend on the Python (the table is
+    Unicode 18.0.0, the `regex` floor's data), so the result is the same on every Python.
     """
     out = [(d, i) for i, c in enumerate(name) for d in _decompose(c)]
     classes = [_combining_class(d) for d, _ in out]

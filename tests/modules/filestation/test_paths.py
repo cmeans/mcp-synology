@@ -265,7 +265,15 @@ class TestRefuseBadName:
         )
 
     @pytest.mark.parametrize(
-        "name", ["rep\u200bort.pdf", "Cafe\u0301\u0301", "\u0301abc", "\u2800report"]
+        "name",
+        [
+            "rep\u200bort.pdf",
+            "Cafe\u0301\u0301",
+            "\u0301abc",
+            "\u2800report",
+            # The plural reason, a run of marks repeated (pre-QA on #515).
+            "a\u0308\u0301\u0308\u0301.txt",
+        ],
     )
     def test_unicode_refusals_say_what_to_change(self, name: str) -> None:
         """The caller already passed only a name: the advice names the fix (pre-QA on
@@ -273,7 +281,8 @@ class TestRefuseBadName:
         with pytest.raises(ToolError) as exc:
             refuse_bad_name("Rename", name, "new_name", "Pass the new name only.")
         assert _error(exc)["suggestion"] == (
-            "Retype the name without the character the message names: DSM would keep it as is."
+            "Retype the name without the character (or repeated marks) the message names: DSM "
+            "would keep it as is."
         )
 
     def test_too_many_variant_selectors_say_how_to_report(
@@ -707,6 +716,10 @@ class TestResolvePaths:
         [
             ("/video/a\u200bb/sub", "Retype the folder's name without the character"),
             ("/video/a\x1bb/sub", "Give the folder a plain name"),
+            (
+                "/video/a\u0308\u0301\u0308\u0301/sub",
+                "Retype the folder's name without the character",
+            ),
         ],
     )
     async def test_a_created_parents_advice_fits_its_problem(self, path: str, advice: str) -> None:
