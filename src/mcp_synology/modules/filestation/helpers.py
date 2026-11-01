@@ -424,65 +424,45 @@ def _repeated_marks(name: str) -> str | None:
 
     A run counts, not just one mark: U+0344 is U+0308 U+0301, so U+0344 typed twice puts
     no mark next to itself (QA round 5 on #515). The verdict reads the NFD alone, so
-    canonically equivalent names get one verdict however they were typed: a decomposition
-    that repeats a mark itself (U+16121 is U+1611E twice) is one unit there, as the
-    character it composes to."""
+    canonically equivalent names get one verdict however they were typed. The one pair
+    that isn't a repeat is a character's own decomposition into one mark twice (U+16121
+    is U+1611E U+1611E), typed out or not; U+16121 twice still is (QA round 6 on #515)."""
     decomposed = _nfd_with_sources(name)
     nfd = "".join(d for d, _ in decomposed)
-    for run in _mark_runs(nfd, _units(nfd)):
-        texts = [nfd[low:high] for low, high in run]
-        for size in range(1, len(run) // 2 + 1):
-            for at in range(len(run) - 2 * size + 1):
-                if texts[at : at + size] == texts[at + size : at + 2 * size]:
-                    low, high = run[at + size][0], run[at + 2 * size - 1][1]
-                    return _describe_repeat(
-                        name, nfd[low:high], [i for _, i in decomposed[low:high]]
-                    )
+    for low, high in _mark_runs(nfd):
+        for size in range(1, (high - low) // 2 + 1):
+            for at in range(low, high - 2 * size + 1):
+                copy = nfd[at + size : at + 2 * size]
+                if size == 1 and copy * 2 in _REPEATING_DECOMPOSITIONS:
+                    continue
+                if nfd[at : at + size] == copy:
+                    sources = [i for _, i in decomposed[at + size : at + 2 * size]]
+                    return _describe_repeat(name, copy, sources)
     return None
 
 
-def _units(nfd: str) -> list[tuple[int, int]]:
-    """``nfd`` split into characters, except that a decomposition repeating a mark itself
-    (Gurung Khema U+16121, U+16126, U+16128) is one span, the longest at each point."""
-    spans = []
-    at = 0
-    while at < len(nfd):
-        end = at + 1
-        for sequence in _REPEATING_DECOMPOSITIONS:
-            if nfd.startswith(sequence, at):
-                end = at + len(sequence)
-                break
-        spans.append((at, end))
-        at = end
-    return spans
-
-
-def _mark_runs(nfd: str, spans: list[tuple[int, int]]) -> list[list[tuple[int, int]]]:
-    """The runs of two or more consecutive spans that are all combining marks."""
-    runs: list[list[tuple[int, int]]] = [[]]
-    for low, high in spans:
-        if all(_MARK.match(c) for c in nfd[low:high]):
-            runs[-1].append((low, high))
-        elif runs[-1]:
-            runs.append([])
-    return [run for run in runs if len(run) > 1]
+def _mark_runs(nfd: str) -> list[tuple[int, int]]:
+    """The spans of two or more consecutive combining marks in ``nfd``."""
+    return [match.span() for match in _MARK_RUN.finditer(nfd)]
 
 
 def _describe_repeat(name: str, copy: str, sources: list[int]) -> str:
-    """The reason for a repeated ``copy``: the mark when it's one, the character it
-    composes to or the one typed when there's one, else the marks."""
+    """The reason for a repeated ``copy``: the mark when it's one; the character it
+    composes to, or the one typed, when the copy is whole characters as typed; else the
+    marks (QA round 6 on #515: a copy can start partway through a character)."""
     if len(copy) == 1:
         return f"repeats a combining mark (U+{ord(copy):04X}), which draws as one"
-    if copy in _REPEATING_DECOMPOSITIONS:
+    typed = [name[i] for i in dict.fromkeys(sources)]
+    whole = "".join(_decompose(c) for c in typed) == copy
+    if whole and copy in _REPEATING_DECOMPOSITIONS:
         # Name it as typed too when it was typed out: U+16121 isn't in the name then.
         char = _REPEATING_DECOMPOSITIONS[copy]
-        typed = [name[i] for i in dict.fromkeys(sources)]
         as_typed = (
             "" if typed == [char] else ", typed as " + " ".join(f"U+{ord(c):04X}" for c in typed)
         )
         return f"repeats a combining mark (U+{ord(char):04X}{as_typed}), which draws as one"
-    if len(set(sources)) == 1 and _decompose(name[sources[0]]) == copy:
-        return f"repeats a combining mark (U+{ord(name[sources[0]]):04X}), which draws as one"
+    if whole and len(typed) == 1:
+        return f"repeats a combining mark (U+{ord(typed[0]):04X}), which draws as one"
     codes = " ".join(f"U+{ord(c):04X}" for c in copy)
     return f"repeats combining marks ({codes}), which draw as one"
 
@@ -522,15 +502,16 @@ def _decompose(char: str) -> str:
 
 
 def _repeating_decompositions() -> dict[str, str]:
-    """The full decompositions that repeat a mark themselves, longest first, each with the
-    character it composes to (Gurung Khema U+16121, U+16126, U+16128); `test_helpers`
-    checks no older character has one."""
+    """The full decompositions that are one mark repeated, each with the character it
+    composes to: only Gurung Khema U+16121 (U+1611E twice). U+16126 and U+16128 contain
+    it and need nothing more (QA round 6 on #515); `test_helpers` checks no older
+    character repeats a mark."""
     found = {}
     for char in NEW_DECOMPOSITIONS:
         parts = _decompose(char)
-        if any(a == b and _MARK.match(a) for a, b in zip(parts, parts[1:], strict=False)):
+        if len(parts) > 1 and len(set(parts)) == 1 and _MARK.match(parts[0]):
             found[parts] = char
-    return dict(sorted(found.items(), key=lambda item: -len(item[0])))
+    return found
 
 
 _REPEATING_DECOMPOSITIONS = _repeating_decompositions()

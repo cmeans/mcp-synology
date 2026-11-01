@@ -164,10 +164,36 @@ class TestInvisibleProblem:
                 "\U00016100\U0001611e\U0001611e\U0001611e\U0001611e",
                 "repeats a combining mark (U+16121, typed as U+1611E U+1611E), which draws as one",
             ),
-            # The longest decomposition at each point is the unit: U+16121 then U+16126 is
-            # two different vowel signs, not U+16121 twice (pre-QA on #515).
-            ("\U00016100\U00016121\U00016126", None),
-            ("\U00016100\U00016121\U00016121\U0001611f", None),
+            # Only U+16121's own pair is exempt: a mark after U+16126 or U+16128 that
+            # repeats its last one is a repeat, and so is U+16121 followed by U+16126, whose
+            # NFD (U+1611E four times, then U+1611F) repeats U+16121 (QA round 6 on #515).
+            (
+                "\U00016100\U00016126\U0001611f",
+                "repeats a combining mark (U+1611F), which draws as one",
+            ),
+            (
+                "\U00016100\U00016128\U00016120",
+                "repeats a combining mark (U+16120), which draws as one",
+            ),
+            (
+                "\U00016100\U0001611e\U00016126\U00016126",
+                "repeats a combining mark (U+16126), which draws as one",
+            ),
+            (
+                "\U00016100\U00016121\U00016126",
+                "repeats combining marks (U+1611E U+1611E), which draw as one",
+            ),
+            (
+                "\U00016100\U00016121\U00016121\U0001611f",
+                "repeats a combining mark (U+16121), which draws as one",
+            ),
+            # A copy that starts partway through a character names the marks, not a
+            # character typed (QA round 6 on #515).
+            (
+                "\U00016100\U0001611e\U00016121\U0001611e",
+                "repeats combining marks (U+1611E U+1611E), which draw as one",
+            ),
+            ("\U00016100\U0001611e\U0001611e\U0001611e", None),
             # However it's typed: the same NFD, the same verdict (pre-QA on #515).
             ("a\U00016121\U0001611e\U0001611f", None),
             ("a\U0001611e\U00016126", None),
@@ -355,7 +381,7 @@ class TestInvisibleProblem:
 
     def test_decompositions_are_the_same_on_every_python(self) -> None:
         """Every canonical decomposition the running Python knows matches `_decompose`,
-        and every one that repeats a mark is in the generated table's list, so Python
+        and every mark one repeats is U+16121's exempt pair, so Python
         3.11 (Unicode 14) and 3.14 (Unicode 16) decompose and judge names alike (QA
         round 5 on #515)."""
         import sys
@@ -371,21 +397,11 @@ class TestInvisibleProblem:
                 continue
             parts = helpers._decompose(char)
             assert parts == unicodedata.normalize("NFD", char), hex(cp)
-            if any(
-                a == b and helpers._MARK.match(a) for a, b in zip(parts, parts[1:], strict=False)
-            ):
-                assert parts in helpers._REPEATING_DECOMPOSITIONS, hex(cp)
-        # Longest first: `_units` takes the first that matches.
-        assert list(helpers._REPEATING_DECOMPOSITIONS.values()) == [
-            "\U00016126",
-            "\U00016128",
-            "\U00016121",
-        ]
-        assert helpers._REPEATING_DECOMPOSITIONS == {
-            "\U0001611e\U0001611e\U0001611f": "\U00016126",
-            "\U0001611e\U0001611e\U00016120": "\U00016128",
-            "\U0001611e\U0001611e": "\U00016121",
-        }
+            for a, b in zip(parts, parts[1:], strict=False):
+                if a == b and helpers._MARK.match(a):
+                    # The only pair a decomposition repeats is U+16121's, which is exempt.
+                    assert a * 2 in helpers._REPEATING_DECOMPOSITIONS, hex(cp)
+        assert helpers._REPEATING_DECOMPOSITIONS == {"\U0001611e\U0001611e": "\U00016121"}
 
     def test_no_character_repeats_a_mark_by_itself(self) -> None:
         """Every character with a canonical decomposition, alone (after a letter when it's
