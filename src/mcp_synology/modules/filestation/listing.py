@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import logging
 import re
@@ -310,8 +309,15 @@ async def list_files(
             isdir: bool | None = None
             if tell_files_apart:
                 # A failed check can't tell: say what DSM said, naming the path.
-                with contextlib.suppress(SynologyError, httpx.HTTPError):
+                try:
                     isdir = (await paths_isdir(client, [normalized])).get(normalized)
+                except (SynologyError, httpx.HTTPError) as check_error:
+                    logger.debug(
+                        "Couldn't check whether %s is a file: %s: %s",
+                        normalized,
+                        type(check_error).__name__,
+                        check_error,
+                    )
             if isdir is False:
                 error_response(
                     ErrorCode.INVALID_PARAMETER,

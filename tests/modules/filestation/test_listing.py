@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 from typing import TYPE_CHECKING, Any
 
@@ -657,7 +658,11 @@ class TestListFiles:
     @pytest.mark.parametrize("getinfo", ["file", "folder", "missing", "502", "connect"])
     @pytest.mark.parametrize("path", ["/video/a.jpg", "video/a.jpg", "/video/a.jpg "])
     async def test_a_file_is_not_called_missing(
-        self, mock_client: DsmClient, getinfo: str, path: str
+        self,
+        mock_client: DsmClient,
+        getinfo: str,
+        path: str,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """DSM answers List's 408 for a file too (seska DSM 7.1.1): getinfo tells a file
         from a missing path. Only ``isdir`` false is a file; a failed getinfo leaves the
@@ -679,10 +684,15 @@ class TestListFiles:
             return httpx.Response(200, json={"success": True, "data": {"files": [entry]}})
 
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        caplog.set_level(logging.DEBUG, logger="mcp_synology.modules.filestation.listing")
         with pytest.raises(ToolError) as exc_info:
             await list_files(mock_client, path=path)
         error = json.loads(str(exc_info.value))["error"]
         assert error["value"] == path
+        # A failed check is in the debug log, so "doesn't exist" can be told from "couldn't
+        # check" (pre-QA on #515).
+        failed_check = "Couldn't check whether /video/a.jpg"
+        assert (failed_check in caplog.text) == (getinfo in ("502", "connect"))
         named = "'/video/a.jpg '" if path.endswith(" ") else "/video/a.jpg"
         if getinfo == "file":
             assert error["code"] == "invalid_parameter"

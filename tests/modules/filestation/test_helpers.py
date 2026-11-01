@@ -158,8 +158,15 @@ class TestInvisibleProblem:
             ("\U00016100\U0001611e\U0001611e\U0001611f", None),
             (
                 "\U00016100\U00016121\U00016121",
-                "repeats a combining mark (U+1611E), which draws as one",
+                "repeats a combining mark (U+16121), which draws as one",
             ),
+            (
+                "\U00016100\U0001611e\U0001611e\U0001611e\U0001611e",
+                "repeats a combining mark (U+16121), which draws as one",
+            ),
+            # However it's typed: the same NFD, the same verdict (pre-QA on #515).
+            ("a\U00016121\U0001611e\U0001611f", None),
+            ("a\U0001611e\U00016126", None),
             # A mark that decomposes to several, typed twice, puts no mark next to itself:
             # the run repeats (QA round 5 on #515). The same on every Python: U+16122 is
             # Unicode 16, decomposed from the generated table.
@@ -364,42 +371,63 @@ class TestInvisibleProblem:
                 a == b and helpers._MARK.match(a) for a, b in zip(parts, parts[1:], strict=False)
             ):
                 assert parts in helpers._REPEATING_DECOMPOSITIONS, hex(cp)
-        assert set(helpers._REPEATING_DECOMPOSITIONS) == {
-            "\U0001611e\U0001611e",
-            "\U0001611e\U0001611e\U0001611f",
-            "\U0001611e\U0001611e\U00016120",
+        assert helpers._REPEATING_DECOMPOSITIONS == {
+            "\U0001611e\U0001611e\U0001611f": "\U00016126",
+            "\U0001611e\U0001611e\U00016120": "\U00016128",
+            "\U0001611e\U0001611e": "\U00016121",
         }
 
+    def test_no_character_repeats_a_mark_by_itself(self) -> None:
+        """Every character with a canonical decomposition, alone (after a letter when it's
+        a mark), passes: no decomposition is read as a repeat (pre-QA on #515)."""
+        import sys
+        import unicodedata
+
+        from mcp_synology.modules.filestation import helpers
+
+        refused = []
+        for cp in range(sys.maxunicode + 1):
+            char = chr(cp)
+            decomposition = unicodedata.decomposition(char)
+            if char in helpers.NEW_DECOMPOSITIONS or (
+                decomposition and not decomposition.startswith("<")
+            ):
+                name = "a" + char if helpers._MARK.match(char) else char
+                if helpers._repeated_marks(name) is not None:
+                    refused.append(hex(cp))
+        assert refused == []
+
     def test_canonically_equivalent_names_get_one_verdict(self) -> None:
-        """A name, its NFC and its NFD are all refused or all pass (QA round 5 on #515)."""
+        """Spellings of one name (precomposed, NFD and mixed) are all refused or all pass.
+
+        Spelled out by hand: CI's Pythons (3.11 to 3.13) don't know Gurung Khema (Unicode
+        16), so `unicodedata.normalize` can't produce these forms there; where it can,
+        the test checks they really are one name (pre-QA on #515)."""
         import unicodedata
 
         from mcp_synology.modules.filestation.helpers import invisible_problem
 
-        names = [
-            "Caf\u00e9",
-            "\u03b9\u0344",
-            "\u0390",
-            "\u0f40\u0f73",
-            "\u0f40\u0f73\u0f73",
-            "\u00e9\u0301",
-            "a\u0344\u0344",
-            "\uac00\u11a8",
-            "\U00016100\U00016121",
-            "\U00016100\U00016126",
-            "\U00016100\U00016128",
-            "\U00016100\U00016121\U00016121",
+        k, aa, i, ii = "\U00016100", "\U0001611e", "\U0001611f", "\U00016120"
+        u, e, ai, o, au = "\U00016121", "\U00016123", "\U00016125", "\U00016126", "\U00016128"
+        groups = [
+            ["Caf\u00e9", "Cafe\u0301"],
+            ["\u03b9\u0344", "\u03b9\u0308\u0301", "\u0390"],
+            ["\u0f40\u0f73", "\u0f40\u0f71\u0f72"],
+            ["a\u0344\u0344", "a\u0308\u0301\u0308\u0301", "a\u0344\u0308\u0301"],
+            [k + u, k + aa + aa],
+            [k + o, k + aa + aa + i, k + u + i],
+            [k + au, k + aa + aa + ii, k + u + ii],
+            [k + u + aa + i, k + aa + o, k + aa + aa + aa + i, k + aa + u + i],
+            [k + u + e, k + aa + o, k + u + aa + i],
+            [k + u + ai, k + aa + au, k + aa + aa + aa + ii],
+            [k + u + u, k + aa * 4, k + aa + aa + u],
         ]
-        for name in names:
-            verdicts = {
-                invisible_problem(form) is None
-                for form in (
-                    name,
-                    unicodedata.normalize("NFC", name),
-                    unicodedata.normalize("NFD", name),
-                )
-            }
-            assert len(verdicts) == 1, name
+        known = unicodedata.unidata_version >= "16"
+        for group in groups:
+            verdicts = {invisible_problem(form) is None for form in group}
+            assert len(verdicts) == 1, group
+            if known or all(ord(c) < 0x16100 for form in group for c in form):
+                assert len({unicodedata.normalize("NFD", form) for form in group}) == 1, group
 
     def test_shown_skips_checking_a_part_longer_than_any_name(
         self, monkeypatch: pytest.MonkeyPatch
