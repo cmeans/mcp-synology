@@ -654,26 +654,36 @@ class TestListFiles:
         assert error["suggestion"].startswith("Check the paths with list_files")
 
     @respx.mock
-    @pytest.mark.parametrize("getinfo", ["file", "missing", "502"])
-    async def test_a_file_is_not_called_missing(self, mock_client: DsmClient, getinfo: str) -> None:
+    @pytest.mark.parametrize("getinfo", ["file", "folder", "missing", "502", "connect"])
+    @pytest.mark.parametrize("path", ["/video/a.jpg", "video/a.jpg"])
+    async def test_a_file_is_not_called_missing(
+        self, mock_client: DsmClient, getinfo: str, path: str
+    ) -> None:
         """DSM answers List's 408 for a file too (seska DSM 7.1.1): getinfo tells a file
-        from a missing path, and a failed getinfo leaves the not-found reply (pre-QA on
-        #515)."""
+        from a missing path. Only ``isdir`` false is a file; a failed getinfo leaves the
+        not-found reply (pre-QA on #515)."""
 
         def side_effect(request: httpx.Request) -> httpx.Response:
             if request.url.params["method"] != "getinfo":
                 return httpx.Response(200, json={"success": False, "error": {"code": 408}})
             if getinfo == "502":
                 return httpx.Response(502)
-            entry = {"isdir": False, "name": "a.jpg"} if getinfo == "file" else {"code": 408}
+            if getinfo == "connect":
+                raise httpx.ConnectError("refused", request=request)
+            entry = (
+                {"code": 408}
+                if getinfo == "missing"
+                else {"isdir": getinfo == "folder", "name": "a.jpg"}
+            )
             return httpx.Response(200, json={"success": True, "data": {"files": [entry]}})
 
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
         with pytest.raises(ToolError) as exc_info:
-            await list_files(mock_client, path="/video/a.jpg")
+            await list_files(mock_client, path=path)
         error = json.loads(str(exc_info.value))["error"]
+        assert error["value"] == path
         if getinfo == "file":
-            assert (error["code"], error["value"]) == ("invalid_parameter", "/video/a.jpg")
+            assert error["code"] == "invalid_parameter"
             assert error["message"] == "List files failed: /video/a.jpg is a file, not a folder."
             assert "get_file_info" in error["suggestion"]
         else:
@@ -805,6 +815,29 @@ class TestListRecycleBin:
         result = await list_recycle_bin(mock_client, share="writable")
         assert result.startswith("/writable has no recycle bin folder (#recycle)")
         assert "cannot be recovered" not in result
+
+    @respx.mock
+    async def test_a_file_named_recycle_is_no_bin(self, mock_client: DsmClient) -> None:
+        """A file named #recycle (planted over SMB) gets List's 408 too: still "no bin
+        folder", with no getinfo to call it a file (pre-QA on #515)."""
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            if request.url.params["method"] == "getinfo":
+                entry = {"isdir": False, "name": "#recycle"}
+                return httpx.Response(200, json={"success": True, "data": {"files": [entry]}})
+            return _no_bin(request)
+
+        route = respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        result = await list_recycle_bin(
+            mock_client, share="writable", recycle_bin_status={"writable": True}
+        )
+        assert result.startswith("/writable has no recycle bin folder (#recycle)")
+        checked = [
+            c.request.url.params.get("path", "")
+            for c in route.calls
+            if c.request.url.params["method"] == "getinfo"
+        ]
+        assert not any("#recycle" in path for path in checked), checked
 
     @pytest.mark.parametrize("cached", [True, False])
     @respx.mock

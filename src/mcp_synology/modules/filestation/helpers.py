@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import fnmatch
 import json
 import logging
@@ -423,22 +424,47 @@ def invisible_problem(name: str) -> str | None:
     return None
 
 
+def _ccc_pattern() -> regex.Pattern[str]:
+    names = []
+    for n in range(1, 255):
+        with contextlib.suppress(regex.error):
+            regex.compile(rf"\p{{ccc={n}}}")
+            names.append(rf"(?P<c{n}>\p{{ccc={n}}})")
+    return regex.compile("|".join(names))
+
+
+# Canonical combining classes from `regex`'s Unicode data, not the interpreter's: with
+# `unicodedata.combining`, a mark Python 3.11 doesn't know (U+10EFD) sorted differently,
+# so a name passed on 3.11 and was refused on 3.12 (pre-QA on #515).
+_CCC = _ccc_pattern()
+
+
+def _combining_class(char: str) -> int:
+    match = _CCC.match(char)
+    return int(match.lastgroup[1:]) if match and match.lastgroup else 0
+
+
 def _nfd_with_sources(name: str) -> list[tuple[str, int]]:
     """NFD of ``name``, each character paired with the index of the one it came from.
 
     NFD is each character's own decomposition, then canonical ordering: a stable sort by
-    combining class within each run of non-zero classes.
+    combining class within each run of non-zero classes. The classes come from `regex`;
+    the decompositions from `unicodedata`, and they never change once a character is
+    assigned, so only a character newer than the interpreter's Unicode (14.0 on Python
+    3.11) is left as is where a newer Python would decompose it.
     """
     out = [(d, i) for i, c in enumerate(name) for d in unicodedata.normalize("NFD", c)]
+    classes = [_combining_class(d) for d, _ in out]
     start = 0
     while start < len(out):
-        if not unicodedata.combining(out[start][0]):
+        if not classes[start]:
             start += 1
             continue
         end = start
-        while end < len(out) and unicodedata.combining(out[end][0]):
+        while end < len(out) and classes[end]:
             end += 1
-        out[start:end] = sorted(out[start:end], key=lambda item: unicodedata.combining(item[0]))
+        run = sorted(range(start, end), key=classes.__getitem__)
+        out[start:end] = [out[k] for k in run]
         start = end
     return out
 

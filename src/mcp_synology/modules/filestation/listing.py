@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import re
@@ -27,6 +28,7 @@ from mcp_synology.modules.filestation.helpers import (
     missing_paths_suggestion,
     normalize_path,
     path_exists,
+    paths_isdir,
     probe_recycle_status,
 )
 from mcp_synology.modules.filestation.helpers import shown as shown_path
@@ -260,11 +262,14 @@ async def list_files(
     limit: int = 200,
     hide_recycle: bool = False,
     file_type_indicator: str = "emoji",
+    tell_files_apart: bool = True,
 ) -> str:
     """List files and folders within a directory path.
 
     ``hide_recycle`` defaults off, as ``hide_recycle_in_listings`` does; the tool always
-    passes the setting.
+    passes the setting. ``tell_files_apart`` checks a path DSM answers 408 for with one
+    ``getinfo``, to call a file a file; `list_recycle_bin` turns it off, since there any
+    408 means there's no bin folder.
     """
 
     normalized = normalize_path(path)
@@ -302,11 +307,12 @@ async def list_files(
         if e.code == 408:
             # DSM answers 408 for a file too, not only a missing path (seska DSM 7.1.1,
             # pre-QA on #515): one getinfo tells them apart.
-            try:
-                exists = await path_exists(client, normalized)
-            except (SynologyError, httpx.HTTPError):
-                exists = None  # can't tell: say what DSM said, naming the path
-            if exists:
+            isdir: bool | None = None
+            if tell_files_apart:
+                # A failed check can't tell: say what DSM said, naming the path.
+                with contextlib.suppress(SynologyError, httpx.HTTPError):
+                    isdir = (await paths_isdir(client, [normalized])).get(normalized)
+            if isdir is False:
                 error_response(
                     ErrorCode.INVALID_PARAMETER,
                     f"List files failed: {shown_path(normalized)} is a file, not a folder.",
@@ -536,6 +542,7 @@ async def list_recycle_bin(
             offset=offset,
             hide_recycle=False,
             file_type_indicator=file_type_indicator,
+            tell_files_apart=False,
         )
     except ToolError as e:
         # list_files converts SynologyError to ToolError with a JSON envelope.

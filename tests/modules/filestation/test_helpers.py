@@ -154,6 +154,14 @@ class TestInvisibleProblem:
             # Khema U+16121 is U+1611E twice on Python 3.14 only (pre-QA on #515). Typed
             # out, the two are a repeat on every Python.
             ("\U00016100\U00016121", None),
+            # Canonical ordering puts U+0316 (class 220) before the two U+0301 (230), so
+            # they're adjacent: a repeat, by `regex`'s classes on every Python. U+10EFD
+            # (Unicode 15) is class 220 there; Python 3.11 called it 0 (pre-QA on #515).
+            ("a\u0301\u0316\u0301", "repeats a combining mark (U+0301), which draws as one"),
+            (
+                "\u0628\u0301\U00010efd\u0301.txt",
+                "repeats a combining mark (U+0301), which draws as one",
+            ),
             (
                 "\U00016100\U0001611e\U0001611e",
                 "repeats a combining mark (U+1611E), which draws as one",
