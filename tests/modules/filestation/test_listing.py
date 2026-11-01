@@ -630,6 +630,26 @@ class TestListFiles:
         assert body["error"]["code"] == "not_found"
 
     @respx.mock
+    @pytest.mark.parametrize(
+        ("path", "named"),
+        [("/nonexistent", "/nonexistent"), ("/video/Movies ", "'/video/Movies '")],
+    )
+    async def test_a_missing_folder_is_named(
+        self, mock_client: DsmClient, path: str, named: str
+    ) -> None:
+        """Paths are taken exactly (#488): a padded path that doesn't exist shows its padding,
+        where DSM's 408 names no path (pre-QA on #515)."""
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 408}}
+        )
+        with pytest.raises(ToolError) as exc_info:
+            await list_files(mock_client, path=path)
+        error = json.loads(str(exc_info.value))["error"]
+        assert (error["code"], error["param"], error["value"]) == ("not_found", "path", path)
+        assert error["message"] == f"List files failed: {named} doesn't exist on the NAS."
+        assert error["suggestion"].startswith("Check the paths with list_files")
+
+    @respx.mock
     async def test_list_files_407_is_permission_denied(self, mock_client: DsmClient) -> None:
         """rc5 live test: list_files /home got DSM 407, reported as "Unknown error (code 407)"."""
         respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(

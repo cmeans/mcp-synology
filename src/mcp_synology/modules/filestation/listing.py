@@ -24,10 +24,12 @@ from mcp_synology.modules.filestation.helpers import (
     dsm_str,
     ensure_recycle_status,
     file_type_icon,
+    missing_paths_suggestion,
     normalize_path,
     path_exists,
     probe_recycle_status,
 )
+from mcp_synology.modules.filestation.helpers import shown as shown_path
 from mcp_synology.modules.filestation.paths import ResolvedPath
 
 logger = logging.getLogger(__name__)
@@ -297,6 +299,18 @@ async def list_files(
     try:
         data = await client.request("SYNO.FileStation.List", "list", params=params)
     except SynologyError as e:
+        if e.code == 408:
+            # Name the path, quoted when padded: paths are taken exactly now (#488), and
+            # DSM's own message names none, so `/video/Movies ` would read as a missing
+            # `Movies` the model can see listed (pre-QA on #515).
+            error_response(
+                ErrorCode.NOT_FOUND,
+                f"List files failed: {shown_path(normalized)} doesn't exist on the NAS.",
+                retryable=False,
+                param="path",
+                value=path,
+                suggestion=missing_paths_suggestion([(normalized, 408)]),
+            )
         synology_error_response("List files", e)
 
     entries = data.get("files", [])
