@@ -18,6 +18,7 @@ from mcp_synology.core.client import DsmClient
 from mcp_synology.core.errors import ErrorCode, SynologyError
 from mcp_synology.core.formatting import error_response
 from mcp_synology.core.redaction import redact_urls
+from mcp_synology.modules.filestation.decompositions import NEW_DECOMPOSITIONS
 from mcp_synology.modules.filestation.standardized_variants import (
     EMOJI_VS_BASES,
     STANDARDIZED_BASES,
@@ -220,6 +221,7 @@ def strip_padding(path: str) -> str:
 
 _IGNORABLE = regex.compile(r"\p{Default_Ignorable_Code_Point}")
 _MARK = regex.compile(r"[\p{Mn}\p{Me}]")
+_MARK_RUN = regex.compile(r"[\p{Mn}\p{Me}]{2,}")
 _NOT_PRINTED = regex.compile(r"[\p{Cc}\p{Cs}\p{Co}\p{Cn}\p{Zl}\p{Zp}]")
 _BRAILLE_BLANK = "\u2800"  # draws nothing, but Unicode doesn't call it default-ignorable
 
@@ -377,8 +379,8 @@ def draws_nothing(c: str) -> bool:
 def invisible_problem(name: str) -> str | None:
     """Why ``name`` (one path part) hides a character, or None: a default-ignorable
     character where Unicode doesn't use one (`_ignorable_belongs`), the Braille blank at an
-    end, a combining mark with no character to go on, the same combining mark twice in
-    a row (UTS #39 section 5.4: it draws as one), or more than `SELECTOR_LIMIT` variation
+    end, a combining mark with no character to go on, the same combining mark or marks
+    twice in a row (UTS #39 section 5.4: it draws as one), or more than `SELECTOR_LIMIT` variation
     selectors that mark a character's variant (an unregistered selector is refused as
     invisible). One rule for new names and `shown`
     (#510)."""
@@ -414,14 +416,45 @@ def invisible_problem(name: str) -> str | None:
         return "starts or ends with a blank character (U+2800)"
     if _MARK.match(text[0]):
         return "starts with a combining mark, which has no character to go on"
+    return _repeated_marks(name)
+
+
+def _repeated_marks(name: str) -> str | None:
+    """Why ``name``'s NFD has a combining mark, or a run of them, twice in a row, or None.
+
+    A run counts, not just one mark: U+0344 is U+0308 U+0301, so U+0344 typed twice puts
+    no mark next to itself (QA round 5 on #515). Copies from one character are its own
+    decomposition, not a repeat typed in (U+16121 is U+1611E twice), and the same marks
+    typed out are that character written another way, so they count as one character too:
+    canonically equivalent names get one verdict."""
     decomposed = _nfd_with_sources(name)
-    for (a, i), (b, j) in zip(decomposed, decomposed[1:], strict=False):
-        # Two copies from one character are its own decomposition, not a repeat typed in:
-        # U+16121 decomposes to U+1611E twice on Python 3.14 (Unicode 16) and not before,
-        # so the name would pass or fail by interpreter (pre-QA on #515).
-        if a == b and i != j and _MARK.match(a):
-            return f"repeats a combining mark (U+{ord(a):04X}), which draws as one"
+    nfd = "".join(d for d, _ in decomposed)
+    sources = [i for _, i in decomposed]
+    for sequence in _REPEATING_DECOMPOSITIONS:
+        start = nfd.find(sequence)
+        while start != -1:
+            end = start + len(sequence)
+            sources[start:end] = [sources[start]] * len(sequence)
+            start = nfd.find(sequence, end)
+    for run in _MARK_RUN.finditer(nfd):
+        low, high = run.span()
+        for size in range(1, (high - low) // 2 + 1):
+            for at in range(low, high - 2 * size + 1):
+                copy = nfd[at + size : at + 2 * size]
+                if nfd[at : at + size] == copy and len(set(sources[at : at + 2 * size])) > 1:
+                    return _describe_repeat(name, copy, sources[at + size : at + 2 * size])
     return None
+
+
+def _describe_repeat(name: str, copy: str, sources: list[int]) -> str:
+    """The reason for a repeated ``copy``: the mark when it's one, else the character typed
+    when it's one, else the marks."""
+    if len(copy) == 1:
+        return f"repeats a combining mark (U+{ord(copy):04X}), which draws as one"
+    if len(set(sources)) == 1 and _decompose(name[sources[0]]) == copy:
+        return f"repeats a combining mark (U+{ord(name[sources[0]]):04X}), which draws as one"
+    codes = " ".join(f"U+{ord(c):04X}" for c in copy)
+    return f"repeats combining marks ({codes}), which draw as one"
 
 
 def _ccc_pattern() -> regex.Pattern[str]:
@@ -444,16 +477,43 @@ def _combining_class(char: str) -> int:
     return int(match.lastgroup[1:]) if match and match.lastgroup else 0
 
 
+def _decompose(char: str) -> str:
+    """``char``'s full canonical decomposition, the same on every Python.
+
+    Decompositions never change once a character is assigned, so `unicodedata` has them
+    all up to its Unicode version (14.0 on Python 3.11); a character assigned since comes
+    from the generated table, from the Unicode version of `regex`'s data. Without it,
+    U+16121 was left as is on 3.11 and decomposed on 3.14 (QA round 5 on #515).
+    """
+    parts = NEW_DECOMPOSITIONS.get(char)
+    if parts is None:
+        return unicodedata.normalize("NFD", char)
+    return "".join(_decompose(part) for part in parts)
+
+
+def _repeating_decompositions() -> tuple[str, ...]:
+    """The full decompositions that repeat a mark themselves (Gurung Khema U+16121,
+    U+16126, U+16128); `test_helpers` checks no older character has one."""
+    found = set()
+    for char in NEW_DECOMPOSITIONS:
+        parts = _decompose(char)
+        if any(a == b and _MARK.match(a) for a, b in zip(parts, parts[1:], strict=False)):
+            found.add(parts)
+    return tuple(sorted(found, key=len, reverse=True))
+
+
+_REPEATING_DECOMPOSITIONS = _repeating_decompositions()
+
+
 def _nfd_with_sources(name: str) -> list[tuple[str, int]]:
     """NFD of ``name``, each character paired with the index of the one it came from.
 
-    NFD is each character's own decomposition, then canonical ordering: a stable sort by
-    combining class within each run of non-zero classes. The classes come from `regex`;
-    the decompositions from `unicodedata`, and they never change once a character is
-    assigned, so only a character newer than the interpreter's Unicode (14.0 on Python
-    3.11) is left as is where a newer Python would decompose it.
+    NFD is each character's own decomposition (`_decompose`), then canonical ordering: a
+    stable sort by combining class within each run of non-zero classes, with the classes
+    from `regex`. Both come from the Unicode version of `regex`'s data, so the result is
+    the same on every Python.
     """
-    out = [(d, i) for i, c in enumerate(name) for d in unicodedata.normalize("NFD", c)]
+    out = [(d, i) for i, c in enumerate(name) for d in _decompose(c)]
     classes = [_combining_class(d) for d, _ in out]
     start = 0
     while start < len(out):
@@ -477,6 +537,7 @@ _INVISIBLE_REASONS = (
     "starts or ends with a blank character",
     "starts with a combining mark",
     "repeats a combining mark",
+    "repeats combining marks",
 )
 
 

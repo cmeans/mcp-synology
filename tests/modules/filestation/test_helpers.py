@@ -151,9 +151,29 @@ class TestInvisibleProblem:
             # NFD first: a precomposed letter plus the same mark is still a repeat.
             ("\u00e9\u0301", "repeats a combining mark (U+0301), which draws as one"),
             # One character whose own decomposition repeats a mark isn't a repeat: Gurung
-            # Khema U+16121 is U+1611E twice on Python 3.14 only (pre-QA on #515). Typed
-            # out, the two are a repeat on every Python.
+            # Khema U+16121 is U+1611E twice (pre-QA on #515), and typed out, the two are
+            # that character written another way (QA round 5 on #515).
             ("\U00016100\U00016121", None),
+            ("\U00016100\U0001611e\U0001611e", None),
+            ("\U00016100\U0001611e\U0001611e\U0001611f", None),
+            (
+                "\U00016100\U00016121\U00016121",
+                "repeats a combining mark (U+1611E), which draws as one",
+            ),
+            # A mark that decomposes to several, typed twice, puts no mark next to itself:
+            # the run repeats (QA round 5 on #515). The same on every Python: U+16122 is
+            # Unicode 16, decomposed from the generated table.
+            ("\u03b9\u0344\u0344", "repeats a combining mark (U+0344), which draws as one"),
+            ("\u0f40\u0f76\u0f76", "repeats a combining mark (U+0F76), which draws as one"),
+            ("\u0f40\u0f93\u0f93", "repeats a combining mark (U+0F93), which draws as one"),
+            ("a\U00016122\U00016122", "repeats a combining mark (U+16122), which draws as one"),
+            (
+                "a\u0308\u0301\u0308\u0301",
+                "repeats combining marks (U+0308 U+0301), which draw as one",
+            ),
+            ("a\u0344\u0308\u0301", "repeats combining marks (U+0308 U+0301), which draw as one"),
+            ("\u03b9\u0344", None),
+            ("\u0390", None),
             # Canonical ordering puts U+0316 (class 220) before the two U+0301 (230), so
             # they're adjacent: a repeat, by `regex`'s classes on every Python. U+10EFD
             # (Unicode 15) is class 220 there; Python 3.11 called it 0 (pre-QA on #515).
@@ -161,10 +181,6 @@ class TestInvisibleProblem:
             (
                 "\u0628\u0301\U00010efd\u0301.txt",
                 "repeats a combining mark (U+0301), which draws as one",
-            ),
-            (
-                "\U00016100\U0001611e\U0001611e",
-                "repeats a combining mark (U+1611E), which draws as one",
             ),
             # Interlinear annotation characters draw nothing, though not default-ignorable.
             ("re\ufffaport", "contains an invisible character (U+FFFA)"),
@@ -302,32 +318,88 @@ class TestInvisibleProblem:
         assert sum(map(len, STANDARDIZED_BASES.values())) > 1000
         assert invisible_problem("0\ufe00") == "contains an invisible character (U+FE00)"
 
-    def test_a_characters_own_decomposition_is_no_repeat(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Pinned on every Python: U+16121 decomposes to U+1611E twice only on 3.14, so
-        this test gives it that decomposition (pre-QA on #515)."""
+    def test_nfd_matches_unicodedata(self) -> None:
+        """`_nfd_with_sources` is NFD: mixed combining classes (220/230, Tibetan 129/130,
+        Hebrew), precomposed letters and Hangul, all known to Python 3.11, come out as
+        `unicodedata` gives them, in canonical order (QA round 5 on #515)."""
+        import unicodedata
+
+        from mcp_synology.modules.filestation.helpers import _nfd_with_sources
+
+        names = [
+            "a\u0301\u0316\u0300\u0323",
+            "\u00e9\u0316\u0301",
+            "\u0f40\u0f72\u0f71\u0f74\u0f71",
+            "\u0f40\u0f73\u0f75\u0f81",
+            "\u05d1\u05bc\u05b8\u05b0\u05bc",
+            "\u1e09\u0323\u01d5",
+            "\ud55c\uae00\u1100\u1161",
+            "\u03b9\u0344\u0345\u0314",
+            "x\u0315\u0300\u05ae\u0300\u0301\u302a",
+        ]
+        for name in names:
+            assert "".join(d for d, _ in _nfd_with_sources(name)) == unicodedata.normalize(
+                "NFD", name
+            ), name
+
+    def test_decompositions_are_the_same_on_every_python(self) -> None:
+        """Every canonical decomposition the running Python knows matches `_decompose`,
+        and every one that repeats a mark is in the generated table's list, so Python
+        3.11 (Unicode 14) and 3.14 (Unicode 16) decompose and judge names alike (QA
+        round 5 on #515)."""
+        import sys
         import unicodedata
 
         from mcp_synology.modules.filestation import helpers
 
-        real = unicodedata.normalize
+        for cp in range(sys.maxunicode + 1):
+            char = chr(cp)
+            if not unicodedata.decomposition(char) or unicodedata.decomposition(char).startswith(
+                "<"
+            ):
+                continue
+            parts = helpers._decompose(char)
+            assert parts == unicodedata.normalize("NFD", char), hex(cp)
+            if any(
+                a == b and helpers._MARK.match(a) for a, b in zip(parts, parts[1:], strict=False)
+            ):
+                assert parts in helpers._REPEATING_DECOMPOSITIONS, hex(cp)
+        assert set(helpers._REPEATING_DECOMPOSITIONS) == {
+            "\U0001611e\U0001611e",
+            "\U0001611e\U0001611e\U0001611f",
+            "\U0001611e\U0001611e\U00016120",
+        }
 
-        class _Unicode16:
-            def __getattr__(self, name: str) -> object:
-                return getattr(unicodedata, name)
+    def test_canonically_equivalent_names_get_one_verdict(self) -> None:
+        """A name, its NFC and its NFD are all refused or all pass (QA round 5 on #515)."""
+        import unicodedata
 
-            @staticmethod
-            def normalize(form: str, text: str) -> str:
-                if form == "NFD" and text == "\U00016121":
-                    return "\U0001611e\U0001611e"
-                return real(form, text)
+        from mcp_synology.modules.filestation.helpers import invisible_problem
 
-        monkeypatch.setattr(helpers, "unicodedata", _Unicode16())
-        assert helpers.invisible_problem("\U00016100\U00016121") is None
-        assert helpers.invisible_problem("\U00016100\U0001611e\U0001611e") == (
-            "repeats a combining mark (U+1611E), which draws as one"
-        )
+        names = [
+            "Caf\u00e9",
+            "\u03b9\u0344",
+            "\u0390",
+            "\u0f40\u0f73",
+            "\u0f40\u0f73\u0f73",
+            "\u00e9\u0301",
+            "a\u0344\u0344",
+            "\uac00\u11a8",
+            "\U00016100\U00016121",
+            "\U00016100\U00016126",
+            "\U00016100\U00016128",
+            "\U00016100\U00016121\U00016121",
+        ]
+        for name in names:
+            verdicts = {
+                invisible_problem(form) is None
+                for form in (
+                    name,
+                    unicodedata.normalize("NFC", name),
+                    unicodedata.normalize("NFD", name),
+                )
+            }
+            assert len(verdicts) == 1, name
 
     def test_shown_skips_checking_a_part_longer_than_any_name(
         self, monkeypatch: pytest.MonkeyPatch

@@ -661,7 +661,8 @@ class TestListFiles:
     ) -> None:
         """DSM answers List's 408 for a file too (seska DSM 7.1.1): getinfo tells a file
         from a missing path. Only ``isdir`` false is a file; a failed getinfo leaves the
-        not-found reply (pre-QA on #515)."""
+        not-found reply (pre-QA on #515). A folder getinfo has just seen isn't called
+        missing (QA round 5 on #515)."""
 
         def side_effect(request: httpx.Request) -> httpx.Response:
             if request.url.params["method"] != "getinfo":
@@ -687,6 +688,15 @@ class TestListFiles:
             assert error["code"] == "invalid_parameter"
             assert error["message"] == f"List files failed: {named} is a file, not a folder."
             assert "get_file_info" in error["suggestion"]
+            assert error["retryable"] is False
+        elif getinfo == "folder":
+            assert error["code"] == "filestation_error"
+            assert error["message"] == (
+                f"List files failed: DSM couldn't list {named} (DSM error 408), though it's a "
+                "folder that exists."
+            )
+            assert error["retryable"] is True
+            assert error["suggestion"].startswith("Retry list_files")
         else:
             assert error["code"] == "not_found"
             assert error["message"] == f"List files failed: {named} doesn't exist on the NAS."

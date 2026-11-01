@@ -6,15 +6,17 @@ registers, and VS15/VS16 (U+FE0E/FE0F) only after an emoji emoji-variation-seque
 registers; anywhere else the selector draws nothing and hides a value. This script turns
 those two files into `src/mcp_synology/modules/filestation/standardized_variants.py`.
 
-Usage, with X.Y.Z the Unicode version of the `regex` floor in pyproject.toml (not
-`latest`, which can be newer than the property data the checks use):
+Usage, with X.Y.Z the Unicode version of the `regex` floor's data (not `latest`, which can
+be newer than the property data the checks use). `regex` doesn't report it: its release
+notes name it, and the header of `standardized_variants.py` records the one in use:
     curl -O https://www.unicode.org/Public/X.Y.Z/ucd/StandardizedVariants.txt
     curl -O https://www.unicode.org/Public/X.Y.Z/ucd/emoji/emoji-variation-sequences.txt
     python scripts/gen_standardized_variants.py StandardizedVariants.txt \\
         emoji-variation-sequences.txt
 
-Regenerate when Unicode publishes a new version, with the `regex` floor in
-pyproject.toml (see docs/specs/project-scaffolding-spec.md). Stdlib only.
+Regenerate when the `regex` floor in pyproject.toml moves to a new Unicode version,
+together with `scripts/gen_decompositions.py` (see docs/specs/project-scaffolding-spec.md).
+Stdlib only.
 """
 
 from __future__ import annotations

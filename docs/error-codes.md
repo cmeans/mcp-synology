@@ -194,6 +194,7 @@ Common causes:
 - For local-side errors: the local file (upload) or destination folder
   (download) does not exist or is given as a relative path that resolves
   somewhere unexpected.
+- `list_files` on a path DSM answers 408 for: "… doesn't exist on the NAS." A file gets `invalid_parameter` instead (below), and a folder that `getinfo` sees gets `filestation_error` (below).
 - For Download Station tasks: the task ID doesn't exist, or the task belongs to
   another user. DSM answers both the same way, and an account that isn't a
   Download Station manager sees only its own tasks.
@@ -270,7 +271,7 @@ Common causes:
   other than a tab, a direction-changing character or a line or paragraph separator, no visible
   character, an invisible character where Unicode doesn't use one (a zero-width space, a
   soft hyphen or a BOM anywhere, `report.pdf` followed by a variation selector), a
-  combining mark at its start or the same one twice in a row, more than 4 variation
+  combining mark at its start or the same one (or run of them) twice in a row, more than 4 variation
   selectors that pick a character's variant (VS1–VS7 and the ideographic ones; emoji and
   Mongolian ones don't count), is longer than 255 bytes in UTF-8, has a character that isn't valid Unicode text (a
   local file name that isn't UTF-8), or is `#recycle` directly in a shared folder or a user's home folder
@@ -639,7 +640,11 @@ Fix:
    DSM (with the default `filetype=all`), whatever the folder's permissions.
    It now sends `pattern="*"` in that case and lists everything (#306). If it
    still appears, check that the account can read the folder.
-6. If you see a specific code repeatedly, [open an issue](https://github.com/cmeans/mcp-synology/issues/new)
+6. **"DSM couldn't list … (DSM error 408), though it's a folder that exists"
+   from `list_files`:** DSM refused the listing as missing, but a check right
+   after found the folder (it was probably created in between). Retry; if it
+   fails the same way, check the folder in DSM's File Station.
+7. If you see a specific code repeatedly, [open an issue](https://github.com/cmeans/mcp-synology/issues/new)
    with the code and operation so we can add it to `core/errors.py`.
 
 ## dsm_error

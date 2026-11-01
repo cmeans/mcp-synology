@@ -322,6 +322,20 @@ async def list_files(
                     suggestion="list_files lists a folder's contents: use get_file_info for "
                     "a file, or list its parent folder.",
                 )
+            if isdir is True:
+                # getinfo has just seen the folder (created between the two calls, or a
+                # List DSM refuses that getinfo allows): don't call it missing (QA round 5
+                # on #515).
+                error_response(
+                    ErrorCode.FILESTATION_ERROR,
+                    f"List files failed: DSM couldn't list {shown_path(normalized)} (DSM error "
+                    "408), though it's a folder that exists.",
+                    retryable=True,
+                    param="path",
+                    value=path,
+                    suggestion="Retry list_files; if it fails the same way, check the folder "
+                    "in DSM's File Station.",
+                )
             # Name the path, quoted when padded: paths are taken exactly now (#488), and
             # DSM's own message names none, so `/video/Movies ` would read as a missing
             # `Movies` the model can see listed (pre-QA on #515).
