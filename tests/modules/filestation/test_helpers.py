@@ -308,6 +308,15 @@ class TestInvisibleProblem:
         helpers.shown("/video/" + "a" * 255)
         assert "a" * 255 in checked
 
+    def test_a_part_longer_than_any_name_is_quoted_escaped(self) -> None:
+        """Unchecked, it's still escaped: ``repr`` would show U+3164 raw (QA round 4 on
+        #515)."""
+        from mcp_synology.modules.filestation.helpers import shown
+
+        got = shown("/video/" + "a" * 300 + "\u3164")
+        assert "\\u3164" in got
+        assert "\u3164" not in got
+
     @staticmethod
     def _tags(text: str) -> str:
         return "".join(chr(0xE0000 + ord(c)) for c in text)

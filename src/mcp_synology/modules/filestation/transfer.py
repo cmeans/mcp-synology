@@ -135,6 +135,7 @@ async def upload_file(
             label=f"the local file's name ({local.name!r})",
             value=local_path,
             parent=dest_folder,
+            keep_suggestion=True,
         )
     file_size = local.stat().st_size
     dest = normalize_path(dest_folder)

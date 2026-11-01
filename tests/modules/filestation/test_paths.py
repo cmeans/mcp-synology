@@ -328,9 +328,41 @@ class TestRefuseBadName:
         filename (pre-QA on #515)."""
         with pytest.raises(ToolError) as exc:
             refuse_bad_name(
-                "Upload", local, "local_path", "Pass filename.", label="the local file's name"
+                "Upload",
+                local,
+                "local_path",
+                "Pass filename.",
+                label="the local file's name",
+                keep_suggestion=True,
             )
         assert _error(exc)["suggestion"] == "Pass filename."
+
+    @pytest.mark.parametrize(
+        ("name", "advice"),
+        [
+            ("rep\u200bort", "Retype the name without the character"),
+            ("\u8f9b\U000e0100\u845b\U000e0101", "Write fewer characters in their variant forms"),
+            ("a" * 256, "Shorten the name to 255 bytes or fewer"),
+            ("a\x1bb", "Give the new folder's name plainly"),
+        ],
+    )
+    async def test_a_new_folders_advice_fits_its_problem(
+        self, monkeypatch: pytest.MonkeyPatch, name: str, advice: str
+    ) -> None:
+        """create_folder's last part has a label but can be retyped: it gets the specific
+        advice, not the plain-name one (QA round 4 on #515)."""
+        from mcp_synology.modules.filestation import helpers
+
+        monkeypatch.setattr(helpers, "SELECTOR_LIMIT", 1)
+        with pytest.raises(ToolError) as exc:
+            await resolve_paths(
+                _FakeClient(),
+                set(),
+                "create_folder",
+                "paths",
+                ["/video/" + name],
+            )
+        assert _error(exc)["suggestion"].startswith(advice)
 
     def test_other_refusals_keep_the_callers_advice(self) -> None:
         with pytest.raises(ToolError) as exc:

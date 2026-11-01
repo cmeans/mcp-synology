@@ -440,6 +440,7 @@ def refuse_bad_name(
     value: str | None = None,
     *,
     parent: str | None = None,
+    keep_suggestion: bool = False,
 ) -> None:
     """Raise ``invalid_parameter`` for a name a tool would create that isn't one: empty,
     blank, a ``/``, a NUL, ``.`` or ``..`` (#449), or what `name_problem` refuses: over 255
@@ -454,8 +455,10 @@ def refuse_bad_name(
     ``#recycle`` where it would be taken for a bin: directly in a shared folder or in a
     user's home folder (``/homes/<user>``) (#510: DSM lets one be created where there's no
     bin folder yet). ``label`` names it in the message when
-    it isn't ``param`` itself (an upload's local file name); ``parent`` is the folder it
-    goes in, when known."""
+    it isn't ``param`` itself (an upload's local file name, a new folder's last part);
+    ``parent`` is the folder it goes in, when known. ``keep_suggestion`` gives the caller's
+    ``suggestion`` for every refusal, for a name the caller can't retype (an upload's local
+    file name: the fix is to pass ``filename``)."""
     problem = (
         "is empty"
         if not name
@@ -476,10 +479,11 @@ def refuse_bad_name(
             retryable=False,
             param=param,
             value=name if value is None else value,
-            # A label means the name isn't the argument itself (an upload's local file
-            # name): the caller's advice (pass `filename`) is the fix (pre-QA on #515).
+            # A name the caller can't retype (an upload's local file name): the caller's
+            # advice (pass `filename`) is the fix (pre-QA on #515). Not keyed on `label`,
+            # which create_folder's last part has too (QA round 4).
             suggestion=suggestion
-            if label is not None
+            if keep_suggestion
             else _LENGTH_ADVICE
             if problem.startswith(_TOO_LONG)
             else _SELECTOR_ADVICE
