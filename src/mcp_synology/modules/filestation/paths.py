@@ -418,6 +418,12 @@ _UNICODE_ADVICE = (
 )
 
 
+_SELECTOR_ADVICE = (
+    "Write fewer characters in their variant forms, or raise name_variation_selector_limit "
+    "in the filestation module settings."
+)
+
+
 def refuse_bad_name(
     op: str,
     name: str,
@@ -461,7 +467,11 @@ def refuse_bad_name(
             retryable=False,
             param=param,
             value=name if value is None else value,
-            suggestion=_UNICODE_ADVICE if is_invisible_problem(problem) else suggestion,
+            suggestion=_SELECTOR_ADVICE
+            if problem.startswith("has ") and "variation selector" in problem
+            else _UNICODE_ADVICE
+            if is_invisible_problem(problem)
+            else suggestion,
         )
 
 

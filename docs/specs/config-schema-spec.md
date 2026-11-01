@@ -144,6 +144,12 @@ modules:
       # Accepted: 0.5-10.0. Default: 1.0
       search_poll_interval: 1.0
 
+      # How many characters in a name a tool creates may be written in a variant
+      # form (VS1-VS7 or an ideographic variation selector, such as a kanji's
+      # family-register form). More would hide data in the name (#515).
+      # Accepted: 0-36. Default: 4
+      name_variation_selector_limit: 4
+
       # Local folders upload_file may read from and download_file may write to,
       # including anything below them. Paths are compared after resolving ~, ..
       # and symlinks. "/" allows everything on macOS and Linux; on Windows list
@@ -274,6 +280,7 @@ Each key is a module name (e.g., `filestation`, `docker`, `system_info`). The va
 | `delete_timeout`, `copy_move_timeout` | `int` | No | `30` | How long `delete_files` (`delete_timeout`) and `copy_files`, `move_files` and `restore_from_recycle_bin` (`copy_move_timeout`) wait before handing a still-running task off (seconds, 10–3600 accepted). The wait is capped at **600 s** whatever the setting, below known client timeouts (a client's timeout arrives as a cancel, which stops the task). A handed-off task keeps running on the NAS and the reply gives a handle for `file_task` (#245). |
 | `upload_timeout`, `download_timeout` | `int` | No | `300` | Transfer timeouts (seconds, 10–3600). |
 | `search_poll_interval` | `float` | No | `1.0` | Seconds `search_files` waits between checks on DSM's search while it runs (0.5–10.0). |
+| `name_variation_selector_limit` | `int` | No | `4` | How many registered variation selectors that mark a character's variant (VS1–VS7, the ideographic VS17–VS48) a name `rename`, `upload_file` or `create_folder` creates may have (0–36; 36 is the most a 255-byte name holds). Each can carry hidden data, and a long run changes how a model tokenizes the name; 4 covers a family and given name written with variant kanji. Emoji VS15/VS16 and Mongolian selectors don't count (#515). |
 | `allowed_local_paths` | `list[str]` | No | the user's Downloads folder (unless the top-level `allowed_local_paths` is set) | Local folders `upload_file` and `download_file` may use, including subfolders, added to the top-level `allowed_local_paths` when that's set (#257). Compared after resolving `~`, `..` and symlinks; `/` allows everything on macOS/Linux (on Windows, list each drive). `default_download_dir` is always allowed. Entries must be absolute or start with `~` (a relative entry would depend on the server's working directory); an empty list, a relative entry, or one that can't be resolved (a NUL byte, a symlink loop) is a config error. A path outside is refused with `permission_denied` before any NAS request; a path that can't be resolved is `invalid_parameter`. The refusal shows where a path resolves to only when the path itself is inside an allowed folder (a symlink there leading out), so it never reveals what exists outside. |
 
 ### `modules.downloadstation.settings` Object

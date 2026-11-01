@@ -156,6 +156,14 @@ class TestInvisibleProblem:
             ("caf\u00e9\ufe00.pdf", "contains an invisible character (U+FE00)"),
             ("\u0434\ufe01oc", "contains an invisible character (U+FE01)"),
             ("\u2229\ufe00", None),
+            # Only selectors Unicode has registered: VS1-VS7 and VS17-VS48 (QA round 2 on
+            # #515); the others are in no registered sequence and only hide a value.
+            ("\u2229\ufe06", None),
+            ("\u2229\ufe07", "contains an invisible character (U+FE07)"),
+            ("\U0001f600\ufe0d", "contains an invisible character (U+FE0D)"),
+            ("\u5b57\U000e011f", None),
+            ("\u5b57\U000e0120", "contains an invisible character (U+E0120)"),
+            ("\u5b57\U000e01ef", "contains an invisible character (U+E01EF)"),
             # A Mongolian selector needs a Mongolian letter before it: the selectors are
             # Mongolian-script themselves and chained into hidden runs (QA round 2 on #515).
             ("\u182e\u1823\u1829\u182d\u1823\u182f\u180b", None),
@@ -218,6 +226,27 @@ class TestInvisibleProblem:
         invisible_problem(name)
         shown("/video/" + name)
         assert time.monotonic() - start < 1
+
+    def test_variant_selectors_are_capped(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """At most 4 characters per name in a variant form by default; emoji VS16 and
+        Mongolian selectors don't count (maintainer, QA round 2 on #515)."""
+        from mcp_synology.modules.filestation import helpers
+
+        monkeypatch.setattr(helpers, "_selector_limit", helpers.DEFAULT_SELECTOR_LIMIT)
+        four = "\u8f9b\U000e0100\u845b\U000e0101\u90ce\U000e0100\u6f22\ufe00"
+        assert helpers.invisible_problem(four) is None
+        five = four + "\u5b57\U000e0100"
+        assert helpers.invisible_problem(five) == (
+            "has 5 variation selectors, more than the 4 a name may have"
+        )
+        assert helpers.invisible_problem("\u2764\ufe0f" * 10) is None
+        assert helpers.invisible_problem("\u1820\u180b\u1821\u180c" * 4) is None
+        helpers.set_selector_limit(5)
+        assert helpers.invisible_problem(five) is None
+        helpers.set_selector_limit(0)
+        assert helpers.invisible_problem("\u5b57\U000e0100") == (
+            "has 1 variation selector, more than the 0 a name may have"
+        )
 
     @staticmethod
     def _tags(text: str) -> str:

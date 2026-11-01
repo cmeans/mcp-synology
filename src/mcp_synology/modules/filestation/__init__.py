@@ -77,6 +77,9 @@ class FileStationSettings(BaseModel):
         return value
 
     search_poll_interval: float = Field(default=1.0, ge=0.5, le=10.0)
+    # How many variation selectors marking a character's variant (VS1-VS7, the ideographic
+    # VS17-VS48) a new name may have (#515); 36 is the most a 255-byte name can hold.
+    name_variation_selector_limit: int = Field(default=4, ge=0, le=36)
 
 
 MODULE_INFO = ModuleInfo(
@@ -298,6 +301,7 @@ def register(ctx: "RegisterContext") -> None:
     from mcp_synology.core import local_paths
     from mcp_synology.core.errors import ErrorCode
     from mcp_synology.core.formatting import error_response
+    from mcp_synology.modules.filestation.helpers import set_selector_limit
     from mcp_synology.modules.filestation.listing import (
         list_files,
         list_recycle_bin,
@@ -357,6 +361,7 @@ def register(ctx: "RegisterContext") -> None:
     local_folders = local_paths.roots_for_description(allowed_roots)
     search_poll_interval = settings.search_poll_interval
     hide_recycle = settings.hide_recycle_in_listings
+    set_selector_limit(settings.name_variation_selector_limit)
 
     # Closure-shared cache of per-share recycle-bin enabled-ness. Populated
     # lazily by `ensure_recycle_status` on first observation per share, and

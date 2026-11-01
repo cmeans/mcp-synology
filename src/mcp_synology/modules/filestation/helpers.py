@@ -253,13 +253,17 @@ _EMOJI_ZWJ = regex.compile(
 _EMOJI_VS = regex.compile(
     r"(?<=(?![\x00-\x7f])\p{Emoji})[\ufe0e\ufe0f]|(?<=[0-9#*])[\ufe0e\ufe0f](?=\u20e3)"
 )
-# VS1-VS14 only after the kinds of character StandardizedVariants.txt gives variants for:
-# math and other symbols, CJK ideographs, and the Myanmar, Phags-pa, Manichaean and
-# Egyptian scripts; not after a Latin or Cyrillic letter, where one hides (pre-QA on #515).
+# Only the variation selectors Unicode has ever registered (StandardizedVariants.txt,
+# IVD_Sequences.txt 2026-08-03): VS1-VS7 (U+FE00-FE06) and VS17-VS48 (U+E0100-E011F).
+# VS8-VS14 and VS49-VS256 are in no registered sequence, so one only hides a value
+# ("variation-selector smuggling", one byte per character; maintainer, QA round 2 on
+# #515). VS1-VS7 only after the kinds of character StandardizedVariants.txt varies: math
+# and other symbols, CJK ideographs, Myanmar, Phags-pa, Manichaean, Egyptian; not after a
+# Latin or Cyrillic letter, where one hides (pre-QA on #515).
 _OTHER_VS = regex.compile(
     r"(?<=(?![\x00-\x7f])[\p{Sm}\p{So}\p{Ideographic}\p{scx=Mymr}\p{scx=Phag}\p{scx=Mani}"
-    r"\p{scx=Egyp}])[\ufe00-\ufe0d]"
-    r"|(?<=\p{Ideographic})[\U000e0100-\U000e01ef]"
+    r"\p{scx=Egyp}])[\ufe00-\ufe06]"
+    r"|(?<=\p{Ideographic})[\U000e0100-\U000e011f]"
     # A Mongolian selector after a Mongolian *letter*: the selectors are scx=Mong
     # themselves, so "after a Mongolian character" let them chain into a hidden run of any
     # length (QA round 2 on #515). The vowel separator sits between two letters, after
@@ -267,6 +271,24 @@ _OTHER_VS = regex.compile(
     r"|(?<=(?=\p{scx=Mong})\p{L})[\u180b-\u180d\u180f]"
     r"|(?<=(?=\p{scx=Mong})\p{L}[\u180b-\u180d\u180f]?)\u180e(?=(?=\p{scx=Mong})\p{L})"
 )
+# A cap on the registered selectors that mark a character's variant (VS1-VS7 and the
+# ideographic ones; not emoji VS15/VS16 or Mongolian's, which spelling uses freely): each
+# can still carry about 5 bits, and a long run changes how a model tokenizes the name. 4
+# covers a family and given name written with variant kanji (maintainer, QA round 2 on
+# #515). A filestation setting, `name_variation_selector_limit`, raises or lowers it: one
+# server process serves one config instance, so `register` sets it once for the process.
+_COUNTED_VS = regex.compile(r"[\ufe00-\ufe06\U000e0100-\U000e011f]")
+DEFAULT_SELECTOR_LIMIT = 4
+_selector_limit = DEFAULT_SELECTOR_LIMIT
+
+
+def set_selector_limit(limit: int) -> None:
+    """Set the cap `invisible_problem` applies (the filestation setting
+    ``name_variation_selector_limit``)."""
+    global _selector_limit
+    _selector_limit = limit
+
+
 _FLAG = "\U0001f3f4"  # waving black flag: the base of a subdivision flag's tag sequence
 
 
@@ -359,6 +381,12 @@ def invisible_problem(name: str) -> str | None:
         if c in _ANNOTATION or (_IGNORABLE.match(c) and not _ignorable_belongs(text, i)):
             return f"contains an invisible character (U+{ord(c):04X})"
         i += 1
+    variants = len(_COUNTED_VS.findall(text))
+    if variants > _selector_limit:
+        return (
+            f"has {variants} variation selector{'s' if variants != 1 else ''}, more than the "
+            f"{_selector_limit} a name may have"
+        )
     if _BRAILLE_BLANK in (text[0], text[-1]):
         return "starts or ends with a blank character (U+2800)"
     if _MARK.match(text[0]):
