@@ -183,7 +183,7 @@ async def _home_takes_only_its_listed_name(client: DsmClient, tmp_path: Path) ->
     list_recycle_bin says it's not there, never "cannot be recovered".
     """
     assert "TESTSHARE" in await list_files(client, path="/TESTSHARE")
-    with pytest.raises(ToolError, match="408"):
+    with pytest.raises(ToolError, match="/Home doesn't exist on the NAS"):
         await list_files(client, path="/Home")
     known: set[str] = set()
     assert await ensure_known_shares(client, ["/Home/x", "Testshare"], known, "paths") == [
