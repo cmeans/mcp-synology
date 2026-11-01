@@ -23,6 +23,7 @@ from mcp_synology.modules.filestation.listing import list_files
 from mcp_synology.modules.filestation.metadata import get_file_info
 from mcp_synology.modules.filestation.operations import create_folder, delete_files, rename
 from mcp_synology.modules.filestation.paths import resolve_paths
+from mcp_synology.modules.filestation.transfer import upload_file
 
 if TYPE_CHECKING:
     from mcp_synology.core.client import DsmClient
@@ -86,6 +87,31 @@ async def test_paths_are_taken_exactly(nas_client: Any) -> None:
 
 async def test_paths_are_taken_exactly_admin(admin_client: Any) -> None:
     await _exact_paths(admin_client[0])
+
+
+async def test_list_files_tells_a_file_from_a_missing_path(nas_client: Any, tmp_path: Any) -> None:
+    """DSM answers List's 408 for a file as for a missing path (pre-QA on #515): a file
+    is called a file, and a padded missing path is named, quoted."""
+    client = nas_client[0]
+    root = f"/writable/t515-{uuid.uuid4().hex[:8]}"
+    await _mk(client, "/writable", root.rsplit("/", 1)[1])
+    local = tmp_path / "a.txt"
+    local.write_text("a file, not a folder")
+    try:
+        await upload_file(client, local_path=str(local), dest_folder=root, allowed_roots=[tmp_path])
+        with pytest.raises(ToolError) as exc:
+            await list_files(client, path=f"{root}/a.txt")
+        error = json.loads(str(exc.value))["error"]
+        assert error["code"] == "invalid_parameter", error
+        assert error["message"] == f"List files failed: {root}/a.txt is a file, not a folder."
+        with pytest.raises(ToolError) as exc:
+            await list_files(client, path=f"{root}/gone ")
+        error = json.loads(str(exc.value))["error"]
+        assert error["code"] == "not_found", error
+        assert repr(f"{root}/gone ") in error["message"], error
+    finally:
+        with contextlib.suppress(ToolError):
+            await delete_files(client, paths=[root], recycle_bin_status={})
 
 
 async def _raw_delete(client: DsmClient, path: str) -> dict[str, Any]:
