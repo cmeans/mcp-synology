@@ -162,7 +162,7 @@ class TestInvisibleProblem:
             ),
             (
                 "\U00016100\U0001611e\U0001611e\U0001611e\U0001611e",
-                "repeats a combining mark (U+16121, typed as U+1611E U+1611E), which draws as one",
+                "repeats a combining mark (U+1611E), which draws as one",
             ),
             # Only U+16121's own pair is exempt: a mark after U+16126 or U+16128 that
             # repeats its last one is a repeat, and so is U+16121 followed by U+16126, whose
@@ -181,22 +181,49 @@ class TestInvisibleProblem:
             ),
             (
                 "\U00016100\U00016121\U00016126",
-                "repeats combining marks (U+1611E U+1611E), which draw as one",
+                "repeats a combining mark (U+1611E, part of U+16121), which draws as one",
+            ),
+            # U+1611E exactly twice is U+16121; a third is a repeat however it's typed,
+            # so U+16121 before U+16123 or after U+1611E is too (pre-QA on #515).
+            (
+                "\U00016100\U00016121\U00016123",
+                "repeats a combining mark (U+1611E, part of U+16121), which draws as one",
+            ),
+            (
+                "\U00016100\U00016121\U0001611e",
+                "repeats a combining mark (U+1611E), which draws as one",
             ),
             (
                 "\U00016100\U00016121\U00016121\U0001611f",
                 "repeats a combining mark (U+16121), which draws as one",
             ),
-            # A copy that starts partway through a character names the marks, not a
-            # character typed (QA round 6 on #515).
+            # A mark from inside a character is named with the character it's part of, so
+            # the model can find it (QA round 6 and pre-QA on #515).
             (
                 "\U00016100\U0001611e\U00016121\U0001611e",
-                "repeats combining marks (U+1611E U+1611E), which draw as one",
+                "repeats a combining mark (U+1611E), which draws as one",
             ),
-            ("\U00016100\U0001611e\U0001611e\U0001611e", None),
+            (
+                "\u0f40\u0f73\u0f75",
+                "repeats a combining mark (U+0F71, part of U+0F75), which draws as one",
+            ),
+            (
+                "\U00016100\U00016122\U00016124",
+                "repeats a combining mark (U+16129, part of U+16124), which draws as one",
+            ),
+            (
+                "\U00016100\U0001611e\U0001611e\U0001611e",
+                "repeats a combining mark (U+1611E), which draws as one",
+            ),
             # However it's typed: the same NFD, the same verdict (pre-QA on #515).
-            ("a\U00016121\U0001611e\U0001611f", None),
-            ("a\U0001611e\U00016126", None),
+            (
+                "a\U00016121\U0001611e\U0001611f",
+                "repeats a combining mark (U+1611E), which draws as one",
+            ),
+            (
+                "a\U0001611e\U00016126",
+                "repeats a combining mark (U+1611E, part of U+16126), which draws as one",
+            ),
             # A mark that decomposes to several, typed twice, puts no mark next to itself:
             # the run repeats (QA round 5 on #515). The same on every Python: U+16122 is
             # Unicode 16, decomposed from the generated table.

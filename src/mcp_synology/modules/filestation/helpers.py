@@ -426,19 +426,36 @@ def _repeated_marks(name: str) -> str | None:
     no mark next to itself (QA round 5 on #515). The verdict reads the NFD alone, so
     canonically equivalent names get one verdict however they were typed. The one pair
     that isn't a repeat is a character's own decomposition into one mark twice (U+16121
-    is U+1611E U+1611E), typed out or not; U+16121 twice still is (QA round 6 on #515)."""
+    is U+1611E U+1611E), typed out or not, and only where that mark appears exactly
+    twice: a third U+1611E, or U+16121 twice, is a repeat (QA round 6 on #515)."""
     decomposed = _nfd_with_sources(name)
     nfd = "".join(d for d, _ in decomposed)
+    first: str | None = None
     for low, high in _mark_runs(nfd):
         for size in range(1, (high - low) // 2 + 1):
             for at in range(low, high - 2 * size + 1):
                 copy = nfd[at + size : at + 2 * size]
-                if size == 1 and copy * 2 in _REPEATING_DECOMPOSITIONS:
+                if nfd[at : at + size] != copy:
                     continue
-                if nfd[at : at + size] == copy:
-                    sources = [i for _, i in decomposed[at + size : at + 2 * size]]
-                    return _describe_repeat(name, copy, sources)
-    return None
+                if size == 1 and _own_pair(nfd, at, low, high):
+                    continue
+                sources = [i for _, i in decomposed[at + size : at + 2 * size]]
+                reason, named = _describe_repeat(name, copy, sources)
+                if named:
+                    return reason
+                first = first or reason
+    return first
+
+
+def _own_pair(nfd: str, at: int, low: int, high: int) -> bool:
+    """Whether the pair at ``at`` is U+16121's decomposition standing alone: that mark
+    exactly twice in a row, not three or more."""
+    mark = nfd[at]
+    return (
+        mark * 2 in _REPEATING_DECOMPOSITIONS
+        and (at == low or nfd[at - 1] != mark)
+        and (at + 2 == high or nfd[at + 2] != mark)
+    )
 
 
 def _mark_runs(nfd: str) -> list[tuple[int, int]]:
@@ -446,25 +463,24 @@ def _mark_runs(nfd: str) -> list[tuple[int, int]]:
     return [match.span() for match in _MARK_RUN.finditer(nfd)]
 
 
-def _describe_repeat(name: str, copy: str, sources: list[int]) -> str:
-    """The reason for a repeated ``copy``: the mark when it's one; the character it
-    composes to, or the one typed, when the copy is whole characters as typed; else the
-    marks (QA round 6 on #515: a copy can start partway through a character)."""
-    if len(copy) == 1:
-        return f"repeats a combining mark (U+{ord(copy):04X}), which draws as one"
+def _describe_repeat(name: str, copy: str, sources: list[int]) -> tuple[str, bool]:
+    """The reason for a repeated ``copy``, and whether it names what was typed.
+
+    It names the mark or the character typed when the copy is whole characters of the
+    name; otherwise it names the marks and the characters they're part of, so the model
+    can find them in its own text (pre-QA on #515: U+0F75 holds U+0F71)."""
     typed = [name[i] for i in dict.fromkeys(sources)]
     whole = "".join(_decompose(c) for c in typed) == copy
-    if whole and copy in _REPEATING_DECOMPOSITIONS:
-        # Name it as typed too when it was typed out: U+16121 isn't in the name then.
-        char = _REPEATING_DECOMPOSITIONS[copy]
-        as_typed = (
-            "" if typed == [char] else ", typed as " + " ".join(f"U+{ord(c):04X}" for c in typed)
-        )
-        return f"repeats a combining mark (U+{ord(char):04X}{as_typed}), which draws as one"
+
+    def codes(chars: str | list[str]) -> str:
+        return " ".join(f"U+{ord(c):04X}" for c in chars)
+
+    part_of = "" if typed == list(copy) else f", part of {codes(typed)}"
+    if len(copy) == 1:
+        return f"repeats a combining mark ({codes(copy)}{part_of}), which draws as one", whole
     if whole and len(typed) == 1:
-        return f"repeats a combining mark (U+{ord(typed[0]):04X}), which draws as one"
-    codes = " ".join(f"U+{ord(c):04X}" for c in copy)
-    return f"repeats combining marks ({codes}), which draw as one"
+        return f"repeats a combining mark ({codes(typed)}), which draws as one", True
+    return f"repeats combining marks ({codes(copy)}{part_of}), which draw as one", whole
 
 
 def _ccc_pattern() -> regex.Pattern[str]:
