@@ -187,6 +187,7 @@ Common causes:
 
 - Typo in the share name. Case doesn't matter to the File Station tools: they send a share name as `list_shares` lists it (`/Home` goes to DSM as `/home`). Only if DSM won't list shares does the name go as given, and then the user home service takes only `/home` in lowercase.
 - Share name omitted: paths must start with a real share, e.g. `/volume1` is wrong, `/photos` is right.
+- A stray space or other whitespace in the path: paths are taken exactly, so `/video/Movies ` names an item called `Movies ` (#488). The message quotes such a path (`'/video/Movies '`), so the whitespace shows.
 - The user lacks list permission on a parent directory, so DSM reports "not
   found" rather than "denied" — DSM does this deliberately to avoid leaking
   directory existence.
@@ -246,6 +247,7 @@ operation.**
 Common causes:
 
 - A filename contains a forbidden character: `/ \ : * ? " < > |`.
+- `list_files` was given a file, not a folder: "… is a file, not a folder". Use `get_file_info` for a file, or list its parent folder.
 - The `new_name` argument to `rename`, or `upload_file`'s `filename`, contains `/`
   or a NUL, is blank, or is `.` or `..` (padded with any whitespace too); the message says which
   (path separators are not allowed in a name — use copy/move to relocate a file).

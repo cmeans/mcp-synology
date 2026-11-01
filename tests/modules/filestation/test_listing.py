@@ -655,7 +655,7 @@ class TestListFiles:
 
     @respx.mock
     @pytest.mark.parametrize("getinfo", ["file", "folder", "missing", "502", "connect"])
-    @pytest.mark.parametrize("path", ["/video/a.jpg", "video/a.jpg"])
+    @pytest.mark.parametrize("path", ["/video/a.jpg", "video/a.jpg", "/video/a.jpg "])
     async def test_a_file_is_not_called_missing(
         self, mock_client: DsmClient, getinfo: str, path: str
     ) -> None:
@@ -682,13 +682,14 @@ class TestListFiles:
             await list_files(mock_client, path=path)
         error = json.loads(str(exc_info.value))["error"]
         assert error["value"] == path
+        named = "'/video/a.jpg '" if path.endswith(" ") else "/video/a.jpg"
         if getinfo == "file":
             assert error["code"] == "invalid_parameter"
-            assert error["message"] == "List files failed: /video/a.jpg is a file, not a folder."
+            assert error["message"] == f"List files failed: {named} is a file, not a folder."
             assert "get_file_info" in error["suggestion"]
         else:
             assert error["code"] == "not_found"
-            assert error["message"] == "List files failed: /video/a.jpg doesn't exist on the NAS."
+            assert error["message"] == f"List files failed: {named} doesn't exist on the NAS."
 
     @respx.mock
     async def test_list_files_407_is_permission_denied(self, mock_client: DsmClient) -> None:
