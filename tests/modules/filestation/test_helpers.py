@@ -152,6 +152,13 @@ class TestInvisibleProblem:
             ("\u00e9\u0301", "repeats a combining mark (U+0301), which draws as one"),
             # Interlinear annotation characters draw nothing, though not default-ignorable.
             ("re\ufffaport", "contains an invisible character (U+FFFA)"),
+            # Egyptian hieroglyph format controls draw nothing on their own (pre-QA on #515).
+            ("rep\U00013430ort", "contains an invisible character (U+13430)"),
+            ("a\U0001343fb", "contains an invisible character (U+1343F)"),
+            # VS15/VS16 only after an emoji emoji-variation-sequences.txt registers.
+            ("\U0001f600\ufe0e", "contains an invisible character (U+FE0E)"),
+            ("\U0001f600\ufe0f", "contains an invisible character (U+FE0F)"),
+            ("\u2764\ufe0e", None),
             # VS1-VS7 only in sequences StandardizedVariants.txt registers (pre-QA on #515).
             ("caf\u00e9\ufe00.pdf", "contains an invisible character (U+FE00)"),
             ("\u0434\ufe01oc", "contains an invisible character (U+FE01)"),
@@ -230,23 +237,38 @@ class TestInvisibleProblem:
         assert time.monotonic() - start < 1
 
     def test_variant_selectors_are_capped(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """At most 4 characters per name in a variant form by default; emoji VS16 and
-        Mongolian selectors don't count (maintainer, QA round 2 on #515)."""
+        """At most 4 characters per name in a variant form; emoji VS16 and Mongolian
+        selectors don't count (maintainer, QA round 2 on #515). The message names each
+        one, since the selectors can't be seen."""
         from mcp_synology.modules.filestation import helpers
 
-        monkeypatch.setattr(helpers, "SELECTOR_LIMIT", 4)
+        assert helpers.SELECTOR_LIMIT == 4
         four = "\u8f9b\U000e0100\u845b\U000e0101\u90ce\U000e0100\u6f22\ufe00"
         assert helpers.invisible_problem(four) is None
         five = four + "\u5b57\U000e0100"
         assert helpers.invisible_problem(five) == (
-            "has 5 variation selectors, more than the 4 a name may have"
+            "has 5 variation selectors (\u8f9b U+E0100, \u845b U+E0101, \u90ce U+E0100, "
+            "\u6f22 U+FE00, \u5b57 U+E0100), more than the 4 a name may have"
         )
         assert helpers.invisible_problem("\u2764\ufe0f" * 10) is None
         assert helpers.invisible_problem("\u1820\u180b\u1821\u180c" * 4) is None
         monkeypatch.setattr(helpers, "SELECTOR_LIMIT", 0)
         assert helpers.invisible_problem("\u5b57\U000e0100") == (
-            "has 1 variation selector, more than the 0 a name may have"
+            "has 1 variation selector (\u5b57 U+E0100), more than the 0 a name may have"
         )
+
+    def test_every_emoji_variation_sequence_passes(self) -> None:
+        from mcp_synology.modules.filestation.helpers import invisible_problem
+        from mcp_synology.modules.filestation.standardized_variants import EMOJI_VS_BASES
+
+        refused = [
+            base + vs
+            for base in EMOJI_VS_BASES
+            for vs in "\ufe0e\ufe0f"
+            if invisible_problem(base + vs) is not None
+        ]
+        assert refused == []
+        assert len(EMOJI_VS_BASES) > 300
 
     def test_every_standardized_variant_passes(self) -> None:
         """Every VS1-VS7 sequence StandardizedVariants.txt registers, but after ASCII."""

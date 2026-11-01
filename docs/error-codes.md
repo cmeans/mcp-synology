@@ -269,7 +269,8 @@ Common causes:
   character, an invisible character where Unicode doesn't use one (a zero-width space, a
   soft hyphen or a BOM anywhere, `report.pdf` followed by a variation selector), a
   combining mark at its start or the same one twice in a row, more than 4 characters in
-  a variant form (variation selectors), is longer than 255 bytes in UTF-8, or is `#recycle` directly in a shared folder or a user's home folder
+  a CJK, symbol or punctuation variant form (variation selectors; emoji and Mongolian
+  ones don't count), is longer than 255 bytes in UTF-8, or is `#recycle` directly in a shared folder or a user's home folder
   (#510); or a copy, move or restore would put a folder named `#recycle` there; or an
   upload or `create_folder` would create a missing parent folder under such a name. Give
   a plain name. Paths themselves are taken exactly, so an existing item named with such

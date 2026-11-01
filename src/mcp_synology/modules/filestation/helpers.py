@@ -17,7 +17,10 @@ from mcp_synology.core.client import DsmClient
 from mcp_synology.core.errors import ErrorCode, SynologyError
 from mcp_synology.core.formatting import error_response
 from mcp_synology.core.redaction import redact_urls
-from mcp_synology.modules.filestation.standardized_variants import STANDARDIZED_BASES
+from mcp_synology.modules.filestation.standardized_variants import (
+    EMOJI_VS_BASES,
+    STANDARDIZED_BASES,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -206,13 +209,13 @@ def strip_padding(path: str) -> str:
 
 
 # -- invisible characters (#510) ----------------------------------------------------------
-# Built on Unicode's own definitions, not a list of our own (maintainer, 2026-10-31, after
-# prior-art research on #515): Default_Ignorable_Code_Point (DerivedCoreProperties.txt) is
-# Unicode's set of characters that draw nothing; UTS #39 section 3.1.1.1 says where the
-# zero-width joiner and non-joiner belong in words; UTS #51 says where emoji sequences use
-# a joiner, a variation selector or tag characters; UTS #39 section 5.4 flags a repeated
-# combining mark. The `regex` package carries current Unicode data (Python 3.11's
-# `unicodedata` is Unicode 14, which calls newer emoji unassigned).
+# Built on Unicode's own definitions and data files, not a judgment of ours (maintainer,
+# 2026-10-31, after prior-art research on #515): Default_Ignorable_Code_Point
+# (DerivedCoreProperties.txt) is Unicode's set of characters that draw nothing; UTS #39
+# section 3.1.1.1 says where the zero-width joiner and non-joiner belong in words; UTS #51
+# says where emoji sequences use a joiner, a variation selector or tag characters; UTS #39
+# section 5.4 flags a repeated combining mark. The `regex` package carries current Unicode
+# data (Python 3.11's `unicodedata` is Unicode 14, which calls newer emoji unassigned).
 
 _IGNORABLE = regex.compile(r"\p{Default_Ignorable_Code_Point}")
 _MARK = regex.compile(r"[\p{Mn}\p{Me}]")
@@ -251,9 +254,10 @@ _ZWNJ_ARABIC = regex.compile(
 _EMOJI_ZWJ = regex.compile(
     r"(?<=[\p{Extended_Pictographic}\p{Emoji_Modifier}\ufe0f])\u200d(?=\p{Extended_Pictographic})"
 )
-_EMOJI_VS = regex.compile(
-    r"(?<=(?![\x00-\x7f])\p{Emoji})[\ufe0e\ufe0f]|(?<=[0-9#*])[\ufe0e\ufe0f](?=\u20e3)"
-)
+# VS15/VS16 after a non-ASCII emoji: `_emoji_presentation` (only bases
+# emoji-variation-sequences.txt registers; pre-QA on #515). After a keycap base, only when
+# the keycap follows (1️⃣).
+_EMOJI_VS = regex.compile(r"(?<=[0-9#*])[\ufe0e\ufe0f](?=\u20e3)")
 # Only the variation selectors Unicode has ever registered (StandardizedVariants.txt,
 # IVD_Sequences.txt 2026-08-03): VS1-VS7 (U+FE00-FE06) and VS17-VS48 (U+E0100-E011F).
 # VS8-VS14 and VS49-VS256 are in no registered sequence, so one only hides a value
@@ -316,7 +320,18 @@ def _ignorable_belongs(text: str, i: int) -> bool:
     character it varies, a tag in a flag (UTS #51). Every other one (a zero-width space,
     a soft hyphen, a word joiner, a BOM, a filler, a combining grapheme joiner) hides.
     Tags are judged a run at a time by `invisible_problem`."""
-    return _standardized_variant(text, i) or any(p.match(text, i) for p in _BELONGS)
+    return (
+        _standardized_variant(text, i)
+        or _emoji_presentation(text, i)
+        or any(p.match(text, i) for p in _BELONGS)
+    )
+
+
+def _emoji_presentation(text: str, i: int) -> bool:
+    """Whether ``text[i]``, VS15 or VS16, follows a non-ASCII emoji
+    emoji-variation-sequences.txt registers it for (``❤️``; not ``😀``+VS16, which has no
+    text form)."""
+    return text[i] in "\ufe0e\ufe0f" and i > 0 and text[i - 1] in EMOJI_VS_BASES
 
 
 def _standardized_variant(text: str, i: int) -> bool:
@@ -336,9 +351,12 @@ _BELONGS = (
     _EMOJI_VS,
     _OTHER_VS,
 )
-# Interlinear annotation characters: format characters that draw nothing, though Unicode
-# doesn't call them default-ignorable (pre-QA on #515).
-_ANNOTATION = frozenset("\ufff9\ufffa\ufffb")
+# Format characters that draw nothing on their own, though Unicode doesn't call them
+# default-ignorable (pre-QA on #515): the interlinear annotation characters and the
+# Egyptian hieroglyph format controls (quadrat layout; refused rather than judged in
+# context, as no file name needs them). The other such format characters (prepended
+# concatenation marks, U+0600-0605...) draw a sign.
+_ANNOTATION = frozenset("\ufff9\ufffa\ufffb" + "".join(map(chr, range(0x13430, 0x13440))))
 
 
 def draws_nothing(c: str) -> bool:
@@ -380,10 +398,13 @@ def invisible_problem(name: str) -> str | None:
         if c in _ANNOTATION or (_IGNORABLE.match(c) and not _ignorable_belongs(text, i)):
             return f"contains an invisible character (U+{ord(c):04X})"
         i += 1
-    variants = len(_COUNTED_VS.findall(text))
-    if variants > SELECTOR_LIMIT:
+    variants = [m.start() for m in _COUNTED_VS.finditer(text)]
+    if len(variants) > SELECTOR_LIMIT:
+        # Name each one: the selectors themselves can't be seen (pre-QA on #515).
+        which = ", ".join(f"{text[i - 1]} U+{ord(text[i]):04X}" for i in variants)
         return (
-            f"has {variants} variation selector{'s' if variants != 1 else ''}, more than the "
+            f"has {len(variants)} variation selector{'s' if len(variants) != 1 else ''} "
+            f"({which}), more than the "
             f"{SELECTOR_LIMIT} a name may have"
         )
     if _BRAILLE_BLANK in (text[0], text[-1]):
