@@ -330,6 +330,25 @@ class TestInvisibleProblem:
 
     @pytest.mark.parametrize(
         "name",
+        ["\u0f40" + "\u0f73" * 84, "\u0f40\u0f73\u0f73\u0f40" + "\u0f73" * 78],
+        ids=["one-run", "later-run"],
+    )
+    def test_a_long_run_of_repeats_is_capped(self, name: str) -> None:
+        """After an unnamed match, the search looks only up to the longest decomposition,
+        in that run and every later one: 85 x U+0F73 took 36 ms a name (pre-QA on #515),
+        and U+0F73 twice, then 78 more in a second run, 28 ms (QA round 7 on #515)."""
+        import time
+
+        from mcp_synology.modules.filestation.helpers import invisible_problem
+
+        assert len(name.encode()) <= 255
+        start = time.perf_counter()
+        for _ in range(40):
+            assert invisible_problem(name) is not None
+        assert time.perf_counter() - start < 0.5
+
+    @pytest.mark.parametrize(
+        "name",
         [
             "\u094d" * 40_000 + "\u200c\u0915",
             "\u094d" * 40_000 + "\u200d",
@@ -430,6 +449,7 @@ class TestInvisibleProblem:
         import unicodedata
 
         from mcp_synology.modules.filestation import helpers
+        from mcp_synology.modules.filestation.decompositions import NEW_DECOMPOSITIONS
 
         for cp in range(sys.maxunicode + 1):
             char = chr(cp)
@@ -441,12 +461,14 @@ class TestInvisibleProblem:
             assert parts == unicodedata.normalize("NFD", char), hex(cp)
             marks = [c for c in parts if helpers._MARK.match(c)]
             assert len(marks) <= helpers._LONGEST_DECOMPOSITION, hex(cp)
-            marks = [c for c in parts if helpers._MARK.match(c)]
-            assert len(marks) <= helpers._LONGEST_DECOMPOSITION, hex(cp)
             for a, b in zip(parts, parts[1:], strict=False):
                 if a == b and helpers._MARK.match(a):
                     # The only pair a decomposition repeats is U+16121's, which is exempt.
                     assert a * 2 in helpers._REPEATING_DECOMPOSITIONS, hex(cp)
+        # The table's own entries too: CI's Pythons know none of them (QA round 7 on #515).
+        for char in NEW_DECOMPOSITIONS:
+            marks = [c for c in helpers._decompose(char) if helpers._MARK.match(c)]
+            assert len(marks) <= helpers._LONGEST_DECOMPOSITION, hex(ord(char))
         assert helpers._REPEATING_DECOMPOSITIONS == {"\U0001611e\U0001611e": "\U00016121"}
 
     def test_no_character_repeats_a_mark_by_itself(self) -> None:
@@ -493,6 +515,8 @@ class TestInvisibleProblem:
             [k + u + e, k + aa + o, k + u + aa + i],
             [k + u + ai, k + aa + au, k + aa + aa + aa + ii],
             [k + u + u, k + aa * 4, k + aa + aa + u],
+            [k + e + u, k + aa + i + aa + aa, k + e + aa + aa],
+            [k + o + u, k + aa + aa + i + aa + aa, k + u + i + u],
         ]
         known = unicodedata.unidata_version >= "16"
         for group in groups:
@@ -500,6 +524,17 @@ class TestInvisibleProblem:
             assert len(verdicts) == 1, group
             if known or all(ord(c) < 0x16100 for form in group for c in form):
                 assert len({unicodedata.normalize("NFD", form) for form in group}) == 1, group
+
+    def test_u_after_another_vowel_sign_passes(self) -> None:
+        """U+16121 before a vowel sign that starts with U+1611E is refused (U+1611E three
+        times in a row); after one it passes, since its NFD has no three in a row (QA
+        round 7 on #515: the spec said "next to")."""
+        from mcp_synology.modules.filestation.helpers import invisible_problem
+
+        k, u = "\U00016100", "\U00016121"
+        for vowel in ("\U00016123", "\U00016125", "\U00016126", "\U00016128"):
+            assert invisible_problem(k + vowel + u) is None, hex(ord(vowel))
+            assert invisible_problem(k + u + vowel) is not None, hex(ord(vowel))
 
     def test_shown_skips_checking_a_part_longer_than_any_name(
         self, monkeypatch: pytest.MonkeyPatch

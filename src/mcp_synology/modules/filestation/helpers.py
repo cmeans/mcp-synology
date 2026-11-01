@@ -433,6 +433,9 @@ def _repeated_marks(name: str) -> str | None:
     first: str | None = None
     for low, high in _mark_runs(nfd):
         limit = (high - low) // 2
+        if first is not None:
+            # A run after one that already matched gets the same cap (QA round 7 on #515).
+            limit = min(limit, _LONGEST_DECOMPOSITION)
         for size in range(1, limit + 1):
             if size > limit:
                 break
@@ -541,8 +544,8 @@ def _repeating_decompositions() -> dict[str, str]:
 
 
 _REPEATING_DECOMPOSITIONS = _repeating_decompositions()
-# The most marks one character decomposes to (Gurung Khema U+16126 and U+16128: 3;
-# `test_helpers` checks every decomposition against it).
+# The most marks one character decomposes to (3: Gurung Khema U+16126 and U+16128, and
+# Greek letters such as U+1F82; `test_helpers` checks every decomposition against it).
 _LONGEST_DECOMPOSITION = 3
 
 
