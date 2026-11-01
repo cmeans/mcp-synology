@@ -413,11 +413,34 @@ def invisible_problem(name: str) -> str | None:
         return "starts or ends with a blank character (U+2800)"
     if _MARK.match(text[0]):
         return "starts with a combining mark, which has no character to go on"
-    decomposed = unicodedata.normalize("NFD", name)
-    for a, b in zip(decomposed, decomposed[1:], strict=False):
-        if a == b and _MARK.match(a):
+    decomposed = _nfd_with_sources(name)
+    for (a, i), (b, j) in zip(decomposed, decomposed[1:], strict=False):
+        # Two copies from one character are its own decomposition, not a repeat typed in:
+        # U+16121 decomposes to U+1611E twice on Python 3.14 (Unicode 16) and not before,
+        # so the name would pass or fail by interpreter (pre-QA on #515).
+        if a == b and i != j and _MARK.match(a):
             return f"repeats a combining mark (U+{ord(a):04X}), which draws as one"
     return None
+
+
+def _nfd_with_sources(name: str) -> list[tuple[str, int]]:
+    """NFD of ``name``, each character paired with the index of the one it came from.
+
+    NFD is each character's own decomposition, then canonical ordering: a stable sort by
+    combining class within each run of non-zero classes.
+    """
+    out = [(d, i) for i, c in enumerate(name) for d in unicodedata.normalize("NFD", c)]
+    start = 0
+    while start < len(out):
+        if not unicodedata.combining(out[start][0]):
+            start += 1
+            continue
+        end = start
+        while end < len(out) and unicodedata.combining(out[end][0]):
+            end += 1
+        out[start:end] = sorted(out[start:end], key=lambda item: unicodedata.combining(item[0]))
+        start = end
+    return out
 
 
 # How `invisible_problem`'s reasons start (the selector cap's: `is_selector_problem`):

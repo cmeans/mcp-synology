@@ -632,7 +632,11 @@ class TestListFiles:
     @respx.mock
     @pytest.mark.parametrize(
         ("path", "named"),
-        [("/nonexistent", "/nonexistent"), ("/video/Movies ", "'/video/Movies '")],
+        [
+            ("/nonexistent", "/nonexistent"),
+            ("/video/Movies ", "'/video/Movies '"),
+            ("video/x", "/video/x"),
+        ],
     )
     async def test_a_missing_folder_is_named(
         self, mock_client: DsmClient, path: str, named: str
@@ -648,6 +652,33 @@ class TestListFiles:
         assert (error["code"], error["param"], error["value"]) == ("not_found", "path", path)
         assert error["message"] == f"List files failed: {named} doesn't exist on the NAS."
         assert error["suggestion"].startswith("Check the paths with list_files")
+
+    @respx.mock
+    @pytest.mark.parametrize("getinfo", ["file", "missing", "502"])
+    async def test_a_file_is_not_called_missing(self, mock_client: DsmClient, getinfo: str) -> None:
+        """DSM answers List's 408 for a file too (seska DSM 7.1.1): getinfo tells a file
+        from a missing path, and a failed getinfo leaves the not-found reply (pre-QA on
+        #515)."""
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            if request.url.params["method"] != "getinfo":
+                return httpx.Response(200, json={"success": False, "error": {"code": 408}})
+            if getinfo == "502":
+                return httpx.Response(502)
+            entry = {"isdir": False, "name": "a.jpg"} if getinfo == "file" else {"code": 408}
+            return httpx.Response(200, json={"success": True, "data": {"files": [entry]}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        with pytest.raises(ToolError) as exc_info:
+            await list_files(mock_client, path="/video/a.jpg")
+        error = json.loads(str(exc_info.value))["error"]
+        if getinfo == "file":
+            assert (error["code"], error["value"]) == ("invalid_parameter", "/video/a.jpg")
+            assert error["message"] == "List files failed: /video/a.jpg is a file, not a folder."
+            assert "get_file_info" in error["suggestion"]
+        else:
+            assert error["code"] == "not_found"
+            assert error["message"] == "List files failed: /video/a.jpg doesn't exist on the NAS."
 
     @respx.mock
     async def test_list_files_407_is_permission_denied(self, mock_client: DsmClient) -> None:

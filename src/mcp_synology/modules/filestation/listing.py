@@ -300,6 +300,22 @@ async def list_files(
         data = await client.request("SYNO.FileStation.List", "list", params=params)
     except SynologyError as e:
         if e.code == 408:
+            # DSM answers 408 for a file too, not only a missing path (seska DSM 7.1.1,
+            # pre-QA on #515): one getinfo tells them apart.
+            try:
+                exists = await path_exists(client, normalized)
+            except (SynologyError, httpx.HTTPError):
+                exists = None  # can't tell: say what DSM said, naming the path
+            if exists:
+                error_response(
+                    ErrorCode.INVALID_PARAMETER,
+                    f"List files failed: {shown_path(normalized)} is a file, not a folder.",
+                    retryable=False,
+                    param="path",
+                    value=path,
+                    suggestion="list_files lists a folder's contents: use get_file_info for "
+                    "a file, or list its parent folder.",
+                )
             # Name the path, quoted when padded: paths are taken exactly now (#488), and
             # DSM's own message names none, so `/video/Movies ` would read as a missing
             # `Movies` the model can see listed (pre-QA on #515).

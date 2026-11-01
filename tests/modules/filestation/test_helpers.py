@@ -148,8 +148,16 @@ class TestInvisibleProblem:
             # A Mongolian vowel separator only between Mongolian letters.
             ("\u1820\u180e\u1821", None),
             ("a\u180eb", "contains an invisible character (U+180E)"),
-            # NFC first: a precomposed letter plus the same mark is still a repeat.
+            # NFD first: a precomposed letter plus the same mark is still a repeat.
             ("\u00e9\u0301", "repeats a combining mark (U+0301), which draws as one"),
+            # One character whose own decomposition repeats a mark isn't a repeat: Gurung
+            # Khema U+16121 is U+1611E twice on Python 3.14 only (pre-QA on #515). Typed
+            # out, the two are a repeat on every Python.
+            ("\U00016100\U00016121", None),
+            (
+                "\U00016100\U0001611e\U0001611e",
+                "repeats a combining mark (U+1611E), which draws as one",
+            ),
             # Interlinear annotation characters draw nothing, though not default-ignorable.
             ("re\ufffaport", "contains an invisible character (U+FFFA)"),
             # Egyptian hieroglyph format controls draw nothing on their own (pre-QA on #515).
@@ -285,6 +293,33 @@ class TestInvisibleProblem:
         assert refused == []
         assert sum(map(len, STANDARDIZED_BASES.values())) > 1000
         assert invisible_problem("0\ufe00") == "contains an invisible character (U+FE00)"
+
+    def test_a_characters_own_decomposition_is_no_repeat(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Pinned on every Python: U+16121 decomposes to U+1611E twice only on 3.14, so
+        this test gives it that decomposition (pre-QA on #515)."""
+        import unicodedata
+
+        from mcp_synology.modules.filestation import helpers
+
+        real = unicodedata.normalize
+
+        class _Unicode16:
+            def __getattr__(self, name: str) -> object:
+                return getattr(unicodedata, name)
+
+            @staticmethod
+            def normalize(form: str, text: str) -> str:
+                if form == "NFD" and text == "\U00016121":
+                    return "\U0001611e\U0001611e"
+                return real(form, text)
+
+        monkeypatch.setattr(helpers, "unicodedata", _Unicode16())
+        assert helpers.invisible_problem("\U00016100\U00016121") is None
+        assert helpers.invisible_problem("\U00016100\U0001611e\U0001611e") == (
+            "repeats a combining mark (U+1611E), which draws as one"
+        )
 
     def test_shown_skips_checking_a_part_longer_than_any_name(
         self, monkeypatch: pytest.MonkeyPatch
