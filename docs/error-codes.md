@@ -270,7 +270,8 @@ Common causes:
   soft hyphen or a BOM anywhere, `report.pdf` followed by a variation selector), a
   combining mark at its start or the same one twice in a row, more than 4 variation
   selectors that pick a character's variant (VS1–VS7 and the ideographic ones; emoji and
-  Mongolian ones don't count), is longer than 255 bytes in UTF-8, or is `#recycle` directly in a shared folder or a user's home folder
+  Mongolian ones don't count), is longer than 255 bytes in UTF-8, has a character that isn't valid Unicode text (a
+  local file name that isn't UTF-8), or is `#recycle` directly in a shared folder or a user's home folder
   (#510); or a copy, move or restore would put a folder named `#recycle` there; or an
   upload or `create_folder` would create a missing parent folder under such a name. Give
   a plain name. Paths themselves are taken exactly, so an existing item named with such

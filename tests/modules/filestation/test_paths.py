@@ -211,6 +211,8 @@ class TestRefuseBadName:
             ("a\rb", "contains a control character"),
             ("a\x1b[31mb", "contains a control character"),
             ("a\t", "starts or ends with whitespace"),
+            # Not text: a local name that isn't UTF-8 decodes to a lone surrogate (pre-QA).
+            ("caf\udce9", "contains a character that isn't valid Unicode text (a lone surrogate)"),
             # Longer than a name can be, before any Unicode check (QA round 2 on #515).
             ("a" * 256, "is longer than 255 bytes in UTF-8, the most ext4 and Btrfs allow"),
             ("\u00e9" * 128, "is longer than 255 bytes in UTF-8, the most ext4 and Btrfs allow"),
@@ -319,6 +321,16 @@ class TestRefuseBadName:
                 creates_parents=True,  # type: ignore[arg-type]
             )
         assert _error(exc)["suggestion"] == "Shorten the name to 255 bytes or fewer in UTF-8."
+
+    @pytest.mark.parametrize("local", ["a" * 256, "rep\u200bort.pdf"])
+    def test_a_local_file_name_keeps_the_pass_filename_advice(self, local: str) -> None:
+        """An upload's local file name (``label``) can't be retyped: the fix is to pass
+        filename (pre-QA on #515)."""
+        with pytest.raises(ToolError) as exc:
+            refuse_bad_name(
+                "Upload", local, "local_path", "Pass filename.", label="the local file's name"
+            )
+        assert _error(exc)["suggestion"] == "Pass filename."
 
     def test_other_refusals_keep_the_callers_advice(self) -> None:
         with pytest.raises(ToolError) as exc:

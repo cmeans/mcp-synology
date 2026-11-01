@@ -27,6 +27,7 @@ from mcp_synology.core.errors import ErrorCode
 from mcp_synology.core.formatting import error_response
 from mcp_synology.modules.filestation import helpers
 from mcp_synology.modules.filestation.helpers import (
+    NAME_BYTES,
     _is_dot,
     draws_nothing,
     invisible_problem,
@@ -380,9 +381,8 @@ def _refuse(message: str, param: str, value: str, suggestion: str) -> None:
 # U+200F (pre-QA r4).
 _BIDI = regex.compile(r"\p{Bidi_Control}")
 _LINE_BREAKS = regex.compile(r"[\p{Zl}\p{Zp}]")
-_NAME_BYTES = 255  # the longest name ext4 and Btrfs (DSM's volumes) allow, in bytes
 _TOO_LONG = "is longer than"
-_LENGTH_ADVICE = f"Shorten the name to {_NAME_BYTES} bytes or fewer in UTF-8."
+_LENGTH_ADVICE = f"Shorten the name to {NAME_BYTES} bytes or fewer in UTF-8."
 
 
 def name_problem(name: str, parent: str | None = None) -> str | None:
@@ -390,8 +390,12 @@ def name_problem(name: str, parent: str | None = None) -> str | None:
     one, beyond the structural checks only whole names get (empty, ``/``, NUL, dots); or
     None. One list, so a new name and a created parent can't drift apart (pre-QA r4)."""
     # First, so the Unicode checks never see an argument of any length (QA round 2 on #515).
-    if len(name.encode("utf-8", "surrogatepass")) > _NAME_BYTES:
-        return f"{_TOO_LONG} {_NAME_BYTES} bytes in UTF-8, the most ext4 and Btrfs allow"
+    if len(name.encode("utf-8", "surrogatepass")) > NAME_BYTES:
+        return f"{_TOO_LONG} {NAME_BYTES} bytes in UTF-8, the most ext4 and Btrfs allow"
+    # A lone surrogate isn't text: a local file name that isn't UTF-8 decodes to one
+    # (surrogateescape), and the request would fail to encode it (pre-QA on #515).
+    if any("\ud800" <= c <= "\udfff" for c in name):
+        return "contains a character that isn't valid Unicode text (a lone surrogate)"
     if any(unicodedata.category(c) == "Cc" and c != "\t" for c in name):
         return "contains a control character"
     if _BIDI.search(name):
@@ -472,7 +476,11 @@ def refuse_bad_name(
             retryable=False,
             param=param,
             value=name if value is None else value,
-            suggestion=_LENGTH_ADVICE
+            # A label means the name isn't the argument itself (an upload's local file
+            # name): the caller's advice (pass `filename`) is the fix (pre-QA on #515).
+            suggestion=suggestion
+            if label is not None
+            else _LENGTH_ADVICE
             if problem.startswith(_TOO_LONG)
             else _SELECTOR_ADVICE
             if is_selector_problem(problem)

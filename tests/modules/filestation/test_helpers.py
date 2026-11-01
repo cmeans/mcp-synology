@@ -286,18 +286,27 @@ class TestInvisibleProblem:
         assert sum(map(len, STANDARDIZED_BASES.values())) > 1000
         assert invisible_problem("0\ufe00") == "contains an invisible character (U+FE00)"
 
-    def test_shown_skips_checking_a_part_longer_than_any_name(self) -> None:
+    def test_shown_skips_checking_a_part_longer_than_any_name(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """NFD reorders a long run of alternating marks in quadratic time: 80,000 took
         4.6 s in `shown` (QA round 3 on #515). No NAS name is over 255 bytes, so such a
-        part is quoted unchecked."""
-        import time
+        part is quoted without the check (deterministic: the check would raise)."""
+        from mcp_synology.modules.filestation import helpers
 
-        from mcp_synology.modules.filestation.helpers import shown
+        checked: list[str] = []
+        real = helpers.invisible_problem
 
-        path = "/video/a" + "\u0952\u0951" * 40_000
-        start = time.monotonic()
-        assert shown(path).startswith("'/video/a")
-        assert time.monotonic() - start < 1
+        def spy(part: str) -> str | None:
+            checked.append(part)
+            return real(part)
+
+        monkeypatch.setattr(helpers, "invisible_problem", spy)
+        long_part = "a" + "\u0952\u0951" * 128  # 769 bytes
+        assert helpers.shown("/video/" + long_part).startswith("'/video/a")
+        assert long_part not in checked
+        helpers.shown("/video/" + "a" * 255)
+        assert "a" * 255 in checked
 
     @staticmethod
     def _tags(text: str) -> str:

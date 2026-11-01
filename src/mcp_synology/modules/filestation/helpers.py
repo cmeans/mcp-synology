@@ -283,6 +283,8 @@ _COUNTED_VS = regex.compile(r"[\ufe00-\ufe06\U000e0100-\U000e011f]")
 SELECTOR_LIMIT = 4
 
 
+NAME_BYTES = 255  # the longest name ext4 and Btrfs (DSM's volumes) allow, in UTF-8 bytes
+
 _FLAG = "\U0001f3f4"  # waving black flag: the base of a subdivision flag's tag sequence
 
 
@@ -475,7 +477,7 @@ def shown(path: str) -> str:
         # A part longer than any NAS name is quoted unchecked: `invisible_problem`'s NFD
         # step is quadratic on a long run of marks (QA round 3 on #515), and new names are
         # capped at 255 bytes before it runs.
-        if len(part.encode("utf-8", "surrogatepass")) > 255:
+        if len(part.encode("utf-8", "surrogatepass")) > NAME_BYTES:
             return _escaped_repr(path)
         if part != part.strip() or invisible_problem(part) is not None or any(map(_hides, part)):
             return _escaped_repr(path)
