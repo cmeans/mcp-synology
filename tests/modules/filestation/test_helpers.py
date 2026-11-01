@@ -232,7 +232,7 @@ class TestInvisibleProblem:
         Mongolian selectors don't count (maintainer, QA round 2 on #515)."""
         from mcp_synology.modules.filestation import helpers
 
-        monkeypatch.setattr(helpers, "_selector_limit", helpers.DEFAULT_SELECTOR_LIMIT)
+        monkeypatch.setattr(helpers, "SELECTOR_LIMIT", 4)
         four = "\u8f9b\U000e0100\u845b\U000e0101\u90ce\U000e0100\u6f22\ufe00"
         assert helpers.invisible_problem(four) is None
         five = four + "\u5b57\U000e0100"
@@ -241,9 +241,7 @@ class TestInvisibleProblem:
         )
         assert helpers.invisible_problem("\u2764\ufe0f" * 10) is None
         assert helpers.invisible_problem("\u1820\u180b\u1821\u180c" * 4) is None
-        helpers.set_selector_limit(5)
-        assert helpers.invisible_problem(five) is None
-        helpers.set_selector_limit(0)
+        monkeypatch.setattr(helpers, "SELECTOR_LIMIT", 0)
         assert helpers.invisible_problem("\u5b57\U000e0100") == (
             "has 1 variation selector, more than the 0 a name may have"
         )

@@ -419,8 +419,8 @@ _UNICODE_ADVICE = (
 
 
 _SELECTOR_ADVICE = (
-    "Write fewer characters in their variant forms, or raise name_variation_selector_limit "
-    "in the filestation module settings."
+    "Write fewer characters in their variant forms. If the name is real and needs them, "
+    "report it at https://github.com/cmeans/mcp-synology/issues."
 )
 
 

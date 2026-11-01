@@ -251,7 +251,6 @@ modules:
 | `upload_timeout` | `300` | 10–3600 s | Time limit for `upload_file`. |
 | `download_timeout` | `300` | 10–3600 s | Time limit for `download_file`. |
 | `search_poll_interval` | `1.0` | 0.5–10.0 s | How often `search_files` checks on DSM's search while it runs. |
-| `name_variation_selector_limit` | `4` | 0–36 | How many characters in a name a tool creates may be written in a variant form (a variation selector, such as a kanji's family-register form). More hide data in the name. Emoji presentation doesn't count. |
 | `allowed_local_paths` | your Downloads folder | local folders | Local folders `upload_file` and `download_file` may use, including subfolders. See [Local path confinement](#features). |
 | `default_download_dir` | none | a local folder | Where `download_file` saves when no `dest_folder` is given. It's always allowed. |
 | `default_upload_dir` | none | a NAS folder | Where `upload_file` uploads when no `dest_folder` is given. |

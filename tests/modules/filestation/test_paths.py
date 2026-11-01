@@ -274,29 +274,16 @@ class TestRefuseBadName:
             "Retype the name without the character the message names: DSM would keep it as is."
         )
 
-    def test_too_many_variant_selectors_point_at_the_setting(
+    def test_too_many_variant_selectors_say_how_to_report(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The cap is a setting: the advice names it (QA round 2 on #515)."""
+        """The advice says to report a real name the cap refuses (maintainer, #515)."""
         from mcp_synology.modules.filestation import helpers
 
-        monkeypatch.setattr(helpers, "_selector_limit", 1)
+        monkeypatch.setattr(helpers, "SELECTOR_LIMIT", 1)
         with pytest.raises(ToolError) as exc:
             refuse_bad_name("Rename", "\u8f9b\U000e0100\u845b\U000e0101", "new_name", "x")
-        assert "name_variation_selector_limit" in _error(exc)["suggestion"]
-
-    @pytest.mark.parametrize(
-        ("settings", "limit"), [({}, 4), ({"name_variation_selector_limit": 9}, 9)]
-    )
-    def test_register_sets_the_selector_limit(
-        self, monkeypatch: pytest.MonkeyPatch, settings: dict[str, int], limit: int
-    ) -> None:
-        from mcp_synology.modules.filestation import helpers
-
-        monkeypatch.setattr(helpers, "_selector_limit", -1)
-        _, _, ctx = _make_ctx(shared_paths=["/tmp"], settings=settings or None)
-        register(ctx)
-        assert helpers._selector_limit == limit
+        assert "github.com/cmeans/mcp-synology/issues" in _error(exc)["suggestion"]
 
     def test_other_refusals_keep_the_callers_advice(self) -> None:
         with pytest.raises(ToolError) as exc:

@@ -275,18 +275,9 @@ _OTHER_VS = regex.compile(
 # ideographic ones; not emoji VS15/VS16 or Mongolian's, which spelling uses freely): each
 # can still carry about 5 bits, and a long run changes how a model tokenizes the name. 4
 # covers a family and given name written with variant kanji (maintainer, QA round 2 on
-# #515). A filestation setting, `name_variation_selector_limit`, raises or lowers it: one
-# server process serves one config instance, so `register` sets it once for the process.
+# #515). A constant, not a setting (maintainer): a real name it refuses is a bug to report.
 _COUNTED_VS = regex.compile(r"[\ufe00-\ufe06\U000e0100-\U000e011f]")
-DEFAULT_SELECTOR_LIMIT = 4
-_selector_limit = DEFAULT_SELECTOR_LIMIT
-
-
-def set_selector_limit(limit: int) -> None:
-    """Set the cap `invisible_problem` applies (the filestation setting
-    ``name_variation_selector_limit``)."""
-    global _selector_limit
-    _selector_limit = limit
+SELECTOR_LIMIT = 4
 
 
 _FLAG = "\U0001f3f4"  # waving black flag: the base of a subdivision flag's tag sequence
@@ -382,10 +373,10 @@ def invisible_problem(name: str) -> str | None:
             return f"contains an invisible character (U+{ord(c):04X})"
         i += 1
     variants = len(_COUNTED_VS.findall(text))
-    if variants > _selector_limit:
+    if variants > SELECTOR_LIMIT:
         return (
             f"has {variants} variation selector{'s' if variants != 1 else ''}, more than the "
-            f"{_selector_limit} a name may have"
+            f"{SELECTOR_LIMIT} a name may have"
         )
     if _BRAILLE_BLANK in (text[0], text[-1]):
         return "starts or ends with a blank character (U+2800)"
