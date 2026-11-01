@@ -427,7 +427,12 @@ def _repeated_marks(name: str) -> str | None:
     canonically equivalent names get one verdict however they were typed. The one pair
     that isn't a repeat is a character's own decomposition into one mark twice (U+16121
     is U+1611E U+1611E), typed out or not, and only where that mark appears exactly
-    twice: a third U+1611E, or U+16121 twice, is a repeat (QA round 6 on #515)."""
+    twice: a third U+1611E, or U+16121 twice, is a repeat (QA round 6 on #515).
+
+    After a match that can only be named as part of a character, the search looks for a
+    copy of whole characters only up to the longest decomposition, in that run and every
+    later one, so the cost stays bounded (QA round 7 on #515). The verdict is the same; the
+    reason may then name that first match rather than a longer named copy further on."""
     decomposed = _nfd_with_sources(name)
     nfd = "".join(d for d, _ in decomposed)
     first: str | None = None
@@ -628,9 +633,10 @@ def shown(path: str) -> str:
     for part in path.split("/"):
         if not part:
             continue
-        # A part longer than any NAS name is quoted unchecked: `invisible_problem`'s NFD
-        # step is quadratic on a long run of marks (QA round 3 on #515), and new names are
-        # capped at 255 bytes before it runs.
+        # A part longer than any NAS name is quoted unchecked: `invisible_problem`'s
+        # repeated-mark search is quadratic on a long run of different marks (the stdlib
+        # NFD it once used was too: QA round 3 on #515), and new names are capped at 255
+        # bytes before it runs.
         if len(part.encode("utf-8", "surrogatepass")) > NAME_BYTES:
             return _escaped_repr(path)
         if part != part.strip() or invisible_problem(part) is not None or any(map(_hides, part)):

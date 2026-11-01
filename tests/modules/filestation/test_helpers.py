@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock
 
 import httpx
@@ -333,19 +333,28 @@ class TestInvisibleProblem:
         ["\u0f40" + "\u0f73" * 84, "\u0f40\u0f73\u0f73\u0f40" + "\u0f73" * 78],
         ids=["one-run", "later-run"],
     )
-    def test_a_long_run_of_repeats_is_capped(self, name: str) -> None:
+    def test_a_long_run_of_repeats_is_capped(
+        self, name: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """After an unnamed match, the search looks only up to the longest decomposition,
         in that run and every later one: 85 x U+0F73 took 36 ms a name (pre-QA on #515),
-        and U+0F73 twice, then 78 more in a second run, 28 ms (QA round 7 on #515)."""
-        import time
+        and U+0F73 twice, then 78 more in a second run, 28 ms (QA round 7 on #515). Counts
+        the matches described rather than timing them, so coverage and slow CI runners
+        don't matter (pre-QA on #515): uncapped, these names describe 3,000 or more."""
+        from mcp_synology.modules.filestation import helpers
 
-        from mcp_synology.modules.filestation.helpers import invisible_problem
+        described = 0
+        real = helpers._describe_repeat
 
+        def counting(*args: Any) -> tuple[str, bool]:
+            nonlocal described
+            described += 1
+            return real(*args)
+
+        monkeypatch.setattr(helpers, "_describe_repeat", counting)
         assert len(name.encode()) <= 255
-        start = time.perf_counter()
-        for _ in range(40):
-            assert invisible_problem(name) is not None
-        assert time.perf_counter() - start < 0.5
+        assert helpers.invisible_problem(name) is not None
+        assert 0 < described < 1000
 
     @pytest.mark.parametrize(
         "name",
@@ -539,8 +548,8 @@ class TestInvisibleProblem:
     def test_shown_skips_checking_a_part_longer_than_any_name(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """NFD reorders a long run of alternating marks in quadratic time: 80,000 took
-        4.6 s in `shown` (QA round 3 on #515). No NAS name is over 255 bytes, so such a
+        """The check is quadratic on a long run of different marks (with the stdlib NFD,
+        80,000 took 4.6 s in `shown`: QA round 3 on #515). No NAS name is over 255 bytes, so such a
         part is quoted without the check (deterministic: the check would raise)."""
         from mcp_synology.modules.filestation import helpers
 
