@@ -432,7 +432,10 @@ def _repeated_marks(name: str) -> str | None:
     nfd = "".join(d for d, _ in decomposed)
     first: str | None = None
     for low, high in _mark_runs(nfd):
-        for size in range(1, (high - low) // 2 + 1):
+        limit = (high - low) // 2
+        for size in range(1, limit + 1):
+            if size > limit:
+                break
             for at in range(low, high - 2 * size + 1):
                 copy = nfd[at + size : at + 2 * size]
                 if nfd[at : at + size] != copy:
@@ -443,7 +446,12 @@ def _repeated_marks(name: str) -> str | None:
                 reason, named = _describe_repeat(name, copy, sources)
                 if named:
                     return reason
-                first = first or reason
+                if first is None:
+                    # After the first match, look for a named one only up to the longest
+                    # decomposition, so a long run of repeats isn't described match by
+                    # match: 255 bytes of U+0F73 took 36 ms (pre-QA on #515).
+                    first = reason
+                    limit = min(limit, max(size, _LONGEST_DECOMPOSITION))
     return first
 
 
@@ -466,8 +474,8 @@ def _mark_runs(nfd: str) -> list[tuple[int, int]]:
 def _describe_repeat(name: str, copy: str, sources: list[int]) -> tuple[str, bool]:
     """The reason for a repeated ``copy``, and whether it names what was typed.
 
-    It names the mark or the character typed when the copy is whole characters of the
-    name; otherwise it names the marks and the characters they're part of, so the model
+    It names the characters typed when the copy is whole characters of the name;
+    otherwise it names the marks and the characters they're part of, so the model
     can find them in its own text (pre-QA on #515: U+0F75 holds U+0F71)."""
     typed = [name[i] for i in dict.fromkeys(sources)]
     whole = "".join(_decompose(c) for c in typed) == copy
@@ -480,6 +488,8 @@ def _describe_repeat(name: str, copy: str, sources: list[int]) -> tuple[str, boo
         return f"repeats a combining mark ({codes(copy)}{part_of}), which draws as one", whole
     if whole and len(typed) == 1:
         return f"repeats a combining mark ({codes(typed)}), which draws as one", True
+    if whole:
+        return f"repeats combining marks ({codes(typed)}), which draw as one", True
     return f"repeats combining marks ({codes(copy)}{part_of}), which draw as one", whole
 
 
@@ -531,6 +541,9 @@ def _repeating_decompositions() -> dict[str, str]:
 
 
 _REPEATING_DECOMPOSITIONS = _repeating_decompositions()
+# The most marks one character decomposes to (Gurung Khema U+16126 and U+16128: 3;
+# `test_helpers` checks every decomposition against it).
+_LONGEST_DECOMPOSITION = 3
 
 
 def _nfd_with_sources(name: str) -> list[tuple[str, int]]:

@@ -207,6 +207,11 @@ class TestInvisibleProblem:
                 "\u0f40\u0f73\u0f75",
                 "repeats a combining mark (U+0F71, part of U+0F75), which draws as one",
             ),
+            # A long run stops looking for a named copy past the longest decomposition.
+            (
+                "\u0f40" + "\u0f73" * 5,
+                "repeats a combining mark (U+0F71, part of U+0F73), which draws as one",
+            ),
             (
                 "\U00016100\U00016122\U00016124",
                 "repeats a combining mark (U+16129, part of U+16124), which draws as one",
@@ -214,6 +219,16 @@ class TestInvisibleProblem:
             (
                 "\U00016100\U0001611e\U0001611e\U0001611e",
                 "repeats a combining mark (U+1611E), which draws as one",
+            ),
+            # A copy of several whole characters names them; one starting with U+1611E
+            # is a repeat, not U+16121's pair (pre-QA on #515).
+            (
+                "a\u0344\u0300\u0344\u0300",
+                "repeats combining marks (U+0344 U+0300), which draw as one",
+            ),
+            (
+                "\U00016100\U00016123\U00016120\U00016123\U00016120",
+                "repeats combining marks (U+16123 U+16120), which draw as one",
             ),
             # However it's typed: the same NFD, the same verdict (pre-QA on #515).
             (
@@ -424,6 +439,10 @@ class TestInvisibleProblem:
                 continue
             parts = helpers._decompose(char)
             assert parts == unicodedata.normalize("NFD", char), hex(cp)
+            marks = [c for c in parts if helpers._MARK.match(c)]
+            assert len(marks) <= helpers._LONGEST_DECOMPOSITION, hex(cp)
+            marks = [c for c in parts if helpers._MARK.match(c)]
+            assert len(marks) <= helpers._LONGEST_DECOMPOSITION, hex(cp)
             for a, b in zip(parts, parts[1:], strict=False):
                 if a == b and helpers._MARK.match(a):
                     # The only pair a decomposition repeats is U+16121's, which is exempt.
