@@ -472,6 +472,11 @@ def shown(path: str) -> str:
     for part in path.split("/"):
         if not part:
             continue
+        # A part longer than any NAS name is quoted unchecked: `invisible_problem`'s NFD
+        # step is quadratic on a long run of marks (QA round 3 on #515), and new names are
+        # capped at 255 bytes before it runs.
+        if len(part.encode("utf-8", "surrogatepass")) > 255:
+            return _escaped_repr(path)
         if part != part.strip() or invisible_problem(part) is not None or any(map(_hides, part)):
             return _escaped_repr(path)
     # Marks, joiners and variation selectors where Unicode uses them show as written

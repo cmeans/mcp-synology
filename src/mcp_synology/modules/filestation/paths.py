@@ -381,6 +381,8 @@ def _refuse(message: str, param: str, value: str, suggestion: str) -> None:
 _BIDI = regex.compile(r"\p{Bidi_Control}")
 _LINE_BREAKS = regex.compile(r"[\p{Zl}\p{Zp}]")
 _NAME_BYTES = 255  # the longest name ext4 and Btrfs (DSM's volumes) allow, in bytes
+_TOO_LONG = "is longer than"
+_LENGTH_ADVICE = f"Shorten the name to {_NAME_BYTES} bytes or fewer in UTF-8."
 
 
 def name_problem(name: str, parent: str | None = None) -> str | None:
@@ -389,7 +391,7 @@ def name_problem(name: str, parent: str | None = None) -> str | None:
     None. One list, so a new name and a created parent can't drift apart (pre-QA r4)."""
     # First, so the Unicode checks never see an argument of any length (QA round 2 on #515).
     if len(name.encode("utf-8", "surrogatepass")) > _NAME_BYTES:
-        return f"is longer than {_NAME_BYTES} bytes in UTF-8, the most ext4 and Btrfs allow"
+        return f"{_TOO_LONG} {_NAME_BYTES} bytes in UTF-8, the most ext4 and Btrfs allow"
     if any(unicodedata.category(c) == "Cc" and c != "\t" for c in name):
         return "contains a control character"
     if _BIDI.search(name):
@@ -442,8 +444,9 @@ def refuse_bad_name(
     at all, whitespace at its start or end (#488: DSM would keep it, and it's almost never
     meant), a character `invisible_problem` refuses (one that draws nothing where Unicode
     doesn't use one, U+FFF9-FFFB, the Braille blank at an end, a combining mark first or the
-    same one twice in a row, more than 4 variation selectors: #515; its advice is to retype
-    the name without it, or for the cap to write fewer variants), or
+    same one twice in a row, more than `SELECTOR_LIMIT` variation selectors: #515; its
+    advice is to retype the name without it, for the cap to write fewer variants, and for
+    the length to shorten it), or
     ``#recycle`` where it would be taken for a bin: directly in a shared folder or in a
     user's home folder (``/homes/<user>``) (#510: DSM lets one be created where there's no
     bin folder yet). ``label`` names it in the message when
@@ -469,7 +472,9 @@ def refuse_bad_name(
             retryable=False,
             param=param,
             value=name if value is None else value,
-            suggestion=_SELECTOR_ADVICE
+            suggestion=_LENGTH_ADVICE
+            if problem.startswith(_TOO_LONG)
+            else _SELECTOR_ADVICE
             if is_selector_problem(problem)
             else _UNICODE_ADVICE
             if is_invisible_problem(problem)
@@ -511,7 +516,9 @@ async def _refuse_bad_created_parents(
                 raw,
                 suggestion
                 or (
-                    _SELECTOR_ADVICE
+                    _LENGTH_ADVICE
+                    if problem.startswith(_TOO_LONG)
+                    else _SELECTOR_ADVICE
                     if is_selector_problem(problem)
                     else "Retype the folder's name without the character the message names, or "
                     "pick an existing folder (list_files shows them)."

@@ -302,6 +302,24 @@ class TestRefuseBadName:
             )
         assert "github.com/cmeans/mcp-synology/issues" in _error(exc)["suggestion"]
 
+    def test_a_long_name_is_told_to_shorten(self) -> None:
+        """QA round 3 on #515: the caller's plain-name advice didn't say what to change."""
+        with pytest.raises(ToolError) as exc:
+            refuse_bad_name("Rename", "a" * 256, "new_name", "Pass the new name only.")
+        assert _error(exc)["suggestion"] == "Shorten the name to 255 bytes or fewer in UTF-8."
+
+    async def test_a_long_created_parent_is_told_to_shorten(self) -> None:
+        with pytest.raises(ToolError) as exc:
+            await resolve_paths(
+                _FakeClient(),
+                set(),
+                "create_folder",
+                "paths",
+                ["/video/" + "a" * 256 + "/sub"],
+                creates_parents=True,  # type: ignore[arg-type]
+            )
+        assert _error(exc)["suggestion"] == "Shorten the name to 255 bytes or fewer in UTF-8."
+
     def test_other_refusals_keep_the_callers_advice(self) -> None:
         with pytest.raises(ToolError) as exc:
             refuse_bad_name("Rename", "a/b", "new_name", "Pass the new name only.")
