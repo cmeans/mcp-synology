@@ -152,13 +152,13 @@ class TestInvisibleProblem:
             ("\u00e9\u0301", "repeats a combining mark (U+0301), which draws as one"),
             # Interlinear annotation characters draw nothing, though not default-ignorable.
             ("re\ufffaport", "contains an invisible character (U+FFFA)"),
-            # VS1-VS14 only after what StandardizedVariants.txt varies (pre-QA on #515).
+            # VS1-VS7 only in sequences StandardizedVariants.txt registers (pre-QA on #515).
             ("caf\u00e9\ufe00.pdf", "contains an invisible character (U+FE00)"),
             ("\u0434\ufe01oc", "contains an invisible character (U+FE01)"),
             ("\u2229\ufe00", None),
             # Only selectors Unicode has registered: VS1-VS7 and VS17-VS48 (QA round 2 on
             # #515); the others are in no registered sequence and only hide a value.
-            ("\u2229\ufe06", None),
+            ("\u2229\ufe06", "contains an invisible character (U+FE06)"),  # unregistered pair
             ("\u2229\ufe07", "contains an invisible character (U+FE07)"),
             ("\U0001f600\ufe0d", "contains an invisible character (U+FE0D)"),
             ("\u5b57\U000e011f", None),
@@ -180,6 +180,7 @@ class TestInvisibleProblem:
             ("\u1820\u180e", "contains an invisible character (U+180E)"),
             ("report \u1820\u180e.pdf", "contains an invisible character (U+180E)"),
             ("\u1802\u180e\u1820", "contains an invisible character (U+180E)"),
+            ("\u1820\u180e\u1802", "contains an invisible character (U+180E)"),
             (
                 "report \u1802" + "\u180e\u180b\u180e\u180c" * 40 + "\u1802.pdf",
                 "contains an invisible character (U+180E)",
@@ -187,7 +188,8 @@ class TestInvisibleProblem:
             # Pins the Unicode data of regex's floor: ★ stopped being Extended_Pictographic
             # after 2024.11.6, so a ZWJ between two is refused (see the scaffolding spec).
             ("\u2605\u200d\u2605", "contains an invisible character (U+200D)"),
-            ("\u5b57\ufe00", None),
+            ("\u5b57\ufe00", "contains an invisible character (U+FE00)"),  # unregistered pair
+            ("\u8c48\ufe00", None),  # registered: CJK compatibility ideograph U+F900
         ],
     )
     def test_invisible_problem(self, name: str, expected: str | None) -> None:
@@ -245,6 +247,21 @@ class TestInvisibleProblem:
         assert helpers.invisible_problem("\u5b57\U000e0100") == (
             "has 1 variation selector, more than the 0 a name may have"
         )
+
+    def test_every_standardized_variant_passes(self) -> None:
+        """Every VS1-VS7 sequence StandardizedVariants.txt registers, but after ASCII."""
+        from mcp_synology.modules.filestation.helpers import invisible_problem
+        from mcp_synology.modules.filestation.standardized_variants import STANDARDIZED_BASES
+
+        refused = [
+            (base, vs)
+            for vs, bases in STANDARDIZED_BASES.items()
+            for base in bases
+            if not base.isascii() and invisible_problem(base + vs) is not None
+        ]
+        assert refused == []
+        assert sum(map(len, STANDARDIZED_BASES.values())) > 1000
+        assert invisible_problem("0\ufe00") == "contains an invisible character (U+FE00)"
 
     @staticmethod
     def _tags(text: str) -> str:

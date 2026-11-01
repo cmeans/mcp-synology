@@ -285,6 +285,23 @@ class TestRefuseBadName:
             refuse_bad_name("Rename", "\u8f9b\U000e0100\u845b\U000e0101", "new_name", "x")
         assert "github.com/cmeans/mcp-synology/issues" in _error(exc)["suggestion"]
 
+    async def test_a_created_parent_over_the_cap_gets_the_cap_advice(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from mcp_synology.modules.filestation import helpers
+
+        monkeypatch.setattr(helpers, "SELECTOR_LIMIT", 1)
+        with pytest.raises(ToolError) as exc:
+            await resolve_paths(
+                _FakeClient(),
+                set(),
+                "create_folder",
+                "paths",
+                ["/video/\u8f9b\U000e0100\u845b\U000e0101/sub"],
+                creates_parents=True,  # type: ignore[arg-type]
+            )
+        assert "github.com/cmeans/mcp-synology/issues" in _error(exc)["suggestion"]
+
     def test_other_refusals_keep_the_callers_advice(self) -> None:
         with pytest.raises(ToolError) as exc:
             refuse_bad_name("Rename", "a/b", "new_name", "Pass the new name only.")
@@ -375,10 +392,20 @@ class TestRefuseBadName:
             # ZWNJ between dual-joining letters in other cursive scripts (UTS #39 A1).
             "\u0710\u0712\u200c\u0712\u0710",  # Syriac
             "\u07ca\u07cb\u200c\u07cc\u07cd",  # N'Ko
-            # Marks between the letter and the joiner (pre-QA on #515: pins `_MARKS`).
+            # Marks between the letter and the joiner (pre-QA on #515; with the rows below,
+            # they pin `_MARKS` above 1).
             "\u0915\u093c\u094d\u200c\u0937",  # NFD Devanagari, nukta + virama + ZWNJ
             "\u062f\u0650\u200c\u0647\u0627",  # Persian, a kasra before the ZWNJ
             "\u09b0\u09bc\u200d\u09cd\u09af",  # Bengali ra-phala after a nukta
+            "\u0628\u0651\u064e\u200c\u0647\u0627",  # Arabic, two marks before the ZWNJ
+            "\u0712\u0730\u200c\u0712\u0710",  # Syriac, a mark before the ZWNJ (A1)
+            "\u07ca\u07eb\u200c\u07cb",  # N'Ko, a tone mark before the ZWNJ (A1)
+            "\u0915\u093c\u094d\u200d\u0937",  # NFD Devanagari half form (UTS #39 B)
+            # Registered standardized variants: fullwidth and CJK punctuation, quotes, math.
+            "\uff01\ufe01",
+            "\u3001\ufe00",
+            "\u2018\ufe02",
+            "\U0001d49c\ufe00",
             # Emoji ZWJ sequences with skin tones.
             "\U0001f468\U0001f3fe\u200d\U0001f9b1",
             "\U0001f9d1\U0001f3fb\u200d\U0001f91d\u200d\U0001f9d1\U0001f3ff",

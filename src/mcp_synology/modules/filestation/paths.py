@@ -31,6 +31,7 @@ from mcp_synology.modules.filestation.helpers import (
     draws_nothing,
     invisible_problem,
     is_invisible_problem,
+    is_selector_problem,
     normalize_path,
     path_exists,
     shown,
@@ -441,7 +442,8 @@ def refuse_bad_name(
     at all, whitespace at its start or end (#488: DSM would keep it, and it's almost never
     meant), a character `invisible_problem` refuses (one that draws nothing where Unicode
     doesn't use one, U+FFF9-FFFB, the Braille blank at an end, a combining mark first or the
-    same one twice in a row: #515; its advice is to retype the name without it), or
+    same one twice in a row, more than 4 variation selectors: #515; its advice is to retype
+    the name without it, or for the cap to write fewer variants), or
     ``#recycle`` where it would be taken for a bin: directly in a shared folder or in a
     user's home folder (``/homes/<user>``) (#510: DSM lets one be created where there's no
     bin folder yet). ``label`` names it in the message when
@@ -468,7 +470,7 @@ def refuse_bad_name(
             param=param,
             value=name if value is None else value,
             suggestion=_SELECTOR_ADVICE
-            if problem.startswith("has ") and "variation selector" in problem
+            if is_selector_problem(problem)
             else _UNICODE_ADVICE
             if is_invisible_problem(problem)
             else suggestion,
@@ -509,7 +511,9 @@ async def _refuse_bad_created_parents(
                 raw,
                 suggestion
                 or (
-                    "Retype the folder's name without the character the message names, or "
+                    _SELECTOR_ADVICE
+                    if is_selector_problem(problem)
+                    else "Retype the folder's name without the character the message names, or "
                     "pick an existing folder (list_files shows them)."
                     if is_invisible_problem(problem)
                     else "Give the folder a plain name, or pick an existing folder (list_files "

@@ -17,6 +17,7 @@ from mcp_synology.core.client import DsmClient
 from mcp_synology.core.errors import ErrorCode, SynologyError
 from mcp_synology.core.formatting import error_response
 from mcp_synology.core.redaction import redact_urls
+from mcp_synology.modules.filestation.standardized_variants import STANDARDIZED_BASES
 
 logger = logging.getLogger(__name__)
 
@@ -257,13 +258,11 @@ _EMOJI_VS = regex.compile(
 # IVD_Sequences.txt 2026-08-03): VS1-VS7 (U+FE00-FE06) and VS17-VS48 (U+E0100-E011F).
 # VS8-VS14 and VS49-VS256 are in no registered sequence, so one only hides a value
 # ("variation-selector smuggling", one byte per character; maintainer, QA round 2 on
-# #515). VS1-VS7 only after the kinds of character StandardizedVariants.txt varies: math
-# and other symbols, CJK ideographs, Myanmar, Phags-pa, Manichaean, Egyptian; not after a
-# Latin or Cyrillic letter, where one hides (pre-QA on #515).
+# #515). VS1-VS7 only in a sequence StandardizedVariants.txt registers
+# (`_standardized_variant`; a list of kinds of character missed fullwidth punctuation and
+# math letters, pre-QA on #515); VS17-VS48 after an ideograph.
 _OTHER_VS = regex.compile(
-    r"(?<=(?![\x00-\x7f])[\p{Sm}\p{So}\p{Ideographic}\p{scx=Mymr}\p{scx=Phag}\p{scx=Mani}"
-    r"\p{scx=Egyp}])[\ufe00-\ufe06]"
-    r"|(?<=\p{Ideographic})[\U000e0100-\U000e011f]"
+    r"(?<=\p{Ideographic})[\U000e0100-\U000e011f]"
     # A Mongolian selector after a Mongolian *letter*: the selectors are scx=Mong
     # themselves, so "after a Mongolian character" let them chain into a hidden run of any
     # length (QA round 2 on #515). The vowel separator sits between two letters, after
@@ -317,7 +316,14 @@ def _ignorable_belongs(text: str, i: int) -> bool:
     character it varies, a tag in a flag (UTS #51). Every other one (a zero-width space,
     a soft hyphen, a word joiner, a BOM, a filler, a combining grapheme joiner) hides.
     Tags are judged a run at a time by `invisible_problem`."""
-    return any(p.match(text, i) for p in _BELONGS)
+    return _standardized_variant(text, i) or any(p.match(text, i) for p in _BELONGS)
+
+
+def _standardized_variant(text: str, i: int) -> bool:
+    """Whether ``text[i]``, VS1-VS7, follows a character StandardizedVariants.txt
+    registers it after; never an ASCII one (``0`` + VS1 looks like ``0``)."""
+    bases = STANDARDIZED_BASES.get(text[i])
+    return bases is not None and i > 0 and not text[i - 1].isascii() and text[i - 1] in bases
 
 
 _BELONGS = (
@@ -350,8 +356,10 @@ def draws_nothing(c: str) -> bool:
 def invisible_problem(name: str) -> str | None:
     """Why ``name`` (one path part) hides a character, or None: a default-ignorable
     character where Unicode doesn't use one (`_ignorable_belongs`), the Braille blank at an
-    end, a combining mark with no character to go on, or the same combining mark twice in
-    a row (UTS #39 section 5.4: it draws as one). One rule for new names and `shown`
+    end, a combining mark with no character to go on, the same combining mark twice in
+    a row (UTS #39 section 5.4: it draws as one), or more than `SELECTOR_LIMIT` variation
+    selectors that mark a character's variant (an unregistered selector is refused as
+    invisible). One rule for new names and `shown`
     (#510)."""
     if not name:
         return None
@@ -389,7 +397,8 @@ def invisible_problem(name: str) -> str | None:
     return None
 
 
-# How every `invisible_problem` reason starts: callers pick their advice by it without
+# How `invisible_problem`'s reasons start (the selector cap's: `is_selector_problem`):
+# callers pick their advice by it without
 # running the check again on an argument another check already refused (pre-QA on #515).
 _INVISIBLE_REASONS = (
     "contains an invisible character",
@@ -399,9 +408,14 @@ _INVISIBLE_REASONS = (
 )
 
 
+def is_selector_problem(problem: str) -> bool:
+    """Whether ``problem`` is `invisible_problem`'s cap on variation selectors."""
+    return problem.startswith("has ") and "variation selector" in problem
+
+
 def is_invisible_problem(problem: str) -> bool:
     """Whether ``problem`` is a reason `invisible_problem` gives."""
-    return problem.startswith(_INVISIBLE_REASONS)
+    return problem.startswith(_INVISIBLE_REASONS) or is_selector_problem(problem)
 
 
 def _hides(c: str) -> bool:
