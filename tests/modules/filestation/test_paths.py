@@ -324,7 +324,7 @@ class TestRefuseBadName:
 
     @pytest.mark.parametrize("local", ["a" * 256, "rep\u200bort.pdf"])
     def test_a_local_file_name_keeps_the_pass_filename_advice(self, local: str) -> None:
-        """An upload's local file name (``label``) can't be retyped: the fix is to pass
+        """An upload's local file name (``keep_suggestion``) can't be retyped: the fix is to pass
         filename (pre-QA on #515)."""
         with pytest.raises(ToolError) as exc:
             refuse_bad_name(
