@@ -129,8 +129,7 @@ jobs:
       # measured from bake v9's images, in GiB (df -BG and du count binary units): a
       # restored image is about 26.4 GiB (the 16 GiB data and 10 GiB system disk images;
       # tarfile writes them out in full, not sparse), the tarball about 1.2 GiB, the
-      # virtual-dsm container image 0.5 GiB, and the venv 0.25 GiB (1 GiB allowed, with
-      # uv's Python).
+      # virtual-dsm container image 0.5 GiB, and the venv 0.25 GiB (1 GiB allowed).
       # - Cache hit: the tarball is already on disk, so what's left is the extracted
       #   image, the container image and the venv: about 28 GiB. Threshold 31.
       # - Cache miss: the bake writes into the storage folder, then the tarball, then the
@@ -162,11 +161,13 @@ jobs:
 
       # Only on a runner short of space, and only a GitHub-hosted one (a self-hosted
       # runner keeps its tools): the action, not a hand-written rm -rf (maintainer's
-      # call, #275). Android, .NET and Haskell freed 20.3 GiB on #180's vdsm run
+      # call, #275). Android, .NET and Haskell freed about 20 GiB on #180's vdsm run
       # (measured in #181), which gets a 12 GiB runner past the cache-hit threshold, the
       # usual case on a PR; a cache miss on one still fails the re-check below. Not the
       # apt purge of large packages (slow; dropped on #275), not Docker images (the image
-      # ships none) and not the tool cache (uv uses its Python).
+      # ships none) and not the preinstalled runtimes in the tool cache (Node, Go, Python,
+      # Ruby, the CodeQL bundle): the job doesn't use them, but what removing them frees
+      # isn't measured, and the three above are enough on a cache hit.
       - name: Free disk space (small runner only)
         if: steps.disk.outputs.short == 'true' && runner.environment == 'github-hosted'
         uses: jlumbroso/free-disk-space@ceedf095f4ec1a097402bc6bd80831f2e1a6fde6 # v2.0.0
@@ -177,7 +178,7 @@ jobs:
           large-packages: false
           docker-images: false
           swap-storage: false
-          tool-cache: false
+          preinstalled-runtimes: false
 
       - name: Check free disk space again
         if: steps.disk.outputs.short == 'true'
@@ -186,6 +187,7 @@ jobs:
           CLEANED: ${{ runner.environment == 'github-hosted' }}
         run: |
           set -euo pipefail
+          : "${NEED:?missing the need output of the first disk check}"
           free=""
           if df -h /; then free=$(df --output=avail -BG / | tail -1 | tr -dc 0-9) || free=""; fi
           if [ -z "$free" ]; then
@@ -194,7 +196,7 @@ jobs:
           fi
           if [ "$free" -lt "$NEED" ]; then
             if [ "$CLEANED" = "true" ]; then
-              echo "::error::only ${free} GiB free after removing preinstalled runtimes; this job needs ${NEED} GiB here. The runner is too small: re-run the job, which usually gets one with about 85 GiB free"
+              echo "::error::only ${free} GiB free after removing the Android SDK, .NET and Haskell; this job needs ${NEED} GiB here. The runner is too small: re-run the job, which usually gets one with about 85 GiB free"
             else
               echo "::error::only ${free} GiB free; this job needs ${NEED} GiB here. Free space on the runner, then re-run"
             fi
