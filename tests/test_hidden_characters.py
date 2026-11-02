@@ -42,15 +42,11 @@ def _in_ci() -> bool:
 
 # The variables that point git at another repository, tree or index; each has a test below.
 _GIT_LOCATION = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR")
-# Also dropped: where git writes objects (a hook's GIT_OBJECT_DIRECTORY would send the
-# tests' own `git add` to another repository) and the namespace. GIT_CONFIG_* stays: it's
-# how a container or CI supplies safe.directory for a mounted checkout.
-_GIT_DROPPED = (
-    *_GIT_LOCATION,
-    "GIT_OBJECT_DIRECTORY",
-    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-    "GIT_NAMESPACE",
-)
+# Also dropped: where git writes objects and refs (a hook's GIT_OBJECT_DIRECTORY or
+# GIT_REFERENCE_BACKEND would send the tests' own `git init` and `git add` to another
+# repository). GIT_CONFIG_* stays: it's how a container or CI supplies safe.directory for
+# a mounted checkout, and it can't move the work tree.
+_GIT_DROPPED = (*_GIT_LOCATION, "GIT_OBJECT_DIRECTORY", "GIT_REFERENCE_BACKEND")
 
 
 def _git(*args: str, cwd: Path | None = None) -> str:
@@ -341,7 +337,15 @@ def test_git_keeps_its_config_variables(monkeypatch: pytest.MonkeyPatch) -> None
         "GIT_CONFIG_GLOBAL": os.devnull,
         "GIT_CEILING_DIRECTORIES": os.devnull,
     }
-    for k, v in {**kept, **dict.fromkeys(_GIT_DROPPED, "x")}.items():
+    dropped = (
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_COMMON_DIR",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_REFERENCE_BACKEND",
+    )
+    for k, v in {**kept, **dict.fromkeys(dropped, "x")}.items():
         monkeypatch.setenv(k, v)
     seen: dict[str, str] = {}
 
@@ -352,7 +356,7 @@ def test_git_keeps_its_config_variables(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setattr(subprocess, "run", spy)
     _git("status")
     assert {k: seen.get(k) for k in kept} == kept
-    assert not set(_GIT_DROPPED) & set(seen)
+    assert not set(dropped) & set(seen)
 
 
 def test_a_tracked_path_that_became_a_folder_is_passed_over_on_windows(
@@ -374,6 +378,34 @@ def test_a_tracked_path_that_became_a_folder_is_passed_over_on_windows(
 
     monkeypatch.setattr(Path, "read_bytes", windows)
     test_no_tracked_file_holds_a_hidden_character()
+
+
+def test_an_unreadable_tracked_file_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Only a folder is passed over: a file the guard can't read must not go unchecked.
+    (tmp_path / "pyproject.toml").write_text("")
+    monkeypatch.setattr(f"{__name__}._tracked_files", lambda: [tmp_path / "pyproject.toml"])
+    monkeypatch.setattr(f"{__name__}.ROOT", tmp_path)
+
+    def denied(self: Path) -> bytes:
+        raise PermissionError(13, "Permission denied", str(self))
+
+    monkeypatch.setattr(Path, "read_bytes", denied)
+    with pytest.raises(PermissionError):
+        test_no_tracked_file_holds_a_hidden_character()
+
+
+def test_a_stray_reference_backend_gets_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The tests' own `git init` mustn't rewrite another repository's HEAD (git 2.45+ reads
+    # GIT_REFERENCE_BACKEND; older git ignores it).
+    _require_git()
+    victim = tmp_path / "victim"
+    _git("init", "-q", str(victim), cwd=tmp_path)
+    head = (victim / ".git" / "HEAD").read_text()
+    monkeypatch.setenv("GIT_REFERENCE_BACKEND", f"files://{victim / '.git'}")
+    _git("init", "-q", "-b", "other", str(tmp_path / "repo"), cwd=tmp_path)
+    assert (victim / ".git" / "HEAD").read_text() == head
 
 
 def test_a_stray_object_directory_gets_nothing(
