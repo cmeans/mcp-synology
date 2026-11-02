@@ -191,7 +191,7 @@ Photos has no trash of its own. Deletes go to the **DSM recycle bin of the share
 
 ### Identifiers and names
 
-Tools take the IDs list calls return, and also **names where they're unique**: tags (always by name), albums and people (by name when exactly one matches; otherwise `invalid_parameter` listing the matches with IDs). Folders take an ID or a path inside the space (`/Trips/2024`, resolved with `Folder.get` by `name`, verified). Places take IDs from `list_photo_collections(type="place")`.
+Tools take the IDs list calls return, and also **names where they're unique**: tags (always by name), albums and people (by name when exactly one matches; otherwise `invalid_parameter` listing the matches with IDs). Folders take an ID or a path inside the space (`/Trips/2024`, resolved with `Folder.get` by `name`, verified). Every folder argument goes through `Photos.folder` (`FOLDER_PARAMS` lists them), which takes a path exactly by File Station's part rules (`folder_path`, #510): only whitespace before a leading `/`, and a trailing `/`, are dropped; a NUL (DSM cuts the path there: `/x/foo<NUL>y` resolved to `/x/foo`), an empty part (`//`) and a `.` or `..` part (DSM answers 642 for those) are refused. Photos reaches a folder whose name starts with whitespace exactly (` foo` beside `foo`; it refuses to create a name ending in whitespace, 606), so the old `strip()` looked up another folder (vdsm, DSM 7.1, 7.2.2, 7.3.2 and 7.4.1, personal space and Shared Space). A backslash is an ordinary character. A trailing `/` answers 642 on DSM 7.1 and resolves on 7.2.2 and later, so it's dropped. Places take IDs from `list_photo_collections(type="place")`.
 
 ### Formatting
 
@@ -590,7 +590,7 @@ Album 9 "Trip 2024" is shared.
 | `action` | `str` | **Yes** | — | `create`, `rename` or `set_cover`. |
 | `folder` | `str` | No | — | Folder ID or path (`rename`, `set_cover`). |
 | `parent` | `str` | No | `"/"` | `create` only: parent folder ID or path. |
-| `name` | `str` | No | — | New leaf name (`create`, `rename`). |
+| `name` | `str` | No | — | New leaf name (`create`, `rename`). File Station's new-name rules apply (`refuse_bad_name`, #510): no `/`, NUL, `.` or `..`, control character (a tab inside is fine), direction-changing or line separator, invisible character where Unicode doesn't use one, or whitespace at either end. DSM keeps a name with ESC, a zero-width space, U+202E or a leading space as given, and refuses a trailing space, `#recycle`, `.`, `..` and `/` itself (606; vdsm, all four versions). |
 | `item_id` | `int` | No | — | `set_cover`. |
 | `space` | `str` | No | `"personal"` | `personal` or `shared`. |
 
