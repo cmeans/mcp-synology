@@ -142,6 +142,47 @@ class TestCreateFolder:
         assert "Created 2 folder(s)" in result
 
 
+class TestNewNamesWithPadding:
+    """#488 (C): a name the tool would create with whitespace at its start or end is
+    refused. DSM keeps it exactly, so `report.pdf ` would be a different file, which a model
+    almost never means. Nothing is sent to DSM (respx refuses an unmatched request)."""
+
+    @respx.mock
+    @pytest.mark.parametrize("name", ["Severance ", " Severance", "Severance\u2003", "Sev\u00a0"])
+    async def test_rename_refuses_a_padded_new_name(
+        self, mock_client: DsmClient, name: str
+    ) -> None:
+        with pytest.raises(ToolError) as exc:
+            await rename(mock_client, path="/video/a.mkv", new_name=name)
+        error = json.loads(str(exc.value))["error"]
+        assert (error["code"], error["param"], error["value"]) == (
+            "invalid_parameter",
+            "new_name",
+            name,
+        )
+        assert error["message"] == (
+            "Rename failed: new_name should be just a file name, but it starts or ends with "
+            "whitespace."
+        )
+
+    @respx.mock
+    async def test_create_folder_takes_a_padded_parent_as_given(
+        self, mock_client: DsmClient
+    ) -> None:
+        """Only the new folder's own name: a parent may exist already, named exactly so."""
+        sent: list[dict[str, str]] = []
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            sent.append(dict(request.url.params))
+            folder = {"path": "/video/old /new", "name": "new", "isdir": True}
+            return httpx.Response(200, json={"success": True, "data": {"folders": [folder]}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        await create_folder(mock_client, paths=["/video/old /new"])
+        assert sent[0]["folder_path"] == "/video/old "
+        assert sent[0]["name"] == '"new"'
+
+
 class TestRename:
     @respx.mock
     async def test_rename_success(self, mock_client: DsmClient) -> None:
@@ -212,15 +253,6 @@ class TestRename:
         with pytest.raises(ToolError) as exc:
             await rename(mock_client, path="/video/a.txt", new_name=name)
         assert json.loads(str(exc.value))["error"]["suggestion"] == suggestion
-
-    @pytest.mark.parametrize("name", [".\t", "\t..", "..\n"])
-    def test_a_name_with_other_whitespace_passes(self, name: str) -> None:
-        """Only spaces pad a dot name: a tab or a newline beside it makes a different, valid
-        Linux name (QA round 2 on #470), in a name and in a path part."""
-        from mcp_synology.modules.filestation.helpers import refuse_bad_name, refuse_dot_parts
-
-        refuse_bad_name("Rename", name, "new_name", "x")  # doesn't raise
-        refuse_dot_parts(f"/video/{name}/x", "path")  # doesn't raise
 
     @respx.mock
     async def test_rename_error(self, mock_client: DsmClient) -> None:
@@ -310,7 +342,7 @@ class TestRename:
         ("path", "new_name"),
         [
             ("/video/a", "a"),  # its own name: the "existing" new path is the source
-            ("/video", "music"),  # a share root: no parent folder to look in
+            # A share root never reaches DSM since #479: TestShareRootSourcesRefused
             # `.` and `..` no longer reach DSM: test_rename_rejects_dot_names
         ],
     )
@@ -612,15 +644,30 @@ class TestDeleteFiles:
         assert "cannot be recovered" in result
 
     @respx.mock
-    async def test_delete_the_recycle_folder_itself_is_permanent(
+    async def test_delete_from_a_users_home_bin_through_homes_is_permanent(
         self, mock_client: DsmClient
     ) -> None:
+        """A user's home bin is /homes/<user>/#recycle to an administrator: the same folder
+        the user sees as /home/#recycle (pre-QA on #479; vdsm, all four versions)."""
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_async_task_side_effect())
         result = await delete_files(
-            mock_client, paths=["/video/#recycle"], recycle_bin_status={"video": True}
+            mock_client,
+            paths=["/homes/alice/keep.txt", "/homes/alice/#recycle/x"],
+            recycle_bin_status={"homes": True},
         )
-        assert result.startswith("[+] Permanently deleted 1 item(s):")
-        assert "can be recovered" not in result
+        assert result.startswith("[+] Deleted 2 item(s):")
+        recoverable, _, permanent = result.partition("⚠")
+        assert "except the items deleted from the recycle bin itself" in recoverable
+        assert "Deleted from the recycle bin on /homes/alice" in permanent
+        assert "/homes/alice/#recycle/x" in permanent
+        assert "/homes/alice/keep.txt" not in permanent
+        only_bin = await delete_files(
+            mock_client, paths=["/homes/alice/#recycle/x"], recycle_bin_status={"homes": True}
+        )
+        assert only_bin.startswith("[+] Permanently deleted 1 item(s):"), only_bin
+        assert "can be recovered" not in only_bin
+
+    # The bin folder itself is refused since #479: TestShareRootSourcesRefused.
 
     @respx.mock
     async def test_delete_mixed_bin_and_regular_paths(self, mock_client: DsmClient) -> None:
@@ -2149,6 +2196,35 @@ class TestStallHandoff:
         assert records.get(Handle("delete", "FileStation_BIG")) is not None
 
     @respx.mock
+    @pytest.mark.parametrize(
+        ("path", "kept"),
+        [
+            # Inside a user's home bin through /homes: permanent, so no share status kept
+            # (pre-QA on #479).
+            ("/homes/alice/#recycle/big", {}),
+            ("/s/#recycle/big", {}),
+            ("/homes/alice/big", {"homes": True}),
+        ],
+    )
+    async def test_handoff_keeps_bin_status_only_outside_a_bin(
+        self, mock_client: DsmClient, path: str, kept: dict[str, bool]
+    ) -> None:
+        calls: list[dict[str, str]] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._dsm(calls, httpx.ReadTimeout(""))
+        )
+        records = TaskRecords()
+        await delete_files(
+            mock_client,
+            paths=[path],
+            recycle_bin_status={"homes": True, "s": True},
+            records=records,
+        )
+        record = records.get(Handle("delete", "FileStation_BIG"))
+        assert record is not None
+        assert record.recycle == kept
+
+    @respx.mock
     async def test_dsm_error_code_still_fails_and_stops(self, mock_client: DsmClient) -> None:
         calls: list[dict[str, str]] = []
 
@@ -2342,7 +2418,7 @@ class TestDeleteHandoff:
         assert result == (
             "[+] Deleted 1 item(s):\n  /video/Downloads/old.mkv\n\n"
             "Recycle bin is enabled on /video \u2014 files can be recovered with "
-            "list_recycle_bin and restore_from_recycle_bin."
+            "list_recycle_bin and restore_from_recycle_bin. Empty folders aren't kept in the bin."
         )
 
     @respx.mock
@@ -3050,82 +3126,156 @@ class TestCountsSeparateThousands:
         assert result.startswith("[+] Deleted 1,200 item(s):")
 
 
-class TestShareRootRefused:
-    """#451: delete_files never sends a whole shared folder (or a spelling of one) to DSM.
-    On DSM 7.2.2 to 7.4.1 (tested), Delete on /<share> deletes the shared folder itself."""
+class TestShareRootSourcesRefused:
+    """#479: a whole shared folder as what a move moves or a rename renames, a share's whole
+    recycle bin as a delete path or a restore item, never reach DSM. Probed on vdsm (all four
+    versions) and seska: a moved shared folder leaves DSM's share list, a renamed one vanishes
+    for an administrator, and a deleted #recycle takes the whole bin with it."""
 
-    @pytest.mark.parametrize("path", ["/video", "video/", " /video ", "/video//"])
-    def test_a_share_root_is_refused(self, path: str) -> None:
-        from mcp_synology.modules.filestation.operations import refuse_share_roots
+    @respx.mock
+    # `//video` reaches here when DSM won't list shares, and Rename has no missing-path
+    # check: it was sent (pre-QA).
+    @respx.mock
+    async def test_move_of_an_item_in_the_bin_isnt_refused_here(
+        self, mock_client: DsmClient
+    ) -> None:
+        """Only the bin itself: `/video/#recycle/x` goes on to the missing-path check."""
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": True, "data": {"files": [{"path": "/video/#recycle/x", "code": 408}]}}
+        )
+        with pytest.raises(ToolError, match="not found"):
+            await move_files(mock_client, paths=["/video/#recycle/x"], dest_folder="/photo")
 
+    @respx.mock
+    async def test_copy_still_takes_a_share_root(self, mock_client: DsmClient) -> None:
+        """Copying a shared folder only copies its contents into a new folder (probe on
+        #479), so copy_files sends it."""
+        starts: list[str] = []
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            p = request.url.params
+            if p.get("method") == "start":
+                starts.append(p.get("path", ""))
+            return _async_task_side_effect()(request)  # type: ignore[operator, no-any-return]
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        result = await copy_files(mock_client, paths=["/video"], dest_folder="/photo")
+        assert starts == ["/video"]
+        assert result.startswith("[+] Copied")
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        "item",
+        ["", " ", "/", "#recycle", "#recycle/", "/#recycle", "/video/#recycle", "/Video/#recycle/"],
+    )
+    async def test_restore_refuses_an_item_naming_the_whole_bin(
+        self, mock_client: DsmClient, item: str
+    ) -> None:
         with pytest.raises(ToolError) as exc:
-            refuse_share_roots(["/video/ok", path])
+            await restore_from_recycle_bin(mock_client, share="video", paths=["a.mkv", item])
         error = json.loads(str(exc.value))["error"]
         assert (error["code"], error["param"], error["value"]) == (
             "invalid_parameter",
             "paths",
-            path,
+            item,
         )
-        assert "is a whole shared folder" in error["message"]
-        assert "list_files" in error["suggestion"] and "Control Panel" in error["suggestion"]
+        assert error["message"] == (
+            f"Restore refused: {item!r} names the whole recycle bin of /video, not an item in "
+            "it. Nothing was restored."
+        )
 
+    @respx.mock
     @pytest.mark.parametrize(
-        "path",
+        ("item", "checked"),
         [
-            "/video/.",
-            "/video/x/..",
-            "//video",
-            "/video/ .. /x",
-            "/video/ /x",
-            # A whitespace-only last part: normalizing alone would send /video/x, deleting
-            # the folder (QA round 2 on #480).
-            "/video/x/ ",
-            "/video/x/ /",
-            "/video/x/\u00a0",
-            "/video/x/\t/",
-            # A NUL: whether DSM cuts the path there (leaving /video/) is unprobed (pre-QA).
-            "/video/\x00",
-            "/video/x/\x00",
-            # A padded dot at the end: normalizing strips the padding, so it's a plain dot
-            # with #470's message; in the middle it gets the delete's own (pre-QA on #480).
-            "/video/x/..\t",
-            "/video/.\t/x",
-            # Padding before the dot isn't stripped: the delete's own (QA round 5 on #480).
-            "/video/x/\t..",
+            # Taken exactly (#488): a whitespace-only part names an item " ", never the
+            # folder above it or the bin itself (before, `Shows/ ` restored all of `Shows`).
+            ("#recycle/ /", "/video/#recycle/ "),
+            ("/ /", "/video/#recycle/ "),
+            ("Shows/ /", "/video/#recycle/Shows/ "),
+            ("Shows/ /Ep1.mkv", "/video/#recycle/Shows/ /Ep1.mkv"),
+            ("Shows/ ", "/video/#recycle/Shows/ "),
+            ("Shows/\t", "/video/#recycle/Shows/\t"),
+            ("Shows/Ep1.mkv ", "/video/#recycle/Shows/Ep1.mkv "),
+            ("/video/#recycle/Shows/ ", "/video/#recycle/Shows/ "),
+            # Padding before a leading slash isn't part of the item.
+            (" /Shows/Ep1.mkv", "/video/#recycle/Shows/Ep1.mkv"),
         ],
     )
-    def test_a_spelling_of_one_is_refused(self, path: str) -> None:
-        from mcp_synology.modules.filestation.operations import refuse_share_roots
+    async def test_restore_takes_items_exactly(
+        self, mock_client: DsmClient, item: str, checked: str
+    ) -> None:
+        looked_up: list[str] = []
 
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            p = request.url.params
+            if p.get("method") == "getinfo":
+                looked_up.append(p.get("path", ""))
+                files = [{"path": p.get("path", ""), "code": 408}]
+                return httpx.Response(200, json={"success": True, "data": {"files": files}})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
         with pytest.raises(ToolError) as exc:
-            refuse_share_roots([path])
-        error = json.loads(str(exc.value))["error"]
-        assert (error["code"], error["param"], error["value"]) == (
-            "invalid_parameter",
-            "paths",
-            path,
-        )
-        # A plain dot part gets #470's message, as in every other tool; the rest are the
-        # delete's own refusal.
-        from mcp_synology.modules.filestation.helpers import normalize_path
+            await restore_from_recycle_bin(mock_client, share="video", paths=[item])
+        assert looked_up == [checked]
+        message = json.loads(str(exc.value))["error"]["message"]
+        # A padded path is shown quoted, so the stray whitespace is visible (#489); the
+        # quoting rule itself is tested in test_helpers (TestShown).
+        from mcp_synology.modules.filestation.helpers import shown
 
-        # As refuse_dot_parts reads it: after normalizing (QA round 4).
-        plain_dot = any(p.strip(" ") in (".", "..") for p in normalize_path(path).split("/"))
-        expected = (
-            "'.' and '..' parts aren't allowed"
-            if plain_dot
-            else "'.', '..', empty and whitespace-only parts, and NUL characters, aren't allowed"
-        )
-        assert expected in error["message"]
+        assert f"not found: {shown(checked)} (DSM error 408)" in message
 
+    @respx.mock
     @pytest.mark.parametrize(
-        "path",
-        ["/video/a", "/video/.hidden", "/video/a..b", "/video/a/", "/video/x//", " /video/x "],
+        ("item", "checked"),
+        [
+            # A folder beside the bin is not in it: before #479 it was moved as is.
+            ("#recycled/x", "/video/#recycle/#recycled/x"),
+            ("/video/#recycled/x", "/video/#recycle/video/#recycled/x"),
+            ("video", "/video/#recycle/video"),
+            # A leading slash on a bin-relative item: no `#recycle//Shows`.
+            ("/Shows/Ep1.mkv", "/video/#recycle/Shows/Ep1.mkv"),
+            # ... and on one that names the bin itself: not `#recycle/#recycle/…` (pre-QA).
+            ("/#recycle/Shows/Ep1.mkv", "/video/#recycle/Shows/Ep1.mkv"),
+        ],
     )
-    def test_ordinary_paths_pass(self, path: str) -> None:
-        from mcp_synology.modules.filestation.operations import refuse_share_roots
+    async def test_restore_lookalikes_stay_in_the_bin(
+        self, mock_client: DsmClient, item: str, checked: str
+    ) -> None:
+        looked_up: list[str] = []
 
-        refuse_share_roots([path])  # doesn't raise
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            p = request.url.params
+            if p.get("method") == "getinfo":
+                looked_up.append(p.get("path", ""))
+                files = [{"path": p.get("path", ""), "code": 408}]
+                return httpx.Response(200, json={"success": True, "data": {"files": files}})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        with pytest.raises(ToolError, match="not found"):
+            await restore_from_recycle_bin(mock_client, share="video", paths=[item])
+        assert looked_up == [checked]
+
+    @respx.mock
+    async def test_restore_strips_only_the_leading_bin_prefix(self, mock_client: DsmClient) -> None:
+        """An item whose own path holds `/video/#recycle` again goes back where it came from,
+        /video/a/video/#recycle, not /video/a/video (#479)."""
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_async_task_side_effect())
+        sent: list[dict[str, str]] = []
+        route = respx.routes[0]
+        route.side_effect = lambda request: (
+            sent.append(dict(request.url.params)),
+            _async_task_side_effect()(request),  # type: ignore[operator]
+        )[1]
+        await restore_from_recycle_bin(
+            mock_client, share="video", paths=["a/video/#recycle/b.txt"], dest_folder=None
+        )
+        starts = [p for p in sent if p.get("method") == "start"]
+        assert starts, sent
+        assert starts[0]["path"] == "/video/#recycle/a/video/#recycle/b.txt"
+        assert starts[0]["dest_folder_path"] == "/video/a/video/#recycle"
 
 
 _RETRY_NOTE = (
@@ -3220,11 +3370,6 @@ class TestDeleteFailurePartway:
             )
         message = json.loads(str(exc.value))["error"]["message"]
         assert "Already deleted before this failure: /video/a." in message
-
-    async def test_delete_files_itself_refuses_a_share_root(self, mock_client: DsmClient) -> None:
-        """Not only the tool: a caller of delete_files can't send a share root either."""
-        with pytest.raises(ToolError, match="is a whole shared folder"):
-            await delete_files(mock_client, paths=["/video"])
 
     @respx.mock
     async def test_a_dsm_error_partway(self, mock_client: DsmClient) -> None:

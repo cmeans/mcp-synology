@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 from typing import TYPE_CHECKING, Any
 
@@ -630,6 +631,87 @@ class TestListFiles:
         assert body["error"]["code"] == "not_found"
 
     @respx.mock
+    @pytest.mark.parametrize(
+        ("path", "named"),
+        [
+            ("/nonexistent", "/nonexistent"),
+            ("/video/Movies ", "'/video/Movies '"),
+            ("video/x", "/video/x"),
+        ],
+    )
+    async def test_a_missing_folder_is_named(
+        self, mock_client: DsmClient, path: str, named: str
+    ) -> None:
+        """Paths are taken exactly (#488): a padded path that doesn't exist shows its padding,
+        where DSM's 408 names no path (pre-QA on #515)."""
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 408}}
+        )
+        with pytest.raises(ToolError) as exc_info:
+            await list_files(mock_client, path=path)
+        error = json.loads(str(exc_info.value))["error"]
+        assert (error["code"], error["param"], error["value"]) == ("not_found", "path", path)
+        assert error["message"] == f"List files failed: {named} doesn't exist on the NAS."
+        assert error["suggestion"].startswith("Check the paths with list_files")
+
+    @respx.mock
+    @pytest.mark.parametrize("getinfo", ["file", "folder", "missing", "502", "connect"])
+    @pytest.mark.parametrize("path", ["/video/a.jpg", "video/a.jpg", "/video/a.jpg "])
+    async def test_a_file_is_not_called_missing(
+        self,
+        mock_client: DsmClient,
+        getinfo: str,
+        path: str,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """DSM answers List's 408 for a file too (seska DSM 7.1.1): getinfo tells a file
+        from a missing path. Only ``isdir`` false is a file; a failed getinfo leaves the
+        not-found reply (pre-QA on #515). A folder getinfo has just seen isn't called
+        missing (QA round 5 on #515)."""
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            if request.url.params["method"] != "getinfo":
+                return httpx.Response(200, json={"success": False, "error": {"code": 408}})
+            if getinfo == "502":
+                return httpx.Response(502)
+            if getinfo == "connect":
+                raise httpx.ConnectError("refused", request=request)
+            entry = (
+                {"code": 408}
+                if getinfo == "missing"
+                else {"isdir": getinfo == "folder", "name": "a.jpg"}
+            )
+            return httpx.Response(200, json={"success": True, "data": {"files": [entry]}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        caplog.set_level(logging.DEBUG, logger="mcp_synology.modules.filestation.listing")
+        with pytest.raises(ToolError) as exc_info:
+            await list_files(mock_client, path=path)
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["value"] == path
+        # A failed check is in the debug log, so "doesn't exist" can be told from "couldn't
+        # check" (pre-QA on #515).
+        failed_check = "Couldn't check whether /video/a.jpg"
+        assert (failed_check in caplog.text) == (getinfo in ("502", "connect"))
+        named = "'/video/a.jpg '" if path.endswith(" ") else "/video/a.jpg"
+        if getinfo == "file":
+            assert error["code"] == "invalid_parameter"
+            assert error["message"] == f"List files failed: {named} is a file, not a folder."
+            assert "get_file_info" in error["suggestion"]
+            assert error["retryable"] is False
+        elif getinfo == "folder":
+            assert error["code"] == "filestation_error"
+            assert error["message"] == (
+                f"List files failed: DSM couldn't list {named} (DSM error 408), though it's a "
+                "folder that exists."
+            )
+            assert error["retryable"] is True
+            assert error["suggestion"].startswith("Retry list_files")
+        else:
+            assert error["code"] == "not_found"
+            assert error["message"] == f"List files failed: {named} doesn't exist on the NAS."
+
+    @respx.mock
     async def test_list_files_407_is_permission_denied(self, mock_client: DsmClient) -> None:
         """rc5 live test: list_files /home got DSM 407, reported as "Unknown error (code 407)"."""
         respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
@@ -754,6 +836,29 @@ class TestListRecycleBin:
         result = await list_recycle_bin(mock_client, share="writable")
         assert result.startswith("/writable has no recycle bin folder (#recycle)")
         assert "cannot be recovered" not in result
+
+    @respx.mock
+    async def test_a_file_named_recycle_is_no_bin(self, mock_client: DsmClient) -> None:
+        """A file named #recycle (planted over SMB) gets List's 408 too: still "no bin
+        folder", with no getinfo to call it a file (pre-QA on #515)."""
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            if request.url.params["method"] == "getinfo":
+                entry = {"isdir": False, "name": "#recycle"}
+                return httpx.Response(200, json={"success": True, "data": {"files": [entry]}})
+            return _no_bin(request)
+
+        route = respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        result = await list_recycle_bin(
+            mock_client, share="writable", recycle_bin_status={"writable": True}
+        )
+        assert result.startswith("/writable has no recycle bin folder (#recycle)")
+        checked = [
+            c.request.url.params.get("path", "")
+            for c in route.calls
+            if c.request.url.params["method"] == "getinfo"
+        ]
+        assert not any("#recycle" in path for path in checked), checked
 
     @pytest.mark.parametrize("cached", [True, False])
     @respx.mock

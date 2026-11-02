@@ -31,6 +31,7 @@ dependencies = [
     "keyring>=25.0",
     "pydantic>=2.0",
     "click>=8.0",
+    "regex>=2026.9.29",
 ]
 
 [project.optional-dependencies]
@@ -42,6 +43,7 @@ dev = [
     "ruff>=0.5",
     "mypy>=1.10",
     "types-PyYAML>=6.0",
+    "types-regex>=2026.9.29",
     "respx>=0.22",
 ]
 vdsm = [

@@ -26,10 +26,12 @@ from mcp_synology.core.formatting import (
     synology_error_response,
 )
 from mcp_synology.core.local_paths import refuse_outside_roots
-from mcp_synology.modules.filestation.helpers import normalize_path, refuse_bad_name
+from mcp_synology.modules.filestation.helpers import normalize_path, shown
+from mcp_synology.modules.filestation.paths import refuse_bad_name
 
 if TYPE_CHECKING:
     from mcp_synology.core.client import DsmClient, ProgressCallback
+    from mcp_synology.modules.filestation.paths import ResolvedPath
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +87,7 @@ async def upload_file(
     client: DsmClient,
     *,
     local_path: str,
-    dest_folder: str,
+    dest_folder: ResolvedPath,
     filename: str | None = None,
     overwrite: bool = False,
     create_parents: bool = True,
@@ -115,7 +117,13 @@ async def upload_file(
         )
 
     if filename:
-        refuse_bad_name("Upload", filename, "filename", "Pass a plain file name, e.g. report.pdf.")
+        refuse_bad_name(
+            "Upload",
+            filename,
+            "filename",
+            "Pass a plain file name, e.g. report.pdf.",
+            parent=dest_folder,
+        )
     else:
         # The local file's own name too: ` .. ` is a valid local name (pre-QA on #470). It
         # isn't `filename`, which the caller didn't pass (QA round 3).
@@ -126,6 +134,8 @@ async def upload_file(
             "Pass filename with a plain name for the file on the NAS.",
             label=f"the local file's name ({local.name!r})",
             value=local_path,
+            parent=dest_folder,
+            keep_suggestion=True,
         )
     file_size = local.stat().st_size
     dest = normalize_path(dest_folder)
@@ -138,7 +148,7 @@ async def upload_file(
     def already_exists() -> NoReturn:
         error_response(
             ErrorCode.ALREADY_EXISTS,
-            f"Upload failed: File '{effective_name}' already exists in {dest}.",
+            f"Upload failed: File '{effective_name}' already exists in {shown(dest)}.",
             retryable=False,
             # The conflict is the file name, passed or not, as download_file reports it (#189).
             param="filename",
@@ -193,7 +203,7 @@ async def upload_file(
 async def download_file(
     client: DsmClient,
     *,
-    path: str,
+    path: ResolvedPath,
     dest_folder: str,
     filename: str | None = None,
     overwrite: bool = False,
@@ -288,7 +298,7 @@ async def download_file(
     elif entry.get("code") == 407:  # no permission for it (vdsm 7.1 and 7.2.2)
         error_response(
             ErrorCode.PERMISSION_DENIED,
-            f"Download failed: no permission to read {nas_path} on the NAS.",
+            f"Download failed: no permission to read {shown(nas_path)} on the NAS.",
             retryable=False,
             param="path",
             value=nas_path,
@@ -303,7 +313,7 @@ async def download_file(
     if exists is False:
         error_response(
             ErrorCode.NOT_FOUND,
-            f"Download failed: {nas_path} doesn't exist on the NAS.",
+            f"Download failed: {shown(nas_path)} doesn't exist on the NAS.",
             retryable=False,
             param="path",
             value=nas_path,
@@ -400,9 +410,9 @@ async def download_file(
             # or proxy error, not DSM's answer for a missing file (#324). Once the NAS
             # answers again, a missing file is reported as not found.
             where = (
-                f"for {nas_path}, which exists."
+                f"for {shown(nas_path)}, which exists."
                 if exists
-                else f"and the check of {nas_path} before it got no DSM answer either."
+                else f"and the check of {shown(nas_path)} before it got no DSM answer either."
             )
             error_response(
                 ErrorCode.UNAVAILABLE,

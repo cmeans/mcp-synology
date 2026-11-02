@@ -24,11 +24,13 @@ from mcp_synology.modules.filestation.helpers import (
     normalize_path,
     parse_human_size,
     parse_mtime,
+    shown,
     task_request,
 )
 
 if TYPE_CHECKING:
     from mcp_synology.core.client import DsmClient
+    from mcp_synology.modules.filestation.paths import ResolvedPath
 
 
 async def _cleanup_search_task(
@@ -47,7 +49,7 @@ async def _cleanup_search_task(
 async def search_files(
     client: DsmClient,
     *,
-    folder_path: str,
+    folder_path: ResolvedPath,
     pattern: str | None = None,
     extension: str | None = None,
     filetype: str = "all",
@@ -175,7 +177,7 @@ async def search_files(
     if lost_task:
         error_response(
             ErrorCode.UNAVAILABLE,
-            f"Search files failed: DSM lost the search task for {normalized} "
+            f"Search files failed: DSM lost the search task for {shown(normalized)} "
             "and returned no results, so this is not a 0-result answer.",
             retryable=True,
             suggestion="Retry the search, or browse the likely folder with list_files.",

@@ -187,12 +187,14 @@ Common causes:
 
 - Typo in the share name. Case doesn't matter to the File Station tools: they send a share name as `list_shares` lists it (`/Home` goes to DSM as `/home`). Only if DSM won't list shares does the name go as given, and then the user home service takes only `/home` in lowercase.
 - Share name omitted: paths must start with a real share, e.g. `/volume1` is wrong, `/photos` is right.
+- A stray space or other whitespace in the path: paths are taken exactly, so `/video/Movies ` names an item called `Movies ` (#488). The message quotes such a path (`'/video/Movies '`), so the whitespace shows.
 - The user lacks list permission on a parent directory, so DSM reports "not
   found" rather than "denied" — DSM does this deliberately to avoid leaking
   directory existence.
 - For local-side errors: the local file (upload) or destination folder
   (download) does not exist or is given as a relative path that resolves
   somewhere unexpected.
+- `list_files` on a path DSM answers 408 for: "… doesn't exist on the NAS." A file gets `invalid_parameter` instead (below), and a folder that `getinfo` sees gets `filestation_error` (below).
 - For Download Station tasks: the task ID doesn't exist, or the task belongs to
   another user. DSM answers both the same way, and an account that isn't a
   Download Station manager sees only its own tasks.
@@ -246,8 +248,9 @@ operation.**
 Common causes:
 
 - A filename contains a forbidden character: `/ \ : * ? " < > |`.
+- `list_files` was given a file, not a folder: "… is a file, not a folder". Use `get_file_info` for a file, or list its parent folder.
 - The `new_name` argument to `rename`, or `upload_file`'s `filename`, contains `/`
-  or a NUL, is blank, or is `.` or `..` (padded with spaces too); the message says which
+  or a NUL, is blank, or is `.` or `..` (padded with any whitespace too); the message says which
   (path separators are not allowed in a name — use copy/move to relocate a file).
   With no `filename` (or an empty one), the local file's own name is checked the same way
   and reported as `local_path`.
@@ -260,8 +263,39 @@ Common causes:
 - `delete_files` on a whole shared folder (`/video`): a shared folder isn't deleted or
   emptied this way (#451; emptying one with the user's confirmation is #484). Delete a
   shared folder's items by path, or the shared folder itself in DSM's Control Panel.
-- `delete_files` on a path with a `.`, `..`, empty or whitespace-only part, or a NUL:
-  write the path out in full.
+- Any File Station path with a NUL (#510: DSM cuts a path at a NUL, so the request would
+  act on another item) or an empty part (`/video//x`): write the path out in full.
+- A name a tool would create (`rename`'s `new_name`, `upload_file`'s `filename` or the
+  local file's name, `create_folder`'s new folder) starts or ends with whitespace (#488:
+  DSM keeps it exactly, making `report.pdf ` a different file), has a control character
+  other than a tab, a direction-changing character or a line or paragraph separator, no visible
+  character, an invisible character where Unicode doesn't use one (a zero-width space, a
+  soft hyphen or a BOM anywhere, `report.pdf` followed by a variation selector), a
+  combining mark at its start or the same one (or run of them) twice in a row, more than 4 variation
+  selectors that pick a character's variant (VS1–VS7 and the ideographic ones; emoji and
+  Mongolian ones don't count), is longer than 255 bytes in UTF-8, has a character that isn't valid Unicode text (a
+  local file name that isn't UTF-8), or is `#recycle` directly in a shared folder or a user's home folder
+  (#510); or a copy, move or restore would put a folder named `#recycle` there; or an
+  upload or `create_folder` would create a missing parent folder under such a name. Give
+  a plain name. Paths themselves are taken exactly, so an existing item named with such
+  whitespace is still reached by its exact path.
+- `create_folder` given a shared folder itself (`/video`) (#510): give the full path of a
+  folder inside a shared folder.
+- `move_files` with a whole shared folder as a source, or `rename` of one (#479): DSM
+  takes it out of its shared folders. Move its items by path, copy it with `copy_files`,
+  or move or rename it in DSM's Control Panel.
+- `delete_files`, `move_files` or `rename` on a whole recycle bin: a share's
+  `/<share>/#recycle`, or a user's home bin (`/home/#recycle`, or `/homes/<user>/#recycle`
+  as an administrator sees it) (#479). Work with the bin's items by their own paths, or
+  restore them with `restore_from_recycle_bin`.
+- `delete_files`, `move_files` or `rename` on a user's whole home folder
+  (`/homes/<user>`) (#510): doing that through File Station breaks the user's home.
+  Work with its items by path, or manage the user's home in DSM's Control Panel.
+- A `restore_from_recycle_bin` item that names the whole bin (`""`, `"/"`, `#recycle`)
+  (#479): give each item as `list_recycle_bin` shows it.
+- A restore that would put an item back inside a recycle bin while saying "Restored"
+  (#515): a `dest_folder` inside a bin, or, with none, an item whose original folder is
+  itself in a bin (`#recycle/#recycle/x`). Give a `dest_folder` outside the bin.
 - `upload_file` or `download_file` was called without `dest_folder`, and no
   default is configured (`default_upload_dir` or `default_download_dir` in the
   `filestation` module settings). The error's `param` is `dest_folder`.
@@ -606,7 +640,11 @@ Fix:
    DSM (with the default `filetype=all`), whatever the folder's permissions.
    It now sends `pattern="*"` in that case and lists everything (#306). If it
    still appears, check that the account can read the folder.
-6. If you see a specific code repeatedly, [open an issue](https://github.com/cmeans/mcp-synology/issues/new)
+6. **"DSM couldn't list … (DSM error 408), though it's a folder that exists"
+   from `list_files`:** DSM refused the listing as missing, but a check right
+   after found the folder (it was probably created in between). Retry; if it
+   fails the same way, check the folder in DSM's File Station.
+7. If you see a specific code repeatedly, [open an issue](https://github.com/cmeans/mcp-synology/issues/new)
    with the code and operation so we can add it to `core/errors.py`.
 
 ## dsm_error
