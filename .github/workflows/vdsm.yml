@@ -139,6 +139,17 @@ jobs:
       # Most runners have a 145 GiB root with about 85 GiB free, and skip the cleanup
       # below (it took 84-109 s when every job ran it, #132). Some come with a 72 GiB
       # disk and about 12 GiB free (an AWS-hosted ubuntu-24.04 runner on #477, #525).
+      # TEST ONLY (#527's throwaway run, never merged): fill the disk until 12 GiB is
+      # free, like the AWS runner on #477, to exercise the cleanup.
+      - name: "TEST ONLY: fill the disk to 12 GiB free"
+        if: steps.scope.outputs.code == 'true'
+        run: |
+          set -euo pipefail
+          df -h /
+          free=$(df --output=avail -BG / | tail -1 | tr -dc 0-9)
+          sudo fallocate -l "$((free - 12))G" /var/tmp/disk-fill
+          df -h /
+
       - name: Check free disk space
         id: disk
         if: steps.scope.outputs.code == 'true'
