@@ -548,12 +548,15 @@ class TestSetupInteractiveValidationFailure:
             result = runner.invoke(
                 main,
                 ["setup"],
-                input="my_nas\nn\n\nread\nbad id\nMy-NAS\n\nadmin\npw\n",
+                input="my_nas\nn\n\nread\n   \nbad id\nMy-NAS\n\nadmin\npw\n",
             )
-        # The host is blamed once; the typed ID gets its own message (pre-QA r1).
+        # The host is blamed once; the typed ID gets its own message (pre-QA r1), without
+        # the file's "leave it out" advice, which can't apply here (pre-QA r3).
         assert result.output.count("This host gives no usable instance ID") == 1
+        assert "  That instance ID is empty.\n" in result.output
+        assert "leave instance_id out" not in result.output
         assert "That instance ID may hold only lowercase letters" in result.output
-        assert result.output.count("Instance ID (names this config") == 2
+        assert result.output.count("Instance ID (names this config") == 3
         assert stored == ["mcp-synology/my-nas"]
 
     @pytest.mark.parametrize(

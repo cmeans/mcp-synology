@@ -127,6 +127,34 @@ class TestDuplicateKeys:
         raw = parse_config_text("a: &a {x: 1}\nc: {<<: &b {<<: *a, x: 2}}\nd: *b\n")
         assert raw["d"] == {"x": 2}
 
+    def test_a_repeat_on_one_line_gives_the_columns(self, tmp_path: Path) -> None:
+        message = _yaml_message(
+            tmp_path, "schema_version: 1\nconnection: {host: nas, https: true, https: no}\n"
+        )
+        assert "`https` twice in one section (line 2, columns 25 and 38)" in message
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "a: &a [*a]\n",
+            "a: &a {b: *a}\n",
+            # Each level doubles the paths to the bottom: without the visited set, the
+            # walk would take 2**25 steps.
+            "l0: &l0 [x, y]\n"
+            + "".join(f"l{i}: &l{i} [*l{i - 1}, *l{i - 1}]\n" for i in range(1, 26)),
+        ],
+    )
+    def test_shared_and_recursive_nodes_are_checked_once(self, text: str) -> None:
+        """Pre-QA r3: the walk over the composed YAML visits each node once, so a
+        recursive anchor doesn't hang and an alias chain doesn't explode."""
+        assert parse_config_text(text) is not None
+
+    @pytest.mark.parametrize("text", ["x: &e\ny: {a: *e}\n", "x: {a: &z , b: *z}\n"])
+    def test_an_alias_to_an_empty_value_is_not_a_colon_less_key(self, text: str) -> None:
+        """Pre-QA r3: the alias's node was written earlier, so its marks aren't this
+        entry's."""
+        parse_config_text(text)
+
     def test_the_same_key_in_two_sections_is_fine(self) -> None:
         raw = parse_config_text("a: {x: 1}\nb: {x: 2}\n")
         assert raw == {"a": {"x": 1}, "b": {"x": 2}}
@@ -338,6 +366,41 @@ class TestHost:
         assert 'an IPv6 address in square brackets needs quotes, "[fd00::1]"' in message
         assert "fd00::1]'" not in message
 
+    @pytest.mark.parametrize(
+        "host", ["192.168.1", "10.1", "127.1", "0x7f.0.0.1", "2130706433", "1.2.3.4.5", "nas.0x1"]
+    )
+    def test_a_short_or_numeric_ipv4_address_is_refused(self, host: str) -> None:
+        """Pre-QA r3: the resolver expands `192.168.1` to 192.168.0.1, the router, so the
+        password went there. A host whose last part is a number must be a whole IPv4
+        address."""
+        from mcp_synology.core.config import host_problems
+
+        (problem,) = host_problems(host)
+        assert problem.startswith("isn't a valid host name or IP address (an IPv4 address")
+
+    @pytest.mark.parametrize("host", ["192.168.1.100", "192.168.1.100.", "nas1", "1nas.local"])
+    def test_a_whole_ipv4_address_or_a_name_with_digits_loads(self, host: str) -> None:
+        from mcp_synology.core.config import host_problems
+
+        assert host_problems(host) == []
+
+    def test_a_tilde_is_refused(self) -> None:
+        from mcp_synology.core.config import host_problems
+
+        assert host_problems("na~s") == ["has a character a host name can't have"]
+
+    @pytest.mark.parametrize(
+        ("kwargs", "form"),
+        [({}, '"[fd00::1]", in quotes'), ({"ipv6_form": "[fd00::1]"}, "brackets, [fd00::1]")],
+    )
+    def test_the_ipv6_advice_fits_its_source(self, kwargs: dict[str, str], form: str) -> None:
+        """Quotes only in the config file: typed into setup or an env var, they'd be part
+        of the host (pre-QA r3)."""
+        from mcp_synology.core.config import host_problems
+
+        assert form in host_problems("fd00::1", **kwargs)[0]
+        assert form.split(", ")[-1] in host_problems("[nas]", **kwargs)[0]
+
     def test_an_empty_host_gets_no_hiding_note(self) -> None:
         from mcp_synology.core.config import host_message, host_problems
 
@@ -360,6 +423,24 @@ class TestHost:
 
 class TestPort:
     """#504 item 1: `port: 70000` ended in a traceback."""
+
+    @pytest.mark.parametrize(
+        ("line", "where"),
+        [
+            ("connection: {host: nas, port: yes}\n", "connection.port:"),
+            ("connection: {host: nas, timeout: on}\n", "connection.timeout:"),
+        ],
+    )
+    def test_true_or_false_isnt_a_number(self, tmp_path: Path, line: str, where: str) -> None:
+        """Pre-QA r3: pydantic read `port: yes` as port 1 and `timeout: on` as 1 s."""
+        message = _validation_message(tmp_path, "schema_version: 1\n" + line + _MODULES)
+        assert f"{where} Value error, must be a whole number, not true or false" in message
+
+    def test_schema_version_true_isnt_1(self, tmp_path: Path) -> None:
+        message = _validation_message(
+            tmp_path, "schema_version: true\nconnection: {host: nas}\n" + _MODULES
+        )
+        assert "schema_version: Value error, must be a whole number" in message
 
     @pytest.mark.parametrize("port", [0, -1, 65536, 70000])
     def test_out_of_range(self, tmp_path: Path, port: int) -> None:

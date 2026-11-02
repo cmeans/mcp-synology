@@ -130,6 +130,7 @@ def _setup_interactive(verbose: bool) -> None:
             host,
             port_setting="type the port at the DSM port question",
             https_setting='answer yes to "Use HTTPS?"',
+            ipv6_form="[fd00::1]",
         )
         if not problems:
             break
@@ -171,7 +172,9 @@ def _setup_interactive(verbose: bool) -> None:
             ).lower()
             if not (problem := instance_id_problem(instance_id)):
                 break
-            click.echo(f"  That instance ID {problem}.")
+            # The file's "leave it out to derive it" advice doesn't apply here: this host
+            # gives none (pre-QA r3).
+            click.echo(f"  That instance ID {'is empty' if not instance_id.strip() else problem}.")
 
     # Prompt for alias
     alias_input = click.prompt("Alias (friendly name, optional)", default="", show_default=False)

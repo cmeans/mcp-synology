@@ -50,22 +50,29 @@ ENV_VAR_MAP: dict[str, str] = {
 
 # Characters a host name or IP address never has, beyond the ones `host_problems`
 # explains on their own (`:`, `/`, `@`, brackets, whitespace).
-_HOST_OTHER_BAD = frozenset("\\?#%\"'<>^`{|},;=&+$!*()")
+_HOST_OTHER_BAD = frozenset("\\?#%\"'<>^`{|},;=&+$!*()~")
 
 
 _BRACKETED = re.compile(r"\[([^\]]*)\](?::(.*))?")
-# Quoted in YAML: unquoted, `host: [fd00::1]` is a list (pre-QA r2 on #511 PR 2).
-_IPV6_FORM = '"[fd00::1]" (in quotes in the config file)'
-_BRACKET_ADVICE = (
-    "has square brackets: square brackets hold only an IPv6 address, around all of it, "
-    + _IPV6_FORM
+# Quoted in the config file: unquoted, `host: [fd00::1]` is a YAML list (pre-QA r2 on
+# #511 PR 2). An env var or setup's prompt takes it as typed.
+_IPV6_FILE_FORM = '"[fd00::1]", in quotes'
+_INVALID_HOST = (
+    "isn't a valid host name or IP address (an IPv4 address has four numbers from 0 to "
+    "255 with no leading zeros; a name's parts are at most 63 characters, of letters, "
+    "digits and hyphens)"
 )
+# A last part that's a number (or 0x hex) makes the whole host an IPv4 address to URL
+# parsers and the resolver, which expand a short one: `192.168.1` is 192.168.0.1, the
+# router, not the NAS (WHATWG URL's "ends in a number" rule; pre-QA r3 on #511 PR 2).
+_NUMERIC_LABEL = re.compile(r"(?:\d+|0[xX][0-9a-fA-F]*)")
 
 
 def host_problems(
     host: str,
     port_setting: str = "set connection.port",
     https_setting: str = "set https: true",
+    ipv6_form: str = _IPV6_FILE_FORM,
 ) -> list[str]:
     """What keeps ``host`` from being a bare host name or IP address, as advice (#511 PR 2).
 
@@ -73,9 +80,14 @@ def host_problems(
     written into the host made a broken URL (a traceback, #504) or put a password into
     the server instructions, tool errors and logs (#476, #471). An IPv6 address goes in
     square brackets (`[fd00::1]`), as in a URL. Never quotes the host: it can hold a
-    password. ``port_setting`` and ``https_setting`` say how to set the port and HTTPS
-    where the host came from (the file, an env var, setup's questions).
+    password. ``port_setting``, ``https_setting`` and ``ipv6_form`` say how to set the
+    port, HTTPS and an IPv6 address where the host came from (the file, an env var,
+    setup's questions).
     """
+    bracket_advice = (
+        "has square brackets: square brackets hold only an IPv6 address, around all of "
+        f"it, {ipv6_form}"
+    )
     if not host.strip():
         return ["is empty"]
     problems = []
@@ -99,7 +111,7 @@ def host_problems(
         try:
             ipaddress.IPv6Address(bracketed[1])
         except ValueError:
-            problems.append(_BRACKET_ADVICE)
+            problems.append(bracket_advice)
         if bracketed[2] is not None:
             problems.append(port)
     else:
@@ -108,10 +120,10 @@ def host_problems(
         except ValueError:
             pass
         else:
-            return [*problems, f"is an IPv6 address: write it in square brackets, {_IPV6_FORM}"]
+            return [*problems, f"is an IPv6 address: write it in square brackets, {ipv6_form}"]
         if "[" in rest or "]" in rest:
             # A half-bracketed IPv6 address has colons too: they aren't a port then.
-            problems.append(_BRACKET_ADVICE)
+            problems.append(bracket_advice)
         elif ":" in rest:
             problems.append(port)
     if any(c.isspace() or not c.isprintable() for c in host):
@@ -120,6 +132,13 @@ def host_problems(
         problems.append("has a character a host name can't have")
     if not problems and (rest.startswith(".") or ".." in rest):
         problems.append("has an empty part (a leading dot, or two dots in a row)")
+    if not problems and not bracketed:
+        last = rest.removesuffix(".").rsplit(".", 1)[-1]
+        if _NUMERIC_LABEL.fullmatch(last):
+            try:
+                ipaddress.IPv4Address(rest.removesuffix("."))
+            except ValueError:
+                problems.append(_INVALID_HOST)
     if not problems:
         # What's left is a name or address that looks bare; the URL library has the final
         # say (`999.1.1.1`, `01.2.3.4`, a name IDNA can't encode), or the URL built from
@@ -127,11 +146,7 @@ def host_problems(
         try:
             httpx.URL(f"http://{host}/")
         except httpx.InvalidURL:
-            problems.append(
-                "isn't a valid host name or IP address (an IPv4 address has four numbers "
-                "from 0 to 255 with no leading zeros; a name's parts are at most 63 "
-                "characters, of letters, digits and hyphens)"
-            )
+            problems.append(_INVALID_HOST)
     return problems
 
 
@@ -162,6 +177,15 @@ def instance_id_problem(value: str) -> str | None:
     return None
 
 
+def _not_a_bool(value: object) -> object:
+    """Refuse true/false for a number: pydantic reads it as 1 or 0, so `port: yes` loaded
+    as port 1 and `timeout: on` as one second (pre-QA r3 on #511 PR 2)."""
+    if isinstance(value, bool):
+        msg = "must be a whole number, not true or false (YAML reads yes/no/on/off as those)."
+        raise ValueError(msg)
+    return value
+
+
 class ConnectionConfig(BaseModel, extra="forbid"):
     """NAS connection settings.
 
@@ -175,6 +199,11 @@ class ConnectionConfig(BaseModel, extra="forbid"):
     https: bool = False
     verify_ssl: bool = True
     timeout: int = Field(default=30, ge=1, le=600)
+
+    @field_validator("port", "timeout", mode="before")
+    @classmethod
+    def _no_bool_number(cls, value: object) -> object:
+        return _not_a_bool(value)
 
     @field_validator("host", mode="before")
     @classmethod
@@ -277,6 +306,11 @@ class AppConfig(BaseModel, extra="forbid"):
     # Local folders every module's tools may use; each module's own allowed_local_paths
     # adds to it (#257). Unset keeps the per-module rule from before #257.
     allowed_local_paths: list[str] | None = Field(default=None, min_length=1)
+
+    @field_validator("schema_version", mode="before")
+    @classmethod
+    def _no_bool_schema_version(cls, value: object) -> object:
+        return _not_a_bool(value)
 
     @field_validator("update_notices", mode="before")
     @classmethod
@@ -553,12 +587,13 @@ def parse_env_value(env_var: str, dotted_path: str, value: str) -> Any:
         # Text: taken as given, then held to the field's own rule.
         if dotted_path == "connection.host" and (
             problems := host_problems(
-                value, port_setting="set SYNOLOGY_PORT", https_setting="set SYNOLOGY_HTTPS=true"
+                value,
+                port_setting="set SYNOLOGY_PORT",
+                https_setting="set SYNOLOGY_HTTPS=true",
+                ipv6_form="[fd00::1]",
             )
         ):
-            raise EnvVarError(
-                f"{env_var} {host_message(problems).removesuffix('.')} (it sets {dotted_path})."
-            )
+            raise EnvVarError(f"{env_var} (it sets {dotted_path}) {host_message(problems)}")
         if dotted_path == "instance_id" and (problem := instance_id_problem(value)):
             raise EnvVarError(f"{env_var} {problem} (it sets {dotted_path}).")
         return value
@@ -863,12 +898,13 @@ class _ConfigLoader(yaml.SafeLoader):
                 stack.extend(node.value)
 
     def _check_mapping(self, node: yaml.MappingNode) -> None:
-        seen: dict[Any, int] = {}
+        seen: dict[Any, tuple[int, int]] = {}
         for key_node, value_node in node.value:
             if key_node.tag == _MERGE_TAG:
                 continue  # its keys may be overridden: YAML's own rule, not a repeat
             line = key_node.start_mark.line + 1
-            if node.flow_style and _has_no_colon(key_node, value_node):
+            column = key_node.start_mark.column + 1
+            if node.flow_style and _has_no_colon(node, key_node, value_node):
                 raise ConfigKeyError(
                     f"The config file has a key with no value inside {{…}} (line {line}). "
                     "It isn't shown, since it may be part of a password. A colon needs a "
@@ -881,21 +917,34 @@ class _ConfigLoader(yaml.SafeLoader):
             first = seen.get(key)
             if first is not None:
                 known = isinstance(key, str) and key in _config_keys()
+                # On one line (`{k: 1, k: 2}`), the columns say where (pre-QA r3).
+                where = (
+                    f"line {line}, columns {first[1]} and {column}"
+                    if first[0] == line
+                    else f"lines {first[0]} and {line}"
+                )
                 raise ConfigKeyError(
                     f"The config file has {f'`{key}`' if known else 'a key'} twice in one "
-                    f"section (lines {first} and {line}), and YAML would silently keep only "
-                    "the last. Remove one."
+                    f"section ({where}), and YAML would silently keep only the last. "
+                    "Remove one."
                     + ("" if known else " The key isn't shown: it may be part of a password.")
                 )
-            seen[key] = line
+            seen[key] = (line, column)
 
 
-def _has_no_colon(key_node: yaml.Node, value_node: yaml.Node) -> bool:
+def _has_no_colon(mapping: yaml.MappingNode, key_node: yaml.Node, value_node: yaml.Node) -> bool:
     """Whether a flow mapping's entry was written without a colon (`{a: 1, b}`)."""
     if not (isinstance(value_node, yaml.ScalarNode) and value_node.value == ""):
         return False
     if value_node.tag != "tag:yaml.org,2002:null":
         return False
+    # An alias (`{a: *empty}`, `{*k: }`) reuses its anchor's node, written before this
+    # mapping, so the marks don't describe this entry (pre-QA r3 on #511 PR 2).
+    start = mapping.start_mark.index
+    if key_node.start_mark.index < start or value_node.start_mark.index < start:
+        return False
+    if value_node.start_mark.index < key_node.end_mark.index:
+        return False  # `{a: &z , b: *z}`: an anchor earlier in this same mapping
     buffer = getattr(key_node.end_mark, "buffer", None)
     if not isinstance(buffer, str):
         return False  # pragma: no cover - text input always keeps its buffer
