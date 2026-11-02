@@ -351,13 +351,15 @@ Certain config values can be overridden by environment variables. This supports 
 |---------|-----------|-------|
 | `SYNOLOGY_HOST` | `connection.host` | — |
 | `SYNOLOGY_PORT` | `connection.port` | — |
-| `SYNOLOGY_HTTPS` | `connection.https` | `"true"` or `"1"` for true |
+| `SYNOLOGY_HTTPS` | `connection.https` | `true`/`false`, `1`/`0`, `yes`/`no`, `on`/`off`, any case |
 | `SYNOLOGY_USERNAME` | `auth.username` | Part of credential hierarchy |
 | `SYNOLOGY_PASSWORD` | `auth.password` | Part of credential hierarchy |
 | `SYNOLOGY_DEVICE_ID` | `auth.device_id` | Part of credential hierarchy |
 | `SYNOLOGY_INSTANCE_ID` | `instance_id` | — |
-| `SYNOLOGY_LOG_LEVEL` | `logging.level` | — |
-| `SYNOLOGY_UPDATE_NOTICES` | `update_notices` | `all`, `security` or `off` |
+| `SYNOLOGY_LOG_LEVEL` | `logging.level` | `debug`, `info`, `warning` or `error`, any case |
+| `SYNOLOGY_UPDATE_NOTICES` | `update_notices` | `all`, `security` or `off`, any case |
+
+**Parsing (#511, #501):** each value is validated by pydantic with its field's own type (`core/config.py` `parse_env_value`), so a variable takes exactly what the config file does: pydantic's boolean spellings, whole numbers, and choices (lower-cased first). Anything else raises `EnvVarError` naming the variable and what it takes, never the value (it could be a password pasted into the wrong variable), and the server doesn't start. An empty or blank variable counts as unset, as the credential variables already did. `SYNOLOGY_HTTPS` used to be true for `true`, `1` or `yes` and false for anything else, so `on` or a typo turned HTTPS off even over `https: true`.
 
 **Precedence:** Environment variables override config file values. For credentials the keyring comes last: env vars, then the config file, then the keyring (`core/auth.py`), each value resolved separately. Explicit sources override the keyring default.
 
@@ -368,10 +370,13 @@ Certain config values can be overridden by environment variables. This supports 
 The server finds its config file in this order:
 
 1. **Explicit `--config` flag:** `mcp-synology serve --config /path/to/config.yaml`
-2. **Environment variable:** `MCP_SYNOLOGY_CONFIG=/path/to/config.yaml`
+2. **Environment variable:** `MCP_SYNOLOGY_CONFIG=/path/to/config.yaml`. The file must exist: a missing one is an error, never env-var-only mode (#499), which would run read-only over plain HTTP instead of the config it names
 3. **Default locations** (first found wins):
    - `~/.config/mcp-synology/config.yaml`
    - `./mcp-synology.yaml` (current directory)
+4. **Env-var-only mode:** no config file found by 1–3 and `SYNOLOGY_HOST` set
+
+The source used is logged at INFO (`Config: <path> (from --config)`, `… (from MCP_SYNOLOGY_CONFIG)`, `Config: <path>`, or `Config: environment variables only …`; the host isn't logged, since it can hold credentials).
 
 For multi-NAS setups, users must use the `--config` flag to specify which config to load:
 
