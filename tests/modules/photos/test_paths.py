@@ -1,4 +1,5 @@
-"""Every Photos folder argument goes through `Photos.folder` and `folder_path` (#510).
+"""Every Photos folder argument goes through `Photos.folder` and `check_folder_path`
+(#510).
 
 A structural test keeps a new tool or argument from skipping the registry; a matrix test
 runs each registered argument through its tool: a NUL is refused before any folder lookup

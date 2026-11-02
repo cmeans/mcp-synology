@@ -128,7 +128,7 @@ def encode(params: dict[str, Any]) -> dict[str, str]:
 
 
 # Every tool argument that names a Photos folder (an ID or a path). Each reaches DSM only
-# through `Photos.folder`, which checks a path with `folder_path` (#510); a new folder
+# through `Photos.folder`, which checks a path with `check_folder_path` (#510); a new folder
 # argument goes here, and tests/modules/photos/test_paths.py fails until it does.
 FOLDER_PARAMS: dict[str, frozenset[str]] = {
     "list_photos": frozenset({"folder"}),

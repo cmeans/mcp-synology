@@ -88,6 +88,11 @@ async def _task_destination(client: DsmClient, task_id: str) -> str:
     return str(data["tasks"][0]["additional"]["detail"]["destination"])
 
 
+async def _task_ids(client: DsmClient) -> list[str]:
+    data = await client.request("SYNO.DownloadStation.Task", "list", version=1)
+    return [str(t["id"]) for t in data.get("tasks", [])]
+
+
 async def _delete_tasks(client: DsmClient, ids: list[str]) -> None:
     for task_id in ids:
         with contextlib.suppress(SynologyError):
@@ -159,6 +164,29 @@ class TestDownloadStation:
                 assert await _task_destination(client, ids[0]) == f"{folders}/{child}"
             finally:
                 await _delete_tasks(client, ids)
+
+    async def test_v1_create_reaches_a_padded_folder_exactly(
+        self, ds_client: DsmClient, folders: str
+    ) -> None:
+        # A source with username/password goes through v1 Task.create, a form POST to
+        # task.cgi (whose form body reads `+` as a space). v1 returns no task IDs, so the new
+        # task is found by listing before and after.
+        client = ds_client
+        for child in ("foo ", " foo", "a b"):
+            before = set(await _task_ids(client))
+            await create_download(
+                client,
+                uri=f"http://example.invalid/{uuid.uuid4().hex}.bin",
+                destination=f"{folders}/{child}",
+                username="u",
+                password="p",
+            )
+            new = sorted(set(await _task_ids(client)) - before)
+            try:
+                assert len(new) == 1, new
+                assert await _task_destination(client, new[0]) == f"{folders}/{child}"
+            finally:
+                await _delete_tasks(client, new)
 
     async def test_dsm_cuts_a_destination_at_a_nul_so_it_is_refused(
         self, ds_client: DsmClient, folders: str
