@@ -726,14 +726,14 @@ class TestRequests:
     async def test_folder_taken_exactly(self) -> None:
         # #510: the folder checked and the folder sent are the same exact path.
         fake = FakePhotos().on(REQ, "list", 1, {"list": []})
-        fake.on(FOLDER, "get", 2, {"folder": {"id": 5, "name": "/x/ foo"}})
+        fake.on(FOLDER, "get", 2, {"folder": {"id": 5, "name": "/x/foo "}})
         fake.on(REQ, "create", 1, captured("request-create"))
         install(fake)
         client = make_client()
         async with client:
-            await photo_request(client, action="create", subject="s", folder="  /x/ foo/")
-        assert fake.one(FOLDER, "get").params == {"name": "/x/ foo"}
-        assert fake.one(REQ, "create").params["folder_home_path"] == "/x/ foo"
+            await photo_request(client, action="create", subject="s", folder="  /x/foo ")
+        assert fake.one(FOLDER, "get").params == {"name": "/x/foo "}
+        assert fake.one(REQ, "create").params["folder_home_path"] == "/x/foo "
 
     @respx.mock
     async def test_folder_with_a_nul_is_refused(self) -> None:
