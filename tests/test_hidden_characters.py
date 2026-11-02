@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -302,6 +303,7 @@ def test_inside_another_repository_it_skips_except_in_ci(
             _tracked_files()
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
 def test_a_checkout_reached_through_a_symlink_is_listed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -347,7 +349,9 @@ def test_odd_names_and_deleted_files(tmp_path: Path, monkeypatch: pytest.MonkeyP
     try:
         with open(os.path.join(os.fsencode(tmp_path), b"a\xff.txt"), "wb") as f:
             f.write("x\u200by\n".encode())
-    except OSError as err:  # APFS refuses names that aren't UTF-8; CI's ext4 doesn't
+    # APFS refuses names that aren't UTF-8 (OSError), and Windows can't even decode the
+    # bytes path (UnicodeDecodeError, PEP 529); CI's ext4 takes it.
+    except (OSError, UnicodeError) as err:
         pytest.skip(f"this filesystem refuses the name: {err}")
     _git("add", "-A", cwd=tmp_path)
     (tmp_path / "gone.txt").unlink()
