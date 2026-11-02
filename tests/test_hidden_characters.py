@@ -10,6 +10,7 @@ checked, not file names."""
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -38,9 +39,7 @@ def _in_ci() -> bool:
     return os.environ.get("CI", "").lower() not in ("", "0", "false")
 
 
-# (GIT_WORK_TREE alone changes nothing here: the list comes from the index, and its paths
-# are relative.)
-_GIT_LOCATION = ("GIT_DIR", "GIT_INDEX_FILE", "GIT_COMMON_DIR")
+_GIT_LOCATION = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR")
 
 
 def _tracked_files() -> list[Path]:
@@ -52,8 +51,8 @@ def _tracked_files() -> list[Path]:
             check=True,
             # git's messages in English, so "not a git repository" below matches.
             env={
-                # A hook's or a script's GIT_DIR, GIT_INDEX_FILE or GIT_COMMON_DIR would
-                # point git at another repository or index than ROOT's.
+                # A hook's or a script's GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE or
+                # GIT_COMMON_DIR would point git at another repository, tree or index.
                 **{k: v for k, v in os.environ.items() if k not in _GIT_LOCATION},
                 "LC_ALL": "C",
                 "LANGUAGE": "",
@@ -161,11 +160,45 @@ def test_hidden_lines(data: bytes, expected: list[tuple[int, list[str]]]) -> Non
 
 
 @pytest.mark.parametrize(
-    ("value", "ci"), [("true", True), ("1", True), ("", False), ("false", False), ("0", False)]
+    ("value", "ci"),
+    [
+        ("true", True),
+        ("TRUE", True),
+        ("1", True),
+        ("", False),
+        ("false", False),
+        ("False", False),
+        ("0", False),
+    ],
 )
 def test_in_ci(value: str, ci: bool, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CI", value)
     assert _in_ci() is ci
+
+
+def _require_git() -> None:
+    """The tests below run git; without it the guard skips, and so do they (except in CI)."""
+    if shutil.which("git") is None and not _in_ci():
+        pytest.skip("git isn't installed")
+
+
+@pytest.mark.parametrize(
+    ("git", "ci", "skips"),
+    [(None, "", True), (None, "true", False), ("/usr/bin/git", "", False)],
+)
+def test_require_git(
+    git: str | None, ci: str, skips: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(shutil, "which", lambda name: git)
+    monkeypatch.setenv("CI", ci)
+    if skips:
+        with pytest.raises(pytest.skip.Exception, match="git isn't installed"):
+            _require_git()
+    else:
+        try:
+            _require_git()
+        except pytest.skip.Exception as e:
+            pytest.fail(f"skipped: {e}")
 
 
 def _must_raise(exc: type[BaseException], match: str | None = None) -> None:
@@ -182,6 +215,7 @@ def _must_raise(exc: type[BaseException], match: str | None = None) -> None:
 def test_outside_a_checkout_it_skips_except_in_ci(
     ci: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    _require_git()
     real_root = ROOT
     try:
         # In a linked worktree the git dir and the common dir differ.
@@ -212,11 +246,15 @@ def test_outside_a_checkout_it_skips_except_in_ci(
 
 @pytest.mark.parametrize("var", _GIT_LOCATION)
 def test_a_stray_git_location_variable_is_ignored(
-    var: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    var: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Each would make git read another repository or index (a missing index lists nothing).
-    monkeypatch.setenv(var, str(tmp_path / "elsewhere"))
+    # Each would make git read another repository, tree or index: ROOT's parent as the work
+    # tree lists nothing (ROOT's files would sit under a prefix the index doesn't have), and
+    # as the git dir, the common dir or the index file it's an error.
+    _require_git()
     monkeypatch.setenv("CI", "")
+    _tracked_files()  # outside a checkout (an sdist, an archive) this skips, as the guard does
+    monkeypatch.setenv(var, str(ROOT.parent))
     try:
         tracked = _tracked_files()
     except pytest.skip.Exception as e:
@@ -261,6 +299,7 @@ def test_without_git_it_skips_except_in_ci(ci: str, monkeypatch: pytest.MonkeyPa
 
 def test_git_speaks_english(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     # The skip matches git's English message; a German locale mustn't turn it into a failure.
+    _require_git()
     monkeypatch.setattr(f"{__name__}.ROOT", tmp_path)
     monkeypatch.setenv("CI", "")
     monkeypatch.setenv("LANG", "de_DE.UTF-8")
