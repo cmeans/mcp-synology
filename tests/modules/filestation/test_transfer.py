@@ -111,7 +111,7 @@ class TestUploadFile:
         )
         assert error["suggestion"] == "Pass filename with a plain name for the file on the NAS."
 
-    @pytest.mark.parametrize("name", ["rep​ort.pdf", "辛\U000e0100葛\U000e0101"])
+    @pytest.mark.parametrize("name", ["rep\u200bort.pdf", "辛\U000e0100葛\U000e0101"])
     async def test_a_local_name_the_unicode_rules_refuse_keeps_the_filename_advice(
         self,
         mock_client: DsmClient,

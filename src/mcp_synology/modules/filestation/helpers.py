@@ -244,22 +244,22 @@ _ZWJ_B = regex.compile(
     r"(?!\p{Indic_Syllabic_Category=Vowel_Dependent})"
 )
 # Two uses the Unicode core spec documents beyond UTS #39's patterns (pre-QA on #515): a ZWJ
-# between a letter and a virama (Bengali ra-phala, `র‍্যালি`, chapter 12), and a ZWNJ between
-# two Arabic-script letters whatever their joining type (Persian writes `در‌ها` with one after
+# between a letter and a virama (Bengali ra-phala, `র<ZWJ>্যালি`, chapter 12), and a ZWNJ between
+# two Arabic-script letters whatever their joining type (Persian writes `در<ZWNJ>ها` with one after
 # a right-joining letter, chapter 9; maintainer, 2026-10-31: real names come first).
 _ZWJ_BEFORE_VIRAMA = regex.compile(rf"(?<=\p{{L}}\p{{Mn}}{_MARKS})\u200d(?=\p{{ccc=Virama}})")
 _ZWNJ_ARABIC = regex.compile(
     rf"(?<=(?=\p{{scx=Arab}})\p{{L}}\p{{jt=T}}{_MARKS})\u200c(?=(?=\p{{scx=Arab}})\p{{L}})"
 )
-# UTS #51: a joiner between two emoji (👨‍👩‍👧, 🏳️‍🌈); VS15/VS16 after an emoji, or after
-# a keycap base when the keycap follows (1️⃣); the other variation selectors after the
-# characters they vary (CJK ideographs, Mongolian letters, math symbols).
+# UTS #51: a joiner between two emoji (👨<ZWJ>👩<ZWJ>👧, 🏳<VS16><ZWJ>🌈); VS15/VS16 after an
+# emoji, or after a keycap base when the keycap follows (1<VS16>⃣); the other variation
+# selectors after the characters they vary (CJK ideographs, Mongolian letters, math symbols).
 _EMOJI_ZWJ = regex.compile(
     r"(?<=[\p{Extended_Pictographic}\p{Emoji_Modifier}\ufe0f])\u200d(?=\p{Extended_Pictographic})"
 )
 # VS15/VS16 after a non-ASCII emoji: `_emoji_presentation` (only bases
 # emoji-variation-sequences.txt registers; pre-QA on #515). After a keycap base, only when
-# the keycap follows (1️⃣).
+# the keycap follows (1<VS16>⃣).
 _EMOJI_VS = regex.compile(r"(?<=[0-9#*])[\ufe0e\ufe0f](?=\u20e3)")
 # Only the variation selectors Unicode has ever registered (StandardizedVariants.txt,
 # IVD_Sequences.txt 2026-08-03): VS1-VS7 (U+FE00-FE06) and VS17-VS48 (U+E0100-E011F).
@@ -334,7 +334,7 @@ def _ignorable_belongs(text: str, i: int) -> bool:
 
 def _emoji_presentation(text: str, i: int) -> bool:
     """Whether ``text[i]``, VS15 or VS16, follows a non-ASCII emoji
-    emoji-variation-sequences.txt registers it for (``❤️``; not ``😀``+VS16, which has no
+    emoji-variation-sequences.txt registers it for (``❤<VS16>``; not ``😀``+VS16, which has no
     text form)."""
     return text[i] in "\ufe0e\ufe0f" and i > 0 and text[i - 1] in EMOJI_VS_BASES
 
@@ -645,7 +645,8 @@ def shown(path: str) -> str:
         if part != part.strip() or invisible_problem(part) is not None or any(map(_hides, part)):
             return _escaped_repr(path)
     # Marks, joiners and variation selectors where Unicode uses them show as written
-    # (`नमस्ते`, NFD `Café`, 👨‍👩‍👧, ❤️); anywhere else they're quoted (`rep<ZWJ>ort.pdf`).
+    # (`नमस्ते`, NFD `Café`, 👨<ZWJ>👩<ZWJ>👧, ❤<VS16>); anywhere else they're quoted
+    # (`rep<ZWJ>ort.pdf`).
     return path
 
 

@@ -458,8 +458,8 @@ class TestRefuseBadName:
             "\u05e9\u05c1\u05b8",  # Hebrew, two different marks
             # The Unicode core spec's own uses (pre-QA on #515): Bengali ra-phala (ZWJ
             # before a virama), a Persian ZWNJ after a right-joining letter.
-            "\u09b0\u200d\u09cd\u09af\u09be\u09b2\u09bf",  # র‍্যালি
-            "\u062f\u0631\u200c\u0647\u0627",  # در‌ها
+            "\u09b0\u200d\u09cd\u09af\u09be\u09b2\u09bf",  # র<ZWJ>্যালি
+            "\u062f\u0631\u200c\u0647\u0627",  # در<ZWNJ>ها
             # ZWNJ between dual-joining letters in other cursive scripts (UTS #39 A1).
             "\u0710\u0712\u200c\u0712\u0710",  # Syriac
             "\u07ca\u07cb\u200c\u07cc\u07cd",  # N'Ko
