@@ -24,10 +24,14 @@ from mcp_synology.modules.filestation.helpers import (
     dsm_str,
     ensure_recycle_status,
     file_type_icon,
+    missing_paths_suggestion,
     normalize_path,
     path_exists,
+    paths_isdir,
     probe_recycle_status,
 )
+from mcp_synology.modules.filestation.helpers import shown as shown_path
+from mcp_synology.modules.filestation.paths import ResolvedPath
 
 logger = logging.getLogger(__name__)
 
@@ -248,7 +252,7 @@ async def list_shares(
 async def list_files(
     client: DsmClient,
     *,
-    path: str,
+    path: ResolvedPath,
     pattern: str | None = None,
     filetype: str = "all",
     sort_by: str = "name",
@@ -257,11 +261,14 @@ async def list_files(
     limit: int = 200,
     hide_recycle: bool = False,
     file_type_indicator: str = "emoji",
+    tell_files_apart: bool = True,
 ) -> str:
     """List files and folders within a directory path.
 
     ``hide_recycle`` defaults off, as ``hide_recycle_in_listings`` does; the tool always
-    passes the setting.
+    passes the setting. ``tell_files_apart`` checks a path DSM answers 408 for with one
+    ``getinfo``, to call a file a file; `list_recycle_bin` turns it off, since there any
+    408 means there's no bin folder.
     """
 
     normalized = normalize_path(path)
@@ -296,6 +303,56 @@ async def list_files(
     try:
         data = await client.request("SYNO.FileStation.List", "list", params=params)
     except SynologyError as e:
+        if e.code == 408:
+            # DSM answers 408 for a file too, not only a missing path (seska DSM 7.1.1,
+            # pre-QA on #515): one getinfo tells them apart.
+            isdir: bool | None = None
+            if tell_files_apart:
+                # A failed check can't tell: say what DSM said, naming the path.
+                try:
+                    isdir = (await paths_isdir(client, [normalized])).get(normalized)
+                except (SynologyError, httpx.HTTPError) as check_error:
+                    logger.debug(
+                        "Couldn't check whether %s is a file: %s: %s",
+                        normalized,
+                        type(check_error).__name__,
+                        check_error,
+                    )
+            if isdir is False:
+                error_response(
+                    ErrorCode.INVALID_PARAMETER,
+                    f"List files failed: {shown_path(normalized)} is a file, not a folder.",
+                    retryable=False,
+                    param="path",
+                    value=path,
+                    suggestion="list_files lists a folder's contents: use get_file_info for "
+                    "a file, or list its parent folder.",
+                )
+            if isdir is True:
+                # getinfo has just seen the folder (created between the two calls, or a
+                # List DSM refuses that getinfo allows): don't call it missing (QA round 5
+                # on #515).
+                error_response(
+                    ErrorCode.FILESTATION_ERROR,
+                    f"List files failed: DSM couldn't list {shown_path(normalized)} (DSM error "
+                    "408), though it's a folder that exists.",
+                    retryable=True,
+                    param="path",
+                    value=path,
+                    suggestion="Retry list_files; if it fails the same way, check the folder "
+                    "in DSM's File Station.",
+                )
+            # Name the path, quoted when padded: paths are taken exactly now (#488), and
+            # DSM's own message names none, so `/video/Movies ` would read as a missing
+            # `Movies` the model can see listed (pre-QA on #515).
+            error_response(
+                ErrorCode.NOT_FOUND,
+                f"List files failed: {shown_path(normalized)} doesn't exist on the NAS.",
+                retryable=False,
+                param="path",
+                value=path,
+                suggestion=missing_paths_suggestion([(normalized, 408)]),
+            )
         synology_error_response("List files", e)
 
     entries = data.get("files", [])
@@ -447,7 +504,7 @@ async def _not_enabled(
 async def list_recycle_bin(
     client: DsmClient,
     *,
-    share: str,
+    share: ResolvedPath,
     pattern: str | None = None,
     sort_by: str = "mtime",
     sort_direction: str = "desc",
@@ -474,7 +531,7 @@ async def list_recycle_bin(
                 definite=recycle_bin_status.get(share_name) is False,
             )
 
-    recycle_path = f"/{share_name}/#recycle"
+    recycle_path = ResolvedPath(f"/{share_name}/#recycle")
 
     try:
         if pattern:
@@ -505,6 +562,7 @@ async def list_recycle_bin(
             offset=offset,
             hide_recycle=False,
             file_type_indicator=file_type_indicator,
+            tell_files_apart=False,
         )
     except ToolError as e:
         # list_files converts SynologyError to ToolError with a JSON envelope.

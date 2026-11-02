@@ -28,7 +28,7 @@ from mcp_synology.core.formatting import (
     format_timestamp,
     synology_error_response,
 )
-from mcp_synology.modules.filestation.helpers import describe_transport_error, dsm_str
+from mcp_synology.modules.filestation.helpers import describe_transport_error, dsm_str, shown
 
 if TYPE_CHECKING:
     from mcp_synology.core.client import DsmClient
@@ -422,7 +422,7 @@ def handoff_reply(
     past = _PAST.get(gerund, "done")
     if stall is None:
         first = (
-            f"{verb} on the NAS: {path} ({progress_text(status)}). This operation keeps "
+            f"{verb} on the NAS: {shown(path)} ({progress_text(status)}). This operation keeps "
             "running after this reply, so nothing more needs to be done to finish it."
         )
     else:
@@ -438,7 +438,7 @@ def handoff_reply(
         else:
             what, why = "The NAS's status reply couldn't be read", type(stall).__name__
         first = (
-            f"{what} while {gerund} {path} ({why}{last}). It's probably still running "
+            f"{what} while {gerund} {shown(path)} ({why}{last}). It's probably still running "
             "there; don't start it again."
         )
     lines = [
@@ -448,10 +448,11 @@ def handoff_reply(
         'action="stop" (it may then be partly done).',
     ]
     if done:
-        lines.append(f"Already {past}: {', '.join(done)}.")
+        lines.append(f"Already {past}: {', '.join(map(shown, done))}.")
     if not_started:
         lines.append(
-            f"Not started: {', '.join(not_started)}. Run them again once this one finishes."
+            f"Not started: {', '.join(map(shown, not_started))}. Run them again once this one "
+            "finishes."
         )
     return "\n".join(lines)
 
@@ -484,8 +485,10 @@ class RunningTask:
 
 
 def _in_recycle_bin(path: str) -> bool:
-    parts = path.split("/")
-    return len(parts) > 2 and parts[2] == "#recycle"
+    # The one bin rule (#510): /homes/<user>/#recycle is a bin too.
+    from mcp_synology.modules.filestation.paths import in_bin
+
+    return in_bin(path)
 
 
 def _task_kind(api: Any, params: dict[str, Any], paths: list[str]) -> HandleKind | None:
@@ -719,7 +722,7 @@ def _generic_final(handle: Handle, status: dict[str, Any]) -> str:
             (str(e.get("path") or "item"), e.get("code", 0)) for e in errors if isinstance(e, dict)
         )
     if failed:
-        text = "; ".join(f"{p} ({_code_text(c)})" for p, c in failed)
+        text = "; ".join(f"{shown(p)} ({_code_text(c)})" for p, c in failed)
         if handle.kind != "delete":
             # No record of the source here, so a 408 can't be told apart: say it anyway.
             text += _partial_note(status, failed, handle.kind.capitalize(), None, None)

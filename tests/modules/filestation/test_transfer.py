@@ -76,6 +76,61 @@ class TestUploadFile:
         assert error["suggestion"] == "Pass filename with a plain name for the file on the NAS."
         assert error["value"] == str(local_file)  # the argument named, as passed
 
+    @pytest.mark.parametrize("filename", ["report.pdf ", " report.pdf", "report.pdf\u00a0"])
+    async def test_upload_refuses_a_padded_filename(
+        self, mock_client: DsmClient, tmp_path: Path, filename: str
+    ) -> None:
+        """DSM would keep the padding, making a file other than `report.pdf` (#488)."""
+        local_file = tmp_path / "report.pdf"
+        local_file.write_text("x")
+        with pytest.raises(ToolError) as exc:
+            await upload_file(
+                mock_client, local_path=str(local_file), dest_folder="/video/up", filename=filename
+            )
+        error = json.loads(str(exc.value))["error"]
+        assert (error["param"], error["value"]) == ("filename", filename)
+        assert error["message"] == (
+            "Upload failed: filename should be just a file name, but it starts or ends with "
+            "whitespace."
+        )
+
+    async def test_upload_refuses_a_padded_local_name_without_filename(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """A Linux file named `report.pdf ` would keep its padding on the NAS (#488);
+        filename gives it a plain name."""
+        local_file = tmp_path / "report.pdf "
+        local_file.write_text("x")
+        with pytest.raises(ToolError) as exc:
+            await upload_file(mock_client, local_path=str(local_file), dest_folder="/video/up")
+        error = json.loads(str(exc.value))["error"]
+        assert (error["param"], error["value"]) == ("local_path", str(local_file))
+        assert error["message"] == (
+            "Upload failed: the local file's name ('report.pdf ') should be just a file name, "
+            "but it starts or ends with whitespace."
+        )
+        assert error["suggestion"] == "Pass filename with a plain name for the file on the NAS."
+
+    @pytest.mark.parametrize("name", ["rep\u200bort.pdf", "辛\U000e0100葛\U000e0101"])
+    async def test_a_local_name_the_unicode_rules_refuse_keeps_the_filename_advice(
+        self,
+        mock_client: DsmClient,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        name: str,
+    ) -> None:
+        """A local file name can't be retyped from here: the advice stays 'pass filename',
+        not 'retype' or 'write fewer variants' (pre-QA and QA round 4 on #515)."""
+        from mcp_synology.modules.filestation import helpers
+
+        monkeypatch.setattr(helpers, "SELECTOR_LIMIT", 1)
+        local_file = tmp_path / name
+        local_file.write_text("x")
+        with pytest.raises(ToolError) as exc:
+            await upload_file(mock_client, local_path=str(local_file), dest_folder="/video/up")
+        error = json.loads(str(exc.value))["error"]
+        assert error["suggestion"] == "Pass filename with a plain name for the file on the NAS."
+
     @pytest.mark.parametrize(
         "filename", [".", "..", " .. ", "../x", "a/b", "/abs", "a\0b", "   ", "\t", "\xa0"]
     )

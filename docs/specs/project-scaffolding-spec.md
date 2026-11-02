@@ -126,6 +126,7 @@ dependencies = [
     "keyring>=25.0",           # OS-native credential storage
     "pydantic>=2.0",           # Config and settings validation
     "click>=8.0",              # CLI framework (serve, setup, check)
+    "regex>=2026.9.29",        # Current Unicode properties for File Station's new-name rules
 ]
 
 [project.optional-dependencies]
@@ -187,6 +188,7 @@ addopts = "-m 'not integration'"
 - **`pydantic>=2.0`**: Config validation, module settings schemas, type coercion.
 - **`pyyaml>=6.0`**: Config file parsing. Always `yaml.safe_load()` — never `yaml.load()`.
 - **`click>=8.0`**: CLI framework. Three subcommands: `serve` (MCP server mode), `setup` (interactive credential bootstrap), `check` (validate credentials). Click handles prompts, password masking, and colored output for the interactive `setup` flow — things that would be tedious with argparse.
+- **`regex>=2026.9.29`**: Unicode properties the standard library lacks or has only in an old version: `Default_Ignorable_Code_Point`, joining type, combining class, Indic syllabic category, emoji properties and scripts, for File Station's rules on the names a tool creates (#515). Python 3.11's `unicodedata` is Unicode 14. Which names are refused follows the Unicode data of the installed `regex` (from 2024.11.6 to 2026.9.29, `Extended_Pictographic` lost 707 characters such as ★), so the floor is the version the tests run against, and `test_helpers.py` pins a case that changed. The repeated-mark check's NFD takes combining classes from `regex` too, and decompositions from `unicodedata` up to Python 3.11's Unicode (14.0; they never change once a character is assigned) and from the generated `filestation/decompositions.py` for every character assigned since, so its verdict is the same on every Python. Raise the floor and the data together: regenerate `filestation/standardized_variants.py` (`scripts/gen_standardized_variants.py`, from StandardizedVariants.txt and emoji-variation-sequences.txt) and `filestation/decompositions.py` (`scripts/gen_decompositions.py`, from UnicodeData.txt and DerivedAge.txt) from the Unicode version of the new floor's data. `regex` doesn't report that version: its release notes name it, and the header of `standardized_variants.py` records the one in use (18.0.0). It ships wheels for every platform. Its stubs, `types-regex`, are a dev dependency.
 - **`respx>=0.22`** (dev): httpx-native mock library. Much cleaner than `unittest.mock.patch` for HTTP testing.
 
 ### Python Version

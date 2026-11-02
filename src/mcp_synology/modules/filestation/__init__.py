@@ -182,7 +182,10 @@ MODULE_INFO = ModuleInfo(
                 "Create one or more folders, each given as a full path starting with its shared "
                 "folder (`/video/TV Shows/New Show`). By default (`force_parent=true`), missing "
                 "folders above it are created too, and a folder that already exists is not an "
-                "error."
+                "error. A new folder's name can't have whitespace at its ends, an invisible "
+                "character where Unicode doesn't use one (a zero-width space, a soft hyphen), "
+                "control or direction-changing characters, or be `#recycle` at a shared or "
+                "home folder's top."
             ),
             permission_tier=PermissionTier.WRITE,
             annotations=_ANNO_IDEMPOTENT,
@@ -192,8 +195,8 @@ MODULE_INFO = ModuleInfo(
             description=(
                 "Rename a file or folder in place. If the new name is already taken in that "
                 "folder, DSM refuses and nothing is replaced. To move something to another "
-                "folder, use move_files. A whole shared folder (`/video`) or recycle bin is "
-                "refused."
+                "folder, use move_files. A whole shared folder (`/video`), recycle bin or user's "
+                "home folder (`/homes/<user>`) is refused."
             ),
             permission_tier=PermissionTier.WRITE,
         ),
@@ -218,8 +221,8 @@ MODULE_INFO = ModuleInfo(
                 "`dest_folder` must already exist; it isn't created. With `overwrite=false` "
                 "(default), items already at the destination are skipped, listed and left at the "
                 "source. If any source is missing, nothing is moved. A whole shared folder "
-                "(`/video`) or recycle bin is refused as a source: move its items by path. A "
-                "long move keeps "
+                "(`/video`), recycle bin or user's home folder (`/homes/<user>`) is refused as a "
+                "source: move its items by path. A long move keeps "
                 "running on the NAS and returns a handle for file_task."
             ),
             permission_tier=PermissionTier.WRITE,
@@ -234,9 +237,10 @@ MODULE_INFO = ModuleInfo(
                 "list_recycle_bin shows them and restore_from_recycle_bin brings them back. "
                 "Without a bin, and for anything inside a bin (`/<share>/#recycle/…`), deletion "
                 "is permanent. Paths are exact, not wildcard patterns, and if any path is missing "
-                "nothing is deleted. A whole shared folder (`/video`) or recycle bin "
-                "(`/video/#recycle`) is refused: delete its items by path. So is a path with a "
-                "`.`, `..`, empty or whitespace-only part, or a NUL. "
+                "nothing is deleted. A whole shared folder (`/video`), recycle bin "
+                "(`/video/#recycle`) or user's home folder (`/homes/<user>`) is refused: delete "
+                "its items by path. So is a path with a "
+                "`.`, `..` or empty part, or a NUL. "
                 "A long delete keeps running on the NAS and returns a handle for file_task."
             ),
             permission_tier=PermissionTier.WRITE,
@@ -257,8 +261,7 @@ MODULE_INFO = ModuleInfo(
             description=(
                 "Restore deleted files or folders from one shared folder's recycle bin. Check "
                 "what's there first with list_recycle_bin: every path must be in that share's "
-                "bin, or nothing is restored; an empty item, naming the whole bin, is refused, "
-                "and so is one with a whitespace-only part after its first. "
+                "bin, or nothing is restored; an empty item, naming the whole bin, is refused. "
                 "Without `dest_folder`, each item goes back to its "
                 "original folder, which is re-created if it's gone. An item already at the "
                 "destination is skipped and stays in the bin, unless `overwrite=true`, which "
@@ -295,7 +298,6 @@ def register(ctx: "RegisterContext") -> None:
     from mcp_synology.core import local_paths
     from mcp_synology.core.errors import ErrorCode
     from mcp_synology.core.formatting import error_response
-    from mcp_synology.modules.filestation.helpers import ensure_known_shares, refuse_dot_parts
     from mcp_synology.modules.filestation.listing import (
         list_files,
         list_recycle_bin,
@@ -307,10 +309,15 @@ def register(ctx: "RegisterContext") -> None:
         create_folder,
         delete_files,
         move_files,
-        refuse_bad_parts,
-        refuse_share_roots,
         rename,
         restore_from_recycle_bin,
+    )
+    from mcp_synology.modules.filestation.paths import (
+        bin_item_origin,
+        refuse_planted_bin,
+        refuse_restore_into_a_bin,
+        resolve_bin_items,
+        resolve_paths,
     )
     from mcp_synology.modules.filestation.search import search_files
     from mcp_synology.modules.filestation.tasks import (
@@ -497,7 +504,7 @@ def register(ctx: "RegisterContext") -> None:
             ] = 200,
         ) -> str:
             client = await _fs_client()
-            [path] = await ensure_known_shares(client, [path], known_shares, "path")
+            [path] = await resolve_paths(client, known_shares, "list_files", "path", [path])
             return _reply(
                 await list_files(
                     client,
@@ -561,7 +568,9 @@ def register(ctx: "RegisterContext") -> None:
             ] = 0,
         ) -> str:
             client = await _fs_client()
-            [share] = await ensure_known_shares(client, [share], known_shares, "share")
+            [share] = await resolve_paths(
+                client, known_shares, "list_recycle_bin", "share", [share]
+            )
             return _reply(
                 await list_recycle_bin(
                     client,
@@ -661,8 +670,8 @@ def register(ctx: "RegisterContext") -> None:
             ] = 500,
         ) -> str:
             client = await _fs_client()
-            [folder_path] = await ensure_known_shares(
-                client, [folder_path], known_shares, "folder_path"
+            [folder_path] = await resolve_paths(
+                client, known_shares, "search_files", "folder_path", [folder_path]
             )
             return _reply(
                 await search_files(
@@ -708,8 +717,8 @@ def register(ctx: "RegisterContext") -> None:
             ] = None,
         ) -> str:
             client = await _fs_client()
-            paths = await ensure_known_shares(client, paths, known_shares, "paths")
-            return _reply(await get_file_info(client, paths=paths, additional=additional))
+            resolved = await resolve_paths(client, known_shares, "get_file_info", "paths", paths)
+            return _reply(await get_file_info(client, paths=resolved, additional=additional))
 
     if "get_dir_size" in ctx.allowed_tools:
 
@@ -725,7 +734,7 @@ def register(ctx: "RegisterContext") -> None:
             ],
         ) -> str:
             client = await _fs_client()
-            [path] = await ensure_known_shares(client, [path], known_shares, "path")
+            [path] = await resolve_paths(client, known_shares, "get_dir_size", "path", [path])
             result = await get_dir_size(client, path=path, timeout=dir_size_timeout)
             return _reply(result)
 
@@ -787,7 +796,7 @@ def register(ctx: "RegisterContext") -> None:
                 )
 
             client = await _fs_client()
-            [path] = await ensure_known_shares(client, [path], known_shares, "path")
+            [path] = await resolve_paths(client, known_shares, "download_file", "path", [path])
 
             async def _progress(current: int, total: int | None) -> None:
                 await ctx.report_progress(float(current), float(total) if total else None)
@@ -833,8 +842,10 @@ def register(ctx: "RegisterContext") -> None:
             ] = True,
         ) -> str:
             client = await _fs_client()
-            paths = await ensure_known_shares(client, paths, known_shares, "paths")
-            result = await create_folder(client, paths=paths, force_parent=force_parent)
+            folders = await resolve_paths(
+                client, known_shares, "create_folder", "paths", paths, creates_parents=force_parent
+            )
+            result = await create_folder(client, paths=folders, force_parent=force_parent)
             return _reply(result)
 
     if "rename" in ctx.allowed_tools:
@@ -851,12 +862,19 @@ def register(ctx: "RegisterContext") -> None:
             ],
             new_name: Annotated[
                 str,
-                Field(description="The new name only, not a path, `.` or `..` (`Severance`)."),
+                Field(
+                    description=(
+                        "The new name only, not a path, `.` or `..` (`Severance`); no whitespace "
+                        "at its ends, no invisible character where Unicode doesn't use one, no "
+                        "control or direction-changing characters, and not `#recycle` at a "
+                        "shared or home folder's top."
+                    )
+                ),
             ],
         ) -> str:
             client = await _fs_client()
-            [path] = await ensure_known_shares(client, [path], known_shares, "path")
-            return _reply(await rename(client, path=path, new_name=new_name))
+            [target] = await resolve_paths(client, known_shares, "rename", "path", [path])
+            return _reply(await rename(client, path=target, new_name=new_name))
 
     if "copy_files" in ctx.allowed_tools:
 
@@ -885,17 +903,16 @@ def register(ctx: "RegisterContext") -> None:
             ] = False,
         ) -> str:
             client = await _fs_client()
-            *paths, dest_folder = await ensure_known_shares(
-                client,
-                [*paths, dest_folder],
-                known_shares,
-                [*(["paths"] * len(paths)), "dest_folder"],
+            sources = await resolve_paths(client, known_shares, "copy_files", "paths", paths)
+            [dest] = await resolve_paths(
+                client, known_shares, "copy_files", "dest_folder", [dest_folder]
             )
+            refuse_planted_bin("copy_files", paths, sources, [dest] * len(sources))
             return _reply(
                 await copy_files(
                     client,
-                    paths=paths,
-                    dest_folder=dest_folder,
+                    paths=sources,
+                    dest_folder=dest,
                     overwrite=overwrite,
                     timeout=copy_move_wait,
                     records=records,
@@ -930,17 +947,16 @@ def register(ctx: "RegisterContext") -> None:
             ] = False,
         ) -> str:
             client = await _fs_client()
-            *paths, dest_folder = await ensure_known_shares(
-                client,
-                [*paths, dest_folder],
-                known_shares,
-                [*(["paths"] * len(paths)), "dest_folder"],
+            sources = await resolve_paths(client, known_shares, "move_files", "paths", paths)
+            [dest] = await resolve_paths(
+                client, known_shares, "move_files", "dest_folder", [dest_folder]
             )
+            refuse_planted_bin("move_files", paths, sources, [dest] * len(sources))
             return _reply(
                 await move_files(
                     client,
-                    paths=paths,
-                    dest_folder=dest_folder,
+                    paths=sources,
+                    dest_folder=dest,
                     overwrite=overwrite,
                     timeout=copy_move_wait,
                     records=records,
@@ -977,18 +993,11 @@ def register(ctx: "RegisterContext") -> None:
             ] = True,
         ) -> str:
             client = await _fs_client()
-            # The part checks on the paths as given: the share-name rewrite below normalizes
-            # a path, which strips a whitespace-only last part (`/VIDEO/x/ ` -> `/video/x`).
-            # The share-root check after the share check, so a typo (`/vidoe`) is an unknown
-            # share, not "a whole shared folder" (pre-QA on #480). delete_files checks both
-            # again on the rewritten paths.
-            refuse_bad_parts(paths)
-            paths = await ensure_known_shares(client, paths, known_shares, "paths")
-            refuse_share_roots(paths)
+            targets = await resolve_paths(client, known_shares, "delete_files", "paths", paths)
             return _reply(
                 await delete_files(
                     client,
-                    paths=paths,
+                    paths=targets,
                     recursive=recursive,
                     recycle_bin_status=recycle_status,
                     timeout=delete_wait,
@@ -1025,7 +1034,9 @@ def register(ctx: "RegisterContext") -> None:
                 str | None,
                 Field(
                     description="Name for the file on the NAS, not a path (default: the local "
-                    "file's name)."
+                    "file's name); no whitespace at its ends, no invisible character where "
+                    "Unicode doesn't use one, no control or direction-changing characters, and "
+                    "not `#recycle` at a shared or home folder's top."
                 ),
             ] = None,
             overwrite: Annotated[
@@ -1065,14 +1076,17 @@ def register(ctx: "RegisterContext") -> None:
             client = await _fs_client()
             # Name the setting when the path came from it, not an argument the caller
             # never passed (QA round 1 on #470).
-            [effective_dest] = await ensure_known_shares(
+            [upload_dest] = await resolve_paths(
                 client,
-                [effective_dest],
                 known_shares,
-                "dest_folder" if dest_folder else "default_upload_dir",
-                None
+                "upload_file",
+                "dest_folder",
+                [effective_dest],
+                error_param="dest_folder" if dest_folder else "default_upload_dir",
+                suggestion=None
                 if dest_folder
                 else "Fix default_upload_dir in the filestation settings, or pass dest_folder.",
+                creates_parents=create_parents,
             )
 
             async def _progress(current: int, total: int | None) -> None:
@@ -1082,7 +1096,7 @@ def register(ctx: "RegisterContext") -> None:
                 await upload_file(
                     client,
                     local_path=local_path,
-                    dest_folder=effective_dest,
+                    dest_folder=upload_dest,
                     filename=filename,
                     overwrite=overwrite,
                     create_parents=create_parents,
@@ -1139,28 +1153,41 @@ def register(ctx: "RegisterContext") -> None:
                 ),
             ] = False,
         ) -> str:
-            # The items are relative to the bin (or full paths into it), not share paths,
-            # so they skip the share check; a dot part would still escape the bin (#449).
-            for item in paths:
-                refuse_dot_parts(
-                    item,
-                    "paths",
-                    "Give the item as list_recycle_bin shows it, e.g. Shows/Ep1.mkv.",
-                )
+            # The items are relative to the bin (or full paths into it), so the operation
+            # resolves them on the checked share (`resolve_bin_items`, #510).
             client = await _fs_client()
-            share, *dest = await ensure_known_shares(
-                client,
-                [share, *([dest_folder] if dest_folder else [])],
-                known_shares,
-                ["share", *(["dest_folder"] if dest_folder else [])],
+            [bin_share] = await resolve_paths(
+                client, known_shares, "restore_from_recycle_bin", "share", [share]
             )
-            dest_folder = dest[0] if dest else None
+            # Before any other request; the operation resolves them the same way.
+            items = resolve_bin_items(bin_share, paths)
+            dest = (
+                (
+                    await resolve_paths(
+                        client,
+                        known_shares,
+                        "restore_from_recycle_bin",
+                        "dest_folder",
+                        [dest_folder],
+                    )
+                )[0]
+                if dest_folder
+                else None
+            )
+            refuse_restore_into_a_bin(paths, items, bin_share.strip("/"), dest, dest_folder or None)
+            # Each item goes to dest, or back to the folder it was deleted from.
+            refuse_planted_bin(
+                "restore_from_recycle_bin",
+                paths,
+                items,
+                [dest or bin_item_origin(bin_share.strip("/"), item) for item in items],
+            )
             return _reply(
                 await restore_from_recycle_bin(
                     client,
-                    share=share,
+                    share=bin_share,
                     paths=paths,
-                    dest_folder=dest_folder,
+                    dest_folder=dest,
                     overwrite=overwrite,
                     timeout=copy_move_wait,
                     records=records,
