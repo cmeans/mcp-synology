@@ -241,7 +241,8 @@ def discover_config_path(explicit_path: str | None = None) -> Path:
         logger.info("Config: %s (from --config)", path)
         return path
 
-    env_path = os.environ.get("MCP_SYNOLOGY_CONFIG")
+    # Blank counts as unset, as for the SYNOLOGY_* variables.
+    env_path = (os.environ.get("MCP_SYNOLOGY_CONFIG") or "").strip()
     if env_path:
         path = Path(env_path).expanduser()
         if not path.exists():
@@ -316,15 +317,25 @@ def _env_expected(annotation: Any) -> str:
 def parse_env_value(env_var: str, dotted_path: str, value: str) -> Any:
     """``value``, read from ``env_var``, as its config field's type (#501).
 
-    Parsed by pydantic with the field's own type, so an env var takes exactly what the
-    config file does: booleans as pydantic reads them (true/false, 1/0, yes/no, on/off,
-    any case), whole numbers, and choices in any case (`SYNOLOGY_LOG_LEVEL=DEBUG`). Any
-    other value is an error naming the variable. `SYNOLOGY_HTTPS` used to be true for
-    `true`, `1` or `yes` and false for anything else, so `on` (or a typo) turned HTTPS
-    off even over `https: true` in the config, and the password went in cleartext.
+    Parsed by pydantic with the field's own type: booleans as pydantic reads them
+    (true/false, 1/0, yes/no, on/off, t/f, y/n, any case), whole numbers, and choices in
+    any case (`SYNOLOGY_LOG_LEVEL=DEBUG`; the config file's are lower-case), with
+    `update_notices` also taking the YAML booleans the file does (`no` is off). A value
+    of the wrong type is an error naming the variable; a field's own rules (an
+    `instance_id`'s characters) are checked with the rest of the config.
+
+    `SYNOLOGY_HTTPS` used to be true for `true`, `1` or `yes` and false for anything
+    else, so `on` (or a typo) turned HTTPS off even over `https: true` in the config, and
+    the password went in cleartext.
     """
     annotation = _env_field_annotation(dotted_path)
     text = value.strip()
+    if dotted_path == "update_notices":
+        # As in the file, where YAML reads `off`/`no`/`false` as false and `on`/`yes`/
+        # `true` as true, and `_yaml_bool_notices` maps them to off and all.
+        loaded = yaml.safe_load(text) if text.lower() != "off" else "off"
+        if isinstance(loaded, bool):
+            text = "all" if loaded else "off"
     if get_origin(annotation) is Literal or any(
         get_origin(a) is Literal for a in get_args(annotation)
     ):
@@ -369,7 +380,8 @@ def _emit_warnings(config: AppConfig) -> None:
     # A username alone isn't a secret (keyring password + config username is the
     # recommended setup), so only a password triggers the warning (#167).
     if config.auth.password:
-        if os.environ.get("SYNOLOGY_PASSWORD"):
+        # Blank counts as unset (_merge_env_overrides): the password is then the file's.
+        if (os.environ.get("SYNOLOGY_PASSWORD") or "").strip():
             logger.warning(
                 "Password provided via the SYNOLOGY_PASSWORD environment variable. "
                 "Consider using 'mcp-synology setup' to store them securely in the OS keyring."
@@ -404,7 +416,8 @@ def _synthesize_env_config() -> AppConfig | None:
 
     Returns an AppConfig if SYNOLOGY_HOST is set, otherwise None.
     """
-    host = os.environ.get("SYNOLOGY_HOST")
+    # Blank counts as unset, as in _merge_env_overrides.
+    host = (os.environ.get("SYNOLOGY_HOST") or "").strip()
     if not host:
         return None
 
@@ -680,7 +693,7 @@ def load_config(path: str | Path | None = None) -> AppConfig:
     except FileNotFoundError:
         # A file named by --config or MCP_SYNOLOGY_CONFIG must exist: never fall back
         # to env-only mode (#499).
-        if path or os.environ.get("MCP_SYNOLOGY_CONFIG"):
+        if path or (os.environ.get("MCP_SYNOLOGY_CONFIG") or "").strip():
             raise
         # Try env-var-only mode
         env_config = _synthesize_env_config()

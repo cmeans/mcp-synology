@@ -230,3 +230,101 @@ def test_the_cli_shows_the_error_without_a_traceback(
     assert "Error: SYNOLOGY_HTTPS must be true or false" in result.output
     assert "hunter2" not in result.output
     assert "Traceback" not in result.output
+
+
+# -- pre-QA r1 ----------------------------------------------------------------------
+
+
+def test_setup_refuses_a_missing_mcp_synology_config_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # It used to start creating a new config elsewhere, ignoring the variable (#499).
+    from click.testing import CliRunner
+
+    from mcp_synology.cli import main
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    result = CliRunner().invoke(
+        main,
+        ["setup"],
+        env={"SYNOLOGY_HOST": "nas.invalid", "MCP_SYNOLOGY_CONFIG": str(tmp_path / "nope.yaml")},
+        input="",
+    )
+    assert result.exit_code == 1
+    assert "Config file not found (from MCP_SYNOLOGY_CONFIG)" in result.output
+    assert "Let's create one" not in result.output
+
+
+def test_a_blank_synology_host_is_not_env_only_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SYNOLOGY_HOST", "   ")
+    with pytest.raises(FileNotFoundError, match="No config file found"):
+        load_config()
+
+
+def test_a_blank_mcp_synology_config_counts_as_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MCP_SYNOLOGY_CONFIG", "  ")
+    monkeypatch.setenv("SYNOLOGY_HOST", "nas.example")
+    config = load_config()
+    assert config.connection is not None and config.connection.host == "nas.example"
+
+
+def test_a_blank_password_variable_doesnt_hide_the_files_plaintext_password(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": 1,
+                "connection": {"host": "nas.example"},
+                "auth": {"password": "fakepw"},
+                "modules": {"filestation": {"enabled": True}},
+            }
+        )
+    )
+    monkeypatch.setenv("SYNOLOGY_PASSWORD", "   ")
+    with caplog.at_level(logging.WARNING, logger="mcp_synology.core.config"):
+        load_config(path)
+    assert "Plaintext password found in config file" in caplog.text
+    assert "SYNOLOGY_PASSWORD environment variable" not in caplog.text
+
+
+@pytest.mark.parametrize("value", ["no", "false", "off", "on", "yes", "true"])
+def test_update_notices_takes_the_yaml_booleans_the_file_does(
+    value: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from_file = yaml.safe_load(f"update_notices: {value}")["update_notices"]
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": 1,
+                "connection": {"host": "nas.example"},
+                "update_notices": from_file,
+                "modules": {"filestation": {"enabled": True}},
+            }
+        )
+    )
+    file_value = load_config(path).update_notices
+    monkeypatch.setenv("SYNOLOGY_UPDATE_NOTICES", value)
+    assert load_config(_config(tmp_path)).update_notices == file_value
+
+
+def test_a_default_location_is_logged_at_info(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.chdir(tmp_path)
+    path = tmp_path / "mcp-synology.yaml"
+    _config(tmp_path).rename(path)
+    with caplog.at_level(logging.INFO, logger="mcp_synology.core.config"):
+        load_config()
+    assert any(r.getMessage() == f"Config: {path}" for r in caplog.records)

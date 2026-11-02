@@ -46,7 +46,12 @@ def setup(config: str | None, list_configs: bool, verbose: bool) -> None:
 
     try:
         app_config = load_config(None)
-    except FileNotFoundError:
+    except FileNotFoundError as e:
+        # A file named by MCP_SYNOLOGY_CONFIG must exist: creating a config elsewhere
+        # would ignore the variable without a word (#499).
+        if (os.environ.get("MCP_SYNOLOGY_CONFIG") or "").strip():
+            click.echo(click.style(f"Error: {e}", fg="red"), err=True)
+            sys.exit(1)
         # No config file found — enter interactive creation mode
         _setup_interactive(verbose)
         return
