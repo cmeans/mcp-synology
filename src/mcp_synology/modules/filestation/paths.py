@@ -409,7 +409,7 @@ def name_problem(name: str, parent: str | None = None) -> str | None:
     # An invisible character where Unicode doesn't use one makes a look-alike name
     # (`report.pdf<ZWSP>`, `rep<soft hyphen>ort.pdf`), as a trailing space would
     # (maintainer, 2026-10-31); one where it does is ordinary (`नमस्ते`, NFD `Café`, a
-    # Persian ZWNJ, `❤<VS16>`, `1<VS16>⃣`, the Scotland flag: 🏴 + tags `gbsct` +
+    # Persian ZWNJ, `❤<VS16>`, `1<VS16><U+20E3>`, the Scotland flag: 🏴 + tags `gbsct` +
     # U+E007F): `invisible_problem`.
     problem = invisible_problem(name)
     if problem:

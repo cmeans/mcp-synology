@@ -244,22 +244,23 @@ _ZWJ_B = regex.compile(
     r"(?!\p{Indic_Syllabic_Category=Vowel_Dependent})"
 )
 # Two uses the Unicode core spec documents beyond UTS #39's patterns (pre-QA on #515): a ZWJ
-# between a letter and a virama (Bengali ra-phala, `র<ZWJ>্যালি`, chapter 12), and a ZWNJ between
-# two Arabic-script letters whatever their joining type (Persian writes `در<ZWNJ>ها` with one after
-# a right-joining letter, chapter 9; maintainer, 2026-10-31: real names come first).
+# between a letter and a virama (Bengali ra-phala, `র<ZWJ><U+09CD>যালি`, chapter 12), and a
+# ZWNJ between two Arabic-script letters whatever their joining type (Persian writes
+# `در<ZWNJ>ها` with one after a right-joining letter, chapter 9; maintainer, 2026-10-31: real
+# names come first).
 _ZWJ_BEFORE_VIRAMA = regex.compile(rf"(?<=\p{{L}}\p{{Mn}}{_MARKS})\u200d(?=\p{{ccc=Virama}})")
 _ZWNJ_ARABIC = regex.compile(
     rf"(?<=(?=\p{{scx=Arab}})\p{{L}}\p{{jt=T}}{_MARKS})\u200c(?=(?=\p{{scx=Arab}})\p{{L}})"
 )
 # UTS #51: a joiner between two emoji (👨<ZWJ>👩<ZWJ>👧, 🏳<VS16><ZWJ>🌈); VS15/VS16 after an
-# emoji, or after a keycap base when the keycap follows (1<VS16>⃣); the other variation
+# emoji, or after a keycap base when the keycap follows (1<VS16><U+20E3>); the other variation
 # selectors after the characters they vary (CJK ideographs, Mongolian letters, math symbols).
 _EMOJI_ZWJ = regex.compile(
     r"(?<=[\p{Extended_Pictographic}\p{Emoji_Modifier}\ufe0f])\u200d(?=\p{Extended_Pictographic})"
 )
 # VS15/VS16 after a non-ASCII emoji: `_emoji_presentation` (only bases
 # emoji-variation-sequences.txt registers; pre-QA on #515). After a keycap base, only when
-# the keycap follows (1<VS16>⃣).
+# the keycap follows (1<VS16><U+20E3>).
 _EMOJI_VS = regex.compile(r"(?<=[0-9#*])[\ufe0e\ufe0f](?=\u20e3)")
 # Only the variation selectors Unicode has ever registered (StandardizedVariants.txt,
 # IVD_Sequences.txt 2026-08-03): VS1-VS7 (U+FE00-FE06) and VS17-VS48 (U+E0100-E011F).
