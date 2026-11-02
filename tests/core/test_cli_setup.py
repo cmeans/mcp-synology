@@ -741,7 +741,7 @@ def test_list_shows_only_bare_hosts_and_text_names(tmp_path: Path) -> None:
     )
     (config_dir / "b.yaml").write_text("schema_version: 1\nconnection:\n")
     (config_dir / "c.yaml").write_text(
-        "schema_version: 1\nconnection: {host: nas.local}\ninstance_id: home\n"
+        "schema_version: 1\nconnection: {host: nas.local}\ninstance_id: Home\n"
     )
     (config_dir / "e.yaml").write_text(
         "schema_version: 1\nconnection: {host: nas}\ninstance_id: Bad ID\n"

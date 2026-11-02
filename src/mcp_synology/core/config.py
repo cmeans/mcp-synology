@@ -17,6 +17,7 @@ import re
 from pathlib import Path
 from typing import Annotated, Any, Literal, get_args, get_origin
 
+import httpx
 import yaml
 from pydantic import (
     BaseModel,
@@ -53,8 +54,11 @@ _HOST_OTHER_BAD = frozenset("\\?#%\"'<>^`{|},;=&+$!*()")
 
 
 _BRACKETED = re.compile(r"\[([^\]]*)\](?::(.*))?")
+# Quoted in YAML: unquoted, `host: [fd00::1]` is a list (pre-QA r2 on #511 PR 2).
+_IPV6_FORM = '"[fd00::1]" (in quotes in the config file)'
 _BRACKET_ADVICE = (
-    "has square brackets: square brackets hold only an IPv6 address, around all of it ([fd00::1])"
+    "has square brackets: square brackets hold only an IPv6 address, around all of it, "
+    + _IPV6_FORM
 )
 
 
@@ -98,14 +102,13 @@ def host_problems(
             problems.append(_BRACKET_ADVICE)
         if bracketed[2] is not None:
             problems.append(port)
-        rest = bracketed[1]
     else:
         try:
             ipaddress.IPv6Address(rest)
         except ValueError:
             pass
         else:
-            return [*problems, "is an IPv6 address: write it in square brackets ([fd00::1])"]
+            return [*problems, f"is an IPv6 address: write it in square brackets, {_IPV6_FORM}"]
         if "[" in rest or "]" in rest:
             # A half-bracketed IPv6 address has colons too: they aren't a port then.
             problems.append(_BRACKET_ADVICE)
@@ -117,11 +120,25 @@ def host_problems(
         problems.append("has a character a host name can't have")
     if not problems and (rest.startswith(".") or ".." in rest):
         problems.append("has an empty part (a leading dot, or two dots in a row)")
+    if not problems:
+        # What's left is a name or address that looks bare; the URL library has the final
+        # say (`999.1.1.1`, `01.2.3.4`, a name IDNA can't encode), or the URL built from
+        # it fails with a traceback (pre-QA r2 on #511 PR 2).
+        try:
+            httpx.URL(f"http://{host}/")
+        except httpx.InvalidURL:
+            problems.append(
+                "isn't a valid host name or IP address (an IPv4 address has four numbers "
+                "from 0 to 255 with no leading zeros; a name's parts are at most 63 "
+                "characters, of letters, digits and hyphens)"
+            )
     return problems
 
 
 def host_message(problems: list[str]) -> str:
     """The advice for a host `host_problems` refused, without the host."""
+    if problems == ["is empty"]:
+        return "must be a bare host name or IP address, and it is empty."
     return (
         "must be a bare host name or IP address, and it "
         + "; it ".join(problems)
@@ -158,6 +175,18 @@ class ConnectionConfig(BaseModel, extra="forbid"):
     https: bool = False
     verify_ssl: bool = True
     timeout: int = Field(default=30, ge=1, le=600)
+
+    @field_validator("host", mode="before")
+    @classmethod
+    def _bracketed_but_unquoted(cls, value: object) -> object:
+        # `host: [fd00::1]` unquoted is a YAML list holding the address.
+        if isinstance(value, list) and len(value) == 1 and isinstance(value[0], str):
+            msg = (
+                "is a YAML list, not text: an IPv6 address in square brackets needs quotes, "
+                '"[fd00::1]".'
+            )
+            raise ValueError(msg)
+        return value
 
     @field_validator("host")
     @classmethod
@@ -208,7 +237,7 @@ def _no_empty_path(name: str, value: str | None) -> str | None:
     class as `--config ''`), so a log file or instructions file the user meant to set
     isn't dropped without a word."""
     if value is not None and not value.strip():
-        msg = f"is empty: give a file's path, or leave {name} out"
+        msg = f"is empty: give a file's path, or leave {name} out."
         raise ValueError(msg)
     return value
 
@@ -339,8 +368,8 @@ class AppConfig(BaseModel, extra="forbid"):
                 msg = (
                     "connection.host gives no usable instance_id: its first part has "
                     "characters other than letters a-z, digits and hyphens (an IPv6 address, "
-                    "an underscore, or a letter outside a-z). Set instance_id "
-                    f"({_INSTANCE_ID_RULE})."
+                    "an underscore, or a letter outside a-z). Set instance_id, or the "
+                    f"SYNOLOGY_INSTANCE_ID environment variable ({_INSTANCE_ID_RULE})."
                 )
                 raise ValueError(msg)
             if problem := instance_id_problem(self.instance_id):
@@ -527,7 +556,9 @@ def parse_env_value(env_var: str, dotted_path: str, value: str) -> Any:
                 value, port_setting="set SYNOLOGY_PORT", https_setting="set SYNOLOGY_HTTPS=true"
             )
         ):
-            raise EnvVarError(f"{env_var} {host_message(problems)} (It sets {dotted_path}.)")
+            raise EnvVarError(
+                f"{env_var} {host_message(problems).removesuffix('.')} (it sets {dotted_path})."
+            )
         if dotted_path == "instance_id" and (problem := instance_id_problem(value)):
             raise EnvVarError(f"{env_var} {problem} (it sets {dotted_path}).")
         return value
@@ -810,25 +841,44 @@ class _ConfigLoader(yaml.SafeLoader):
     still a key set to null; only the colon-less form is refused.
     """
 
-    def construct_mapping(self, node: yaml.MappingNode, deep: bool = False) -> dict[Any, Any]:
+    def construct_document(self, node: yaml.Node) -> Any:
+        # Every mapping is checked as written, before anything is built: SafeLoader
+        # flattens `<<: *base` merges in place (merged keys put in front of the node's
+        # own), so a check while building would see an override as a repeat, both in the
+        # merging mapping and in an anchor reused by alias after it was flattened.
+        self._check_written_keys(node)
+        return super().construct_document(node)  # type: ignore[no-untyped-call]
+
+    def _check_written_keys(self, root: yaml.Node) -> None:
+        stack, visited = [root], set()
+        while stack:  # a loop, not recursion: an alias can make the graph share nodes
+            node = stack.pop()
+            if id(node) in visited:
+                continue
+            visited.add(id(node))
+            if isinstance(node, yaml.MappingNode):
+                self._check_mapping(node)
+                stack.extend(n for pair in node.value for n in pair)
+            elif isinstance(node, yaml.SequenceNode):
+                stack.extend(node.value)
+
+    def _check_mapping(self, node: yaml.MappingNode) -> None:
         seen: dict[Any, int] = {}
-        # Before SafeLoader flattens `<<: *base` merges, whose keys an explicit key may
-        # override: that's YAML's own rule, not a repeat.
         for key_node, value_node in node.value:
             if key_node.tag == _MERGE_TAG:
-                continue
+                continue  # its keys may be overridden: YAML's own rule, not a repeat
             line = key_node.start_mark.line + 1
             if node.flow_style and _has_no_colon(key_node, value_node):
                 raise ConfigKeyError(
                     f"The config file has a key with no value inside {{…}} (line {line}). "
-                    f"It isn't shown, since it may be part of a password: {_SPLIT_HINT}; to "
-                    "leave a setting empty, leave it out."
+                    "It isn't shown, since it may be part of a password. A colon needs a "
+                    f"space after it (`host: nas`, not `host:nas`); {_SPLIT_HINT}; to leave "
+                    "a setting empty, leave it out."
                 )
-            key = self.construct_object(key_node, deep=deep)  # type: ignore[no-untyped-call]
-            try:
-                first = seen.get(key)
-            except TypeError:
-                continue  # unhashable: SafeLoader's own error follows
+            if not isinstance(key_node, yaml.ScalarNode):
+                continue  # a list or mapping as a key: SafeLoader's own error follows
+            key = self.construct_object(key_node)  # type: ignore[no-untyped-call]
+            first = seen.get(key)
             if first is not None:
                 known = isinstance(key, str) and key in _config_keys()
                 raise ConfigKeyError(
@@ -838,7 +888,6 @@ class _ConfigLoader(yaml.SafeLoader):
                     + ("" if known else " The key isn't shown: it may be part of a password.")
                 )
             seen[key] = line
-        return super().construct_mapping(node, deep=deep)
 
 
 def _has_no_colon(key_node: yaml.Node, value_node: yaml.Node) -> bool:

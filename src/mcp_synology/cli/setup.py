@@ -104,7 +104,7 @@ def _list_configurations() -> None:
             if isinstance(alias, str) and alias.strip():
                 label = alias
             elif isinstance(instance_id, str) and not instance_id_problem(instance_id):
-                label = instance_id
+                label = instance_id.lower()  # as the server uses it
             else:
                 label = f.stem
             click.echo(f"  {f.name}")

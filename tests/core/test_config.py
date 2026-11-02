@@ -672,8 +672,9 @@ class TestAppConfig:
             assert (
                 "connection.host gives no usable instance_id: its first part has characters "
                 "other than letters a-z, digits and hyphens (an IPv6 address, an underscore, "
-                "or a letter outside a-z). Set instance_id (lowercase letters, digits and "
-                "hyphens; capitals are lowered)."
+                "or a letter outside a-z). Set instance_id, or the SYNOLOGY_INSTANCE_ID "
+                "environment variable (lowercase letters, digits and hyphens; capitals are "
+                "lowered)."
             ) in shown
 
     def test_yaml_error_without_a_location(self) -> None:

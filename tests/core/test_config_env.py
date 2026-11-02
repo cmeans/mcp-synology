@@ -392,8 +392,8 @@ def test_text_values_are_taken_as_given(env_var: str) -> None:
         (
             "SYNOLOGY_HOST",
             "SYNOLOGY_HOST must be a bare host name or IP address, and it has a space or an "
-            "invisible character. It isn't shown, since it may hold a password. (It sets "
-            "connection.host.)",
+            "invisible character. It isn't shown, since it may hold a password (it sets "
+            "connection.host).",
         ),
         (
             "SYNOLOGY_INSTANCE_ID",

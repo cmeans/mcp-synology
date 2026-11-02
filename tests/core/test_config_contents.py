@@ -121,6 +121,12 @@ class TestDuplicateKeys:
         )
         assert raw["conn"] == {"https": False, "port": 5001}
 
+    def test_a_merged_anchor_reused_by_alias_is_not_a_repeat(self) -> None:
+        """Pre-QA r2: SafeLoader flattens a merge in place, so the alias's second visit saw
+        the override as a repeat."""
+        raw = parse_config_text("a: &a {x: 1}\nc: {<<: &b {<<: *a, x: 2}}\nd: *b\n")
+        assert raw["d"] == {"x": 2}
+
     def test_the_same_key_in_two_sections_is_fine(self) -> None:
         raw = parse_config_text("a: {x: 1}\nb: {x: 2}\n")
         assert raw == {"a": {"x": 1}, "b": {"x": 2}}
@@ -144,6 +150,13 @@ class TestKeyWithoutValue:
         assert "Spring" not in message
         assert "device_id" not in message
         assert "quote that value" in message
+
+    def test_a_missing_space_after_the_colon_gets_that_advice(self, tmp_path: Path) -> None:
+        """`{host:nas}` is one colon-less key in YAML (pre-QA r2)."""
+        message = _yaml_message(
+            tmp_path, "schema_version: 1\nconnection: {host:nas, https:true}\n" + _MODULES
+        )
+        assert "A colon needs a space after it (`host: nas`, not `host:nas`)" in message
 
     def test_a_flow_key_with_a_colon_and_no_value_is_fine(self) -> None:
         assert parse_config_text("a: {b: , c: 1}\n") == {"a": {"b": None, "c": 1}}
@@ -303,6 +316,35 @@ class TestHost:
 
         assert [p.split(":")[0].removeprefix("has a ") for p in host_problems(host)] == kinds
 
+    @pytest.mark.parametrize("host", ["999.1.1.1", "1.2.3.999", "01.2.3.4", "Ⓝas", "ä" * 70])
+    def test_a_host_the_url_library_refuses_is_refused_here(self, host: str) -> None:
+        """Pre-QA r2: these looked bare but crashed later with httpx.InvalidURL."""
+        from mcp_synology.core.config import host_problems
+
+        (problem,) = host_problems(host)
+        assert problem.startswith("isn't a valid host name or IP address")
+
+    @pytest.mark.parametrize("text", ["host: [fd00::1]\n", "host: [fd00::1]\nport: 5001\n"])
+    def test_an_unquoted_bracketed_ipv6_address_says_to_quote_it(self, text: str) -> None:
+        """Unquoted, `[fd00::1]` is a YAML list (pre-QA r2)."""
+        raw = {
+            "schema_version": 1,
+            "connection": parse_config_text(text),
+            "modules": {"filestation": {}},
+        }
+        with pytest.raises(ValidationError) as exc:
+            AppConfig.model_validate(raw)
+        message = format_validation_error(exc.value)
+        assert 'an IPv6 address in square brackets needs quotes, "[fd00::1]"' in message
+        assert "fd00::1]'" not in message
+
+    def test_an_empty_host_gets_no_hiding_note(self) -> None:
+        from mcp_synology.core.config import host_message, host_problems
+
+        assert host_message(host_problems("")) == (
+            "must be a bare host name or IP address, and it is empty."
+        )
+
     @pytest.mark.parametrize(
         ("kwargs", "says"),
         [
@@ -352,6 +394,27 @@ class TestEmptyValues:
                     + _MODULES,
                 )
             )
+
+    def test_instance_id_is_lowered(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """It names the state folder and keyring entry (pre-QA r2: no test pinned it)."""
+        path = _write(
+            tmp_path, "schema_version: 1\ninstance_id: MyNAS\nconnection: {host: nas}\n" + _MODULES
+        )
+        assert load_config(path).instance_id == "mynas"
+        monkeypatch.setenv("SYNOLOGY_INSTANCE_ID", "Office-NAS")
+        assert load_config(path).instance_id == "office-nas"
+
+    @pytest.mark.parametrize(
+        "line", ["logging:\n  file:\n", "instructions_file:\n", "logging: {file: }\n"]
+    )
+    def test_a_key_left_blank_is_unset(self, tmp_path: Path, line: str) -> None:
+        """YAML reads a key with nothing after it as null: not set, like an empty section
+        (maintainer decision 3; only "" names an empty path)."""
+        config = load_config(
+            _write(tmp_path, "schema_version: 1\nconnection: {host: nas}\n" + line + _MODULES)
+        )
+        assert config.logging.file is None
+        assert config.instructions_file is None
 
     @pytest.mark.parametrize(
         ("line", "where"),
