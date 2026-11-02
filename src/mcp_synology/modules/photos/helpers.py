@@ -146,7 +146,7 @@ FOLDER_PARAMS: dict[str, frozenset[str]] = {
 FOLDER_ADVICE = "Pass a folder ID, or a path starting with /, such as /Trips/2024."
 
 
-def check_folder_path(value: str, param: str = "folder") -> str:
+def check_folder_path(value: str, param: str = "folder", advice: str = FOLDER_ADVICE) -> str:
     """A Photos folder path as DSM's ``Browse.Folder`` takes it: ``/`` and the folders below.
 
     Taken exactly, by File Station's part rules (#510): `check_parts` drops only whitespace
@@ -154,9 +154,10 @@ def check_folder_path(value: str, param: str = "folder") -> str:
     there: ``/x/foo<NUL>y`` resolved to ``/x/foo``), an empty part (``//``) and a ``.`` or
     ``..`` part (DSM answers 642 for those). Photos reaches a folder whose name starts with
     whitespace exactly (`` foo`` beside ``foo``), so stripping looked up another folder (vdsm
-    DSM 7.1, 7.2.2, 7.3.2 and 7.4.1, personal space and Shared Space).
+    DSM 7.1, 7.2.2, 7.3.2 and 7.4.1, personal space and Shared Space). ``advice`` is the
+    refusal's suggestion, for an argument that takes only a path (`photo_request`).
     """
-    return check_parts(value, param, FOLDER_ADVICE)
+    return check_parts(value, param, advice)
 
 
 @dataclass

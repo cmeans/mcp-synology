@@ -456,6 +456,9 @@ def _request_block(req: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+_REQUEST_FOLDER_ADVICE = "Pass the folder as a path starting with /, such as /Inbox."
+
+
 async def photo_request(
     client: DsmClient,
     *,
@@ -538,7 +541,8 @@ async def photo_request(
         if description is not None:
             fields["description"] = description
         if folder is not None:
-            path = check_folder_path(folder)
+            # A path only: an ID here would be a folder named after it (`12` is `/12`).
+            path = check_folder_path(folder, advice=_REQUEST_FOLDER_ADVICE)
             # Checked here, so a typo isn't a request into a folder that doesn't exist.
             await Photos(client, sp, op).folder(path)
             fields["library"] = _LIBRARY[sp]

@@ -11,7 +11,6 @@ from __future__ import annotations
 import contextlib
 import inspect
 import json
-import re
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -28,6 +27,7 @@ from mcp_synology.modules.downloadstation.tasks import create_download, edit_dow
 from tests.modules.downloadstation.dsm import captured, get_route, post_route
 from tests.modules.downloadstation.test_config import _manager
 from tests.modules.downloadstation.test_tasks import _form, _has_default
+from tests.path_words import PATHLIKE_WORDS, words
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -66,16 +66,12 @@ def _tools() -> dict[str, Any]:
     return {name: t.fn for name, t in server._tool_manager._tools.items()}
 
 
-def _words(param: str) -> set[str]:
-    return set(re.split(r"_", param))
-
-
 def test_every_folder_argument_is_registered() -> None:
     tools = _tools()
     unregistered = []
     for name, fn in tools.items():
         for param in inspect.signature(fn).parameters:
-            if not _words(param) & {"destination", "folder", "path", "dir"}:
+            if not words(param) & PATHLIKE_WORDS:
                 continue
             if DESTINATION_PARAMS.get(name) == param or param in LOCAL_PARAMS.get(name, set()):
                 continue

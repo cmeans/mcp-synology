@@ -12,7 +12,6 @@ from __future__ import annotations
 import contextlib
 import inspect
 import json
-import re
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock
@@ -31,6 +30,7 @@ from mcp_synology.modules.photos.organize import photo_folder, photo_request
 from mcp_synology.modules.photos.tasks import copy_or_move, delete_photo_folders
 from mcp_synology.modules.photos.transfer import upload_photos
 from tests.modules.photos.dsm import FakePhotos, captured, install, make_client
+from tests.path_words import PATHLIKE_WORDS, words
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -41,6 +41,12 @@ FOLDER = "SYNO.Foto.Browse.Folder"
 
 # Arguments that name a file or folder on this machine, not in Photos.
 LOCAL_PARAMS = {"download_photos": {"dest_folder"}, "upload_photos": {"local_paths"}}
+# Arguments whose names look like a folder's but aren't one.
+NOT_FOLDERS = {
+    "merge_people": {"target"},  # the person to keep
+    "copy_photos": {"dest_space"},  # personal or shared
+    "move_photos": {"dest_space"},
+}
 
 Call = Callable[["DsmClient", str, "Path"], "Awaitable[str]"]
 
@@ -109,10 +115,10 @@ def test_every_folder_argument_is_registered() -> None:
     unregistered = []
     for name, fn in tools.items():
         for param in inspect.signature(fn).parameters:
-            words = set(re.split(r"_", param))
-            if not words & {"folder", "folders", "parent", "destination", "path", "paths"}:
+            if not words(param) & PATHLIKE_WORDS:
                 continue
-            if param in FOLDER_PARAMS.get(name, set()) | LOCAL_PARAMS.get(name, set()):
+            known = FOLDER_PARAMS.get(name, set()) | LOCAL_PARAMS.get(name, set())
+            if param in known | NOT_FOLDERS.get(name, set()):
                 continue
             unregistered.append(f"{name}.{param}")
     assert not unregistered, f"folder arguments not in FOLDER_PARAMS: {unregistered}"

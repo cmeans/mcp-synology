@@ -744,6 +744,10 @@ class TestRequests:
             with pytest.raises(ToolError) as exc:
                 await photo_request(client, action="create", subject="s", folder="/x\x00y")
         assert _error(exc)["param"] == "folder"
+        # A path only: no ID advice (QA round 1 on #526).
+        assert _error(exc)["suggestion"] == (
+            "Pass the folder as a path starting with /, such as /Inbox."
+        )
         assert not fake.of(REQ, "create") and not fake.of(FOLDER)
 
     @respx.mock
