@@ -36,7 +36,7 @@ _HIDDEN = regex.compile(
 
 
 def _in_ci() -> bool:
-    return os.environ.get("CI", "").lower() not in ("", "0", "false")
+    return os.environ.get("CI", "").lower() not in ("", "0", "false", "no", "off")
 
 
 _GIT_LOCATION = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR")
@@ -56,6 +56,9 @@ def _tracked_files() -> list[Path]:
                 **{k: v for k, v in os.environ.items() if k not in _GIT_LOCATION},
                 "LC_ALL": "C",
                 "LANGUAGE": "",
+                # Stop at ROOT: an sdist unpacked inside another repository's work tree
+                # would otherwise list that repository (nothing here) instead of skipping.
+                "GIT_CEILING_DIRECTORIES": str(ROOT.parent),
             },
         ).stdout.decode("utf-8", "surrogateescape")
     except FileNotFoundError as e:
@@ -169,6 +172,8 @@ def test_hidden_lines(data: bytes, expected: list[tuple[int, list[str]]]) -> Non
         ("false", False),
         ("False", False),
         ("0", False),
+        ("no", False),
+        ("OFF", False),
     ],
 )
 def test_in_ci(value: str, ci: bool, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -262,9 +267,43 @@ def test_a_stray_git_location_variable_is_ignored(
     assert ROOT / "pyproject.toml" in tracked
 
 
+def test_inside_another_repository_it_skips(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # An sdist unpacked in a monorepo or a dist-git checkout.
+    _require_git()
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    copy = tmp_path / "mcp-synology-0.0"
+    copy.mkdir()
+    (copy / "pyproject.toml").write_text("")
+    monkeypatch.setattr(f"{__name__}.ROOT", copy)
+    monkeypatch.setenv("CI", "")
+    monkeypatch.delenv("GIT_CEILING_DIRECTORIES", raising=False)
+    with pytest.raises(pytest.skip.Exception, match="not a git checkout"):
+        _tracked_files()
+
+
+def test_odd_names_and_deleted_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A tracked name that isn't UTF-8 is still checked, and a tracked file deleted from the
+    # working tree is passed over.
+    _require_git()
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / "pyproject.toml").write_text("")
+    (tmp_path / "gone.txt").write_text("")
+    with open(os.path.join(os.fsencode(tmp_path), b"a\xff.txt"), "wb") as f:
+        f.write("x\u200by\n".encode())
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    (tmp_path / "gone.txt").unlink()
+    monkeypatch.setattr(f"{__name__}.ROOT", tmp_path)
+    monkeypatch.setenv("CI", "")
+    with pytest.raises(AssertionError) as e:
+        test_no_tracked_file_holds_a_hidden_character()
+    assert "a\udcff.txt:1: U+200B" in str(e.value)
+    assert "gone.txt" not in str(e.value)
+
+
 def test_an_empty_listing_fails(monkeypatch: pytest.MonkeyPatch) -> None:
-    # git can list nothing without an error (GIT_INDEX_FILE naming a missing index): the
-    # guard would then check nothing and pass.
+    # Should git ever list nothing without an error, the guard would check nothing and pass.
     monkeypatch.setattr(f"{__name__}._tracked_files", lambda: [])
     with pytest.raises(AssertionError, match="pyproject.toml"):
         test_no_tracked_file_holds_a_hidden_character()
