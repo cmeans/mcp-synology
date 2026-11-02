@@ -15,9 +15,9 @@ from mcp_synology.modules.photos.helpers import (
     V7,
     Photos,
     add_rejected,
+    check_folder_path,
     check_ids,
     check_space,
-    folder_path,
     in_batches,
     invalid,
     not_found,
@@ -538,7 +538,7 @@ async def photo_request(
         if description is not None:
             fields["description"] = description
         if folder is not None:
-            path = folder_path(folder)
+            path = check_folder_path(folder)
             # Checked here, so a typo isn't a request into a folder that doesn't exist.
             await Photos(client, sp, op).folder(path)
             fields["library"] = _LIBRARY[sp]

@@ -251,7 +251,7 @@ class TestPhotos:
             assert _error(exc)["code"] == "invalid_parameter"
 
             # DSM keeps these new names as given; photo_folder refuses them.
-            for bad in (" bar", "a\x1bb", "a​b", "a‮b"):
+            for bad in (" bar", "a\x1bb", "a\u200bb", "a\u202eb"):
                 made = await ph.call(
                     "Browse.Folder", "create", {"target_id": int(top["id"]), "name": bad}
                 )

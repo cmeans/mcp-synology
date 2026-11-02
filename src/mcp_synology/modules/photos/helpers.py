@@ -146,7 +146,7 @@ FOLDER_PARAMS: dict[str, frozenset[str]] = {
 FOLDER_ADVICE = "Pass a folder ID, or a path starting with /, such as /Trips/2024."
 
 
-def folder_path(value: str, param: str = "folder") -> str:
+def check_folder_path(value: str, param: str = "folder") -> str:
     """A Photos folder path as DSM's ``Browse.Folder`` takes it: ``/`` and the folders below.
 
     Taken exactly, by File Station's part rules (#510): `check_parts` drops only whitespace
@@ -259,13 +259,13 @@ class Photos:
         """A folder by ID or by path inside the space (``/`` is the root).
 
         Every folder argument comes through here, so the path rules live in one place
-        (#510): a path is taken exactly, by File Station's part rules (`folder_path`).
+        (#510): a path is taken exactly, by File Station's part rules (`check_folder_path`).
         """
         text = value.strip()
         if text.isascii() and text.isdigit():
             params: dict[str, Any] = {"id": int(text)}
         else:
-            path = folder_path(value, param)
+            path = check_folder_path(value, param)
             params = {"id": 0} if path == "/" else {"name": path}
         try:
             data = await self.call("Browse.Folder", "get", params, version=2)
