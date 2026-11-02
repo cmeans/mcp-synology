@@ -542,6 +542,9 @@ Supporting `${VAR}` syntax in YAML adds complexity (custom loader, escaping edge
 
 Config loading follows this sequence:
 1. Load raw YAML (structural parse only, no field-level validation)
+   The root must be a mapping (an empty file is treated as an empty mapping).
+   An empty section becomes a mapping when an environment override fills it;
+   a non-mapping section is refused before applying that override.
 2. Merge environment variable overrides into the loaded config
 3. Apply defaults (port from https, instance_id from host, etc.)
 4. Validate the merged config with Pydantic (required fields, types, ranges)

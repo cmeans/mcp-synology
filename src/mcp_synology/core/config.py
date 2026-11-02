@@ -271,8 +271,10 @@ def _merge_env_overrides(raw: dict[str, Any]) -> dict[str, Any]:
         parts = dotted_path.split(".")
         target = raw
         for part in parts[:-1]:
-            if part not in target:
+            if target.get(part) is None:
                 target[part] = {}
+            if not isinstance(target[part], dict):
+                raise ValueError(f"Config section '{part}' must be a YAML mapping of settings")
             target = target[part]
 
         key = parts[-1]
@@ -620,11 +622,18 @@ def load_config(path: str | Path | None = None) -> AppConfig:
             f"The config file isn't valid UTF-8 (line {line}). Save it as UTF-8 (in Notepad: "
             "File > Save as, Encoding: UTF-8)."
         ) from None
-    raw: dict[str, Any] = parse_config_text(raw_text) or {}
+    raw = parse_config_text(raw_text)
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        raise ValueError(
+            "The config file must be a YAML mapping of settings "
+            "(schema_version: 1, connection: ...)"
+        )
 
     raw = _merge_env_overrides(raw)
 
-    config = AppConfig(**raw)
+    config = AppConfig.model_validate(raw)
 
     logger.debug(
         "Config loaded: instance_id=%s, host=%s, port=%s, https=%s, modules=%s",
