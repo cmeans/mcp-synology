@@ -235,10 +235,12 @@ def discover_config_path(explicit_path: str | None = None) -> Path:
     """
     if explicit_path:
         path = Path(explicit_path).expanduser()
+        # Absolute in messages: an MCP client starts the server in a working folder the
+        # user rarely knows (QA round 1 on #529).
         if not path.exists():
-            msg = f"Config file not found: {path}"
+            msg = f"Config file not found: {path.absolute()}"
             raise FileNotFoundError(msg)
-        logger.info("Config: %s (from --config)", path)
+        logger.info("Config: %s (from --config)", path.absolute())
         return path
 
     # Blank counts as unset, as for the SYNOLOGY_* variables.
@@ -249,11 +251,11 @@ def discover_config_path(explicit_path: str | None = None) -> Path:
             # An error, never env-only mode: that would run read-only over plain HTTP
             # instead of the config the variable names (#499).
             msg = (
-                f"Config file not found (from MCP_SYNOLOGY_CONFIG): {path}. Fix the path, "
-                "or unset MCP_SYNOLOGY_CONFIG to use the default locations."
+                f"Config file not found (from MCP_SYNOLOGY_CONFIG): {path.absolute()}. "
+                "Fix the path, or unset MCP_SYNOLOGY_CONFIG to use the default locations."
             )
             raise FileNotFoundError(msg)
-        logger.info("Config: %s (from MCP_SYNOLOGY_CONFIG)", path)
+        logger.info("Config: %s (from MCP_SYNOLOGY_CONFIG)", path.absolute())
         return path
 
     default_paths = [
@@ -263,7 +265,7 @@ def discover_config_path(explicit_path: str | None = None) -> Path:
     for path in default_paths:
         logger.debug("Checking default config path: %s", path)
         if path.exists():
-            logger.info("Config: %s", path)
+            logger.info("Config: %s", path.absolute())
             return path
 
     msg = (
@@ -315,22 +317,48 @@ def _env_expected(annotation: Any) -> str:
     return "a valid value"  # pragma: no cover
 
 
+# The boolean words an env var takes, exactly the documented ones.
+_ENV_BOOLS = {
+    "true": True,
+    "1": True,
+    "yes": True,
+    "on": True,
+    "false": False,
+    "0": False,
+    "no": False,
+    "off": False,
+}
+
+
 def parse_env_value(env_var: str, dotted_path: str, value: str) -> Any:
     """``value``, read from ``env_var``, as its config field's type (#501).
 
-    Parsed by pydantic with the field's own type: booleans as pydantic reads them
-    (true/false, 1/0, yes/no, on/off, t/f, y/n, any case), whole numbers, and choices in
-    any case (`SYNOLOGY_LOG_LEVEL=DEBUG`; the config file's are lower-case), with
-    `update_notices` also taking the YAML booleans the file does (`no` is off). A value
-    of the wrong type is an error naming the variable; a field's own rules (an
-    `instance_id`'s characters) are checked with the rest of the config.
+    Booleans take only the documented words, `true`/`false`, `1`/`0`, `yes`/`no`,
+    `on`/`off`, in any case (not pydantic's one-letter `t`/`f`/`y`/`n`: `SYNOLOGY_HTTPS=n`
+    would turn HTTPS off; QA round 1 on #529). Whole numbers and choices are parsed by
+    pydantic with the field's own type, choices in any case (`SYNOLOGY_LOG_LEVEL=DEBUG`;
+    the config file's are lower-case), with `update_notices` also taking the words the
+    file's YAML reads as booleans (`no` is off). Typed values are stripped; text values
+    (host, credentials, `instance_id`) are taken as given, as in the file. A value of the
+    wrong type is an error naming the variable; a field's own rules (an `instance_id`'s
+    characters) are checked with the rest of the config.
 
     `SYNOLOGY_HTTPS` used to be true for `true`, `1` or `yes` and false for anything
     else, so `on` (or a typo) turned HTTPS off even over `https: true` in the config, and
     the password went in cleartext.
     """
     annotation = _env_field_annotation(dotted_path)
+    kinds = [a for a in get_args(annotation) if a is not type(None)] or [annotation]
+    if kinds == [str]:
+        return value  # text: taken as given
     text = value.strip()
+    if kinds == [bool]:
+        word = _ENV_BOOLS.get(text.lower())
+        if word is None:
+            raise EnvVarError(
+                f"{env_var} must be {_env_expected(annotation)} (it sets {dotted_path})."
+            )
+        return word
     if dotted_path == "update_notices":
         # As in the file, where YAML reads `no`/`false`/`off` as false and `yes`/`true`/
         # `on` as true, and `_yaml_bool_notices` maps them to off and all. A word list,

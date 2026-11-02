@@ -241,9 +241,10 @@ def test_the_cli_shows_the_error_without_a_traceback(
         env={"SYNOLOGY_HTTPS": "hunter2"},
     )
     assert result.exit_code == 1
+    # A handled error exits through sys.exit; an uncaught exception would be kept here.
+    assert isinstance(result.exception, SystemExit)
     assert "Error: SYNOLOGY_HTTPS must be true or false" in result.output
     assert "hunter2" not in result.output
-    assert "Traceback" not in result.output
 
 
 # -- pre-QA r1 ----------------------------------------------------------------------
@@ -399,3 +400,52 @@ def test_early_logging_reads_the_level_as_the_config_does(
     monkeypatch.setenv("SYNOLOGY_LOG_LEVEL", value)
     logging_._init_early_logging()
     assert seen["level"] == level
+
+
+# -- QA round 1 on #529 ---------------------------------------------------------------
+
+
+@pytest.mark.parametrize("value", ["t", "T", "f", "y", "Y", "n", "N"])
+def test_one_letter_booleans_are_errors(value: str) -> None:
+    # pydantic takes them, but they aren't documented, and `n` would turn HTTPS off.
+    with pytest.raises(EnvVarError) as excinfo:
+        parse_env_value("SYNOLOGY_HTTPS", "connection.https", value)
+    assert str(excinfo.value) == MESSAGES["SYNOLOGY_HTTPS"]
+
+
+@pytest.mark.parametrize("env_var", sorted(TEXT_VARS))
+def test_text_values_are_taken_as_given(env_var: str) -> None:
+    assert parse_env_value(env_var, ENV_VAR_MAP[env_var], " a b ") == " a b "
+
+
+def test_a_padded_instance_id_is_refused_as_in_the_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pydantic import ValidationError
+
+    monkeypatch.setenv("SYNOLOGY_INSTANCE_ID", " my-id ")
+    with pytest.raises(ValidationError, match="invalid characters"):
+        load_config(_config(tmp_path))
+
+
+def test_a_relative_mcp_synology_config_is_shown_absolute(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MCP_SYNOLOGY_CONFIG", "cfgx.yaml")
+    with pytest.raises(FileNotFoundError) as excinfo:
+        load_config()
+    assert str(tmp_path / "cfgx.yaml") in str(excinfo.value)
+    _config(tmp_path).rename(tmp_path / "cfgx.yaml")
+    with caplog.at_level(logging.INFO, logger="mcp_synology.core.config"):
+        load_config()
+    assert f"Config: {tmp_path / 'cfgx.yaml'} (from MCP_SYNOLOGY_CONFIG)" in caplog.text
+
+
+def test_a_relative_config_flag_is_shown_absolute(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(FileNotFoundError) as excinfo:
+        load_config("cfgx.yaml")
+    assert str(tmp_path / "cfgx.yaml") in str(excinfo.value)
