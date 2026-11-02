@@ -337,9 +337,10 @@ class TestInvisibleProblem:
         self, name: str, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """After an unnamed match, the search looks only up to the longest decomposition,
-        in that run and every later one: 85 x U+0F73 took 36 ms a name (pre-QA on #515),
-        and U+0F73 twice, then 78 more in a second run, 28 ms (QA round 7 on #515). Counts
-        the matches described rather than timing them, so coverage and slow CI runners
+        in that run and every later one: a letter and 84 x U+0F73 took 36 ms a name
+        (pre-QA on #515), and U+0F73 twice, then 78 more in a second run, 28 ms (QA round 7
+        on #515). Counts the matches described rather than timing them, so coverage and
+        slow CI runners
         don't matter (pre-QA on #515): uncapped, these names describe 3,000 or more."""
         from mcp_synology.modules.filestation import helpers
 
@@ -541,16 +542,19 @@ class TestInvisibleProblem:
         from mcp_synology.modules.filestation.helpers import invisible_problem
 
         k, u = "\U00016100", "\U00016121"
-        for vowel in ("\U00016123", "\U00016125", "\U00016126", "\U00016128"):
+        # Every vowel sign whose decomposition starts with U+1611E, except U+1611E itself
+        # and U+16121 (three U+1611E in a row either way).
+        for vowel in map(chr, (0x16122, 0x16123, 0x16125, 0x16126, 0x16127, 0x16128)):
             assert invisible_problem(k + vowel + u) is None, hex(ord(vowel))
             assert invisible_problem(k + u + vowel) is not None, hex(ord(vowel))
 
     def test_shown_skips_checking_a_part_longer_than_any_name(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The check is quadratic on a long run of different marks (with the stdlib NFD,
-        80,000 took 4.6 s in `shown`: QA round 3 on #515). No NAS name is over 255 bytes, so such a
-        part is quoted without the check (deterministic: the check would raise)."""
+        """The check grows with the cube of a long run of different marks (4,000 take
+        about a second; the stdlib NFD it once used was quadratic: QA round 3 on #515). No
+        NAS name is over 255 bytes, so such a part is quoted without the check
+        (deterministic: the check would raise)."""
         from mcp_synology.modules.filestation import helpers
 
         checked: list[str] = []

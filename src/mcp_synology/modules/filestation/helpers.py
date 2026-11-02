@@ -457,7 +457,7 @@ def _repeated_marks(name: str) -> str | None:
                 if first is None:
                     # After the first match, look for a named one only up to the longest
                     # decomposition, so a long run of repeats isn't described match by
-                    # match: 255 bytes of U+0F73 took 36 ms (pre-QA on #515).
+                    # match: a letter and 84 x U+0F73 (255 bytes) took 36 ms (pre-QA on #515).
                     first = reason
                     limit = min(limit, max(size, _LONGEST_DECOMPOSITION))
     return first
@@ -634,9 +634,9 @@ def shown(path: str) -> str:
         if not part:
             continue
         # A part longer than any NAS name is quoted unchecked: `invisible_problem`'s
-        # repeated-mark search is quadratic on a long run of different marks (the stdlib
-        # NFD it once used was too: QA round 3 on #515), and new names are capped at 255
-        # bytes before it runs.
+        # repeated-mark search grows with the cube of a long run of different marks (the
+        # stdlib NFD it once used was quadratic: QA round 3 on #515), and new names are
+        # capped at 255 bytes before it runs.
         if len(part.encode("utf-8", "surrogatepass")) > NAME_BYTES:
             return _escaped_repr(path)
         if part != part.strip() or invisible_problem(part) is not None or any(map(_hides, part)):
