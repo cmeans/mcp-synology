@@ -256,11 +256,15 @@ class Photos:
 
     # -- folders ------------------------------------------------------------
 
-    async def folder(self, value: str, *, param: str = "folder") -> dict[str, Any]:
+    async def folder(
+        self, value: str, *, param: str = "folder", missing_advice: str | None = None
+    ) -> dict[str, Any]:
         """A folder by ID or by path inside the space (``/`` is the root).
 
         Every folder argument comes through here, so the path rules live in one place
         (#510): a path is taken exactly, by File Station's part rules (`check_folder_path`).
+        ``missing_advice`` replaces the not-found suggestion, for an argument that takes only
+        a path (`photo_request`).
         """
         text = value.strip()
         if text.isascii() and text.isdigit():
@@ -277,7 +281,8 @@ class Photos:
                     f"no folder {value!r} in the {space_label(self.space)}.",
                     param=param,
                     value=value,
-                    suggestion=(
+                    suggestion=missing_advice
+                    or (
                         "Pass a folder ID, or a path starting with / "
                         "(list_photo_collections type=folder lists them)."
                     ),

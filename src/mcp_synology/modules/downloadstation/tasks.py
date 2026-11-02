@@ -34,6 +34,7 @@ from mcp_synology.modules.downloadstation.helpers import (
     task_error_detail,
     task_size_unknown,
 )
+from mcp_synology.modules.filestation.helpers import shown
 
 logger = logging.getLogger(__name__)
 
@@ -1063,4 +1064,6 @@ def _edit_result(task: dict[str, Any] | None, destination: str) -> str:
         return "ok"
     if task.get("status") == "finished":
         return "not changed: finished (Download Station doesn't move a finished task's file)"
-    return f"not changed: destination is still {now or '—'}"
+    # Quoted when padded (`shown`): destinations are taken exactly now (#510), so a stray
+    # space is the difference between the asked-for folder and this one.
+    return f"not changed: destination is still {shown(now) if now else '—'}"

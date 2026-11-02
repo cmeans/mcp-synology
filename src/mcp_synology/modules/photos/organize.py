@@ -457,6 +457,9 @@ def _request_block(req: dict[str, Any]) -> str:
 
 
 _REQUEST_FOLDER_ADVICE = "Pass the folder as a path starting with /, such as /Inbox."
+_REQUEST_MISSING_ADVICE = (
+    "Pass the folder as a path starting with / (list_photo_collections type=folder lists them)."
+)
 
 
 async def photo_request(
@@ -544,7 +547,7 @@ async def photo_request(
             # A path only: an ID here would be a folder named after it (`12` is `/12`).
             path = check_folder_path(folder, advice=_REQUEST_FOLDER_ADVICE)
             # Checked here, so a typo isn't a request into a folder that doesn't exist.
-            await Photos(client, sp, op).folder(path)
+            await Photos(client, sp, op).folder(path, missing_advice=_REQUEST_MISSING_ADVICE)
             fields["library"] = _LIBRARY[sp]
             fields["folder_home_path"] = path
         if max_file_mib is not None:

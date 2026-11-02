@@ -751,6 +751,24 @@ class TestRequests:
         assert not fake.of(REQ, "create") and not fake.of(FOLDER)
 
     @respx.mock
+    async def test_missing_folder_advice_is_path_only(self) -> None:
+        # The folder is a path only: no ID advice for a folder that isn't there either (#526).
+        fake = FakePhotos().on(REQ, "list", 1, {"list": []})
+        fake.error(FOLDER, "get", 2, 642)
+        install(fake)
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await photo_request(client, action="create", subject="s", folder="Inbx")
+        err = _error(exc)
+        assert (err["code"], err["param"]) == ("not_found", "folder")
+        assert err["suggestion"] == (
+            "Pass the folder as a path starting with / (list_photo_collections type=folder "
+            "lists them)."
+        )
+        assert not fake.of(REQ, "create")
+
+    @respx.mock
     async def test_shared_space_folder_checked_there(self) -> None:
         fake = FakePhotos().on(REQ, "list", 1, {"list": []})
         fake.on("SYNO.FotoTeam.Browse.Folder", "get", 2, {"folder": {"id": 5, "name": "/team"}})
