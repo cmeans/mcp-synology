@@ -91,7 +91,9 @@ INVALID = {
 }
 # Each typed variable's whole error message.
 MESSAGES = {
-    "SYNOLOGY_PORT": "SYNOLOGY_PORT must be a whole number (it sets connection.port).",
+    "SYNOLOGY_PORT": (
+        "SYNOLOGY_PORT must be a whole number from 1 to 65535 (it sets connection.port)."
+    ),
     "SYNOLOGY_HTTPS": (
         "SYNOLOGY_HTTPS must be true or false (also 1/0, yes/no, on/off) "
         "(it sets connection.https)."
@@ -375,19 +377,40 @@ def test_one_letter_booleans_are_errors(value: str) -> None:
     assert str(excinfo.value) == MESSAGES["SYNOLOGY_HTTPS"]
 
 
-@pytest.mark.parametrize("env_var", sorted(TEXT_VARS))
+# The text variables whose field has no rule of its own beyond being text.
+FREE_TEXT_VARS = TEXT_VARS - {"SYNOLOGY_HOST", "SYNOLOGY_INSTANCE_ID"}
+
+
+@pytest.mark.parametrize("env_var", sorted(FREE_TEXT_VARS))
 def test_text_values_are_taken_as_given(env_var: str) -> None:
     assert parse_env_value(env_var, ENV_VAR_MAP[env_var], " a b ") == " a b "
 
 
-def test_a_padded_instance_id_is_refused_as_in_the_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("env_var", "message"),
+    [
+        (
+            "SYNOLOGY_HOST",
+            "SYNOLOGY_HOST must be a bare host name or IP address, and it has a space or an "
+            "invisible character. It isn't shown, since it may hold a password. (It sets "
+            "connection.host.)",
+        ),
+        (
+            "SYNOLOGY_INSTANCE_ID",
+            "SYNOLOGY_INSTANCE_ID may hold only lowercase letters, digits and hyphens "
+            "(capitals are lowered) (it sets instance_id).",
+        ),
+    ],
+)
+def test_padded_text_with_a_rule_is_refused_naming_the_variable(
+    env_var: str, message: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from pydantic import ValidationError
-
-    monkeypatch.setenv("SYNOLOGY_INSTANCE_ID", " my-id ")
-    with pytest.raises(ValidationError, match="invalid characters"):
+    """Taken as given, as in the file, so padding breaks the field's rule; since #511 PR 2
+    the error names the variable, as for the typed ones."""
+    monkeypatch.setenv(env_var, " my-id ")
+    with pytest.raises(EnvVarError) as excinfo:
         load_config(_config(tmp_path))
+    assert str(excinfo.value) == message
 
 
 def test_a_relative_mcp_synology_config_is_shown_absolute(

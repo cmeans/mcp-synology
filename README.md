@@ -445,7 +445,7 @@ modules:
 
 ```yaml
 connection:
-  host: 192.168.1.100    # or a hostname
+  host: 192.168.1.100    # or a hostname; bare: no https://, user name or :port ([fd00::1] for IPv6)
   https: true            # default false: credentials then cross the network in cleartext
   port: 5001             # default 5000, or 5001 with https: true
   verify_ssl: false      # default true; false for DSM's default self-signed certificate

@@ -72,7 +72,7 @@ def setup(config: str | None, list_configs: bool, verbose: bool) -> None:
 
 def _list_configurations() -> None:
     """List existing configuration files in the config directory."""
-    from mcp_synology.core.config import parse_config_text
+    from mcp_synology.core.config import host_problems, instance_id_problem, parse_config_text
 
     if not _CONFIG_DIR.exists():
         click.echo("No configurations found.")
@@ -89,10 +89,24 @@ def _list_configurations() -> None:
     for f in yaml_files:
         try:
             raw = parse_config_text(f.read_text(encoding="utf-8")) or {}
-            host = raw.get("connection", {}).get("host", "?")
-            alias = raw.get("alias", "")
-            instance_id = raw.get("instance_id", f.stem)
-            label = alias or instance_id
+            # An empty `connection:` is no connection settings (#492).
+            host = (raw.get("connection") or {}).get("host")
+            # Shown only when it's a bare host the server would accept: one written as a
+            # URL can hold a password (#476, #471).
+            if host is None:
+                host = "?"
+            elif not isinstance(host, str) or host_problems(host):
+                host = "(not shown: not a bare host name or IP address)"
+            # Only text the server would accept: `alias: {password: …}` printed the
+            # mapping (#476).
+            alias = raw.get("alias")
+            instance_id = raw.get("instance_id")
+            if isinstance(alias, str) and alias.strip():
+                label = alias
+            elif isinstance(instance_id, str) and not instance_id_problem(instance_id):
+                label = instance_id
+            else:
+                label = f.stem
             click.echo(f"  {f.name}")
             click.echo(f"    Name: {label}")
             click.echo(f"    Host: {host}")
@@ -105,8 +119,17 @@ def _setup_interactive(verbose: bool) -> None:
     """Interactive setup when no config file exists."""
     click.echo("No configuration file found. Let's create one.\n")
 
-    # Prompt for connection details
-    host = click.prompt("NAS host (IP or hostname)")
+    from mcp_synology.core.config import host_message, host_problems, instance_id_problem
+
+    # Prompt for connection details. The host is checked here, by the config's own rule,
+    # so a URL, port or user name gets advice and another try instead of a failure after
+    # every other prompt (#471).
+    while True:
+        host = click.prompt("NAS host (IP or hostname)")
+        problems = host_problems(host, port_setting="connection.port in the config file")
+        if not problems:
+            break
+        click.echo(click.style(f"  The host {host_message(problems)}", fg="red"), err=True)
     # HTTPS by default (#193): DSM serves it on 5001 out of the box.
     use_https = click.confirm("Use HTTPS?", default=True)
     if not use_https:
@@ -127,6 +150,14 @@ def _setup_interactive(verbose: bool) -> None:
     from mcp_synology.core.config import _derive_instance_id
 
     instance_id = _derive_instance_id(host)
+    # An IPv6 address, or a name with characters outside a-z, 0-9 and hyphens, gives no
+    # usable ID: ask for one.
+    while problem := instance_id_problem(instance_id):
+        if instance_id:
+            click.echo(f"  This host gives no usable instance ID (it {problem}).")
+        instance_id = click.prompt(
+            "Instance ID (names this config; lowercase letters, digits and hyphens)"
+        ).lower()
 
     # Prompt for alias
     alias_input = click.prompt("Alias (friendly name, optional)", default="", show_default=False)
@@ -158,12 +189,15 @@ def _setup_interactive(verbose: bool) -> None:
         config_dict["alias"] = alias
 
     # Validate before writing
-    from mcp_synology.core.config import AppConfig
+    from pydantic import ValidationError
+
+    from mcp_synology.core.config import AppConfig, format_validation_error
 
     try:
         app_config = AppConfig(**config_dict)
-    except ValueError as e:
-        click.echo(click.style(f"Config validation failed: {e}", fg="red"), err=True)
+    except ValidationError as e:
+        # Screened like every config error: pydantic's own text quotes the input (#471).
+        click.echo(click.style(f"Error: {format_validation_error(e)}", fg="red"), err=True)
         sys.exit(1)
 
     # Prompt for credentials

@@ -52,7 +52,7 @@ uv run pytest -n auto --cov=mcp_synology   # Tests with coverage
 ### Stack & Dependencies
 - **MCP SDK:** `mcp.server.mcpserver.MCPServer` from the official `mcp` package (2.x; 1.x called it `mcp.server.fastmcp.FastMCP`) — NOT the standalone `fastmcp` by PrefectHQ. `server.py`'s `_SynologyServer` overrides only the documented `list_tools()` (schema compaction, #163), `call_tool()` (keeps the message of a non-`ToolError` exception, which 2.x would hide, #114) and `add_tool()` (every tool is unstructured: the SDK would give each `-> str` tool a `{"result": string}` `outputSchema` and send each reply twice, as `content` and `structuredContent`, #377). Don't reach into private SDK attributes
 - **HTTP:** `httpx` (async only) for all NAS communication, `respx` for mocking in tests
-- **Config:** `pyyaml` — always `yaml.safe_load()`, never `yaml.load()`
+- **Config:** `pyyaml` — always a SafeLoader: `yaml.safe_load()`, or `parse_config_text` for config files (its `_ConfigLoader` subclasses SafeLoader to refuse repeated keys, #464); never `yaml.load()` with any other loader
 - **Credentials:** `keyring` (OS-native backends)
 - **Validation:** `pydantic` for config and module settings schemas
 - **CLI:** `click` for subcommands (serve, setup, check)
@@ -113,7 +113,7 @@ uv run pytest -n auto --cov=mcp_synology   # Tests with coverage
 ### Config
 - Config is read-only from the server's perspective — never write to it
 - Runtime state goes in `~/.local/state/mcp-synology/{instance_id}/state.yaml`
-- Strict validation everywhere but module settings: unknown keys at the top level, in `connection`/`auth`/`logging` (#386) and directly under `modules.<name>` are errors; unknown keys within module settings are warnings. Config errors never echo a credential's value: `format_validation_error` shows only plain values outside `auth`, never an unknown key's, and never names an unknown key under `auth`, or one with no value outside module settings and module names (a near-miss names the real key it's close to instead); a file that isn't UTF-8 is reported by line, never its bytes; `format_yaml_error` never quotes the file; config files are parsed only through `parse_config_text`
+- Strict validation everywhere but module settings: unknown keys at the top level, in `connection`/`auth`/`logging` (#386) and directly under `modules.<name>` are errors; unknown keys within module settings are warnings. Config errors never echo a credential's value: `format_validation_error` shows only plain values outside `auth`, never an unknown key's, and never names an unknown key under `auth`, or one with no value outside module settings and module names (a near-miss names the real key it's close to instead); a file that isn't UTF-8 is reported by line, never its bytes; `format_yaml_error` never quotes the file; config files are parsed only through `parse_config_text`, which refuses a repeated key and a colon-less key inside `{…}` (#464). `connection.host` must be a bare host name or IP address (`host_problems`; never shown in an error), and the env vars follow each field's own rule with an `EnvVarError` naming the variable (#511 PR 2). An empty section is an empty mapping; an empty `instance_id`, `logging.file` or `instructions_file` is an error
 - Two-phase loading: parse YAML → merge env var overrides → apply defaults → validate with Pydantic
 
 ### Class entry points

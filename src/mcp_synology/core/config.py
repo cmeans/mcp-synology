@@ -10,11 +10,12 @@ Four-step loading:
 from __future__ import annotations
 
 import difflib
+import ipaddress
 import logging
 import os
 import re
 from pathlib import Path
-from typing import Any, Literal, get_args, get_origin
+from typing import Annotated, Any, Literal, get_args, get_origin
 
 import yaml
 from pydantic import (
@@ -46,6 +47,90 @@ ENV_VAR_MAP: dict[str, str] = {
 }
 
 
+# Characters a host name or IP address never has, beyond the ones `host_problems`
+# explains on their own (`:`, `/`, `@`, brackets, whitespace).
+_HOST_OTHER_BAD = frozenset("\\?#%\"'<>^`{|},;=&+$!*()")
+
+
+def host_problems(host: str, port_setting: str = "connection.port") -> list[str]:
+    """What keeps ``host`` from being a bare host name or IP address, as advice (#511 PR 2).
+
+    The URL is built as ``http(s)://{host}:{port}``, so a scheme, user name, port or path
+    written into the host made a broken URL (a traceback, #504) or put a password into
+    the server instructions, tool errors and logs (#476, #471). An IPv6 address goes in
+    square brackets (`[fd00::1]`), as in a URL. Never quotes the host: it can hold a
+    password. ``port_setting`` names what sets the port where the host came from.
+    """
+    if not host.strip():
+        return ["is empty"]
+    if host.startswith("[") and host.endswith("]"):
+        try:
+            ipaddress.IPv6Address(host[1:-1])
+        except ValueError:
+            return ["has square brackets: square brackets hold only an IPv6 address ([fd00::1])"]
+        return []
+    problems = []
+    rest = host
+    if "://" in rest:
+        problems.append("has a scheme: drop the https:// (HTTPS is the https setting)")
+        rest = rest.split("://", 1)[1]
+    if "@" in rest:
+        problems.append(
+            "has a user name: user names and passwords go under auth or in the keyring "
+            "(mcp-synology setup), never in the host"
+        )
+        rest = rest.rsplit("@", 1)[1]
+    try:
+        ipaddress.IPv6Address(rest)
+    except ValueError:
+        pass
+    else:
+        return [*problems, "is an IPv6 address: write it in square brackets ([fd00::1])"]
+    if "/" in rest:
+        problems.append("has a path: the host takes no path")
+        rest = rest.split("/", 1)[0]
+    if "[" in rest or "]" in rest:
+        # A half-bracketed IPv6 address has colons too: they aren't a port then.
+        problems.append(
+            "has square brackets: square brackets hold only an IPv6 address, around all of "
+            "it ([fd00::1])"
+        )
+    elif ":" in rest:
+        problems.append(f"has a port: set {port_setting} instead")
+    if any(c.isspace() or not c.isprintable() for c in host):
+        problems.append("has a space or an invisible character")
+    if any(c in _HOST_OTHER_BAD for c in rest):
+        problems.append("has a character a host name can't have")
+    if not problems and (rest.startswith(".") or ".." in rest):
+        problems.append("has an empty part (a leading dot, or two dots in a row)")
+    return problems
+
+
+def host_message(problems: list[str]) -> str:
+    """The advice for a host `host_problems` refused, without the host."""
+    return (
+        "must be a bare host name or IP address, and it "
+        + "; it ".join(problems)
+        + ". It isn't shown, since it may hold a password."
+    )
+
+
+_INSTANCE_ID_RULE = "lowercase letters, digits and hyphens (capitals are lowered)"
+
+
+def instance_id_problem(value: str) -> str | None:
+    """Why ``value`` can't be an `instance_id`, or None. An empty one put every such
+    instance's state file in one shared folder (#485)."""
+    if not value.strip():
+        return (
+            "is empty: leave instance_id out to derive it from the host, or set it to "
+            f"{_INSTANCE_ID_RULE}"
+        )
+    if not re.fullmatch(r"[a-z0-9-]+", value.lower()):
+        return f"may hold only {_INSTANCE_ID_RULE}"
+    return None
+
+
 class ConnectionConfig(BaseModel, extra="forbid"):
     """NAS connection settings.
 
@@ -55,10 +140,17 @@ class ConnectionConfig(BaseModel, extra="forbid"):
     """
 
     host: str
-    port: int | None = None
+    port: int | None = Field(default=None, ge=1, le=65535)
     https: bool = False
     verify_ssl: bool = True
     timeout: int = Field(default=30, ge=1, le=600)
+
+    @field_validator("host")
+    @classmethod
+    def _bare_host(cls, value: str) -> str:
+        if problems := host_problems(value):
+            raise ValueError(host_message(problems))
+        return value
 
 
 class AuthConfig(BaseModel, extra="forbid"):
@@ -85,12 +177,38 @@ class ModuleConfig(BaseModel, extra="forbid"):
     permission: Literal["read", "write", "admin"] = "read"
     settings: dict[str, Any] = Field(default_factory=dict)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _empty_is_defaults(cls, value: object) -> object:
+        # `filestation:` with nothing under it is `filestation: {}` (#492).
+        return {} if value is None else value
+
+    @field_validator("settings", mode="before")
+    @classmethod
+    def _empty_settings(cls, value: object) -> object:
+        return {} if value is None else value
+
+
+def _no_empty_path(name: str, value: str | None) -> str | None:
+    """An empty or blank file path names no file: an error, not "none" (#511; the same
+    class as `--config ''`), so a log file or instructions file the user meant to set
+    isn't dropped without a word."""
+    if value is not None and not value.strip():
+        msg = f"is empty: give a file's path, or leave {name} out"
+        raise ValueError(msg)
+    return value
+
 
 class LoggingConfig(BaseModel, extra="forbid"):
     """Logging configuration. extra="forbid" (#386): `levle: debug` is an error."""
 
     level: Literal["debug", "info", "warning", "error"] = "info"
     file: str | None = None
+
+    @field_validator("file")
+    @classmethod
+    def _file_not_empty(cls, value: str | None) -> str | None:
+        return _no_empty_path("logging.file", value)
 
 
 class AppConfig(BaseModel, extra="forbid"):
@@ -132,6 +250,20 @@ class AppConfig(BaseModel, extra="forbid"):
     @classmethod
     def _absolute_local_paths(cls, value: list[str] | None) -> list[str] | None:
         return check_local_path_entries("allowed_local_paths", value)
+
+    @field_validator("auth", "logging", "modules", mode="before")
+    @classmethod
+    def _empty_section(cls, value: object) -> object:
+        # An empty section (`auth:`, which YAML reads as null) is the same as one left
+        # out, whatever the environment sets (#492, #475). An empty `modules:` then gets
+        # the "at least one module" error. `connection:` stays None: its own error says
+        # the host is needed.
+        return {} if value is None else value
+
+    @field_validator("instructions_file")
+    @classmethod
+    def _instructions_file_not_empty(cls, value: str | None) -> str | None:
+        return _no_empty_path("instructions_file", value)
 
     @property
     def display_name(self) -> str:
@@ -184,30 +316,21 @@ class AppConfig(BaseModel, extra="forbid"):
         if derived:
             self.instance_id = _derive_instance_id(self.connection.host)
 
-        # Normalize and validate instance_id format
-        if self.instance_id:
-            self.instance_id = self.instance_id.lower()
-            if not re.match(r"^[a-z0-9-]+$", self.instance_id):
-                # A derived one isn't quoted: a host written as a URL can carry a password
-                # (`https://admin:…@nas`, #386).
-                what = (
-                    "The instance_id derived from connection.host"
-                    if derived
-                    else f"instance_id '{self.instance_id}'"
-                )
+        # Normalize and validate instance_id format. `is not None`: an empty one is
+        # refused too (#485).
+        if self.instance_id is not None:
+            if derived and instance_id_problem(self.instance_id):
+                # The host is already a bare name or address; what's left is an IPv6
+                # address, or a name with characters outside a-z, 0-9 and hyphens.
                 msg = (
-                    f"{what} contains invalid characters. Only lowercase alphanumeric "
-                    "characters and hyphens are allowed"
-                    + (
-                        ": write connection.host as a bare host name or IPv4 address (no "
-                        "https://, user name or port), or set instance_id (lowercase letters, "
-                        "digits and hyphens), which an IPv6 address or a host name with "
-                        "other characters needs."
-                        if derived
-                        else "."
-                    )
+                    "The instance_id derived from connection.host may hold only "
+                    f"{_INSTANCE_ID_RULE}, and this host's first part has others (an IPv6 "
+                    "address, an underscore, or a letter outside a-z): set instance_id."
                 )
                 raise ValueError(msg)
+            if problem := instance_id_problem(self.instance_id):
+                raise ValueError(f"instance_id {problem}.")
+            self.instance_id = self.instance_id.lower()
 
         return self
 
@@ -301,6 +424,17 @@ class EnvVarError(ValueError):
     """
 
 
+def _env_field_bounds(dotted_path: str) -> tuple[Any, ...]:
+    """The config field's range constraints (`port`'s 1 to 65535), as pydantic metadata."""
+    section, _, name = dotted_path.rpartition(".")
+    model: Any = _SECTION_MODELS[section] if section else AppConfig
+    return tuple(
+        m
+        for m in model.model_fields[name].metadata
+        if getattr(m, "ge", None) is not None or getattr(m, "le", None) is not None
+    )
+
+
 def _env_field_annotation(dotted_path: str) -> Any:
     """The type of the config field at ``dotted_path`` (``connection.https``)."""
     model: Any = AppConfig
@@ -319,7 +453,7 @@ def _env_field_annotation(dotted_path: str) -> Any:
     return annotation
 
 
-def _env_expected(annotation: Any) -> str:
+def _env_expected(annotation: Any, bounds: tuple[Any, ...] = ()) -> str:
     """What a field of ``annotation`` takes, for an env var's error."""
     if get_origin(annotation) is Literal:
         kind = annotation
@@ -328,7 +462,10 @@ def _env_expected(annotation: Any) -> str:
     if kind is bool:
         return "true or false (also 1/0, yes/no, on/off)"
     if kind is int:
-        return "a whole number"
+        low = next((m.ge for m in bounds if getattr(m, "ge", None) is not None), None)
+        high = next((m.le for m in bounds if getattr(m, "le", None) is not None), None)
+        bounded = low is not None and high is not None
+        return "a whole number" + (f" from {low} to {high}" if bounded else "")
     if get_origin(kind) is Literal:
         return "one of " + ", ".join(str(v) for v in get_args(kind))
     # A text field takes any value, so it never fails to parse and never gets here.
@@ -358,8 +495,9 @@ def parse_env_value(env_var: str, dotted_path: str, value: str) -> Any:
     the config file's are lower-case), with `update_notices` also taking the words the
     file's YAML reads as booleans (`no` is off). Typed values are stripped; text values
     (host, credentials, `instance_id`) are taken as given, as in the file. A value of the
-    wrong type is an error naming the variable; a field's own rules (an `instance_id`'s
-    characters) are checked with the rest of the config.
+    wrong type, or one that breaks its field's own rule (the port's range, a bare host, an
+    `instance_id`'s characters; #511 PR 2), is an error naming the variable, never quoting
+    the value.
 
     `SYNOLOGY_HTTPS` used to be true for `true`, `1` or `yes` and false for anything
     else, so `on` (or a typo) turned HTTPS off even over `https: true` in the config, and
@@ -368,7 +506,14 @@ def parse_env_value(env_var: str, dotted_path: str, value: str) -> Any:
     annotation = _env_field_annotation(dotted_path)
     kinds = [a for a in get_args(annotation) if a is not type(None)] or [annotation]
     if kinds == [str]:
-        return value  # text: taken as given
+        # Text: taken as given, then held to the field's own rule.
+        if dotted_path == "connection.host" and (
+            problems := host_problems(value, port_setting="SYNOLOGY_PORT")
+        ):
+            raise EnvVarError(f"{env_var} {host_message(problems)} (It sets {dotted_path}.)")
+        if dotted_path == "instance_id" and (problem := instance_id_problem(value)):
+            raise EnvVarError(f"{env_var} {problem} (it sets {dotted_path}).")
+        return value
     text = value.strip()
     if kinds == [bool]:
         word = _ENV_BOOLS.get(text.lower())
@@ -389,11 +534,13 @@ def parse_env_value(env_var: str, dotted_path: str, value: str) -> Any:
         get_origin(a) is Literal for a in get_args(annotation)
     ):
         text = text.lower()
+    bounds = _env_field_bounds(dotted_path)
+    field_type = Annotated[annotation, *bounds] if bounds else annotation
     try:
-        return TypeAdapter(annotation).validate_python(text)
+        return TypeAdapter(field_type).validate_python(text)
     except ValidationError:
         raise EnvVarError(
-            f"{env_var} must be {_env_expected(annotation)} (it sets {dotted_path})."
+            f"{env_var} must be {_env_expected(annotation, bounds)} (it sets {dotted_path})."
         ) from None
 
 
@@ -502,6 +649,9 @@ def _may_show(err: Any, loc_parts: list[str]) -> bool:
         "dict_type",
         "model_attributes_type",
     ):
+        return False
+    # The host can hold a password (`admin:…@nas`, #476); its own error says what's wrong.
+    if loc_parts[:2] == ["connection", "host"]:
         return False
     return not (loc_parts and loc_parts[0] == "auth")
 
@@ -619,15 +769,85 @@ class ConfigValueError(yaml.YAMLError):
     kind: str = ""
 
 
+class ConfigKeyError(yaml.YAMLError):
+    """A mapping in the config file repeats a key, or has a key with no value inside
+    `{…}` (#464). ``message`` is the whole user-facing text, with line numbers and only
+    the config's own key names, never a value."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
+
+
+_MERGE_TAG = "tag:yaml.org,2002:merge"
+
+
+class _ConfigLoader(yaml.SafeLoader):
+    """SafeLoader that refuses a repeated key and a valueless key in a flow mapping (#464).
+
+    PyYAML keeps the last of two equal keys without a word, so `https: true` then
+    `https: false`, two `password:` lines, or a second, empty `connection:` silently
+    replaced what the user wrote. And YAML splits `{password: Spring,device_id}` at the
+    comma: the fragment `device_id` became a key with no value, and the password was cut
+    short with no error. A key with a colon and nothing after it (`{device_id: }`) is
+    still a key set to null; only the colon-less form is refused.
+    """
+
+    def construct_mapping(self, node: yaml.MappingNode, deep: bool = False) -> dict[Any, Any]:
+        seen: dict[Any, int] = {}
+        # Before SafeLoader flattens `<<: *base` merges, whose keys an explicit key may
+        # override: that's YAML's own rule, not a repeat.
+        for key_node, value_node in node.value:
+            if key_node.tag == _MERGE_TAG:
+                continue
+            line = key_node.start_mark.line + 1
+            if node.flow_style and _has_no_colon(key_node, value_node):
+                raise ConfigKeyError(
+                    f"The config file has a key with no value inside {{…}} (line {line}). "
+                    f"It isn't shown, since it may be part of a password: {_SPLIT_HINT}; to "
+                    "leave a setting empty, leave it out."
+                )
+            key = self.construct_object(key_node, deep=deep)  # type: ignore[no-untyped-call]
+            try:
+                first = seen.get(key)
+            except TypeError:
+                continue  # unhashable: SafeLoader's own error follows
+            if first is not None:
+                known = isinstance(key, str) and key in _config_keys()
+                raise ConfigKeyError(
+                    f"The config file has {f'`{key}`' if known else 'a key'} twice in one "
+                    f"section (lines {first} and {line}), and YAML would silently keep only "
+                    "the last. Remove one."
+                    + ("" if known else " The key isn't shown: it may be part of a password.")
+                )
+            seen[key] = line
+        return super().construct_mapping(node, deep=deep)
+
+
+def _has_no_colon(key_node: yaml.Node, value_node: yaml.Node) -> bool:
+    """Whether a flow mapping's entry was written without a colon (`{a: 1, b}`)."""
+    if not (isinstance(value_node, yaml.ScalarNode) and value_node.value == ""):
+        return False
+    if value_node.tag != "tag:yaml.org,2002:null":
+        return False
+    buffer = getattr(key_node.end_mark, "buffer", None)
+    if not isinstance(buffer, str):
+        return False  # pragma: no cover - text input always keeps its buffer
+    between = buffer[key_node.end_mark.index : value_node.start_mark.index]
+    return ":" not in between
+
+
 def parse_config_text(text: str) -> Any:
-    """`yaml.safe_load`, with any error building a value raised as `ConfigValueError`.
+    """Load a config file's YAML: `yaml.safe_load` refusing repeated keys and valueless
+    flow keys (`ConfigKeyError`, #464), with any error building a value raised as
+    `ConfigValueError`.
 
     A tag that doesn't fit its value makes PyYAML raise ValueError (`!!int Hunter2x`),
     KeyError (`!!bool Hunter2x`), AttributeError (`!!timestamp Hunter2x`) and so on, each
     naming the value (#386). Every loader of a config file goes through here.
     """
     try:
-        return yaml.safe_load(text)
+        return yaml.load(text, Loader=_ConfigLoader)  # noqa: S506 - a SafeLoader subclass
     except yaml.YAMLError:
         raise
     except Exception as e:  # noqa: BLE001 - any constructor error; its text names the value
@@ -671,6 +891,8 @@ def format_yaml_error(exc: yaml.YAMLError) -> str:
         "starts an escape, so write a Windows path in single quotes, 'C:\\Users\\me', or "
         "double each backslash) and indentation."
     )
+    if isinstance(exc, ConfigKeyError):
+        return exc.message
     if isinstance(exc, ConfigValueError) and exc.kind == "RecursionError":
         return (
             "The config file is nested too deeply for YAML to read. Check its brackets and "
