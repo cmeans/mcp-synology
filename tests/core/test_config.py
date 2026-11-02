@@ -926,6 +926,84 @@ class TestLoadConfig:
         assert "filestation" in config.modules
 
 
+@pytest.mark.parametrize("raw", ["some-text", ["x"], 12345678, False])
+def test_load_rejects_non_mapping_yaml(tmp_path: Path, raw: Any) -> None:
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(yaml.safe_dump(raw))
+    with pytest.raises(ValueError, match="YAML mapping"):
+        load_config(config_file)
+
+
+def test_load_validates_non_string_keys(tmp_path: Path) -> None:
+    raw = _minimal_raw()
+    raw[12345678] = "value"
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(yaml.safe_dump(raw))
+    with pytest.raises(ValidationError, match="Keys should be strings"):
+        load_config(config_file)
+
+
+@pytest.mark.parametrize("content", ["", "# comments only\n", "---\n"])
+def test_load_empty_file_reports_missing_fields(tmp_path: Path, content: str) -> None:
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(content)
+    with pytest.raises(ValidationError) as excinfo:
+        load_config(config_file)
+    assert {(error["loc"][0], error["type"]) for error in excinfo.value.errors()} == {
+        ("schema_version", "missing"),
+        ("modules", "missing"),
+    }
+
+
+@pytest.mark.parametrize("key", ["12345678", "2024-01-02"])
+def test_non_text_root_key_is_not_shown(tmp_path: Path, key: str) -> None:
+    from mcp_synology.core.config import format_validation_error
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(yaml.safe_dump(_minimal_raw()) + f"{key}: value\n")
+    with pytest.raises(ValidationError) as excinfo:
+        load_config(config_file)
+    message = format_validation_error(excinfo.value)
+    assert key not in message
+    assert "isn't text" in message
+
+
+@pytest.mark.parametrize(
+    ("section", "env_var", "field", "value"),
+    [
+        ("auth", "SYNOLOGY_PASSWORD", "password", "test-password"),
+        ("connection", "SYNOLOGY_HOST", "host", "nas.example"),
+        ("logging", "SYNOLOGY_LOG_LEVEL", "level", "debug"),
+    ],
+)
+def test_env_override_fills_empty_section(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    section: str,
+    env_var: str,
+    field: str,
+    value: str,
+) -> None:
+    raw = _minimal_raw()
+    raw[section] = None
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(yaml.safe_dump(raw))
+    monkeypatch.setenv(env_var, value)
+    config = load_config(config_file)
+    assert getattr(config, section).model_dump()[field] == value
+
+
+@pytest.mark.parametrize("value", ["not-a-mapping", ["x"], 42, False])
+def test_env_override_rejects_non_mapping_section(
+    monkeypatch: pytest.MonkeyPatch, value: Any
+) -> None:
+    raw = _minimal_raw()
+    raw["auth"] = value
+    monkeypatch.setenv("SYNOLOGY_PASSWORD", "test-password")
+    with pytest.raises(ValueError, match="auth.*mapping"):
+        _merge_env_overrides(raw)
+
+
 class TestTopLevelAllowedLocalPaths:
     """#257: one allowed_local_paths for every module, at the top level."""
 
