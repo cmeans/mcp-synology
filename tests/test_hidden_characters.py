@@ -42,25 +42,27 @@ def _in_ci() -> bool:
 _GIT_LOCATION = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR")
 
 
+def _git(*args: str, cwd: Path | None = None) -> str:
+    return subprocess.run(
+        ["git", *args],
+        cwd=cwd or ROOT,
+        capture_output=True,
+        check=True,
+        # git's messages in English, so "not a git repository" below matches.
+        env={
+            # A hook's or a script's GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE or
+            # GIT_COMMON_DIR would point git at another repository, tree or index.
+            **{k: v for k, v in os.environ.items() if k not in _GIT_LOCATION},
+            "LC_ALL": "C",
+            "LANGUAGE": "",
+        },
+    ).stdout.decode("utf-8", "surrogateescape")
+
+
 def _tracked_files() -> list[Path]:
     try:
-        listed = subprocess.run(
-            ["git", "ls-files", "-z"],
-            cwd=ROOT,
-            capture_output=True,
-            check=True,
-            # git's messages in English, so "not a git repository" below matches.
-            env={
-                # A hook's or a script's GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE or
-                # GIT_COMMON_DIR would point git at another repository, tree or index.
-                **{k: v for k, v in os.environ.items() if k not in _GIT_LOCATION},
-                "LC_ALL": "C",
-                "LANGUAGE": "",
-                # Stop at ROOT: an sdist unpacked inside another repository's work tree
-                # would otherwise list that repository (nothing here) instead of skipping.
-                "GIT_CEILING_DIRECTORIES": str(ROOT.parent),
-            },
-        ).stdout.decode("utf-8", "surrogateescape")
+        top = _git("rev-parse", "--show-toplevel").strip()
+        listed = _git("ls-files", "-z")
     except FileNotFoundError as e:
         if _in_ci():
             raise
@@ -71,8 +73,14 @@ def _tracked_files() -> list[Path]:
         # list. CI always has a checkout, so there it's a failure, and so is any other git
         # error (dubious ownership, a broken index): the guard mustn't skip in a checkout.
         if _in_ci() or "not a git repository" not in reason:
-            pytest.fail(f"git ls-files failed: {reason}")
+            pytest.fail(f"git failed: {reason}")
         pytest.skip(f"not a git checkout: {reason}")
+    if Path(top).resolve() != ROOT.resolve():
+        # A copy inside another repository's work tree (an sdist unpacked in a monorepo):
+        # git would list that repository, which holds nothing of this one.
+        if _in_ci():
+            pytest.fail(f"git's work tree is {top}, not {ROOT}")
+        pytest.skip(f"not a git checkout: {ROOT} is inside {top}")
     return [ROOT / name for name in listed.split("\0") if name]
 
 
@@ -223,15 +231,13 @@ def test_outside_a_checkout_it_skips_except_in_ci(
     _require_git()
     real_root = ROOT
     try:
-        # In a linked worktree the git dir and the common dir differ.
-        git_dir, common_dir = subprocess.run(
-            ["git", "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"],
-            cwd=ROOT,
-            capture_output=True,
-            check=True,
-            text=True,
-        ).stdout.split()
-    except (subprocess.CalledProcessError, FileNotFoundError):
+        # In a linked worktree the git dir and the common dir differ. (Relative paths come
+        # back relative to ROOT; --path-format=absolute would need git 2.31.)
+        git_dir, common_dir = (
+            str((ROOT / line).resolve())
+            for line in _git("rev-parse", "--git-dir", "--git-common-dir").splitlines()
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError, ValueError):
         git_dir = common_dir = str(tmp_path / "no-repo")
     monkeypatch.setattr(f"{__name__}.ROOT", tmp_path)
     monkeypatch.setenv("CI", ci)
@@ -267,32 +273,43 @@ def test_a_stray_git_location_variable_is_ignored(
     assert ROOT / "pyproject.toml" in tracked
 
 
-def test_inside_another_repository_it_skips(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("ci", ["true", ""])
+@pytest.mark.parametrize("outer", ["outer", "a:b"])
+def test_inside_another_repository_it_skips_except_in_ci(
+    outer: str, ci: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # An sdist unpacked in a monorepo or a dist-git checkout.
+    # An sdist unpacked in a monorepo or a dist-git checkout (a colon too: it would split a
+    # GIT_CEILING_DIRECTORIES list).
     _require_git()
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
-    copy = tmp_path / "mcp-synology-0.0"
+    repo = tmp_path / outer
+    _git("init", "-q", str(repo), cwd=tmp_path)
+    copy = repo / "mcp-synology-0.0"
     copy.mkdir()
     (copy / "pyproject.toml").write_text("")
     monkeypatch.setattr(f"{__name__}.ROOT", copy)
-    monkeypatch.setenv("CI", "")
+    monkeypatch.setenv("CI", ci)
     monkeypatch.delenv("GIT_CEILING_DIRECTORIES", raising=False)
-    with pytest.raises(pytest.skip.Exception, match="not a git checkout"):
-        _tracked_files()
+    if ci:
+        _must_raise(pytest.fail.Exception, "work tree is")
+    else:
+        with pytest.raises(pytest.skip.Exception, match="is inside"):
+            _tracked_files()
 
 
 def test_odd_names_and_deleted_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # A tracked name that isn't UTF-8 is still checked, and a tracked file deleted from the
     # working tree is passed over.
     _require_git()
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    # Through _git: a hook's GIT_DIR would otherwise point these at the real repository.
+    _git("init", "-q", str(tmp_path), cwd=tmp_path)
     (tmp_path / "pyproject.toml").write_text("")
     (tmp_path / "gone.txt").write_text("")
-    with open(os.path.join(os.fsencode(tmp_path), b"a\xff.txt"), "wb") as f:
-        f.write("x\u200by\n".encode())
-    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    try:
+        with open(os.path.join(os.fsencode(tmp_path), b"a\xff.txt"), "wb") as f:
+            f.write("x\u200by\n".encode())
+    except OSError as err:  # APFS refuses names that aren't UTF-8; CI's ext4 doesn't
+        pytest.skip(f"this filesystem refuses the name: {err}")
+    _git("add", "-A", cwd=tmp_path)
     (tmp_path / "gone.txt").unlink()
     monkeypatch.setattr(f"{__name__}.ROOT", tmp_path)
     monkeypatch.setenv("CI", "")
