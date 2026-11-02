@@ -36,6 +36,7 @@ from mcp_synology.modules.filestation.paths import (
     resolve_paths,
 )
 from tests.modules.filestation.test_register import _fake_mcp_ctx, _make_ctx
+from tests.path_words import PATHLIKE_WORDS
 
 
 def _error(exc: pytest.ExceptionInfo[ToolError]) -> dict[str, Any]:
@@ -1053,18 +1054,9 @@ async def test_hostile_spelling_matrix(
 # -- the structural test -------------------------------------------------------------------
 
 # Whole words of an argument's name (`sort_direction` isn't a dir).
-_PATHLIKE = {
-    "path",
-    "paths",
-    "folder",
-    "share",
-    "dest",
-    "source",
-    "sources",
-    "target",
-    "src",
-    "dir",
-}
+_PATHLIKE = PATHLIKE_WORDS
+# Arguments whose names have a path word but don't name a path.
+NOT_PATHS = {"create_folder": {"force_parent"}}  # a flag
 
 
 def _words(param: str) -> set[str]:
@@ -1087,7 +1079,7 @@ def test_every_path_argument_is_registered() -> None:
                 if NAME_PARAMS.get(name) != param and param not in LOCAL_PARAMS.get(name, set()):
                     unregistered.append(f"{name}.{param} (a name: NAME_PARAMS)")
                 continue
-            if not _words(param) & _PATHLIKE:
+            if not _words(param) & _PATHLIKE or param in NOT_PATHS.get(name, set()):
                 continue
             known = (
                 param in PATH_PARAMS.get(name, {})

@@ -10,10 +10,12 @@ from typing import TYPE_CHECKING, Any
 
 from mcp_synology.core.errors import SynologyError
 from mcp_synology.core.formatting import format_size, format_table, synology_error_response
+from mcp_synology.modules.filestation.paths import refuse_bad_name
 from mcp_synology.modules.photos.helpers import (
     V7,
     Photos,
     add_rejected,
+    check_folder_path,
     check_ids,
     check_space,
     in_batches,
@@ -58,12 +60,14 @@ async def photo_folder(
             value=action,
             valid=list(_FOLDER_ACTIONS),
         )
-    leaf = (name or "").strip()
+    # Taken exactly, by File Station's new-name rules (#510): DSM keeps a folder name with
+    # a control character, a direction-changing character, a zero-width space or a leading
+    # space as given (vdsm DSM 7.1, 7.2.2, 7.3.2 and 7.4.1); it was stripped before.
+    leaf = name or ""
     if action in ("create", "rename"):
         if not leaf:
             invalid(op, f"action={action} needs name.", param="name", value=name)
-        if "/" in leaf or leaf in (".", ".."):
-            invalid(op, "name is one folder name, without /.", param="name", value=name)
+        refuse_bad_name(op, leaf, "name", "Pass one folder name, without /, such as Trips.")
     if action in ("rename", "set_cover") and folder is None:
         invalid(op, f"action={action} needs folder.", param="folder")
     if action == "set_cover" and item_id is None:
@@ -452,6 +456,12 @@ def _request_block(req: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+_REQUEST_FOLDER_ADVICE = "Pass the folder as a path starting with /, such as /Inbox."
+_REQUEST_MISSING_ADVICE = (
+    "Pass the folder as a path starting with / (list_photo_collections type=folder lists them)."
+)
+
+
 async def photo_request(
     client: DsmClient,
     *,
@@ -534,9 +544,10 @@ async def photo_request(
         if description is not None:
             fields["description"] = description
         if folder is not None:
-            path = "/" + folder.strip().strip("/")
+            # A path only: an ID here would be a folder named after it (`12` is `/12`).
+            path = check_folder_path(folder, advice=_REQUEST_FOLDER_ADVICE)
             # Checked here, so a typo isn't a request into a folder that doesn't exist.
-            await Photos(client, sp, op).folder(path)
+            await Photos(client, sp, op).folder(path, missing_advice=_REQUEST_MISSING_ADVICE)
             fields["library"] = _LIBRARY[sp]
             fields["folder_home_path"] = path
         if max_file_mib is not None:

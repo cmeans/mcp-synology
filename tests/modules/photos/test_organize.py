@@ -133,6 +133,49 @@ class TestFolder:
             await photo_folder(make_client(), **kwargs)
         assert _error(exc)["param"] == param
 
+    @pytest.mark.parametrize("action", ["create", "rename"])
+    @pytest.mark.parametrize(
+        ("name", "problem"),
+        [
+            # File Station's new-name rules (#510). DSM keeps each of these as given (vdsm,
+            # DSM 7.1, 7.2.2, 7.3.2 and 7.4.1); a leading space was stripped before.
+            (" x", "starts or ends with whitespace"),
+            ("x ", "starts or ends with whitespace"),
+            ("   ", "is blank"),
+            ("a\x1bb", "control character"),
+            ("a\u202eb", "changes text direction"),
+            ("a\u200bb", "invisible character (U+200B)"),
+            ("a\x00b", "NUL"),
+            ("..", "'.' or '..'"),
+            ("a/b", "contains '/'"),
+        ],
+    )
+    @respx.mock
+    async def test_a_bad_new_name_is_refused_before_any_request(
+        self, action: str, name: str, problem: str
+    ) -> None:
+        fake = FakePhotos()  # no routes: a request would fail the test
+        install(fake)
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await photo_folder(client, action=action, folder="13", parent="/x", name=name)
+        assert not fake.calls
+        err = _error(exc)
+        assert (err["code"], err["param"], err["value"]) == ("invalid_parameter", "name", name)
+        assert problem in err["message"]
+
+    @respx.mock
+    async def test_a_tab_inside_a_name_is_kept(self) -> None:
+        # As in File Station: DSM keeps a tab inside a name (maintainer, 2026-10-31).
+        fake = FakePhotos().on(FOLDER, "get", 2, captured("folder-get-by-name"))
+        fake.on(FOLDER, "create", 1, captured("folder-create-duplicate-name"))
+        install(fake)
+        client = make_client()
+        async with client:
+            await photo_folder(client, action="create", parent="/x", name="a\tb")
+        assert fake.one(FOLDER, "create").params["name"] == "a\tb"
+
 
 class TestTags:
     @respx.mock
@@ -678,6 +721,52 @@ class TestRequests:
         }
         assert 'Photo request "mcp spec" → /mcp-spec-capture (personal space)' in out
         assert "Link:      http://nas.example:5000/mo/request/ZxOc9Ep8q" in out
+
+    @respx.mock
+    async def test_folder_taken_exactly(self) -> None:
+        # #510: the folder checked and the folder sent are the same exact path.
+        fake = FakePhotos().on(REQ, "list", 1, {"list": []})
+        fake.on(FOLDER, "get", 2, {"folder": {"id": 5, "name": "/x/foo "}})
+        fake.on(REQ, "create", 1, captured("request-create"))
+        install(fake)
+        client = make_client()
+        async with client:
+            await photo_request(client, action="create", subject="s", folder="  /x/foo ")
+        assert fake.one(FOLDER, "get").params == {"name": "/x/foo "}
+        assert fake.one(REQ, "create").params["folder_home_path"] == "/x/foo "
+
+    @respx.mock
+    async def test_folder_with_a_nul_is_refused(self) -> None:
+        fake = FakePhotos().on(REQ, "list", 1, {"list": []})
+        install(fake)
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await photo_request(client, action="create", subject="s", folder="/x\x00y")
+        assert _error(exc)["param"] == "folder"
+        # A path only: no ID advice (QA round 1 on #526).
+        assert _error(exc)["suggestion"] == (
+            "Pass the folder as a path starting with /, such as /Inbox."
+        )
+        assert not fake.of(REQ, "create") and not fake.of(FOLDER)
+
+    @respx.mock
+    async def test_missing_folder_advice_is_path_only(self) -> None:
+        # The folder is a path only: no ID advice for a folder that isn't there either (#526).
+        fake = FakePhotos().on(REQ, "list", 1, {"list": []})
+        fake.error(FOLDER, "get", 2, 642)
+        install(fake)
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await photo_request(client, action="create", subject="s", folder="Inbx")
+        err = _error(exc)
+        assert (err["code"], err["param"]) == ("not_found", "folder")
+        assert err["suggestion"] == (
+            "Pass the folder as a path starting with / (list_photo_collections type=folder "
+            "lists them)."
+        )
+        assert not fake.of(REQ, "create")
 
     @respx.mock
     async def test_shared_space_folder_checked_there(self) -> None:

@@ -361,6 +361,7 @@ modules:
 - A `destination` must be an existing folder: Download Station doesn't create missing folders. Create it first with File Station's `create_folder` (`/video/TV/New show`; the `filestation` module needs `permission: write`) or in DSM's own File Station, then pass it share-relative (`video/TV/New show`). An error that says the destination doesn't exist names this fix (#296).
 - `create_download` returns no task IDs for URLs that use `username` / `password`.
 - `edit_download` changes only the destination.
+- A destination is taken exactly: `video/TV/New show ` (with a trailing space) is a different folder from `video/TV/New show`.
 - `delete_download(force_complete=true)` doesn't reliably keep partial data: DSM discarded unfinished HTTP downloads anyway. DSM also refuses it for finished tasks, and the tool reports those as not removed.
 
 </details>

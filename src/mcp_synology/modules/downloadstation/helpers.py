@@ -11,6 +11,7 @@ from mcp_synology.core.formatting import (
     format_size,
     weekly_plan_grid,
 )
+from mcp_synology.modules.filestation.paths import check_parts
 
 if TYPE_CHECKING:
     from mcp_synology.core.client import DsmClient
@@ -78,25 +79,34 @@ def task_error_detail(task: dict[str, Any]) -> object:
     return extra.get("error_detail") if isinstance(extra, dict) else None
 
 
+# Every tool argument that names a NAS folder. Each goes through `normalize_destination`
+# (#510); a new one goes here, and tests/modules/downloadstation/test_paths.py fails until
+# it does.
+DESTINATION_PARAMS: dict[str, str] = {
+    "create_download": "destination",
+    "edit_download": "destination",
+    "set_download_config": "default_destination",
+}
+
+_DESTINATION_ADVICE = "Write the path out in full from the shared folder, e.g. 'video/Torrents'."
+
+
 def normalize_destination(destination: str, *, operation: str, param: str = "destination") -> str:
     """Make a destination share-relative, as Download Station requires.
 
     File Station shows paths as ``/share/...``; DS rejects that form (DSM 403
-    "Destination doesn't exist" on create, error 100 on edit), so a leading or
-    trailing ``/`` is dropped, and a ``.`` or ``..`` part is refused, as in File Station
-    paths (#449). ``param`` names the caller's argument in errors.
+    "Destination doesn't exist" on create, error 100 on edit), so the ``/`` at either end is
+    dropped. Otherwise the path is taken exactly, by File Station's part rules (#510):
+    `check_parts` drops only whitespace before a leading ``/`` and refuses a NUL (DSM cuts
+    the path there: a task created or edited into ``x/foo<NUL>y`` went to ``x/foo``), an
+    empty part (``//``) and a ``.`` or ``..`` part, padded too (#449). DS reaches a folder
+    whose name starts or ends with whitespace exactly (``x/foo `` and ``x/ foo`` are
+    folders beside ``x/foo``; vdsm DSM 7.1, 7.2.2, 7.3.2 and 7.4.1), so stripping sent a
+    task to another folder. (``Task.edit`` and ``Info.setserverconfig`` reach it too: the
+    client sends their spaces as ``%20``, `_reads_plus_literally`.) ``param`` names the
+    caller's argument in errors.
     """
-    relative = destination.strip().strip("/")
-    # Padded too (` .. `), as File Station refuses them (QA round 2 on #470).
-    if any(part.strip(" ") in (".", "..") for part in relative.split("/")):
-        error_response(
-            ErrorCode.INVALID_PARAMETER,
-            f"{operation} failed: {param} {destination!r}: '.' and '..' parts aren't allowed.",
-            retryable=False,
-            param=param,
-            value=destination,
-            suggestion="Write the path out in full from the shared folder, e.g. 'video/Torrents'.",
-        )
+    relative = check_parts(destination, param, _DESTINATION_ADVICE)[1:]
     if not relative:
         error_response(
             ErrorCode.INVALID_PARAMETER,

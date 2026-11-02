@@ -1799,3 +1799,38 @@ class TestNoReauthOnAuthApi:
                     await client.request("SYNO.API.Auth", "logout", version=6)
         assert not reauths
         assert (post if form_post else get).call_count == 1
+
+
+class TestSpacesInDownloadStationV1Queries:
+    """Download Station's v1 CGIs read `+` in a query as a plus, so their GETs send a space
+    as %20 (#510); every other API keeps httpx's encoding (entry.cgi reads `+` as a space)."""
+
+    @respx.mock
+    async def test_a_ds_v1_cgi_gets_pct20(self) -> None:
+        route = respx.get(f"{BASE_URL}/webapi/DownloadStation/task.cgi").respond(
+            json={"success": True, "data": {}}
+        )
+        client = make_client(make_api_cache())
+        async with client:
+            await client.request(
+                "SYNO.DownloadStation.Task",
+                "edit",
+                2,
+                {"id": "dbid_1", "destination": "video/a b+c", "flag": True},
+            )
+        url = route.calls.last.request.url
+        assert url.params["destination"] == "video/a b+c"
+        assert b"destination=video%2Fa%20b%2Bc" in url.query
+        assert b"flag=true" in url.query  # httpx's encoding of the values otherwise
+
+    @respx.mock
+    async def test_entry_cgi_keeps_httpx_encoding(self) -> None:
+        route = respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": True, "data": {"files": []}}
+        )
+        client = make_client(make_api_cache())
+        async with client:
+            await client.request("SYNO.FileStation.List", "list", 2, {"folder_path": "/v/a b"})
+        url = route.calls.last.request.url
+        assert url.params["folder_path"] == "/v/a b"
+        assert b"folder_path=%2Fv%2Fa+b" in url.query

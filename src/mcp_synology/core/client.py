@@ -227,6 +227,27 @@ def _publish_download(tmp_file: Path, dest_file: Path, *, overwrite: bool) -> No
     tmp_file.unlink()
 
 
+def _reads_plus_literally(path: str) -> bool:
+    """Whether the API at ``path`` reads a ``+`` in a query string as a plus, not a space.
+
+    Download Station's v1 CGIs (``DownloadStation/task.cgi``, ``info.cgi``, ...) do: httpx
+    writes a space as ``+``, so ``Task.edit`` into ``video/a b`` went to ``video/a+b`` (moved
+    the task there when that folder existed, else error 100), and ``Info.setserverconfig``
+    stored ``video/a+b`` (else 401). ``%20`` reaches ``video/a b`` exactly (vdsm, DSM 7.1,
+    7.2.2, 7.3.2 and 7.4.1; #510). ``entry.cgi`` (File Station, DS2, everything else) reads
+    ``+`` as a space, as form encoding says.
+    """
+    return path.startswith("DownloadStation/")
+
+
+def _query_with_pct20(params: dict[str, Any]) -> str:
+    """``params`` as httpx would encode them, with each space as ``%20`` instead of ``+``.
+
+    httpx writes a literal ``+`` as ``%2B``, so every ``+`` it leaves is a space.
+    """
+    return str(httpx.QueryParams(params)).replace("+", "%20")
+
+
 class DsmClient:
     """Async DSM API client.
 
@@ -630,6 +651,10 @@ class DsmClient:
         def send(client: httpx.AsyncClient) -> Awaitable[httpx.Response]:
             if post_form:
                 return client.post(url, data=req_params, headers=headers, timeout=req_timeout)
+            if _reads_plus_literally(info.path):
+                return client.get(
+                    f"{url}?{_query_with_pct20(req_params)}", headers=headers, timeout=req_timeout
+                )
             return client.get(url, params=req_params, headers=headers, timeout=req_timeout)
 
         try:

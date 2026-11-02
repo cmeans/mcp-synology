@@ -1501,6 +1501,8 @@ class TestEditDownload:
             ("video/Movies", "downloading", "not changed: destination is still video/Movies"),
             # The share name matches in any case: DSM stores it as typed.
             ("VIDEO/movies", "downloading", "ok"),
+            # A padded folder is another folder, and it's quoted so the space shows (#510).
+            ("video/movies ", "downloading", "not changed: destination is still 'video/movies '"),
         ],
     )
     async def test_destination_case(
