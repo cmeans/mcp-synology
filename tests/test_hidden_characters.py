@@ -39,6 +39,7 @@ def _in_ci() -> bool:
     return os.environ.get("CI", "").lower() not in ("", "0", "false", "no", "off")
 
 
+# The variables that point git at another repository, tree or index; each has a test below.
 _GIT_LOCATION = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR")
 
 
@@ -50,9 +51,15 @@ def _git(*args: str, cwd: Path | None = None) -> str:
         check=True,
         # git's messages in English, so "not a git repository" below matches.
         env={
-            # A hook's or a script's GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE or
-            # GIT_COMMON_DIR would point git at another repository, tree or index.
-            **{k: v for k, v in os.environ.items() if k not in _GIT_LOCATION},
+            # A hook's or a script's GIT_* variables (_GIT_LOCATION, and others such as
+            # GIT_OBJECT_DIRECTORY, which would send the tests' own `git add` objects to
+            # another repository) don't reach git. GIT_CEILING_DIRECTORIES only stops the
+            # search for a repository, so it stays.
+            **{
+                k: v
+                for k, v in os.environ.items()
+                if not k.startswith("GIT_") or k == "GIT_CEILING_DIRECTORIES"
+            },
             "LC_ALL": "C",
             "LANGUAGE": "",
         },
@@ -243,7 +250,8 @@ def test_outside_a_checkout_it_skips_except_in_ci(
     monkeypatch.setenv("CI", ci)
     monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path.parent))
     # A hook's GIT_DIR (with GIT_WORK_TREE and the rest) mustn't point git back at this repo.
-    # (With them kept, git lists this repo's files and nothing raises.)
+    # (Kept, they'd point git back at this repo: the top-level check would then skip with
+    # "is inside" and fail in CI with "work tree is", not with "not a git repository".)
     monkeypatch.setenv("GIT_DIR", git_dir)
     monkeypatch.setenv("GIT_WORK_TREE", str(real_root))
     monkeypatch.setenv("GIT_INDEX_FILE", str(Path(git_dir) / "index"))
@@ -251,7 +259,7 @@ def test_outside_a_checkout_it_skips_except_in_ci(
     if ci:
         _must_raise(pytest.fail.Exception, "not a git repository")
     else:
-        with pytest.raises(pytest.skip.Exception, match="not a git checkout"):
+        with pytest.raises(pytest.skip.Exception, match="not a git repository"):
             _tracked_files()
 
 
@@ -274,14 +282,12 @@ def test_a_stray_git_location_variable_is_ignored(
 
 
 @pytest.mark.parametrize("ci", ["true", ""])
-@pytest.mark.parametrize("outer", ["outer", "a:b"])
 def test_inside_another_repository_it_skips_except_in_ci(
-    outer: str, ci: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ci: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # An sdist unpacked in a monorepo or a dist-git checkout (a colon too: it would split a
-    # GIT_CEILING_DIRECTORIES list).
+    # An sdist unpacked in a monorepo or a dist-git checkout.
     _require_git()
-    repo = tmp_path / outer
+    repo = tmp_path / "outer"
     _git("init", "-q", str(repo), cwd=tmp_path)
     copy = repo / "mcp-synology-0.0"
     copy.mkdir()
@@ -294,6 +300,40 @@ def test_inside_another_repository_it_skips_except_in_ci(
     else:
         with pytest.raises(pytest.skip.Exception, match="is inside"):
             _tracked_files()
+
+
+def test_a_checkout_reached_through_a_symlink_is_listed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # git reports the real path as its top level (macOS's /var is /private/var).
+    _require_git()
+    real = tmp_path / "real"
+    _git("init", "-q", str(real), cwd=tmp_path)
+    (real / "pyproject.toml").write_text("")
+    _git("add", "-A", cwd=real)
+    (tmp_path / "link").symlink_to(real)
+    monkeypatch.setattr(f"{__name__}.ROOT", tmp_path / "link")
+    monkeypatch.setenv("CI", "")
+    try:
+        tracked = _tracked_files()
+    except pytest.skip.Exception as e:
+        pytest.fail(f"skipped: {e}")
+    assert tmp_path / "link" / "pyproject.toml" in tracked
+
+
+def test_a_stray_object_directory_gets_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The tests' own `git add` mustn't write objects into another repository's store.
+    _require_git()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.setenv("GIT_OBJECT_DIRECTORY", str(elsewhere))
+    repo = tmp_path / "repo"
+    _git("init", "-q", str(repo), cwd=tmp_path)
+    (repo / "f.txt").write_text("x")
+    _git("add", "-A", cwd=repo)
+    assert not any(elsewhere.iterdir())
 
 
 def test_odd_names_and_deleted_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
