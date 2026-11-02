@@ -88,27 +88,10 @@ DESTINATION_PARAMS: dict[str, str] = {
     "set_download_config": "default_destination",
 }
 
-# DSM's answer, per call, to a destination with a space anywhere in it (a padded name, or
-# `a b`), even one that exists: `Task.edit` 100 and `Info.setserverconfig` 401, on DSM 7.1,
-# 7.2.2, 7.3.2 and 7.4.1 (vdsm, #510). JSON-quoting the value makes it refuse every
-# destination. `Task.create` takes the same destinations.
-SPACE_ERRORS = {"edit": 100, "config": 401}
-SPACE_ADVICE = {
-    100: "Delete the task and create it again with create_download's destination, which "
-    "takes spaces, or choose a folder without a space in its path.",
-    401: "Pass the folder as destination on each create_download, which takes spaces, or "
-    "choose a folder without a space in its path.",
-}
 _DESTINATION_ADVICE = "Write the path out in full from the shared folder, e.g. 'video/Torrents'."
 
 
-def normalize_destination(
-    destination: str,
-    *,
-    operation: str,
-    param: str = "destination",
-    space_error: int | None = None,
-) -> str:
+def normalize_destination(destination: str, *, operation: str, param: str = "destination") -> str:
     """Make a destination share-relative, as Download Station requires.
 
     File Station shows paths as ``/share/...``; DS rejects that form (DSM 403
@@ -119,10 +102,9 @@ def normalize_destination(
     empty part (``//``) and a ``.`` or ``..`` part, padded too (#449). DS reaches a folder
     whose name starts or ends with whitespace exactly (``x/foo `` and ``x/ foo`` are
     folders beside ``x/foo``; vdsm DSM 7.1, 7.2.2, 7.3.2 and 7.4.1), so stripping sent a
-    task to another folder. ``space_error`` is the DSM error code of a call that can't take
-    a destination with a space in it (`SPACE_ERRORS`): such a destination is refused up
-    front, since DSM's own answer reads as a missing folder. ``param`` names the caller's
-    argument in errors.
+    task to another folder. (``Task.edit`` and ``Info.setserverconfig`` reach it too: the
+    client sends their spaces as ``%20``, `_reads_plus_literally`.) ``param`` names the
+    caller's argument in errors.
     """
     relative = check_parts(destination, param, _DESTINATION_ADVICE)[1:]
     if not relative:
@@ -133,17 +115,6 @@ def normalize_destination(
             param=param,
             value=destination,
             suggestion="Pass a share-relative path such as 'video/Torrents'.",
-        )
-    if space_error is not None and " " in relative:
-        error_response(
-            ErrorCode.INVALID_PARAMETER,
-            f"{operation} failed: {param} {destination!r} has a space in it, which this "
-            f"Download Station call can't take: DSM answers error {space_error} even when the "
-            "folder exists.",
-            retryable=False,
-            param=param,
-            value=destination,
-            suggestion=SPACE_ADVICE[space_error],
         )
     return relative
 

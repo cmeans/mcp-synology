@@ -23,7 +23,6 @@ from mcp_synology.core.formatting import (
 from mcp_synology.core.local_paths import refuse_outside_roots
 from mcp_synology.core.redaction import redact_title, redact_url, redact_urls
 from mcp_synology.modules.downloadstation.helpers import (
-    SPACE_ERRORS,
     STATUS_GROUPS,
     ds_is_manager,
     format_eta,
@@ -968,9 +967,7 @@ async def edit_download(
             retryable=False,
             valid=["destination"],
         )
-    destination = normalize_destination(
-        destination, operation="Edit download", space_error=SPACE_ERRORS["edit"]
-    )
+    destination = normalize_destination(destination, operation="Edit download")
 
     ids_joined = ",".join(task_ids)
 

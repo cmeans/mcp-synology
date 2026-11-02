@@ -2,10 +2,10 @@
 
 DSM keeps whitespace in a folder name, and Download Station and Photos reach ``foo `` or
 `` foo`` beside ``foo``; the tools used to ``strip()`` and sent a task or a lookup to
-``foo``. DSM cuts a path at a NUL, so a NUL is refused. ``Task.edit`` and
-``Info.setserverconfig`` can't take a destination with a space even when it exists, so
-``edit_download`` and ``set_download_config`` refuse one up front. Each DSM behavior the
-tools rely on is pinned here with a raw call, so a DSM that changes it fails a test.
+``foo``. DSM cuts a path at a NUL, so a NUL is refused (pinned with a raw call). The v1
+CGIs behind ``edit_download`` and ``set_download_config`` read ``+`` in a query as a plus,
+so the client sends a space as ``%20``; an ``a+b`` folder beside ``a b`` catches a
+regression.
 
 Run: ``uv run pytest tests/vdsm -m vdsm --dsm-version 7.2.2 -k ds_photos_paths``
 """
@@ -116,7 +116,7 @@ async def _ds2_create(client: DsmClient, destination: str) -> list[str]:
 
 @pytest.fixture
 async def folders(nas_client: Any) -> AsyncIterator[str]:
-    """``writable/<unique>`` holding ``foo``, ``foo ``, `` foo`` and ``a b`` (share-relative)."""
+    """``writable/<unique>`` holding ``foo``, ``foo ``, `` foo``, ``a b`` and ``a+b``."""
     client: DsmClient = nas_client[0]
     name = f"t510b-{uuid.uuid4().hex[:8]}"
     await client.request(
@@ -125,7 +125,7 @@ async def folders(nas_client: Any) -> AsyncIterator[str]:
         params={"folder_path": "/writable", "name": dsm_str(name), "force_parent": "false"},
     )
     try:
-        for child in ("foo", "foo ", " foo", "a b"):
+        for child in ("foo", "foo ", " foo", "a b", "a+b"):
             await client.request(
                 "SYNO.FileStation.CreateFolder",
                 "create",
@@ -173,49 +173,30 @@ class TestDownloadStation:
             await create_download(client, uri=_magnet(), destination=f"{folders}/foo\x00x")
         assert _error(exc)["code"] == "invalid_parameter"
 
-    async def test_edit_and_config_cant_take_a_space_so_it_is_refused(
+    async def test_edit_and_config_reach_a_spaced_folder_exactly(
         self, ds_client: DsmClient, folders: str
     ) -> None:
+        # The v1 CGIs behind them read `+` in a query as a plus: sent as `+`, `a b` went to
+        # the `a+b` folder beside it. The client sends %20 (#510).
         client = ds_client
         ids = await _ds2_create(client, f"{folders}/foo")
         try:
-            for child in ("foo ", " foo", "a b"):
-                with pytest.raises(SynologyError) as dsm:
-                    await client.request(
-                        "SYNO.DownloadStation.Task",
-                        "edit",
-                        version=2,
-                        params={"id": ids[0], "destination": f"{folders}/{child}"},
-                    )
-                assert dsm.value.code == 100
-                with pytest.raises(ToolError) as exc:
-                    await edit_download(client, task_ids=ids, destination=f"{folders}/{child}")
-                assert "has a space in it" in _error(exc)["message"]
-            assert await _task_destination(client, ids[0]) == f"{folders}/foo"
+            for child in ("foo ", " foo", "a b", "a+b"):
+                out = await edit_download(client, task_ids=ids, destination=f"{folders}/{child}")
+                assert "ok" in out, out
+                assert await _task_destination(client, ids[0]) == f"{folders}/{child}"
         finally:
             await _delete_tasks(client, ids)
 
         config = await client.request("SYNO.DownloadStation.Info", "getconfig", 1)
         original = config["default_destination"]
         try:
-            with pytest.raises(SynologyError) as dsm:
-                await client.request(
-                    "SYNO.DownloadStation.Info",
-                    "setserverconfig",
-                    1,
-                    {"default_destination": f"{folders}/a b"},
-                )
-            assert dsm.value.code == 401
-            with pytest.raises(ToolError) as exc:
-                await set_download_config(client, default_destination=f"{folders}/a b")
-            assert "has a space in it" in _error(exc)["message"]
+            for child in ("a b", " foo"):
+                await set_download_config(client, default_destination=f"{folders}/{child}")
+                config = await client.request("SYNO.DownloadStation.Info", "getconfig", 1)
+                assert config["default_destination"] == f"{folders}/{child}"
         finally:
-            await client.request(
-                "SYNO.DownloadStation.Info",
-                "setserverconfig",
-                1,
-                {"default_destination": original},
-            )
+            await set_download_config(client, default_destination=original)
         config = await client.request("SYNO.DownloadStation.Info", "getconfig", 1)
         assert config["default_destination"] == original
 
