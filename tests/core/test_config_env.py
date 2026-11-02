@@ -280,17 +280,6 @@ def test_a_blank_synology_host_is_not_env_only_mode(
         load_config()
 
 
-def test_a_blank_mcp_synology_config_counts_as_unset(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("MCP_SYNOLOGY_CONFIG", "  ")
-    monkeypatch.setenv("SYNOLOGY_HOST", "nas.example")
-    config = load_config()
-    assert config.connection is not None and config.connection.host == "nas.example"
-
-
 def test_a_blank_password_variable_doesnt_hide_the_files_plaintext_password(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -345,18 +334,6 @@ def test_a_default_location_is_logged_at_info(
     assert any(r.getMessage() == f"Config: {path}" for r in caplog.records)
 
 
-def test_a_blank_mcp_synology_config_still_finds_the_default_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.chdir(tmp_path)
-    _config(tmp_path).rename(tmp_path / "mcp-synology.yaml")
-    monkeypatch.setenv("MCP_SYNOLOGY_CONFIG", "  ")
-    config = load_config()
-    assert config.connection is not None and config.connection.host == "nas.example"
-    assert config.modules  # the file's, not env-only mode's synthesized config
-
-
 @pytest.mark.parametrize("value", ["[", "{a", "*x", "@hunter2", "!!int hunter2", "%x", "maybe"])
 def test_odd_update_notices_values_are_env_var_errors(value: str) -> None:
     # A YAML parse of the value let these escape as YAML or int errors, which blamed the
@@ -364,21 +341,6 @@ def test_odd_update_notices_values_are_env_var_errors(value: str) -> None:
     with pytest.raises(EnvVarError) as excinfo:
         parse_env_value("SYNOLOGY_UPDATE_NOTICES", "update_notices", value)
     assert str(excinfo.value) == MESSAGES["SYNOLOGY_UPDATE_NOTICES"]
-
-
-def test_setup_with_a_blank_mcp_synology_config_creates_a_config(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # Blank counts as unset: no named file, so interactive creation starts as before.
-    from click.testing import CliRunner
-
-    from mcp_synology.cli import main
-
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.chdir(tmp_path)
-    result = CliRunner().invoke(main, ["setup"], env={"MCP_SYNOLOGY_CONFIG": "  "}, input="")
-    assert "Let's create one" in result.output
-    assert "MCP_SYNOLOGY_CONFIG" not in result.output
 
 
 @pytest.mark.parametrize(
@@ -449,3 +411,88 @@ def test_a_relative_config_flag_is_shown_absolute(
     with pytest.raises(FileNotFoundError) as excinfo:
         load_config("cfgx.yaml")
     assert str(tmp_path / "cfgx.yaml") in str(excinfo.value)
+
+
+# -- maintainer decision on #529: an empty config path is an error ----------------------
+
+EMPTY_FLAG = (
+    "--config is empty: give a config file's path, or leave --config out to use the "
+    "default locations."
+)
+BLANK_VAR = (
+    "MCP_SYNOLOGY_CONFIG is set but empty: give a config file's path, or unset "
+    "MCP_SYNOLOGY_CONFIG to use the default locations."
+)
+
+
+@pytest.mark.parametrize("value", ["", "   "])
+def test_a_blank_mcp_synology_config_is_an_error(
+    value: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Even with a default config file present and SYNOLOGY_HOST set: an unfilled ""
+    # in a client's env block mustn't drop the config it was meant to name.
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.chdir(tmp_path)
+    _config(tmp_path).rename(tmp_path / "mcp-synology.yaml")
+    monkeypatch.setenv("SYNOLOGY_HOST", "nas.example")
+    monkeypatch.setenv("MCP_SYNOLOGY_CONFIG", value)
+    with pytest.raises(FileNotFoundError) as excinfo:
+        load_config()
+    assert str(excinfo.value) == BLANK_VAR
+
+
+@pytest.mark.parametrize("value", ["", "   "])
+def test_an_empty_config_flag_is_an_error(
+    value: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # It used to fall through to the default locations, and to env-only mode.
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.chdir(tmp_path)
+    _config(tmp_path).rename(tmp_path / "mcp-synology.yaml")
+    monkeypatch.setenv("SYNOLOGY_HOST", "nas.example")
+    with pytest.raises(FileNotFoundError) as excinfo:
+        load_config(value)
+    assert str(excinfo.value) == EMPTY_FLAG
+
+
+@pytest.mark.parametrize("command", ["check", "serve", "setup"])
+@pytest.mark.parametrize("value", ["", "   "])
+def test_each_command_refuses_an_empty_config_flag(
+    command: str, value: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from click.testing import CliRunner
+
+    from mcp_synology.cli import main
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(
+        main, [command, "--config", value], env={"SYNOLOGY_HOST": "nas.invalid"}, input=""
+    )
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert f"Error: {EMPTY_FLAG}" in result.output.replace("\n", " ")
+    assert "Let's create one" not in result.output
+
+
+@pytest.mark.parametrize("command", ["check", "serve", "setup"])
+@pytest.mark.parametrize("value", ["", "   "])
+def test_each_command_refuses_a_blank_mcp_synology_config(
+    command: str, value: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from click.testing import CliRunner
+
+    from mcp_synology.cli import main
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(
+        main,
+        [command],
+        env={"SYNOLOGY_HOST": "nas.invalid", "MCP_SYNOLOGY_CONFIG": value},
+        input="",
+    )
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert f"Error: {BLANK_VAR}" in result.output.replace("\n", " ")
+    assert "Let's create one" not in result.output

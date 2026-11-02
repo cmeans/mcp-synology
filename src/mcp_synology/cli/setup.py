@@ -35,7 +35,7 @@ def setup(config: str | None, list_configs: bool, verbose: bool) -> None:
         return
 
     # If --config is given, use the existing config-file flow
-    if config:
+    if config is not None:  # an empty --config is an error there, not "no flag"
         _setup_with_config(config, verbose)
         return
 
@@ -49,7 +49,7 @@ def setup(config: str | None, list_configs: bool, verbose: bool) -> None:
     except FileNotFoundError as e:
         # A file named by MCP_SYNOLOGY_CONFIG must exist: creating a config elsewhere
         # would ignore the variable without a word (#499).
-        if (os.environ.get("MCP_SYNOLOGY_CONFIG") or "").strip():
+        if os.environ.get("MCP_SYNOLOGY_CONFIG") is not None:
             click.echo(click.style(f"Error: {e}", fg="red"), err=True)
             sys.exit(1)
         # No config file found — enter interactive creation mode

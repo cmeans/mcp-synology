@@ -233,7 +233,16 @@ def discover_config_path(explicit_path: str | None = None) -> Path:
     3. ~/.config/mcp-synology/config.yaml
     4. ./mcp-synology.yaml
     """
-    if explicit_path:
+    # An empty path names no file, so it's an error, the same as a missing one (#499;
+    # maintainer, 2026-11-02): `--config ''` used to fall through to the default
+    # locations, and with SYNOLOGY_HOST set to env-only mode.
+    if explicit_path is not None:
+        if not explicit_path.strip():
+            msg = (
+                "--config is empty: give a config file's path, or leave --config out to "
+                "use the default locations."
+            )
+            raise FileNotFoundError(msg)
         path = Path(explicit_path).expanduser()
         # Absolute in messages: an MCP client starts the server in a working folder the
         # user rarely knows (QA round 1 on #529).
@@ -243,9 +252,17 @@ def discover_config_path(explicit_path: str | None = None) -> Path:
         logger.info("Config: %s (from --config)", path.absolute())
         return path
 
-    # Blank counts as unset, as for the SYNOLOGY_* variables.
-    env_path = (os.environ.get("MCP_SYNOLOGY_CONFIG") or "").strip()
-    if env_path:
+    # Set but blank is an error, unlike the SYNOLOGY_* variables (maintainer,
+    # 2026-11-02): an unfilled "" in an MCP client's env block would otherwise drop
+    # the config it was meant to name without a word.
+    env_path = os.environ.get("MCP_SYNOLOGY_CONFIG")
+    if env_path is not None:
+        if not env_path.strip():
+            msg = (
+                "MCP_SYNOLOGY_CONFIG is set but empty: give a config file's path, or unset "
+                "MCP_SYNOLOGY_CONFIG to use the default locations."
+            )
+            raise FileNotFoundError(msg)
         path = Path(env_path).expanduser()
         if not path.exists():
             # An error, never env-only mode: that would run read-only over plain HTTP
@@ -720,11 +737,11 @@ def load_config(path: str | Path | None = None) -> AppConfig:
     SYNOLOGY_HOST is set.
     """
     try:
-        config_path = discover_config_path(str(path) if path else None)
+        config_path = discover_config_path(None if path is None else str(path))
     except FileNotFoundError:
         # A file named by --config or MCP_SYNOLOGY_CONFIG must exist: never fall back
         # to env-only mode (#499).
-        if path or (os.environ.get("MCP_SYNOLOGY_CONFIG") or "").strip():
+        if path is not None or os.environ.get("MCP_SYNOLOGY_CONFIG") is not None:
             raise
         # Try env-var-only mode
         env_config = _synthesize_env_config()
