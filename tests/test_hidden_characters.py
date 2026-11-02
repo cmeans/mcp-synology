@@ -1,4 +1,5 @@
-"""No tracked text file holds a hidden character or a look-alike space (#515).
+"""No tracked text file holds a hidden character, a control character or a look-alike space
+(#515).
 
 GitHub shows a "hidden or bidirectional Unicode text" banner on files with characters like
 these, and editors flag them; in a project that refuses such characters in file names, an
@@ -11,6 +12,7 @@ from __future__ import annotations
 import os
 import subprocess
 from pathlib import Path
+from typing import Any
 
 import pytest
 import regex
@@ -22,11 +24,12 @@ ROOT = Path(__file__).resolve().parent.parent
 # Default-ignorable code points (zero-width characters, joiners, variation selectors,
 # tags, soft hyphen, BOM, Hangul fillers; the bidi controls are among them), the other
 # characters the File Station checks say draw nothing (helpers' `_BRAILLE_BLANK` and
-# `_ANNOTATION`: a test keeps this in step), the line and paragraph separators, and every
-# space but U+0020 (NBSP, U+3000, ...).
+# `_ANNOTATION`: a test keeps this in step), the line and paragraph separators, every
+# space but U+0020 (NBSP, U+3000, ...), and every control character but tab, LF and CR
+# (ESC draws nothing on GitHub, and in a terminal `ESC[2J` clears the screen).
 _HIDDEN = regex.compile(
     r"[\p{Default_Ignorable_Code_Point}\u2800\ufff9-\ufffb\U00013430-\U0001343f"
-    r"\p{Zl}\p{Zp}\p{Zs}--\x20]",
+    r"\p{Zl}\p{Zp}\p{Zs}\p{Cc}--[\x20\t\n\r]]",
     flags=regex.V1,
 )
 
@@ -38,14 +41,25 @@ def _in_ci() -> bool:
 def _tracked_files() -> list[Path]:
     try:
         listed = subprocess.run(
-            ["git", "ls-files", "-z"], cwd=ROOT, capture_output=True, check=True
+            ["git", "ls-files", "-z"],
+            cwd=ROOT,
+            capture_output=True,
+            check=True,
+            # git's messages in English, so "not a git repository" below matches.
+            env={**os.environ, "LC_ALL": "C", "LANGUAGE": ""},
         ).stdout.decode("utf-8", "surrogateescape")
-    except (subprocess.CalledProcessError, FileNotFoundError) as e:
-        # An sdist, an archive export or a sandbox without the git directory: nothing to
-        # list. CI always has a checkout, so there it's a failure.
+    except FileNotFoundError as e:
         if _in_ci():
             raise
-        pytest.skip(f"not a git checkout: {e}")
+        pytest.skip(f"git isn't installed: {e}")
+    except subprocess.CalledProcessError as e:
+        reason = e.stderr.decode("utf-8", "replace").strip()
+        # An sdist, an archive export or a sandbox without the git directory: nothing to
+        # list. CI always has a checkout, so there it's a failure, and so is any other git
+        # error (dubious ownership, a broken index): the guard mustn't skip in a checkout.
+        if _in_ci() or "not a git repository" not in reason:
+            pytest.fail(f"git ls-files failed: {reason}")
+        pytest.skip(f"not a git checkout: {reason}")
     return [ROOT / name for name in listed.split("\0") if name]
 
 
@@ -97,11 +111,16 @@ def test_no_tracked_file_holds_a_hidden_character() -> None:
         "\u3000",
         "\u2028",
         "\u2029",
+        "\x1b",
+        "\x0c",
+        "\x00",
+        "\x7f",
+        "\x85",
     ],
 )
 def test_the_pattern_finds_each_kind(char: str) -> None:
     assert _HIDDEN.findall(f"a{char}b") == [char]
-    assert not _HIDDEN.findall("a b\tc\u0301")
+    assert not _HIDDEN.findall("a b\tc\u0301\r\n")
 
 
 def test_the_pattern_covers_what_the_checks_call_drawing_nothing() -> None:
@@ -117,8 +136,8 @@ def test_the_pattern_covers_what_the_checks_call_drawing_nothing() -> None:
         (b"\xff\n" + "x\u200by".encode(), [(2, ["U+200B"])]),
         # UTF-16 is read (its ASCII has NUL bytes); the BOM itself isn't reported.
         ("a\n\u00a0".encode("utf-16"), [(2, ["U+00A0"])]),
-        # Only "\n" ends a line: "\r" and a form feed don't move the count.
-        ("a\r\x0cb\n\u2800".encode(), [(2, ["U+2800"])]),
+        # Only "\n" ends a line: "\r" and a form feed (itself reported) don't move the count.
+        ("a\r\x0cb\n\u2800".encode(), [(1, ["U+000C"]), (2, ["U+2800"])]),
         (b"\x89PNG\0\0\xe2\x80\x8b", []),
     ],
     ids=["utf-8", "stray-byte", "utf-16", "line-count", "binary"],
@@ -143,13 +162,59 @@ def test_outside_a_checkout_it_skips_except_in_ci(
     monkeypatch.setenv("CI", ci)
     monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path.parent))
     if ci:
-        try:
+        with pytest.raises(pytest.fail.Exception, match="not a git repository"):
             _tracked_files()
-        except pytest.skip.Exception:
-            pytest.fail("skipped in CI")
-        except subprocess.CalledProcessError:
-            return
-        pytest.fail("listed files outside a checkout")
     else:
-        with pytest.raises(pytest.skip.Exception):
+        with pytest.raises(pytest.skip.Exception, match="not a git checkout"):
             _tracked_files()
+
+
+def test_any_other_git_error_fails_with_gits_message(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Dubious ownership (a checkout mounted for another user) is a checkout git refuses:
+    # skipping there would quietly turn the guard off.
+    def refuse(*args: Any, **kwargs: Any) -> None:
+        raise subprocess.CalledProcessError(
+            128, args[0], stderr=b"fatal: detected dubious ownership in repository at '/w'"
+        )
+
+    monkeypatch.setattr(subprocess, "run", refuse)
+    monkeypatch.setenv("CI", "")
+    with pytest.raises(pytest.fail.Exception, match="dubious ownership"):
+        _tracked_files()
+
+
+@pytest.mark.parametrize("ci", ["true", ""])
+def test_without_git_it_skips_except_in_ci(ci: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    def missing(*args: Any, **kwargs: Any) -> None:
+        raise FileNotFoundError(2, "No such file or directory", "git")
+
+    monkeypatch.setattr(subprocess, "run", missing)
+    monkeypatch.setenv("CI", ci)
+    if ci:
+        with pytest.raises(FileNotFoundError):
+            _tracked_files()
+    else:
+        with pytest.raises(pytest.skip.Exception, match="git isn't installed"):
+            _tracked_files()
+
+
+def test_git_speaks_english(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # The skip matches git's English message; a German locale mustn't turn it into a failure.
+    monkeypatch.setattr(f"{__name__}.ROOT", tmp_path)
+    monkeypatch.setenv("CI", "")
+    monkeypatch.setenv("LANG", "de_DE.UTF-8")
+    monkeypatch.setenv("LC_ALL", "de_DE.UTF-8")
+    monkeypatch.setenv("LANGUAGE", "de")
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path.parent))
+    seen: dict[str, Any] = {}
+    real_run = subprocess.run
+
+    def spy(*args: Any, **kwargs: Any) -> Any:
+        seen.update(kwargs.get("env") or {})
+        return real_run(*args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", spy)
+    with pytest.raises(pytest.skip.Exception, match="not a git checkout"):
+        _tracked_files()
+    assert seen["LC_ALL"] == "C"
+    assert seen["LANGUAGE"] == ""
