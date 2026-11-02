@@ -125,36 +125,45 @@ jobs:
             .vdsm/golden/dsm-${{ env.DSM_VERSION }}.meta.json
           key: ${{ steps.golden.outputs.key }}
 
-      # Disk the job needs, measured from bake v9's images (#525): a restored image takes
-      # about 27 GB (the 16 GB data and 11 GB system disk images; tarfile writes them out
-      # in full, not sparse; 25 to 27 GB per DSM version), the tarball about 1.2 GB, and the
-      # virtual-dsm container image 0.56 GB, plus the venv. A cache hit restores the
-      # tarball into that folder: about 30 GB. A cache miss bakes into the same folder,
-      # which the restore clears before extracting, so it peaks at about the same, plus
-      # Playwright's Chromium: about 31 GB. 35 GB leaves room for both.
+      # Disk the job still needs when this step runs, after the cache restore (#525),
+      # measured from bake v9's images, in GiB (df -BG and du count binary units): a
+      # restored image is about 26.4 GiB (the 16 GB data and 11 GB system disk images;
+      # tarfile writes them out in full, not sparse), the tarball about 1.2 GiB, the
+      # virtual-dsm container image 0.5 GiB, plus the venv (about 1 GiB).
+      # - Cache hit: the tarball is already on disk, so what's left is the extracted
+      #   image, the container image and the venv: about 28 GiB. Threshold 31.
+      # - Cache miss: the bake writes into the storage folder, then the tarball, then the
+      #   restore clears the folder and extracts again, plus Playwright's Chromium: a
+      #   peak of about 30 GiB. Threshold 35.
       #
-      # Most runners have a 145 GB root with about 85 GB free, and skip the cleanup
+      # Most runners have a 145 GB root with about 85 GiB free, and skip the cleanup
       # (it took 84-109 s when every job ran it, #132). Some come with a 72 GB disk and
-      # about 12 GB free (an AWS-hosted ubuntu-24.04 runner on #477, #525); those first
-      # remove large preinstalled runtimes this job doesn't use (about 30 GB, measured on
-      # #181), then check again.
+      # about 12 GiB free (an AWS-hosted ubuntu-24.04 runner on #477, #525); those first
+      # remove large preinstalled runtimes this job doesn't use: Android, .NET and GHC
+      # freed 20.3 GiB on #181's runner, plus the CodeQL bundle. That gets a 12 GiB
+      # runner past the cache-hit threshold, the usual case on a PR; a cache miss on one
+      # still fails with the clear message below.
       - name: Check free disk space
         if: steps.scope.outputs.code == 'true'
+        env:
+          CACHE_HIT: ${{ steps.cache-golden.outputs.cache-hit }}
         run: |
           set -euo pipefail
-          need=35
-          free_gb() { df --output=avail -BG / | tail -1 | tr -dc 0-9; }
-          df -h /
-          if [ "$(free_gb)" -lt "$need" ]; then
-            echo "::warning::only $(free_gb) GB free; removing preinstalled runtimes this job doesn't use"
-            sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup \
-              /opt/hostedtoolcache/CodeQL
-            docker image prune -af
-            df -h /
-          fi
+          if [ "${CACHE_HIT}" = "true" ]; then need=31; else need=35; fi
+          free_gb() {
+            # The table goes to the log (stderr); only the number is the result.
+            df -h / >&2 && df --output=avail -BG / | tail -1 | tr -dc 0-9 ||
+              { echo "::error::couldn't read free disk space" >&2; return 1; }
+          }
           free=$(free_gb)
           if [ "$free" -lt "$need" ]; then
-            echo "::error::only ${free} GB free; the vdsm job needs about ${need} GB"
+            echo "::warning::only ${free} GiB free; removing preinstalled runtimes this job doesn't use"
+            sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup \
+              /opt/hostedtoolcache/CodeQL
+            free=$(free_gb)
+          fi
+          if [ "$free" -lt "$need" ]; then
+            echo "::error::only ${free} GiB free; the vdsm job needs about ${need} GiB here"
             exit 1
           fi
 
