@@ -331,11 +331,13 @@ def parse_env_value(env_var: str, dotted_path: str, value: str) -> Any:
     annotation = _env_field_annotation(dotted_path)
     text = value.strip()
     if dotted_path == "update_notices":
-        # As in the file, where YAML reads `off`/`no`/`false` as false and `on`/`yes`/
-        # `true` as true, and `_yaml_bool_notices` maps them to off and all.
-        loaded = yaml.safe_load(text) if text.lower() != "off" else "off"
-        if isinstance(loaded, bool):
-            text = "all" if loaded else "off"
+        # As in the file, where YAML reads `no`/`false`/`off` as false and `yes`/`true`/
+        # `on` as true, and `_yaml_bool_notices` maps them to off and all. A word list,
+        # not a YAML parse: any other text must reach the choice check below, so it's
+        # an EnvVarError naming the variable (pre-QA on #511).
+        text = {"yes": "all", "true": "all", "on": "all", "no": "off", "false": "off"}.get(
+            text.lower(), text
+        )
     if get_origin(annotation) is Literal or any(
         get_origin(a) is Literal for a in get_args(annotation)
     ):

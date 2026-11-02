@@ -1,8 +1,8 @@
 """Environment variables and config discovery (#511 PR 1: #501, #499, #458's env items).
 
-Every ``SYNOLOGY_*`` variable is parsed with its config field's own type, so it takes
-exactly what the config file does, and an invalid value is an error naming the variable,
-never a silent default. A config file named by ``MCP_SYNOLOGY_CONFIG`` must exist.
+Every ``SYNOLOGY_*`` variable is parsed with its config field's own type (choices in any
+case), and a value of the wrong type is an error naming the variable, never a silent
+default. A config file named by ``MCP_SYNOLOGY_CONFIG`` must exist.
 """
 
 from __future__ import annotations
@@ -89,6 +89,20 @@ INVALID = {
     "SYNOLOGY_LOG_LEVEL": "hunter2",
     "SYNOLOGY_UPDATE_NOTICES": "hunter2",
 }
+# Each typed variable's whole error message.
+MESSAGES = {
+    "SYNOLOGY_PORT": "SYNOLOGY_PORT must be a whole number (it sets connection.port).",
+    "SYNOLOGY_HTTPS": (
+        "SYNOLOGY_HTTPS must be true or false (also 1/0, yes/no, on/off) "
+        "(it sets connection.https)."
+    ),
+    "SYNOLOGY_LOG_LEVEL": (
+        "SYNOLOGY_LOG_LEVEL must be one of debug, info, warning, error (it sets logging.level)."
+    ),
+    "SYNOLOGY_UPDATE_NOTICES": (
+        "SYNOLOGY_UPDATE_NOTICES must be one of all, security, off (it sets update_notices)."
+    ),
+}
 TEXT_VARS = {
     "SYNOLOGY_HOST",
     "SYNOLOGY_USERNAME",
@@ -111,7 +125,7 @@ def test_an_invalid_value_names_the_variable_and_hides_the_value(
     with pytest.raises(EnvVarError) as excinfo:
         load_config(_config(tmp_path))
     message = str(excinfo.value)
-    assert message.startswith(f"{env_var} must be ")
+    assert message == MESSAGES[env_var]
     assert "hunter2" not in message
 
 
@@ -340,3 +354,48 @@ def test_a_blank_mcp_synology_config_still_finds_the_default_file(
     config = load_config()
     assert config.connection is not None and config.connection.host == "nas.example"
     assert config.modules  # the file's, not env-only mode's synthesized config
+
+
+@pytest.mark.parametrize("value", ["[", "{a", "*x", "@hunter2", "!!int hunter2", "%x", "maybe"])
+def test_odd_update_notices_values_are_env_var_errors(value: str) -> None:
+    # A YAML parse of the value let these escape as YAML or int errors, which blamed the
+    # config file or echoed the value (pre-QA r2 on #511).
+    with pytest.raises(EnvVarError) as excinfo:
+        parse_env_value("SYNOLOGY_UPDATE_NOTICES", "update_notices", value)
+    assert str(excinfo.value) == MESSAGES["SYNOLOGY_UPDATE_NOTICES"]
+
+
+def test_setup_with_a_blank_mcp_synology_config_creates_a_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Blank counts as unset: no named file, so interactive creation starts as before.
+    from click.testing import CliRunner
+
+    from mcp_synology.cli import main
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(main, ["setup"], env={"MCP_SYNOLOGY_CONFIG": "  "}, input="")
+    assert "Let's create one" in result.output
+    assert "MCP_SYNOLOGY_CONFIG" not in result.output
+
+
+@pytest.mark.parametrize(
+    ("value", "level"),
+    [
+        ("DEBUG", logging.DEBUG),
+        (" warning ", logging.WARNING),
+        ("basic_format", logging.INFO),  # not a level: INFO, and the config load reports it
+        ("", logging.INFO),
+    ],
+)
+def test_early_logging_reads_the_level_as_the_config_does(
+    value: str, level: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from mcp_synology.cli import logging_
+
+    seen: dict[str, int] = {}
+    monkeypatch.setattr(logging_.logging, "basicConfig", lambda **kw: seen.update(kw))
+    monkeypatch.setenv("SYNOLOGY_LOG_LEVEL", value)
+    logging_._init_early_logging()
+    assert seen["level"] == level
