@@ -203,14 +203,81 @@ class TestNormalizeDestination:
         )
 
     @pytest.mark.parametrize("given", ["video/..\t/x", "video/.\t/x"])
-    def test_only_spaces_pad_a_dot_part(self, given: str) -> None:
-        # As File Station's: a tab makes another name (pre-QA on #470).
-        assert normalize_destination(given, operation="Edit download") == given
+    def test_a_dot_part_padded_with_any_whitespace_is_invalid(self, given: str) -> None:
+        # File Station's part rules (#510): whether DSM trims padding beside a dot is
+        # unprobed, so every padded form is refused, as there.
+        with pytest.raises(ToolError, match="'.' and '..' parts"):
+            normalize_destination(given, operation="Edit download")
 
     def test_dots_inside_a_name_pass(self) -> None:
         assert normalize_destination("video/.hidden/a..b", operation="Edit download") == (
             "video/.hidden/a..b"
         )
+
+    @pytest.mark.parametrize(
+        ("given", "sent"),
+        [
+            # Taken exactly (#510): DS reaches these folders, beside `video/x/foo` (vdsm,
+            # DSM 7.1, 7.2.2, 7.3.2 and 7.4.1); stripping sent the task to `video/x/foo`.
+            ("video/x/foo ", "video/x/foo "),
+            ("video/x/ foo", "video/x/ foo"),
+            ("video/x/ ", "video/x/ "),
+            ("video/x/a\tb", "video/x/a\tb"),
+            ("video/a\\b", "video/a\\b"),
+            # Only whitespace before a leading / is padding, as in File Station.
+            ("  /video/x/", "video/x"),
+            # Without a leading /, a leading space is part of the share's name.
+            (" video/x", " video/x"),
+        ],
+    )
+    def test_taken_exactly(self, given: str, sent: str) -> None:
+        assert normalize_destination(given, operation="Create download") == sent
+
+    @pytest.mark.parametrize(
+        ("given", "what"),
+        [
+            # DSM cuts a destination at a NUL: a task sent to `x/foo<NUL>y` went to `x/foo`.
+            ("video/x/foo\x00y", "NUL"),
+            ("video//x", "empty part"),
+            ("//video/x", "empty part"),
+        ],
+    )
+    def test_nul_and_empty_parts_are_invalid(self, given: str, what: str) -> None:
+        with pytest.raises(ToolError) as exc_info:
+            normalize_destination(given, operation="Create download")
+        error = json.loads(str(exc_info.value))["error"]
+        assert (error["code"], error["param"], error["value"]) == (
+            "invalid_parameter",
+            "destination",
+            given,
+        )
+        assert what in error["message"]
+
+
+class TestDestinationWithASpace:
+    """Task.edit answers 100 and Info.setserverconfig 401 to a destination with a space in
+    it, even one that exists (vdsm, DSM 7.1, 7.2.2, 7.3.2 and 7.4.1, #510), so those calls
+    refuse it up front; Task.create takes it."""
+
+    @pytest.mark.parametrize("given", ["video/a b", "video/x/foo ", "video/x/ foo", "video/ "])
+    @pytest.mark.parametrize(("call", "code"), [("edit", 100), ("config", 401)])
+    def test_refused_for_edit_and_config(self, given: str, call: str, code: int) -> None:
+        from mcp_synology.modules.downloadstation.helpers import SPACE_ERRORS
+
+        assert SPACE_ERRORS[call] == code
+        with pytest.raises(ToolError) as exc_info:
+            normalize_destination(given, operation="Op", param="p", space_error=code)
+        error = json.loads(str(exc_info.value))["error"]
+        assert (error["code"], error["param"], error["value"]) == ("invalid_parameter", "p", given)
+        assert f"DSM answers error {code} even when the folder exists" in error["message"]
+        assert "create_download" in error["suggestion"]
+
+    def test_create_takes_it(self) -> None:
+        assert normalize_destination("video/a b", operation="Create download") == "video/a b"
+
+    @pytest.mark.parametrize("code", [100, 401])
+    def test_padding_before_a_leading_slash_isnt_a_space_in_the_path(self, code: int) -> None:
+        assert normalize_destination(" /video/ab", operation="Op", space_error=code) == "video/ab"
 
 
 class TestStatusGroups:

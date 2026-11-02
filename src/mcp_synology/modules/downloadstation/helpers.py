@@ -11,6 +11,7 @@ from mcp_synology.core.formatting import (
     format_size,
     weekly_plan_grid,
 )
+from mcp_synology.modules.filestation.paths import check_parts
 
 if TYPE_CHECKING:
     from mcp_synology.core.client import DsmClient
@@ -78,25 +79,52 @@ def task_error_detail(task: dict[str, Any]) -> object:
     return extra.get("error_detail") if isinstance(extra, dict) else None
 
 
-def normalize_destination(destination: str, *, operation: str, param: str = "destination") -> str:
+# Every tool argument that names a NAS folder. Each goes through `normalize_destination`
+# (#510); a new one goes here, and tests/modules/downloadstation/test_paths.py fails until
+# it does.
+DESTINATION_PARAMS: dict[str, str] = {
+    "create_download": "destination",
+    "edit_download": "destination",
+    "set_download_config": "default_destination",
+}
+
+# DSM's answer, per call, to a destination with a space anywhere in it (a padded name, or
+# `a b`), even one that exists: `Task.edit` 100 and `Info.setserverconfig` 401, on DSM 7.1,
+# 7.2.2, 7.3.2 and 7.4.1 (vdsm, #510). JSON-quoting the value makes it refuse every
+# destination. `Task.create` takes the same destinations.
+SPACE_ERRORS = {"edit": 100, "config": 401}
+SPACE_ADVICE = {
+    100: "Delete the task and create it again with create_download's destination, which "
+    "takes spaces, or choose a folder without a space in its path.",
+    401: "Pass the folder as destination on each create_download, which takes spaces, or "
+    "choose a folder without a space in its path.",
+}
+_DESTINATION_ADVICE = "Write the path out in full from the shared folder, e.g. 'video/Torrents'."
+
+
+def normalize_destination(
+    destination: str,
+    *,
+    operation: str,
+    param: str = "destination",
+    space_error: int | None = None,
+) -> str:
     """Make a destination share-relative, as Download Station requires.
 
     File Station shows paths as ``/share/...``; DS rejects that form (DSM 403
-    "Destination doesn't exist" on create, error 100 on edit), so a leading or
-    trailing ``/`` is dropped, and a ``.`` or ``..`` part is refused, as in File Station
-    paths (#449). ``param`` names the caller's argument in errors.
+    "Destination doesn't exist" on create, error 100 on edit), so the ``/`` at either end is
+    dropped. Otherwise the path is taken exactly, by File Station's part rules (#510):
+    `check_parts` drops only whitespace before a leading ``/`` and refuses a NUL (DSM cuts
+    the path there: a task created or edited into ``x/foo<NUL>y`` went to ``x/foo``), an
+    empty part (``//``) and a ``.`` or ``..`` part, padded too (#449). DS reaches a folder
+    whose name starts or ends with whitespace exactly (``x/foo `` and ``x/ foo`` are
+    folders beside ``x/foo``; vdsm DSM 7.1, 7.2.2, 7.3.2 and 7.4.1), so stripping sent a
+    task to another folder. ``space_error`` is the DSM error code of a call that can't take
+    a destination with a space in it (`SPACE_ERRORS`): such a destination is refused up
+    front, since DSM's own answer reads as a missing folder. ``param`` names the caller's
+    argument in errors.
     """
-    relative = destination.strip().strip("/")
-    # Padded too (` .. `), as File Station refuses them (QA round 2 on #470).
-    if any(part.strip(" ") in (".", "..") for part in relative.split("/")):
-        error_response(
-            ErrorCode.INVALID_PARAMETER,
-            f"{operation} failed: {param} {destination!r}: '.' and '..' parts aren't allowed.",
-            retryable=False,
-            param=param,
-            value=destination,
-            suggestion="Write the path out in full from the shared folder, e.g. 'video/Torrents'.",
-        )
+    relative = check_parts(destination, param, _DESTINATION_ADVICE)[1:]
     if not relative:
         error_response(
             ErrorCode.INVALID_PARAMETER,
@@ -105,6 +133,17 @@ def normalize_destination(destination: str, *, operation: str, param: str = "des
             param=param,
             value=destination,
             suggestion="Pass a share-relative path such as 'video/Torrents'.",
+        )
+    if space_error is not None and " " in relative:
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            f"{operation} failed: {param} {destination!r} has a space in it, which this "
+            f"Download Station call can't take: DSM answers error {space_error} even when the "
+            "folder exists.",
+            retryable=False,
+            param=param,
+            value=destination,
+            suggestion=SPACE_ADVICE[space_error],
         )
     return relative
 

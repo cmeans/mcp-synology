@@ -173,6 +173,17 @@ class TestFolders:
             ("/", {"id": 0}),
             ("", {"id": 0}),
             ("mcp-spec-capture/", {"name": "/mcp-spec-capture"}),
+            (" 10 ", {"id": 10}),
+            ("  /", {"id": 0}),
+            # Taken exactly (#510): Photos reaches ` foo` beside `foo` (vdsm, DSM 7.1,
+            # 7.2.2, 7.3.2 and 7.4.1, both spaces); stripping looked up `foo`.
+            ("/x/ foo", {"name": "/x/ foo"}),
+            ("/x/foo ", {"name": "/x/foo "}),
+            ("/x/ ", {"name": "/x/ "}),
+            ("/x/a\\b", {"name": "/x/a\\b"}),
+            # Only whitespace before a leading / is padding, as in File Station.
+            ("  /x/", {"name": "/x"}),
+            (" x", {"name": "/ x"}),
         ],
     )
     @respx.mock
@@ -183,6 +194,35 @@ class TestFolders:
         async with client:
             await Photos(client, "personal", "Op").folder(value)
         assert fake.one("SYNO.Foto.Browse.Folder", "get").params == sent
+
+    @pytest.mark.parametrize(
+        ("value", "what"),
+        [
+            # DSM cuts the path at a NUL: `/x/foo<NUL>y` resolved to `/x/foo`.
+            ("/x/foo\x00y", "NUL"),
+            ("/x//foo", "empty part"),
+            ("/x/../y", "'.' and '..' parts"),
+            ("/x/ . /y", "'.' and '..' parts"),
+        ],
+    )
+    @respx.mock
+    async def test_nul_empty_and_dot_parts_refused_before_any_request(
+        self, value: str, what: str
+    ) -> None:
+        fake = FakePhotos()  # no routes: a request would fail the test
+        install(fake)
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await Photos(client, "personal", "Op").folder(value, param="destination")
+        assert not fake.calls
+        err = _error(exc)
+        assert (err["code"], err["param"], err["value"]) == (
+            "invalid_parameter",
+            "destination",
+            value,
+        )
+        assert what in err["message"]
 
     @respx.mock
     async def test_missing_folder_is_not_found(self) -> None:

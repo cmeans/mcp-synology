@@ -29,6 +29,7 @@ from mcp_synology.core.errors import (
     SynologyError,
 )
 from mcp_synology.core.formatting import error_response
+from mcp_synology.modules.filestation.paths import check_parts
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Sequence
@@ -124,6 +125,38 @@ def not_supported(operation: str, what: str, *, param: str | None = None) -> NoR
 def encode(params: dict[str, Any]) -> dict[str, str]:
     """JSON-encode every value, strings included (#121: DSM parses values as JSON)."""
     return {k: json.dumps(v) for k, v in params.items() if v is not None}
+
+
+# Every tool argument that names a Photos folder (an ID or a path). Each reaches DSM only
+# through `Photos.folder`, which checks a path with `folder_path` (#510); a new folder
+# argument goes here, and tests/modules/photos/test_paths.py fails until it does.
+FOLDER_PARAMS: dict[str, frozenset[str]] = {
+    "list_photos": frozenset({"folder"}),
+    "list_photo_collections": frozenset({"parent"}),
+    "photo_folder": frozenset({"folder", "parent"}),
+    "photo_request": frozenset({"folder"}),
+    "upload_photos": frozenset({"folder"}),
+    "copy_photos": frozenset({"folders", "destination"}),
+    "move_photos": frozenset({"folders", "destination"}),
+    "delete_photo_folders": frozenset({"folders"}),
+    # A smart album's condition: its `folders` key.
+    "photo_album": frozenset({"condition"}),
+}
+
+FOLDER_ADVICE = "Pass a folder ID, or a path starting with /, such as /Trips/2024."
+
+
+def folder_path(value: str, param: str = "folder") -> str:
+    """A Photos folder path as DSM's ``Browse.Folder`` takes it: ``/`` and the folders below.
+
+    Taken exactly, by File Station's part rules (#510): `check_parts` drops only whitespace
+    before a leading ``/`` (and a trailing ``/``), and refuses a NUL (DSM cuts the path
+    there: ``/x/foo<NUL>y`` resolved to ``/x/foo``), an empty part (``//``) and a ``.`` or
+    ``..`` part (DSM answers 642 for those). Photos reaches a folder whose name starts with
+    whitespace exactly (`` foo`` beside ``foo``), so stripping looked up another folder (vdsm
+    DSM 7.1, 7.2.2, 7.3.2 and 7.4.1, personal space and Shared Space).
+    """
+    return check_parts(value, param, FOLDER_ADVICE)
 
 
 @dataclass
@@ -223,15 +256,18 @@ class Photos:
     # -- folders ------------------------------------------------------------
 
     async def folder(self, value: str, *, param: str = "folder") -> dict[str, Any]:
-        """A folder by ID or by path inside the space (``/`` is the root)."""
+        """A folder by ID or by path inside the space (``/`` is the root).
+
+        Every folder argument comes through here, so the path rules live in one place
+        (#510): a path is taken exactly, by File Station's part rules (`folder_path`).
+        """
         text = value.strip()
+        if text.isascii() and text.isdigit():
+            params: dict[str, Any] = {"id": int(text)}
+        else:
+            path = folder_path(value, param)
+            params = {"id": 0} if path == "/" else {"name": path}
         try:
-            if text.isascii() and text.isdigit():
-                params: dict[str, Any] = {"id": int(text)}
-            elif text in ("", "/"):
-                params = {"id": 0}
-            else:
-                params = {"name": "/" + text.strip("/")}
             data = await self.call("Browse.Folder", "get", params, version=2)
         except SynologyError as e:
             if e.code == 642:
