@@ -328,3 +328,15 @@ def test_a_default_location_is_logged_at_info(
     with caplog.at_level(logging.INFO, logger="mcp_synology.core.config"):
         load_config()
     assert any(r.getMessage() == f"Config: {path}" for r in caplog.records)
+
+
+def test_a_blank_mcp_synology_config_still_finds_the_default_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.chdir(tmp_path)
+    _config(tmp_path).rename(tmp_path / "mcp-synology.yaml")
+    monkeypatch.setenv("MCP_SYNOLOGY_CONFIG", "  ")
+    config = load_config()
+    assert config.connection is not None and config.connection.host == "nas.example"
+    assert config.modules  # the file's, not env-only mode's synthesized config
