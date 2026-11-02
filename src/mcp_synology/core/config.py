@@ -247,7 +247,8 @@ def discover_config_path(explicit_path: str | None = None) -> Path:
         # Absolute in messages: an MCP client starts the server in a working folder the
         # user rarely knows (QA round 1 on #529).
         if not path.exists():
-            msg = f"Config file not found: {path.absolute()}"
+            # Quoted: a stray \r or space at the end would otherwise be invisible.
+            msg = f"Config file not found: {str(path.absolute())!r}"
             raise FileNotFoundError(msg)
         logger.info("Config: %s (from --config)", path.absolute())
         return path
@@ -268,7 +269,7 @@ def discover_config_path(explicit_path: str | None = None) -> Path:
             # An error, never env-only mode: that would run read-only over plain HTTP
             # instead of the config the variable names (#499).
             msg = (
-                f"Config file not found (from MCP_SYNOLOGY_CONFIG): {path.absolute()}. "
+                f"Config file not found (from MCP_SYNOLOGY_CONFIG): {str(path.absolute())!r}. "
                 "Fix the path, or unset MCP_SYNOLOGY_CONFIG to use the default locations."
             )
             raise FileNotFoundError(msg)

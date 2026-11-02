@@ -395,7 +395,7 @@ Every module uses `logging.getLogger(__name__)` so log output includes the full 
 ### Log Level Guidelines
 
 - **DEBUG** — detailed operational trace for troubleshooting: every DSM API request/response (with passwords masked), credential resolution steps (which source provided credentials), config discovery and loading, version negotiation results, API cache contents, session lifecycle events, module registration decisions. This is the level to use when something isn't working.
-- **INFO** — significant lifecycle events only: successful authentication, re-authentication attempts, config notes (a module disabled).
+- **INFO** — significant lifecycle events only: successful authentication, re-authentication attempts, the config source used (`Config: …`, #511), config notes (a module disabled).
 - **WARNING** — configuration issues that may indicate problems: HTTPS disabled (#374), SSL verification off, unknown module names and settings, deprecated settings.
 - **ERROR** — failures that prevent operation (logged via exceptions, not typically via `logger.error` directly).
 

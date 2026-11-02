@@ -496,3 +496,13 @@ def test_each_command_refuses_a_blank_mcp_synology_config(
     assert isinstance(result.exception, SystemExit)
     assert f"Error: {BLANK_VAR}" in result.output.replace("\n", " ")
     assert "Let's create one" not in result.output
+
+
+def test_a_not_found_path_is_quoted_so_a_stray_character_shows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A CRLF env file leaves a \r on the value; printed raw, it overwrote the message.
+    monkeypatch.setenv("MCP_SYNOLOGY_CONFIG", str(tmp_path / "c.yaml") + "\r")
+    with pytest.raises(FileNotFoundError) as excinfo:
+        load_config()
+    assert repr(str(tmp_path / "c.yaml") + "\r") in str(excinfo.value)

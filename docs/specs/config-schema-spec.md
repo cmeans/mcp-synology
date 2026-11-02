@@ -376,7 +376,7 @@ The server finds its config file in this order:
    - `./mcp-synology.yaml` (current directory)
 4. **Env-var-only mode:** no config file found by 1–3 and `SYNOLOGY_HOST` set
 
-The source used is logged at INFO, with the path made absolute, as in the not-found errors, since an MCP client starts the server in a working folder the user rarely knows (`Config: <path> (from --config)`, `… (from MCP_SYNOLOGY_CONFIG)`, `Config: <path>`, or `Config: environment variables only …`; the host isn't logged, since it can hold credentials).
+The source used is logged at INFO (to stderr only: it's logged while the config loads, before `logging.file` is set up), with the path made absolute, as in the not-found errors, since an MCP client starts the server in a working folder the user rarely knows (`Config: <path> (from --config)`, `… (from MCP_SYNOLOGY_CONFIG)`, `Config: <path>`, or `Config: environment variables only …`; the host isn't logged, since it can hold credentials).
 
 For multi-NAS setups, users must use the `--config` flag to specify which config to load:
 
