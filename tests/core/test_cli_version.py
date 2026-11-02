@@ -352,7 +352,17 @@ class TestGlobalState:
             assert v._load_global_state() == {}
 
     @pytest.mark.parametrize(
-        "content", [b"- a\n- b\n", b"just a string\n", b"42\n", b"\xff\xfe not utf-8\n"]
+        "content",
+        [
+            b"- a\n- b\n",
+            b"just a string\n",
+            b"42\n",
+            b"\xff\xfe not utf-8\n",
+            # A tag that doesn't fit its value: KeyError / AttributeError from PyYAML,
+            # which crashed every command (#475, pre-QA r1 on #511 PR 2).
+            b"last_seen_version: !!bool Hunter2x\n",
+            b"last_seen_version: !!timestamp Hunter2x\n",
+        ],
     )
     def test_load_returns_empty_for_anything_but_a_mapping(
         self, tmp_path: Path, content: bytes

@@ -670,10 +670,10 @@ class TestAppConfig:
         if "://" not in host:
             # The whole advice for a bare host whose first part isn't an instance_id.
             assert (
-                "The instance_id derived from connection.host may hold only lowercase "
-                "letters, digits and hyphens (capitals are lowered), and this host's first "
-                "part has others (an IPv6 address, an underscore, or a letter outside a-z): "
-                "set instance_id."
+                "connection.host gives no usable instance_id: its first part has characters "
+                "other than letters a-z, digits and hyphens (an IPv6 address, an underscore, "
+                "or a letter outside a-z). Set instance_id (lowercase letters, digits and "
+                "hyphens; capitals are lowered)."
             ) in shown
 
     def test_yaml_error_without_a_location(self) -> None:

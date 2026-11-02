@@ -126,7 +126,11 @@ def _setup_interactive(verbose: bool) -> None:
     # every other prompt (#471).
     while True:
         host = click.prompt("NAS host (IP or hostname)")
-        problems = host_problems(host, port_setting="connection.port in the config file")
+        problems = host_problems(
+            host,
+            port_setting="type the port at the DSM port question",
+            https_setting='answer yes to "Use HTTPS?"',
+        )
         if not problems:
             break
         click.echo(click.style(f"  The host {host_message(problems)}", fg="red"), err=True)
@@ -140,6 +144,10 @@ def _setup_interactive(verbose: bool) -> None:
                 fg="yellow",
             )
         )
+    # A NAS on a custom port couldn't be set up interactively (#504 item 1): the host
+    # takes no port, so it's asked for here, defaulting to DSM's.
+    default_port = 5001 if use_https else 5000
+    port = click.prompt("DSM port", default=default_port, type=click.IntRange(1, 65535))
     permission = click.prompt(
         "File Station permission",
         type=click.Choice(["read", "write"]),
@@ -152,12 +160,18 @@ def _setup_interactive(verbose: bool) -> None:
     instance_id = _derive_instance_id(host)
     # An IPv6 address, or a name with characters outside a-z, 0-9 and hyphens, gives no
     # usable ID: ask for one.
-    while problem := instance_id_problem(instance_id):
-        if instance_id:
-            click.echo(f"  This host gives no usable instance ID (it {problem}).")
-        instance_id = click.prompt(
-            "Instance ID (names this config; lowercase letters, digits and hyphens)"
-        ).lower()
+    if instance_id_problem(instance_id):
+        click.echo(
+            "  This host gives no usable instance ID (its first part has characters other "
+            "than letters a-z, digits and hyphens)."
+        )
+        while True:
+            instance_id = click.prompt(
+                "Instance ID (names this config; lowercase letters, digits and hyphens)"
+            ).lower()
+            if not (problem := instance_id_problem(instance_id)):
+                break
+            click.echo(f"  That instance ID {problem}.")
 
     # Prompt for alias
     alias_input = click.prompt("Alias (friendly name, optional)", default="", show_default=False)
@@ -165,6 +179,8 @@ def _setup_interactive(verbose: bool) -> None:
 
     # Build config dict
     conn: dict[str, Any] = {"host": host}
+    if port != default_port:
+        conn["port"] = port
     if use_https:
         conn["https"] = True
         click.echo(

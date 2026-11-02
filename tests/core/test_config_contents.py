@@ -149,6 +149,16 @@ class TestKeyWithoutValue:
         assert parse_config_text("a: {b: , c: 1}\n") == {"a": {"b": None, "c": 1}}
         assert parse_config_text("a: {b:}\n") == {"a": {"b": None}}
 
+    @pytest.mark.parametrize(
+        "text",
+        ["auth: {password: Spr,ing #x: y\n}\n", "a: {a: 1, b # note: x\n}\n"],
+    )
+    def test_a_colon_in_a_comment_doesnt_count(self, text: str) -> None:
+        """Pre-QA r1: a colon inside a comment let the fragment through."""
+        with pytest.raises(yaml.YAMLError) as exc:
+            parse_config_text(text)
+        assert "a key with no value inside {…}" in format_yaml_error(exc.value)
+
     def test_block_style_is_unaffected(self) -> None:
         assert parse_config_text("a:\n  b:\n  c: 1\n") == {"a": {"b": None, "c": 1}}
 
@@ -172,6 +182,20 @@ class TestEmptySections:
         )
         assert config.modules["filestation"].enabled is True
         assert config.modules["filestation"].permission == "read"
+
+    def test_every_registered_module_takes_an_empty_entry(self) -> None:
+        """The rule is ModuleConfig's, so it holds for every module, including ones
+        added later (maintainer, 2026-11-02; documented in the README's Modules)."""
+        from mcp_synology.server import _MODULE_REGISTRY
+
+        names = sorted(_MODULE_REGISTRY)
+        text = "schema_version: 1\nconnection: {host: nas}\nmodules:\n" + "".join(
+            f"  {name}:\n" for name in names
+        )
+        config = AppConfig.model_validate(parse_config_text(text))
+        assert sorted(config.modules) == names
+        for module in config.modules.values():
+            assert (module.enabled, module.permission, module.settings) == (True, "read", {})
 
     def test_empty_settings_are_no_settings(self, tmp_path: Path) -> None:
         config = load_config(
@@ -210,7 +234,7 @@ class TestHost:
     @pytest.mark.parametrize(
         ("host", "advice"),
         [
-            ("https://admin:Hunter2x@nas", "drop the https://"),
+            ("https://admin:Hunter2x@nas", "drop the http:// or https://"),
             ("admin:Hunter2x@nas", "user names and passwords go under auth"),
             ("nas.local:5001", "set connection.port"),
             ("nas.local/dsm", "no path"),
@@ -255,9 +279,41 @@ class TestHost:
         with pytest.raises(ValidationError) as exc:
             AppConfig.model_validate(raw)
         message = format_validation_error(exc.value)
-        assert "drop the https://" in message
+        assert "drop the http:// or https://" in message
         assert "user names and passwords go under auth" in message
         assert "hunter2x" not in message.casefold()
+
+    @pytest.mark.parametrize(
+        ("host", "kinds"),
+        [
+            ("[fd00::1]:5001", ["port"]),
+            ("https://[fd00::1]", ["scheme"]),
+            ("https://[fd00::1]:5001/x", ["scheme", "path", "port"]),
+            ("admin:pw@[fd00::1]", ["user name"]),
+            ("[fe80::1%eth0]", []),
+            ("[nas]:5001", ["has square brackets", "port"]),
+        ],
+    )
+    def test_a_bracketed_ipv6_address_gets_only_whats_wrong_around_it(
+        self, host: str, kinds: list[str]
+    ) -> None:
+        """Pre-QA r1: `[fd00::1]` is the right form, so `[fd00::1]:5001` gets the port
+        advice, not a complaint about its brackets."""
+        from mcp_synology.core.config import host_problems
+
+        assert [p.split(":")[0].removeprefix("has a ") for p in host_problems(host)] == kinds
+
+    @pytest.mark.parametrize(
+        ("kwargs", "says"),
+        [
+            ({}, "for HTTPS, set https: true"),
+            ({"https_setting": "set SYNOLOGY_HTTPS=true"}, "for HTTPS, set SYNOLOGY_HTTPS=true"),
+        ],
+    )
+    def test_the_https_advice_names_its_source(self, kwargs: dict[str, str], says: str) -> None:
+        from mcp_synology.core.config import host_problems
+
+        assert says in host_problems("http://nas", **kwargs)[0]
 
 
 class TestPort:
@@ -322,7 +378,7 @@ class TestEnvVarsFollowTheFieldRules:
     @pytest.mark.parametrize(
         ("name", "value", "says"),
         [
-            ("SYNOLOGY_HOST", "https://admin:Hunter2x@nas", "drop the https://"),
+            ("SYNOLOGY_HOST", "https://admin:Hunter2x@nas", "drop the http:// or https://"),
             ("SYNOLOGY_HOST", "nas:5001", "set SYNOLOGY_PORT"),
             ("SYNOLOGY_PORT", "70000", "a whole number from 1 to 65535"),
             ("SYNOLOGY_PORT", "0", "a whole number from 1 to 65535"),

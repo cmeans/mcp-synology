@@ -321,8 +321,13 @@ def _load_global_state() -> dict[str, Any]:
     path = _global_state_path()
     if not path.exists():
         return {}
+    from mcp_synology.core.config import parse_config_text
+
     try:
-        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        # Through parse_config_text: a tag that doesn't fit its value (`!!bool x`) made
+        # PyYAML raise KeyError or AttributeError, which crashed every command with the
+        # value in the traceback (#475); it raises them as a YAMLError.
+        raw = parse_config_text(path.read_text(encoding="utf-8"))
     except (OSError, ValueError, yaml.YAMLError):  # ValueError: not UTF-8
         return {}
     # Every instance on the machine shares this file: anything but a mapping is a bad

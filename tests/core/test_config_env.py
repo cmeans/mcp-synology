@@ -397,8 +397,8 @@ def test_text_values_are_taken_as_given(env_var: str) -> None:
         ),
         (
             "SYNOLOGY_INSTANCE_ID",
-            "SYNOLOGY_INSTANCE_ID may hold only lowercase letters, digits and hyphens "
-            "(capitals are lowered) (it sets instance_id).",
+            "SYNOLOGY_INSTANCE_ID may hold only lowercase letters, digits and hyphens; "
+            "capitals are lowered (it sets instance_id).",
         ),
     ],
 )

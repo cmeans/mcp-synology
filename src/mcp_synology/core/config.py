@@ -52,27 +52,32 @@ ENV_VAR_MAP: dict[str, str] = {
 _HOST_OTHER_BAD = frozenset("\\?#%\"'<>^`{|},;=&+$!*()")
 
 
-def host_problems(host: str, port_setting: str = "connection.port") -> list[str]:
+_BRACKETED = re.compile(r"\[([^\]]*)\](?::(.*))?")
+_BRACKET_ADVICE = (
+    "has square brackets: square brackets hold only an IPv6 address, around all of it ([fd00::1])"
+)
+
+
+def host_problems(
+    host: str,
+    port_setting: str = "set connection.port",
+    https_setting: str = "set https: true",
+) -> list[str]:
     """What keeps ``host`` from being a bare host name or IP address, as advice (#511 PR 2).
 
     The URL is built as ``http(s)://{host}:{port}``, so a scheme, user name, port or path
     written into the host made a broken URL (a traceback, #504) or put a password into
     the server instructions, tool errors and logs (#476, #471). An IPv6 address goes in
     square brackets (`[fd00::1]`), as in a URL. Never quotes the host: it can hold a
-    password. ``port_setting`` names what sets the port where the host came from.
+    password. ``port_setting`` and ``https_setting`` say how to set the port and HTTPS
+    where the host came from (the file, an env var, setup's questions).
     """
     if not host.strip():
         return ["is empty"]
-    if host.startswith("[") and host.endswith("]"):
-        try:
-            ipaddress.IPv6Address(host[1:-1])
-        except ValueError:
-            return ["has square brackets: square brackets hold only an IPv6 address ([fd00::1])"]
-        return []
     problems = []
     rest = host
     if "://" in rest:
-        problems.append("has a scheme: drop the https:// (HTTPS is the https setting)")
+        problems.append(f"has a scheme: drop the http:// or https:// (for HTTPS, {https_setting})")
         rest = rest.split("://", 1)[1]
     if "@" in rest:
         problems.append(
@@ -80,26 +85,35 @@ def host_problems(host: str, port_setting: str = "connection.port") -> list[str]
             "(mcp-synology setup), never in the host"
         )
         rest = rest.rsplit("@", 1)[1]
-    try:
-        ipaddress.IPv6Address(rest)
-    except ValueError:
-        pass
-    else:
-        return [*problems, "is an IPv6 address: write it in square brackets ([fd00::1])"]
     if "/" in rest:
         problems.append("has a path: the host takes no path")
         rest = rest.split("/", 1)[0]
-    if "[" in rest or "]" in rest:
-        # A half-bracketed IPv6 address has colons too: they aren't a port then.
-        problems.append(
-            "has square brackets: square brackets hold only an IPv6 address, around all of "
-            "it ([fd00::1])"
-        )
-    elif ":" in rest:
-        problems.append(f"has a port: set {port_setting} instead")
+    port = f"has a port: {port_setting} instead"
+    if bracketed := _BRACKETED.fullmatch(rest):
+        # `[fd00::1]` is the right form, also inside a URL (`https://[fd00::1]:5001`):
+        # only what surrounds it is wrong.
+        try:
+            ipaddress.IPv6Address(bracketed[1])
+        except ValueError:
+            problems.append(_BRACKET_ADVICE)
+        if bracketed[2] is not None:
+            problems.append(port)
+        rest = bracketed[1]
+    else:
+        try:
+            ipaddress.IPv6Address(rest)
+        except ValueError:
+            pass
+        else:
+            return [*problems, "is an IPv6 address: write it in square brackets ([fd00::1])"]
+        if "[" in rest or "]" in rest:
+            # A half-bracketed IPv6 address has colons too: they aren't a port then.
+            problems.append(_BRACKET_ADVICE)
+        elif ":" in rest:
+            problems.append(port)
     if any(c.isspace() or not c.isprintable() for c in host):
         problems.append("has a space or an invisible character")
-    if any(c in _HOST_OTHER_BAD for c in rest):
+    if not bracketed and any(c in _HOST_OTHER_BAD for c in rest):
         problems.append("has a character a host name can't have")
     if not problems and (rest.startswith(".") or ".." in rest):
         problems.append("has an empty part (a leading dot, or two dots in a row)")
@@ -115,7 +129,7 @@ def host_message(problems: list[str]) -> str:
     )
 
 
-_INSTANCE_ID_RULE = "lowercase letters, digits and hyphens (capitals are lowered)"
+_INSTANCE_ID_RULE = "lowercase letters, digits and hyphens; capitals are lowered"
 
 
 def instance_id_problem(value: str) -> str | None:
@@ -323,9 +337,10 @@ class AppConfig(BaseModel, extra="forbid"):
                 # The host is already a bare name or address; what's left is an IPv6
                 # address, or a name with characters outside a-z, 0-9 and hyphens.
                 msg = (
-                    "The instance_id derived from connection.host may hold only "
-                    f"{_INSTANCE_ID_RULE}, and this host's first part has others (an IPv6 "
-                    "address, an underscore, or a letter outside a-z): set instance_id."
+                    "connection.host gives no usable instance_id: its first part has "
+                    "characters other than letters a-z, digits and hyphens (an IPv6 address, "
+                    "an underscore, or a letter outside a-z). Set instance_id "
+                    f"({_INSTANCE_ID_RULE})."
                 )
                 raise ValueError(msg)
             if problem := instance_id_problem(self.instance_id):
@@ -508,7 +523,9 @@ def parse_env_value(env_var: str, dotted_path: str, value: str) -> Any:
     if kinds == [str]:
         # Text: taken as given, then held to the field's own rule.
         if dotted_path == "connection.host" and (
-            problems := host_problems(value, port_setting="SYNOLOGY_PORT")
+            problems := host_problems(
+                value, port_setting="set SYNOLOGY_PORT", https_setting="set SYNOLOGY_HTTPS=true"
+            )
         ):
             raise EnvVarError(f"{env_var} {host_message(problems)} (It sets {dotted_path}.)")
         if dotted_path == "instance_id" and (problem := instance_id_problem(value)):
@@ -834,7 +851,9 @@ def _has_no_colon(key_node: yaml.Node, value_node: yaml.Node) -> bool:
     if not isinstance(buffer, str):
         return False  # pragma: no cover - text input always keeps its buffer
     between = buffer[key_node.end_mark.index : value_node.start_mark.index]
-    return ":" not in between
+    # The colon must come right after the key (spaces aside): a comment holding one
+    # (`{password: Spr,ing # x: y`) doesn't count (pre-QA r1 on #511 PR 2).
+    return not between.lstrip().startswith(":")
 
 
 def parse_config_text(text: str) -> Any:

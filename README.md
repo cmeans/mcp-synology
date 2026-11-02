@@ -183,7 +183,7 @@ Each value is read as its config field's type, and choices in any case (`SYNOLOG
 
 Every module is configured the same way, under `modules:`:
 
-- **`enabled`**: `true` (the default) or `false`. Listing a module is enough to load it; `enabled: false` keeps its block in the file without loading it.
+- **`enabled`**: `true` (the default) or `false`. Listing a module is enough to load it: for every module, a name with nothing under it (`filestation:`) is the same as `filestation: {}`, enabled at `read` with no settings, and an empty `settings:` is the same as no settings. `enabled: false` keeps its block in the file without loading it.
 - **`permission`**: `read` (the default) registers the READ tools only; `write` adds the WRITE tools. `admin` is also accepted and is the same as `write` today. It doesn't refer to the DSM account: an admin account doesn't need it.
 - **`settings`**: the module's own options, listed in its section. A setting the module doesn't know is ignored with a warning that names the valid ones, so a config written for a newer version still loads. Any other key next to these three is an error, so a typo such as `permision` stops the server instead of being ignored.
 

@@ -501,8 +501,8 @@ class TestSetupInteractiveValidationFailure:
             patch("mcp_synology.core.config.AppConfig", side_effect=error),
             patch.dict(os.environ, self._clean_env(), clear=True),
         ):
-            # host, https, permission, alias: fewer prompts since validation fails
-            result = runner.invoke(main, ["setup"], input="192.168.1.50\nn\nread\n\n")
+            # host, https, port, permission, alias: fewer prompts since validation fails
+            result = runner.invoke(main, ["setup"], input="192.168.1.50\nn\n\nread\n\n")
         assert result.exit_code == 1
         assert "Error: Configuration validation failed (1 error(s)):" in result.output
         assert "connection.timeout:" in result.output
@@ -521,10 +521,12 @@ class TestSetupInteractiveValidationFailure:
             result = runner.invoke(
                 main,
                 ["setup"],
-                input="https://admin:Hunter2x@nas\nnas:5001\nnas.local\nn\nread\n\nadmin\npw\n",
+                input="https://admin:Hunter2x@nas\nnas:5001\nnas.local\nn\n\nread\n\nadmin\npw\n",
             )
-        assert "drop the https://" in result.output
-        assert "set connection.port in the config file instead" in result.output
+        assert 'drop the http:// or https:// (for HTTPS, answer yes to "Use HTTPS?")' in (
+            result.output
+        )
+        assert "type the port at the DSM port question instead" in result.output
         # Only where CliRunner echoes what was typed; the advice never repeats it.
         assert result.output.casefold().count("hunter2x") == 1
         assert result.output.count("NAS host (IP or hostname)") == 3
@@ -546,11 +548,48 @@ class TestSetupInteractiveValidationFailure:
             result = runner.invoke(
                 main,
                 ["setup"],
-                input="my_nas\nn\nread\nbad id\nMy-NAS\n\nadmin\npw\n",
+                input="my_nas\nn\n\nread\nbad id\nMy-NAS\n\nadmin\npw\n",
             )
-        assert "This host gives no usable instance ID" in result.output
+        # The host is blamed once; the typed ID gets its own message (pre-QA r1).
+        assert result.output.count("This host gives no usable instance ID") == 1
+        assert "That instance ID may hold only lowercase letters" in result.output
         assert result.output.count("Instance ID (names this config") == 2
         assert stored == ["mcp-synology/my-nas"]
+
+    @pytest.mark.parametrize(
+        ("https", "port", "written"),
+        [("n", "", None), ("y", "", None), ("n", "5555", 5555), ("y", "5000", 5000)],
+    )
+    def test_the_port_is_asked_for(
+        self, tmp_path: Path, https: str, port: str, written: int | None
+    ) -> None:
+        """#504 item 1: a NAS on a custom port can be set up interactively; the default
+        is DSM's for the protocol chosen."""
+        captured: list[Any] = []
+
+        async def fake_connect(app_config: Any, *_: Any) -> dict[str, Any]:
+            captured.append(app_config)
+            return {"success": False}
+
+        config_dir = tmp_path / "config"
+        verify = "n\n" if https == "y" else ""
+        runner = CliRunner()
+        with (
+            patch("mcp_synology.cli.setup._CONFIG_DIR", config_dir),
+            patch("mcp_synology.core.config.discover_config_path", side_effect=FileNotFoundError),
+            patch("mcp_synology.cli.setup._store_keyring", return_value=True),
+            patch("mcp_synology.cli.setup._connect_and_login", side_effect=fake_connect),
+            patch.dict(os.environ, self._clean_env(), clear=True),
+        ):
+            result = runner.invoke(
+                main,
+                ["setup"],
+                input=f"nas.local\n{https}\n{port}\nread\n\n{verify}admin\npw\n",
+            )
+        assert result.exit_code == 0, result.output
+        (app_config,) = captured
+        default = 5001 if https == "y" else 5000
+        assert app_config.connection.port == (written or default)
 
 
 # ---------- _emit_claude_desktop_snippet Linux fallback ----------
@@ -583,7 +622,7 @@ class TestEmitClaudeDesktopSnippetLinuxFallback:
             result = runner.invoke(
                 main,
                 ["setup"],
-                input="192.168.1.50\nn\nread\n\nadmin\npassword\n",
+                input="192.168.1.50\nn\n\nread\n\nadmin\npassword\n",
             )
 
         assert result.exit_code == 0
@@ -612,7 +651,7 @@ class TestEmitClaudeDesktopSnippetLinuxFallback:
             result = runner.invoke(
                 main,
                 ["setup"],
-                input="192.168.1.50\nn\nread\n\nadmin\npassword\n",
+                input="192.168.1.50\nn\n\nread\n\nadmin\npassword\n",
             )
 
         assert result.exit_code == 0
@@ -651,7 +690,7 @@ class TestSetupAtomicConfigWrite:
             result = runner.invoke(
                 main,
                 ["setup"],
-                input="192.168.1.50\nn\nread\n\nadmin\npassword\n",
+                input="192.168.1.50\nn\n\nread\n\nadmin\npassword\n",
             )
 
         assert result.exit_code == 0, f"setup failed:\n{result.output}"
@@ -704,6 +743,9 @@ def test_list_shows_only_bare_hosts_and_text_names(tmp_path: Path) -> None:
     (config_dir / "c.yaml").write_text(
         "schema_version: 1\nconnection: {host: nas.local}\ninstance_id: home\n"
     )
+    (config_dir / "e.yaml").write_text(
+        "schema_version: 1\nconnection: {host: nas}\ninstance_id: Bad ID\n"
+    )
     (config_dir / "d.yaml").write_text("schema_version: 1\nconnection: {host: 12}\nalias: Office\n")
     with patch("mcp_synology.cli.setup._CONFIG_DIR", config_dir):
         result = CliRunner().invoke(main, ["setup", "--list"])
@@ -717,6 +759,8 @@ def test_list_shows_only_bare_hosts_and_text_names(tmp_path: Path) -> None:
     assert (
         "  d.yaml\n    Name: Office\n    Host: (not shown: not a bare host name or IP address)\n"
     ) in result.output
+    # An instance_id the server would refuse isn't the name: the file's stem is.
+    assert "  e.yaml\n    Name: e\n    Host: nas\n" in result.output
 
 
 def test_setup_reports_a_config_it_cant_read(tmp_path: Path) -> None:
