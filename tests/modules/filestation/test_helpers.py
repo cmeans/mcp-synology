@@ -337,11 +337,11 @@ class TestInvisibleProblem:
         self, name: str, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """After an unnamed match, the search looks only up to the longest decomposition,
-        in that run and every later one: a letter and 84 x U+0F73 took 36 ms a name
+        in that run and every later one: a letter and 84 x U+0F73 took 36 ms per name
         (pre-QA on #515), and U+0F73 twice, then 78 more in a second run, 28 ms (QA round 7
-        on #515). Counts the matches described rather than timing them, so coverage and
-        slow CI runners
-        don't matter (pre-QA on #515): uncapped, these names describe 3,000 or more."""
+        on #515). The test counts the matches described rather than timing them, so
+        coverage and slow CI runners don't matter (pre-QA on #515): uncapped, these names
+        describe 3,000 or more."""
         from mcp_synology.modules.filestation import helpers
 
         described = 0
@@ -551,10 +551,10 @@ class TestInvisibleProblem:
     def test_shown_skips_checking_a_part_longer_than_any_name(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The check grows with the cube of a long run of different marks (4,000 take
-        about a second; the stdlib NFD it once used was quadratic: QA round 3 on #515). No
-        NAS name is over 255 bytes, so such a part is quoted without the check
-        (deterministic: the check would raise)."""
+        """The check grows with the cube of a long run of different marks (each doubling
+        costs up to 8 times as much; the stdlib NFD it once used was quadratic: QA round 3
+        on #515). No NAS name is over 255 bytes, so such a part is quoted without the
+        check (deterministic: a spy records whether the part was checked)."""
         from mcp_synology.modules.filestation import helpers
 
         checked: list[str] = []

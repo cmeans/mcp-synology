@@ -388,6 +388,9 @@ def invisible_problem(name: str) -> str | None:
         return None
     # UTS #39 states its joiner contexts on NFC text; the patterns take any number of
     # marks, so they read decomposed text the same, and the name is checked as given.
+    # A name in neither form (marks typed out of canonical order) can get another
+    # verdict than its NFD from these and the selector checks; only the repeat check
+    # reads the NFD (pre-QA on #515: such names are junk, not real spellings).
     text = name
     i = 0
     while i < len(text):
