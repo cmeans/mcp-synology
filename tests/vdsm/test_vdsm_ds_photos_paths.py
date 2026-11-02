@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import re
 import uuid
 from typing import TYPE_CHECKING, Any
 
@@ -152,7 +153,7 @@ class TestDownloadStation:
         client = ds_client
         for child in ("foo ", " foo", "a b"):
             out = await create_download(client, uri=_magnet(), destination=f"{folders}/{child}")
-            ids = [w for w in out.replace(",", " ").split() if w.startswith("dbid_")]
+            ids = re.findall(r"\bdbid_\d+\b", out)
             try:
                 assert ids, out
                 assert await _task_destination(client, ids[0]) == f"{folders}/{child}"
