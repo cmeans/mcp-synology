@@ -311,7 +311,8 @@ def _env_expected(annotation: Any) -> str:
         return "a whole number"
     if get_origin(kind) is Literal:
         return "one of " + ", ".join(str(v) for v in get_args(kind))
-    return "text"
+    # A text field takes any value, so it never fails to parse and never gets here.
+    return "a valid value"  # pragma: no cover
 
 
 def parse_env_value(env_var: str, dotted_path: str, value: str) -> Any:
