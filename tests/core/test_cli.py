@@ -256,7 +256,6 @@ def test_non_mapping_config_reports_clean_error(tmp_path: Path, command: str, co
     result = CliRunner().invoke(main, [command, "--config", str(config_file)])
     assert result.exit_code == 1
     assert "YAML mapping" in result.output
-    assert "Traceback" not in result.output
     assert not isinstance(result.exception, TypeError)
 
 

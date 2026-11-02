@@ -943,16 +943,46 @@ def test_load_validates_non_string_keys(tmp_path: Path) -> None:
         load_config(config_file)
 
 
+@pytest.mark.parametrize("content", ["", "# comments only\n", "---\n"])
+def test_load_empty_file_reports_missing_fields(tmp_path: Path, content: str) -> None:
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(content)
+    with pytest.raises(ValidationError) as excinfo:
+        load_config(config_file)
+    assert {(error["loc"][0], error["type"]) for error in excinfo.value.errors()} == {
+        ("schema_version", "missing"),
+        ("modules", "missing"),
+    }
+
+
+@pytest.mark.parametrize("key", ["12345678", "2024-01-02"])
+def test_non_text_root_key_is_not_shown(tmp_path: Path, key: str) -> None:
+    from mcp_synology.core.config import format_validation_error
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(yaml.safe_dump(_minimal_raw()) + f"{key}: value\n")
+    with pytest.raises(ValidationError) as excinfo:
+        load_config(config_file)
+    message = format_validation_error(excinfo.value)
+    assert key not in message
+    assert "isn't text" in message
+
+
 @pytest.mark.parametrize(
-    ("section", "env_var", "value"),
+    ("section", "env_var", "field", "value"),
     [
-        ("auth", "SYNOLOGY_PASSWORD", "test-password"),
-        ("connection", "SYNOLOGY_HOST", "nas.example"),
-        ("logging", "SYNOLOGY_LOG_LEVEL", "debug"),
+        ("auth", "SYNOLOGY_PASSWORD", "password", "test-password"),
+        ("connection", "SYNOLOGY_HOST", "host", "nas.example"),
+        ("logging", "SYNOLOGY_LOG_LEVEL", "level", "debug"),
     ],
 )
 def test_env_override_fills_empty_section(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, section: str, env_var: str, value: str
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    section: str,
+    env_var: str,
+    field: str,
+    value: str,
 ) -> None:
     raw = _minimal_raw()
     raw[section] = None
@@ -960,7 +990,7 @@ def test_env_override_fills_empty_section(
     config_file.write_text(yaml.safe_dump(raw))
     monkeypatch.setenv(env_var, value)
     config = load_config(config_file)
-    assert getattr(config, section).model_dump()[env_var.rsplit("_", 1)[-1].lower()] == value
+    assert getattr(config, section).model_dump()[field] == value
 
 
 @pytest.mark.parametrize("value", ["not-a-mapping", ["x"], 42, False])
