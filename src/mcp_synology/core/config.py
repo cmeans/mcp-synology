@@ -66,6 +66,10 @@ _INVALID_HOST = (
 # parsers and the resolver, which expand a short one: `192.168.1` is 192.168.0.1, the
 # router, not the NAS (WHATWG URL's "ends in a number" rule; pre-QA r3 on #511 PR 2).
 _NUMERIC_LABEL = re.compile(r"(?:\d+|0[xX][0-9a-fA-F]*)")
+_SHORT_IPV4 = (
+    "ends in a number, so it's read as an IPv4 address, but it isn't a whole one: write all "
+    "four numbers (192.168.1.100), or a name whose last part isn't a number"
+)
 
 
 def host_problems(
@@ -132,22 +136,32 @@ def host_problems(
         problems.append("has a character a host name can't have")
     if not problems and (rest.startswith(".") or ".." in rest):
         problems.append("has an empty part (a leading dot, or two dots in a row)")
-    if not problems and not bracketed:
-        last = rest.removesuffix(".").rsplit(".", 1)[-1]
-        if _NUMERIC_LABEL.fullmatch(last):
-            try:
-                ipaddress.IPv4Address(rest.removesuffix("."))
-            except ValueError:
-                problems.append(_INVALID_HOST)
-    if not problems:
-        # What's left is a name or address that looks bare; the URL library has the final
-        # say (`999.1.1.1`, `01.2.3.4`, a name IDNA can't encode), or the URL built from
-        # it fails with a traceback (pre-QA r2 on #511 PR 2).
+    if problems:
+        return problems
+    # What's left is a name or address that looks bare; the URL library has the final
+    # say (`999.1.1.1`, `01.2.3.4`, a name IDNA can't encode), or the URL built from it
+    # fails with a traceback (pre-QA r2 on #511 PR 2).
+    try:
+        url = httpx.URL(f"http://{host}/")
+    except httpx.InvalidURL:
+        return [_INVALID_HOST]
+    if bracketed:
+        return []
+    # The numeric rule reads the host as httpx will use it: IDNA maps `。`, `．` and `｡`
+    # to `.`, so `192。168。1` is `192.168.1` (pre-QA r4), as WHATWG checks "ends in a
+    # number" after domain-to-ASCII.
+    normalized = url.host
+    bare = normalized.removesuffix(".")
+    if _NUMERIC_LABEL.fullmatch(bare.rsplit(".", 1)[-1]):
         try:
-            httpx.URL(f"http://{host}/")
-        except httpx.InvalidURL:
-            problems.append(_INVALID_HOST)
-    return problems
+            ipaddress.IPv4Address(bare)
+        except ValueError:
+            return [_SHORT_IPV4]
+        if bare != normalized:
+            # `192.168.1.100.` resolves nowhere, and gave the instance ID `192`, shared by
+            # every such host (pre-QA r4). A name's trailing dot (`nas.local.`) is fine.
+            return ["has a dot after the IPv4 address: drop it"]
+    return []
 
 
 def host_message(problems: list[str]) -> str:
@@ -902,8 +916,12 @@ class _ConfigLoader(yaml.SafeLoader):
         for key_node, value_node in node.value:
             if key_node.tag == _MERGE_TAG:
                 continue  # its keys may be overridden: YAML's own rule, not a repeat
-            line = key_node.start_mark.line + 1
-            column = key_node.start_mark.column + 1
+            # A key given by alias (`{*k: …}`) has its anchor's marks, from before this
+            # mapping: report the mapping's own place then (pre-QA r4).
+            mark = key_node.start_mark
+            if mark.index < node.start_mark.index:
+                mark = node.start_mark
+            line, column = mark.line + 1, mark.column + 1
             if node.flow_style and _has_no_colon(node, key_node, value_node):
                 raise ConfigKeyError(
                     f"The config file has a key with no value inside {{…}} (line {line}). "

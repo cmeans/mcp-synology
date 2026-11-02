@@ -127,6 +127,14 @@ class TestDuplicateKeys:
         raw = parse_config_text("a: &a {x: 1}\nc: {<<: &b {<<: *a, x: 2}}\nd: *b\n")
         assert raw["d"] == {"x": 2}
 
+    def test_a_repeated_alias_key_names_the_mappings_line(self) -> None:
+        """Pre-QA r4: the alias's own marks are its anchor's, on another line."""
+        with pytest.raises(yaml.YAMLError) as exc:
+            parse_config_text("x: &k https\nconnection: {*k: true, https: false}\n")
+        assert "`https` twice in one section (line 2, columns 13 and 24)" in format_yaml_error(
+            exc.value
+        )
+
     def test_a_repeat_on_one_line_gives_the_columns(self, tmp_path: Path) -> None:
         message = _yaml_message(
             tmp_path, "schema_version: 1\nconnection: {host: nas, https: true, https: no}\n"
@@ -149,7 +157,9 @@ class TestDuplicateKeys:
         recursive anchor doesn't hang and an alias chain doesn't explode."""
         assert parse_config_text(text) is not None
 
-    @pytest.mark.parametrize("text", ["x: &e\ny: {a: *e}\n", "x: {a: &z , b: *z}\n"])
+    @pytest.mark.parametrize(
+        "text", ["x: &e\ny: {a: *e}\n", "x: {a: &z , b: *z}\n", "x: &k a\ny: {*k: }\n"]
+    )
     def test_an_alias_to_an_empty_value_is_not_a_colon_less_key(self, text: str) -> None:
         """Pre-QA r3: the alias's node was written earlier, so its marks aren't this
         entry's."""
@@ -367,7 +377,22 @@ class TestHost:
         assert "fd00::1]'" not in message
 
     @pytest.mark.parametrize(
-        "host", ["192.168.1", "10.1", "127.1", "0x7f.0.0.1", "2130706433", "1.2.3.4.5", "nas.0x1"]
+        "host",
+        [
+            "192.168.1",
+            "10.1",
+            "127.1",
+            "0x7f.0.0.1",
+            "2130706433",
+            "1.2.3.4.5",
+            "nas.0x1",
+            "nas.42",
+            # IDNA maps these dots to `.` before resolving (pre-QA r4).
+            "192。168。1",
+            "127．1",
+            "192.168.1。",
+            "127｡1",
+        ],
     )
     def test_a_short_or_numeric_ipv4_address_is_refused(self, host: str) -> None:
         """Pre-QA r3: the resolver expands `192.168.1` to 192.168.0.1, the router, so the
@@ -375,10 +400,19 @@ class TestHost:
         address."""
         from mcp_synology.core.config import host_problems
 
-        (problem,) = host_problems(host)
-        assert problem.startswith("isn't a valid host name or IP address (an IPv4 address")
+        assert host_problems(host) == [
+            "ends in a number, so it's read as an IPv4 address, but it isn't a whole one: "
+            "write all four numbers (192.168.1.100), or a name whose last part isn't a number"
+        ]
 
-    @pytest.mark.parametrize("host", ["192.168.1.100", "192.168.1.100.", "nas1", "1nas.local"])
+    @pytest.mark.parametrize("host", ["192.168.1.100.", "192.168.1.100。"])
+    def test_a_dot_after_an_ipv4_address_is_refused(self, host: str) -> None:
+        """Pre-QA r4: it resolves nowhere, and derived the instance ID `192`."""
+        from mcp_synology.core.config import host_problems
+
+        assert host_problems(host) == ["has a dot after the IPv4 address: drop it"]
+
+    @pytest.mark.parametrize("host", ["192.168.1.100", "nas.local.", "nas1", "1nas.local"])
     def test_a_whole_ipv4_address_or_a_name_with_digits_loads(self, host: str) -> None:
         from mcp_synology.core.config import host_problems
 
