@@ -397,7 +397,7 @@ def test_an_unreadable_tracked_file_fails(tmp_path: Path, monkeypatch: pytest.Mo
 def test_a_stray_reference_backend_gets_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # The tests' own `git init` mustn't rewrite another repository's HEAD (git 2.45+ reads
+    # The tests' own `git init` mustn't rewrite another repository's HEAD (git 2.54+ reads
     # GIT_REFERENCE_BACKEND; older git ignores it).
     _require_git()
     victim = tmp_path / "victim"
