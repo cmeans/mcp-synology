@@ -42,6 +42,15 @@ def _in_ci() -> bool:
 
 # The variables that point git at another repository, tree or index; each has a test below.
 _GIT_LOCATION = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR")
+# Also dropped: where git writes objects (a hook's GIT_OBJECT_DIRECTORY would send the
+# tests' own `git add` to another repository) and the namespace. GIT_CONFIG_* stays: it's
+# how a container or CI supplies safe.directory for a mounted checkout.
+_GIT_DROPPED = (
+    *_GIT_LOCATION,
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_NAMESPACE",
+)
 
 
 def _git(*args: str, cwd: Path | None = None) -> str:
@@ -52,15 +61,8 @@ def _git(*args: str, cwd: Path | None = None) -> str:
         check=True,
         # git's messages in English, so "not a git repository" below matches.
         env={
-            # A hook's or a script's GIT_* variables (_GIT_LOCATION, and others such as
-            # GIT_OBJECT_DIRECTORY, which would send the tests' own `git add` objects to
-            # another repository) don't reach git. GIT_CEILING_DIRECTORIES only stops the
-            # search for a repository, so it stays.
-            **{
-                k: v
-                for k, v in os.environ.items()
-                if not k.startswith("GIT_") or k == "GIT_CEILING_DIRECTORIES"
-            },
+            # A hook's or a script's repository-location variables don't reach git.
+            **{k: v for k, v in os.environ.items() if k not in _GIT_DROPPED},
             "LC_ALL": "C",
             "LANGUAGE": "",
         },
@@ -120,7 +122,11 @@ def test_no_tracked_file_holds_a_hidden_character() -> None:
         try:
             data = path.read_bytes()
         except (FileNotFoundError, IsADirectoryError, NotADirectoryError):
-            continue  # deleted in the working tree
+            continue  # deleted in the working tree, or now a folder
+        except PermissionError:
+            if path.is_dir():  # Windows reports a folder this way
+                continue
+            raise
         for number, hidden in _hidden_lines(data):
             found.append(f"{path.relative_to(ROOT)}:{number}: {', '.join(hidden)}")
     assert not found, "write these as escapes or <NAME> placeholders:\n" + "\n".join(found)
@@ -323,6 +329,53 @@ def test_a_checkout_reached_through_a_symlink_is_listed(
     assert tmp_path / "link" / "pyproject.toml" in tracked
 
 
+def test_git_keeps_its_config_variables(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A mounted checkout's safe.directory often comes from GIT_CONFIG_COUNT/KEY/VALUE,
+    # GIT_CONFIG_PARAMETERS (`git -c`) or GIT_CONFIG_GLOBAL; without them the guard would
+    # fail where git works.
+    kept = {
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "safe.directory",
+        "GIT_CONFIG_VALUE_0": "*",
+        "GIT_CONFIG_PARAMETERS": "'safe.directory'='*'",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CEILING_DIRECTORIES": os.devnull,
+    }
+    for k, v in {**kept, **dict.fromkeys(_GIT_DROPPED, "x")}.items():
+        monkeypatch.setenv(k, v)
+    seen: dict[str, str] = {}
+
+    def spy(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+        seen.update(kwargs["env"])
+        return subprocess.CompletedProcess(args[0], 0, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr(subprocess, "run", spy)
+    _git("status")
+    assert {k: seen.get(k) for k in kept} == kept
+    assert not set(_GIT_DROPPED) & set(seen)
+
+
+def test_a_tracked_path_that_became_a_folder_is_passed_over_on_windows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "pyproject.toml").write_text("")
+    (tmp_path / "now-a-folder").mkdir()
+    monkeypatch.setattr(
+        f"{__name__}._tracked_files",
+        lambda: [tmp_path / "pyproject.toml", tmp_path / "now-a-folder"],
+    )
+    monkeypatch.setattr(f"{__name__}.ROOT", tmp_path)
+    real = Path.read_bytes
+
+    def windows(self: Path) -> bytes:
+        if self.is_dir():
+            raise PermissionError(13, "Permission denied", str(self))
+        return real(self)
+
+    monkeypatch.setattr(Path, "read_bytes", windows)
+    test_no_tracked_file_holds_a_hidden_character()
+
+
 def test_a_stray_object_directory_gets_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -352,7 +405,7 @@ def test_odd_names_and_deleted_files(tmp_path: Path, monkeypatch: pytest.MonkeyP
     # APFS refuses names that aren't UTF-8 (OSError), and Windows can't even decode the
     # bytes path (UnicodeDecodeError, PEP 529); CI's ext4 takes it.
     except (OSError, UnicodeError) as err:
-        pytest.skip(f"this filesystem refuses the name: {err}")
+        pytest.skip(f"this platform can't create the name: {err}")
     _git("add", "-A", cwd=tmp_path)
     (tmp_path / "gone.txt").unlink()
     monkeypatch.setattr(f"{__name__}.ROOT", tmp_path)
