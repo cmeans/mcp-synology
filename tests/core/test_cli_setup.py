@@ -530,6 +530,8 @@ class TestSetupInteractiveValidationFailure:
         assert "type the port at the DSM port question instead" in result.output
         # Setup asks for them later: not the file's "under auth" (QA round 1 on #532).
         assert "user names and passwords are asked for after these questions" in result.output
+        # The host was just typed above, so no "isn't shown" note (pre-QA on #532).
+        assert "It isn't shown" not in result.output
         # Only where CliRunner echoes what was typed; the advice never repeats it.
         assert result.output.casefold().count("hunter2x") == 1
         assert result.output.count("NAS host (IP or hostname)") == 3

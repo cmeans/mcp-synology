@@ -135,7 +135,10 @@ def _setup_interactive(verbose: bool) -> None:
         )
         if not problems:
             break
-        click.echo(click.style(f"  The host {host_message(problems)}", fg="red"), err=True)
+        click.echo(
+            click.style(f"  The host {host_message(problems, hidden_note=False)}", fg="red"),
+            err=True,
+        )
     # HTTPS by default (#193): DSM serves it on 5001 out of the box.
     use_https = click.confirm("Use HTTPS?", default=True)
     if not use_https:

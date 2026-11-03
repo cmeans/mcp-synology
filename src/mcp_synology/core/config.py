@@ -61,8 +61,12 @@ _IDNA_DOTS = str.maketrans({"。": ".", "．": ".", "｡": "."})
 _IPV6_FILE_FORM = '"[fd00::1]", in quotes'
 _INVALID_HOST = (
     "isn't a valid host name or IP address (an IPv4 address has four numbers from 0 to "
-    "255 with no leading zeros; a name's parts are at most 63 characters, of letters, "
-    "digits and hyphens)"
+    "255 with no leading zeros; a name's parts are at most 63 characters)"
+)
+# Its own advice: such a host meets every rule _INVALID_HOST states (pre-QA on #532).
+_BAD_PUNYCODE = (
+    "starts with a part beginning xn--, which isn't valid punycode: write the name as it's "
+    "spelled, or copy its xn-- form exactly"
 )
 # A last part that's a number (or 0x hex) makes the whole host an IPv4 address to URL
 # parsers and the resolver, which expand a short one: `192.168.1` is 192.168.0.1, the
@@ -154,6 +158,8 @@ def host_problems(
     # fails with a traceback (pre-QA r2 on #511 PR 2).
     normalized = _url_host(host)
     if normalized is None:
+        if host.split(".", 1)[0].lower().startswith("xn--"):
+            return [_BAD_PUNYCODE]
         return [_INVALID_HOST]
     if bracketed:
         return []
@@ -189,14 +195,18 @@ def _url_host(host: str) -> str | None:
         return None
 
 
-def host_message(problems: list[str]) -> str:
-    """The advice for a host `host_problems` refused, without the host."""
+def host_message(problems: list[str], *, hidden_note: bool = True) -> str:
+    """The advice for a host `host_problems` refused, without the host.
+
+    ``hidden_note=False`` leaves out why the host isn't shown, for setup's prompt, where
+    it's right above (pre-QA on #532).
+    """
     if problems == ["is empty"]:
         return "must be a bare host name or IP address, and it is empty."
     return (
         "must be a bare host name or IP address, and it "
         + "; it ".join(problems)
-        + ". It isn't shown, since it may hold a password."
+        + (". It isn't shown, since it may hold a password." if hidden_note else ".")
     )
 
 
@@ -794,6 +804,10 @@ def _may_show(err: Any, loc_parts: list[str]) -> bool:
     # The host can hold a password (`admin:…@nas`, #476); its own error says what's wrong.
     if loc_parts[:2] == ["connection", "host"]:
         return False
+    # Nor the instance ID, whatever its type (`instance_id: 123`): anything may be pasted
+    # there (#511 PR 2, decision 4; pre-QA on #532).
+    if loc_parts[:1] == ["instance_id"]:
+        return False
     return not (loc_parts and loc_parts[0] == "auth")
 
 
@@ -943,19 +957,26 @@ class _ConfigLoader(yaml.SafeLoader):
         return super().construct_document(node)  # type: ignore[no-untyped-call]
 
     def _check_written_keys(self, root: yaml.Node) -> None:
-        stack, visited = [root], set()
+        # Each node with the keys leading to it, so a repeat under `modules` or a module's
+        # `settings` can be named (pre-QA on #532); a node shared by alias is checked once,
+        # at the first path reached.
+        stack: list[tuple[yaml.Node, tuple[str, ...]]] = [(root, ())]
+        visited: set[int] = set()
         while stack:  # a loop, not recursion: an alias can make the graph share nodes
-            node = stack.pop()
+            node, path = stack.pop()
             if id(node) in visited:
                 continue
             visited.add(id(node))
             if isinstance(node, yaml.MappingNode):
-                self._check_mapping(node)
-                stack.extend(n for pair in node.value for n in pair)
+                self._check_mapping(node, path)
+                for key_node, value_node in node.value:
+                    stack.append((key_node, path))
+                    name = key_node.value if isinstance(key_node, yaml.ScalarNode) else ""
+                    stack.append((value_node, (*path, str(name))))
             elif isinstance(node, yaml.SequenceNode):
-                stack.extend(node.value)
+                stack.extend((item, path) for item in node.value)
 
-    def _check_mapping(self, node: yaml.MappingNode) -> None:
+    def _check_mapping(self, node: yaml.MappingNode, path: tuple[str, ...] = ()) -> None:
         seen: dict[Any, tuple[int, int, bool]] = {}
         merge_line: int | None = None
         for key_node, value_node in node.value:
@@ -989,12 +1010,24 @@ class _ConfigLoader(yaml.SafeLoader):
             key = self.construct_object(key_node)  # type: ignore[no-untyped-call]
             first = seen.get(key)
             if first is not None:
-                known = isinstance(key, str) and key in _config_keys()
+                # A module's name, and a key in its settings, can be named too: the
+                # warnings already name them, since settings hold no credentials (pre-QA
+                # on #532: a pasted second `filestation:` was "a key … isn't shown").
+                known = isinstance(key, str) and (
+                    key in _config_keys()
+                    or path == ("modules",)
+                    or (len(path) == 3 and path[0] == "modules" and path[2] == "settings")
+                )
                 # On one line (`{k: 1, k: 2}`), the columns say where (pre-QA r3), unless
-                # a key came by alias: its column is the mapping's, so "columns 4 and 4"
-                # (QA round 1 on #532).
+                # a key came by alias: its marks are then the mapping's, so "columns 4 and
+                # 4" (QA round 1 on #532); the mapping's own line is all there is.
                 if first[2] or clamped:
-                    where = f"in the {{…}} at line {line}"
+                    start = node.start_mark.line + 1
+                    where = (
+                        f"in the {{…}} at line {start}"
+                        if node.flow_style
+                        else f"in the section that starts at line {start}"
+                    )
                 elif first[0] == line:
                     where = f"line {line}, columns {first[1]} and {column}"
                 else:

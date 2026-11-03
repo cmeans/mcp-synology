@@ -100,11 +100,56 @@ class TestDuplicateKeys:
         """A key that isn't the config's own may be a password's fragment."""
         message = _yaml_message(
             tmp_path,
-            "schema_version: 1\nconnection: {host: nas}\nmodules:\n  filestation:\n"
-            "    settings:\n      Hunter2x: 1\n      Hunter2x: 2\n",
+            "schema_version: 1\nconnection: {host: nas}\nauth:\n  Hunter2x: 1\n  Hunter2x: 2\n",
         )
         assert "Hunter2x" not in message
-        assert message.startswith("The config file has a key twice in one section (lines 6 and 7)")
+        assert message.startswith("The config file has a key twice in one section (lines 4 and 5)")
+
+    @pytest.mark.parametrize(
+        ("text", "key", "where"),
+        [
+            # A pasted second module block (pre-QA on #532): settings and module names
+            # hold no credentials, and the warnings already name them.
+            (
+                "modules:\n  filestation:\n  filestation:\n    permission: write\n",
+                "filestation",
+                "lines 2 and 3",
+            ),
+            (
+                "modules:\n  filestation:\n    settings:\n      zz_custom: 1\n      zz_custom: 2\n",
+                "zz_custom",
+                "lines 4 and 5",
+            ),
+        ],
+    )
+    def test_a_repeated_module_or_setting_is_named(self, text: str, key: str, where: str) -> None:
+        with pytest.raises(yaml.YAMLError) as exc:
+            parse_config_text(text)
+        assert format_yaml_error(exc.value).startswith(
+            f"The config file has `{key}` twice in one section ({where})"
+        )
+
+    @pytest.mark.parametrize(
+        ("text", "where"),
+        [
+            # Block style: there's no {…}, and the alias's marks are its anchor's (pre-QA
+            # on #532 found "in the {…} at line 4" here).
+            (
+                "k: &k host\nconnection:\n  *k : a\n  host: b\n",
+                "in the section that starts at line 3",
+            ),
+            (
+                "k: &k host\nconnection:\n  host: a\n  *k : b\n",
+                "in the section that starts at line 3",
+            ),
+        ],
+    )
+    def test_a_repeat_by_alias_in_a_block_names_the_sections_line(
+        self, text: str, where: str
+    ) -> None:
+        with pytest.raises(yaml.YAMLError) as exc:
+            parse_config_text(text)
+        assert f"`host` twice in one section ({where})" in format_yaml_error(exc.value)
 
     def test_a_comma_split_that_repeats_a_real_key(self, tmp_path: Path) -> None:
         """#464 comment: `{username: me, password: Spring,username}` loaded username=None."""
@@ -478,11 +523,14 @@ class TestHost:
     @pytest.mark.parametrize("host", ["xn--", "xn--zz", "xn--a"])
     def test_a_malformed_a_label_is_refused_not_raised(self, host: str) -> None:
         """QA round 1 on #532: reading `url.host` decoded the `xn--` label, and idna's own
-        error (a UnicodeError, its text decoded from the host) escaped."""
+        error (a UnicodeError, its text decoded from the host) escaped. Pre-QA after it:
+        such a host meets every rule the general advice states, so it gets its own."""
         from mcp_synology.core.config import host_problems
 
-        (problem,) = host_problems(host)
-        assert problem.startswith("isn't a valid host name or IP address")
+        assert host_problems(host) == [
+            "starts with a part beginning xn--, which isn't valid punycode: write the name "
+            "as it's spelled, or copy its xn-- form exactly"
+        ]
 
     @pytest.mark.parametrize("from_env", [False, True])
     def test_a_malformed_a_label_is_a_config_error_naming_no_text(self, from_env: bool) -> None:
@@ -497,7 +545,7 @@ class TestHost:
             with pytest.raises(ValidationError) as exc:
                 AppConfig.model_validate(raw)
             message = format_validation_error(exc.value)
-        assert "isn't a valid host name or IP address" in message
+        assert "which isn't valid punycode" in message
         assert "Codepoint" not in message
         assert "\\x80" not in message
 
@@ -612,6 +660,16 @@ class TestPort:
 class TestEmptyValues:
     """#485 and the #511 comment: an empty value that names nothing is an error, not
     "unset"."""
+
+    def test_an_instance_id_of_another_type_isnt_quoted(self, tmp_path: Path) -> None:
+        """Pre-QA on #532: decision 4 hid a character error's value, but `instance_id: 123`
+        still showed "(got 123)"."""
+        message = _validation_message(
+            tmp_path,
+            "schema_version: 1\ninstance_id: 735719\nconnection: {host: nas}\n" + _MODULES,
+        )
+        assert "instance_id" in message
+        assert "735719" not in message
 
     @pytest.mark.parametrize("value", ['""', '"  "'])
     def test_an_empty_instance_id(self, tmp_path: Path, value: str) -> None:
