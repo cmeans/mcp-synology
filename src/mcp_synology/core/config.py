@@ -414,8 +414,9 @@ def _warn_always(log: logging.Logger, msg: str) -> None:
 
     For security warnings only: `SYNOLOGY_LOG_LEVEL=error` used to hide that HTTPS was
     off, so `SYNOLOGY_HTTPS=off` turned it off without a word. `Logger.handle` skips the
-    level check, so the record still goes through the handlers (stderr, and
-    `logging.file` once it's set up) in the usual format.
+    level check, so the record still goes through the handlers in the usual format:
+    while the config loads, where these are logged, that's stderr only (`logging.file`
+    is set up after the load).
     """
     if log.isEnabledFor(logging.WARNING):
         log.warning(msg)
@@ -436,6 +437,22 @@ def _file_value(raw: dict[str, Any], dotted_path: str) -> Any:
             return None
         target = target.get(part)
     return target
+
+
+def _as_compared(dotted_path: str, value: Any) -> Any:
+    """``value`` as the loaded config would use it, for the override check.
+
+    A host and an instance ID in any case are the same (DNS ignores case; the instance
+    ID is lowered), and so is a port written as text in the file (`port: "5001"`, which
+    pydantic reads as 5001): the same value mustn't warn (pre-QA on #533).
+    """
+    if dotted_path in ("connection.host", "instance_id") and isinstance(value, str):
+        return value.lower()
+    if dotted_path == "connection.port" and isinstance(value, str):
+        text = value.strip()
+        if text.isascii() and text.isdigit():
+            return int(text)
+    return value
 
 
 def _merge_env_overrides(raw: dict[str, Any], *, from_file: bool = False) -> dict[str, Any]:
@@ -464,7 +481,10 @@ def _merge_env_overrides(raw: dict[str, Any], *, from_file: bool = False) -> dic
 
         logger.debug("Env override: %s -> %s", env_var, dotted_path)
         parsed = parse_env_value(env_var, dotted_path, value)
-        if from_file and before.get(dotted_path) not in (None, parsed):
+        file_value = before.get(dotted_path) if from_file else None
+        if file_value is not None and _as_compared(dotted_path, file_value) != _as_compared(
+            dotted_path, parsed
+        ):
             _warn_always(
                 logger,
                 f"{env_var} overrides {dotted_path} from the config file. "
@@ -487,17 +507,20 @@ def _emit_warnings(config: AppConfig) -> None:
     """Emit warnings for insecure or unusual config."""
     # A username alone isn't a secret (keyring password + config username is the
     # recommended setup), so only a password triggers the warning (#167).
+    # At any log level, as the transport warnings below (pre-QA on #533).
     if config.auth.password:
         # Blank counts as unset (_merge_env_overrides): the password is then the file's.
         if (os.environ.get("SYNOLOGY_PASSWORD") or "").strip():
-            logger.warning(
+            _warn_always(
+                logger,
                 "Password provided via the SYNOLOGY_PASSWORD environment variable. "
-                "Consider using 'mcp-synology setup' to store them securely in the OS keyring."
+                "Consider using 'mcp-synology setup' to store them securely in the OS keyring.",
             )
         else:
-            logger.warning(
+            _warn_always(
+                logger,
                 "Plaintext password found in config file. "
-                "Use 'mcp-synology setup' to store credentials securely in the OS keyring."
+                "Use 'mcp-synology setup' to store credentials securely in the OS keyring.",
             )
 
     conn = config.connection

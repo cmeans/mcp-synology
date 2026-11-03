@@ -669,6 +669,11 @@ def test_an_override_of_the_files_setting_warns_at_any_level(
         ("SYNOLOGY_PORT", "5002", {}),  # the file doesn't set it
         ("SYNOLOGY_INSTANCE_ID", "nas", {}),  # the ID the file's host gives
         ("SYNOLOGY_LOG_LEVEL", "error", {}),  # not a connection setting
+        # The same value in another form (pre-QA on #533): the instance ID is lowered,
+        # DNS ignores a host's case, and pydantic reads a text port as the number.
+        ("SYNOLOGY_INSTANCE_ID", "home-nas", {"instance_id": "Home-NAS"}),
+        ("SYNOLOGY_HOST", "nas.example", {"host": "NAS.example"}),
+        ("SYNOLOGY_PORT", "5001", {"port": "5001"}),
     ],
 )
 def test_no_override_warning_when_nothing_the_file_sets_changes(
@@ -721,6 +726,29 @@ def test_transport_warnings_show_at_any_level(
     settings: dict[str, Any], start: str, tmp_path: Path, at_error: _Lines
 ) -> None:
     load_config(str(_file(tmp_path, **settings)))
+    assert [w for w in at_error.messages() if w.startswith(start)]
+
+
+@pytest.mark.parametrize("from_env", [False, True])
+def test_password_warnings_show_at_any_level(
+    from_env: bool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, at_error: _Lines
+) -> None:
+    """Pre-QA on #533: the plaintext-password warnings were still hidden at ERROR."""
+    path = tmp_path / "config.yaml"
+    raw: dict[str, Any] = {
+        "schema_version": 1,
+        "connection": {"host": "nas.example", "https": True},
+        "auth": {"username": "u"},
+        "modules": {"filestation": {"enabled": True}},
+    }
+    if from_env:
+        monkeypatch.setenv("SYNOLOGY_PASSWORD", "Hunter2x")
+        start = "Password provided via the SYNOLOGY_PASSWORD environment variable."
+    else:
+        raw["auth"]["password"] = "Hunter2x"
+        start = "Plaintext password found in config file."
+    path.write_text(yaml.safe_dump(raw))
+    load_config(str(path))
     assert [w for w in at_error.messages() if w.startswith(start)]
 
 
