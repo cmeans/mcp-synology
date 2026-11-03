@@ -179,9 +179,22 @@ def test_a_missing_mcp_synology_config_file_is_an_error_not_env_only(
     # With SYNOLOGY_HOST set, it used to fall back to env-only mode: read-only File
     # Station over plain HTTP, instead of the config the variable names.
     monkeypatch.setenv("SYNOLOGY_HOST", "nas.example")
-    monkeypatch.setenv("MCP_SYNOLOGY_CONFIG", str(tmp_path / "missing.yaml"))
-    with pytest.raises(FileNotFoundError, match="MCP_SYNOLOGY_CONFIG"):
+    missing = tmp_path / "missing.yaml"
+    monkeypatch.setenv("MCP_SYNOLOGY_CONFIG", str(missing))
+    with pytest.raises(FileNotFoundError) as excinfo:
         load_config()
+    # Whole, so no "unset it to use the defaults" advice creeps back: that's env-only
+    # mode here, the downgrade this refuses (QA round 3 on #529).
+    assert str(excinfo.value) == (
+        f"Config file not found (from MCP_SYNOLOGY_CONFIG): {str(missing)!r}. Fix the path."
+    )
+
+
+def test_a_missing_config_flag_file_is_an_error_with_no_advice(tmp_path: Path) -> None:
+    missing = tmp_path / "missing.yaml"
+    with pytest.raises(FileNotFoundError) as excinfo:
+        load_config(str(missing))
+    assert str(excinfo.value) == f"Config file not found: {str(missing)!r}"
 
 
 def test_env_only_mode_still_works_without_a_named_file(
@@ -441,6 +454,27 @@ def test_a_relative_config_flag_is_shown_absolute(
     assert f"Config: {str(tmp_path / 'cfgx.yaml')!r} (from --config)" in caplog.text
 
 
+@pytest.mark.parametrize("via", ["flag", "env"])
+def test_a_relative_path_from_a_deleted_folder_is_still_named(
+    via: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pre-QA on #529: absolute() raises in a deleted working folder, and the error
+    was a bare "[Errno 2] No such file or directory" naming neither path nor source."""
+    gone = tmp_path / "gone"
+    gone.mkdir()
+    monkeypatch.chdir(gone)
+    gone.rmdir()
+    if via == "env":
+        monkeypatch.setenv("MCP_SYNOLOGY_CONFIG", "rel.yaml")
+        expected = "Config file not found (from MCP_SYNOLOGY_CONFIG): 'rel.yaml'. Fix the path."
+    else:
+        monkeypatch.delenv("MCP_SYNOLOGY_CONFIG", raising=False)
+        expected = "Config file not found: 'rel.yaml'"
+    with pytest.raises(FileNotFoundError) as excinfo:
+        load_config("rel.yaml" if via == "flag" else None)
+    assert str(excinfo.value) == expected
+
+
 def test_a_newline_in_the_path_cant_forge_a_log_line(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -453,6 +487,25 @@ def test_a_newline_in_the_path_cant_forge_a_log_line(
         load_config(config)
     lines = [r.getMessage() for r in caplog.records if "evil" in r.getMessage()]
     assert {line.split(" ", 1)[0] for line in lines} == {"Config:", "Loading"}
+    for line in lines:
+        assert "\n" not in line
+        assert "\\n2026-11-02 [WARNING] fake" in line
+
+
+def test_a_newline_in_the_working_folder_cant_forge_a_log_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """QA round 3 on #529: the DEBUG "Checking default config path" line was unquoted."""
+    folder = tmp_path / "evil\n2026-11-02 [WARNING] fake: injected"
+    folder.mkdir()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("MCP_SYNOLOGY_CONFIG", raising=False)
+    monkeypatch.chdir(folder)
+    _config(tmp_path).rename(folder / "mcp-synology.yaml")
+    with caplog.at_level(logging.DEBUG, logger="mcp_synology.core.config"):
+        load_config()
+    lines = [r.getMessage() for r in caplog.records if "evil" in r.getMessage()]
+    assert {line.split(" ", 1)[0] for line in lines} == {"Checking", "Config:", "Loading"}
     for line in lines:
         assert "\n" not in line
         assert "\\n2026-11-02 [WARNING] fake" in line
