@@ -280,7 +280,8 @@ def discover_config_path(explicit_path: str | None = None) -> Path:
         Path.cwd() / "mcp-synology.yaml",
     ]
     for path in default_paths:
-        logger.debug("Checking default config path: %s", path)
+        # Quoted: the working folder's name could forge a log line (QA round 3 on #529).
+        logger.debug("Checking default config path: %r", str(path))
         if path.exists():
             logger.info("Config: %r", str(path.absolute()))
             return path
