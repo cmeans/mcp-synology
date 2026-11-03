@@ -225,6 +225,18 @@ def _derive_instance_id(host: str) -> str:
     return host.split(".")[0].lower()
 
 
+def _shown_path(path: Path) -> str:
+    """The path made absolute for messages, or as given if it can't be.
+
+    `absolute()` raises when the working folder has been deleted; the message must
+    still name the path (pre-QA on #529).
+    """
+    try:
+        return str(path.absolute())
+    except OSError:
+        return str(path)
+
+
 def discover_config_path(explicit_path: str | None = None) -> Path:
     """Find the config file using the discovery hierarchy.
 
@@ -248,11 +260,11 @@ def discover_config_path(explicit_path: str | None = None) -> Path:
         # user rarely knows (QA round 1 on #529).
         if not path.exists():
             # Quoted: a stray \r or space at the end would otherwise be invisible.
-            msg = f"Config file not found: {str(path.absolute())!r}"
+            msg = f"Config file not found: {_shown_path(path)!r}"
             raise FileNotFoundError(msg)
         # Quoted, as in the errors: a newline in a folder's name would forge a log line
         # (QA round 2 on #529).
-        logger.info("Config: %r (from --config)", str(path.absolute()))
+        logger.info("Config: %r (from --config)", _shown_path(path))
         return path
 
     # Set but blank is an error, unlike the SYNOLOGY_* variables (maintainer,
@@ -268,11 +280,11 @@ def discover_config_path(explicit_path: str | None = None) -> Path:
             # An error, never env-only mode: that would run read-only over plain HTTP
             # instead of the config the variable names (#499).
             msg = (
-                f"Config file not found (from MCP_SYNOLOGY_CONFIG): {str(path.absolute())!r}. "
+                f"Config file not found (from MCP_SYNOLOGY_CONFIG): {_shown_path(path)!r}. "
                 "Fix the path."
             )
             raise FileNotFoundError(msg)
-        logger.info("Config: %r (from MCP_SYNOLOGY_CONFIG)", str(path.absolute()))
+        logger.info("Config: %r (from MCP_SYNOLOGY_CONFIG)", _shown_path(path))
         return path
 
     default_paths = [
@@ -735,7 +747,8 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         path: Explicit config file path, or None for auto-discovery.
 
     Falls back to env-var-only mode if no config file is found but
-    SYNOLOGY_HOST is set.
+    SYNOLOGY_HOST is set, unless --config or MCP_SYNOLOGY_CONFIG names a file:
+    that file must exist (#499).
     """
     try:
         config_path = discover_config_path(None if path is None else str(path))

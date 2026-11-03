@@ -431,6 +431,27 @@ def test_a_relative_config_flag_is_shown_absolute(
     assert f"Config: {str(tmp_path / 'cfgx.yaml')!r} (from --config)" in caplog.text
 
 
+@pytest.mark.parametrize("via", ["flag", "env"])
+def test_a_relative_path_from_a_deleted_folder_is_still_named(
+    via: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pre-QA on #529: absolute() raises in a deleted working folder, and the error
+    was a bare "[Errno 2] No such file or directory" naming neither path nor source."""
+    gone = tmp_path / "gone"
+    gone.mkdir()
+    monkeypatch.chdir(gone)
+    gone.rmdir()
+    if via == "env":
+        monkeypatch.setenv("MCP_SYNOLOGY_CONFIG", "rel.yaml")
+        expected = "Config file not found (from MCP_SYNOLOGY_CONFIG): 'rel.yaml'. Fix the path."
+    else:
+        monkeypatch.delenv("MCP_SYNOLOGY_CONFIG", raising=False)
+        expected = "Config file not found: 'rel.yaml'"
+    with pytest.raises(FileNotFoundError) as excinfo:
+        load_config("rel.yaml" if via == "flag" else None)
+    assert str(excinfo.value) == expected
+
+
 def test_a_newline_in_the_path_cant_forge_a_log_line(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
