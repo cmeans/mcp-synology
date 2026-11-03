@@ -167,13 +167,17 @@ Without a config file, mcp-synology always runs **File Station, read-only**. No 
 |---|---|---|
 | `SYNOLOGY_HOST` | `connection.host` (needed for env-only mode) | — |
 | `SYNOLOGY_PORT` | `connection.port` | 5000, or 5001 with HTTPS |
-| `SYNOLOGY_HTTPS` | `connection.https` (`true`, `1` or `yes` for on; anything else is off) | `false` |
+| `SYNOLOGY_HTTPS` | `connection.https` (`true`/`false`, `1`/`0`, `yes`/`no` or `on`/`off`, any case) | `false` |
 | `SYNOLOGY_USERNAME` | `auth.username` | the keyring |
 | `SYNOLOGY_PASSWORD` | `auth.password` | the keyring |
 | `SYNOLOGY_DEVICE_ID` | `auth.device_id` (2FA device token) | the keyring |
 | `SYNOLOGY_INSTANCE_ID` | `instance_id` (names the keyring entry and state folder) | derived from the host |
 | `SYNOLOGY_LOG_LEVEL` | `logging.level` (`debug`, `info`, `warning`, `error`) | `info` |
 | `SYNOLOGY_UPDATE_NOTICES` | `update_notices` (`all`, `security`, `off`) | `all` |
+
+Each value is read as its config field's type, and choices in any case (`SYNOLOGY_LOG_LEVEL=DEBUG`); `SYNOLOGY_UPDATE_NOTICES` also takes `no`/`yes` as the config file does. A value of the wrong type is an error that names the variable, and the server doesn't start: `SYNOLOGY_HTTPS=sure` never means off. An empty or blank variable counts as unset.
+
+`MCP_SYNOLOGY_CONFIG=/path/to/config.yaml` points to a config file instead of the default locations (`~/.config/mcp-synology/config.yaml`, then `./mcp-synology.yaml`); `--config` takes precedence over it. If the file it names doesn't exist, or the variable is set but empty, that's an error: mcp-synology doesn't fall back to the default locations or to env-var-only mode. An empty `--config ""` is an error too. The log says which config was used, at INFO.
 
 ## Modules
 

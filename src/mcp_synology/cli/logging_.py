@@ -19,8 +19,19 @@ def _init_early_logging(*, verbose: bool = False) -> None:
     if verbose:
         level = logging.DEBUG
     else:
-        env_level = os.environ.get("SYNOLOGY_LOG_LEVEL", "info").upper()
-        level = getattr(logging, env_level, logging.INFO)
+        # Read as the config reads it (#511): an invalid value is INFO here, and a config
+        # load that follows reports it, naming the variable (none does when discovery
+        # fails first, or when setup goes on to create a config).
+        from mcp_synology.core.config import ENV_VAR_MAP, EnvVarError, parse_env_value
+
+        name = "info"
+        raw = os.environ.get("SYNOLOGY_LOG_LEVEL", "")
+        if raw.strip():
+            try:
+                name = parse_env_value("SYNOLOGY_LOG_LEVEL", ENV_VAR_MAP["SYNOLOGY_LOG_LEVEL"], raw)
+            except EnvVarError:
+                name = "info"
+        level = getattr(logging, name.upper())
     logging.basicConfig(level=level, format=_LOG_FORMAT, stream=sys.stderr)
 
 

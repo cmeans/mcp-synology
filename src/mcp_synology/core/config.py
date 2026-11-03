@@ -14,10 +14,17 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, get_args, get_origin
 
 import yaml
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    TypeAdapter,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from mcp_synology.core.local_paths import check_local_path_entries
 
@@ -218,6 +225,18 @@ def _derive_instance_id(host: str) -> str:
     return host.split(".")[0].lower()
 
 
+def _shown_path(path: Path) -> str:
+    """The path made absolute for messages, or as given if it can't be.
+
+    `absolute()` raises when the working folder has been deleted; the message must
+    still name the path (pre-QA on #529).
+    """
+    try:
+        return str(path.absolute())
+    except OSError:
+        return str(path)
+
+
 def discover_config_path(explicit_path: str | None = None) -> Path:
     """Find the config file using the discovery hierarchy.
 
@@ -226,21 +245,46 @@ def discover_config_path(explicit_path: str | None = None) -> Path:
     3. ~/.config/mcp-synology/config.yaml
     4. ./mcp-synology.yaml
     """
-    if explicit_path:
-        path = Path(explicit_path).expanduser()
-        logger.debug("Config path from --config flag: %s", path)
-        if not path.exists():
-            msg = f"Config file not found: {path}"
+    # An empty path names no file, so it's an error, the same as a missing one (#499;
+    # maintainer, 2026-11-02): `--config ''` used to fall through to the default
+    # locations, and with SYNOLOGY_HOST set to env-only mode.
+    if explicit_path is not None:
+        if not explicit_path.strip():
+            # No "leave it out" advice: without a config file, a set SYNOLOGY_HOST means
+            # env-only mode, read-only over plain HTTP, the outcome this refuses (QA
+            # round 2 on #529).
+            msg = "--config is empty: give a config file's path."
             raise FileNotFoundError(msg)
+        path = Path(explicit_path).expanduser()
+        # Absolute in messages: an MCP client starts the server in a working folder the
+        # user rarely knows (QA round 1 on #529).
+        if not path.exists():
+            # Quoted: a stray \r or space at the end would otherwise be invisible.
+            msg = f"Config file not found: {_shown_path(path)!r}"
+            raise FileNotFoundError(msg)
+        # Quoted, as in the errors: a newline in a folder's name would forge a log line
+        # (QA round 2 on #529).
+        logger.info("Config: %r (from --config)", _shown_path(path))
         return path
 
+    # Set but blank is an error, unlike the SYNOLOGY_* variables (maintainer,
+    # 2026-11-02): an unfilled "" in an MCP client's env block would otherwise drop
+    # the config it was meant to name without a word.
     env_path = os.environ.get("MCP_SYNOLOGY_CONFIG")
-    if env_path:
-        path = Path(env_path).expanduser()
-        logger.debug("Config path from MCP_SYNOLOGY_CONFIG env: %s", path)
-        if not path.exists():
-            msg = f"Config file not found (from MCP_SYNOLOGY_CONFIG): {path}"
+    if env_path is not None:
+        if not env_path.strip():
+            msg = "MCP_SYNOLOGY_CONFIG is set but empty: set it to a config file's path."
             raise FileNotFoundError(msg)
+        path = Path(env_path).expanduser()
+        if not path.exists():
+            # An error, never env-only mode: that would run read-only over plain HTTP
+            # instead of the config the variable names (#499).
+            msg = (
+                f"Config file not found (from MCP_SYNOLOGY_CONFIG): {_shown_path(path)!r}. "
+                "Fix the path."
+            )
+            raise FileNotFoundError(msg)
+        logger.info("Config: %r (from MCP_SYNOLOGY_CONFIG)", _shown_path(path))
         return path
 
     default_paths = [
@@ -248,9 +292,10 @@ def discover_config_path(explicit_path: str | None = None) -> Path:
         Path.cwd() / "mcp-synology.yaml",
     ]
     for path in default_paths:
-        logger.debug("Checking default config path: %s", path)
+        # Quoted: the working folder's name could forge a log line (QA round 3 on #529).
+        logger.debug("Checking default config path: %r", str(path))
         if path.exists():
-            logger.debug("Config found: %s", path)
+            logger.info("Config: %r", str(path.absolute()))
             return path
 
     msg = (
@@ -260,14 +305,124 @@ def discover_config_path(explicit_path: str | None = None) -> Path:
     raise FileNotFoundError(msg)
 
 
+class EnvVarError(ValueError):
+    """An environment variable's value isn't one its config field takes (#501).
+
+    The message names the variable and what it takes, never the value: it may be a
+    password (a value pasted into the wrong variable).
+    """
+
+
+def _env_field_annotation(dotted_path: str) -> Any:
+    """The type of the config field at ``dotted_path`` (``connection.https``)."""
+    model: Any = AppConfig
+    annotation: Any = None
+    for part in dotted_path.split("."):
+        annotation = model.model_fields[part].annotation
+        # A section (`connection: ConnectionConfig | None`): step into its model.
+        model = next(
+            (
+                a
+                for a in (annotation, *get_args(annotation))
+                if isinstance(a, type) and issubclass(a, BaseModel)
+            ),
+            None,
+        )
+    return annotation
+
+
+def _env_expected(annotation: Any) -> str:
+    """What a field of ``annotation`` takes, for an env var's error."""
+    if get_origin(annotation) is Literal:
+        kind = annotation
+    else:
+        kind = next((a for a in get_args(annotation) if a is not type(None)), annotation)
+    if kind is bool:
+        return "true or false (also 1/0, yes/no, on/off)"
+    if kind is int:
+        return "a whole number"
+    if get_origin(kind) is Literal:
+        return "one of " + ", ".join(str(v) for v in get_args(kind))
+    # A text field takes any value, so it never fails to parse and never gets here.
+    return "a valid value"  # pragma: no cover
+
+
+# The boolean words an env var takes, exactly the documented ones.
+_ENV_BOOLS = {
+    "true": True,
+    "1": True,
+    "yes": True,
+    "on": True,
+    "false": False,
+    "0": False,
+    "no": False,
+    "off": False,
+}
+
+
+def parse_env_value(env_var: str, dotted_path: str, value: str) -> Any:
+    """``value``, read from ``env_var``, as its config field's type (#501).
+
+    Booleans take only the documented words, `true`/`false`, `1`/`0`, `yes`/`no`,
+    `on`/`off`, in any case (not pydantic's one-letter `t`/`f`/`y`/`n`: `SYNOLOGY_HTTPS=n`
+    would turn HTTPS off; QA round 1 on #529). Whole numbers and choices are parsed by
+    pydantic with the field's own type, choices in any case (`SYNOLOGY_LOG_LEVEL=DEBUG`;
+    the config file's are lower-case), with `update_notices` also taking the words the
+    file's YAML reads as booleans (`no` is off). Typed values are stripped; text values
+    (host, credentials, `instance_id`) are taken as given, as in the file. A value of the
+    wrong type is an error naming the variable; a field's own rules (an `instance_id`'s
+    characters) are checked with the rest of the config.
+
+    `SYNOLOGY_HTTPS` used to be true for `true`, `1` or `yes` and false for anything
+    else, so `on` (or a typo) turned HTTPS off even over `https: true` in the config, and
+    the password went in cleartext.
+    """
+    annotation = _env_field_annotation(dotted_path)
+    kinds = [a for a in get_args(annotation) if a is not type(None)] or [annotation]
+    if kinds == [str]:
+        return value  # text: taken as given
+    text = value.strip()
+    if kinds == [bool]:
+        word = _ENV_BOOLS.get(text.lower())
+        if word is None:
+            raise EnvVarError(
+                f"{env_var} must be {_env_expected(annotation)} (it sets {dotted_path})."
+            )
+        return word
+    if dotted_path == "update_notices":
+        # As in the file, where YAML reads `no`/`false`/`off` as false and `yes`/`true`/
+        # `on` as true, and `_yaml_bool_notices` maps them to off and all. A word list,
+        # not a YAML parse: any other text must reach the choice check below, so it's
+        # an EnvVarError naming the variable (pre-QA on #511).
+        text = {"yes": "all", "true": "all", "on": "all", "no": "off", "false": "off"}.get(
+            text.lower(), text
+        )
+    if get_origin(annotation) is Literal or any(
+        get_origin(a) is Literal for a in get_args(annotation)
+    ):
+        text = text.lower()
+    try:
+        return TypeAdapter(annotation).validate_python(text)
+    except ValidationError:
+        raise EnvVarError(
+            f"{env_var} must be {_env_expected(annotation)} (it sets {dotted_path})."
+        ) from None
+
+
 def _merge_env_overrides(raw: dict[str, Any]) -> dict[str, Any]:
-    """Merge environment variable overrides into raw config dict."""
+    """Merge environment variable overrides into the raw config dict.
+
+    An empty (or blank) variable counts as unset, as the credentials already did
+    (`auth.resolve_credentials`): `SYNOLOGY_HTTPS=` leaves the config's `https` alone
+    instead of turning it off.
+    """
     for env_var, dotted_path in ENV_VAR_MAP.items():
         value = os.environ.get(env_var)
-        if value is None:
+        if value is None or not value.strip():
             continue
 
         logger.debug("Env override: %s -> %s", env_var, dotted_path)
+        parsed = parse_env_value(env_var, dotted_path, value)
         parts = dotted_path.split(".")
         target = raw
         for part in parts[:-1]:
@@ -276,15 +431,7 @@ def _merge_env_overrides(raw: dict[str, Any]) -> dict[str, Any]:
             if not isinstance(target[part], dict):
                 raise ValueError(f"Config section '{part}' must be a YAML mapping of settings")
             target = target[part]
-
-        key = parts[-1]
-        # Type coercion for known types
-        if key == "port":
-            target[key] = int(value)
-        elif key == "https":
-            target[key] = value.lower() in ("true", "1", "yes")
-        else:
-            target[key] = value
+        target[parts[-1]] = parsed
 
     return raw
 
@@ -294,7 +441,8 @@ def _emit_warnings(config: AppConfig) -> None:
     # A username alone isn't a secret (keyring password + config username is the
     # recommended setup), so only a password triggers the warning (#167).
     if config.auth.password:
-        if os.environ.get("SYNOLOGY_PASSWORD"):
+        # Blank counts as unset (_merge_env_overrides): the password is then the file's.
+        if (os.environ.get("SYNOLOGY_PASSWORD") or "").strip():
             logger.warning(
                 "Password provided via the SYNOLOGY_PASSWORD environment variable. "
                 "Consider using 'mcp-synology setup' to store them securely in the OS keyring."
@@ -329,11 +477,12 @@ def _synthesize_env_config() -> AppConfig | None:
 
     Returns an AppConfig if SYNOLOGY_HOST is set, otherwise None.
     """
-    host = os.environ.get("SYNOLOGY_HOST")
+    # Blank counts as unset, as in _merge_env_overrides.
+    host = (os.environ.get("SYNOLOGY_HOST") or "").strip()
     if not host:
         return None
 
-    logger.debug("No config file found; synthesizing from SYNOLOGY_HOST=%s", host)
+    logger.info("Config: environment variables only (no config file; SYNOLOGY_HOST is set)")
     raw: dict[str, Any] = {
         "schema_version": CURRENT_SCHEMA_VERSION,
         "connection": {"host": host},
@@ -598,13 +747,15 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         path: Explicit config file path, or None for auto-discovery.
 
     Falls back to env-var-only mode if no config file is found but
-    SYNOLOGY_HOST is set.
+    SYNOLOGY_HOST is set, unless --config or MCP_SYNOLOGY_CONFIG names a file:
+    that file must exist (#499).
     """
     try:
-        config_path = discover_config_path(str(path) if path else None)
+        config_path = discover_config_path(None if path is None else str(path))
     except FileNotFoundError:
-        # If an explicit path was given, always fail
-        if path:
+        # A file named by --config or MCP_SYNOLOGY_CONFIG must exist: never fall back
+        # to env-only mode (#499).
+        if path is not None or os.environ.get("MCP_SYNOLOGY_CONFIG") is not None:
             raise
         # Try env-var-only mode
         env_config = _synthesize_env_config()
@@ -612,7 +763,7 @@ def load_config(path: str | Path | None = None) -> AppConfig:
             return env_config
         raise
 
-    logger.debug("Loading config from %s", config_path)
+    logger.debug("Loading config from %r", str(config_path))  # quoted, as the INFO line
     try:
         raw_text = config_path.read_text(encoding="utf-8")
     except UnicodeDecodeError as e:
