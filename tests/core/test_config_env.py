@@ -421,15 +421,18 @@ def test_a_relative_config_flag_is_shown_absolute(
 def test_a_newline_in_the_path_cant_forge_a_log_line(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """QA round 2 on #529: the INFO line logged the path unquoted."""
+    """QA round 2 on #529: the INFO line logged the path unquoted (and pre-QA after it:
+    the DEBUG "Loading config from" line too)."""
     folder = tmp_path / "evil\n2026-11-02 [WARNING] fake: injected"
     folder.mkdir()
     config = _config(tmp_path).rename(folder / "c.yaml")
-    with caplog.at_level(logging.INFO, logger="mcp_synology.core.config"):
+    with caplog.at_level(logging.DEBUG, logger="mcp_synology.core.config"):
         load_config(config)
-    (line,) = [r.getMessage() for r in caplog.records if r.getMessage().startswith("Config:")]
-    assert "\n" not in line
-    assert "\\n2026-11-02 [WARNING] fake" in line
+    lines = [r.getMessage() for r in caplog.records if "evil" in r.getMessage()]
+    assert {line.split(" ", 1)[0] for line in lines} == {"Config:", "Loading"}
+    for line in lines:
+        assert "\n" not in line
+        assert "\\n2026-11-02 [WARNING] fake" in line
 
 
 # -- maintainer decision on #529: an empty config path is an error ----------------------

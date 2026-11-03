@@ -749,7 +749,7 @@ def load_config(path: str | Path | None = None) -> AppConfig:
             return env_config
         raise
 
-    logger.debug("Loading config from %s", config_path)
+    logger.debug("Loading config from %r", str(config_path))  # quoted, as the INFO line
     try:
         raw_text = config_path.read_text(encoding="utf-8")
     except UnicodeDecodeError as e:
