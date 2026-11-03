@@ -54,6 +54,8 @@ _HOST_OTHER_BAD = frozenset("\\?#%\"'<>^`{|},;=&+$!*()~")
 
 
 _BRACKETED = re.compile(r"\[([^\]]*)\](?::(.*))?")
+_IPV6_ZONE = re.compile(r"[A-Za-z0-9._~-]+")
+_IDNA_DOTS = str.maketrans({"。": ".", "．": ".", "｡": "."})
 # Quoted in the config file: unquoted, `host: [fd00::1]` is a YAML list (pre-QA r2 on
 # #511 PR 2). An env var or setup's prompt takes it as typed.
 _IPV6_FILE_FORM = '"[fd00::1]", in quotes'
@@ -77,6 +79,7 @@ def host_problems(
     port_setting: str = "set connection.port",
     https_setting: str = "set https: true",
     ipv6_form: str = _IPV6_FILE_FORM,
+    credentials_setting: str = "go under auth or in the keyring (mcp-synology setup)",
 ) -> list[str]:
     """What keeps ``host`` from being a bare host name or IP address, as advice (#511 PR 2).
 
@@ -84,9 +87,9 @@ def host_problems(
     written into the host made a broken URL (a traceback, #504) or put a password into
     the server instructions, tool errors and logs (#476, #471). An IPv6 address goes in
     square brackets (`[fd00::1]`), as in a URL. Never quotes the host: it can hold a
-    password. ``port_setting``, ``https_setting`` and ``ipv6_form`` say how to set the
-    port, HTTPS and an IPv6 address where the host came from (the file, an env var,
-    setup's questions).
+    password. ``port_setting``, ``https_setting``, ``ipv6_form`` and
+    ``credentials_setting`` say how to set the port, HTTPS, an IPv6 address and the
+    credentials where the host came from (the file, an env var, setup's questions).
     """
     bracket_advice = (
         "has square brackets: square brackets hold only an IPv6 address, around all of "
@@ -101,8 +104,7 @@ def host_problems(
         rest = rest.split("://", 1)[1]
     if "@" in rest:
         problems.append(
-            "has a user name: user names and passwords go under auth or in the keyring "
-            "(mcp-synology setup), never in the host"
+            f"has a user name: user names and passwords {credentials_setting}, never in the host"
         )
         rest = rest.rsplit("@", 1)[1]
     if "/" in rest:
@@ -116,6 +118,15 @@ def host_problems(
             ipaddress.IPv6Address(bracketed[1])
         except ValueError:
             problems.append(bracket_advice)
+        else:
+            # ipaddress takes any zone text (`fe80::1%a\b`); a URL's zone is RFC 6874's
+            # unreserved characters (QA round 1 on #532).
+            zone = bracketed[1].partition("%")[2]
+            if "%" in bracketed[1] and not _IPV6_ZONE.fullmatch(zone):
+                problems.append(
+                    "has an IPv6 zone (after %) with characters other than letters, digits, "
+                    "'.', '_', '~' and '-'"
+                )
         if bracketed[2] is not None:
             problems.append(port)
     else:
@@ -141,16 +152,17 @@ def host_problems(
     # What's left is a name or address that looks bare; the URL library has the final
     # say (`999.1.1.1`, `01.2.3.4`, a name IDNA can't encode), or the URL built from it
     # fails with a traceback (pre-QA r2 on #511 PR 2).
-    try:
-        url = httpx.URL(f"http://{host}/")
-    except httpx.InvalidURL:
+    normalized = _url_host(host)
+    if normalized is None:
         return [_INVALID_HOST]
     if bracketed:
         return []
+    # As _INVALID_HOST says, which httpx doesn't check (QA round 1 on #532).
+    if any(len(label) > 63 for label in normalized.split(".")):
+        return [_INVALID_HOST]
     # The numeric rule reads the host as httpx will use it: IDNA maps `。`, `．` and `｡`
     # to `.`, so `192。168。1` is `192.168.1` (pre-QA r4), as WHATWG checks "ends in a
     # number" after domain-to-ASCII.
-    normalized = url.host
     bare = normalized.removesuffix(".")
     if _NUMERIC_LABEL.fullmatch(bare.rsplit(".", 1)[-1]):
         try:
@@ -162,6 +174,19 @@ def host_problems(
             # every such host (pre-QA r4). A name's trailing dot (`nas.local.`) is fine.
             return ["has a dot after the IPv4 address: drop it"]
     return []
+
+
+def _url_host(host: str) -> str | None:
+    """``host`` as httpx will use it (IDNA-mapped, lower-case), or None if it refuses it.
+
+    Both steps can fail: building the URL (`httpx.InvalidURL`), and reading `.host`,
+    which decodes an `xn--` first label and raises idna's own error (a UnicodeError)
+    for a malformed one, its text decoded from the host (QA round 1 on #532).
+    """
+    try:
+        return httpx.URL(f"http://{host}/").host
+    except (httpx.InvalidURL, UnicodeError):
+        return None
 
 
 def host_message(problems: list[str]) -> str:
@@ -433,6 +458,9 @@ def _derive_instance_id(host: str) -> str:
     IP addresses: dots -> hyphens (192.168.1.100 -> 192-168-1-100)
     Hostnames: first component (nas.local -> nas)
     """
+    # IDNA reads `。`, `．` and `｡` as dots, and host_problems accepts them, so they split
+    # here too: `nas．local` is `nas` (QA round 1 on #532).
+    host = host.translate(_IDNA_DOTS)
     # IP address pattern
     if re.match(r"^\d+\.\d+\.\d+\.\d+$", host):
         return host.replace(".", "-")
@@ -617,6 +645,10 @@ def parse_env_value(env_var: str, dotted_path: str, value: str) -> Any:
                 port_setting="set SYNOLOGY_PORT",
                 https_setting="set SYNOLOGY_HTTPS=true",
                 ipv6_form="[fd00::1]",
+                credentials_setting=(
+                    "go in SYNOLOGY_USERNAME and SYNOLOGY_PASSWORD or in the keyring "
+                    "(mcp-synology setup)"
+                ),
             )
         ):
             raise EnvVarError(f"{env_var} (it sets {dotted_path}) {host_message(problems)}")
@@ -924,16 +956,27 @@ class _ConfigLoader(yaml.SafeLoader):
                 stack.extend(node.value)
 
     def _check_mapping(self, node: yaml.MappingNode) -> None:
-        seen: dict[Any, tuple[int, int]] = {}
+        seen: dict[Any, tuple[int, int, bool]] = {}
+        merge_line: int | None = None
         for key_node, value_node in node.value:
-            if key_node.tag == _MERGE_TAG:
-                continue  # its keys may be overridden: YAML's own rule, not a repeat
             # A key given by alias (`{*k: …}`) has its anchor's marks, from before this
             # mapping: report the mapping's own place then (pre-QA r4).
             mark = key_node.start_mark
-            if mark.index < node.start_mark.index:
+            clamped = mark.index < node.start_mark.index
+            if clamped:
                 mark = node.start_mark
             line, column = mark.line + 1, mark.column + 1
+            if key_node.tag == _MERGE_TAG:
+                # Its keys may be overridden: YAML's own rule, not a repeat. A second `<<`
+                # is a repeated key like any other (QA round 1 on #532).
+                if merge_line is not None:
+                    raise ConfigKeyError(
+                        f"The config file has `<<` twice in one section (lines {merge_line} "
+                        f"and {line}), and YAML would silently let the later one win. Merge "
+                        "both in one: `<<: [*a, *b]`."
+                    )
+                merge_line = line
+                continue
             if node.flow_style and _has_no_colon(node, key_node, value_node):
                 raise ConfigKeyError(
                     f"The config file has a key with no value inside {{…}} (line {line}). "
@@ -947,19 +990,22 @@ class _ConfigLoader(yaml.SafeLoader):
             first = seen.get(key)
             if first is not None:
                 known = isinstance(key, str) and key in _config_keys()
-                # On one line (`{k: 1, k: 2}`), the columns say where (pre-QA r3).
-                where = (
-                    f"line {line}, columns {first[1]} and {column}"
-                    if first[0] == line
-                    else f"lines {first[0]} and {line}"
-                )
+                # On one line (`{k: 1, k: 2}`), the columns say where (pre-QA r3), unless
+                # a key came by alias: its column is the mapping's, so "columns 4 and 4"
+                # (QA round 1 on #532).
+                if first[2] or clamped:
+                    where = f"in the {{…}} at line {line}"
+                elif first[0] == line:
+                    where = f"line {line}, columns {first[1]} and {column}"
+                else:
+                    where = f"lines {first[0]} and {line}"
                 raise ConfigKeyError(
                     f"The config file has {f'`{key}`' if known else 'a key'} twice in one "
                     f"section ({where}), and YAML would silently keep only the last. "
                     "Remove one."
                     + ("" if known else " The key isn't shown: it may be part of a password.")
                 )
-            seen[key] = (line, column)
+            seen[key] = (line, column, clamped)
 
 
 def _has_no_colon(mapping: yaml.MappingNode, key_node: yaml.Node, value_node: yaml.Node) -> bool:
@@ -984,7 +1030,7 @@ def _has_no_colon(mapping: yaml.MappingNode, key_node: yaml.Node, value_node: ya
     return not between.lstrip().startswith(":")
 
 
-def parse_config_text(text: str) -> Any:
+def parse_config_text(text: str, *, check_keys: bool = True) -> Any:
     """Load a config file's YAML: `yaml.safe_load` refusing repeated keys and valueless
     flow keys (`ConfigKeyError`, #464), with any error building a value raised as
     `ConfigValueError`.
@@ -992,9 +1038,14 @@ def parse_config_text(text: str) -> Any:
     A tag that doesn't fit its value makes PyYAML raise ValueError (`!!int Hunter2x`),
     KeyError (`!!bool Hunter2x`), AttributeError (`!!timestamp Hunter2x`) and so on, each
     naming the value (#386). Every loader of a config file goes through here.
+
+    ``check_keys=False`` skips the key checks, for a file the program writes (the shared
+    `global.yaml`): there a repeated key keeps the last, as before, rather than making
+    the whole file unreadable (QA round 1 on #532).
     """
+    loader = _ConfigLoader if check_keys else yaml.SafeLoader
     try:
-        return yaml.load(text, Loader=_ConfigLoader)  # noqa: S506 - a SafeLoader subclass
+        return yaml.load(text, Loader=loader)  # noqa: S506 - SafeLoader or its subclass
     except yaml.YAMLError:
         raise
     except Exception as e:  # noqa: BLE001 - any constructor error; its text names the value

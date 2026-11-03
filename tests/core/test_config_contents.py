@@ -17,6 +17,7 @@ from mcp_synology.core.config import (
     format_yaml_error,
     load_config,
     parse_config_text,
+    parse_env_value,
 )
 
 if TYPE_CHECKING:
@@ -128,12 +129,32 @@ class TestDuplicateKeys:
         assert raw["d"] == {"x": 2}
 
     def test_a_repeated_alias_key_names_the_mappings_line(self) -> None:
-        """Pre-QA r4: the alias's own marks are its anchor's, on another line."""
+        """Pre-QA r4: the alias's own marks are its anchor's, on another line. QA round 1
+        on #532: its column is then the mapping's, so no columns are given."""
         with pytest.raises(yaml.YAMLError) as exc:
             parse_config_text("x: &k https\nconnection: {*k: true, https: false}\n")
-        assert "`https` twice in one section (line 2, columns 13 and 24)" in format_yaml_error(
-            exc.value
+        assert "`https` twice in one section (in the {…} at line 2)" in format_yaml_error(exc.value)
+
+    def test_a_key_repeated_by_alias_twice_gets_no_columns(self) -> None:
+        """QA round 1 on #532: it said "columns 4 and 4"."""
+        with pytest.raises(yaml.YAMLError) as exc:
+            parse_config_text("x: &k host\nm: {*k : 1, *k : 2}\n")
+        message = format_yaml_error(exc.value)
+        assert "`host` twice in one section (in the {…} at line 2)" in message
+        assert "columns" not in message
+
+    def test_two_merge_keys_in_one_mapping_are_refused(self) -> None:
+        """QA round 1 on #532: the later `<<` silently won."""
+        with pytest.raises(yaml.YAMLError) as exc:
+            parse_config_text("b: &b {host: x}\nc: &c {host: y}\nconnection:\n  <<: *b\n  <<: *c\n")
+        assert format_yaml_error(exc.value).startswith(
+            "The config file has `<<` twice in one section (lines 4 and 5), and YAML would "
+            "silently let the later one win. Merge both in one: `<<: [*a, *b]`."
         )
+
+    def test_one_merge_key_with_a_list_is_fine(self) -> None:
+        raw = parse_config_text("b: &b {host: x}\nc: &c {host: y}\nconnection:\n  <<: [*b, *c]\n")
+        assert raw["connection"] == {"host": "x"}
 
     def test_a_repeat_on_one_line_gives_the_columns(self, tmp_path: Path) -> None:
         message = _yaml_message(
@@ -453,6 +474,99 @@ class TestHost:
         from mcp_synology.core.config import host_problems
 
         assert says in host_problems("http://nas", **kwargs)[0]
+
+    @pytest.mark.parametrize("host", ["xn--", "xn--zz", "xn--a"])
+    def test_a_malformed_a_label_is_refused_not_raised(self, host: str) -> None:
+        """QA round 1 on #532: reading `url.host` decoded the `xn--` label, and idna's own
+        error (a UnicodeError, its text decoded from the host) escaped."""
+        from mcp_synology.core.config import host_problems
+
+        (problem,) = host_problems(host)
+        assert problem.startswith("isn't a valid host name or IP address")
+
+    @pytest.mark.parametrize("from_env", [False, True])
+    def test_a_malformed_a_label_is_a_config_error_naming_no_text(self, from_env: bool) -> None:
+        raw: dict[str, Any] = {"schema_version": 1, "modules": {"filestation": {}}}
+        if from_env:
+            with pytest.raises(EnvVarError) as env_exc:
+                parse_env_value("SYNOLOGY_HOST", "connection.host", "xn--a")
+            message = str(env_exc.value)
+            assert message.startswith("SYNOLOGY_HOST (it sets connection.host) must be")
+        else:
+            raw["connection"] = {"host": "xn--a"}
+            with pytest.raises(ValidationError) as exc:
+                AppConfig.model_validate(raw)
+            message = format_validation_error(exc.value)
+        assert "isn't a valid host name or IP address" in message
+        assert "Codepoint" not in message
+        assert "\\x80" not in message
+
+    @pytest.mark.parametrize(
+        ("host", "ok"),
+        [
+            ("[fe80::1%eth0]", True),
+            ("[fe80::1%en0.1_a~b-c]", True),
+            ("[fe80::1%x:80]", False),
+            ("[fe80::1%a\\b]", False),
+        ],
+    )
+    def test_an_ipv6_zone_takes_only_unreserved_characters(self, host: str, ok: bool) -> None:
+        """QA round 1 on #532: ipaddress takes any zone text."""
+        from mcp_synology.core.config import host_problems
+
+        assert host_problems(host) == (
+            []
+            if ok
+            else [
+                "has an IPv6 zone (after %) with characters other than letters, digits, "
+                "'.', '_', '~' and '-'"
+            ]
+        )
+
+    def test_a_part_longer_than_63_characters_is_refused(self) -> None:
+        """QA round 1 on #532: the error states this rule, which httpx doesn't check."""
+        from mcp_synology.core.config import host_problems
+
+        assert host_problems("a" * 63 + ".local") == []
+        (problem,) = host_problems("a" * 64 + ".local")
+        assert problem.startswith("isn't a valid host name or IP address")
+
+    @pytest.mark.parametrize(
+        ("kwargs", "says"),
+        [
+            ({}, "user names and passwords go under auth or in the keyring"),
+            (
+                {"credentials_setting": "are asked for after these questions"},
+                "user names and passwords are asked for after these questions",
+            ),
+        ],
+    )
+    def test_the_credentials_advice_names_its_source(
+        self, kwargs: dict[str, str], says: str
+    ) -> None:
+        """QA round 1 on #532: setup and SYNOLOGY_HOST got the file's advice."""
+        from mcp_synology.core.config import host_problems
+
+        assert says in host_problems("admin@nas", **kwargs)[0]
+
+    def test_synology_host_gets_the_env_credentials_advice(self) -> None:
+        with pytest.raises(EnvVarError) as exc:
+            parse_env_value("SYNOLOGY_HOST", "connection.host", "admin@nas")
+        assert "go in SYNOLOGY_USERNAME and SYNOLOGY_PASSWORD" in str(exc.value)
+
+    @pytest.mark.parametrize(
+        ("host", "derived"),
+        [("nas．local", "nas"), ("nas。local", "nas"), ("192｡168｡1｡100", "192-168-1-100")],
+    )
+    def test_ideographic_and_full_width_dots_split_the_derived_id(
+        self, host: str, derived: str
+    ) -> None:
+        """QA round 1 on #532: host_problems accepts them (IDNA maps them to `.`), but
+        the instance ID split on ASCII dots only, and blamed the host's characters."""
+        config = AppConfig.model_validate(
+            {"schema_version": 1, "connection": {"host": host}, "modules": {"filestation": {}}}
+        )
+        assert config.instance_id == derived
 
 
 class TestPort:

@@ -131,6 +131,7 @@ def _setup_interactive(verbose: bool) -> None:
             port_setting="type the port at the DSM port question",
             https_setting='answer yes to "Use HTTPS?"',
             ipv6_form="[fd00::1]",
+            credentials_setting="are asked for after these questions",
         )
         if not problems:
             break

@@ -375,6 +375,23 @@ class TestGlobalState:
         with patch("pathlib.Path.home", return_value=tmp_path):
             assert v._load_global_state() == {}
 
+    def test_a_repeated_key_keeps_the_rest_of_the_state(self, tmp_path: Path) -> None:
+        """QA round 1 on #532: the config's repeated-key check made the whole file no
+        state, and the next save dropped auto_upgrade and the previous_version that
+        --revert needs. The program writes this file, so last-wins is kept."""
+        state_dir = tmp_path / ".local" / "state" / "mcp-synology"
+        state_dir.mkdir(parents=True)
+        (state_dir / "global.yaml").write_text(
+            "auto_upgrade: true\nprevious_version: 0.9.0\n"
+            "latest_known_version: 0.10.0\nlatest_known_version: 0.10.1\n"
+        )
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            assert v._load_global_state() == {
+                "auto_upgrade": True,
+                "previous_version": "0.9.0",
+                "latest_known_version": "0.10.1",
+            }
+
     def test_save_creates_directory_and_file(self, tmp_path: Path) -> None:
         with patch("pathlib.Path.home", return_value=tmp_path):
             v._save_global_state({"running_version": "1.0.0", "auto_upgrade": True})

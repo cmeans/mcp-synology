@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import yaml
 from click.testing import CliRunner
 
 from mcp_synology.cli import setup as setup_mod
@@ -527,6 +528,8 @@ class TestSetupInteractiveValidationFailure:
             result.output
         )
         assert "type the port at the DSM port question instead" in result.output
+        # Setup asks for them later: not the file's "under auth" (QA round 1 on #532).
+        assert "user names and passwords are asked for after these questions" in result.output
         # Only where CliRunner echoes what was typed; the advice never repeats it.
         assert result.output.casefold().count("hunter2x") == 1
         assert result.output.count("NAS host (IP or hostname)") == 3
@@ -567,12 +570,13 @@ class TestSetupInteractiveValidationFailure:
         self, tmp_path: Path, https: str, port: str, written: int | None
     ) -> None:
         """#504 item 1: a NAS on a custom port can be set up interactively; the default
-        is DSM's for the protocol chosen."""
+        is DSM's for the protocol chosen, and isn't written, so the port follows a later
+        change of `https` (QA round 1 on #532: a written 5001 would stay on plain HTTP)."""
         captured: list[Any] = []
 
         async def fake_connect(app_config: Any, *_: Any) -> dict[str, Any]:
             captured.append(app_config)
-            return {"success": False}
+            return {"success": True}
 
         config_dir = tmp_path / "config"
         verify = "n\n" if https == "y" else ""
@@ -593,6 +597,8 @@ class TestSetupInteractiveValidationFailure:
         (app_config,) = captured
         default = 5001 if https == "y" else 5000
         assert app_config.connection.port == (written or default)
+        connection = yaml.safe_load((config_dir / "nas.yaml").read_text())["connection"]
+        assert connection.get("port") == written
 
 
 # ---------- _emit_claude_desktop_snippet Linux fallback ----------
