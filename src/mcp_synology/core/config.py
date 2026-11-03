@@ -453,10 +453,10 @@ def discover_config_path(explicit_path: str | None = None) -> Path:
     # locations, and with SYNOLOGY_HOST set to env-only mode.
     if explicit_path is not None:
         if not explicit_path.strip():
-            msg = (
-                "--config is empty: give a config file's path, or leave --config out to "
-                "use the default locations."
-            )
+            # No "leave it out" advice: without a config file, a set SYNOLOGY_HOST means
+            # env-only mode, read-only over plain HTTP, the outcome this refuses (QA
+            # round 2 on #529).
+            msg = "--config is empty: give a config file's path."
             raise FileNotFoundError(msg)
         path = Path(explicit_path).expanduser()
         # Absolute in messages: an MCP client starts the server in a working folder the
@@ -465,7 +465,9 @@ def discover_config_path(explicit_path: str | None = None) -> Path:
             # Quoted: a stray \r or space at the end would otherwise be invisible.
             msg = f"Config file not found: {str(path.absolute())!r}"
             raise FileNotFoundError(msg)
-        logger.info("Config: %s (from --config)", path.absolute())
+        # Quoted, as in the errors: a newline in a folder's name would forge a log line
+        # (QA round 2 on #529).
+        logger.info("Config: %r (from --config)", str(path.absolute()))
         return path
 
     # Set but blank is an error, unlike the SYNOLOGY_* variables (maintainer,
@@ -474,10 +476,7 @@ def discover_config_path(explicit_path: str | None = None) -> Path:
     env_path = os.environ.get("MCP_SYNOLOGY_CONFIG")
     if env_path is not None:
         if not env_path.strip():
-            msg = (
-                "MCP_SYNOLOGY_CONFIG is set but empty: give a config file's path, or unset "
-                "MCP_SYNOLOGY_CONFIG to use the default locations."
-            )
+            msg = "MCP_SYNOLOGY_CONFIG is set but empty: set it to a config file's path."
             raise FileNotFoundError(msg)
         path = Path(env_path).expanduser()
         if not path.exists():
@@ -485,10 +484,10 @@ def discover_config_path(explicit_path: str | None = None) -> Path:
             # instead of the config the variable names (#499).
             msg = (
                 f"Config file not found (from MCP_SYNOLOGY_CONFIG): {str(path.absolute())!r}. "
-                "Fix the path, or unset MCP_SYNOLOGY_CONFIG to use the default locations."
+                "Fix the path."
             )
             raise FileNotFoundError(msg)
-        logger.info("Config: %s (from MCP_SYNOLOGY_CONFIG)", path.absolute())
+        logger.info("Config: %r (from MCP_SYNOLOGY_CONFIG)", str(path.absolute()))
         return path
 
     default_paths = [
@@ -498,7 +497,7 @@ def discover_config_path(explicit_path: str | None = None) -> Path:
     for path in default_paths:
         logger.debug("Checking default config path: %s", path)
         if path.exists():
-            logger.info("Config: %s", path.absolute())
+            logger.info("Config: %r", str(path.absolute()))
             return path
 
     msg = (
@@ -1107,7 +1106,7 @@ def load_config(path: str | Path | None = None) -> AppConfig:
             return env_config
         raise
 
-    logger.debug("Loading config from %s", config_path)
+    logger.debug("Loading config from %r", str(config_path))  # quoted, as the INFO line
     try:
         raw_text = config_path.read_text(encoding="utf-8")
     except UnicodeDecodeError as e:

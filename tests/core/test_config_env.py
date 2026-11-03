@@ -209,7 +209,7 @@ def test_the_config_source_is_logged_at_info(
             monkeypatch.setenv("MCP_SYNOLOGY_CONFIG", str(path))
             load_config()
     where = "--config" if how == "flag" else "MCP_SYNOLOGY_CONFIG"
-    assert f"Config: {path} (from {where})" in caplog.text
+    assert f"Config: {str(path)!r} (from {where})" in caplog.text
 
 
 # -- the documented table matches the code's ---------------------------------------------
@@ -333,7 +333,7 @@ def test_a_default_location_is_logged_at_info(
     _config(tmp_path).rename(path)
     with caplog.at_level(logging.INFO, logger="mcp_synology.core.config"):
         load_config()
-    assert any(r.getMessage() == f"Config: {path}" for r in caplog.records)
+    assert any(r.getMessage() == f"Config: {str(path)!r}" for r in caplog.records)
 
 
 @pytest.mark.parametrize("value", ["[", "{a", "*x", "@hunter2", "!!int hunter2", "%x", "maybe"])
@@ -350,7 +350,7 @@ def test_odd_update_notices_values_are_env_var_errors(value: str) -> None:
     [
         ("DEBUG", logging.DEBUG),
         (" warning ", logging.WARNING),
-        ("basic_format", logging.INFO),  # not a level: INFO, and the config load reports it
+        ("basic_format", logging.INFO),  # not a level: INFO; a config load that follows reports it
         ("", logging.INFO),
     ],
 )
@@ -424,28 +424,46 @@ def test_a_relative_mcp_synology_config_is_shown_absolute(
     _config(tmp_path).rename(tmp_path / "cfgx.yaml")
     with caplog.at_level(logging.INFO, logger="mcp_synology.core.config"):
         load_config()
-    assert f"Config: {tmp_path / 'cfgx.yaml'} (from MCP_SYNOLOGY_CONFIG)" in caplog.text
+    assert f"Config: {str(tmp_path / 'cfgx.yaml')!r} (from MCP_SYNOLOGY_CONFIG)" in caplog.text
 
 
 def test_a_relative_config_flag_is_shown_absolute(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     monkeypatch.chdir(tmp_path)
     with pytest.raises(FileNotFoundError) as excinfo:
         load_config("cfgx.yaml")
     assert str(tmp_path / "cfgx.yaml") in str(excinfo.value)
+    # The INFO line too (QA round 2 on #529: only the error was pinned).
+    _config(tmp_path).rename(tmp_path / "cfgx.yaml")
+    with caplog.at_level(logging.INFO, logger="mcp_synology.core.config"):
+        load_config("cfgx.yaml")
+    assert f"Config: {str(tmp_path / 'cfgx.yaml')!r} (from --config)" in caplog.text
+
+
+def test_a_newline_in_the_path_cant_forge_a_log_line(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """QA round 2 on #529: the INFO line logged the path unquoted (and pre-QA after it:
+    the DEBUG "Loading config from" line too)."""
+    folder = tmp_path / "evil\n2026-11-02 [WARNING] fake: injected"
+    folder.mkdir()
+    config = _config(tmp_path).rename(folder / "c.yaml")
+    with caplog.at_level(logging.DEBUG, logger="mcp_synology.core.config"):
+        load_config(config)
+    lines = [r.getMessage() for r in caplog.records if "evil" in r.getMessage()]
+    assert {line.split(" ", 1)[0] for line in lines} == {"Config:", "Loading"}
+    for line in lines:
+        assert "\n" not in line
+        assert "\\n2026-11-02 [WARNING] fake" in line
 
 
 # -- maintainer decision on #529: an empty config path is an error ----------------------
 
-EMPTY_FLAG = (
-    "--config is empty: give a config file's path, or leave --config out to use the "
-    "default locations."
-)
-BLANK_VAR = (
-    "MCP_SYNOLOGY_CONFIG is set but empty: give a config file's path, or unset "
-    "MCP_SYNOLOGY_CONFIG to use the default locations."
-)
+# No "leave it out to use the defaults" advice: with SYNOLOGY_HOST set and no default
+# file, that's env-only mode, the downgrade #499 refuses (QA round 2 on #529).
+EMPTY_FLAG = "--config is empty: give a config file's path."
+BLANK_VAR = "MCP_SYNOLOGY_CONFIG is set but empty: set it to a config file's path."
 
 
 @pytest.mark.parametrize("value", ["", "   "])

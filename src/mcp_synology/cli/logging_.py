@@ -19,8 +19,9 @@ def _init_early_logging(*, verbose: bool = False) -> None:
     if verbose:
         level = logging.DEBUG
     else:
-        # Read as the config reads it (#511): an invalid value is INFO here, and the
-        # config load that follows reports it, naming the variable.
+        # Read as the config reads it (#511): an invalid value is INFO here, and a config
+        # load that follows reports it, naming the variable (none does when discovery
+        # fails first, or when setup goes on to create a config).
         from mcp_synology.core.config import ENV_VAR_MAP, EnvVarError, parse_env_value
 
         name = "info"
