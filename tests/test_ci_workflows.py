@@ -18,7 +18,10 @@ _COMMENT_LINE = re.compile(r"^\s*#.*$", re.MULTILINE)
 # Plain text, so it fails loudly on a mention too: the safe direction, and one line to change.
 _OPT_OUTS = ("UV_FROZEN", "UV_NO_SYNC", "UV_NO_PROJECT")
 _OPT_OUT = re.compile(
-    "|".join(("--frozen", "--no-locked", "--no-sync", "--no-project", "UV_LOCKED", *_OPT_OUTS))
+    "|".join(
+        ("--frozen", "--no-locked", "--no-sync", "--no-project", "--no_workspace", "UV_LOCKED")
+        + _OPT_OUTS
+    )
 )
 
 
@@ -41,12 +44,13 @@ def _workflow_scripts(workflow: dict[str, Any]) -> list[str]:
     return [script for job in _jobs(workflow) for script in _scripts(job.get("steps") or [])]
 
 
-def _inner_envs(workflow: dict[str, Any]) -> Iterator[dict[str, Any]]:
-    """Each job's and step's environment. An expression instead of a mapping can't name the
-    variable, so it's left out."""
+def _inner_envs(workflow: dict[str, Any]) -> Iterator[dict[str, Any] | str]:
+    """Each job's and step's environment: a mapping, or an expression as a string, which the
+    names are looked for in. An expression that doesn't spell them, like a matrix value, isn't
+    seen."""
     for job in _jobs(workflow):
         for holder in (job, *(job.get("steps") or [])):
-            if isinstance(holder.get("env"), dict):
+            if holder.get("env"):
                 yield holder["env"]
 
 
@@ -57,9 +61,10 @@ def _runs_uv(workflow: dict[str, Any]) -> bool:
 def _lock_problem(workflow: dict[str, Any]) -> str | None:
     """Why this workflow's `uv sync` and `uv run` could use a stale lock, or None. By environment,
     not by parsing each command: that found a new shell corner in every review (QA rounds 1 and
-    2 and pre-QA r3 on #544). It keeps the workflows honest and isn't a security boundary: a
-    variable expanded in a script, or `env -u` under another name, isn't seen. `uv pip` doesn't
-    read the lock at all, so it isn't covered."""
+    2 and pre-QA r3 on #544). It keeps the workflows honest and catches the usual opt-outs; it isn't a security boundary.
+    Not seen: a command that leaves the project (`cd`, `--directory`, `--project`, `--script`, a
+    step's `working-directory`), `uvx` and `uv tool`, `env -i`, and a variable expanded in a
+    script. `uv pip` doesn't read the lock at all, so it isn't covered."""
     if not _runs_uv(workflow):
         return None
     if (workflow.get("env") or {}).get("UV_LOCKED") != "1":
@@ -134,6 +139,8 @@ _LOCKED = "env: {UV_LOCKED: '1'}\n"
         f"{_LOCKED}jobs: {{a: {{steps: [{{run: UV_NO_PROJECT=1 uv run x}}]}}}}",
         f"{_LOCKED}jobs: {{a: {{steps: [{{run: uv run --no-sync x}}]}}}}",
         f"{_LOCKED}jobs: {{a: {{steps: [{{run: uv run --no-project x}}]}}}}",
+        f"{_LOCKED}jobs: {{a: {{steps: [{{run: uv run --no_workspace x}}]}}}}",
+        f"{_LOCKED}jobs: {{a: {{env: '${{{{ fromJSON(x).UV_LOCKED }}}}', steps: [{{run: uv sync}}]}}}}",
         "env: {UV_LOCKED: '1', UV_FROZEN: '1'}\njobs: {a: {steps: [{run: uv sync}]}}",
         "env: {UV_LOCKED: '1', UV_NO_PROJECT: '1'}\njobs: {a: {steps: [{run: uv sync}]}}",
         f"{_LOCKED}jobs: {{a: {{steps: [{{run: 'echo UV_LOCKED=0 >> $GITHUB_ENV'}}, "
