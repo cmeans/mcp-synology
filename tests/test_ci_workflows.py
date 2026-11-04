@@ -61,10 +61,10 @@ def _runs_uv(workflow: dict[str, Any]) -> bool:
 def _lock_problem(workflow: dict[str, Any]) -> str | None:
     """Why this workflow's `uv sync` and `uv run` could use a stale lock, or None. By environment,
     not by parsing each command: that found a new shell corner in every review (QA rounds 1 and
-    2 and pre-QA r3 on #544). It keeps the workflows honest and catches the usual opt-outs; it isn't a security boundary.
-    Not seen: a command that leaves the project (`cd`, `--directory`, `--project`, `--script`, a
-    step's `working-directory`), `uvx` and `uv tool`, `env -i`, and a variable expanded in a
-    script. `uv pip` doesn't read the lock at all, so it isn't covered."""
+    2 and pre-QA r3 on #544). It keeps the workflows honest and catches the usual opt-outs; it
+    isn't a security boundary. Not seen: a command that leaves the project (`cd`, `--directory`,
+    `--project`, `--script`, a step's `working-directory`), `uvx` and `uv tool`, `env -i`, and a
+    variable expanded in a script. `uv pip` doesn't read the lock at all, so it isn't covered."""
     if not _runs_uv(workflow):
         return None
     if (workflow.get("env") or {}).get("UV_LOCKED") != "1":
@@ -140,7 +140,8 @@ _LOCKED = "env: {UV_LOCKED: '1'}\n"
         f"{_LOCKED}jobs: {{a: {{steps: [{{run: uv run --no-sync x}}]}}}}",
         f"{_LOCKED}jobs: {{a: {{steps: [{{run: uv run --no-project x}}]}}}}",
         f"{_LOCKED}jobs: {{a: {{steps: [{{run: uv run --no_workspace x}}]}}}}",
-        f"{_LOCKED}jobs: {{a: {{env: '${{{{ fromJSON(x).UV_LOCKED }}}}', steps: [{{run: uv sync}}]}}}}",
+        f"{_LOCKED}jobs: {{a: {{env: '${{{{ fromJSON(x).UV_LOCKED }}}}', "
+        "steps: [{run: uv sync}]}}",
         "env: {UV_LOCKED: '1', UV_FROZEN: '1'}\njobs: {a: {steps: [{run: uv sync}]}}",
         "env: {UV_LOCKED: '1', UV_NO_PROJECT: '1'}\njobs: {a: {steps: [{run: uv sync}]}}",
         f"{_LOCKED}jobs: {{a: {{steps: [{{run: 'echo UV_LOCKED=0 >> $GITHUB_ENV'}}, "
