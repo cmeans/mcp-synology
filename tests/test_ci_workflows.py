@@ -36,16 +36,19 @@ def _commands(line: str) -> Iterator[list[str]]:
 
 
 def _is_sync(command: list[str]) -> bool:
-    if "uv" not in command:
+    names = [word.rsplit("/", 1)[-1] for word in command]  # `/usr/bin/uv` is `uv` too
+    if "uv" not in names:
         return False
-    after_uv = command[command.index("uv") + 1 :]
+    after_uv = command[names.index("uv") + 1 :]
     return "sync" in after_uv and "run" not in after_uv[: after_uv.index("sync")]
 
 
 def _syncs_in(script: str) -> list[list[str]]:
     """Each command in a `run:` script that runs `uv sync`. By command, not by line: a continued
     line hides the sync, and another command's `--locked` isn't this one's (QA round 1 on
-    #544). A variable holding `uv` (`"$UV" sync`) isn't seen."""
+    #544). Not seen: a variable holding `uv` (`"$UV" sync`), a sync in backticks or a quoted
+    `bash -c`, and one `uv run` starts. This keeps the workflows honest; it isn't a security
+    boundary."""
     joined = _CONTINUATION.sub(" ", _COMMENT_LINE.sub("", script))
     return [
         command
@@ -76,7 +79,8 @@ def _run_scripts(node: object) -> Iterator[str]:
 
 
 def _uv_syncs() -> list[tuple[str, list[str]]]:
-    """Every `uv sync` in a workflow's `run:` steps, with its file's name."""
+    """The `uv sync` commands in a workflow's `run:` steps that `_syncs_in` sees, with the
+    file's name."""
     return [
         (path.name, sync)
         for path in sorted(GITHUB.rglob("*.y*ml"))
@@ -103,6 +107,8 @@ def test_every_uv_sync_refuses_a_stale_lock() -> None:
         "uv sync --extra dev | tee --locked",
         "uv sync --extra dev & echo --locked",
         "uv sync --extra dev > --locked",
+        "uv sync --extra dev < --locked",
+        "uv sync --locked,x",
         "(uv sync --extra dev) --locked",
         "uv sync --extra dev -- --locked",
         "uv sync --no-locked",
@@ -115,6 +121,9 @@ def test_every_uv_sync_refuses_a_stale_lock() -> None:
         "uv \\\n    sync --extra dev",
         "uv --directory . sync --extra dev",
         "uv --python 3.12 sync",
+        "/usr/bin/uv sync --extra dev",
+        "./uv sync --extra dev",
+        '"$HOME/.local/bin/uv" sync',
     ],
 )
 def test_the_guard_catches_a_sync_without_the_flag(script: str) -> None:
