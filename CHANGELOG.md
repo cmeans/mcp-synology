@@ -30,7 +30,7 @@
 
 ### Fixed
 
-- **`check`, `serve` and `setup` validate a config the same way** (#511, PR 3 of 3) — closes #511, #498, #483. `server.validate_config` is the one path.
+- **`check`, `serve` and `setup` validate a config the same way** (#541, #511 PR 3 of 3) — closes #511, #498, #483. `server.validate_config` is the one path.
   - **Module settings:** a bad one gave a raw traceback from `serve`, quoting the input, while `check` passed it. Each command now reports it cleanly, with its place (`modules.photos.settings.task_timeout`). True or false in a number setting (`task_timeout: on` meant 1 s) and an empty text setting (`default_download_dir: ""` meant none) are refused.
   - **Paths:** a NUL in `allowed_local_paths` or `default_download_dir`, or on Python 3.11 and 3.12 a symlink loop, is refused by every command, where `check` passed it and `serve` crashed. So is a control character in those or in `logging.file` or `instructions_file`: `"C:\temp\new.log"` in double quotes loaded with a real tab and newline, and a path's line break reached the model's instructions as written.
   - **Files the config names:** a config file that can't be read (a folder, no permission, an unknown `~user`) is a clean error, not a traceback. `logging.file`'s folder is created, and a log file that can't be opened is a clean error. An `instructions_file` that can't be used (not UTF-8, not a regular file) falls back to the built-in text as documented, instead of crashing or hanging: `check` warns, and `serve` logs an ERROR.
