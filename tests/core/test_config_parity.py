@@ -36,12 +36,13 @@ from mcp_synology.modules.filestation import FileStationSettings
 from mcp_synology.modules.photos import PhotosSettings
 from mcp_synology.server import (
     _MODULE_REGISTRY,
+    _is_same_file,
     config_notices,
     create_server,
     module_settings,
     validate_config,
 )
-from tests.conftest import skip_unless_the_locale_can_encode
+from tests.conftest import capped_memory_limit, skip_unless_the_locale_can_encode
 
 SECRET = "Hunter2x"
 GOOD_HEAD = "schema_version: 1\nconnection: {host: nas.local, https: true}\n"
@@ -1075,6 +1076,67 @@ class TestPreQa5OnPr541:
         path = _in_a_config(tmp_path, "instructions_file: ~nosuchuser541/x.md")
         _, output, _ = _run("check", "--config", str(path))
         assert "instructions_file '~nosuchuser541/x.md'" in output
+
+    @pytest.mark.parametrize(
+        ("soft", "hard", "expected"),
+        [
+            (-1, -1, 2**31),  # no limit in place
+            (2**30, -1, 2**30),  # `ulimit -Sv`
+            (2**30, 2**30, 2**30),  # `prlimit --as`
+            (-1, 2**30, 2**30),
+            (2**33, 2**33, 2**31),  # a higher limit doesn't raise the cap
+        ],
+    )
+    def test_run_capped_never_lifts_a_limit(self, soft: int, hard: int, expected: int) -> None:
+        assert capped_memory_limit(soft, hard, -1) == expected
+
+    def test_the_log_file_is_the_config_with_no_name_for_the_working_folder(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """QA round 4, under a real chroot: `resolve` raised there, and the `samefile` after it
+        never ran, so the log could be the config."""
+        (tmp_path / "c.yaml").write_text("{}\n", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+
+        def no_name() -> str:
+            raise FileNotFoundError(2, "No such file or directory")
+
+        with monkeypatch.context() as patched:
+            patched.setattr(os, "getcwd", no_name)
+            same = _is_same_file(Path("c.yaml"), Path("c.yaml"))
+        assert same is True
+
+    def test_a_log_file_not_there_yet_is_still_the_instructions_by_path(
+        self, tmp_path: Path
+    ) -> None:
+        """Neither exists yet, so `samefile` can't say: the resolved paths decide."""
+        path = tmp_path / "not-yet.log"
+        assert _is_same_file(path, path) is True
+        assert _is_same_file(path, tmp_path / "other.log") is False
+
+    def test_a_line_separator_is_named_where_it_can_be_found(self, tmp_path: Path) -> None:
+        """QA round 4: "control character or lone surrogate" named nothing a user could see."""
+        path = _in_a_config(tmp_path, 'logging: {file: "/tmp/a\\u2028b"}')
+        with pytest.raises(ValueError, match="has a control character, line break or lone"):
+            validate_config(path)
+
+    def test_the_other_control_character_messages_name_all_three(self, tmp_path: Path) -> None:
+        all_three = "control character, line break or lone surrogate"
+        path = tmp_path / "c.yaml"
+        path.write_text(
+            f'{GOOD_HEAD}modules: {{filestation: {{settings: {{default_upload_dir: "a\\nb"}}}}}}\n',
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match=all_three):
+            validate_config(path)
+        target = tmp_path / "x\nFORGED"
+        target.mkdir()
+        (tmp_path / "link").symlink_to(target)
+        with pytest.raises(ValueError, match=f"resolves to a path with a {all_three}"):
+            validate_config(_in_a_config(tmp_path, f"allowed_local_paths: [{tmp_path / 'link'}]"))
+        (tmp_path / "Downloads").symlink_to(target)
+        with pytest.raises(ValueError, match=f"has a {all_three} in its path"):
+            validate_config(_in_a_config(tmp_path, ""))
 
     def test_a_surrogate_is_named_as_one(self, tmp_path: Path) -> None:
         path = _in_a_config(tmp_path, 'alias: "x\\ud800"')

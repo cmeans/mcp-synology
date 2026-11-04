@@ -601,11 +601,11 @@ def _working_folder_is_searchable() -> bool:
     """By `stat`, with the same IDs as the check it follows: `os.access` uses the real user ID
     (QA round 3 on #541)."""
     try:
-        os.stat("./.")
+        os.stat(".")
     except PermissionError:
         return False
-    except OSError:
-        return True
+    except OSError:  # any other error isn't about searching it
+        pass
     return True
 
 

@@ -966,14 +966,24 @@ def _is_this_stderr(path: Path) -> bool:
 
 
 def _is_same_file(path: Path, other: str | Path | None) -> bool:
-    """By resolved path first: neither may exist yet, and opening the log file would create what
-    the same run then reads as its instructions (pre-QA r4 on #541). `samefile` adds hard links."""
+    """By `samefile`, which sees hard links, then by resolved path: neither may exist yet, and
+    opening the log file would create what the same run then reads as its instructions (pre-QA
+    r4 on #541). `samefile` goes first because `resolve` needs the working folder's name, which
+    a folder outside this process's root doesn't have (QA round 4)."""
     if other is None:
         return False
     try:
         other_path = Path(other).expanduser()
-        return path.resolve() == other_path.resolve() or path.samefile(other_path)
-    except (OSError, RuntimeError, ValueError):  # no such file yet, an unknown ~user
+    except (RuntimeError, ValueError):  # an unknown ~user
+        return False
+    try:
+        if path.samefile(other_path):
+            return True
+    except (OSError, ValueError):  # no such file yet
+        pass
+    try:
+        return path.resolve() == other_path.resolve()
+    except (OSError, RuntimeError, ValueError):
         return False
 
 
@@ -1044,9 +1054,9 @@ def _local_root_problems(config: AppConfig, settings: dict[str, BaseModel | None
         for root in roots:
             if has_control_character(str(root)):
                 msg = (
-                    f"the folder {str(root)!r} has a control character or lone surrogate in its "
-                    "path. If no setting names it, it's the Downloads default: set "
-                    "allowed_local_paths to another folder"
+                    f"the folder {str(root)!r} has a control character, line break or lone "
+                    "surrogate in its path. If no setting names it, it's the Downloads default: "
+                    "set allowed_local_paths to another folder"
                 )
                 problems.append({"loc": where, "msg": msg, "type": "value_error"})
     return problems

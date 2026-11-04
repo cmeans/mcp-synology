@@ -20,9 +20,15 @@ from mcp_synology.core.state import ApiInfoEntry
 from tests.personas import ReauthSpy, reauth_spy_on
 
 
+def capped_memory_limit(soft: int, hard: int, unlimited: int) -> int:
+    """At most 2 GiB, and never above a limit already in place, such as a developer's own cap,
+    since a child can't raise a hard limit, and shouldn't lift a soft one (QA round 3 on #541)."""
+    return min(x for x in (soft, hard, 2**31) if x != unlimited)
+
+
 @pytest.fixture
 def run_capped() -> Callable[..., subprocess.CompletedProcess[str]]:
-    """Run Python in a child with a 2 GiB memory limit and a time limit.
+    """Run Python in a child with a soft memory limit of at most 2 GiB, and a time limit.
 
     For any test that puts an endless source (`/dev/zero`, a pipe nothing writes to) in front of
     the code. In-process, a lost guard read until the kernel killed pytest at 57 GiB, and systemd
@@ -33,9 +39,8 @@ def run_capped() -> Callable[..., subprocess.CompletedProcess[str]]:
     resource = pytest.importorskip("resource")
 
     def cap() -> None:
-        # Never above a limit already in place, such as a developer's own cap (QA round 3).
         soft, hard = resource.getrlimit(resource.RLIMIT_AS)
-        limit = min(x for x in (soft, hard, 2**31) if x != resource.RLIM_INFINITY)
+        limit = capped_memory_limit(soft, hard, resource.RLIM_INFINITY)
         resource.setrlimit(resource.RLIMIT_AS, (limit, hard))
 
     def run(*args: str) -> subprocess.CompletedProcess[str]:

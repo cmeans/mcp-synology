@@ -79,7 +79,8 @@ class FileStationSettings(ModuleSettings):
     def _upload_dir_on_one_line(cls, value: str | None) -> str | None:
         if value and has_control_character(value):
             raise ValueError(
-                "has a control character or lone surrogate: give a NAS path on one line."
+                "has a control character, line break or lone surrogate: give a NAS path on one "
+                "line."
             )
         return value
 

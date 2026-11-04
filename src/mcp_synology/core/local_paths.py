@@ -126,8 +126,8 @@ def has_control_character(value: str) -> bool:
 # Inside double quotes a backslash starts an escape: "C:\temp\new.log" loaded with a real tab
 # and newline, with no error (QA round 3 on #532).
 CONTROL_CHARACTER_ADVICE = (
-    "has a control character or lone surrogate. Inside double quotes a backslash starts an "
-    "escape, so write a Windows path in single quotes."
+    "has a control character, line break or lone surrogate. Inside double quotes a backslash "
+    "starts an escape, so write a Windows path in single quotes."
 )
 
 
@@ -149,7 +149,7 @@ def check_resolvable(setting: str, entry: str) -> Path:
         raise ValueError(msg) from e
     if has_control_character(str(resolved)):
         msg = (
-            f"{setting} resolves to a path with a control character or lone surrogate: "
+            f"{setting} resolves to a path with a control character, line break or lone surrogate: "
             f"{str(resolved)!r}"
         )
         raise ValueError(msg)
