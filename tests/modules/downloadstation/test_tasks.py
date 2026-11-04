@@ -1354,6 +1354,22 @@ class TestPauseResume:
         assert self._rows(result) == {"dbid_1": tasks_module._UNCONFIRMED}
 
     @respx.mock
+    async def test_a_failed_read_before_the_pause_is_a_warning(
+        self,
+        mock_client: DsmClient,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        monkeypatch.setattr(tasks_module, "_PAUSE_HOLD_INTERVAL", 0)
+        get_route(TASK, "pause", version=1).respond(json=ok([{"error": 0, "id": "dbid_1"}]))
+        get_route(TASK, "getinfo", version=1).mock(
+            side_effect=[httpx.ReadTimeout("slow"), *self._statuses("paused")]
+        )
+        with caplog.at_level("WARNING", logger=tasks_module.__name__):
+            await pause_download(mock_client, task_ids=["dbid_1"])
+        assert "Couldn't read tasks before pausing: watching all of them" in caplog.messages
+
+    @respx.mock
     async def test_a_failed_read_before_the_pause_still_catches_an_undo(
         self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1478,9 +1494,13 @@ class TestPauseResume:
 
     @respx.mock
     async def test_a_missing_id_makes_the_first_read_one_request(
-        self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
+        self,
+        mock_client: DsmClient,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """Pre-QA r3: one read per ID before the pause was sent, with no budget."""
+        """Pre-QA r3: one read per ID before the pause was sent, with no budget. QA round 2: a
+        mistyped ID isn't a NAS problem, so it's no warning."""
         monkeypatch.setattr(tasks_module, "_PAUSE_HOLD_INTERVAL", 0)
         get_route(TASK, "pause", version=1).respond(
             json=ok([{"error": 0, "id": "dbid_1"}, {"error": 404, "id": "dbid_2"}])
@@ -1497,9 +1517,12 @@ class TestPauseResume:
             )
 
         get_route(TASK, "getinfo", version=1).mock(side_effect=answer)
-        result = await pause_download(mock_client, task_ids=["dbid_1", "dbid_2"])
+        with caplog.at_level("INFO", logger=tasks_module.__name__):
+            result = await pause_download(mock_client, task_ids=["dbid_1", "dbid_2"])
         assert set(reads[1:]) == {"dbid_1"}
         assert self._rows(result)["dbid_1"] == "ok"
+        assert "An ID in dbid_1,dbid_2 is missing: no states read" in caplog.messages
+        assert not [r for r in caplog.records if r.levelname == "WARNING"]
 
     @respx.mock
     @pytest.mark.parametrize(

@@ -117,8 +117,9 @@ async def _read_tasks(
     finished task with a per-task ``ok`` (#413), and an edit of one with no per-task
     result at all, changing nothing (#412). ``getinfo`` fails the whole call when one ID
     is missing or another user's (spec: non-manager semantics), so then each ID is read
-    on its own and the missing ones are left out, unless ``each_alone`` is False: then that's
-    None, for a read that has to stay one request.
+    on its own and the missing ones are left out, unless ``each_alone`` is False, for a read
+    that has to stay one request: then that's an empty result, since the read says nothing
+    about the rest.
     """
 
     async def read(ids: list[str]) -> dict[str, dict[str, Any]]:
@@ -139,7 +140,10 @@ async def _read_tasks(
         try:
             return await read(task_ids)
         except SynologyError as e:
-            if e.code not in _TASK_NOT_FOUND_CODES or len(task_ids) == 1 or not each_alone:
+            if e.code in _TASK_NOT_FOUND_CODES and not each_alone:
+                logger.info("An ID in %s is missing: no states read", ",".join(task_ids))
+                return {}
+            if e.code not in _TASK_NOT_FOUND_CODES or len(task_ids) == 1:
                 raise
         found: dict[str, dict[str, Any]] = {}
         for task_id in task_ids:
