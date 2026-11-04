@@ -872,7 +872,7 @@ def _read_instructions_file(config: AppConfig) -> tuple[str | None, str | None]:
         reason = "it isn't valid UTF-8"
     except OSError as e:
         reason = e.strerror or type(e).__name__
-    except (RuntimeError, ValueError):  # an unknown ~user; a NUL
+    except (RuntimeError, ValueError):  # an unknown ~user; a path this locale can't encode
         # As written: made absolute, `~nosuchuser/x` names a folder nobody asked for.
         return (
             None,
@@ -997,7 +997,9 @@ def _log_file_problem(config: AppConfig) -> str | None:
         return None
     path = Path(config.logging.file)
     try:
-        path = path.expanduser()
+        # What `FileHandler` will open: it collapses `..` without following links, so
+        # `link/../pipe` is another file to it than to the kernel (pre-QA r7 on #541).
+        path = Path(os.path.abspath(path.expanduser()))
         # Every command appends to it, so these would break the next run, or reach the model.
         if _is_same_file(path, config._source_path):
             reason = "it's the config file"
@@ -1020,7 +1022,7 @@ def _log_file_problem(config: AppConfig) -> str | None:
         reason = "a part of its folder path is a file or a broken link"
     except OSError as e:
         reason = e.strerror or type(e).__name__
-    except (RuntimeError, ValueError):  # an unknown ~user; a NUL
+    except (RuntimeError, ValueError):  # an unknown ~user; a path this locale can't encode
         # As written: made absolute, `~nosuchuser/x` names a folder nobody asked for.
         return (
             f"{config.logging.file!r} can't be opened: the path isn't usable. "
@@ -1122,7 +1124,7 @@ def create_server(config: AppConfig) -> MCPServer:
             logger.debug("Module %r is disabled, skipping", mod_name)
             continue
         module = _MODULE_REGISTRY.get(mod_name)
-        if module is None:  # named by config_notices above
+        if module is None:  # named by _unknown_keys above
             continue
         tier = PermissionTier(mod_config.permission)
         plan.append(

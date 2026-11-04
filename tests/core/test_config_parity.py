@@ -1138,6 +1138,45 @@ class TestPreQa5OnPr541:
         with pytest.raises(ValueError, match=f"has a {all_three} in its path"):
             validate_config(_in_a_config(tmp_path, ""))
 
+    @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="no named pipes here")
+    def test_a_dot_dot_after_a_link_cant_get_a_pipe_past_the_check(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Pre-QA r7: the check followed `link`, while `FileHandler` collapses `link/..`, so a
+        pipe passed the check, and opening it hung every command."""
+        (tmp_path / "other" / "dir").mkdir(parents=True)
+        (tmp_path / "link").symlink_to(tmp_path / "other" / "dir")
+        os.mkfifo(tmp_path / "pipe")
+        monkeypatch.chdir(tmp_path)
+        path = _in_a_config(tmp_path, "logging: {file: link/../pipe}")
+        with pytest.raises(ValueError, match="it's a named pipe"):
+            validate_config(path)
+        assert not (tmp_path / "other" / "pipe").exists()
+
+    def test_a_dot_dot_after_a_link_cant_make_the_log_the_config(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        (tmp_path / "other" / "dir").mkdir(parents=True)
+        (tmp_path / "link").symlink_to(tmp_path / "other" / "dir")
+        monkeypatch.chdir(tmp_path)
+        path = _in_a_config(tmp_path, "logging: {file: link/../bad.yaml}")
+        before = path.read_text(encoding="utf-8")
+        with pytest.raises(ValueError, match="it's the config file"):
+            validate_config(path)
+        assert path.read_text(encoding="utf-8") == before
+        assert not (tmp_path / "other" / "bad.yaml").exists()
+
+    def test_run_capped_applies_the_limit(self, run_capped: Any) -> None:
+        """The fixture is what stands between a lost guard and the machine's memory."""
+        resource = pytest.importorskip("resource")
+        parent_soft, parent_hard = resource.getrlimit(resource.RLIMIT_AS)
+        result = run_capped("-c", "import resource; print(*resource.getrlimit(resource.RLIMIT_AS))")
+        soft, hard = (int(x) for x in result.stdout.split())
+        assert 0 < soft <= 2**31
+        if parent_soft != resource.RLIM_INFINITY:
+            assert soft <= parent_soft
+        assert hard == parent_hard
+
     def test_a_surrogate_is_named_as_one(self, tmp_path: Path) -> None:
         path = _in_a_config(tmp_path, 'alias: "x\\ud800"')
         with pytest.raises(ValueError, match="lone surrogate"):
