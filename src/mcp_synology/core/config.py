@@ -500,12 +500,14 @@ def _merge_env_overrides(raw: dict[str, Any], *, from_file: bool = False) -> dic
     host without a word.
     """
     before: dict[str, Any] = {}
+    id_is_derived = False
     if from_file:
         before = {path: _file_value(raw, path) for path in _WATCHED_OVERRIDES}
         # As the field reads it: `host: !!binary bmFz` is `nas`, and derives its ID.
         file_host = _as_field_reads("connection.host", before["connection.host"])
         if before["instance_id"] is None and isinstance(file_host, str) and file_host:
             before["instance_id"] = _derive_instance_id(file_host)
+            id_is_derived = True
 
     for env_var, dotted_path in ENV_VAR_MAP.items():
         value = os.environ.get(env_var)
@@ -518,9 +520,15 @@ def _merge_env_overrides(raw: dict[str, Any], *, from_file: bool = False) -> dic
         if file_value is not None and _as_compared(dotted_path, file_value) != _as_compared(
             dotted_path, parsed
         ):
+            # A file with no `instance_id` key: someone checking it would find no such
+            # setting (pre-QA r4 on #535).
+            overridden = (
+                "the instance_id the config file's host gives"
+                if id_is_derived and dotted_path == "instance_id"
+                else f"{dotted_path} from the config file"
+            )
             _warn_always(
-                f"{env_var} overrides {dotted_path} from the config file. "
-                f"Unset {env_var} if that isn't intended.",
+                f"{env_var} overrides {overridden}. Unset {env_var} if that isn't intended."
             )
         parts = dotted_path.split(".")
         target = raw

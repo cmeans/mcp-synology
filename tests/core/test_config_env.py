@@ -641,9 +641,6 @@ def _override(var: str, path: str) -> str:
         ("SYNOLOGY_PORT", "5002", "connection.port", {"port": 5001}),
         ("SYNOLOGY_HTTPS", "yes", "connection.https", {"https": False}),
         ("SYNOLOGY_INSTANCE_ID", "other-nas", "instance_id", {"instance_id": "home-nas"}),
-        # No instance_id in the file: it's derived from the host ("nas"), and the
-        # variable picks another keyring entry.
-        ("SYNOLOGY_INSTANCE_ID", "other-nas", "instance_id", {}),
     ],
 )
 def test_an_override_of_the_files_setting_warns_at_any_level(
@@ -665,6 +662,24 @@ def test_an_override_of_the_files_setting_warns_at_any_level(
     assert all(value not in w for w in warnings)
 
 
+_OVERRIDES_DERIVED_ID = (
+    "SYNOLOGY_INSTANCE_ID overrides the instance_id the config file's host gives. "
+    "Unset SYNOLOGY_INSTANCE_ID if that isn't intended."
+)
+
+
+def test_an_override_of_the_derived_instance_id_says_where_it_comes_from(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, at_error: _Lines
+) -> None:
+    """No instance_id in the file: it's derived from the host ("nas"), the variable picks
+    another keyring entry, and the warning doesn't send anyone looking for the key."""
+    monkeypatch.setenv("SYNOLOGY_INSTANCE_ID", "other-nas")
+    load_config(str(_file(tmp_path)))
+    warnings = at_error.messages()
+    assert _OVERRIDES_DERIVED_ID in warnings
+    assert all("other-nas" not in w for w in warnings)
+
+
 @pytest.mark.parametrize(
     ("var", "value", "file_settings"),
     [
@@ -678,8 +693,8 @@ def test_an_override_of_the_files_setting_warns_at_any_level(
         ("SYNOLOGY_INSTANCE_ID", "home-nas", {"instance_id": "Home-NAS"}),
         ("SYNOLOGY_HOST", "nas.example", {"host": "NAS.example"}),
         ("SYNOLOGY_PORT", "5001", {"port": "5001"}),
-        # Every spelling the config accepts (QA round 1 on #535): the file's value goes
-        # through the field's own type, and a host is compared as httpx would send it.
+        # The spellings the config treats as the same (QA round 1 on #535): the file's
+        # value goes through the field's own type, and a host is compared as httpx sends it.
         ("SYNOLOGY_HTTPS", "true", {"https": "on"}),
         ("SYNOLOGY_HTTPS", "true", {"https": "yes"}),
         ("SYNOLOGY_HTTPS", "true", {"https": 1}),
@@ -809,8 +824,7 @@ def test_a_binary_host_derives_the_instance_id_the_config_uses(
     )
     monkeypatch.setenv("SYNOLOGY_INSTANCE_ID", value)
     assert load_config(str(config)).instance_id == value
-    expected = _override("SYNOLOGY_INSTANCE_ID", "instance_id")
-    assert (expected in at_error.messages()) is warns
+    assert (_OVERRIDES_DERIVED_ID in at_error.messages()) is warns
 
 
 def test_only_the_instance_id_ignores_case_among_text_settings() -> None:
