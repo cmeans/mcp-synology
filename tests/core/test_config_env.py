@@ -768,28 +768,16 @@ def test_no_override_warning_when_nothing_the_file_sets_changes(
         ("SYNOLOGY_HOST", "nas.example", "connection.host", {"host": "admin@nas.example"}),
         ("SYNOLOGY_HOST", "nas.example", "connection.host", {"host": "nas.example:5001"}),
         ("SYNOLOGY_HOST", "nas.example", "connection.host", {"host": "nas.example/x"}),
-        ("SYNOLOGY_HOST", "admin@nas.example", "connection.host", {"host": "nas.example"}),
-        # The URL the client builds keeps these apart: another user, another path, and
-        # a bare IPv6 address that isn't valid in a URL (pre-QA r2 on #535).
-        ("SYNOLOGY_HOST", "ADMIN@nas.example", "connection.host", {"host": "admin@nas.example"}),
-        ("SYNOLOGY_HOST", "nas.example/DSM", "connection.host", {"host": "nas.example/dsm"}),
-        ("SYNOLOGY_HOST", "nas%2Fx", "connection.host", {"host": "nas/x"}),
-        ("SYNOLOGY_HOST", "::1", "connection.host", {"host": "[::1]"}),
-        # Only an address ignores case: what follows `[` may not be one.
-        ("SYNOLOGY_HOST", "[::1]/DSM", "connection.host", {"host": "[::1]/dsm"}),
-        ("SYNOLOGY_HOST", "[ADMIN:PW]@nas", "connection.host", {"host": "[admin:pw]@nas"}),
+        # httpx would bracket a bare `::1`, and a path isn't part of the address (pre-QA r2
+        # and r3 on #535).
+        ("SYNOLOGY_HOST", "[::1]", "connection.host", {"host": "::1"}),
+        ("SYNOLOGY_HOST", "[::1]", "connection.host", {"host": "[::1]/dsm"}),
+        # A zone names an interface, so its case stays.
         ("SYNOLOGY_HOST", "[fe80::1%25ETH0]", "connection.host", {"host": "[fe80::1%25eth0]"}),
-        # A name httpx refuses stays as written, its case included.
-        ("SYNOLOGY_HOST", "\uff2eas.example", "connection.host", {"host": "\uff4eas.example"}),
-        # Look-alikes are other hosts: Cyrillic a, and a name IDNA refuses.
+        # Look-alikes are other hosts: Cyrillic a, a name IDNA refuses, and another name.
         ("SYNOLOGY_HOST", "n\u0430s.example", "connection.host", {"host": "nas.example"}),
         ("SYNOLOGY_HOST", "nas.example", "connection.host", {"host": "\uff4eas.example"}),
-        (
-            "SYNOLOGY_HOST",
-            "xn--bcher-kvb.example",
-            "connection.host",
-            {"host": "b\u00fccher.example"},
-        ),
+        ("SYNOLOGY_HOST", "b\u00fccher.example", "connection.host", {"host": "bucher.example"}),
     ],
 )
 def test_a_different_value_still_warns(
@@ -811,7 +799,7 @@ def test_a_different_value_still_warns(
     ("value", "file_host"),
     [
         ("[::1]", "[0:0:0:0:0:0:0:1]"),
-        ("NAS.example:5001", "nas.example:5001"),
+        ("[::ffff:102:304]", "[::ffff:1.2.3.4]"),
     ],
 )
 def test_the_same_destination_written_another_way_warns(
@@ -821,11 +809,39 @@ def test_the_same_destination_written_another_way_warns(
     monkeypatch: pytest.MonkeyPatch,
     at_error: _Lines,
 ) -> None:
-    """Outside a host name and a whole bracketed address, hosts compare as written, so
-    these warn though they reach the same place. A false alarm is the safe side."""
+    """A bracketed address ignores only case, so these warn though they reach the same
+    place. A false alarm is the safe side."""
     monkeypatch.setenv("SYNOLOGY_HOST", value)
     load_config(str(_file(tmp_path, instance_id="home-nas", host=file_host)))
     assert _override("SYNOLOGY_HOST", "connection.host") in at_error.messages()
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "admin@nas.example",
+        "ADMIN@nas.example",
+        "nas.example/DSM",
+        "nas%2Fx",
+        "nas.example:5001",
+        "::2",  # not `::1`: the advice's own example, `[fd00::1]`, contains that
+        "[::1]/DSM",
+        "[ADMIN:PW]@nas",
+        "Ｎas.example",
+        "xn--bcher-kvb.example",
+    ],
+)
+def test_a_variable_that_isnt_bare_stops_before_any_comparison(
+    value: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, at_error: _Lines
+) -> None:
+    """Over any file value, so an override can't reach another user, path or port. The
+    error names the variable, never the value (#532)."""
+    monkeypatch.setenv("SYNOLOGY_HOST", value)
+    with pytest.raises(EnvVarError) as exc:
+        load_config(str(_file(tmp_path, instance_id="home-nas", host="nas.example")))
+    assert str(exc.value).startswith("SYNOLOGY_HOST (it sets connection.host) must be")
+    assert value not in str(exc.value)
+    assert not [w for w in at_error.messages() if "overrides" in w]
 
 
 @pytest.mark.parametrize(("value", "warns"), [("other", True), ("nas", False)])

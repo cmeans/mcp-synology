@@ -783,14 +783,12 @@ def _as_compared(dotted_path: str, value: Any) -> Any:
     replaces it. An instance ID is lowered, as the config does.
 
     A host name is compared as httpx sends it: lower-case, IDNA-mapped (`bücher.example`
-    is `xn--bcher-kva.example`). A bracketed IPv6 address only ignores case. Anything else
-    stays as written, so it differs: the client puts the host into a URL, where `A@nas`
-    and `a@nas` are other users, `nas/X` and `nas/x` other paths, and `::1` is no address
-    at all. A `:` is told apart before httpx, whose `URL(host=)` brackets a bare `::1`.
-    `@` and `/` are told apart after it, by the `%` its escaping leaves in the lowered
-    host. httpx doesn't document that escaping and `httpx>=0.27` has no upper bound, so
-    `test_a_different_value_still_warns` pins it. Never read a host from a URL string,
-    where `admin@nas` or `nas:5001` is just `nas`, which would hide the change.
+    is `xn--bcher-kva.example`). A bracketed IPv6 address only ignores case. Any other
+    host with a `:` stays as written, so it differs: httpx's `URL(host=)` would bracket a
+    bare `::1`. Only the file's value can be such a host, or have `@` or `/`, which httpx
+    escapes: the variable must be bare (`parse_env_value`), so neither form can equal it.
+    Never read a host from a URL string, where `admin@nas` or `nas:5001` is just `nas`,
+    which would hide the change.
     """
     typed = _as_field_reads(dotted_path, value)
     if not isinstance(typed, str):
@@ -799,10 +797,9 @@ def _as_compared(dotted_path: str, value: Any) -> Any:
         if ":" in typed:
             return typed.lower() if _BRACKETED_ADDRESS.fullmatch(typed) else typed
         try:
-            sent = httpx.URL(scheme="https", host=typed).raw_host.decode("ascii")
+            return httpx.URL(scheme="https", host=typed).raw_host.decode("ascii")
         except httpx.InvalidURL:
             return typed
-        return typed if "%" in sent else sent
     return typed.lower() if dotted_path == "instance_id" else typed
 
 
