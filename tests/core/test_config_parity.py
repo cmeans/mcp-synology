@@ -41,6 +41,7 @@ from mcp_synology.server import (
     module_settings,
     validate_config,
 )
+from tests.conftest import skip_unless_the_locale_can_encode
 
 SECRET = "Hunter2x"
 GOOD_HEAD = "schema_version: 1\nconnection: {host: nas.local, https: true}\n"
@@ -950,8 +951,11 @@ class TestRound2OnPr541:
         def odd(_: str) -> None:
             raise OSError(5, "Input/output error")
 
-        monkeypatch.setattr(os, "stat", odd)
-        assert config_module._working_folder_is_searchable() is True
+        # Undone before the assert: pytest's report of a failure calls os.stat too.
+        with monkeypatch.context() as patched:
+            patched.setattr(os, "stat", odd)
+            searchable = config_module._working_folder_is_searchable()
+        assert searchable is True
 
     def test_a_working_folder_that_cant_be_searched_warns(
         self,
@@ -1010,6 +1014,7 @@ class TestPreQa5OnPr541:
     ) -> None:
         """Quoting it would give the model an escaped path that isn't the real one."""
         home = tmp_path / "a\u200cb"
+        skip_unless_the_locale_can_encode(str(home))
         home.mkdir()
         allowed = tmp_path / "allowed"
         allowed.mkdir()
@@ -1064,6 +1069,12 @@ class TestPreQa5OnPr541:
         with patch("mcp_synology.cli.setup._CONFIG_DIR", tmp_path / ".config" / "mcp-synology"):
             _, output, _ = _run("setup", "--list")
         assert "No configurations found" in output
+
+    def test_an_unknown_user_in_instructions_file_shows_as_written(self, tmp_path: Path) -> None:
+        """Made absolute, it names a folder nobody asked for, as in `logging.file`."""
+        path = _in_a_config(tmp_path, "instructions_file: ~nosuchuser541/x.md")
+        _, output, _ = _run("check", "--config", str(path))
+        assert "instructions_file '~nosuchuser541/x.md'" in output
 
     def test_a_surrogate_is_named_as_one(self, tmp_path: Path) -> None:
         path = _in_a_config(tmp_path, 'alias: "x\\ud800"')

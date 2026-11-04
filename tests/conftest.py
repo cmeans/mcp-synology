@@ -34,8 +34,8 @@ def run_capped() -> Callable[..., subprocess.CompletedProcess[str]]:
 
     def cap() -> None:
         # Never above a limit already in place, such as a developer's own cap (QA round 3).
-        _, hard = resource.getrlimit(resource.RLIMIT_AS)
-        limit = 2**31 if hard == resource.RLIM_INFINITY else min(hard, 2**31)
+        soft, hard = resource.getrlimit(resource.RLIMIT_AS)
+        limit = min(x for x in (soft, hard, 2**31) if x != resource.RLIM_INFINITY)
         resource.setrlimit(resource.RLIMIT_AS, (limit, hard))
 
     def run(*args: str) -> subprocess.CompletedProcess[str]:

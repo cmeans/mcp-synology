@@ -1,4 +1,4 @@
-"""Check command: validate stored credentials."""
+"""Check command: validate the config, then the stored credentials."""
 
 from __future__ import annotations
 

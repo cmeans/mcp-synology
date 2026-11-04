@@ -873,7 +873,12 @@ def _read_instructions_file(config: AppConfig) -> tuple[str | None, str | None]:
     except OSError as e:
         reason = e.strerror or type(e).__name__
     except (RuntimeError, ValueError):  # an unknown ~user; a NUL
-        reason = "the path isn't usable"
+        # As written: made absolute, `~nosuchuser/x` names a folder nobody asked for.
+        return (
+            None,
+            f"instructions_file {config.instructions_file!r} can't be read (the path isn't "
+            "usable): using the built-in text.",
+        )
     return (
         None,
         f"instructions_file {_shown_path(path)!r} can't be read ({reason}): using the built-in "
