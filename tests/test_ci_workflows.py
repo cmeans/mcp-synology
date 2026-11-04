@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import tomllib
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -180,6 +181,19 @@ def test_the_guard_passes_a_locked_workflow(workflow: str) -> None:
 )
 def test_the_guard_ignores_a_workflow_that_doesnt_run_uv(workflow: str) -> None:
     assert _lock_problem(yaml.safe_load(workflow)) is None
+
+
+def test_ci_tests_every_python_the_package_claims() -> None:
+    """Pre-QA on #548: the classifiers could claim a version CI no longer tests."""
+    project = tomllib.loads((GITHUB.parent / "pyproject.toml").read_text(encoding="utf-8"))
+    classifiers = {
+        c.rsplit(" :: ", 1)[-1]
+        for c in project["project"]["classifiers"]
+        if re.fullmatch(r"Programming Language :: Python :: 3\.\d+", c)
+    }
+    matrix = _workflows()["ci.yml"]["jobs"]["test"]["strategy"]["matrix"]["python-version"]
+    assert classifiers
+    assert classifiers == {str(version) for version in matrix}
 
 
 def test_python_updates_keep_the_lock_current() -> None:
