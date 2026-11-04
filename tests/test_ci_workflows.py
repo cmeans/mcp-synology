@@ -3,39 +3,85 @@
 from __future__ import annotations
 
 import re
+import shlex
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 import yaml
 
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
 GITHUB = Path(__file__).resolve().parents[1] / ".github"
-_UV_SYNC = re.compile(r"\buv\s+(?:-\S+\s+)*sync\b")
-_COMMAND_BREAK = re.compile(r"&&|\|\||;|\|")
+_COMMENT_LINE = re.compile(r"^\s*#.*$", re.MULTILINE)
+_CONTINUATION = re.compile(r"\\\n\s*")
+_OPERATOR = set("();<>|&")
 
 
-def _syncs_in(text: str) -> list[str]:
-    """Each command in ``text`` that runs `uv sync`. By command, not by line: a continued line
-    hides the sync, and another command's `--locked` isn't this one's (QA round 1 on #544).
-    Comments are dropped, so one can't satisfy the guard."""
-    found = []
-    for line in re.sub(r"\\\n\s*", " ", text).splitlines():
-        code = line.split(" #")[0]
-        if code.lstrip().startswith("#"):
-            continue
-        found += [cmd.strip() for cmd in _COMMAND_BREAK.split(code) if _UV_SYNC.search(cmd)]
-    return found
+def _commands(line: str) -> Iterator[list[str]]:
+    """A line of shell as commands, each a list of words: quotes and comments are the shell's,
+    not a regex's (pre-QA r2 on #544)."""
+    lexer = shlex.shlex(line, posix=True, punctuation_chars=True)
+    lexer.commenters = "#"
+    lexer.whitespace_split = True
+    command: list[str] = []
+    for token in lexer:
+        if set(token) <= _OPERATOR:
+            yield command
+            command = []
+        else:
+            command.append(token)
+    yield command
 
 
-def _unlocked(syncs: list[str]) -> list[str]:
-    return [sync for sync in syncs if "--locked" not in sync.split()]
+def _is_sync(command: list[str]) -> bool:
+    if "uv" not in command:
+        return False
+    after_uv = command[command.index("uv") + 1 :]
+    return "sync" in after_uv and "run" not in after_uv[: after_uv.index("sync")]
 
 
-def _uv_syncs() -> list[tuple[str, str]]:
-    """Every `uv sync` that runs in a workflow, with its file's name."""
+def _syncs_in(script: str) -> list[list[str]]:
+    """Each command in a `run:` script that runs `uv sync`. By command, not by line: a continued
+    line hides the sync, and another command's `--locked` isn't this one's (QA round 1 on
+    #544). A variable holding `uv` (`"$UV" sync`) isn't seen."""
+    joined = _CONTINUATION.sub(" ", _COMMENT_LINE.sub("", script))
+    return [
+        command
+        for line in joined.splitlines()
+        if "uv" in line and "sync" in line  # the only lines it has to tokenize
+        for command in _commands(line)
+        if _is_sync(command)
+    ]
+
+
+def _is_locked(command: list[str]) -> bool:
+    """The last of `--locked` and `--no-locked` wins; after `--`, words aren't uv's options."""
+    words = command[: command.index("--")] if "--" in command else command
+    flags = [word for word in words if word in ("--locked", "--no-locked")]
+    return bool(flags) and flags[-1] == "--locked"
+
+
+def _run_scripts(node: object) -> Iterator[str]:
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == "run" and isinstance(value, str):
+                yield value
+            else:
+                yield from _run_scripts(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _run_scripts(value)
+
+
+def _uv_syncs() -> list[tuple[str, list[str]]]:
+    """Every `uv sync` in a workflow's `run:` steps, with its file's name."""
     return [
         (path.name, sync)
         for path in sorted(GITHUB.rglob("*.y*ml"))
-        for sync in _syncs_in(path.read_text(encoding="utf-8"))
+        for script in _run_scripts(yaml.safe_load(path.read_text(encoding="utf-8")))
+        for sync in _syncs_in(script)
     ]
 
 
@@ -44,42 +90,73 @@ def test_every_uv_sync_refuses_a_stale_lock() -> None:
     tested on a lock nobody committed, and the sync rewrites `uv.lock` on the runner."""
     syncs = _uv_syncs()
     assert syncs, "no uv sync found: the workflows moved, so this guard checks nothing"
-    assert _unlocked([sync for _, sync in syncs]) == []
+    assert [(name, " ".join(sync)) for name, sync in syncs if not _is_locked(sync)] == []
 
 
 @pytest.mark.parametrize(
-    "text",
+    "script",
     [
-        "run: uv sync --extra dev",
-        "run: uv sync --extra dev&&echo --locked",
-        "run: uv sync --extra dev || echo --locked",
-        "run: uv sync --extra dev; echo --locked",
-        "run: uv sync --extra dev | tee --locked",
-        "run: uv sync --no-locked",
-        "run: uv sync --locked-foo",
-        "run: uv sync  # --locked",
-        "run: |\n  uv \\\n    sync --extra dev",
+        "uv sync --extra dev",
+        "uv sync --extra dev&&echo --locked",
+        "uv sync --extra dev || echo --locked",
+        "uv sync --extra dev; echo --locked",
+        "uv sync --extra dev | tee --locked",
+        "uv sync --extra dev & echo --locked",
+        "uv sync --extra dev > --locked",
+        "(uv sync --extra dev) --locked",
+        "uv sync --extra dev -- --locked",
+        "uv sync --no-locked",
+        "uv sync --locked --no-locked",
+        "uv sync --locked-foo",
+        "uv sync --extra dev  # --locked",
+        "uv sync --extra dev\t# --locked",
+        'echo " #" && uv sync --extra dev',
+        "# a note \\\nuv sync --extra dev",
+        "uv \\\n    sync --extra dev",
+        "uv --directory . sync --extra dev",
+        "uv --python 3.12 sync",
     ],
 )
-def test_the_guard_catches_a_sync_without_the_flag(text: str) -> None:
-    assert _unlocked(_syncs_in(text)) != []
+def test_the_guard_catches_a_sync_without_the_flag(script: str) -> None:
+    syncs = _syncs_in(script)
+    assert syncs
+    assert not all(_is_locked(sync) for sync in syncs)
 
 
 @pytest.mark.parametrize(
-    ("text", "count"),
+    ("script", "count"),
     [
-        ("run: uv sync --locked --extra dev", 1),
-        ("run: uv sync --extra dev --locked && uv run pytest", 1),
-        ("run: |\n  uv sync \\\n    --locked \\\n    --extra dev", 1),
-        ("run: uv --quiet sync --locked", 1),
-        ("# run: uv sync", 0),
-        ("run: uv run pytest", 0),
+        ("uv sync --locked --extra dev", 1),
+        ("uv sync --extra dev --locked && uv run pytest", 1),
+        ("uv sync \\\n    --locked \\\n    --extra dev", 1),
+        ("uv --quiet sync --locked", 1),
+        ("(uv sync --locked)", 1),
+        ("uv sync --no-locked --locked", 1),
+        ("# uv sync", 0),
+        ("uv run sync", 0),
+        ("uv run pytest", 0),
     ],
 )
-def test_the_guard_passes_a_locked_sync(text: str, count: int) -> None:
-    syncs = _syncs_in(text)
+def test_the_guard_passes_a_locked_sync(script: str, count: int) -> None:
+    syncs = _syncs_in(script)
     assert len(syncs) == count
-    assert _unlocked(syncs) == []
+    assert all(_is_locked(sync) for sync in syncs)
+
+
+def test_the_guard_reads_run_steps_after_yaml() -> None:
+    """A step's name isn't a sync; quotes and folding are YAML's (pre-QA r2 on #544)."""
+    workflow = """
+    steps:
+      - name: uv sync
+      - run: "uv sync --locked"
+      - run: >-
+          uv sync
+          --locked
+    """
+    scripts = list(_run_scripts(yaml.safe_load(workflow)))
+    syncs = [sync for script in scripts for sync in _syncs_in(script)]
+    assert len(syncs) == 2
+    assert all(_is_locked(sync) for sync in syncs)
 
 
 def test_the_guard_sees_every_workflow_that_syncs() -> None:
