@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 @click.option("-c", "--config", type=click.Path(), help="Path to config file")
 @click.option("-v", "--verbose", is_flag=True, help="Enable debug logging")
 def check(config: str | None, verbose: bool) -> None:
-    """Validate stored credentials can authenticate."""
+    """Validate the config, as serve does, then check the stored credentials can log in."""
     escape_what_stdout_cant_encode()
     _init_early_logging(verbose=verbose)
 

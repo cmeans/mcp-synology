@@ -372,7 +372,7 @@ def alias_problem(value: str) -> str | None:
     if not value.strip():
         return "is empty: give a name, or leave alias out."
     if has_control_character(value):
-        return "has a control character or line break: give a name on one line."
+        return "has a control character, line break or lone surrogate: give a name on one line."
     return None
 
 
@@ -661,7 +661,7 @@ def discover_config_path(explicit_path: str | None = None) -> Path:
     try:
         home_found = _config_exists(home_config)
     except OSError as e:
-        msg = f"{e}. Fix its permissions, or name a config file with --config."
+        msg = f"{e}. Fix the path or its permissions, or name a config file with --config."
         raise OSError(msg) from e
     if home_found:
         logger.info("Config: %r", str(home_config))
@@ -680,7 +680,8 @@ def discover_config_path(explicit_path: str | None = None) -> Path:
         # that can't be searched leaves nothing to report but that.
         if os.access(".", os.X_OK):
             raise
-        logger.warning("The working folder can't be searched for a config file: %s", e)
+        # At any log level: a config passed over can leave env-only mode, read-only over plain HTTP.
+        _warn_always(f"The working folder can't be searched for a config file: {e}")
 
     msg = (
         "No config file found. Create one at ~/.config/mcp-synology/config.yaml "

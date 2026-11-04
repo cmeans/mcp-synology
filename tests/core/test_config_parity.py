@@ -976,6 +976,127 @@ class TestRound2OnPr541:
         assert "No configurations found" not in output
 
 
+class TestPreQa5OnPr541:
+    """What pre-QA r5 on #541 found the wording and the tests left open."""
+
+    def test_a_joiner_in_the_home_folder_reaches_the_model_as_is(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Quoting it would give the model an escaped path that isn't the real one."""
+        home = tmp_path / "a\u200cb"
+        home.mkdir()
+        allowed = tmp_path / "allowed"
+        allowed.mkdir()
+        path = _in_a_config(tmp_path, f"allowed_local_paths: [{allowed}]")
+        monkeypatch.setenv("HOME", str(home))
+        instructions = create_server(validate_config(path)).instructions or ""
+        assert f"Home directory: {home}\n" in instructions
+
+    @pytest.mark.skipif(
+        not hasattr(os, "geteuid") or os.geteuid() == 0, reason="needs folder permissions to apply"
+    )
+    def test_the_working_folder_warning_shows_at_any_log_level(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        request: pytest.FixtureRequest,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A config passed over there can leave env-only mode: #533's class."""
+        here = tmp_path / "here"
+        here.mkdir()
+        monkeypatch.chdir(here)
+        here.chmod(0o000)
+        request.addfinalizer(lambda: here.chmod(0o700))
+        # The logger's level only: `caplog.at_level` also sets its handler's, which would drop
+        # the record however it's logged.
+        level = config_module.logger.level
+        config_module.logger.setLevel(logging.ERROR)
+        request.addfinalizer(lambda: config_module.logger.setLevel(level))
+        with pytest.raises(FileNotFoundError):
+            discover_config_path()
+        assert any("can't be searched" in m for m in caplog.messages)
+
+    def test_a_link_loop_at_home_isnt_told_only_to_fix_permissions(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        config = tmp_path / ".config" / "mcp-synology" / "config.yaml"
+        config.parent.mkdir(parents=True)
+        config.symlink_to(config)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        with pytest.raises(OSError, match=r"Fix the path or its permissions, or name a config"):
+            discover_config_path()
+
+    def test_a_file_where_the_config_folder_belongs_means_not_there(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        (tmp_path / ".config").write_text("", encoding="utf-8")
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(FileNotFoundError, match="No config file found"):
+            discover_config_path()
+        with patch("mcp_synology.cli.setup._CONFIG_DIR", tmp_path / ".config" / "mcp-synology"):
+            _, output, _ = _run("setup", "--list")
+        assert "No configurations found" in output
+
+    def test_a_surrogate_is_named_as_one(self, tmp_path: Path) -> None:
+        path = _in_a_config(tmp_path, 'alias: "x\\ud800"')
+        with pytest.raises(ValueError, match="lone surrogate"):
+            validate_config(path)
+        path = _in_a_config(tmp_path, 'logging: {file: "/tmp/a\\ud800"}')
+        with pytest.raises(ValueError, match="lone surrogate"):
+            validate_config(path)
+
+    def test_a_windows_path_in_double_quotes_gets_the_advice(self, tmp_path: Path) -> None:
+        path = _in_a_config(tmp_path, 'allowed_local_paths: ["C:\\new"]')
+        with pytest.raises(ValueError, match="write a Windows path in single quotes"):
+            validate_config(path)
+
+    def test_a_bad_downloads_default_says_what_to_set(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        target = tmp_path / "x\nFORGED"
+        target.mkdir()
+        (tmp_path / "Downloads").symlink_to(target)
+        path = _in_a_config(tmp_path, "")
+        with pytest.raises(ValueError, match="Downloads default: set allowed_local_paths"):
+            validate_config(path)
+
+    def test_a_downloads_link_loop_is_placed_in_allowed_local_paths(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        (tmp_path / "Downloads").symlink_to(tmp_path / "Downloads")
+        path = _in_a_config(tmp_path, "")
+        if sys.version_info >= (3, 13):
+            pytest.skip("Path.resolve doesn't raise on a loop from 3.13")
+        with pytest.raises(ValueError, match=r"filestation\.settings\.allowed_local_paths"):
+            validate_config(path)
+
+    def test_repeated_keys_are_listed_by_line(self, tmp_path: Path) -> None:
+        """A parent's repeat is collected before its child's, so the order has to be sorted."""
+        path = tmp_path / "c.yaml"
+        path.write_text(
+            "schema_version: 1\n"
+            "connection: {host: a,\n"
+            "  host: b}\n"
+            "schema_version: 1\n"
+            "modules: {filestation: }\n",
+            encoding="utf-8",
+        )
+        _, output, _ = _run("check", "--config", str(path))
+        assert output.index("`host` twice") < output.index("`schema_version` twice")
+
+    def test_a_newline_in_an_error_location_cant_forge_a_line(self, tmp_path: Path) -> None:
+        path = tmp_path / "c.yaml"
+        path.write_text(
+            f'{GOOD_HEAD}modules: {{filestation: , "x\\necho PWNED": 5}}\n', encoding="utf-8"
+        )
+        code, output, _ = _run("check", "--config", str(path))
+        assert code == 1
+        assert "\necho PWNED" not in output
+        assert "x\\necho PWNED" in output
+
+
 class TestUnguardedReadsOnPr541:
     """QA round 2: reads every command makes, with an endless source in front of them."""
 

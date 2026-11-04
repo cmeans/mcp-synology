@@ -36,6 +36,7 @@ from mcp_synology.core.config import (
 )
 from mcp_synology.core.errors import ErrorCode, SynologyError, detached_copy
 from mcp_synology.core.formatting import error_response, synology_error_response
+from mcp_synology.core.local_paths import has_control_character
 from mcp_synology.core.redaction import redact_urls
 from mcp_synology.core.state import ServerState
 from mcp_synology.modules import PermissionTier, RegisterContext, filter_tools_by_permission
@@ -1017,7 +1018,7 @@ def _log_file_problem(config: AppConfig) -> str | None:
 def _local_root_problems(config: AppConfig, settings: dict[str, BaseModel | None]) -> list[Any]:
     """What `create_server` would crash on or print raw in resolving each module's local
     folders, including the Downloads default, which no setting names (QA round 1 on #541)."""
-    from mcp_synology.core.local_paths import allowed_local_roots, has_control_character
+    from mcp_synology.core.local_paths import allowed_local_roots
 
     problems: list[Any] = []
     for name, given in settings.items():
@@ -1037,7 +1038,11 @@ def _local_root_problems(config: AppConfig, settings: dict[str, BaseModel | None
             continue
         for root in roots:
             if has_control_character(str(root)):
-                msg = f"the folder {str(root)!r} has a control character in its path"
+                msg = (
+                    f"the folder {str(root)!r} has a control character in its path. If no setting "
+                    "names it, it's the Downloads default: set allowed_local_paths to another "
+                    "folder"
+                )
                 problems.append({"loc": where, "msg": msg, "type": "value_error"})
     return problems
 
@@ -1086,7 +1091,10 @@ def create_server(config: AppConfig) -> MCPServer:
         "host": conn.host if conn else "unknown",
         "port": str(conn.port) if conn else "5000",
         # Quoted if a line break in it could forge a line of the instructions (pre-QA r4 on #541).
-        "home_dir": str(Path.home()) if str(Path.home()).isprintable() else repr(str(Path.home())),
+        # Not for a joiner or no-break space, which names need: repr would escape the real path.
+        "home_dir": repr(str(Path.home()))
+        if has_control_character(str(Path.home()))
+        else str(Path.home()),
         "platform": _platform_label(),
     }
     server_name = f"synology-{config.display_name}"

@@ -114,7 +114,7 @@ On Linux, the server auto-detects the D-Bus session socket for keyring access. I
 ### 3. Verify
 
 ```bash
-uvx mcp-synology check                # Validates credentials work
+uvx mcp-synology check                # Validates the config and credentials
 uvx mcp-synology setup --list         # Shows all configured NAS instances
 ```
 
