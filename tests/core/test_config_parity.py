@@ -9,7 +9,11 @@ from __future__ import annotations
 import ast
 import logging
 import os
+import signal
+import subprocess
+import sys
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -18,7 +22,14 @@ from click.testing import CliRunner
 import mcp_synology.cli
 from mcp_synology.cli import logging_
 from mcp_synology.cli.main import main
-from mcp_synology.core.config import ENV_VAR_MAP, alias_problem, load_config
+from mcp_synology.core import config as config_module
+from mcp_synology.core import local_paths
+from mcp_synology.core.config import (
+    ENV_VAR_MAP,
+    alias_problem,
+    discover_config_path,
+    load_config,
+)
 from mcp_synology.modules import ModuleSettings, RegisterContext
 from mcp_synology.modules.filestation import FileStationSettings
 from mcp_synology.modules.photos import PhotosSettings
@@ -155,6 +166,26 @@ def _restore_logging() -> object:
             handler.close()
     root.setLevel(level)
     logging_._early_records = None
+
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+_NEEDS_PIPES = pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="no named pipes here")
+
+
+@pytest.fixture
+def _pipe_timeout() -> Iterator[None]:
+    """A regression here would wait on the pipe forever: fail instead (QA round 1 on #541)."""
+
+    def fail(*_: object) -> None:
+        raise TimeoutError("waited on a named pipe")
+
+    previous = signal.signal(signal.SIGALRM, fail)
+    signal.alarm(30)
+    yield
+    signal.alarm(0)
+    signal.signal(signal.SIGALRM, previous)
 
 
 def _run(*args: str) -> tuple[int, str, BaseException | None]:
@@ -757,7 +788,10 @@ class TestEdgeCases:
         assert isinstance(exception, SystemExit)
         assert "Traceback" not in output
 
-    def test_an_unusable_instructions_file_warns_and_falls_back(self, tmp_path: Path) -> None:
+    @_NEEDS_PIPES
+    def test_an_unusable_instructions_file_warns_and_falls_back(
+        self, tmp_path: Path, _pipe_timeout: None
+    ) -> None:
         """A named pipe would hang `check`; a folder and a missing file just fall back."""
         pipe = tmp_path / "pipe"
         os.mkfifo(pipe)
@@ -770,7 +804,10 @@ class TestEdgeCases:
             config = validate_config(path)
             assert any(reason in notice for notice in config_notices(config))
 
-    def test_a_named_pipe_as_the_log_file_is_refused(self, tmp_path: Path) -> None:
+    @_NEEDS_PIPES
+    def test_a_named_pipe_as_the_log_file_is_refused(
+        self, tmp_path: Path, _pipe_timeout: None
+    ) -> None:
         pipe = tmp_path / "pipe"
         os.mkfifo(pipe)
         path = tmp_path / "bad.yaml"
@@ -793,3 +830,267 @@ class TestEdgeCases:
         with caplog.at_level(logging.ERROR, logger="mcp_synology.server"):
             create_server(config)
         assert "instructions_file" in caplog.text
+
+
+def _in_a_config(tmp_path: Path, extra: str) -> Path:
+    path = tmp_path / "bad.yaml"
+    path.write_text(f"{GOOD_HEAD}{extra}\nmodules: {{filestation: }}\n", encoding="utf-8")
+    return path
+
+
+def _folder(tmp_path: Path) -> tuple[Path, str]:
+    return tmp_path, "can't be read"
+
+
+def _not_utf8(tmp_path: Path) -> tuple[Path, str]:
+    path = tmp_path / "bad.yaml"
+    path.write_bytes(GOOD_HEAD.encode() + b"alias: \xff\n")
+    return path, "isn't valid UTF-8"
+
+
+def _pipe_log(tmp_path: Path) -> tuple[Path, str]:
+    os.mkfifo(tmp_path / "pipe")
+    return _in_a_config(tmp_path, f"logging: {{file: {tmp_path / 'pipe'}}}"), "named pipe"
+
+
+def _log_is_the_config(tmp_path: Path) -> tuple[Path, str]:
+    path = tmp_path / "bad.yaml"
+    path.write_text(
+        f"{GOOD_HEAD}logging: {{file: {path}}}\nmodules: {{filestation: }}\n", encoding="utf-8"
+    )
+    return path, "it's the config file"
+
+
+def _unknown_home(tmp_path: Path) -> tuple[Path, str]:
+    return Path("~nosuchuser541/x.yaml"), "nosuchuser541"
+
+
+@_NEEDS_PIPES
+@pytest.mark.parametrize(
+    "build", [_folder, _not_utf8, _pipe_log, _log_is_the_config, _unknown_home]
+)
+def test_every_command_refuses_a_bad_file_the_same_way(
+    build: Any, tmp_path: Path, _pipe_timeout: None
+) -> None:
+    """QA round 1 on #541: these ways to fail had no parity row."""
+    path, expected = build(tmp_path)
+    errors = []
+    for command in ("check", "serve", "setup"):
+        code, output, _ = _run(command, "--config", str(path))
+        assert code == 1, command
+        assert "Traceback" not in output, command
+        errors.append(_only_the_error(output))
+    assert errors[0] == errors[1] == errors[2]
+    assert expected in errors[0]
+
+
+class TestRound1OnPr541:
+    """What QA round 1 on #541 found the claims went further than the code."""
+
+    def test_a_deleted_working_folder_doesnt_hide_the_home_config(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home_config = tmp_path / ".config" / "mcp-synology" / "config.yaml"
+        home_config.parent.mkdir(parents=True)
+        home_config.write_text(f"{GOOD_HEAD}modules: {{filestation: }}\n", encoding="utf-8")
+
+        def gone() -> Path:
+            raise FileNotFoundError(2, "No such file or directory")
+
+        monkeypatch.setattr(Path, "cwd", staticmethod(gone))
+        monkeypatch.setenv("SYNOLOGY_HOST", "nas")
+        assert discover_config_path() == home_config
+
+    def test_a_deleted_working_folder_with_no_config_says_so(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def gone() -> Path:
+            raise FileNotFoundError(2, "No such file or directory")
+
+        monkeypatch.setattr(Path, "cwd", staticmethod(gone))
+        with pytest.raises(FileNotFoundError, match="No config file found"):
+            discover_config_path()
+
+    def test_a_config_folder_without_permission_names_the_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Not env-only mode, and not a bare [Errno 13]."""
+
+        def refused(self: Path, **_: object) -> bool:
+            raise PermissionError(13, "Permission denied")
+
+        monkeypatch.setattr(Path, "exists", refused)
+        monkeypatch.setenv("SYNOLOGY_HOST", "nas")
+        with pytest.raises(OSError, match="can't be read.*config.yaml.*Permission denied"):
+            load_config()
+
+    @pytest.mark.parametrize("value", ["x\\uD800", "a\\u2029b"])
+    def test_an_alias_that_would_crash_or_forge_is_refused(
+        self, tmp_path: Path, value: str
+    ) -> None:
+        path = _in_a_config(tmp_path, f'alias: "{value}"')
+        with pytest.raises(ValueError, match="alias"):
+            validate_config(path)
+
+    def test_custom_instructions_that_would_crash_are_refused(self, tmp_path: Path) -> None:
+        path = _in_a_config(tmp_path, 'custom_instructions: "x\\uD800"')
+        with pytest.raises(ValueError, match="custom_instructions"):
+            validate_config(path)
+
+    def test_a_downloads_default_that_wont_resolve_is_refused(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`check` passed this, and `serve` crashed: no setting names that folder."""
+        real = local_paths._resolve
+
+        def resolve(path: str | Path) -> Path:
+            if str(path).endswith("Downloads"):
+                raise ValueError(f"{str(path)!r} can't be resolved: loop")
+            return real(path)
+
+        monkeypatch.setattr(local_paths, "_resolve", resolve)
+        path = _in_a_config(tmp_path, "")
+        with pytest.raises(ValueError, match="allowed_local_paths.*can't be resolved"):
+            validate_config(path)
+
+    def test_a_link_to_a_folder_with_a_line_break_is_refused(self, tmp_path: Path) -> None:
+        target = tmp_path / "x\nFORGED"
+        target.mkdir()
+        link = tmp_path / "link"
+        link.symlink_to(target)
+        path = _in_a_config(tmp_path, f"allowed_local_paths: [{link}]")
+        with pytest.raises(ValueError, match="control character"):
+            validate_config(path)
+
+    def test_a_folder_that_wont_resolve_is_refused_by_check_resolvable(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def loop(self: Path, strict: bool = False) -> Path:
+            raise RuntimeError("Symlink loop")
+
+        monkeypatch.setattr(Path, "resolve", loop)
+        with pytest.raises(ValueError, match="my_setting.*can't be resolved"):
+            local_paths.check_resolvable("my_setting", "/a/b")
+
+    def test_a_default_upload_dir_with_a_line_break_is_refused(self, tmp_path: Path) -> None:
+        path = tmp_path / "bad.yaml"
+        path.write_text(
+            f'{GOOD_HEAD}modules: {{filestation: {{settings: {{default_upload_dir: "a\\nb"}}}}}}\n',
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="default_upload_dir"):
+            validate_config(path)
+
+    def test_the_instructions_file_cant_be_the_log_file(self, tmp_path: Path) -> None:
+        shared = tmp_path / "shared.md"
+        shared.write_text("hello\n", encoding="utf-8")
+        path = _in_a_config(tmp_path, f"instructions_file: {shared}\nlogging: {{file: {shared}}}")
+        with pytest.raises(ValueError, match="it's the instructions file"):
+            validate_config(path)
+        assert shared.read_text(encoding="utf-8") == "hello\n"
+
+    def test_a_link_to_the_config_cant_be_the_log_file(self, tmp_path: Path) -> None:
+        link = tmp_path / "log"
+        path = tmp_path / "bad.yaml"
+        link.symlink_to(path)
+        path.write_text(
+            f"{GOOD_HEAD}logging: {{file: {link}}}\nmodules: {{filestation: }}\n", encoding="utf-8"
+        )
+        with pytest.raises(ValueError, match="it's the config file"):
+            validate_config(path)
+
+    def test_a_dangling_link_in_the_log_files_folder_says_so(self, tmp_path: Path) -> None:
+        link = tmp_path / "dead"
+        link.symlink_to(tmp_path / "nothing")
+        path = _in_a_config(tmp_path, f"logging: {{file: {link}/x.log}}")
+        with pytest.raises(ValueError, match="broken link"):
+            validate_config(path)
+
+    def test_an_unknown_home_in_the_log_file_is_shown_as_written(self, tmp_path: Path) -> None:
+        path = _in_a_config(tmp_path, "logging: {file: ~nosuchuser541/x.log}")
+        with pytest.raises(ValueError) as exc:
+            validate_config(path)
+        assert "'~nosuchuser541/x.log'" in str(exc.value)
+        assert str(Path.cwd()) not in str(exc.value).split("Config file:")[0]
+
+    @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="no named pipes here")
+    def test_dev_stderr_as_a_pipe_is_allowed(self, tmp_path: Path) -> None:
+        """Under an MCP client stderr is a pipe with a reader; opening it doesn't wait."""
+        path = _in_a_config(tmp_path, "logging: {file: /dev/stderr}")
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys; from mcp_synology.server import validate_config; "
+                "validate_config(sys.argv[1]); print('ok')",
+                str(path),
+            ],
+            capture_output=True,
+            env={**os.environ, "HOME": str(tmp_path)},
+            timeout=60,
+        )
+        assert result.returncode == 0, result.stderr
+        assert b"ok" in result.stdout
+
+    def test_an_unknown_settings_name_cant_forge_a_log_line(self, tmp_path: Path) -> None:
+        path = tmp_path / "ok.yaml"
+        path.write_text(
+            f'{GOOD_HEAD}modules: {{filestation: {{settings: {{"x\\necho PWNED": 1}}}}}}\n',
+            encoding="utf-8",
+        )
+        notices = config_notices(validate_config(path))
+        assert any(repr("x\necho PWNED") in notice for notice in notices)
+        assert not any("\n" in notice for notice in notices)
+
+    def test_an_unknown_modules_name_cant_forge_a_log_line(self, tmp_path: Path) -> None:
+        path = tmp_path / "ok.yaml"
+        path.write_text(
+            f'{GOOD_HEAD}modules: {{filestation: , "y\\necho PWNED": }}\n', encoding="utf-8"
+        )
+        notices = config_notices(validate_config(path))
+        assert not any("\n" in notice for notice in notices)
+
+    def test_a_disabled_modules_name_cant_forge_an_error_line(self, tmp_path: Path) -> None:
+        path = tmp_path / "bad.yaml"
+        path.write_text(
+            f'{GOOD_HEAD}modules: {{"y\\nFORGED": {{enabled: false}}}}\n', encoding="utf-8"
+        )
+        with pytest.raises(ValueError) as exc:
+            validate_config(path)
+        assert "\nFORGED" not in str(exc.value)
+
+    def test_exactly_the_cap_of_key_problems_has_no_count(self, tmp_path: Path) -> None:
+        lines = "".join(f"k{i}: 1\nk{i}: 2\n" for i in range(config_module._MAX_KEY_PROBLEMS))
+        path = tmp_path / "bad.yaml"
+        path.write_text(f"{GOOD_HEAD}{lines}modules: {{filestation: }}\n", encoding="utf-8")
+        code, output, _ = _run("check", "--config", str(path))
+        assert code == 1
+        assert output.count("a key twice") == config_module._MAX_KEY_PROBLEMS
+        assert "more like these" not in output
+
+    def test_a_missing_instructions_file_isnt_called_irregular(self, tmp_path: Path) -> None:
+        path = _in_a_config(tmp_path, f"instructions_file: {tmp_path / 'missing.md'}")
+        notices = config_notices(validate_config(path))
+        assert any("No such file" in notice for notice in notices)
+        assert not any("regular file" in notice for notice in notices)
+
+    def test_early_records_reach_the_log_file_formatted(self, tmp_path: Path) -> None:
+        log = tmp_path / "server.log"
+        path = _in_a_config(tmp_path, f"logging: {{file: {log}}}\nalias: Office")
+        logging_._init_early_logging(verbose=False)
+        logging.getLogger("mcp_synology.test").warning("early %s", "record")
+        logging_._configure_logging("warning", validate_config(path).logging.file)
+        text = log.read_text(encoding="utf-8")
+        assert "early record" in text
+        assert "mcp_synology.test" in text
+
+    def test_setup_with_a_config_opens_the_log_file_once(self, tmp_path: Path) -> None:
+        log = tmp_path / "server.log"
+        path = _in_a_config(tmp_path, f"logging: {{file: {log}}}")
+        _run("setup", "--config", str(path))
+        files = [
+            h
+            for h in logging.getLogger().handlers
+            if isinstance(h, logging.FileHandler) and h.baseFilename == str(log)
+        ]
+        assert len(files) == 1

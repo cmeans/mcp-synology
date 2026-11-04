@@ -15,7 +15,11 @@ from mcp.server.mcpserver import (
 from mcp.types import ToolAnnotations
 from pydantic import Field, field_validator
 
-from mcp_synology.core.local_paths import check_local_path_entries, check_resolvable
+from mcp_synology.core.local_paths import (
+    check_local_path_entries,
+    check_resolvable,
+    has_control_character,
+)
 from mcp_synology.modules import (
     ApiRequirement,
     ModuleInfo,
@@ -69,6 +73,13 @@ class FileStationSettings(ModuleSettings):
     @classmethod
     def _absolute_local_paths(cls, value: list[str] | None) -> list[str] | None:
         return check_local_path_entries("allowed_local_paths", value)
+
+    @field_validator("default_upload_dir")
+    @classmethod
+    def _upload_dir_on_one_line(cls, value: str | None) -> str | None:
+        if value and has_control_character(value):
+            raise ValueError("has a control character: give a NAS path on one line.")
+        return value
 
     @field_validator("default_download_dir")
     @classmethod

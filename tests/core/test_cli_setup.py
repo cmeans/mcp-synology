@@ -931,6 +931,26 @@ def test_list_doesnt_wait_on_a_named_pipe(tmp_path: Path) -> None:
     assert "z.yaml" in output
 
 
+def test_list_survives_a_config_folder_without_search_permission(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """QA round 1 on #541: `is_file` raises there on 3.11, and the rest went unlisted."""
+    from pathlib import Path
+
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "a.yaml").write_text("schema_version: 1\nconnection: {host: nas}\n")
+
+    def refused(self: Path) -> bool:
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(Path, "is_file", refused)
+    with patch("mcp_synology.cli.setup._CONFIG_DIR", config_dir):
+        result = CliRunner().invoke(main, ["setup", "--list"])
+    assert result.exit_code == 0, result.output
+    assert "a.yaml  (could not parse)" in result.output
+
+
 def test_list_shows_only_bare_hosts_and_text_names(tmp_path: Path) -> None:
     """#476, #471: a host written with credentials, or a name given as a mapping, isn't
     printed; #492: an empty `connection:` lists instead of failing to parse."""

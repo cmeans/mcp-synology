@@ -88,11 +88,11 @@ def _list_configurations() -> None:
     click.echo(f"Configurations in {_shown_name(_CONFIG_DIR)}:\n")
     for f in yaml_files:
         shown = _shown_name(f.name)
-        # A named pipe would wait for a writer, and the later files would go unlisted.
-        if not f.is_file():
-            click.echo(f"  {shown}  (could not parse)")
-            continue
         try:
+            # A named pipe would wait for a writer, and the later files would go unlisted.
+            if not f.is_file():
+                click.echo(f"  {shown}  (could not parse)")
+                continue
             raw = parse_config_text(f.read_text(encoding="utf-8")) or {}
             # An empty `connection:` is no connection settings (#492).
             host = (raw.get("connection") or {}).get("host")
@@ -264,7 +264,12 @@ def _setup_interactive(verbose: bool) -> None:
 
     # Suggest hostname as alias if we fetched one and user didn't set an alias
     nas_hostname = result.get("hostname")
-    if nas_hostname and not alias and not alias_problem(nas_hostname):
+    if (
+        isinstance(nas_hostname, str)
+        and nas_hostname
+        and not alias
+        and not alias_problem(nas_hostname)
+    ):
         use_hostname = click.confirm(
             f'NAS reports hostname "{nas_hostname}". Use as alias?', default=True
         )

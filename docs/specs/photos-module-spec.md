@@ -46,7 +46,7 @@ MODULE_INFO = ModuleInfo(
 )
 
 
-class PhotosSettings(BaseModel):
+class PhotosSettings(ModuleSettings):
     # Local folders upload_photos may read from and download_photos may write to, added
     # to the top-level allowed_local_paths, exactly as File Station's and Download
     # Station's lists (#257, core/local_paths.allowed_local_roots): with no top-level

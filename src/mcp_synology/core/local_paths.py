@@ -113,9 +113,10 @@ def expand_setting(setting: str, entry: str) -> Path:
 
 
 def has_control_character(value: str) -> bool:
-    """A control character or a line or paragraph separator: what can forge a line of output
-    or move the terminal. Joiners and the like are fine: names need them."""
-    return any(unicodedata.category(c) in ("Cc", "Zl", "Zp") for c in value)
+    """A control character, a line or paragraph separator or a lone surrogate: what can forge a
+    line of output, move the terminal, or crash the server's first reply, which can't encode a
+    surrogate. Joiners and the like are fine: names need them."""
+    return any(unicodedata.category(c) in ("Cc", "Zl", "Zp", "Cs") for c in value)
 
 
 # Inside double quotes a backslash starts an escape: "C:\temp\new.log" loaded with a real tab
@@ -130,16 +131,21 @@ def check_resolvable(setting: str, entry: str) -> Path:
     """``~`` expanded, and the path checked to have no control character, which would reach
     the model's instructions as written, and to resolve (a NUL byte; a symlink loop on Python
     3.11 and 3.12). The server resolves these when it starts, so a config that passes here
-    starts: otherwise `check` passed what `serve` crashed on (#511 PR 3)."""
+    starts: otherwise `check` passed what `serve` crashed on (#511 PR 3). The instructions
+    print the resolved path, so that's checked too: a link can lead to a folder with a line
+    break in its name (QA round 1 on #541)."""
     if has_control_character(entry):
         msg = f"{setting} {CONTROL_CHARACTER_ADVICE}"
         raise ValueError(msg)
     path = expand_setting(setting, entry)
     try:
-        _resolve(path)
+        resolved = _resolve(path)
     except ValueError as e:
         msg = f"{setting}: {e}"
         raise ValueError(msg) from e
+    if has_control_character(str(resolved)):
+        msg = f"{setting} resolves to a path with a control character: {str(resolved)!r}"
+        raise ValueError(msg)
     return path
 
 

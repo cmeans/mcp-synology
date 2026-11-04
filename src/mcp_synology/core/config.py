@@ -14,6 +14,7 @@ import ipaddress
 import logging
 import os
 import re
+import unicodedata
 from datetime import date
 from pathlib import Path
 from typing import Annotated, Any, Literal, get_args, get_origin
@@ -447,11 +448,19 @@ class AppConfig(BaseModel, extra="forbid"):
 
     @field_validator("alias")
     @classmethod
-    def _alias_is_a_printable_name(cls, value: str | None) -> str | None:
+    def _alias_has_no_control_character(cls, value: str | None) -> str | None:
         # It names the server and a line of `setup --list`: `x\n    Host: evil.example` forged
         # a Host line, and an escape sequence reached the terminal (QA round 3 on #532).
         if value is not None and (problem := alias_problem(value)):
             raise ValueError(problem)
+        return value
+
+    @field_validator("custom_instructions")
+    @classmethod
+    def _instructions_can_be_sent(cls, value: str | None) -> str | None:
+        # A lone surrogate crashes the server's first reply, where `check` can't see it.
+        if value is not None and any(unicodedata.category(c) == "Cs" for c in value):
+            raise ValueError("has a lone surrogate, which can't be sent to a client.")
         return value
 
     @field_validator("instructions_file")
@@ -494,7 +503,7 @@ class AppConfig(BaseModel, extra="forbid"):
             )
         elif not any(mod.enabled for mod in self.modules.values()):
             # A server with no enabled module has 0 tools: almost certainly a config mistake.
-            listed = ", ".join(sorted(self.modules))
+            listed = ", ".join(_printable(name) for name in sorted(self.modules))
             problems.append(
                 f"No module is enabled (listed with enabled: false: {listed}). "
                 "Enable at least one, e.g. filestation: {enabled: true}."
@@ -552,6 +561,22 @@ def _derive_instance_id(host: str) -> str:
     return host.split(".")[0].lower()
 
 
+def _printable(name: str) -> str:
+    """A name from the config as is, or quoted if it could forge a line (QA round 1 on #541)."""
+    return name if name.isprintable() else repr(name)
+
+
+def _config_exists(path: Path) -> bool:
+    """Whether the config file is there. An error that isn't "no such file" stays an error, with
+    the path: a folder without permission, a name too long. Never FileNotFoundError, which
+    would mean env-only mode, ignoring the file (#483)."""
+    try:
+        return path.exists()
+    except OSError as e:
+        msg = f"Config file can't be read: {_shown_path(path)!r}: {e.strerror or type(e).__name__}"
+        raise OSError(msg) from e
+
+
 def _shown_path(path: Path) -> str:
     """The path made absolute for messages, or as given if it can't be.
 
@@ -594,7 +619,7 @@ def discover_config_path(explicit_path: str | None = None) -> Path:
         path = _expanded_config_path(explicit_path, "--config")
         # Absolute in messages: an MCP client starts the server in a working folder the
         # user rarely knows (QA round 1 on #529).
-        if not path.exists():
+        if not _config_exists(path):
             # Quoted: a stray \r or space at the end would otherwise be invisible.
             msg = f"Config file not found: {_shown_path(path)!r}"
             raise FileNotFoundError(msg)
@@ -612,7 +637,7 @@ def discover_config_path(explicit_path: str | None = None) -> Path:
             msg = "MCP_SYNOLOGY_CONFIG is set but empty: set it to a config file's path."
             raise FileNotFoundError(msg)
         path = _expanded_config_path(env_path, "MCP_SYNOLOGY_CONFIG")
-        if not path.exists():
+        if not _config_exists(path):
             # An error, never env-only mode: that would run read-only over plain HTTP
             # instead of the config the variable names (#499).
             msg = (
@@ -623,16 +648,23 @@ def discover_config_path(explicit_path: str | None = None) -> Path:
         logger.info("Config: %r (from MCP_SYNOLOGY_CONFIG)", _shown_path(path))
         return path
 
-    default_paths = [
-        Path.home() / ".config" / "mcp-synology" / "config.yaml",
-        Path.cwd() / "mcp-synology.yaml",
-    ]
-    for path in default_paths:
+    home_config = Path.home() / ".config" / "mcp-synology" / "config.yaml"
+    logger.debug("Checking default config path: %r", str(home_config))
+    if _config_exists(home_config):
+        logger.info("Config: %r", str(home_config))
+        return home_config
+    # A deleted working folder, or one without permission, has no config in it. Raising here
+    # would hide the home config, and with SYNOLOGY_HOST set would look like env-only mode
+    # (#483, QA round 1 on #541); the home config is checked first for that reason.
+    try:
+        local_config = Path.cwd() / "mcp-synology.yaml"
         # Quoted: the working folder's name could forge a log line (QA round 3 on #529).
-        logger.debug("Checking default config path: %r", str(path))
-        if path.exists():
-            logger.info("Config: %r", str(path.absolute()))
-            return path
+        logger.debug("Checking default config path: %r", str(local_config))
+        if local_config.exists():
+            logger.info("Config: %r", str(local_config.absolute()))
+            return local_config
+    except OSError as e:
+        logger.debug("No working folder to look in: %r", e)
 
     msg = (
         "No config file found. Create one at ~/.config/mcp-synology/config.yaml "
@@ -952,7 +984,7 @@ def _emit_warnings(config: AppConfig) -> None:
 
     for name, mod in config.modules.items():
         if not mod.enabled:
-            logger.info("Module '%s' is listed but disabled.", name)
+            logger.info("Module %r is listed but disabled.", name)
 
 
 def _synthesize_env_config() -> AppConfig | None:
@@ -1439,7 +1471,7 @@ def format_config_errors(errors: list[Any]) -> str:
     non_text_keys = _non_text_keys(errors)
     for err in errors:
         loc_parts = [str(p) for p in err.get("loc", ())]
-        loc = _shown_location(err, loc_parts, non_text_keys)
+        loc = _printable(_shown_location(err, loc_parts, non_text_keys))
         msg = str(err.get("msg", "validation error"))
         input_value = err.get("input")
         suffix = ""
@@ -1508,7 +1540,7 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         list(config.modules.keys()),
     )
     for name, mod in config.modules.items():
-        logger.debug("  Module '%s': enabled=%s, permission=%s", name, mod.enabled, mod.permission)
+        logger.debug("  Module %r: enabled=%s, permission=%s", name, mod.enabled, mod.permission)
 
     _emit_warnings(config)
     return config

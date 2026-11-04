@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import os
 import platform
 import re
 import signal
@@ -900,16 +901,16 @@ def _unknown_keys(config: AppConfig) -> list[str]:
     for mod_name, mod_config in config.modules.items():
         module = _MODULE_REGISTRY.get(mod_name)
         if module is None:
-            notices.append(f"Unknown module '{mod_name}' in modules: skipped. Known: {known}.")
+            notices.append(f"Unknown module {mod_name!r} in modules: skipped. Known: {known}.")
             continue
         schema = module.MODULE_INFO.settings_schema
         valid = sorted(schema.model_fields) if schema else []
         for key in sorted(set(mod_config.settings) - set(valid)):
             where = f"modules.{mod_name}.settings"
             notices.append(
-                f"Unknown setting '{key}' in {where}: ignored. Valid: {', '.join(valid)}."
+                f"Unknown setting {key!r} in {where}: ignored. Valid: {', '.join(valid)}."
                 if valid
-                else f"Unknown setting '{key}' in {where}: ignored ({mod_name} has no settings)."
+                else f"Unknown setting {key!r} in {where}: ignored ({mod_name} has no settings)."
             )
     return notices
 
@@ -948,6 +949,22 @@ def _module_settings(config: AppConfig) -> tuple[dict[str, BaseModel | None], li
     return settings, errors
 
 
+def _is_this_stderr(path: Path) -> bool:
+    """Whether a path is this process's own stderr: under an MCP client that's a pipe with a
+    reader, so opening it doesn't wait. `/dev/stderr` is the usual spelling."""
+    try:
+        return bool(os.path.samestat(path.stat(), os.fstat(2)))
+    except OSError:  # stderr is closed
+        return False
+
+
+def _is_same_file(path: Path, other: str | Path | None) -> bool:
+    try:
+        return other is not None and path.samefile(Path(other).expanduser())
+    except (OSError, RuntimeError, ValueError):  # no such file yet, an unknown ~user
+        return False
+
+
 def _log_file_problem(config: AppConfig) -> str | None:
     """Why `logging.file` can't be opened, or None, after creating its folder (#498).
 
@@ -959,20 +976,59 @@ def _log_file_problem(config: AppConfig) -> str | None:
     path = Path(config.logging.file)
     try:
         path = path.expanduser()
-        if path.is_fifo():  # opening one waits for a reader, forever
+        # Every command appends to it, so these would break the next run, or reach the model.
+        if _is_same_file(path, config._source_path):
+            reason = "it's the config file"
+        elif _is_same_file(path, config.instructions_file):
+            reason = "it's the instructions file"
+        # Opening one waits for a reader, forever. There's no way to test for a reader: opening
+        # one to look gives that reader end-of-file, and the next open waits.
+        elif path.is_fifo() and not _is_this_stderr(path):
             reason = "it's a named pipe"
         else:
             path.parent.mkdir(parents=True, exist_ok=True)
             with path.open("a", encoding="utf-8"):
                 return None
-    except FileExistsError:  # from mkdir: a file where a folder of the path belongs
-        reason = "a part of its folder path is a file"
+    except FileExistsError:  # from mkdir: a file or a dead link where a folder belongs
+        reason = "a part of its folder path is a file or a broken link"
     except OSError as e:
         reason = e.strerror or type(e).__name__
     except (RuntimeError, ValueError):  # an unknown ~user; a NUL
-        reason = "the path isn't usable"
+        # As written: made absolute, `~nosuchuser/x` names a folder nobody asked for.
+        return (
+            f"{config.logging.file!r} can't be opened: the path isn't usable. "
+            "Fix the path, or leave it out."
+        )
     # Absolute: a relative path depends on the folder an MCP client starts the server in.
     return f"{_shown_path(path)!r} can't be opened: {reason}. Fix the path, or leave it out."
+
+
+def _local_root_problems(config: AppConfig, settings: dict[str, BaseModel | None]) -> list[Any]:
+    """What `create_server` would crash on or print raw in resolving each module's local
+    folders, including the Downloads default, which no setting names (QA round 1 on #541)."""
+    from mcp_synology.core.local_paths import allowed_local_roots, has_control_character
+
+    problems: list[Any] = []
+    for name, given in settings.items():
+        if not hasattr(given, "allowed_local_paths"):
+            continue
+        where = ("modules", name, "settings", "allowed_local_paths")
+        download_dir = getattr(given, "default_download_dir", None)
+        try:
+            roots = allowed_local_roots(
+                given.allowed_local_paths,  # type: ignore[union-attr]
+                str(Path(download_dir).expanduser()) if download_dir else None,
+                shared_paths=config.allowed_local_paths,
+                module=name,
+            )
+        except ValueError as e:
+            problems.append({"loc": where, "msg": str(e), "type": "value_error"})
+            continue
+        for root in roots:
+            if has_control_character(str(root)):
+                msg = f"the folder {str(root)!r} has a control character in its path"
+                problems.append({"loc": where, "msg": msg, "type": "value_error"})
+    return problems
 
 
 def validate_config(path: str | Path | None = None) -> AppConfig:
@@ -984,7 +1040,8 @@ def validate_config(path: str | Path | None = None) -> AppConfig:
     documented: it's in `config_notices`.
     """
     config = load_config(path)
-    _, errors = _module_settings(config)
+    settings, errors = _module_settings(config)
+    errors.extend(_local_root_problems(config, settings))
     if log_problem := _log_file_problem(config):
         errors.append({"loc": ("logging", "file"), "msg": log_problem, "type": "value_error"})
     if errors:
@@ -1027,7 +1084,7 @@ def create_server(config: AppConfig) -> MCPServer:
     plan: _ModulePlan = []
     for mod_name, mod_config in config.modules.items():
         if not mod_config.enabled:
-            logger.debug("Module '%s' is disabled, skipping", mod_name)
+            logger.debug("Module %r is disabled, skipping", mod_name)
             continue
         module = _MODULE_REGISTRY.get(mod_name)
         if module is None:  # named by config_notices above
