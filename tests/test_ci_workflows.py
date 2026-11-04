@@ -16,7 +16,10 @@ GITHUB = Path(__file__).resolve().parents[1] / ".github"
 _RUNS_UV = re.compile(r"\buv\b")
 _COMMENT_LINE = re.compile(r"^\s*#.*$", re.MULTILINE)
 # Plain text, so it fails loudly on a mention too: the safe direction, and one line to change.
-_OPT_OUT = re.compile(r"--frozen|--no-locked|UV_LOCKED|UV_FROZEN|UV_NO_SYNC")
+_OPT_OUTS = ("UV_FROZEN", "UV_NO_SYNC", "UV_NO_PROJECT")
+_OPT_OUT = re.compile(
+    "|".join(("--frozen", "--no-locked", "--no-sync", "--no-project", "UV_LOCKED", *_OPT_OUTS))
+)
 
 
 def _workflows() -> dict[str, Any]:
@@ -55,16 +58,17 @@ def _lock_problem(workflow: dict[str, Any]) -> str | None:
     """Why this workflow's `uv sync` and `uv run` could use a stale lock, or None. By environment,
     not by parsing each command: that found a new shell corner in every review (QA rounds 1 and
     2 and pre-QA r3 on #544). It keeps the workflows honest and isn't a security boundary: a
-    variable expanded in a script, or `env -u` under another name, isn't seen."""
+    variable expanded in a script, or `env -u` under another name, isn't seen. `uv pip` doesn't
+    read the lock at all, so it isn't covered."""
     if not _runs_uv(workflow):
         return None
     if (workflow.get("env") or {}).get("UV_LOCKED") != "1":
         return 'top-level env UV_LOCKED must be the string "1"'
     for env in _inner_envs(workflow):
-        for name in ("UV_LOCKED", "UV_FROZEN", "UV_NO_SYNC"):
+        for name in ("UV_LOCKED", *_OPT_OUTS):
             if name in env:
                 return f"a job or step sets {name}"
-    for name in ("UV_FROZEN", "UV_NO_SYNC"):
+    for name in _OPT_OUTS:
         if name in workflow["env"]:
             return f"the workflow sets {name}"
     for script in _workflow_scripts(workflow):
@@ -125,6 +129,13 @@ _LOCKED = "env: {UV_LOCKED: '1'}\n"
         f"{_LOCKED}jobs: {{a: {{steps: [{{run: uv sync --no-locked}}]}}}}",
         f"{_LOCKED}jobs: {{a: {{steps: [{{run: UV_LOCKED=0 uv sync}}]}}}}",
         f"{_LOCKED}jobs: {{a: {{steps: [{{run: env -u UV_LOCKED uv sync}}]}}}}",
+        f"{_LOCKED}jobs: {{a: {{steps: [{{run: UV_FROZEN=1 uv sync}}]}}}}",
+        f"{_LOCKED}jobs: {{a: {{steps: [{{run: UV_NO_SYNC=1 uv run x}}]}}}}",
+        f"{_LOCKED}jobs: {{a: {{steps: [{{run: UV_NO_PROJECT=1 uv run x}}]}}}}",
+        f"{_LOCKED}jobs: {{a: {{steps: [{{run: uv run --no-sync x}}]}}}}",
+        f"{_LOCKED}jobs: {{a: {{steps: [{{run: uv run --no-project x}}]}}}}",
+        "env: {UV_LOCKED: '1', UV_FROZEN: '1'}\njobs: {a: {steps: [{run: uv sync}]}}",
+        "env: {UV_LOCKED: '1', UV_NO_PROJECT: '1'}\njobs: {a: {steps: [{run: uv sync}]}}",
         f"{_LOCKED}jobs: {{a: {{steps: [{{run: 'echo UV_LOCKED=0 >> $GITHUB_ENV'}}, "
         "{run: uv sync}]}}",
     ],
@@ -153,6 +164,7 @@ def test_the_guard_passes_a_locked_workflow(workflow: str) -> None:
     "workflow",
     [
         "jobs: {a: {steps: [{run: echo hello}]}}",
+        "jobs: {a: {steps: [{run: echo uvicorn}]}}",
         "defaults: {run: {shell: bash}}\njobs: {a: {steps: [{run: echo hello}]}}",
         'jobs: {a: {steps: [{run: "# about uv\\n echo hello"}]}}',
         "jobs: {a: {steps: [{name: uv sync, run: echo hello}]}}",
