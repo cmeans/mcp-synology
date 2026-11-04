@@ -56,6 +56,9 @@ _PAUSE_HOLD_CHECKS = 6
 _PAUSE_HOLD_INTERVAL = 0.5
 # Seconds. The checks are 3 s of waiting when reads are quick; slow reads add to that.
 _PAUSE_HOLD_BUDGET = 6.0
+# Seconds, for the calls a pause adds. The client's default of 30 s would put a stalled NAS
+# past the roughly 60 s an MCP client waits (pre-QA r3 on #545).
+_PAUSE_READ_TIMEOUT = 5.0
 _UNDONE = "not paused: it didn't stay paused; pause it again"
 _UNCONFIRMED = "not confirmed paused: couldn't check it; see list_downloads"
 # DSM said no, no answer, or an answer without what DSM always sends. The client's own reply
@@ -101,14 +104,21 @@ def _per_task_rows(results: list[dict[str, Any]]) -> tuple[list[list[str]], list
     return rows, errors
 
 
-async def _read_tasks(client: DsmClient, task_ids: list[str]) -> dict[str, dict[str, Any]] | None:
+async def _read_tasks(
+    client: DsmClient,
+    task_ids: list[str],
+    *,
+    read_timeout: float | None = None,
+    each_alone: bool = True,
+) -> dict[str, dict[str, Any]] | None:
     """The tasks as DSM now reports them (with ``detail``), by ID; None if unreadable.
 
     Used to check what a pause or edit actually did: DS 3.9.5 answers a pause of a
     finished task with a per-task ``ok`` (#413), and an edit of one with no per-task
     result at all, changing nothing (#412). ``getinfo`` fails the whole call when one ID
     is missing or another user's (spec: non-manager semantics), so then each ID is read
-    on its own and the missing ones are left out.
+    on its own and the missing ones are left out, unless ``each_alone`` is False: then that's
+    None, for a read that has to stay one request.
     """
 
     async def read(ids: list[str]) -> dict[str, dict[str, Any]]:
@@ -117,6 +127,7 @@ async def _read_tasks(client: DsmClient, task_ids: list[str]) -> dict[str, dict[
             "getinfo",
             version=1,
             params={"id": ",".join(ids), "additional": "detail"},
+            read_timeout=read_timeout,
         )
         entries = data.get("tasks") if isinstance(data, dict) else None
         if not isinstance(entries, list):
@@ -128,7 +139,7 @@ async def _read_tasks(client: DsmClient, task_ids: list[str]) -> dict[str, dict[
         try:
             return await read(task_ids)
         except SynologyError as e:
-            if e.code not in _TASK_NOT_FOUND_CODES or len(task_ids) == 1:
+            if e.code not in _TASK_NOT_FOUND_CODES or len(task_ids) == 1 or not each_alone:
                 raise
         found: dict[str, dict[str, Any]] = {}
         for task_id in task_ids:
@@ -883,16 +894,16 @@ async def _pause_again(client: DsmClient, task_ids: list[str]) -> None:
             "pause",
             version=1,
             params={"id": ",".join(task_ids)},
+            read_timeout=_PAUSE_READ_TIMEOUT,
         )
+        results = data if isinstance(data, list) else data.get("results", [])
+        for result in results:
+            if result.get("error"):
+                logger.warning(
+                    "Second pause of %s: DSM error %s", result.get("id"), result.get("error")
+                )
     except _READ_FAILED as e:
         logger.warning("Couldn't pause %s a second time: %r", ",".join(task_ids), e)
-        return
-    results = data if isinstance(data, list) else data.get("results", [])
-    for result in results:
-        if result.get("error"):
-            logger.warning(
-                "Second pause of %s: DSM error %s", result.get("id"), result.get("error")
-            )
 
 
 async def _hold_pause(client: DsmClient, task_ids: list[str]) -> bool:
@@ -911,7 +922,7 @@ async def _hold_pause(client: DsmClient, task_ids: list[str]) -> bool:
     paused_again: set[str] = set()
     for _ in range(_PAUSE_HOLD_CHECKS):
         await asyncio.sleep(_PAUSE_HOLD_INTERVAL)
-        tasks = await _read_tasks(client, remaining)
+        tasks = await _read_tasks(client, remaining, read_timeout=_PAUSE_READ_TIMEOUT)
         if tasks is None:
             logger.warning("Stopped watching paused tasks: a read failed")
             return False
@@ -938,6 +949,9 @@ def _not_paused_row(status: object) -> str | None:
     """The reply row for a task DSM said ok to pause, if its status says otherwise."""
     if status == "paused":
         return None
+    if not re.fullmatch(r"[a-z_]+", str(status)):
+        # A reply goes to the model, so only what looks like a status goes into it.
+        return "not confirmed paused: it reads an unknown status; see list_downloads"
     return {
         # DS 3.9.5 answers ok for a finished task, which stays finished (#413).
         "finished": "not paused: already finished",
@@ -967,7 +981,12 @@ async def _task_state_change(
     ids_joined = ",".join(task_ids)
 
     # Before the pause: afterward, a task still starting reads `paused` like any other.
-    before = await _read_tasks(client, task_ids) if method == "pause" else None
+    # One request, whatever's missing: a list with a missing ID then watches every task.
+    before = (
+        await _read_tasks(client, task_ids, read_timeout=_PAUSE_READ_TIMEOUT, each_alone=False)
+        if method == "pause"
+        else None
+    )
 
     try:
         data = await client.request(
@@ -1008,16 +1027,21 @@ async def _task_state_change(
         starting = [
             t
             for t in unique
-            if before is None or before.get(t, {}).get("status", "waiting") == "waiting"
+            if before is None or before.get(t, {}).get("status") in (None, "waiting")
         ]
         watched = await _hold_pause(client, starting) if starting else True
-        tasks = await _read_tasks(client, unique) if watched else None
+        tasks = (
+            await _read_tasks(client, unique, read_timeout=_PAUSE_READ_TIMEOUT) if watched else None
+        )
         for row in rows:
             if row[0] not in done:
                 continue
             status = (tasks or {}).get(row[0], {}).get("status")
             if status is not None:
                 row[1] = _not_paused_row(status) or row[1]
+            elif tasks is None and (before or {}).get(row[0], {}).get("status") == "finished":
+                # Finished before the pause, and nothing undoes that (#413).
+                row[1] = "not paused: already finished"
             elif row[0] in starting:
                 # It may have been undone, with nothing left to say so: not DSM's plain ok.
                 row[1] = _UNCONFIRMED

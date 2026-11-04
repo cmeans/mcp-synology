@@ -195,7 +195,8 @@ such a task for about 3 s and pauses it once more if it starts, then reports wha
 - `pause it again`: call `pause_download` again. If the task has paused by then, that call can
   fail with `invalid_parameter` (above), which means there's nothing left to pause.
 - `see list_downloads`: check the task's status there. `not confirmed paused: couldn't check it`
-  means the NAS didn't answer in time, so the pause may or may not have held.
+  means the NAS didn't answer in time or gave an error, or the task is gone, so the pause may or
+  may not have held.
 
 ### `create_download` returns no task IDs
 
