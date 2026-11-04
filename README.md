@@ -161,7 +161,7 @@ Or from the CLI:
 SYNOLOGY_HOST=192.168.1.100 uvx mcp-synology check
 ```
 
-Without a config file, mcp-synology always runs **File Station, read-only**. No environment variable enables another module or the write tools; for those, use a config file (the same variables then override its values, and overriding its host, port, HTTPS or instance ID logs a warning naming the variable, at any log level). The variables:
+Without a config file, mcp-synology always runs **File Station, read-only**. No environment variable enables another module or the write tools; for those, use a config file (the same variables then override its values, and overriding its host, port, HTTPS or instance ID prints a warning on stderr naming the variable, at any log level). The variables:
 
 | Variable | Sets | Default |
 |---|---|---|

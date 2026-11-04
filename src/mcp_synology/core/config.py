@@ -448,10 +448,13 @@ def _as_compared(dotted_path: str, value: Any) -> Any:
     refuses stays as written, so it differs: validation reports it unless the variable
     replaces it. An instance ID is lowered, as the config does.
 
-    A host is compared as httpx sends it: lower-case, IDNA-mapped (`bücher.example` is
-    `xn--bcher-kva.example`), or as written if httpx refuses it. It's given to httpx as
-    the host, not in a URL: `admin@nas` or `nas:5001` read from a URL is just `nas`,
-    which would hide the change of a value that isn't the same.
+    A host name is compared as httpx sends it: lower-case, IDNA-mapped (`bücher.example`
+    is `xn--bcher-kva.example`). A bracketed IPv6 address only ignores case. Anything else
+    stays as written, so it differs: the client puts the host into a URL, where `A@nas`
+    and `a@nas` are other users, `nas/X` and `nas/x` other paths, and `::1` is no address
+    at all. These are told apart before httpx, whose `URL(host=)` brackets a bare `::1`
+    and escapes (then lowers) `@` and `/`. Never read one from a URL string, where
+    `admin@nas` or `nas:5001` is just `nas`, which would hide the change.
     """
     try:
         typed = TypeAdapter(_env_field_annotation(dotted_path)).validate_python(value)
@@ -460,10 +463,13 @@ def _as_compared(dotted_path: str, value: Any) -> Any:
     if not isinstance(typed, str):
         return typed
     if dotted_path == "connection.host":
+        if ":" in typed:
+            return typed.lower() if typed.startswith("[") else typed
         try:
-            return httpx.URL(scheme="https", host=typed).raw_host.decode("ascii")
-        except (httpx.InvalidURL, UnicodeError):
-            return typed  # no host httpx could send to: nothing to normalize
+            sent = httpx.URL(scheme="https", host=typed).raw_host.decode("ascii")
+        except httpx.InvalidURL:
+            return typed
+        return typed if "%" in sent else sent
     return typed.lower()
 
 

@@ -8,7 +8,10 @@ default. A config file named by ``MCP_SYNOLOGY_CONFIG`` must exist.
 from __future__ import annotations
 
 import logging
+import os
 import re
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -693,6 +696,7 @@ def test_an_override_of_the_files_setting_warns_at_any_level(
             {"host": "XN--BCHER-KVA.example", "instance_id": "home-nas"},
         ),
         ("SYNOLOGY_HOST", "nas.example", {"host": "nas\uff0eexample"}),  # IDNA's dot
+        ("SYNOLOGY_HOST", "[fe80::1]", {"host": "[FE80::1]", "instance_id": "home-nas"}),
     ],
 )
 def test_no_override_warning_when_nothing_the_file_sets_changes(
@@ -720,6 +724,13 @@ def test_no_override_warning_when_nothing_the_file_sets_changes(
         ("SYNOLOGY_HOST", "nas.example", "connection.host", {"host": "nas.example:5001"}),
         ("SYNOLOGY_HOST", "nas.example", "connection.host", {"host": "nas.example/x"}),
         ("SYNOLOGY_HOST", "admin@nas.example", "connection.host", {"host": "nas.example"}),
+        # The URL the client builds keeps these apart: another user, another path, and
+        # a bare IPv6 address that isn't valid in a URL (pre-QA r2 on #535).
+        ("SYNOLOGY_HOST", "ADMIN@nas.example", "connection.host", {"host": "admin@nas.example"}),
+        ("SYNOLOGY_HOST", "nas.example/DSM", "connection.host", {"host": "nas.example/dsm"}),
+        ("SYNOLOGY_HOST", "nas%2Fx", "connection.host", {"host": "nas/x"}),
+        ("SYNOLOGY_HOST", "::1", "connection.host", {"host": "[::1]"}),
+        ("SYNOLOGY_HOST", "[::1]", "connection.host", {"host": "[0:0:0:0:0:0:0:1]"}),
         # Look-alikes are other hosts: Cyrillic a, and a name IDNA refuses.
         ("SYNOLOGY_HOST", "n\u0430s.example", "connection.host", {"host": "nas.example"}),
         ("SYNOLOGY_HOST", "nas.example", "connection.host", {"host": "\uff4eas.example"}),
@@ -744,6 +755,34 @@ def test_a_different_value_in_any_spelling_still_warns(
     # A set instance ID: an odd host derives none the config would accept.
     load_config(str(_file(tmp_path, instance_id="home-nas", **file_settings)))
     assert _override(var, dotted) in at_error.messages()
+
+
+def test_the_real_logging_setup_shows_the_warnings_at_error(tmp_path: Path) -> None:
+    """#533's repro through the CLI's own logging setup, not a test handler."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("SYNOLOGY_", "MCP_SYNOLOGY_"))}
+    env.update(
+        HOME=str(tmp_path),
+        SYNOLOGY_LOG_LEVEL="error",
+        SYNOLOGY_HTTPS="off",
+        PYTHONIOENCODING="utf-8",
+    )
+    script = (
+        "import sys\n"
+        "from mcp_synology.cli.logging_ import _init_early_logging\n"
+        "from mcp_synology.core.config import load_config\n"
+        "_init_early_logging()\n"
+        "load_config(sys.argv[1])\n"
+    )
+    done = subprocess.run(
+        [sys.executable, "-c", script, str(_file(tmp_path, https=True))],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert done.returncode == 0, done.stderr
+    assert _override("SYNOLOGY_HTTPS", "connection.https") in done.stderr
+    assert "HTTPS is disabled. Credentials will be sent in cleartext." in done.stderr
 
 
 def test_env_only_mode_has_no_override_warning(
