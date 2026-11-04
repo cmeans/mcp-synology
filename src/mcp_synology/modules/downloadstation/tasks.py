@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NoReturn
 
@@ -53,7 +54,13 @@ _VALID_SORTS: set[str] = {"queue", *_SORT_KEYS}
 # showed within about a second of the pause, and nothing paused 3 s after creation undid.
 _PAUSE_HOLD_CHECKS = 6
 _PAUSE_HOLD_INTERVAL = 0.5
+# Seconds. The checks are 3 s of waiting when reads are quick; slow reads add to that.
+_PAUSE_HOLD_BUDGET = 6.0
 _UNDONE = "not paused: it didn't stay paused; pause it again"
+_UNCONFIRMED = "not confirmed paused: couldn't check it; see list_downloads"
+# DSM said no, no answer, or an answer without what DSM always sends. The client's own reply
+# handling raises TypeError and AttributeError on some of those (`data: null`, `error: "x"`).
+_READ_FAILED = (SynologyError, httpx.HTTPError, ValueError, TypeError, AttributeError)
 
 
 def _format_epoch(epoch: int | None) -> str:
@@ -131,8 +138,8 @@ async def _read_tasks(client: DsmClient, task_ids: list[str]) -> dict[str, dict[
                 if e.code not in _TASK_NOT_FOUND_CODES:
                     raise
         return found
-    except (SynologyError, httpx.HTTPError, ValueError) as e:
-        logger.debug("Couldn't read tasks %s back: %r", ",".join(task_ids), e)
+    except _READ_FAILED as e:
+        logger.debug("Couldn't read tasks %s: %r", ",".join(task_ids), e)
         return None
 
 
@@ -867,53 +874,77 @@ async def delete_download(
     return table
 
 
+async def _pause_again(client: DsmClient, task_ids: list[str]) -> None:
+    """The second pause. The read before the reply decides each row, so a failure here is only
+    logged."""
+    try:
+        data = await client.request(
+            "SYNO.DownloadStation.Task",
+            "pause",
+            version=1,
+            params={"id": ",".join(task_ids)},
+        )
+    except _READ_FAILED as e:
+        logger.warning("Couldn't pause %s a second time: %r", ",".join(task_ids), e)
+        return
+    results = data if isinstance(data, list) else data.get("results", [])
+    for result in results:
+        if result.get("error"):
+            logger.warning(
+                "Second pause of %s: DSM error %s", result.get("id"), result.get("error")
+            )
+
+
 async def _hold_pause(client: DsmClient, task_ids: list[str]) -> bool:
-    """Watch tasks paused while still `waiting`; False if a read failed, so nothing is known.
+    """Watch tasks paused while still `waiting`; False if a read failed or the reads took too
+    long, so nothing is known.
 
     DS can undo such a pause: `pause` answers ok, then the task goes to `downloading` and
     stays there, usually after reading `paused` for a moment (#243; the spec has the numbers
     per version). No pause sent once a task had left `waiting` was undone, so a task that has
-    left it gets one more pause, and one still `waiting` isn't paused again yet. The watch
-    stops at the first failed read: on a stalled NAS, each further read would wait out its
-    own timeout, and the reply would miss the client's time limit.
+    gone to `downloading` gets one more pause, and any other status gets none. The watch stops
+    at the first failed read, and past _PAUSE_HOLD_BUDGET: on a stalled or slow NAS, each
+    further read adds to the wait, and the reply would miss the client's time limit.
     """
+    start = time.monotonic()
+    remaining = task_ids
     paused_again: set[str] = set()
     for _ in range(_PAUSE_HOLD_CHECKS):
         await asyncio.sleep(_PAUSE_HOLD_INTERVAL)
-        tasks = await _read_tasks(client, task_ids)
+        tasks = await _read_tasks(client, remaining)
         if tasks is None:
+            logger.warning("Stopped watching paused tasks: a read failed")
             return False
+        # A task the read leaves out would cost one read per ID on every later check.
+        remaining = [t for t in remaining if t in tasks]
         again = [
             t
-            for t in task_ids
-            if t not in paused_again
-            and _not_paused_row((tasks.get(t) or {}).get("status")) == _UNDONE
+            for t in remaining
+            if t not in paused_again and tasks[t].get("status") == "downloading"
         ]
         if again:
+            logger.info("Pause undone for %s (reads downloading): pausing again", ",".join(again))
             paused_again.update(again)
-            try:
-                await client.request(
-                    "SYNO.DownloadStation.Task",
-                    "pause",
-                    version=1,
-                    params={"id": ",".join(again)},
-                )
-            except (SynologyError, httpx.HTTPError) as e:
-                logger.debug("Couldn't pause %s again: %r", ",".join(again), e)
+            await _pause_again(client, again)
+        if not remaining:
+            return True
+        if time.monotonic() - start > _PAUSE_HOLD_BUDGET:
+            logger.warning("Stopped watching paused tasks: reads too slow")
+            return False
     return True
 
 
 def _not_paused_row(status: object) -> str | None:
-    """The reply row for a task DSM said ok to pause, if its status says otherwise. A task
-    the read left out says nothing."""
-    if status is None or status == "paused":
+    """The reply row for a task DSM said ok to pause, if its status says otherwise."""
+    if status == "paused":
         return None
     return {
         # DS 3.9.5 answers ok for a finished task, which stays finished (#413).
         "finished": "not paused: already finished",
-        "error": "not paused: the task is in error",
+        "error": "not paused: the task is in error; see list_downloads",
         "waiting": "not paused: it still reads waiting; pause it again",
-    }.get(str(status), _UNDONE)
+        "downloading": _UNDONE,
+    }.get(str(status), f"not confirmed paused: it reads {status}; see list_downloads")
 
 
 async def _task_state_change(
@@ -970,17 +1001,26 @@ async def _task_state_change(
     rows, errors = _per_task_rows(results)
     done = [row[0] for row in rows if row[1] == "ok"]
     if method == "pause" and done:
-        starting = [t for t in done if (before or {}).get(t, {}).get("status") == "waiting"]
+        unique = list(dict.fromkeys(done))
+        if before is None:
+            logger.warning("Couldn't read tasks before pausing: watching all of them")
+        # A task whose status isn't known may be starting, so it's watched too.
+        starting = [
+            t
+            for t in unique
+            if before is None or before.get(t, {}).get("status", "waiting") == "waiting"
+        ]
         watched = await _hold_pause(client, starting) if starting else True
-        tasks = await _read_tasks(client, done) if watched else None
+        tasks = await _read_tasks(client, unique) if watched else None
         for row in rows:
             if row[0] not in done:
                 continue
-            if tasks is not None:
-                row[1] = _not_paused_row((tasks.get(row[0]) or {}).get("status")) or row[1]
+            status = (tasks or {}).get(row[0], {}).get("status")
+            if status is not None:
+                row[1] = _not_paused_row(status) or row[1]
             elif row[0] in starting:
-                # It may have been undone, with no read left to say: not DSM's plain ok.
-                row[1] = "not confirmed paused: it was starting; see list_downloads"
+                # It may have been undone, with nothing left to say so: not DSM's plain ok.
+                row[1] = _UNCONFIRMED
     return format_table(
         headers=["Task ID", "Result"],
         rows=rows,

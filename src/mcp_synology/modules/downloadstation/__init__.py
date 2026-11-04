@@ -165,7 +165,9 @@ MODULE_INFO = ModuleInfo(
                 "paused (one finished or already-paused task alone, a missing id, or another "
                 "user's task), the whole call fails with invalid_parameter; list_downloads "
                 "shows each task's status. If a task is still waiting to start, the call takes "
-                "about 3 s more, to check that the pause held."
+                "about 3 s more, since Download Station can undo that pause: it checks, and "
+                "pauses again once. A row saying `pause it again` means call this again; "
+                "`see list_downloads` means check the task there."
             ),
             permission_tier=PermissionTier.WRITE,
         ),

@@ -186,6 +186,17 @@ and 7.2.2, #136, #146). With at least one pausable ID, the others are refused on
 **What to do:** check each task's status with `list_downloads`. See
 [invalid_parameter](error-codes.md#invalid_parameter).
 
+### `pause_download` says a task isn't paused
+
+**Why:** Download Station can undo a pause sent while a task is starting (#243). The tool checks
+such a task for about 3 s and pauses it once more if it starts, then reports what it last read.
+
+**What to do:**
+- `pause it again`: call `pause_download` again. If the task has paused by then, that call can
+  fail with `invalid_parameter` (above), which means there's nothing left to pause.
+- `see list_downloads`: check the task's status there. `not confirmed paused: couldn't check it`
+  means the NAS didn't answer in time, so the pause may or may not have held.
+
 ### `create_download` returns no task IDs
 
 **Why:** a URL created with `username` / `password` goes through Download Station's older API,

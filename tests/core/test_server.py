@@ -1850,7 +1850,8 @@ class TestInstructionComments:
 # +135 by #515 (QA round 1): ... an invisible character anywhere Unicode doesn't use one, not
 # only padding at the ends.
 # +98 by #243: pause_download says a task still starting takes about 3 s more.
-PAYLOAD_BUDGET_CHARS = 57_231
+# +150 by #545 (QA round 1): ... and what its rows ask the model to do next.
+PAYLOAD_BUDGET_CHARS = 57_381
 
 
 class TestPayloadBudget:
