@@ -34,6 +34,7 @@ from click.testing import CliRunner
 
 from mcp_synology.cli import setup as setup_mod
 from mcp_synology.cli.main import main
+from tests.conftest import skip_unless_the_locale_can_encode
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -803,6 +804,7 @@ def test_list_gives_the_reason_a_file_cant_be_read(tmp_path: Path) -> None:
 def test_list_survives_a_stdout_that_cant_encode_the_reason(tmp_path: Path, encoding: str) -> None:
     """QA round 3 on #532: the reason holds `…`, stdout is strict about encoding, and the
     crash left the later files unlisted."""
+    skip_unless_the_locale_can_encode("b-ब.yaml")
     config_dir = tmp_path / ".config" / "mcp-synology"
     config_dir.mkdir(parents=True)
     (config_dir / "a.yaml").write_text("schema_version: 1\nauth: {username: me, secret}\n")
@@ -829,6 +831,33 @@ def test_list_survives_a_stdout_that_cant_encode_the_reason(tmp_path: Path, enco
     assert "a.yaml  (could not parse)" in output
     assert "z.yaml" in output
     assert "with no value inside" in output
+    if encoding != "utf-8":
+        # Escaped, as the code's comment promises, not `?` (#543).
+        assert "{\\u2026}" in output
+        assert "b-\\u092c.yaml" in output
+
+
+def test_list_with_stdout_closed_doesnt_crash(tmp_path: Path) -> None:
+    """Python's `sys.stdout` is None then, with no `reconfigure` to call (#543)."""
+    config_dir = tmp_path / ".config" / "mcp-synology"
+    config_dir.mkdir(parents=True)
+    (config_dir / "z.yaml").write_text("schema_version: 1\nconnection: {host: nas}\n")
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from mcp_synology.cli.main import main; main(['setup', '--list'])",
+        ],
+        stderr=subprocess.PIPE,
+        preexec_fn=lambda: os.close(1),
+        env={
+            **os.environ,
+            "HOME": str(tmp_path),
+            "PYTHON_KEYRING_BACKEND": "keyring.backends.null.Keyring",
+        },
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_list_shows_only_bare_hosts_and_text_names(tmp_path: Path) -> None:

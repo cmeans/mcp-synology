@@ -164,7 +164,10 @@ def host_problems(
     # fails with a traceback (pre-QA r2 on #511 PR 2).
     normalized = _url_host(host)
     if normalized is None:
-        if host.split(".", 1)[0].lower().startswith("xn--"):
+        # Only if that part is what fails: the advice blamed a valid first part for a bad
+        # later one (`xn--bcher-kva.my_nas`, #543).
+        first = host.split(".", 1)[0]
+        if first.lower().startswith("xn--") and _url_host(first) is None:
             return [_BAD_PUNYCODE]
         return [_INVALID_HOST]
     if bracketed:

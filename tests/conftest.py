@@ -182,3 +182,12 @@ def reauth_spy(nas_client: Any) -> Iterator[ReauthSpy]:
     _, auth, _, _ = nas_client
     with reauth_spy_on(auth) as spy:
         yield spy
+
+
+def skip_unless_the_locale_can_encode(value: str) -> None:
+    """Skip a test whose file name or environment variable this locale can't hold (#543):
+    it would fail before reaching what it tests. CI runs UTF-8, so it never skips there."""
+    try:
+        os.fsencode(value)
+    except UnicodeEncodeError:
+        pytest.skip(f"this locale can't encode {value!r}")

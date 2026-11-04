@@ -25,6 +25,7 @@ from mcp_synology.core.config import (
     load_config,
     parse_env_value,
 )
+from tests.conftest import skip_unless_the_locale_can_encode
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -789,6 +790,7 @@ def test_a_different_value_still_warns(
     monkeypatch: pytest.MonkeyPatch,
     at_error: _Lines,
 ) -> None:
+    skip_unless_the_locale_can_encode(value)
     monkeypatch.setenv(var, value)
     # A set instance ID: an odd host derives none the config would accept.
     load_config(str(_file(tmp_path, instance_id="home-nas", **file_settings)))
@@ -836,6 +838,7 @@ def test_a_variable_that_isnt_bare_stops_before_any_comparison(
 ) -> None:
     """Over any file value, so an override can't reach another user, path or port. The
     error names the variable, never the value (#532)."""
+    skip_unless_the_locale_can_encode(value)
     monkeypatch.setenv("SYNOLOGY_HOST", value)
     with pytest.raises(EnvVarError) as exc:
         load_config(str(_file(tmp_path, instance_id="home-nas", host="nas.example")))
