@@ -16,6 +16,7 @@ import re
 from pathlib import Path
 from typing import Any, Literal, get_args, get_origin
 
+import httpx
 import yaml
 from pydantic import (
     BaseModel,
@@ -442,17 +443,28 @@ def _file_value(raw: dict[str, Any], dotted_path: str) -> Any:
 def _as_compared(dotted_path: str, value: Any) -> Any:
     """``value`` as the loaded config would use it, for the override check.
 
-    A host and an instance ID in any case are the same (DNS ignores case; the instance
-    ID is lowered), and so is a port written as text in the file (`port: "5001"`, which
-    pydantic reads as 5001): the same value mustn't warn (pre-QA on #533).
+    It goes through the field's own type, so every spelling pydantic accepts in the file
+    compares equal (`https: 'on'`, `port: "5001"`; QA round 1 on #535). A value the field
+    refuses stays as written, so it differs: validation reports it unless the variable
+    replaces it. An instance ID is lowered, as the config does.
+
+    A host is compared as httpx sends it: lower-case, IDNA-mapped (`bücher.example` is
+    `xn--bcher-kva.example`), or as written if httpx refuses it. It's given to httpx as
+    the host, not in a URL: `admin@nas` or `nas:5001` read from a URL is just `nas`,
+    which would hide the change of a value that isn't the same.
     """
-    if dotted_path in ("connection.host", "instance_id") and isinstance(value, str):
-        return value.lower()
-    if dotted_path == "connection.port" and isinstance(value, str):
-        text = value.strip()
-        if text.isascii() and text.isdigit():
-            return int(text)
-    return value
+    try:
+        typed = TypeAdapter(_env_field_annotation(dotted_path)).validate_python(value)
+    except ValidationError:
+        return value
+    if not isinstance(typed, str):
+        return typed
+    if dotted_path == "connection.host":
+        try:
+            return httpx.URL(scheme="https", host=typed).raw_host.decode("ascii")
+        except (httpx.InvalidURL, UnicodeError):
+            return typed  # no host httpx could send to: nothing to normalize
+    return typed.lower()
 
 
 def _merge_env_overrides(raw: dict[str, Any], *, from_file: bool = False) -> dict[str, Any]:

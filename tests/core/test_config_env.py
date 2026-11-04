@@ -674,6 +674,25 @@ def test_an_override_of_the_files_setting_warns_at_any_level(
         ("SYNOLOGY_INSTANCE_ID", "home-nas", {"instance_id": "Home-NAS"}),
         ("SYNOLOGY_HOST", "nas.example", {"host": "NAS.example"}),
         ("SYNOLOGY_PORT", "5001", {"port": "5001"}),
+        # Every spelling the config accepts (QA round 1 on #535): the file's value goes
+        # through the field's own type, and a host is compared as httpx would send it.
+        ("SYNOLOGY_HTTPS", "true", {"https": "on"}),
+        ("SYNOLOGY_HTTPS", "true", {"https": "yes"}),
+        ("SYNOLOGY_HTTPS", "true", {"https": 1}),
+        ("SYNOLOGY_HTTPS", "off", {"https": "no"}),
+        ("SYNOLOGY_PORT", "5001", {"port": " 5001 "}),
+        ("SYNOLOGY_HOST", "xn--bcher-kva.example", {"host": "b\u00fccher.example"}),
+        (
+            "SYNOLOGY_HOST",
+            "b\u00fccher.example",
+            {"host": "xn--bcher-kva.example", "instance_id": "home-nas"},
+        ),
+        (
+            "SYNOLOGY_HOST",
+            "B\u00dcCHER.example",
+            {"host": "XN--BCHER-KVA.example", "instance_id": "home-nas"},
+        ),
+        ("SYNOLOGY_HOST", "nas.example", {"host": "nas\uff0eexample"}),  # IDNA's dot
     ],
 )
 def test_no_override_warning_when_nothing_the_file_sets_changes(
@@ -687,6 +706,44 @@ def test_no_override_warning_when_nothing_the_file_sets_changes(
     monkeypatch.setenv(var, value)
     load_config(str(_file(tmp_path, **file_settings)))
     assert not [w for w in at_error.messages() if "overrides" in w]
+
+
+@pytest.mark.parametrize(
+    ("var", "value", "dotted", "file_settings"),
+    [
+        ("SYNOLOGY_HTTPS", "on", "connection.https", {"https": "off"}),
+        # A file value its field refuses is compared as written: it can't equal anything.
+        ("SYNOLOGY_HTTPS", "on", "connection.https", {"https": "maybe"}),
+        ("SYNOLOGY_PORT", "5001", "connection.port", {"port": "nope"}),
+        # Reading these as a URL would leave just `nas.example`, hiding the change.
+        ("SYNOLOGY_HOST", "nas.example", "connection.host", {"host": "admin@nas.example"}),
+        ("SYNOLOGY_HOST", "nas.example", "connection.host", {"host": "nas.example:5001"}),
+        ("SYNOLOGY_HOST", "nas.example", "connection.host", {"host": "nas.example/x"}),
+        ("SYNOLOGY_HOST", "admin@nas.example", "connection.host", {"host": "nas.example"}),
+        # Look-alikes are other hosts: Cyrillic a, and a name IDNA refuses.
+        ("SYNOLOGY_HOST", "n\u0430s.example", "connection.host", {"host": "nas.example"}),
+        ("SYNOLOGY_HOST", "nas.example", "connection.host", {"host": "\uff4eas.example"}),
+        (
+            "SYNOLOGY_HOST",
+            "xn--bcher-kvb.example",
+            "connection.host",
+            {"host": "b\u00fccher.example"},
+        ),
+    ],
+)
+def test_a_different_value_in_any_spelling_still_warns(
+    var: str,
+    value: str,
+    dotted: str,
+    file_settings: dict[str, Any],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    at_error: _Lines,
+) -> None:
+    monkeypatch.setenv(var, value)
+    # A set instance ID: an odd host derives none the config would accept.
+    load_config(str(_file(tmp_path, instance_id="home-nas", **file_settings)))
+    assert _override(var, dotted) in at_error.messages()
 
 
 def test_env_only_mode_has_no_override_warning(
