@@ -72,7 +72,18 @@ def setup(config: str | None, list_configs: bool, verbose: bool) -> None:
 
 def _list_configurations() -> None:
     """List existing configuration files in the config directory."""
-    from mcp_synology.core.config import parse_config_text
+    # Stdout is strict about encoding, and a reason (`…`), a file's name or the folder's can
+    # hold what it can't encode: crashing would leave the later files unlisted (QA round 3
+    # and pre-QA on #532).
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(errors="backslashreplace")
+
+    from mcp_synology.core.config import (
+        format_yaml_error,
+        host_problems,
+        instance_id_problem,
+        parse_config_text,
+    )
 
     if not _CONFIG_DIR.exists():
         click.echo("No configurations found.")
@@ -89,15 +100,34 @@ def _list_configurations() -> None:
     for f in yaml_files:
         try:
             raw = parse_config_text(f.read_text(encoding="utf-8")) or {}
-            host = raw.get("connection", {}).get("host", "?")
-            alias = raw.get("alias", "")
-            instance_id = raw.get("instance_id", f.stem)
-            label = alias or instance_id
+            # An empty `connection:` is no connection settings (#492).
+            host = (raw.get("connection") or {}).get("host")
+            # Shown only when it's a bare host the server would accept: one written as a
+            # URL can hold a password (#476, #471).
+            if host is None:
+                host = "?"
+            elif not isinstance(host, str) or host_problems(host):
+                host = "(not shown: not a bare host name or IP address)"
+            # Only text the server would accept: `alias: {password: …}` printed the
+            # mapping (#476).
+            alias = raw.get("alias")
+            instance_id = raw.get("instance_id")
+            if isinstance(alias, str) and alias.strip():
+                label = alias
+            elif isinstance(instance_id, str) and not instance_id_problem(instance_id):
+                label = instance_id.lower()  # as the server uses it
+            else:
+                label = f.stem
             click.echo(f"  {f.name}")
             click.echo(f"    Name: {label}")
             click.echo(f"    Host: {host}")
             click.echo()
-        except (OSError, ValueError, yaml.YAMLError, AttributeError):
+        except yaml.YAMLError as e:
+            # The reason `check` gives; format_yaml_error never quotes the file (QA round 2
+            # on #532).
+            click.echo(f"  {f.name}  (could not parse)")
+            click.echo(f"    {format_yaml_error(e)}")
+        except (OSError, ValueError, AttributeError):
             click.echo(f"  {f.name}  (could not parse)")
 
 
@@ -105,8 +135,26 @@ def _setup_interactive(verbose: bool) -> None:
     """Interactive setup when no config file exists."""
     click.echo("No configuration file found. Let's create one.\n")
 
-    # Prompt for connection details
-    host = click.prompt("NAS host (IP or hostname)")
+    from mcp_synology.core.config import host_message, host_problems, instance_id_problem
+
+    # Prompt for connection details. The host is checked here, by the config's own rule,
+    # so a URL, port or user name gets advice and another try instead of a failure after
+    # every other prompt (#471).
+    while True:
+        host = click.prompt("NAS host (IP or hostname)")
+        problems = host_problems(
+            host,
+            port_setting="type the port at the DSM port question",
+            https_setting='answer yes to "Use HTTPS?"',
+            ipv6_form="[fd00::1]",
+            credentials_setting="are asked for after these questions",
+        )
+        if not problems:
+            break
+        click.echo(
+            click.style(f"  The host {host_message(problems, hidden_note=False)}", fg="red"),
+            err=True,
+        )
     # HTTPS by default (#193): DSM serves it on 5001 out of the box.
     use_https = click.confirm("Use HTTPS?", default=True)
     if not use_https:
@@ -117,6 +165,10 @@ def _setup_interactive(verbose: bool) -> None:
                 fg="yellow",
             )
         )
+    # A NAS on a custom port couldn't be set up interactively (#504 item 1): the host
+    # takes no port, so it's asked for here, defaulting to DSM's.
+    default_port = 5001 if use_https else 5000
+    port = click.prompt("DSM port", default=default_port, type=click.IntRange(1, 65535))
     permission = click.prompt(
         "File Station permission",
         type=click.Choice(["read", "write"]),
@@ -127,6 +179,22 @@ def _setup_interactive(verbose: bool) -> None:
     from mcp_synology.core.config import _derive_instance_id
 
     instance_id = _derive_instance_id(host)
+    # An IPv6 address, or a name with characters outside a-z, 0-9 and hyphens, gives no
+    # usable ID: ask for one.
+    if instance_id_problem(instance_id):
+        click.echo(
+            "  This host gives no usable instance ID (its first part has characters other "
+            "than letters a-z, digits and hyphens)."
+        )
+        while True:
+            instance_id = click.prompt(
+                "Instance ID (names this config; lowercase letters, digits and hyphens)"
+            ).lower()
+            if not (problem := instance_id_problem(instance_id)):
+                break
+            # The file's "leave it out to derive it" advice doesn't apply here: this host
+            # gives none (pre-QA r3).
+            click.echo(f"  That instance ID {'is empty' if not instance_id.strip() else problem}.")
 
     # Prompt for alias
     alias_input = click.prompt("Alias (friendly name, optional)", default="", show_default=False)
@@ -134,6 +202,8 @@ def _setup_interactive(verbose: bool) -> None:
 
     # Build config dict
     conn: dict[str, Any] = {"host": host}
+    if port != default_port:
+        conn["port"] = port
     if use_https:
         conn["https"] = True
         click.echo(
@@ -158,12 +228,15 @@ def _setup_interactive(verbose: bool) -> None:
         config_dict["alias"] = alias
 
     # Validate before writing
-    from mcp_synology.core.config import AppConfig
+    from pydantic import ValidationError
+
+    from mcp_synology.core.config import AppConfig, format_validation_error
 
     try:
         app_config = AppConfig(**config_dict)
-    except ValueError as e:
-        click.echo(click.style(f"Config validation failed: {e}", fg="red"), err=True)
+    except ValidationError as e:
+        # Screened like every config error: pydantic's own text quotes the input (#471).
+        click.echo(click.style(f"Error: {format_validation_error(e)}", fg="red"), err=True)
         sys.exit(1)
 
     # Prompt for credentials

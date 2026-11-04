@@ -10,11 +10,13 @@ Four-step loading:
 from __future__ import annotations
 
 import difflib
+import ipaddress
 import logging
 import os
 import re
+from datetime import date
 from pathlib import Path
-from typing import Any, Literal, get_args, get_origin
+from typing import Annotated, Any, Literal, get_args, get_origin
 
 import httpx
 import yaml
@@ -47,6 +49,211 @@ ENV_VAR_MAP: dict[str, str] = {
 }
 
 
+# Characters a host name or IP address never has, beyond the ones `host_problems`
+# explains on their own (`:`, `/`, `@`, brackets, whitespace).
+_HOST_OTHER_BAD = frozenset("\\?#%\"'<>^`{|},;=&+$!*()~")
+
+
+_BRACKETED = re.compile(r"\[([^\]]*)\](?::(.*))?")
+_IPV6_ZONE = re.compile(r"[A-Za-z0-9._~-]+")
+_IDNA_DOTS = str.maketrans({"。": ".", "．": ".", "｡": "."})
+# Quoted in the config file: unquoted, `host: [fd00::1]` is a YAML list (pre-QA r2 on
+# #511 PR 2). An env var or setup's prompt takes it as typed.
+_IPV6_FILE_FORM = '"[fd00::1]", in quotes'
+_INVALID_HOST = (
+    "isn't a valid host name or IP address (an IPv4 address has four numbers from 0 to "
+    "255 with no leading zeros; a name's parts are at most 63 characters)"
+)
+# Its own advice: such a host meets every rule _INVALID_HOST states (pre-QA on #532).
+_BAD_PUNYCODE = (
+    "starts with a part beginning xn--, which isn't valid punycode: write the name as it's "
+    "spelled, or copy its xn-- form exactly"
+)
+# A last part that's a number (or 0x hex) makes the whole host an IPv4 address to URL
+# parsers and the resolver, which expand a short one: `192.168.1` is 192.168.0.1, the
+# router, not the NAS (WHATWG URL's "ends in a number" rule; pre-QA r3 on #511 PR 2).
+_NUMERIC_LABEL = re.compile(r"(?:\d+|0[xX][0-9a-fA-F]*)", re.ASCII)
+_SHORT_IPV4 = (
+    "ends in a number, so it's read as an IPv4 address, but it isn't a whole one: write all "
+    "four numbers (192.168.1.100), or a name whose last part isn't a number"
+)
+
+
+def host_problems(
+    host: str,
+    port_setting: str = "set connection.port",
+    https_setting: str = "set https: true",
+    ipv6_form: str = _IPV6_FILE_FORM,
+    credentials_setting: str = "go under auth or in the keyring (mcp-synology setup)",
+) -> list[str]:
+    """What keeps ``host`` from being a bare host name or IP address, as advice (#511 PR 2).
+
+    The URL is built as ``http(s)://{host}:{port}``, so a scheme, user name, port or path
+    written into the host made a broken URL (a traceback, #504) or put a password into
+    the server instructions, tool errors and logs (#476, #471). An IPv6 address goes in
+    square brackets (`[fd00::1]`), as in a URL. Never quotes the host: it can hold a
+    password. ``port_setting``, ``https_setting``, ``ipv6_form`` and
+    ``credentials_setting`` say how to set the port, HTTPS, an IPv6 address and the
+    credentials where the host came from (the file, an env var, setup's questions).
+    """
+    bracket_advice = (
+        "has square brackets: square brackets hold only an IPv6 address, around all of "
+        f"it, {ipv6_form}"
+    )
+    if not host.strip():
+        return ["is empty"]
+    problems = []
+    rest = host
+    if "://" in rest:
+        problems.append(f"has a scheme: drop the http:// or https:// (for HTTPS, {https_setting})")
+        rest = rest.split("://", 1)[1]
+    if "@" in rest:
+        problems.append(
+            f"has a user name: user names and passwords {credentials_setting}, never in the host"
+        )
+        rest = rest.rsplit("@", 1)[1]
+    if "/" in rest:
+        problems.append("has a path: the host takes no path")
+        rest = rest.split("/", 1)[0]
+    port = f"has a port: {port_setting} instead"
+    if bracketed := _BRACKETED.fullmatch(rest):
+        # `[fd00::1]` is the right form, also inside a URL (`https://[fd00::1]:5001`):
+        # only what surrounds it is wrong.
+        try:
+            ipaddress.IPv6Address(bracketed[1])
+        except ValueError:
+            problems.append(bracket_advice)
+        else:
+            # ipaddress takes any zone text (`fe80::1%a\b`); a URL's zone is RFC 6874's
+            # unreserved characters (QA round 1 on #532).
+            zone = bracketed[1].partition("%")[2]
+            if "%" in bracketed[1] and not _IPV6_ZONE.fullmatch(zone):
+                problems.append(
+                    "has an IPv6 zone (after %) with characters other than letters, digits, "
+                    "'.', '_', '~' and '-'"
+                )
+        if bracketed[2] is not None:
+            problems.append(port)
+    else:
+        try:
+            ipaddress.IPv6Address(rest)
+        except ValueError:
+            pass
+        else:
+            return [*problems, f"is an IPv6 address: write it in square brackets, {ipv6_form}"]
+        if "[" in rest or "]" in rest:
+            # A half-bracketed IPv6 address has colons too: they aren't a port then.
+            problems.append(bracket_advice)
+        elif ":" in rest:
+            problems.append(port)
+    if any(c.isspace() or not c.isprintable() for c in host):
+        problems.append("has a space or an invisible character")
+    if not bracketed and any(c in _HOST_OTHER_BAD for c in rest):
+        problems.append("has a character a host name can't have")
+    if not problems and (rest.startswith(".") or ".." in rest):
+        problems.append("has an empty part (a leading dot, or two dots in a row)")
+    if problems:
+        return problems
+    # What's left is a name or address that looks bare; the URL library has the final
+    # say (`999.1.1.1`, `01.2.3.4`, a name IDNA can't encode), or the URL built from it
+    # fails with a traceback (pre-QA r2 on #511 PR 2).
+    normalized = _url_host(host)
+    if normalized is None:
+        if host.split(".", 1)[0].lower().startswith("xn--"):
+            return [_BAD_PUNYCODE]
+        return [_INVALID_HOST]
+    if bracketed:
+        return []
+    # As _INVALID_HOST says, which httpx doesn't check (QA round 1 on #532). On the host as
+    # sent: `.host` decodes a first `xn--` part, so it would measure the short form (QA
+    # round 2).
+    sent = httpx.URL(f"http://{host}/").raw_host.decode("ascii")
+    if any(len(label) > 63 for label in sent.split(".")):
+        return [_INVALID_HOST]
+    # The numeric rule reads the host as httpx will use it: IDNA maps `。`, `．` and `｡`
+    # to `.`, so `192。168。1` is `192.168.1` (pre-QA r4), as WHATWG checks "ends in a
+    # number" after domain-to-ASCII.
+    bare = normalized.removesuffix(".")
+    if _NUMERIC_LABEL.fullmatch(bare.rsplit(".", 1)[-1]):
+        try:
+            ipaddress.IPv4Address(bare)
+        except ValueError:
+            return [_SHORT_IPV4]
+        if bare != normalized:
+            # `192.168.1.100.` resolves nowhere, and gave the instance ID `192`, shared by
+            # every such host (pre-QA r4). A name's trailing dot (`nas.local.`) is fine.
+            return ["has a dot after the IPv4 address: drop it"]
+    return []
+
+
+def _url_host(host: str) -> str | None:
+    """``host`` as httpx reads it, or None if it refuses it: a name IDNA-mapped and lower-case,
+    an IPv6 address as written. A name whose first part is `xn--` comes back decoded (`.host`
+    does that); `raw_host` is what's sent.
+
+    Both steps can fail: building the URL (`httpx.InvalidURL`), and reading `.host`,
+    which decodes an `xn--` first label and raises idna's own error (a UnicodeError)
+    for a malformed one, its text decoded from the host (QA round 1 on #532).
+    """
+    try:
+        return httpx.URL(f"http://{host}/").host
+    except (httpx.InvalidURL, UnicodeError):
+        return None
+
+
+def host_message(problems: list[str], *, hidden_note: bool = True) -> str:
+    """The advice for a host `host_problems` refused, without the host.
+
+    ``hidden_note=False`` leaves out why the host isn't shown, for setup's prompt, where
+    it's right above (pre-QA on #532).
+    """
+    if problems == ["is empty"]:
+        return "must be a bare host name or IP address, and it is empty."
+    return (
+        "must be a bare host name or IP address, and it "
+        + "; it ".join(problems)
+        + (". It isn't shown, since it may hold a password." if hidden_note else ".")
+    )
+
+
+_INSTANCE_ID_RULE = "lowercase letters, digits and hyphens; capitals are lowered"
+
+
+def instance_id_problem(value: str) -> str | None:
+    """Why ``value`` can't be an `instance_id`, or None. An empty one gave every such
+    instance one keyring entry (`mcp-synology/default`) and session name prefix (#485).
+    The limit is a host part's: a config file and a keyring entry are named after it, and
+    a very long one crashed `setup` with the keyring already written (QA round 2 on #532).
+    """
+    if not value.strip():
+        return (
+            "is empty: leave instance_id out to derive it from the host, or set it to "
+            f"{_INSTANCE_ID_RULE}"
+        )
+    if len(value) > 63:
+        return "is longer than 63 characters"
+    if not re.fullmatch(r"[a-z0-9-]+", value.lower()):
+        return f"may hold only {_INSTANCE_ID_RULE}"
+    return None
+
+
+def _unquoted_text_problem(value: object) -> None:
+    """Say why a text setting got a number, date or boolean, without showing it: the value
+    is hidden there, and `123` looks like text in the file (QA round 2 on #532)."""
+    if isinstance(value, bool | int | float | date):
+        msg = "isn't text: YAML read it as a number, date or true/false, so put it in quotes."
+        raise ValueError(msg)
+
+
+def _not_a_bool(value: object) -> object:
+    """Refuse true/false for a number: pydantic reads it as 1 or 0, so `port: yes` loaded
+    as port 1 and `timeout: on` as one second (pre-QA r3 on #511 PR 2)."""
+    if isinstance(value, bool):
+        msg = "must be a whole number, not true or false (YAML reads yes/no/on/off as those)."
+        raise ValueError(msg)
+    return value
+
+
 class ConnectionConfig(BaseModel, extra="forbid"):
     """NAS connection settings.
 
@@ -56,10 +263,38 @@ class ConnectionConfig(BaseModel, extra="forbid"):
     """
 
     host: str
-    port: int | None = None
+    port: int | None = Field(default=None, ge=1, le=65535)
     https: bool = False
     verify_ssl: bool = True
     timeout: int = Field(default=30, ge=1, le=600)
+
+    @field_validator("port", "timeout", mode="before")
+    @classmethod
+    def _no_bool_number(cls, value: object) -> object:
+        return _not_a_bool(value)
+
+    @field_validator("host", mode="before")
+    @classmethod
+    def _host_as_yaml_read_it(cls, value: object) -> object:
+        # `host: [fd00::1]` unquoted is a YAML list holding the address.
+        if isinstance(value, list) and len(value) == 1 and isinstance(value[0], str):
+            msg = (
+                "is a YAML list, not text: an IPv6 address in square brackets needs quotes, "
+                '"[fd00::1]".'
+            )
+            raise ValueError(msg)
+        # Left blank, as `host: ""` says it (QA round 2 on #532).
+        if value is None:
+            raise ValueError(host_message(["is empty"]))
+        _unquoted_text_problem(value)
+        return value
+
+    @field_validator("host")
+    @classmethod
+    def _bare_host(cls, value: str) -> str:
+        if problems := host_problems(value):
+            raise ValueError(host_message(problems))
+        return value
 
 
 class AuthConfig(BaseModel, extra="forbid"):
@@ -71,6 +306,14 @@ class AuthConfig(BaseModel, extra="forbid"):
     username: str | None = None
     password: str | None = None
     device_id: str | None = None
+
+    @field_validator("username", "password", "device_id", mode="before")
+    @classmethod
+    def _credential_as_yaml_read_it(cls, value: object) -> object:
+        # `password: 123456` looks like text, and these values are never shown (pre-QA r6
+        # on #532).
+        _unquoted_text_problem(value)
+        return value
 
 
 class ModuleConfig(BaseModel, extra="forbid"):
@@ -86,12 +329,38 @@ class ModuleConfig(BaseModel, extra="forbid"):
     permission: Literal["read", "write", "admin"] = "read"
     settings: dict[str, Any] = Field(default_factory=dict)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _empty_is_defaults(cls, value: object) -> object:
+        # `filestation:` with nothing under it is `filestation: {}` (#492).
+        return {} if value is None else value
+
+    @field_validator("settings", mode="before")
+    @classmethod
+    def _empty_settings(cls, value: object) -> object:
+        return {} if value is None else value
+
+
+def _no_empty_path(name: str, value: str | None) -> str | None:
+    """An empty or blank file path names no file: an error, not "none" (#511; the same
+    class as `--config ''`), so a log file or instructions file the user meant to set
+    isn't dropped without a word."""
+    if value is not None and not value.strip():
+        msg = f"is empty: give a file's path, or leave {name} out."
+        raise ValueError(msg)
+    return value
+
 
 class LoggingConfig(BaseModel, extra="forbid"):
     """Logging configuration. extra="forbid" (#386): `levle: debug` is an error."""
 
     level: Literal["debug", "info", "warning", "error"] = "info"
     file: str | None = None
+
+    @field_validator("file")
+    @classmethod
+    def _file_not_empty(cls, value: str | None) -> str | None:
+        return _no_empty_path("logging.file", value)
 
 
 class AppConfig(BaseModel, extra="forbid"):
@@ -118,6 +387,11 @@ class AppConfig(BaseModel, extra="forbid"):
     # adds to it (#257). Unset keeps the per-module rule from before #257.
     allowed_local_paths: list[str] | None = Field(default=None, min_length=1)
 
+    @field_validator("schema_version", mode="before")
+    @classmethod
+    def _no_bool_schema_version(cls, value: object) -> object:
+        return _not_a_bool(value)
+
     @field_validator("update_notices", mode="before")
     @classmethod
     def _yaml_bool_notices(cls, value: object) -> object:
@@ -133,6 +407,26 @@ class AppConfig(BaseModel, extra="forbid"):
     @classmethod
     def _absolute_local_paths(cls, value: list[str] | None) -> list[str] | None:
         return check_local_path_entries("allowed_local_paths", value)
+
+    @field_validator("auth", "logging", "modules", mode="before")
+    @classmethod
+    def _empty_section(cls, value: object) -> object:
+        # An empty section (`auth:`, which YAML reads as null) is the same as one left
+        # out, whatever the environment sets (#492, #475). An empty `modules:` then gets
+        # the "at least one module" error. `connection:` stays None: its own error says
+        # the host is needed.
+        return {} if value is None else value
+
+    @field_validator("instance_id", mode="before")
+    @classmethod
+    def _instance_id_as_yaml_read_it(cls, value: object) -> object:
+        _unquoted_text_problem(value)  # left blank (None) is still "not set"
+        return value
+
+    @field_validator("instructions_file")
+    @classmethod
+    def _instructions_file_not_empty(cls, value: str | None) -> str | None:
+        return _no_empty_path("instructions_file", value)
 
     @property
     def display_name(self) -> str:
@@ -185,30 +479,22 @@ class AppConfig(BaseModel, extra="forbid"):
         if derived:
             self.instance_id = _derive_instance_id(self.connection.host)
 
-        # Normalize and validate instance_id format
-        if self.instance_id:
-            self.instance_id = self.instance_id.lower()
-            if not re.match(r"^[a-z0-9-]+$", self.instance_id):
-                # A derived one isn't quoted: a host written as a URL can carry a password
-                # (`https://admin:…@nas`, #386).
-                what = (
-                    "The instance_id derived from connection.host"
-                    if derived
-                    else f"instance_id '{self.instance_id}'"
-                )
+        # Normalize and validate instance_id format. `is not None`: an empty one is
+        # refused too (#485).
+        if self.instance_id is not None:
+            if derived and instance_id_problem(self.instance_id):
+                # The host is already a bare name or address; what's left is an IPv6
+                # address, or a name with characters outside a-z, 0-9 and hyphens.
                 msg = (
-                    f"{what} contains invalid characters. Only lowercase alphanumeric "
-                    "characters and hyphens are allowed"
-                    + (
-                        ": write connection.host as a bare host name or IPv4 address (no "
-                        "https://, user name or port), or set instance_id (lowercase letters, "
-                        "digits and hyphens), which an IPv6 address or a host name with "
-                        "other characters needs."
-                        if derived
-                        else "."
-                    )
+                    "connection.host gives no usable instance_id: its first part has "
+                    "characters other than letters a-z, digits and hyphens (an IPv6 address, "
+                    "an underscore, or a letter outside a-z). Set instance_id, or the "
+                    f"SYNOLOGY_INSTANCE_ID environment variable ({_INSTANCE_ID_RULE})."
                 )
                 raise ValueError(msg)
+            if problem := instance_id_problem(self.instance_id):
+                raise ValueError(f"instance_id {problem}.")
+            self.instance_id = self.instance_id.lower()
 
         return self
 
@@ -219,6 +505,9 @@ def _derive_instance_id(host: str) -> str:
     IP addresses: dots -> hyphens (192.168.1.100 -> 192-168-1-100)
     Hostnames: first component (nas.local -> nas)
     """
+    # IDNA reads `。`, `．` and `｡` as dots, and host_problems accepts them, so they split
+    # here too: `nas．local` is `nas` (QA round 1 on #532).
+    host = host.translate(_IDNA_DOTS)
     # IP address pattern
     if re.match(r"^\d+\.\d+\.\d+\.\d+$", host):
         return host.replace(".", "-")
@@ -314,6 +603,17 @@ class EnvVarError(ValueError):
     """
 
 
+def _env_field_bounds(dotted_path: str) -> tuple[Any, ...]:
+    """The config field's range constraints (`port`'s 1 to 65535), as pydantic metadata."""
+    section, _, name = dotted_path.rpartition(".")
+    model: Any = _SECTION_MODELS[section] if section else AppConfig
+    return tuple(
+        m
+        for m in model.model_fields[name].metadata
+        if getattr(m, "ge", None) is not None or getattr(m, "le", None) is not None
+    )
+
+
 def _env_field_annotation(dotted_path: str) -> Any:
     """The type of the config field at ``dotted_path`` (``connection.https``)."""
     model: Any = AppConfig
@@ -332,7 +632,7 @@ def _env_field_annotation(dotted_path: str) -> Any:
     return annotation
 
 
-def _env_expected(annotation: Any) -> str:
+def _env_expected(annotation: Any, bounds: tuple[Any, ...] = ()) -> str:
     """What a field of ``annotation`` takes, for an env var's error."""
     if get_origin(annotation) is Literal:
         kind = annotation
@@ -341,7 +641,10 @@ def _env_expected(annotation: Any) -> str:
     if kind is bool:
         return "true or false (also 1/0, yes/no, on/off)"
     if kind is int:
-        return "a whole number"
+        low = next((m.ge for m in bounds if getattr(m, "ge", None) is not None), None)
+        high = next((m.le for m in bounds if getattr(m, "le", None) is not None), None)
+        bounded = low is not None and high is not None
+        return "a whole number" + (f" from {low} to {high}" if bounded else "")
     if get_origin(kind) is Literal:
         return "one of " + ", ".join(str(v) for v in get_args(kind))
     # A text field takes any value, so it never fails to parse and never gets here.
@@ -371,8 +674,9 @@ def parse_env_value(env_var: str, dotted_path: str, value: str) -> Any:
     the config file's are lower-case), with `update_notices` also taking the words the
     file's YAML reads as booleans (`no` is off). Typed values are stripped; text values
     (host, credentials, `instance_id`) are taken as given, as in the file. A value of the
-    wrong type is an error naming the variable; a field's own rules (an `instance_id`'s
-    characters) are checked with the rest of the config.
+    wrong type, or one that breaks its field's own rule (the port's range, a bare host, an
+    `instance_id`'s characters; #511 PR 2), is an error naming the variable, never quoting
+    the value.
 
     `SYNOLOGY_HTTPS` used to be true for `true`, `1` or `yes` and false for anything
     else, so `on` (or a typo) turned HTTPS off even over `https: true` in the config, and
@@ -381,7 +685,23 @@ def parse_env_value(env_var: str, dotted_path: str, value: str) -> Any:
     annotation = _env_field_annotation(dotted_path)
     kinds = [a for a in get_args(annotation) if a is not type(None)] or [annotation]
     if kinds == [str]:
-        return value  # text: taken as given
+        # Text: taken as given, then held to the field's own rule.
+        if dotted_path == "connection.host" and (
+            problems := host_problems(
+                value,
+                port_setting="set SYNOLOGY_PORT",
+                https_setting="set SYNOLOGY_HTTPS=true",
+                ipv6_form="[fd00::1]",
+                credentials_setting=(
+                    "go in SYNOLOGY_USERNAME and SYNOLOGY_PASSWORD or in the keyring "
+                    "(mcp-synology setup)"
+                ),
+            )
+        ):
+            raise EnvVarError(f"{env_var} (it sets {dotted_path}) {host_message(problems)}")
+        if dotted_path == "instance_id" and (problem := instance_id_problem(value)):
+            raise EnvVarError(f"{env_var} {problem} (it sets {dotted_path}).")
+        return value
     text = value.strip()
     if kinds == [bool]:
         word = _ENV_BOOLS.get(text.lower())
@@ -402,11 +722,13 @@ def parse_env_value(env_var: str, dotted_path: str, value: str) -> Any:
         get_origin(a) is Literal for a in get_args(annotation)
     ):
         text = text.lower()
+    bounds = _env_field_bounds(dotted_path)
+    field_type = Annotated[annotation, *bounds] if bounds else annotation
     try:
-        return TypeAdapter(annotation).validate_python(text)
+        return TypeAdapter(field_type).validate_python(text)
     except ValidationError:
         raise EnvVarError(
-            f"{env_var} must be {_env_expected(annotation)} (it sets {dotted_path})."
+            f"{env_var} must be {_env_expected(annotation, bounds)} (it sets {dotted_path})."
         ) from None
 
 
@@ -442,7 +764,7 @@ def _file_value(raw: dict[str, Any], dotted_path: str) -> Any:
     return target
 
 
-# Only an address: `[::1]/x`, `[a:b]@nas` or a zone (`[fe80::1%25eth0]`) can differ by case.
+# Only an address: `[::1]/x`, `[a:b]@nas` or a zone (`[fe80::1%eth0]`) can differ by case.
 _BRACKETED_ADDRESS = re.compile(r"\[[0-9A-Fa-f:.]+\]")
 
 
@@ -463,14 +785,13 @@ def _as_compared(dotted_path: str, value: Any) -> Any:
     replaces it. An instance ID is lowered, as the config does.
 
     A host name is compared as httpx sends it: lower-case, IDNA-mapped (`bücher.example`
-    is `xn--bcher-kva.example`). A bracketed IPv6 address only ignores case. Anything else
-    stays as written, so it differs: the client puts the host into a URL, where `A@nas`
-    and `a@nas` are other users, `nas/X` and `nas/x` other paths, and `::1` is no address
-    at all. A `:` is told apart before httpx, whose `URL(host=)` brackets a bare `::1`.
-    `@` and `/` are told apart after it, by the `%` its escaping leaves in the lowered
-    host. httpx doesn't document that escaping and `httpx>=0.27` has no upper bound, so
-    `test_a_different_value_still_warns` pins it. Never read a host from a URL string,
-    where `admin@nas` or `nas:5001` is just `nas`, which would hide the change.
+    is `xn--bcher-kva.example`). A bracketed IPv6 address only ignores case, unless it has
+    a zone, which names an interface. Any other host with a `:` stays as written, so it
+    differs: httpx's `URL(host=)` would bracket a bare `::1`. Only the file's value can be
+    such a host, or have `@` or `/`, which httpx escapes: the variable must be bare
+    (`parse_env_value`), so neither form can equal it.
+    Never read a host from a URL string, where `admin@nas` or `nas:5001` is just `nas`,
+    which would hide the change.
     """
     typed = _as_field_reads(dotted_path, value)
     if not isinstance(typed, str):
@@ -479,10 +800,9 @@ def _as_compared(dotted_path: str, value: Any) -> Any:
         if ":" in typed:
             return typed.lower() if _BRACKETED_ADDRESS.fullmatch(typed) else typed
         try:
-            sent = httpx.URL(scheme="https", host=typed).raw_host.decode("ascii")
+            return httpx.URL(scheme="https", host=typed).raw_host.decode("ascii")
         except httpx.InvalidURL:
             return typed
-        return typed if "%" in sent else sent
     return typed.lower() if dotted_path == "instance_id" else typed
 
 
@@ -625,6 +945,13 @@ def _may_show(err: Any, loc_parts: list[str]) -> bool:
         "model_attributes_type",
     ):
         return False
+    # The host can hold a password (`admin:…@nas`, #476); its own error says what's wrong.
+    if loc_parts[:2] == ["connection", "host"]:
+        return False
+    # Nor the instance ID, whatever its type (`instance_id: 123`): anything may be pasted
+    # there (#511 PR 2, decision 4; pre-QA on #532).
+    if loc_parts[:1] == ["instance_id"]:
+        return False
     return not (loc_parts and loc_parts[0] == "auth")
 
 
@@ -741,15 +1068,191 @@ class ConfigValueError(yaml.YAMLError):
     kind: str = ""
 
 
-def parse_config_text(text: str) -> Any:
-    """`yaml.safe_load`, with any error building a value raised as `ConfigValueError`.
+class ConfigKeyError(yaml.YAMLError):
+    """A mapping in the config file repeats a key, or has a key with no value inside
+    `{…}` (#464). ``message`` is the whole user-facing text, with line numbers and only
+    the config's own key names, module names and keys in a module's settings, never a
+    value."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
+
+
+_MERGE_TAG = "tag:yaml.org,2002:merge"
+# A plain `=` key. SafeLoader rewrites this tag to text only while flattening, which comes
+# after the checks, and has no constructor for it (QA round 2 on #532).
+_VALUE_TAG = "tag:yaml.org,2002:value"
+# A repeated module or settings key is named only in this form, so it can't forge a line
+# of the error (QA round 2 on #532).
+_NAMEABLE_KEY = re.compile(r"[\w.-]+")
+
+
+class _ConfigLoader(yaml.SafeLoader):
+    """SafeLoader that refuses a repeated key and a valueless key in a flow mapping (#464).
+
+    PyYAML keeps the last of two equal keys without a word, so `https: true` then
+    `https: false`, two `password:` lines, or a second, empty `connection:` silently
+    replaced what the user wrote. And YAML splits `{password: Spring,device_id}` at the
+    comma: the fragment `device_id` became a key with no value, and the password was cut
+    short with no error. A key with a colon and nothing after it (`{device_id: }`) is
+    still a key set to null; only the colon-less form is refused.
+    """
+
+    def construct_document(self, node: yaml.Node) -> Any:
+        # Every mapping is checked as written, before anything is built: SafeLoader
+        # flattens `<<: *base` merges in place (merged keys put in front of the node's
+        # own), so a check while building would see an override as a repeat, both in the
+        # merging mapping and in an anchor reused by alias after it was flattened.
+        self._check_written_keys(node)
+        return super().construct_document(node)  # type: ignore[no-untyped-call]
+
+    def _check_written_keys(self, root: yaml.Node) -> None:
+        # Each node with the keys leading to it, so a repeat under `modules` or a module's
+        # `settings` can be named (pre-QA on #532); a node shared by alias is checked once,
+        # at the first path reached.
+        stack: list[tuple[yaml.Node, tuple[str, ...]]] = [(root, ())]
+        visited: set[int] = set()
+        while stack:  # a loop, not recursion: an alias can make the graph share nodes
+            node, path = stack.pop()
+            if id(node) in visited:
+                continue
+            visited.add(id(node))
+            if isinstance(node, yaml.MappingNode):
+                self._check_mapping(node, path)
+                for key_node, value_node in node.value:
+                    stack.append((key_node, path))
+                    name = key_node.value if isinstance(key_node, yaml.ScalarNode) else ""
+                    stack.append((value_node, (*path, str(name))))
+            elif isinstance(node, yaml.SequenceNode):
+                stack.extend((item, path) for item in node.value)
+
+    def _check_mapping(self, node: yaml.MappingNode, path: tuple[str, ...] = ()) -> None:
+        seen: dict[Any, tuple[int, int, bool]] = {}
+        merge_at: tuple[int, int, bool] | None = None
+        furthest = -1
+        for key_node, value_node in node.value:
+            # A key given by alias (`{*k: …}`) has its anchor's marks, from before this
+            # mapping (pre-QA r4), in an earlier key or inside an earlier value (QA round 2
+            # on #532): `_repeat_place` reports the mapping's own place then. A key written
+            # here always comes after the last entry. A block value's end mark is the next
+            # key's start.
+            mark = key_node.start_mark
+            clamped = mark.index < node.start_mark.index or mark.index <= furthest
+            furthest = max(furthest, mark.index, value_node.end_mark.index - 1)
+            line, column = mark.line + 1, mark.column + 1
+            if key_node.tag == _MERGE_TAG:
+                # Its keys may be overridden: YAML's own rule, not a repeat. A second `<<`
+                # is a repeated key like any other (QA round 1 on #532). The first in a
+                # list wins, so the later one goes first to keep the result (QA round 2).
+                if merge_at is not None:
+                    where = _repeat_place(node, merge_at, line, column, clamped)
+                    raise ConfigKeyError(
+                        f"The config file has `<<` twice in one section ({where}), and YAML "
+                        "would silently let the later one win. Merge both in one, later one "
+                        "first, since the first in a list wins: `<<: [*later, *earlier]`."
+                    )
+                merge_at = (line, column, clamped)
+                continue
+            if node.flow_style and _has_no_colon(node, key_node, value_node):
+                # Directly under `modules`, leaving it out would drop the module (QA round
+                # 2 on #532).
+                empty_advice = (
+                    "to list a module with its defaults, give it a colon: "
+                    "`{filestation: , photos: }`"
+                    if path == ("modules",)
+                    else "to leave a setting empty, leave it out"
+                )
+                raise ConfigKeyError(
+                    f"The config file has a key with no value inside {{…}} (line {line}). "
+                    "It isn't shown, since it may be part of a password. A colon needs a "
+                    f"space after it (`host: nas`, not `host:nas`); {_SPLIT_HINT}; "
+                    f"{empty_advice}."
+                )
+            if not isinstance(key_node, yaml.ScalarNode):
+                continue  # a list or mapping as a key: SafeLoader's own error follows
+            key = (
+                key_node.value if key_node.tag == _VALUE_TAG else self.construct_object(key_node)  # type: ignore[no-untyped-call]
+            )
+            first = seen.get(key)
+            if first is not None:
+                # A module's name, and a key in its settings, can be named too: the
+                # warnings already name them, since settings hold no credentials (pre-QA
+                # on #532: a pasted second `filestation:` was "a key … isn't shown").
+                known = isinstance(key, str) and (
+                    key in _config_keys()
+                    or (
+                        _NAMEABLE_KEY.fullmatch(key) is not None
+                        and (
+                            path == ("modules",)
+                            or (len(path) == 3 and path[0] == "modules" and path[2] == "settings")
+                        )
+                    )
+                )
+                where = _repeat_place(node, first, line, column, clamped)
+                raise ConfigKeyError(
+                    f"The config file has {f'`{key}`' if known else 'a key'} twice in one "
+                    f"section ({where}), and YAML would silently keep only the last. "
+                    "Remove one."
+                    + ("" if known else " The key isn't shown: it may be part of a password.")
+                )
+            seen[key] = (line, column, clamped)
+
+
+def _repeat_place(
+    node: yaml.MappingNode, first: tuple[int, int, bool], line: int, column: int, clamped: bool
+) -> str:
+    """Where a repeated key is: both lines, or on one line (`{k: 1, k: 2}`) the columns
+    (pre-QA r3). If either came by alias, its marks are the mapping's, so "columns 4 and 4"
+    (QA round 1 on #532); the mapping's own line is all there is."""
+    if first[2] or clamped:
+        start = node.start_mark.line + 1
+        if node.flow_style:
+            return f"in the {{…}} at line {start}"
+        return f"in the section that starts at line {start}"
+    if first[0] == line:
+        return f"line {line}, columns {first[1]} and {column}"
+    return f"lines {first[0]} and {line}"
+
+
+def _has_no_colon(mapping: yaml.MappingNode, key_node: yaml.Node, value_node: yaml.Node) -> bool:
+    """Whether a flow mapping's entry was written without a colon (`{a: 1, b}`)."""
+    if not (isinstance(value_node, yaml.ScalarNode) and value_node.value == ""):
+        return False
+    if value_node.tag != "tag:yaml.org,2002:null":
+        return False
+    # An alias (`{a: *empty}`, `{*k: }`) reuses its anchor's node, written before this
+    # mapping, so the marks don't describe this entry (pre-QA r3 on #511 PR 2).
+    start = mapping.start_mark.index
+    if key_node.start_mark.index < start or value_node.start_mark.index < start:
+        return False
+    if value_node.start_mark.index < key_node.end_mark.index:
+        return False  # `{a: &z , b: *z}`: an anchor earlier in this same mapping
+    buffer = getattr(key_node.end_mark, "buffer", None)
+    if not isinstance(buffer, str):
+        return False  # pragma: no cover - text input always keeps its buffer
+    between = buffer[key_node.end_mark.index : value_node.start_mark.index]
+    # The colon must come right after the key (spaces aside): a comment holding one
+    # (`{password: Spr,ing # x: y`) doesn't count (pre-QA r1 on #511 PR 2).
+    return not between.lstrip().startswith(":")
+
+
+def parse_config_text(text: str, *, check_keys: bool = True) -> Any:
+    """Load a config file's YAML: `yaml.safe_load` refusing repeated keys and valueless
+    flow keys (`ConfigKeyError`, #464), with any error building a value raised as
+    `ConfigValueError`.
 
     A tag that doesn't fit its value makes PyYAML raise ValueError (`!!int Hunter2x`),
     KeyError (`!!bool Hunter2x`), AttributeError (`!!timestamp Hunter2x`) and so on, each
     naming the value (#386). Every loader of a config file goes through here.
+
+    ``check_keys=False`` skips the key checks, for a file the program writes (the shared
+    `global.yaml`): there a repeated key keeps the last, as before, rather than making
+    the whole file unreadable (QA round 1 on #532).
     """
+    loader = _ConfigLoader if check_keys else yaml.SafeLoader
     try:
-        return yaml.safe_load(text)
+        return yaml.load(text, Loader=loader)  # noqa: S506 - SafeLoader or its subclass
     except yaml.YAMLError:
         raise
     except Exception as e:  # noqa: BLE001 - any constructor error; its text names the value
@@ -793,6 +1296,8 @@ def format_yaml_error(exc: yaml.YAMLError) -> str:
         "starts an escape, so write a Windows path in single quotes, 'C:\\Users\\me', or "
         "double each backslash) and indentation."
     )
+    if isinstance(exc, ConfigKeyError):
+        return exc.message
     if isinstance(exc, ConfigValueError) and exc.kind == "RecursionError":
         return (
             "The config file is nested too deeply for YAML to read. Check its brackets and "

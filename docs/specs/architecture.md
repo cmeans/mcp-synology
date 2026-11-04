@@ -9,7 +9,7 @@
 - **HTTP client:** httpx (async)
 - **Distribution:** uvx (from GitHub), Docker as secondary option
 - **Project/dependency management:** uv
-- **Config format:** YAML (PyYAML, always use `safe_load`)
+- **Config format:** YAML (PyYAML, always a SafeLoader: `safe_load`, or `parse_config_text` for config files)
 - **Credential storage:** keyring (OS-native: macOS Keychain, Windows Credential Manager, Linux Secret Service)
 - **Validation:** Pydantic / dataclasses with type hints throughout
 

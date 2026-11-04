@@ -650,26 +650,32 @@ class TestAppConfig:
         assert "ter2x" not in message
         assert "(character 40 of the file)" in message
 
-    def test_a_derived_instance_id_is_not_quoted(self) -> None:
-        """A host written as a URL can carry a password; the instance_id derived from it
-        isn't quoted."""
+    @pytest.mark.parametrize("host", ["https://admin:Hunter2x@nas", "my_Hunter2x", "[fd00::1]"])
+    def test_a_derived_instance_id_is_not_quoted(self, host: str) -> None:
+        """A host written as a URL can carry a password: it's refused as a host (#511 PR 2),
+        and the instance_id derived from any other host isn't quoted either."""
         raw: dict[str, Any] = {
             "schema_version": 1,
-            "connection": {"host": "https://admin:Hunter2x@nas"},
+            "connection": {"host": host},
             "modules": {"filestation": {"enabled": True}},
         }
-        with pytest.raises(ValueError) as exc:
+        from pydantic import ValidationError
+
+        from mcp_synology.core.config import format_validation_error
+
+        with pytest.raises(ValidationError) as exc:
             AppConfig(**raw)
-        assert "hunter" not in str(exc.value).casefold()
-        # The whole advice: what a derivable host looks like, and when instance_id is needed
-        # (QA round 4 on #469).
-        assert (
-            "The instance_id derived from connection.host contains invalid characters. Only "
-            "lowercase alphanumeric characters and hyphens are allowed: write connection.host "
-            "as a bare host name or IPv4 address (no https://, user name or port), or set "
-            "instance_id (lowercase letters, digits and hyphens), which an IPv6 address or a "
-            "host name with other characters needs."
-        ) in str(exc.value)
+        shown = format_validation_error(exc.value)
+        assert "hunter" not in shown.casefold()
+        if "://" not in host:
+            # The whole advice for a bare host whose first part isn't an instance_id.
+            assert (
+                "connection.host gives no usable instance_id: its first part has characters "
+                "other than letters a-z, digits and hyphens (an IPv6 address, an underscore, "
+                "or a letter outside a-z). Set instance_id, or the SYNOLOGY_INSTANCE_ID "
+                "environment variable (lowercase letters, digits and hyphens; capitals are "
+                "lowered)."
+            ) in shown
 
     def test_yaml_error_without_a_location(self) -> None:
         import yaml
@@ -726,9 +732,17 @@ class TestAppConfig:
 
     def test_invalid_instance_id_characters(self) -> None:
         raw = _minimal_raw()
+        from pydantic import ValidationError
+
+        from mcp_synology.core.config import format_validation_error
+
         raw["instance_id"] = "bad_chars!"
-        with pytest.raises(ValueError, match="invalid characters"):
+        with pytest.raises(ValidationError) as exc:
             AppConfig(**raw)
+        shown = format_validation_error(exc.value)
+        assert "instance_id may hold only lowercase" in shown
+        # Not quoted: a value pasted into the wrong place may be anything (#511 PR 2).
+        assert "bad_chars" not in shown
 
     def test_invalid_permission_value(self) -> None:
         raw = _minimal_raw()
