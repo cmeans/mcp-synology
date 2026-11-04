@@ -959,8 +959,13 @@ def _is_this_stderr(path: Path) -> bool:
 
 
 def _is_same_file(path: Path, other: str | Path | None) -> bool:
+    """By resolved path first: neither may exist yet, and opening the log file would create what
+    the same run then reads as its instructions (pre-QA r4 on #541). `samefile` adds hard links."""
+    if other is None:
+        return False
     try:
-        return other is not None and path.samefile(Path(other).expanduser())
+        other_path = Path(other).expanduser()
+        return path.resolve() == other_path.resolve() or path.samefile(other_path)
     except (OSError, RuntimeError, ValueError):  # no such file yet, an unknown ~user
         return False
 
@@ -1074,7 +1079,8 @@ def create_server(config: AppConfig) -> MCPServer:
         "instance_id": config.instance_id,
         "host": conn.host if conn else "unknown",
         "port": str(conn.port) if conn else "5000",
-        "home_dir": str(Path.home()),
+        # Quoted if a line break in it could forge a line of the instructions (pre-QA r4 on #541).
+        "home_dir": str(Path.home()) if str(Path.home()).isprintable() else repr(str(Path.home())),
         "platform": _platform_label(),
     }
     server_name = f"synology-{config.display_name}"

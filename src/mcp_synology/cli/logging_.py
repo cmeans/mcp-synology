@@ -8,7 +8,7 @@ import sys
 
 _LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 
-# More than a config load logs at any level; the cap only matters for a `setup` or `check -v`
+# More than a config load usually logs at any level; the cap matters for a `setup` or `check -v`
 # that never replays them.
 _EARLY_RECORDS_CAP = 1000
 
@@ -26,7 +26,8 @@ class _EarlyRecords(logging.Handler):
         self.records: list[logging.LogRecord] = []
 
     def emit(self, record: logging.LogRecord) -> None:
-        if len(self.records) < _EARLY_RECORDS_CAP:
+        # A security warning is kept past the cap: they're logged last, and "at any level".
+        if len(self.records) < _EARLY_RECORDS_CAP or getattr(record, "show_always", False):
             self.records.append(record)
 
 

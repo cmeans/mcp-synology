@@ -184,17 +184,16 @@ def allowed_local_roots(
         raw += [(f"{module} setting allowed_local_paths", e) for e in own]
     if default_download_dir:
         raw.append((f"{module} setting default_download_dir", default_download_dir))
-    roots: list[Path] = []
+    roots: dict[Path, None] = {}  # in order, without repeats
     for setting, entry in raw:
         try:
             root = _resolve(entry)
         except ValueError as e:
             msg = f"{setting}: {e}"
             raise ValueError(msg) from e
-        if root not in roots:
-            roots.append(root)
+        roots[root] = None
     logger.debug("Allowed local paths: %s", [str(r) for r in roots])
-    return roots
+    return list(roots)
 
 
 def roots_for_description(roots: list[Path]) -> str:

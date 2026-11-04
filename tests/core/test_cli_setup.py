@@ -951,6 +951,18 @@ def test_list_survives_a_config_folder_without_search_permission(
     assert "a.yaml  (could not parse)" in result.output
 
 
+def test_list_says_when_the_config_folder_cant_be_checked() -> None:
+    """Pre-QA r4 on #541: a PermissionError traceback, with `~/.config` at mode 000. (Python
+    3.14's `Path.exists` swallows it, so this is the older Pythons' path.)"""
+    folder = MagicMock()
+    folder.exists.side_effect = PermissionError(13, "Permission denied")
+    with patch("mcp_synology.cli.setup._CONFIG_DIR", folder):
+        result = CliRunner().invoke(main, ["setup", "--list"])
+    assert result.exit_code == 0, result.output
+    assert "can't be read" in result.output
+    assert "Permission denied" in result.output
+
+
 def test_list_shows_only_bare_hosts_and_text_names(tmp_path: Path) -> None:
     """#476, #471: a host written with credentials, or a name given as a mapping, isn't
     printed; #492: an empty `connection:` lists instead of failing to parse."""

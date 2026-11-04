@@ -74,7 +74,12 @@ def _list_configurations() -> None:
         parse_config_text,
     )
 
-    if not _CONFIG_DIR.exists():
+    try:
+        config_dir_exists = _CONFIG_DIR.exists()
+    except OSError as e:
+        click.echo(f"Config directory can't be read: {_shown_name(_CONFIG_DIR)}: {e.strerror}")
+        return
+    if not config_dir_exists:
         click.echo("No configurations found.")
         click.echo(f"Config directory: {_shown_name(_CONFIG_DIR)}")
         return

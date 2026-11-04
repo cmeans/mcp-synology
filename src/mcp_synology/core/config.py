@@ -322,6 +322,10 @@ class AuthConfig(BaseModel, extra="forbid"):
         # `password: 123456` looks like text, and these values are never shown (pre-QA r6
         # on #532).
         _unquoted_text_problem(value)
+        # A lone surrogate, also from a variable with bytes that aren't UTF-8, ended in a
+        # traceback hashing the credentials (pre-QA r4 on #541).
+        if isinstance(value, str) and any(unicodedata.category(c) == "Cs" for c in value):
+            raise ValueError("has a lone surrogate or bytes that aren't UTF-8.")
         return value
 
 
@@ -569,12 +573,16 @@ def _printable(name: str) -> str:
 def _config_exists(path: Path) -> bool:
     """Whether the config file is there. An error that isn't "no such file" stays an error, with
     the path: a folder without permission, a name too long. Never FileNotFoundError, which
-    would mean env-only mode, ignoring the file (#483)."""
+    would mean env-only mode, ignoring the file (#483). By `stat`: `Path.exists` swallows
+    every OSError on Python 3.14 (pre-QA r4 on #541)."""
     try:
-        return path.exists()
+        path.stat()
+    except (FileNotFoundError, NotADirectoryError, ValueError):  # ValueError: a NUL
+        return False
     except OSError as e:
         msg = f"Config file can't be read: {_shown_path(path)!r}: {e.strerror or type(e).__name__}"
         raise OSError(msg) from e
+    return True
 
 
 def _shown_path(path: Path) -> str:
@@ -1016,6 +1024,9 @@ def _may_show(err: Any, loc_parts: list[str]) -> bool:
     missing-field error carries as its input (`auth` and env-var overrides included), is
     never shown."""
     if not isinstance(err.get("input"), str | int | float | bool):
+        return False
+    # Text of any length, and its message says what's wrong.
+    if loc_parts[:1] == ["custom_instructions"]:
         return False
     # A mapping key that failed (`settings.2024.[key]`): the input is the key itself.
     if "[key]" in err.get("loc", ()):
@@ -1480,7 +1491,11 @@ def format_config_errors(errors: list[Any]) -> str:
         if not loc_parts:  # one wording for a model-level problem, alone or among several
             msg = msg.removeprefix("Value error, ")
         lines.extend(f"  - {loc}: {part}{suffix}" for part in msg.split("\n"))
-    return "\n".join([f"Configuration validation failed ({len(lines)} error(s)):", *lines])
+    head = f"Configuration validation failed ({len(lines)} error(s)):"
+    more = len(lines) - _MAX_KEY_PROBLEMS
+    if more > 0:
+        lines = [*lines[:_MAX_KEY_PROBLEMS], f"  … and {more} more like these."]
+    return "\n".join([head, *lines])
 
 
 def config_error_text(exc: Exception) -> str:
@@ -1554,6 +1569,9 @@ def config_file_note(path: Path) -> str:
 
 def _load_file(config_path: Path) -> AppConfig:
     """Read, parse, merge the environment over, and validate one config file."""
+    # `/dev/zero` would read until memory ran out. A pipe stays allowed: `--config <(generate)`.
+    if config_path.is_char_device() or config_path.is_block_device():
+        raise ValueError("The config file can't be read: it's a device, not a file.")
     try:
         raw_text = config_path.read_text(encoding="utf-8")
     except UnicodeDecodeError as e:
