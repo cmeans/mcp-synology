@@ -23,10 +23,13 @@ Coverage target per #14: cli/setup.py 63% → 90%+.
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import yaml
 from click.testing import CliRunner
 
 from mcp_synology.cli import setup as setup_mod
@@ -467,37 +470,175 @@ class TestSetupCommandErrorPaths:
 
 
 class TestSetupInteractiveValidationFailure:
+    @staticmethod
+    def _clean_env() -> dict[str, str]:
+        return {k: val for k, val in os.environ.items() if not k.startswith("SYNOLOGY_")}
+
     def test_validation_failure_during_interactive_exits_nonzero(self, tmp_path: Path) -> None:
-        """If AppConfig(**config_dict) raises after the user fills out prompts, exit 1.
+        """If AppConfig(**config_dict) raises after the user fills out prompts, exit 1,
+        with the error screened like every config error (#471: it printed pydantic's own
+        text, which quotes the input).
 
-        Triggered by patching `_derive_instance_id` to return an invalid id (with
-        characters AppConfig rejects), which fails validation at the first
-        AppConfig(**config_dict) construction call inside _setup_interactive.
+        The prompts check the host and instance ID by the config's own rules, so nothing
+        a user types reaches this; AppConfig is patched to fail with a real error.
         """
+        from pydantic import ValidationError
+
+        from mcp_synology.core.config import AppConfig
+
+        try:
+            AppConfig.model_validate(
+                {
+                    "schema_version": 1,
+                    "connection": {"host": "nas", "timeout": 0},
+                    "modules": {"filestation": {}},
+                }
+            )
+        except ValidationError as e:
+            error = e
         config_dir = tmp_path / "config"
+        runner = CliRunner()
+        with (
+            patch("mcp_synology.cli.setup._CONFIG_DIR", config_dir),
+            patch("mcp_synology.core.config.discover_config_path", side_effect=FileNotFoundError),
+            patch("mcp_synology.core.config.AppConfig", side_effect=error),
+            patch.dict(os.environ, self._clean_env(), clear=True),
+        ):
+            # host, https, port, permission, alias: fewer prompts since validation fails
+            result = runner.invoke(main, ["setup"], input="192.168.1.50\nn\n\nread\n\n")
+        assert result.exit_code == 1
+        assert "Error: Configuration validation failed (1 error(s)):" in result.output
+        assert "connection.timeout:" in result.output
+        assert "input_value" not in result.output
 
-        clean_env: dict[str, str] = {
-            k: val for k, val in os.environ.items() if not k.startswith("SYNOLOGY_")
-        }
+    def test_a_host_that_isnt_bare_is_asked_again(self, tmp_path: Path) -> None:
+        """#471: a URL with credentials, or a port, gets advice and another try."""
+        config_dir = tmp_path / "config"
+        runner = CliRunner()
+        with (
+            patch("mcp_synology.cli.setup._CONFIG_DIR", config_dir),
+            patch("mcp_synology.core.config.discover_config_path", side_effect=FileNotFoundError),
+            patch("mcp_synology.cli.setup._store_keyring", return_value=False),
+            patch.dict(os.environ, self._clean_env(), clear=True),
+        ):
+            result = runner.invoke(
+                main,
+                ["setup"],
+                input="https://admin:Hunter2x@nas\nnas:5001\nnas.local\nn\n\nread\n\nadmin\npw\n",
+            )
+        assert 'drop the http:// or https:// (for HTTPS, answer yes to "Use HTTPS?")' in (
+            result.output
+        )
+        assert "type the port at the DSM port question instead" in result.output
+        # Setup asks for them later: not the file's "under auth" (QA round 1 on #532).
+        assert "user names and passwords are asked for after these questions" in result.output
+        # The host was just typed above, so no "isn't shown" note (pre-QA on #532).
+        assert "It isn't shown" not in result.output
+        # Only where CliRunner echoes what was typed; the advice never repeats it.
+        assert result.output.casefold().count("hunter2x") == 1
+        assert result.output.count("NAS host (IP or hostname)") == 3
 
+    def test_a_host_with_no_usable_id_asks_for_one(self, tmp_path: Path) -> None:
+        """An IPv6 address or a name like `my_nas` gives no instance ID: setup asks."""
+        config_dir = tmp_path / "config"
+        stored: list[str] = []
         runner = CliRunner()
         with (
             patch("mcp_synology.cli.setup._CONFIG_DIR", config_dir),
             patch("mcp_synology.core.config.discover_config_path", side_effect=FileNotFoundError),
             patch(
-                "mcp_synology.core.config._derive_instance_id",
-                return_value="INVALID ID WITH SPACES!",
+                "mcp_synology.cli.setup._store_keyring",
+                side_effect=lambda service, *_: stored.append(service) and False,
             ),
-            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(os.environ, self._clean_env(), clear=True),
         ):
-            # host, https, permission, alias — fewer prompts since validation fails
             result = runner.invoke(
                 main,
                 ["setup"],
-                input="192.168.1.50\nn\nread\n\n",
+                input="my_nas\nn\n\nread\n   \nbad id\nMy-NAS\n\nadmin\npw\n",
             )
-        assert result.exit_code == 1
-        assert "Config validation failed" in result.output
+        # The host is blamed once; the typed ID gets its own message (pre-QA r1), without
+        # the file's "leave it out" advice, which can't apply here (pre-QA r3).
+        assert result.output.count("This host gives no usable instance ID") == 1
+        assert "  That instance ID is empty.\n" in result.output
+        assert "leave instance_id out" not in result.output
+        assert "That instance ID may hold only lowercase letters" in result.output
+        assert result.output.count("Instance ID (names this config") == 3
+        assert stored == ["mcp-synology/my-nas"]
+
+    def test_an_unbracketed_ipv6_host_gets_no_quotes_advice(self, tmp_path: Path) -> None:
+        """Pre-QA r6 on #532: quotes are for the file's form, not an answer to a question."""
+        with (
+            patch("mcp_synology.cli.setup._CONFIG_DIR", tmp_path / "config"),
+            patch("mcp_synology.core.config.discover_config_path", side_effect=FileNotFoundError),
+            patch("mcp_synology.cli.setup._store_keyring", return_value=False),
+            patch.dict(os.environ, self._clean_env(), clear=True),
+        ):
+            result = CliRunner().invoke(
+                main, ["setup"], input="fd00::1\nnas.local\nn\n\nread\n\nadmin\npw\n"
+            )
+        assert "write it in square brackets, [fd00::1]." in result.output
+
+    def test_a_very_long_id_is_asked_again(self, tmp_path: Path) -> None:
+        """QA round 2 on #532: it was a traceback from the file name, with the keyring
+        already written."""
+        config_dir = tmp_path / "config"
+        stored: list[str] = []
+        with (
+            patch("mcp_synology.cli.setup._CONFIG_DIR", config_dir),
+            patch("mcp_synology.core.config.discover_config_path", side_effect=FileNotFoundError),
+            patch(
+                "mcp_synology.cli.setup._store_keyring",
+                side_effect=lambda service, *_: stored.append(service) and False,
+            ),
+            patch.dict(os.environ, self._clean_env(), clear=True),
+        ):
+            result = CliRunner().invoke(
+                main,
+                ["setup"],
+                input=f"my_nas\nn\n\nread\n{'a' * 400}\nmy-nas\n\nadmin\npw\n",
+            )
+        assert "  That instance ID is longer than 63 characters.\n" in result.output
+        assert result.output.count("Instance ID (names this config") == 2
+        assert stored == ["mcp-synology/my-nas"]
+
+    @pytest.mark.parametrize(
+        ("https", "port", "written"),
+        [("n", "", None), ("y", "", None), ("n", "5555", 5555), ("y", "5000", 5000)],
+    )
+    def test_the_port_is_asked_for(
+        self, tmp_path: Path, https: str, port: str, written: int | None
+    ) -> None:
+        """#504 item 1: a NAS on a custom port can be set up interactively; the default
+        is DSM's for the protocol chosen, and isn't written, so the port follows a later
+        change of `https` (QA round 1 on #532: a written 5001 would stay on plain HTTP)."""
+        captured: list[Any] = []
+
+        async def fake_connect(app_config: Any, *_: Any) -> dict[str, Any]:
+            captured.append(app_config)
+            return {"success": True}
+
+        config_dir = tmp_path / "config"
+        verify = "n\n" if https == "y" else ""
+        runner = CliRunner()
+        with (
+            patch("mcp_synology.cli.setup._CONFIG_DIR", config_dir),
+            patch("mcp_synology.core.config.discover_config_path", side_effect=FileNotFoundError),
+            patch("mcp_synology.cli.setup._store_keyring", return_value=True),
+            patch("mcp_synology.cli.setup._connect_and_login", side_effect=fake_connect),
+            patch.dict(os.environ, self._clean_env(), clear=True),
+        ):
+            result = runner.invoke(
+                main,
+                ["setup"],
+                input=f"nas.local\n{https}\n{port}\nread\n\n{verify}admin\npw\n",
+            )
+        assert result.exit_code == 0, result.output
+        (app_config,) = captured
+        default = 5001 if https == "y" else 5000
+        assert app_config.connection.port == (written or default)
+        connection = yaml.safe_load((config_dir / "nas.yaml").read_text())["connection"]
+        assert connection.get("port") == written
 
 
 # ---------- _emit_claude_desktop_snippet Linux fallback ----------
@@ -530,7 +671,7 @@ class TestEmitClaudeDesktopSnippetLinuxFallback:
             result = runner.invoke(
                 main,
                 ["setup"],
-                input="192.168.1.50\nn\nread\n\nadmin\npassword\n",
+                input="192.168.1.50\nn\n\nread\n\nadmin\npassword\n",
             )
 
         assert result.exit_code == 0
@@ -559,7 +700,7 @@ class TestEmitClaudeDesktopSnippetLinuxFallback:
             result = runner.invoke(
                 main,
                 ["setup"],
-                input="192.168.1.50\nn\nread\n\nadmin\npassword\n",
+                input="192.168.1.50\nn\n\nread\n\nadmin\npassword\n",
             )
 
         assert result.exit_code == 0
@@ -598,7 +739,7 @@ class TestSetupAtomicConfigWrite:
             result = runner.invoke(
                 main,
                 ["setup"],
-                input="192.168.1.50\nn\nread\n\nadmin\npassword\n",
+                input="192.168.1.50\nn\n\nread\n\nadmin\npassword\n",
             )
 
         assert result.exit_code == 0, f"setup failed:\n{result.output}"
@@ -636,6 +777,91 @@ def test_list_never_shows_a_mistagged_password(tmp_path: Path) -> None:
     assert "a.yaml  (could not parse)" in result.output
     assert "b.yaml  (could not parse)" in result.output
     assert "c.yaml  (could not parse)" in result.output  # not UTF-8: a ValueError
+
+
+def test_list_gives_the_reason_a_file_cant_be_read(tmp_path: Path) -> None:
+    """QA round 2 on #532: a repeated key was a bare "(could not parse)", where `check`
+    gives the lines. The reason names no value."""
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "a.yaml").write_text(
+        "schema_version: 1\nauth:\n  password: Hunter2x\n  password: Spring2y\n"
+    )
+    (config_dir / "b.yaml").write_text("schema_version: 1\nauth: {password: !!int Hunter2x}\n")
+    with patch("mcp_synology.cli.setup._CONFIG_DIR", config_dir):
+        result = CliRunner().invoke(main, ["setup", "--list"])
+    assert result.exit_code == 0, result.output
+    assert "a.yaml  (could not parse)" in result.output
+    assert "The config file has `password` twice in one section (lines 3 and 4)" in result.output
+    assert "b.yaml  (could not parse)" in result.output
+    assert "a value YAML can't build" in result.output
+    assert "hunter" not in result.output.casefold()
+    assert "spring" not in result.output.casefold()
+
+
+@pytest.mark.parametrize("encoding", ["iso-8859-1", "cp866", "utf-8"])
+def test_list_survives_a_stdout_that_cant_encode_the_reason(tmp_path: Path, encoding: str) -> None:
+    """QA round 3 on #532: the reason holds `…`, stdout is strict about encoding, and the
+    crash left the later files unlisted."""
+    config_dir = tmp_path / ".config" / "mcp-synology"
+    config_dir.mkdir(parents=True)
+    (config_dir / "a.yaml").write_text("schema_version: 1\nauth: {username: me, secret}\n")
+    # Its name can't be encoded either (pre-QA on #532).
+    (config_dir / "b-ब.yaml").write_text("schema_version: 1\nauth: {username: me, secret}\n")
+    (config_dir / "z.yaml").write_text("schema_version: 1\nconnection: {host: nas}\n")
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from mcp_synology.cli.main import main; main(['setup', '--list'])",
+        ],
+        capture_output=True,
+        env={
+            **os.environ,
+            "HOME": str(tmp_path),
+            "PYTHONIOENCODING": encoding,
+            "PYTHON_KEYRING_BACKEND": "keyring.backends.null.Keyring",
+        },
+        timeout=60,
+    )
+    output = result.stdout.decode(encoding)
+    assert result.returncode == 0, result.stderr
+    assert "a.yaml  (could not parse)" in output
+    assert "z.yaml" in output
+    assert "with no value inside" in output
+
+
+def test_list_shows_only_bare_hosts_and_text_names(tmp_path: Path) -> None:
+    """#476, #471: a host written with credentials, or a name given as a mapping, isn't
+    printed; #492: an empty `connection:` lists instead of failing to parse."""
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "a.yaml").write_text(
+        "schema_version: 1\nconnection: {host: 'https://admin:Hunter2x@nas'}\n"
+        "alias: {password: Hunter2x}\ninstance_id: {x: Hunter2x}\n"
+    )
+    (config_dir / "b.yaml").write_text("schema_version: 1\nconnection:\n")
+    (config_dir / "c.yaml").write_text(
+        "schema_version: 1\nconnection: {host: nas.local}\ninstance_id: Home\n"
+    )
+    (config_dir / "e.yaml").write_text(
+        "schema_version: 1\nconnection: {host: nas}\ninstance_id: Bad ID\n"
+    )
+    (config_dir / "d.yaml").write_text("schema_version: 1\nconnection: {host: 12}\nalias: Office\n")
+    with patch("mcp_synology.cli.setup._CONFIG_DIR", config_dir):
+        result = CliRunner().invoke(main, ["setup", "--list"])
+    assert result.exit_code == 0, result.output
+    assert "hunter" not in result.output.casefold()
+    assert (
+        "  a.yaml\n    Name: a\n    Host: (not shown: not a bare host name or IP address)\n"
+    ) in result.output
+    assert "  b.yaml\n    Name: b\n    Host: ?\n" in result.output
+    assert "  c.yaml\n    Name: home\n    Host: nas.local\n" in result.output
+    assert (
+        "  d.yaml\n    Name: Office\n    Host: (not shown: not a bare host name or IP address)\n"
+    ) in result.output
+    # An instance_id the server would refuse isn't the name: the file's stem is.
+    assert "  e.yaml\n    Name: e\n    Host: nas\n" in result.output
 
 
 def test_setup_reports_a_config_it_cant_read(tmp_path: Path) -> None:
