@@ -300,7 +300,7 @@ Each key is a module name (e.g., `filestation`, `docker`, `system_info`). The va
 - `debug` — detailed operational trace for troubleshooting: every DSM API request/response (passwords masked), credential resolution steps, config discovery, version negotiation, API cache contents, session lifecycle, module registration. Use this when something isn't working.
 - `info` — significant lifecycle events: successful auth, re-auth, config notes (e.g. a module disabled).
 - `warning` — configuration issues (plain HTTP, SSL verification off, unknown modules, deprecated settings).
-- `error` — failures that prevent operation.
+- `error` — failures that prevent operation, plus the security warnings, which show at any level (#533).
 
 All modules use `logging.getLogger(__name__)` so log output includes the full module path (e.g., `mcp_synology.core.client`), making it easy to trace messages to source.
 

@@ -410,7 +410,7 @@ def parse_env_value(env_var: str, dotted_path: str, value: str) -> Any:
         ) from None
 
 
-def _warn_always(log: logging.Logger, msg: str) -> None:
+def _warn_always(msg: str) -> None:
     """Log ``msg`` as a WARNING even when the log level would hide it (#533).
 
     For security warnings only: `SYNOLOGY_LOG_LEVEL=error` used to hide that HTTPS was
@@ -419,10 +419,12 @@ def _warn_always(log: logging.Logger, msg: str) -> None:
     while the config loads, where these are logged, that's stderr only (`logging.file`
     is set up after the load).
     """
-    if log.isEnabledFor(logging.WARNING):
-        log.warning(msg)
+    if logger.isEnabledFor(logging.WARNING):
+        logger.warning(msg)
     else:
-        log.handle(log.makeRecord(log.name, logging.WARNING, "(unknown file)", 0, msg, (), None))
+        logger.handle(
+            logger.makeRecord(logger.name, logging.WARNING, "(unknown file)", 0, msg, (), None)
+        )
 
 
 # Settings an env var mustn't change silently over the config file's own value: they
@@ -440,6 +442,10 @@ def _file_value(raw: dict[str, Any], dotted_path: str) -> Any:
     return target
 
 
+# Only an address: `[::1]/x`, `[a:b]@nas` or a zone (`[fe80::1%25eth0]`) can differ by case.
+_BRACKETED_ADDRESS = re.compile(r"\[[0-9A-Fa-f:.]+\]")
+
+
 def _as_compared(dotted_path: str, value: Any) -> Any:
     """``value`` as the loaded config would use it, for the override check.
 
@@ -453,7 +459,7 @@ def _as_compared(dotted_path: str, value: Any) -> Any:
     stays as written, so it differs: the client puts the host into a URL, where `A@nas`
     and `a@nas` are other users, `nas/X` and `nas/x` other paths, and `::1` is no address
     at all. These are told apart before httpx, whose `URL(host=)` brackets a bare `::1`
-    and escapes (then lowers) `@` and `/`. Never read one from a URL string, where
+    and lowers, then escapes, `@` and `/`. Never read one from a URL string, where
     `admin@nas` or `nas:5001` is just `nas`, which would hide the change.
     """
     try:
@@ -464,13 +470,13 @@ def _as_compared(dotted_path: str, value: Any) -> Any:
         return typed
     if dotted_path == "connection.host":
         if ":" in typed:
-            return typed.lower() if typed.startswith("[") else typed
+            return typed.lower() if _BRACKETED_ADDRESS.fullmatch(typed) else typed
         try:
             sent = httpx.URL(scheme="https", host=typed).raw_host.decode("ascii")
         except httpx.InvalidURL:
             return typed
         return typed if "%" in sent else sent
-    return typed.lower()
+    return typed.lower() if dotted_path == "instance_id" else typed
 
 
 def _merge_env_overrides(raw: dict[str, Any], *, from_file: bool = False) -> dict[str, Any]:
@@ -486,6 +492,7 @@ def _merge_env_overrides(raw: dict[str, Any], *, from_file: bool = False) -> dic
     to be DEBUG only, so `SYNOLOGY_HOST` sent the file's keyring credentials to another
     host without a word.
     """
+    before: dict[str, Any] = {}
     if from_file:
         before = {path: _file_value(raw, path) for path in _WATCHED_OVERRIDES}
         file_host = before["connection.host"]
@@ -499,12 +506,11 @@ def _merge_env_overrides(raw: dict[str, Any], *, from_file: bool = False) -> dic
 
         logger.debug("Env override: %s -> %s", env_var, dotted_path)
         parsed = parse_env_value(env_var, dotted_path, value)
-        file_value = before.get(dotted_path) if from_file else None
+        file_value = before.get(dotted_path)
         if file_value is not None and _as_compared(dotted_path, file_value) != _as_compared(
             dotted_path, parsed
         ):
             _warn_always(
-                logger,
                 f"{env_var} overrides {dotted_path} from the config file. "
                 f"Unset {env_var} if that isn't intended.",
             )
@@ -530,13 +536,11 @@ def _emit_warnings(config: AppConfig) -> None:
         # Blank counts as unset (_merge_env_overrides): the password is then the file's.
         if (os.environ.get("SYNOLOGY_PASSWORD") or "").strip():
             _warn_always(
-                logger,
                 "Password provided via the SYNOLOGY_PASSWORD environment variable. "
                 "Consider using 'mcp-synology setup' to store them securely in the OS keyring.",
             )
         else:
             _warn_always(
-                logger,
                 "Plaintext password found in config file. "
                 "Use 'mcp-synology setup' to store credentials securely in the OS keyring.",
             )
@@ -548,13 +552,11 @@ def _emit_warnings(config: AppConfig) -> None:
         # output at all (#533).
         if not conn.https:
             _warn_always(
-                logger,
                 "HTTPS is disabled. Credentials will be sent in cleartext. "
                 "Acceptable on a trusted LAN; to turn it on, see https://github.com/cmeans/mcp-synology/blob/main/docs/https.md",
             )
         if conn.https and not conn.verify_ssl:
             _warn_always(
-                logger,
                 "SSL certificate verification is disabled. "
                 "Only use this on trusted networks with self-signed certificates.",
             )

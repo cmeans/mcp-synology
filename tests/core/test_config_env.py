@@ -21,6 +21,7 @@ import yaml
 from mcp_synology.core.config import (
     ENV_VAR_MAP,
     EnvVarError,
+    _as_compared,
     load_config,
     parse_env_value,
 )
@@ -730,6 +731,10 @@ def test_no_override_warning_when_nothing_the_file_sets_changes(
         ("SYNOLOGY_HOST", "nas.example/DSM", "connection.host", {"host": "nas.example/dsm"}),
         ("SYNOLOGY_HOST", "nas%2Fx", "connection.host", {"host": "nas/x"}),
         ("SYNOLOGY_HOST", "::1", "connection.host", {"host": "[::1]"}),
+        # Only an address ignores case: what follows `[` may not be one.
+        ("SYNOLOGY_HOST", "[::1]/DSM", "connection.host", {"host": "[::1]/dsm"}),
+        ("SYNOLOGY_HOST", "[ADMIN:PW]@nas", "connection.host", {"host": "[admin:pw]@nas"}),
+        ("SYNOLOGY_HOST", "[fe80::1%25ETH0]", "connection.host", {"host": "[fe80::1%25eth0]"}),
         ("SYNOLOGY_HOST", "NAS.example:5001", "connection.host", {"host": "nas.example:5001"}),
         # A name httpx refuses stays as written, its case included.
         ("SYNOLOGY_HOST", "\uff2eas.example", "connection.host", {"host": "\uff4eas.example"}),
@@ -758,6 +763,11 @@ def test_a_different_value_in_any_spelling_still_warns(
     # A set instance ID: an odd host derives none the config would accept.
     load_config(str(_file(tmp_path, instance_id="home-nas", **file_settings)))
     assert _override(var, dotted) in at_error.messages()
+
+
+def test_only_the_instance_id_ignores_case_among_text_settings() -> None:
+    assert _as_compared("instance_id", "Home-NAS") == "home-nas"
+    assert _as_compared("auth.username", "Admin") == "Admin"
 
 
 def test_the_real_logging_setup_shows_the_warnings_at_error(tmp_path: Path) -> None:
