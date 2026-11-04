@@ -41,9 +41,13 @@ _XDG_DOWNLOAD = re.compile(r'^\s*XDG_DOWNLOAD_DIR\s*=\s*"(?P<value>[^"]*)"\s*$')
 def _xdg_downloads_dir() -> Path | None:
     """The Downloads folder from ``user-dirs.dirs`` (xdg-user-dirs), if set."""
     config_home = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
+    dirs_file = Path(config_home) / "user-dirs.dirs"
     try:
-        text = (Path(config_home) / "user-dirs.dirs").read_text(encoding="utf-8")
-    except OSError:
+        # Every command gets here: a device would read until memory ran out, a pipe would wait.
+        if not dirs_file.is_file():
+            return None
+        text = dirs_file.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
         return None
     home = Path.home()
     for line in text.splitlines():

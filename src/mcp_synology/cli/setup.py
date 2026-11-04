@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import fnmatch
 import json
 import logging
 import os
@@ -74,17 +75,20 @@ def _list_configurations() -> None:
         parse_config_text,
     )
 
+    # By scandir: `Path.exists` swallows every OSError on Python 3.14, and `glob` on all of them,
+    # which would read as no configurations (QA round 2 on #541).
     try:
-        config_dir_exists = _CONFIG_DIR.exists()
+        with os.scandir(_CONFIG_DIR) as entries:
+            yaml_files = sorted(
+                _CONFIG_DIR / entry.name
+                for entry in entries
+                if fnmatch.fnmatch(entry.name, "*.yaml")
+            )
+    except (FileNotFoundError, NotADirectoryError):
+        yaml_files = []
     except OSError as e:
         click.echo(f"Config directory can't be read: {_shown_name(_CONFIG_DIR)}: {e.strerror}")
         return
-    if not config_dir_exists:
-        click.echo("No configurations found.")
-        click.echo(f"Config directory: {_shown_name(_CONFIG_DIR)}")
-        return
-
-    yaml_files = sorted(_CONFIG_DIR.glob("*.yaml"))
     if not yaml_files:
         click.echo("No configurations found.")
         click.echo(f"Config directory: {_shown_name(_CONFIG_DIR)}")

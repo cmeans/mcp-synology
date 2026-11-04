@@ -10,6 +10,7 @@ import ast
 import logging
 import os
 import signal
+import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -884,6 +885,160 @@ def test_every_command_refuses_a_bad_file_the_same_way(
     assert expected in errors[0]
 
 
+@pytest.mark.skipif(
+    not hasattr(os, "geteuid") or os.geteuid() == 0, reason="needs folder permissions to apply"
+)
+class TestRound2OnPr541:
+    """A location that can't be checked never silently means "no config". On the real
+    filesystem: mocks of `Path.exists` hid this across Python versions."""
+
+    @staticmethod
+    def _locked(folder: Path, request: pytest.FixtureRequest) -> None:
+        folder.chmod(0o000)
+        request.addfinalizer(lambda: folder.chmod(0o700))
+
+    def test_a_working_folder_under_a_locked_one_isnt_env_only(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
+    ) -> None:
+        here = tmp_path / "locked" / "here"
+        here.mkdir(parents=True)
+        (here / "mcp-synology.yaml").write_text(
+            f"{GOOD_HEAD}modules: {{filestation: }}\n", encoding="utf-8"
+        )
+        monkeypatch.chdir(here)
+        self._locked(tmp_path / "locked", request)
+        monkeypatch.setenv("SYNOLOGY_HOST", "nas")
+        code, output, _ = _run("check")
+        assert code == 1
+        assert "environment variables only" not in output
+        assert "can't be read: Permission denied" in output
+        assert "Errno" not in output
+
+    def test_a_link_into_a_locked_folder_isnt_env_only(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
+    ) -> None:
+        (tmp_path / "locked").mkdir()
+        here = tmp_path / "here"
+        here.mkdir()
+        (here / "mcp-synology.yaml").symlink_to(tmp_path / "locked" / "c.yaml")
+        monkeypatch.chdir(here)
+        self._locked(tmp_path / "locked", request)
+        monkeypatch.setenv("SYNOLOGY_HOST", "nas")
+        with pytest.raises(OSError, match=r"can't be read: .*Permission denied"):
+            discover_config_path()
+
+    def test_a_working_folder_that_cant_be_searched_warns(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        request: pytest.FixtureRequest,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        here = tmp_path / "here"
+        here.mkdir()
+        monkeypatch.chdir(here)
+        self._locked(here, request)
+        with (
+            caplog.at_level("WARNING", logger=config_module.__name__),
+            pytest.raises(FileNotFoundError, match="No config file found"),
+        ):
+            discover_config_path()
+        assert any("can't be searched" in m for m in caplog.messages)
+
+    def test_a_locked_config_folder_stops_and_suggests_config(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
+    ) -> None:
+        home = tmp_path / "home"
+        (home / ".config").mkdir(parents=True)
+        here = tmp_path / "here"
+        here.mkdir()
+        (here / "mcp-synology.yaml").write_text(
+            f"{GOOD_HEAD}modules: {{filestation: }}\n", encoding="utf-8"
+        )
+        monkeypatch.setattr(Path, "home", lambda: home)
+        monkeypatch.chdir(here)
+        self._locked(home / ".config", request)
+        with pytest.raises(OSError, match=r"can't be read: .*--config"):
+            discover_config_path()
+
+    @pytest.mark.parametrize("locked", ["parent", "itself"])
+    def test_setup_list_says_a_locked_config_folder_cant_be_read(
+        self, tmp_path: Path, request: pytest.FixtureRequest, locked: str
+    ) -> None:
+        folder = tmp_path / "parent" / "mcp-synology"
+        folder.mkdir(parents=True)
+        (folder / "a.yaml").write_text("{}\n", encoding="utf-8")
+        with patch("mcp_synology.cli.setup._CONFIG_DIR", folder):
+            self._locked(folder.parent if locked == "parent" else folder, request)
+            _, output, _ = _run("setup", "--list")
+        assert "Config directory can't be read" in output
+        assert "Permission denied" in output
+        assert "No configurations found" not in output
+
+
+class TestUnguardedReadsOnPr541:
+    """QA round 2: reads every command makes, with an endless source in front of them."""
+
+    def test_setup_list_quotes_a_config_folder_name(self, tmp_path: Path) -> None:
+        folder = tmp_path / "d\nFORGED"
+        folder.mkdir()
+        (folder / "a.yaml").write_text("{}\n", encoding="utf-8")
+        with patch("mcp_synology.cli.setup._CONFIG_DIR", folder):
+            _, output, _ = _run("setup", "--list")
+        assert "\nFORGED" not in output
+        assert "d\\nFORGED" in output
+
+    def test_setup_list_with_no_config_folder(self, tmp_path: Path) -> None:
+        with patch("mcp_synology.cli.setup._CONFIG_DIR", tmp_path / "nowhere"):
+            _, output, _ = _run("setup", "--list")
+        assert "No configurations found" in output
+
+    def test_a_hard_link_to_the_config_as_the_log_file_is_refused(self, tmp_path: Path) -> None:
+        """`samefile` adds what comparing resolved paths can't see."""
+        log = tmp_path / "log.txt"
+        path = _in_a_config(tmp_path, f"logging: {{file: {log}}}")
+        os.link(path, log)
+        with pytest.raises(ValueError, match="it's the config file"):
+            validate_config(str(path))
+
+    @pytest.mark.skipif(not hasattr(os, "fork"), reason="no Unix sockets to test here")
+    def test_a_socket_as_the_log_file_says_so(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Node's spawn gives stderr as a socket, and one can't be opened by name."""
+        monkeypatch.chdir(tmp_path)
+        listener = socket.socket(socket.AF_UNIX)
+        listener.bind("s")  # relative: a Unix socket's path has a short limit
+        try:
+            path = _in_a_config(tmp_path, f"logging: {{file: {tmp_path / 's'}}}")
+            with pytest.raises(ValueError, match="it's a socket.*logs go to stderr"):
+                validate_config(str(path))
+        finally:
+            listener.close()
+
+    @pytest.mark.parametrize("kind", ["device", "pipe"])
+    def test_a_device_or_pipe_as_global_state_reads_as_none(
+        self, tmp_path: Path, run_capped: Any, kind: str
+    ) -> None:
+        state = tmp_path / ".local" / "state" / "mcp-synology"
+        state.mkdir(parents=True)
+        if kind == "pipe":
+            os.mkfifo(state / "global.yaml")
+        else:
+            (state / "global.yaml").symlink_to("/dev/zero")
+        result = run_capped(
+            "-c",
+            "from pathlib import Path\n"
+            "import sys\n"
+            "from mcp_synology.cli import version\n"
+            "Path.home = staticmethod(lambda: Path(sys.argv[1]))\n"
+            "print(version._load_global_state())",
+            str(tmp_path),
+        )
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == "{}"
+
+
 class TestRound1OnPr541:
     """What QA round 1 on #541 found the claims went further than the code."""
 
@@ -963,11 +1118,15 @@ class TestRound1OnPr541:
         assert isinstance(exception, SystemExit)
         assert "auth.username" in output
 
-    def test_a_device_as_the_config_is_refused(self) -> None:
-        """Pre-QA r4: `/dev/zero` read until memory ran out."""
-        code, output, _ = _run("check", "--config", "/dev/zero")
-        assert code == 1
-        assert "it's a device" in output
+    def test_a_device_as_the_config_is_refused(self, run_capped: Any) -> None:
+        """Pre-QA r4: `/dev/zero` read until memory ran out. In a capped child, since without
+        the guard this test took the machine's memory (QA round 2)."""
+        result = run_capped(
+            "-c", "from mcp_synology.cli import main; main()", "check", "--config", "/dev/zero"
+        )
+        assert result.returncode == 1
+        assert "it's a device" in result.stderr + result.stdout
+        assert "MemoryError" not in result.stderr + result.stdout
 
     def test_a_security_warning_passes_the_early_records_cap(self) -> None:
         handler = logging_._EarlyRecords()

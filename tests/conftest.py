@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Iterator
+    from collections.abc import AsyncGenerator, Callable, Iterator
 
 import keyring
 import pytest
@@ -16,6 +18,32 @@ from mcp_synology.core.client import DsmClient
 from mcp_synology.core.config import AppConfig
 from mcp_synology.core.state import ApiInfoEntry
 from tests.personas import ReauthSpy, reauth_spy_on
+
+
+@pytest.fixture
+def run_capped() -> Callable[..., subprocess.CompletedProcess[str]]:
+    """Run Python in a child with a 2 GiB memory limit and a time limit.
+
+    For any test that puts an endless source (`/dev/zero`, a pipe nothing writes to) in front of
+    the code. In-process, a lost guard read until the kernel killed pytest at 57 GiB, and systemd
+    then stopped the whole terminal scope with every session in it (QA round 2 on #541). In a
+    child, the same mistake fails the test with a MemoryError or a timeout.
+    """
+    resource = pytest.importorskip("resource")
+
+    def cap() -> None:
+        resource.setrlimit(resource.RLIMIT_AS, (2**31, 2**31))
+
+    def run(*args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, *args],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            preexec_fn=cap,
+        )
+
+    return run
 
 
 @pytest.hookimpl(tryfirst=True)

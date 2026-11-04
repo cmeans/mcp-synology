@@ -658,21 +658,29 @@ def discover_config_path(explicit_path: str | None = None) -> Path:
 
     home_config = Path.home() / ".config" / "mcp-synology" / "config.yaml"
     logger.debug("Checking default config path: %r", str(home_config))
-    if _config_exists(home_config):
+    try:
+        home_found = _config_exists(home_config)
+    except OSError as e:
+        msg = f"{e}. Fix its permissions, or name a config file with --config."
+        raise OSError(msg) from e
+    if home_found:
         logger.info("Config: %r", str(home_config))
         return home_config
-    # A deleted working folder, or one without permission, has no config in it. Raising here
-    # would hide the home config, and with SYNOLOGY_HOST set would look like env-only mode
-    # (#483, QA round 1 on #541); the home config is checked first for that reason.
+    # Relative: that needs no permission on the folders above it, and in a deleted folder the
+    # file is just absent (#483, QA rounds 1 and 2 on #541).
+    local_config = Path("mcp-synology.yaml")
+    # Quoted: the working folder's name could forge a log line (QA round 3 on #529).
+    logger.debug("Checking default config path: %r", _shown_path(local_config))
     try:
-        local_config = Path.cwd() / "mcp-synology.yaml"
-        # Quoted: the working folder's name could forge a log line (QA round 3 on #529).
-        logger.debug("Checking default config path: %r", str(local_config))
-        if local_config.exists():
-            logger.info("Config: %r", str(local_config.absolute()))
-            return local_config
+        if _config_exists(local_config):
+            logger.info("Config: %r", _shown_path(local_config))
+            return local_config.absolute()
     except OSError as e:
-        logger.debug("No working folder to look in: %r", e)
+        # A config there that can't be read stays an error, never env-only mode. Only a folder
+        # that can't be searched leaves nothing to report but that.
+        if os.access(".", os.X_OK):
+            raise
+        logger.warning("The working folder can't be searched for a config file: %s", e)
 
     msg = (
         "No config file found. Create one at ~/.config/mcp-synology/config.yaml "
@@ -1569,10 +1577,10 @@ def config_file_note(path: Path) -> str:
 
 def _load_file(config_path: Path) -> AppConfig:
     """Read, parse, merge the environment over, and validate one config file."""
-    # `/dev/zero` would read until memory ran out. A pipe stays allowed: `--config <(generate)`.
-    if config_path.is_char_device() or config_path.is_block_device():
-        raise ValueError("The config file can't be read: it's a device, not a file.")
     try:
+        # `/dev/zero` would read until memory ran out. A pipe stays allowed: `--config <(generate)`.
+        if config_path.is_char_device() or config_path.is_block_device():
+            raise ValueError("The config file can't be read: it's a device, not a file.")
         raw_text = config_path.read_text(encoding="utf-8")
     except UnicodeDecodeError as e:
         # Its message quotes the byte, which may be one of a password's (QA round 2 on #469).

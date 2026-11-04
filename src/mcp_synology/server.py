@@ -950,8 +950,9 @@ def _module_settings(config: AppConfig) -> tuple[dict[str, BaseModel | None], li
 
 
 def _is_this_stderr(path: Path) -> bool:
-    """Whether a path is this process's own stderr: under an MCP client that's a pipe with a
-    reader, so opening it doesn't wait. `/dev/stderr` is the usual spelling."""
+    """Whether a path is this process's own stderr. `/dev/stderr` is the usual spelling. If it's
+    a pipe, it has a reader, so opening it doesn't wait. An MCP client on Node gives a socket
+    instead, which can't be opened by name (_log_file_problem says so)."""
     try:
         return bool(os.path.samestat(path.stat(), os.fstat(2)))
     except OSError:  # stderr is closed
@@ -990,6 +991,11 @@ def _log_file_problem(config: AppConfig) -> str | None:
         # one to look gives that reader end-of-file, and the next open waits.
         elif path.is_fifo() and not _is_this_stderr(path):
             reason = "it's a named pipe"
+        elif path.is_socket():
+            reason = (
+                "it's a socket, which can't be opened by name; "
+                "without logging.file, logs go to stderr"
+            )
         else:
             path.parent.mkdir(parents=True, exist_ok=True)
             with path.open("a", encoding="utf-8"):
