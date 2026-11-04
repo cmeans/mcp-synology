@@ -475,7 +475,7 @@ class TestInvisibleProblem:
                 if a == b and helpers._MARK.match(a):
                     # The only pair a decomposition repeats is U+16121's, which is exempt.
                     assert a * 2 in helpers._REPEATING_DECOMPOSITIONS, hex(cp)
-        # The table's own entries too: CI's Pythons know none of them (QA round 7 on #515).
+        # The table's own entries too: Python 3.11 to 3.13 know none of them (QA round 7 on #515).
         for char in NEW_DECOMPOSITIONS:
             marks = [c for c in helpers._decompose(char) if helpers._MARK.match(c)]
             assert len(marks) <= helpers._LONGEST_DECOMPOSITION, hex(ord(char))
@@ -504,8 +504,8 @@ class TestInvisibleProblem:
     def test_canonically_equivalent_names_get_one_verdict(self) -> None:
         """Spellings of one name (precomposed, NFD and mixed) are all refused or all pass.
 
-        Spelled out by hand: CI's Pythons (3.11 to 3.13) don't know Gurung Khema (Unicode
-        16), so `unicodedata.normalize` can't produce these forms there; where it can,
+        Spelled out by hand: Python 3.11 to 3.13 don't know Gurung Khema (Unicode 16),
+        so `unicodedata.normalize` can't produce these forms there; where it can,
         the test checks they really are one name (pre-QA on #515)."""
         import unicodedata
 

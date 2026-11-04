@@ -723,7 +723,7 @@ def parse_env_value(env_var: str, dotted_path: str, value: str) -> Any:
     ):
         text = text.lower()
     bounds = _env_field_bounds(dotted_path)
-    field_type = Annotated[annotation, *bounds] if bounds else annotation
+    field_type: Any = Annotated[annotation, *bounds] if bounds else annotation
     try:
         return TypeAdapter(field_type).validate_python(text)
     except ValidationError:
