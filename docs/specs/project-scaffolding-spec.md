@@ -295,6 +295,7 @@ jobs:
 - Three parallel jobs: lint, typecheck, test. Fast feedback — failures are independent.
 - Test matrix: Python 3.11, 3.12, 3.13.
 - `uv` for CI via `astral-sh/setup-uv` — faster than pip.
+- `UV_LOCKED: "1"` at the top of every workflow that runs uv, so `uv sync` and `uv run` refuse a `uv.lock` that doesn't match `pyproject.toml`. `tests/test_ci_workflows.py` checks it. Dependabot's Python updates use its `uv` ecosystem, which updates the lock.
 - Coverage collected on 3.12, uploaded to Codecov. Not a hard gate initially — just visibility.
 - Integration tests excluded by default (`addopts = "-m 'not integration'"` in pyproject.toml).
 
