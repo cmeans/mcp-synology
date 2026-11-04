@@ -120,7 +120,11 @@ def _list_configurations() -> None:
             # The reason `check` gives; format_yaml_error never quotes the file (QA round 2
             # on #532).
             click.echo(f"  {f.name}  (could not parse)")
-            click.echo(f"    {format_yaml_error(e)}")
+            # Stdout is strict about encoding, and these messages hold `…`: crashing here
+            # would leave the later files unlisted (QA round 3 on #532).
+            encoding = sys.stdout.encoding or "utf-8"
+            reason = format_yaml_error(e).encode(encoding, "backslashreplace").decode(encoding)
+            click.echo(f"    {reason}")
         except (OSError, ValueError, AttributeError):
             click.echo(f"  {f.name}  (could not parse)")
 

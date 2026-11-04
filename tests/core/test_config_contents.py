@@ -15,6 +15,7 @@ from mcp_synology.core.config import (
     EnvVarError,
     format_validation_error,
     format_yaml_error,
+    host_problems,
     load_config,
     parse_config_text,
     parse_env_value,
@@ -273,9 +274,12 @@ class TestDuplicateKeys:
             )
         assert "Hunter2x" not in format_yaml_error(exc.value)
 
-    def test_a_repeated_settings_key_that_could_forge_a_line_isnt_named(self) -> None:
-        """QA round 2 on #532: a quoted key can hold a newline."""
-        key = '"a\\n[ERROR] forged"'
+    @pytest.mark.parametrize(
+        "key",
+        ['"a\\n[ERROR] forged"', '"a\\r[ERROR] forged"', '"a\\e[31m[ERROR] forged"'],
+    )
+    def test_a_repeated_settings_key_that_could_forge_a_line_isnt_named(self, key: str) -> None:
+        """QA rounds 2 and 3 on #532: a quoted key can hold a line break or an escape."""
         with pytest.raises(yaml.YAMLError) as exc:
             parse_config_text(
                 f"modules:\n  filestation:\n    settings:\n      {key}: 1\n      {key}: 2\n"
@@ -456,6 +460,16 @@ class TestEmptySections:
 class TestHost:
     """#476, #471, #504 item 1: `connection.host` is a bare host name or IP address, and a
     rejected host is never shown (it can hold a password)."""
+
+    @pytest.mark.parametrize("first", ["nas", "bücher", "xn--bcher-kva"])
+    def test_a_digit_outside_ascii_isnt_a_number(self, first: str) -> None:
+        """QA round 3 on #532: httpx sends `nas.१२३` as a name, and one name got two
+        answers, since `.host` decodes only a first `xn--` part."""
+        assert host_problems(f"{first}.१२३") == []
+
+    @pytest.mark.parametrize("host", ["nas.123", "0x7f.1", "nas.0x"])
+    def test_an_ascii_number_at_the_end_is_still_refused(self, host: str) -> None:
+        assert host_problems(host) != []
 
     @pytest.mark.parametrize(
         "host",
