@@ -25,6 +25,7 @@
 
 ### Changed
 
+- **CI refuses a stale `uv.lock`** (#544) — part of #115. Every `uv sync` in the workflows, the publish ones included, now uses `--locked`, and `UV_LOCKED` holds `uv run` to the same. A PR that changed a dependency and forgot `uv lock` used to pass, tested on a lock nobody committed. Change a dependency, run `uv lock`. Dependabot's weekly Python updates move from its `pip` ecosystem, which didn't update the lock, to `uv`, which does.
 - **Bump github-actions group: astral-sh/setup-uv 10.3.2→10.3.3** (#523)
 - **vdsm tests run each DSM version's latest update** (#445) — closes #443. Bake v9 installs Synology's latest update before the packages: DSM 7.1.1-42962 Update 9, 7.2.2-72806 Update 10, 7.3.2-86009 Update 5 and 7.4.1-90080 Update 1. The images ran each release without updates; the `7.1` image now runs 7.1.1 (7.1-42661 before), since 7.1-42661's updates stop at Update 4 and Synology's later 7.1 updates are for 7.1.1, the release the maintainer's real NAS runs. The guest downloads the update pack, `synoupgrade --check-pat` and `--patch` install it, and the bake reboots and checks `smallfixnumber`; `meta.json` records the build, the update and the version DSM reports, and a new bake test checks the restored image still reports them. The virtual-dsm container image is pinned to 7.66 (it was `latest`). The README and `DEVELOPMENT.md` name the builds and updates tested. `BAKE_VERSION` 8 → 9, so CI bakes fresh images; this is a maintenance PR on its own, per the bake rule
 

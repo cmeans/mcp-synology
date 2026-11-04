@@ -12,6 +12,8 @@ permissions:
   contents: read
 
 env:
+  # `uv sync` and `uv run` refuse a uv.lock that doesn't match pyproject.toml (#115).
+  UV_LOCKED: "1"
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
@@ -26,7 +28,7 @@ jobs:
 
       - name: Run tests
         run: |
-          uv sync --extra dev
+          uv sync --locked --extra dev
           uv run pytest -n auto
 
       - name: Build distributions
