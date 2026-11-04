@@ -371,6 +371,7 @@ class TestKeyWithoutValue:
     def test_a_flow_key_with_a_colon_and_no_value_is_fine(self) -> None:
         assert parse_config_text("a: {b: , c: 1}\n") == {"a": {"b": None, "c": 1}}
         assert parse_config_text("a: {b:}\n") == {"a": {"b": None}}
+        assert parse_config_text("a: {b : }\n") == {"a": {"b": None}}  # pre-QA r7 on #532
 
     @pytest.mark.parametrize(
         "text",

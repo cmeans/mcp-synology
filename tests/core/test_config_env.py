@@ -773,7 +773,7 @@ def test_no_override_warning_when_nothing_the_file_sets_changes(
         ("SYNOLOGY_HOST", "[::1]", "connection.host", {"host": "::1"}),
         ("SYNOLOGY_HOST", "[::1]", "connection.host", {"host": "[::1]/dsm"}),
         # A zone names an interface, so its case stays.
-        ("SYNOLOGY_HOST", "[fe80::1%25ETH0]", "connection.host", {"host": "[fe80::1%25eth0]"}),
+        ("SYNOLOGY_HOST", "[fe80::1%ETH0]", "connection.host", {"host": "[fe80::1%eth0]"}),
         # Look-alikes are other hosts: Cyrillic a, a name IDNA refuses, and another name.
         ("SYNOLOGY_HOST", "n\u0430s.example", "connection.host", {"host": "nas.example"}),
         ("SYNOLOGY_HOST", "nas.example", "connection.host", {"host": "\uff4eas.example"}),

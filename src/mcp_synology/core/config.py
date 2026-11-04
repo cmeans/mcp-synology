@@ -762,7 +762,7 @@ def _file_value(raw: dict[str, Any], dotted_path: str) -> Any:
     return target
 
 
-# Only an address: `[::1]/x`, `[a:b]@nas` or a zone (`[fe80::1%25eth0]`) can differ by case.
+# Only an address: `[::1]/x`, `[a:b]@nas` or a zone (`[fe80::1%eth0]`) can differ by case.
 _BRACKETED_ADDRESS = re.compile(r"\[[0-9A-Fa-f:.]+\]")
 
 
@@ -783,10 +783,11 @@ def _as_compared(dotted_path: str, value: Any) -> Any:
     replaces it. An instance ID is lowered, as the config does.
 
     A host name is compared as httpx sends it: lower-case, IDNA-mapped (`bücher.example`
-    is `xn--bcher-kva.example`). A bracketed IPv6 address only ignores case. Any other
-    host with a `:` stays as written, so it differs: httpx's `URL(host=)` would bracket a
-    bare `::1`. Only the file's value can be such a host, or have `@` or `/`, which httpx
-    escapes: the variable must be bare (`parse_env_value`), so neither form can equal it.
+    is `xn--bcher-kva.example`). A bracketed IPv6 address only ignores case, unless it has
+    a zone, which names an interface. Any other host with a `:` stays as written, so it
+    differs: httpx's `URL(host=)` would bracket a bare `::1`. Only the file's value can be
+    such a host, or have `@` or `/`, which httpx escapes: the variable must be bare
+    (`parse_env_value`), so neither form can equal it.
     Never read a host from a URL string, where `admin@nas` or `nas:5001` is just `nas`,
     which would hide the change.
     """
