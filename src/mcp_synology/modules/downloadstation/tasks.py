@@ -150,8 +150,10 @@ async def _read_tasks(
                     task_ids,
                 )
                 return {}
-            if e.code not in _TASK_NOT_FOUND_CODES or len(task_ids) == 1:
+            if e.code not in _TASK_NOT_FOUND_CODES:
                 raise
+            if len(task_ids) == 1:
+                return {}  # left out, as for a longer list: a missing task isn't a failed read
         found: dict[str, dict[str, Any]] = {}
         for task_id in task_ids:
             if deadline is not None and time.monotonic() > deadline:
@@ -923,16 +925,15 @@ async def _pause_again(client: DsmClient, task_ids: list[str]) -> None:
 
 
 async def _hold_pause(client: DsmClient, task_ids: list[str]) -> bool:
-    """Watch tasks paused while still `waiting`; False if a read failed or the reads took too
-    long, so nothing is known.
+    """Watch tasks paused while still `waiting`; False if a read failed, so nothing is known.
 
     DS can undo such a pause: `pause` answers ok, then the task goes to `downloading` and
     stays there, usually after reading `paused` for a moment (#243; the spec has the numbers
     per version). No pause sent once a task had left `waiting` was undone, so a task that has
     gone to `downloading` gets one more pause, and any other status gets none. The watch stops
-    at the first failed read, and past _PAUSE_HOLD_BUDGET if there's a check left: on a stalled
-    or slow NAS, each further read adds to the wait, and the reply would miss the client's time
-    limit.
+    at the first failed read, and past _PAUSE_HOLD_BUDGET: on a stalled or slow NAS, each further
+    read adds to the wait, and the reply would miss the client's time limit. By the budget the
+    3 s have gone by, so the read before the reply still says what's known.
     """
     start = time.monotonic()
     deadline = start + _PAUSE_HOLD_BUDGET
@@ -960,15 +961,14 @@ async def _hold_pause(client: DsmClient, task_ids: list[str]) -> bool:
         if not remaining:
             return True
         elapsed = time.monotonic() - start
-        # After the last check nothing's left to cut short, and that read succeeded.
-        if check < _PAUSE_HOLD_CHECKS and elapsed > _PAUSE_HOLD_BUDGET:
-            logger.warning(
-                "Stopped watching paused tasks %r: reads too slow, %.1f s after %d check(s)",
+        if elapsed > _PAUSE_HOLD_BUDGET:
+            logger.info(
+                "Stopped watching paused tasks %r: reads are slow, %.1f s after %d check(s)",
                 remaining,
                 elapsed,
                 check,
             )
-            return False
+            return True
     return True
 
 

@@ -42,7 +42,7 @@ _TASKID_RE = re.compile(r"^[A-Za-z0-9_]{1,80}$")
 _DECORATION = " \t\r\n`'\"*.,;:()[]<>"
 # DSM 7.1 sometimes answers a Delete stop only after ~60 s, although the stop takes
 # effect at once; the default read timeout would report a working stop as unanswered.
-# Read timeout only: connect, write and pool keep the client's default.
+# Write and pool keep the client's default, and connect does up to this.
 STOP_TIMEOUT = 90.0
 
 

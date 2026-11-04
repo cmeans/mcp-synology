@@ -84,6 +84,8 @@ connection:
   verify_ssl: true
 
   # Connection timeout in seconds for individual API requests.
+  # A few calls set their own: the reads pause_download adds take 5 s, whatever this says, so
+  # the reply beats an MCP client's limit, and File Station's task stops take 90 s to read.
   # Default: 30
   timeout: 30
 
