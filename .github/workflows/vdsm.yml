@@ -21,6 +21,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
+  # Every uv command refuses a uv.lock that doesn't match pyproject.toml, `uv run` too (#115).
+  UV_LOCKED: "1"
   # Pins JavaScript-action Node runtime to Node 24 across all JS-based
   # GitHub Actions in this workflow. Matches the pattern used by the
   # other workflows in .github/workflows/ so CI behavior is consistent

@@ -21,6 +21,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
+  # Every uv command refuses a uv.lock that doesn't match pyproject.toml, `uv run` too (#115).
+  UV_LOCKED: "1"
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
