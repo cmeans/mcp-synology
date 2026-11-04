@@ -78,7 +78,9 @@ class FileStationSettings(ModuleSettings):
     @classmethod
     def _upload_dir_on_one_line(cls, value: str | None) -> str | None:
         if value and has_control_character(value):
-            raise ValueError("has a control character: give a NAS path on one line.")
+            raise ValueError(
+                "has a control character or lone surrogate: give a NAS path on one line."
+            )
         return value
 
     @field_validator("default_download_dir")

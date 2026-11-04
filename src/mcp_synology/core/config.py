@@ -597,6 +597,18 @@ def _shown_path(path: Path) -> str:
         return str(path)
 
 
+def _working_folder_is_searchable() -> bool:
+    """By `stat`, with the same IDs as the check it follows: `os.access` uses the real user ID
+    (QA round 3 on #541)."""
+    try:
+        os.stat("./.")
+    except PermissionError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
 def _expanded_config_path(value: str, source: str) -> Path:
     """``~`` expanded; an unknown ``~user`` is RuntimeError, a traceback in every command."""
     try:
@@ -672,16 +684,22 @@ def discover_config_path(explicit_path: str | None = None) -> Path:
     # Quoted: the working folder's name could forge a log line (QA round 3 on #529).
     logger.debug("Checking default config path: %r", _shown_path(local_config))
     try:
-        if _config_exists(local_config):
-            logger.info("Config: %r", _shown_path(local_config))
-            return local_config.absolute()
+        found = _config_exists(local_config)
     except OSError as e:
         # A config there that can't be read stays an error, never env-only mode. Only a folder
         # that can't be searched leaves nothing to report but that.
-        if os.access(".", os.X_OK):
-            raise
+        if _working_folder_is_searchable():
+            msg = f"{e}. Fix the path or its permissions, or name a config file with --config."
+            raise OSError(msg) from e
         # At any log level: a config passed over can leave env-only mode, read-only over plain HTTP.
         _warn_always(f"The working folder can't be searched for a config file: {e}")
+        found = False
+    if found:
+        logger.info("Config: %r", _shown_path(local_config))
+        try:
+            return local_config.absolute()
+        except OSError:  # a working folder outside this process's root has no name
+            return local_config
 
     msg = (
         "No config file found. Create one at ~/.config/mcp-synology/config.yaml "

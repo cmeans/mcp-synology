@@ -1039,9 +1039,9 @@ def _local_root_problems(config: AppConfig, settings: dict[str, BaseModel | None
         for root in roots:
             if has_control_character(str(root)):
                 msg = (
-                    f"the folder {str(root)!r} has a control character in its path. If no setting "
-                    "names it, it's the Downloads default: set allowed_local_paths to another "
-                    "folder"
+                    f"the folder {str(root)!r} has a control character or lone surrogate in its "
+                    "path. If no setting names it, it's the Downloads default: set "
+                    "allowed_local_paths to another folder"
                 )
                 problems.append({"loc": where, "msg": msg, "type": "value_error"})
     return problems

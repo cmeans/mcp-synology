@@ -924,8 +924,34 @@ class TestRound2OnPr541:
         monkeypatch.chdir(here)
         self._locked(tmp_path / "locked", request)
         monkeypatch.setenv("SYNOLOGY_HOST", "nas")
-        with pytest.raises(OSError, match=r"can't be read: .*Permission denied"):
+        with pytest.raises(OSError, match=r"can't be read: .*Permission denied.*--config"):
             discover_config_path()
+
+    def test_a_working_folder_with_no_name_still_loads_its_config(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """QA round 3: `getcwd` fails for a folder outside the process's root, and the raise read
+        as no config, so with `SYNOLOGY_HOST` set the file was dropped for env-only mode."""
+        (tmp_path / "mcp-synology.yaml").write_text(
+            f"{GOOD_HEAD}modules: {{filestation: }}\n", encoding="utf-8"
+        )
+        monkeypatch.chdir(tmp_path)
+
+        def no_name() -> str:
+            raise FileNotFoundError(2, "No such file or directory")
+
+        monkeypatch.setattr(os, "getcwd", no_name)
+        monkeypatch.setenv("SYNOLOGY_HOST", "nas")
+        assert discover_config_path() == Path("mcp-synology.yaml")
+
+    def test_an_unknown_error_searching_the_working_folder_stays_an_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def odd(_: str) -> None:
+            raise OSError(5, "Input/output error")
+
+        monkeypatch.setattr(os, "stat", odd)
+        assert config_module._working_folder_is_searchable() is True
 
     def test_a_working_folder_that_cant_be_searched_warns(
         self,
@@ -1108,6 +1134,14 @@ class TestUnguardedReadsOnPr541:
             _, output, _ = _run("setup", "--list")
         assert "\nFORGED" not in output
         assert "d\\nFORGED" in output
+
+    def test_setup_list_shows_only_yaml_files(self, tmp_path: Path) -> None:
+        (tmp_path / "a.yaml").write_text("{}\n", encoding="utf-8")
+        (tmp_path / "x.txt").write_text("{}\n", encoding="utf-8")
+        with patch("mcp_synology.cli.setup._CONFIG_DIR", tmp_path):
+            _, output, _ = _run("setup", "--list")
+        assert "a.yaml" in output
+        assert "x.txt" not in output
 
     def test_setup_list_with_no_config_folder(self, tmp_path: Path) -> None:
         with patch("mcp_synology.cli.setup._CONFIG_DIR", tmp_path / "nowhere"):

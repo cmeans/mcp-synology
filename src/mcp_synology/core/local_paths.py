@@ -127,8 +127,7 @@ def has_control_character(value: str) -> bool:
 # and newline, with no error (QA round 3 on #532).
 CONTROL_CHARACTER_ADVICE = (
     "has a control character or lone surrogate. Inside double quotes a backslash starts an "
-    "escape, so write a "
-    "Windows path in single quotes."
+    "escape, so write a Windows path in single quotes."
 )
 
 
@@ -149,7 +148,10 @@ def check_resolvable(setting: str, entry: str) -> Path:
         msg = f"{setting}: {e}"
         raise ValueError(msg) from e
     if has_control_character(str(resolved)):
-        msg = f"{setting} resolves to a path with a control character: {str(resolved)!r}"
+        msg = (
+            f"{setting} resolves to a path with a control character or lone surrogate: "
+            f"{str(resolved)!r}"
+        )
         raise ValueError(msg)
     return path
 

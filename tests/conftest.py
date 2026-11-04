@@ -27,12 +27,16 @@ def run_capped() -> Callable[..., subprocess.CompletedProcess[str]]:
     For any test that puts an endless source (`/dev/zero`, a pipe nothing writes to) in front of
     the code. In-process, a lost guard read until the kernel killed pytest at 57 GiB, and systemd
     then stopped the whole terminal scope with every session in it (QA round 2 on #541). In a
-    child, the same mistake fails the test with a MemoryError or a timeout.
+    child, the same mistake fails the test with a MemoryError or a timeout. (Whether macOS
+    enforces the limit isn't known, so there it may be only the timeout.)
     """
     resource = pytest.importorskip("resource")
 
     def cap() -> None:
-        resource.setrlimit(resource.RLIMIT_AS, (2**31, 2**31))
+        # Never above a limit already in place, such as a developer's own cap (QA round 3).
+        _, hard = resource.getrlimit(resource.RLIMIT_AS)
+        limit = 2**31 if hard == resource.RLIM_INFINITY else min(hard, 2**31)
+        resource.setrlimit(resource.RLIMIT_AS, (limit, hard))
 
     def run(*args: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
