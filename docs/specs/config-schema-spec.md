@@ -327,14 +327,17 @@ At startup, the config is validated with Pydantic. Validation failures produce c
 - Unknown top-level keys, and unknown keys in `connection`, `auth`, `logging` or directly under `modules.<name>` (catch typos early — strict schema, #386)
 - `permission` value is not one of `read`, `write`, `admin`
 - `logging.level` value is not one of `debug`, `info`, `warning`, `error`
-- Module settings fail Pydantic validation (if the module provides a `settings_schema`)
+- An enabled module's settings fail Pydantic validation (if the module provides a `settings_schema`; #498). Errors give the place (`modules.photos.settings.task_timeout`), for every module at once. A disabled or unknown module isn't loaded, so its settings aren't read. Every schema extends `ModuleSettings`, which also refuses true or false for a number (`task_timeout: on` loaded a 1 s timeout) and an empty or blank text setting (`default_download_dir: ""` meant none)
+- The config file can't be read: a folder, or no permission (#483). `logging.file` can't be opened (its folder is created first; a folder at that path, or no permission, is the error, #498)
+
+`serve`, `check` and `setup` all run this validation (`server.validate_config`, #511 PR 3), so `check` refuses what `serve` would. `check` makes `logging.file`'s folder and file too, since it's the same pass. An error lists every problem found together, repeated keys in file order and then, once those are fixed, the fields, and ends with `Config file: '<path>'`, at any log level, except an `EnvVarError`, which names its variable and has nothing to do with the file. A derived `instance_id` that fails names `SYNOLOGY_HOST` when that's where the host came from.
 
 ### Warnings (server starts, but user is alerted)
 
 - `auth.password` is present in the config file → warn about a plaintext password, recommend keyring. A password from `SYNOLOGY_PASSWORD` gets an env-var variant of the warning instead. `auth.username` alone isn't a secret and gets no warning: a config username with the password in the keyring is the recommended setup (#167)
 - `connection.https` is `false` → warning that credentials are sent in cleartext (acceptable on a trusted LAN, risky otherwise), linking `docs/https.md` (#374; it was info-level). `mcp-synology setup` writes `https: true` unless the user declines
 - `connection.verify_ssl` is `false` → warn that SSL verification is disabled
-- The password, cleartext and SSL-verification warnings above are shown at any log level (#533): logged as WARNING through the handlers in place while the config loads (stderr; `logging.file` is set up after) even when `SYNOLOGY_LOG_LEVEL=error` would filter them (`core/config.py` `_warn_always`). At `error`, `SYNOLOGY_HTTPS=off` used to turn HTTPS off with no output at all
+- The password, cleartext and SSL-verification warnings above are shown at any log level (#533): logged as WARNING through the handlers in place while the config loads (stderr, and replayed into `logging.file` once it's open, #511 PR 3) even when `SYNOLOGY_LOG_LEVEL=error` would filter them (`core/config.py` `_warn_always`). At `error`, `SYNOLOGY_HTTPS=off` used to turn HTTPS off with no output at all
 - A `SYNOLOGY_*` variable changes a value the config file sets for `connection.host`, `connection.port`, `connection.https` or `instance_id` (including the `instance_id` the file's host derives when the file sets none) → a WARNING at any log level, naming the variable and the setting, never the value: `SYNOLOGY_HOST overrides connection.host from the config file. Unset SYNOLOGY_HOST if that isn't intended.` (#533), or, for a derived ID, `SYNOLOGY_INSTANCE_ID overrides the instance_id the config file's host gives. …`. These say which NAS the credentials go to, how, and which keyring entry holds them; it used to be DEBUG only, so `SYNOLOGY_HOST` sent the file's keyring credentials to another host without a word. A variable equal to the file's value in a spelling the config treats as the same (a boolean or port as pydantic reads it, `https: 'on'`, `port: "5001"`; an instance ID in any case; a host name as httpx sends it, in any case, and an international name as its `xn--` form; a bracketed IPv6 address in any case, unless it has a zone, which names an interface and is compared as written), a setting the file doesn't set, and env-only mode get no warning. A variable must itself be a bare host (Hard Errors, above, never a comparison), so anything else in a host is on the file's side, and differs: `nas` over `admin@nas` or `nas:5001`, and `[::1]` over `::1` or `[::1]/dsm`, all warn, and the variable's host replaces the one the file's rule would refuse. Two spellings of one address the comparison doesn't recognize warn too, `[::1]` over `[0:0:0:0:0:0:0:1]`: a false alarm is the safe side
 - A module is listed but `enabled: false` → info-level note (helps users remember they disabled something)
 - Unknown keys within `modules.*.settings`, and unknown module names → warn but don't fail (forward-compatible for module updates). The warning names the key and the valid ones; `serve` logs it and `check` prints it (`server.config_notices`, #368). Before #368 nothing warned: an `allowed_local_paths` typo silently left the Downloads default in force
@@ -385,7 +388,7 @@ The server finds its config file in this order:
    - `./mcp-synology.yaml` (current directory)
 4. **Env-var-only mode:** no config file found by 1–3 and `SYNOLOGY_HOST` set
 
-The source used is logged at INFO (to stderr only: it's logged while the config loads, before `logging.file` is set up), with the path made absolute and quoted, as in the not-found errors, since an MCP client starts the server in a working folder the user rarely knows, and a newline in a folder's name would otherwise forge a log line (`Config: '<path>' (from --config)`, `… (from MCP_SYNOLOGY_CONFIG)`, `Config: '<path>'`, or `Config: environment variables only …`; the host isn't logged at INFO, since it can hold credentials; DEBUG's `Config loaded:` line has it). The not-found and empty errors say only to fix the path: "leave it out to use the defaults" would lead, with `SYNOLOGY_HOST` set and no default file, to env-var-only mode, the downgrade they refuse (QA round 2 on #529).
+The source used is logged at INFO (while the config loads, and replayed into `logging.file` if the level allows, #511 PR 3), with the path made absolute and quoted, as in the not-found errors, since an MCP client starts the server in a working folder the user rarely knows, and a newline in a folder's name would otherwise forge a log line (`Config: '<path>' (from --config)`, `… (from MCP_SYNOLOGY_CONFIG)`, `Config: '<path>'`, or `Config: environment variables only …`; the host isn't logged at INFO, since it can hold credentials; DEBUG's `Config loaded:` line has it). The not-found and empty errors say only to fix the path: "leave it out to use the defaults" would lead, with `SYNOLOGY_HOST` set and no default file, to env-var-only mode, the downgrade they refuse (QA round 2 on #529).
 
 For multi-NAS setups, users must use the `--config` flag to specify which config to load:
 
@@ -591,17 +594,16 @@ class ModuleInfo:
     description: str
     required_apis: list[ApiRequirement]
     tools: list[ToolInfo]
-    settings_schema: type[BaseModel] | None = None  # Optional Pydantic model
+    settings_schema: type[ModuleSettings] | None = None  # Optional; a Pydantic model
 ```
 
 If `settings_schema` is provided:
-- The core validates `modules.*.settings` against it at startup
+- The core validates `modules.*.settings` against it at startup (`server.module_settings`)
 - Invalid settings produce clear error messages with field names and expected types
-- The module receives a validated, typed settings object
+- The module receives a validated, typed settings object (`ctx.settings_as(FileStationSettings)`)
 
 If `settings_schema` is `None`:
-- The core passes `modules.*.settings` as a `dict[str, Any]`
-- The module is responsible for its own validation (or lack thereof)
+- The module receives no settings
 - Any key there produces a warning ("<module> has no settings"), but not an error
 
 This gives mature modules (like File Station) full type safety while letting experimental or third-party modules iterate quickly without fighting the schema.

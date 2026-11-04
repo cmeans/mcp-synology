@@ -405,7 +405,7 @@ Log level is set via:
 1. Config file: `logging.level: debug` (default: `info`)
 2. Environment variable: `SYNOLOGY_LOG_LEVEL=debug` (overrides config)
 
-Logs go to stderr by default. Optionally `logging.file` can redirect to a file (useful when launched by Claude Desktop where stderr may not be visible).
+Logs go to stderr by default. Optionally `logging.file` adds a file (useful when launched by Claude Desktop where stderr may not be visible). What's logged while the config loads is replayed into it once it's open, so the security warnings reach it at any log level (#511 PR 3).
 
 ---
 
