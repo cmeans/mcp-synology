@@ -853,13 +853,20 @@ def _read_instructions_file(config: AppConfig) -> tuple[str | None, str | None]:
     """The instructions file's text, or why it can't be used (never its bytes)."""
     if not config.instructions_file:
         return None, None
-    path = Path(config.instructions_file).expanduser()
+    path = Path(config.instructions_file)
     try:
-        return path.read_text(encoding="utf-8"), None
+        path = path.expanduser()
+        # A named pipe would hang the server here, and a device could read forever.
+        if path.exists() and not path.is_file():
+            reason = "it isn't a regular file"
+        else:
+            return path.read_text(encoding="utf-8"), None
     except UnicodeDecodeError:
         reason = "it isn't valid UTF-8"
     except OSError as e:
         reason = e.strerror or type(e).__name__
+    except (RuntimeError, ValueError):  # an unknown ~user; a NUL
+        reason = "the path isn't usable"
     return (
         None,
         f"instructions_file {str(path)!r} can't be read ({reason}): using the built-in text.",
@@ -876,10 +883,13 @@ def config_notices(config: AppConfig) -> list[str]:
     starts; `serve` logs them and `check` prints them. Unknown keys directly under a
     module are errors (`ModuleConfig`, extra="forbid").
     """
-    notices = []
     _, instructions_problem = _read_instructions_file(config)
-    if instructions_problem:
-        notices.append(instructions_problem)
+    return [*([instructions_problem] if instructions_problem else []), *_unknown_keys(config)]
+
+
+def _unknown_keys(config: AppConfig) -> list[str]:
+    """`config_notices`' warnings about module names and settings keys."""
+    notices = []
     known = ", ".join(sorted(_MODULE_REGISTRY))
     for mod_name, mod_config in config.modules.items():
         module = _MODULE_REGISTRY.get(mod_name)
@@ -926,43 +936,51 @@ def module_settings(config: AppConfig) -> dict[str, BaseModel | None]:
     return settings
 
 
-def _check_log_file(config: AppConfig) -> None:
-    """Make sure `logging.file` can be opened, creating its folder (#498).
+def _log_file_problem(config: AppConfig) -> str | None:
+    """Why `logging.file` can't be opened, or None, after creating its folder (#498).
 
     `examples/config-power-user.yaml` names a folder a fresh machine doesn't have, and
     `FileHandler` raised a traceback there.
     """
     if not config.logging.file:
-        return
-    path = Path(config.logging.file).expanduser()
+        return None
+    path = Path(config.logging.file)
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8"):
-            pass
+        path = path.expanduser()
+        if path.is_fifo():  # opening one waits for a reader, forever
+            reason = "it's a named pipe"
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8"):
+                return None
     except OSError as e:
         reason = e.strerror or type(e).__name__
-        msg = (
-            f"logging.file {str(path)!r} can't be opened: {reason}. Fix the path, or leave it out."
-        )
-        raise ValueError(msg) from e
+    except (RuntimeError, ValueError):  # an unknown ~user; a NUL
+        reason = "the path isn't usable"
+    return f"logging.file {str(path)!r} can't be opened: {reason}. Fix the path, or leave it out."
 
 
 def validate_config(path: str | Path | None = None) -> AppConfig:
     """The fully validated config: the one way `serve`, `check` and `setup` get a config
     (#511), so what one accepts the others accept.
 
-    Everything `load_config` checks, plus each enabled module's settings and the log file.
-    An instructions file that can't be read isn't an error, as documented: it's in
-    `config_notices`.
+    Everything `load_config` checks, plus each enabled module's settings and the log file,
+    reported together. An instructions file that can't be read isn't an error, as
+    documented: it's in `config_notices`.
     """
     config = load_config(path)
+    problems = []
     try:
         module_settings(config)
-        _check_log_file(config)
     except ValueError as e:
+        problems.append(str(e))
+    if log_problem := _log_file_problem(config):
+        problems.append(log_problem)
+    if problems:
+        error = ValueError("\n".join(problems))
         if config._source_path is not None:
-            e.add_note(config_file_note(config._source_path))
-        raise
+            error.add_note(config_file_note(config._source_path))
+        raise error
     return config
 
 
@@ -973,8 +991,13 @@ def create_server(config: AppConfig) -> MCPServer:
     module configuration and permission tiers.
     """
     settings = module_settings(config)
-    for notice in config_notices(config):
+    for notice in _unknown_keys(config):
         logger.warning("%s", notice)
+    # One read. An ERROR: the model gets other instructions than the config names, and that
+    # must show at `logging.level: error` too.
+    instructions_text, instructions_problem = _read_instructions_file(config)
+    if instructions_problem:
+        logger.error("%s", instructions_problem)
     # Populate template variables in the instructions so Claude can
     # distinguish between multiple NAS connections.
     conn = config.connection
@@ -1021,9 +1044,8 @@ def create_server(config: AppConfig) -> MCPServer:
 
     # Full replacement — user provides their own instructions file. They can start from the
     # built-in server.md, filestation.md, filestation-write.md and local.md. One that can't
-    # be read falls back to the full built-in instructions, generated sections included;
-    # config_notices, logged above, says so.
-    instructions_text, _ = _read_instructions_file(config)
+    # be read falls back to the full built-in instructions, generated sections included,
+    # and the error above says so.
     replacement = None if instructions_text is None else _strip_html_comments(instructions_text)
     if replacement is not None:
         replacement = replacement.strip()

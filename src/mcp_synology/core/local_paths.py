@@ -108,6 +108,19 @@ def expand_setting(setting: str, entry: str) -> Path:
         raise ValueError(msg) from e
 
 
+def check_resolvable(setting: str, entry: str) -> Path:
+    """``~`` expanded, and the path checked to resolve (a NUL byte, a symlink loop). The
+    server resolves these when it starts, so a config that passes here starts: otherwise
+    `check` passed what `serve` crashed on (#511 PR 3)."""
+    path = expand_setting(setting, entry)
+    try:
+        _resolve(path)
+    except ValueError as e:
+        msg = f"{setting}: {e}"
+        raise ValueError(msg) from e
+    return path
+
+
 def check_local_path_entries(setting: str, value: list[str] | None) -> list[str] | None:
     """Validate an ``allowed_local_paths`` list: every entry absolute or starting with ``~``.
 
@@ -115,7 +128,7 @@ def check_local_path_entries(setting: str, value: list[str] | None) -> list[str]
     depends on how the MCP client launched it (QA R1 on #186).
     """
     for entry in value or []:
-        if not expand_setting(setting, entry).is_absolute():
+        if not check_resolvable(setting, entry).is_absolute():
             msg = f"{setting} entries must be absolute (or start with ~): {entry!r}"
             raise ValueError(msg)
     return value

@@ -347,6 +347,14 @@ def _no_empty_path(name: str, value: str | None) -> str | None:
     if value is not None and not value.strip():
         msg = f"is empty: give a file's path, or leave {name} out."
         raise ValueError(msg)
+    if value is not None and any(ord(c) < 32 or ord(c) == 127 for c in value):
+        # Inside double quotes a backslash starts an escape: "C:\temp\new.log" loaded with a
+        # real tab and newline, with no error (QA round 3 on #532).
+        msg = (
+            "has a control character. Inside double quotes a backslash starts an escape, so "
+            "write a Windows path in single quotes."
+        )
+        raise ValueError(msg)
     return value
 
 
@@ -422,6 +430,16 @@ class AppConfig(BaseModel, extra="forbid"):
     @classmethod
     def _instance_id_as_yaml_read_it(cls, value: object) -> object:
         _unquoted_text_problem(value)  # left blank (None) is still "not set"
+        return value
+
+    @field_validator("alias")
+    @classmethod
+    def _alias_is_a_printable_name(cls, value: str | None) -> str | None:
+        # It names the server and a line of `setup --list`: `x\n    Host: evil.example` forged
+        # a Host line, and an escape sequence reached the terminal (QA round 3 on #532).
+        if value is not None and (not value.strip() or not value.isprintable()):
+            msg = "must be a name with printable characters, or left out."
+            raise ValueError(msg)
         return value
 
     @field_validator("instructions_file")
@@ -534,6 +552,15 @@ def _shown_path(path: Path) -> str:
         return str(path)
 
 
+def _expanded_config_path(value: str, source: str) -> Path:
+    """``~`` expanded; an unknown ``~user`` is RuntimeError, a traceback in every command."""
+    try:
+        return Path(value).expanduser()
+    except RuntimeError:
+        msg = f"Config file not found (from {source}): {value!r}: no such home folder."
+        raise FileNotFoundError(msg) from None
+
+
 def discover_config_path(explicit_path: str | None = None) -> Path:
     """Find the config file using the discovery hierarchy.
 
@@ -552,7 +579,7 @@ def discover_config_path(explicit_path: str | None = None) -> Path:
             # round 2 on #529).
             msg = "--config is empty: give a config file's path."
             raise FileNotFoundError(msg)
-        path = Path(explicit_path).expanduser()
+        path = _expanded_config_path(explicit_path, "--config")
         # Absolute in messages: an MCP client starts the server in a working folder the
         # user rarely knows (QA round 1 on #529).
         if not path.exists():
@@ -572,7 +599,7 @@ def discover_config_path(explicit_path: str | None = None) -> Path:
         if not env_path.strip():
             msg = "MCP_SYNOLOGY_CONFIG is set but empty: set it to a config file's path."
             raise FileNotFoundError(msg)
-        path = Path(env_path).expanduser()
+        path = _expanded_config_path(env_path, "MCP_SYNOLOGY_CONFIG")
         if not path.exists():
             # An error, never env-only mode: that would run read-only over plain HTTP
             # instead of the config the variable names (#499).
@@ -1100,6 +1127,8 @@ _VALUE_TAG = "tag:yaml.org,2002:value"
 # A repeated module or settings key is named only in this form, so it can't forge a line
 # of the error (QA round 2 on #532).
 _NAMEABLE_KEY = re.compile(r"[\w.-]+")
+# A pasted or generated file could repeat thousands of keys; nobody fixes those one by one.
+_MAX_KEY_PROBLEMS = 50
 
 
 class _ConfigLoader(yaml.SafeLoader):
@@ -1127,7 +1156,7 @@ class _ConfigLoader(yaml.SafeLoader):
         # Each node with the keys leading to it, so a repeat under `modules` or a module's
         # `settings` can be named (pre-QA on #532); a node shared by alias is checked once,
         # at the first path reached.
-        problems: list[tuple[int, str]] = []
+        problems: list[tuple[int, int, str]] = []
         stack: list[tuple[yaml.Node, tuple[str, ...]]] = [(root, ())]
         visited: set[int] = set()
         while stack:  # a loop, not recursion: an alias can make the graph share nodes
@@ -1137,20 +1166,26 @@ class _ConfigLoader(yaml.SafeLoader):
             visited.add(id(node))
             if isinstance(node, yaml.MappingNode):
                 problems.extend(self._check_mapping(node, path))
-                for key_node, value_node in node.value:
-                    stack.append((key_node, path))
+                # Reversed, so nodes pop in file order, and a node shared by alias is checked
+                # where it's written: under `auth`, its keys stay hidden (QA round 3 on #532).
+                for key_node, value_node in reversed(node.value):
                     name = key_node.value if isinstance(key_node, yaml.ScalarNode) else ""
                     stack.append((value_node, (*path, str(name))))
+                    stack.append((key_node, path))
             elif isinstance(node, yaml.SequenceNode):
-                stack.extend((item, path) for item in node.value)
+                stack.extend((item, path) for item in reversed(node.value))
         if problems:
-            raise ConfigKeyError("\n".join(text for _, text in sorted(problems)))
+            texts = [text for *_, text in sorted(problems)]
+            more = len(texts) - _MAX_KEY_PROBLEMS
+            if more > 0:
+                texts = [*texts[:_MAX_KEY_PROBLEMS], f"… and {more} more like these."]
+            raise ConfigKeyError("\n".join(texts))
 
     def _check_mapping(
         self, node: yaml.MappingNode, path: tuple[str, ...] = ()
-    ) -> list[tuple[int, str]]:
-        """This mapping's problems, each with the line it's on."""
-        problems: list[tuple[int, str]] = []
+    ) -> list[tuple[int, int, str]]:
+        """This mapping's problems, each with the line and column it's on."""
+        problems: list[tuple[int, int, str]] = []
         seen: dict[Any, tuple[int, int, bool]] = {}
         merge_at: tuple[int, int, bool] | None = None
         furthest = -1
@@ -1174,6 +1209,7 @@ class _ConfigLoader(yaml.SafeLoader):
                     problems.append(
                         (
                             line,
+                            column,
                             f"The config file has `<<` twice in one section ({where}), and YAML "
                             "would silently let the later one win. Merge both in one, later one "
                             "first, since the first in a list wins: `<<: [*later, *earlier]`.",
@@ -1193,6 +1229,7 @@ class _ConfigLoader(yaml.SafeLoader):
                 problems.append(
                     (
                         line,
+                        column,
                         f"The config file has a key with no value inside {{…}} (line {line}). "
                         "It isn't shown, since it may be part of a password. A colon needs a "
                         f"space after it (`host: nas`, not `host:nas`); {_SPLIT_HINT}; "
@@ -1224,6 +1261,7 @@ class _ConfigLoader(yaml.SafeLoader):
                 problems.append(
                     (
                         line,
+                        column,
                         f"The config file has {f'`{key}`' if known else 'a key'} twice in one "
                         f"section ({where}), and YAML would silently keep only the last. "
                         "Remove one."
@@ -1391,12 +1429,14 @@ def format_config_errors(errors: list[Any]) -> str:
     for err in errors:
         loc_parts = [str(p) for p in err.get("loc", ())]
         loc = _shown_location(err, loc_parts, non_text_keys)
-        msg = err.get("msg", "validation error")
+        msg = str(err.get("msg", "validation error"))
         input_value = err.get("input")
         suffix = ""
         if _may_show(err, loc_parts):
             suffix = f" (got {input_value!r})" if input_value not in (None, "") else ""
-        lines.extend(f"  - {loc}: {part}{suffix}" for part in str(msg).split("\n"))
+        if "\n" in msg:  # several problems in one error: pydantic's prefix is only on the first
+            msg = msg.removeprefix("Value error, ")
+        lines.extend(f"  - {loc}: {part}{suffix}" for part in msg.split("\n"))
     return "\n".join([f"Configuration validation failed ({len(lines)} error(s)):", *lines])
 
 

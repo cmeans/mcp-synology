@@ -26,7 +26,11 @@ def _plain_types(annotation: Any) -> set[Any]:
 
 
 class ModuleSettings(BaseModel):
-    """Base of every module's settings: the rules that hold for any setting (#511 PR 3)."""
+    """Base of every module's settings: the rules that hold for any setting (#511 PR 3).
+
+    They look at a field's own value, not inside a list or mapping: no setting today holds
+    numbers in one.
+    """
 
     @field_validator("*", mode="before")
     @classmethod

@@ -15,7 +15,7 @@ from mcp.server.mcpserver import (
 from mcp.types import ToolAnnotations
 from pydantic import Field, field_validator
 
-from mcp_synology.core.local_paths import check_local_path_entries, expand_setting
+from mcp_synology.core.local_paths import check_local_path_entries, check_resolvable
 from mcp_synology.modules import (
     ApiRequirement,
     ModuleInfo,
@@ -74,7 +74,7 @@ class FileStationSettings(ModuleSettings):
     @classmethod
     def _expandable_download_dir(cls, value: str | None) -> str | None:
         if value:
-            expand_setting("default_download_dir", value)
+            check_resolvable("default_download_dir", value)
         return value
 
     search_poll_interval: float = Field(default=1.0, ge=0.5, le=10.0)
