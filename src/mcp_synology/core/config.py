@@ -14,6 +14,7 @@ import ipaddress
 import logging
 import os
 import re
+from datetime import date
 from pathlib import Path
 from typing import Annotated, Any, Literal, get_args, get_origin
 
@@ -163,8 +164,11 @@ def host_problems(
         return [_INVALID_HOST]
     if bracketed:
         return []
-    # As _INVALID_HOST says, which httpx doesn't check (QA round 1 on #532).
-    if any(len(label) > 63 for label in normalized.split(".")):
+    # As _INVALID_HOST says, which httpx doesn't check (QA round 1 on #532). On the host as
+    # sent: `.host` decodes a first `xn--` part, so it would measure the short form (QA
+    # round 2).
+    sent = httpx.URL(f"http://{host}/").raw_host.decode("ascii")
+    if any(len(label) > 63 for label in sent.split(".")):
         return [_INVALID_HOST]
     # The numeric rule reads the host as httpx will use it: IDNA maps `。`, `．` and `｡`
     # to `.`, so `192。168。1` is `192.168.1` (pre-QA r4), as WHATWG checks "ends in a
@@ -214,16 +218,29 @@ _INSTANCE_ID_RULE = "lowercase letters, digits and hyphens; capitals are lowered
 
 
 def instance_id_problem(value: str) -> str | None:
-    """Why ``value`` can't be an `instance_id`, or None. An empty one put every such
-    instance's state file in one shared folder (#485)."""
+    """Why ``value`` can't be an `instance_id`, or None. An empty one gave every such
+    instance one keyring entry (`mcp-synology/default`) and session name prefix (#485).
+    The limit is a host part's: a config file and a keyring entry are named after it, and
+    a very long one crashed `setup` with the keyring already written (QA round 2 on #532).
+    """
     if not value.strip():
         return (
             "is empty: leave instance_id out to derive it from the host, or set it to "
             f"{_INSTANCE_ID_RULE}"
         )
+    if len(value) > 63:
+        return "is longer than 63 characters"
     if not re.fullmatch(r"[a-z0-9-]+", value.lower()):
         return f"may hold only {_INSTANCE_ID_RULE}"
     return None
+
+
+def _unquoted_text_problem(value: object) -> None:
+    """Say why a text setting got a number, date or boolean, without showing it: the value
+    is hidden there, and `123` looks like text in the file (QA round 2 on #532)."""
+    if isinstance(value, bool | int | float | date):
+        msg = "isn't text: YAML read it as a number, date or true/false, so put it in quotes."
+        raise ValueError(msg)
 
 
 def _not_a_bool(value: object) -> object:
@@ -256,7 +273,7 @@ class ConnectionConfig(BaseModel, extra="forbid"):
 
     @field_validator("host", mode="before")
     @classmethod
-    def _bracketed_but_unquoted(cls, value: object) -> object:
+    def _host_as_yaml_read_it(cls, value: object) -> object:
         # `host: [fd00::1]` unquoted is a YAML list holding the address.
         if isinstance(value, list) and len(value) == 1 and isinstance(value[0], str):
             msg = (
@@ -264,6 +281,10 @@ class ConnectionConfig(BaseModel, extra="forbid"):
                 '"[fd00::1]".'
             )
             raise ValueError(msg)
+        # Left blank, as `host: ""` says it (QA round 2 on #532).
+        if value is None:
+            raise ValueError(host_message(["is empty"]))
+        _unquoted_text_problem(value)
         return value
 
     @field_validator("host")
@@ -385,6 +406,12 @@ class AppConfig(BaseModel, extra="forbid"):
         # the "at least one module" error. `connection:` stays None: its own error says
         # the host is needed.
         return {} if value is None else value
+
+    @field_validator("instance_id", mode="before")
+    @classmethod
+    def _instance_id_as_yaml_read_it(cls, value: object) -> object:
+        _unquoted_text_problem(value)  # left blank (None) is still "not set"
+        return value
 
     @field_validator("instructions_file")
     @classmethod
@@ -935,6 +962,12 @@ class ConfigKeyError(yaml.YAMLError):
 
 
 _MERGE_TAG = "tag:yaml.org,2002:merge"
+# A plain `=` key. SafeLoader rewrites this tag to text only while flattening, which comes
+# after the checks, and has no constructor for it (QA round 2 on #532).
+_VALUE_TAG = "tag:yaml.org,2002:value"
+# A repeated module or settings key is named only in this form, so it can't forge a line
+# of the error (QA round 2 on #532).
+_NAMEABLE_KEY = re.compile(r"[\w.-]+")
 
 
 class _ConfigLoader(yaml.SafeLoader):
@@ -978,36 +1011,55 @@ class _ConfigLoader(yaml.SafeLoader):
 
     def _check_mapping(self, node: yaml.MappingNode, path: tuple[str, ...] = ()) -> None:
         seen: dict[Any, tuple[int, int, bool]] = {}
-        merge_line: int | None = None
+        merge_at: tuple[int, int] | None = None
+        furthest = -1
         for key_node, value_node in node.value:
             # A key given by alias (`{*k: …}`) has its anchor's marks, from before this
-            # mapping: report the mapping's own place then (pre-QA r4).
+            # mapping (pre-QA r4) or earlier in it (QA round 2 on #532): report the
+            # mapping's own place then. A key written here always moves past the last.
             mark = key_node.start_mark
-            clamped = mark.index < node.start_mark.index
+            clamped = mark.index < node.start_mark.index or mark.index <= furthest
+            furthest = max(furthest, mark.index)
             if clamped:
                 mark = node.start_mark
             line, column = mark.line + 1, mark.column + 1
             if key_node.tag == _MERGE_TAG:
                 # Its keys may be overridden: YAML's own rule, not a repeat. A second `<<`
-                # is a repeated key like any other (QA round 1 on #532).
-                if merge_line is not None:
-                    raise ConfigKeyError(
-                        f"The config file has `<<` twice in one section (lines {merge_line} "
-                        f"and {line}), and YAML would silently let the later one win. Merge "
-                        "both in one: `<<: [*a, *b]`."
+                # is a repeated key like any other (QA round 1 on #532). The first in a
+                # list wins, so the later one goes first to keep the result (QA round 2).
+                if merge_at is not None:
+                    where = (
+                        f"line {line}, columns {merge_at[1]} and {column}"
+                        if merge_at[0] == line
+                        else f"lines {merge_at[0]} and {line}"
                     )
-                merge_line = line
+                    raise ConfigKeyError(
+                        f"The config file has `<<` twice in one section ({where}), and YAML "
+                        "would silently let the later one win. Merge both in one, later one "
+                        "first, since the first in a list wins: `<<: [*later, *earlier]`."
+                    )
+                merge_at = (line, column)
                 continue
             if node.flow_style and _has_no_colon(node, key_node, value_node):
+                # Directly under `modules`, leaving it out would drop the module (QA round
+                # 2 on #532).
+                empty_advice = (
+                    "to list a module with its defaults, give it a colon: "
+                    "`{filestation: , photos: }`"
+                    if path == ("modules",)
+                    else "to leave a setting empty, leave it out"
+                )
                 raise ConfigKeyError(
                     f"The config file has a key with no value inside {{…}} (line {line}). "
                     "It isn't shown, since it may be part of a password. A colon needs a "
-                    f"space after it (`host: nas`, not `host:nas`); {_SPLIT_HINT}; to leave "
-                    "a setting empty, leave it out."
+                    f"space after it (`host: nas`, not `host:nas`); {_SPLIT_HINT}; "
+                    f"{empty_advice}."
                 )
             if not isinstance(key_node, yaml.ScalarNode):
                 continue  # a list or mapping as a key: SafeLoader's own error follows
-            key = self.construct_object(key_node)  # type: ignore[no-untyped-call]
+            key = (
+                key_node.value if key_node.tag == _VALUE_TAG else self.construct_object(key_node)  # type: ignore[no-untyped-call]
+            )
             first = seen.get(key)
             if first is not None:
                 # A module's name, and a key in its settings, can be named too: the
@@ -1015,8 +1067,13 @@ class _ConfigLoader(yaml.SafeLoader):
                 # on #532: a pasted second `filestation:` was "a key … isn't shown").
                 known = isinstance(key, str) and (
                     key in _config_keys()
-                    or path == ("modules",)
-                    or (len(path) == 3 and path[0] == "modules" and path[2] == "settings")
+                    or (
+                        _NAMEABLE_KEY.fullmatch(key) is not None
+                        and (
+                            path == ("modules",)
+                            or (len(path) == 3 and path[0] == "modules" and path[2] == "settings")
+                        )
+                    )
                 )
                 # On one line (`{k: 1, k: 2}`), the columns say where (pre-QA r3), unless
                 # a key came by alias: its marks are then the mapping's, so "columns 4 and

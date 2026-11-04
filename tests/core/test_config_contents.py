@@ -194,8 +194,73 @@ class TestDuplicateKeys:
             parse_config_text("b: &b {host: x}\nc: &c {host: y}\nconnection:\n  <<: *b\n  <<: *c\n")
         assert format_yaml_error(exc.value).startswith(
             "The config file has `<<` twice in one section (lines 4 and 5), and YAML would "
-            "silently let the later one win. Merge both in one: `<<: [*a, *b]`."
+            "silently let the later one win. Merge both in one, later one first, since the "
+            "first in a list wins: `<<: [*later, *earlier]`."
         )
+
+    def test_following_the_merge_advice_keeps_the_result(self) -> None:
+        """QA round 2 on #532: `<<: [*a, *b]` turned HTTPS off where the two lines had it on."""
+        anchors = "a: &a {https: false}\nb: &b {https: true}\nc:\n"
+        as_written = yaml.safe_load(anchors + "  <<: *a\n  <<: *b\n")["c"]
+        assert parse_config_text(anchors + "  <<: [*b, *a]\n")["c"] == as_written == {"https": True}
+
+    def test_two_merge_keys_on_one_line_give_the_columns(self) -> None:
+        """QA round 2 on #532: it said "lines 3 and 3"."""
+        with pytest.raises(yaml.YAMLError) as exc:
+            parse_config_text("a: &a {x: 1}\nb: &b {y: 2}\nc: {<<: *a, <<: *b}\n")
+        assert "`<<` twice in one section (line 3, columns 5 and 13)" in format_yaml_error(
+            exc.value
+        )
+
+    @pytest.mark.parametrize(
+        ("text", "where"),
+        [
+            ("connection: {&k host: a, *k : b}\n", "in the {…} at line 1"),
+            (
+                "connection:\n  &k host: a\n  https: true\n  *k : b\n",
+                "in the section that starts at line 2",
+            ),
+            # After an alias to an anchor outside the mapping, whose marks are further back.
+            ("x: &o z\nm: {&k host: 2, *o : 3, *k : 4}\n", "in the {…} at line 2"),
+        ],
+    )
+    def test_an_alias_to_an_anchor_in_the_same_mapping(self, text: str, where: str) -> None:
+        """QA round 2 on #532: "columns 14 and 14", or "line 2" for a repeat on line 4."""
+        with pytest.raises(yaml.YAMLError) as exc:
+            parse_config_text(text)
+        message = format_yaml_error(exc.value)
+        assert f"twice in one section ({where})" in message
+        assert "columns" not in message
+
+    def test_a_repeated_settings_key_that_could_forge_a_line_isnt_named(self) -> None:
+        """QA round 2 on #532: a quoted key can hold a newline."""
+        key = '"a\\n[ERROR] forged"'
+        with pytest.raises(yaml.YAMLError) as exc:
+            parse_config_text(
+                f"modules:\n  filestation:\n    settings:\n      {key}: 1\n      {key}: 2\n"
+            )
+        message = format_yaml_error(exc.value)
+        assert message.startswith("The config file has a key twice in one section (lines 4 and 5)")
+        assert "forged" not in message
+
+    def test_a_dotted_settings_key_is_named(self) -> None:
+        with pytest.raises(yaml.YAMLError) as exc:
+            parse_config_text("modules:\n  x:\n    settings:\n      a-b.c_d: 1\n      a-b.c_d: 2\n")
+        assert format_yaml_error(exc.value).startswith("The config file has `a-b.c_d` twice")
+
+    def test_a_key_at_a_settings_like_path_under_auth_stays_hidden(self) -> None:
+        """The rule names keys only under `modules`: any other may be a password's fragment."""
+        with pytest.raises(yaml.YAMLError) as exc:
+            parse_config_text("auth:\n  x:\n    settings:\n      Hunter2x: 1\n      Hunter2x: 2\n")
+        assert "Hunter2x" not in format_yaml_error(exc.value)
+
+    def test_a_key_spelled_equals_is_text(self) -> None:
+        """QA round 2 on #532: the check built the key before PyYAML rewrites its tag, so
+        `{=: 1}`, which YAML loads, was "isn't valid YAML"."""
+        assert parse_config_text("a: {=: 1}\n") == yaml.safe_load("a: {=: 1}\n") == {"a": {"=": 1}}
+        with pytest.raises(yaml.YAMLError) as exc:
+            parse_config_text("a: {=: 1, =: 2}\n")
+        assert "a key twice in one section" in format_yaml_error(exc.value)
 
     def test_one_merge_key_with_a_list_is_fine(self) -> None:
         raw = parse_config_text("b: &b {host: x}\nc: &c {host: y}\nconnection:\n  <<: [*b, *c]\n")
@@ -278,6 +343,21 @@ class TestKeyWithoutValue:
 
     def test_block_style_is_unaffected(self) -> None:
         assert parse_config_text("a:\n  b:\n  c: 1\n") == {"a": {"b": None, "c": 1}}
+
+    def test_under_modules_the_advice_keeps_the_module(self, tmp_path: Path) -> None:
+        """QA round 2 on #532: "leave it out" drops the module, and the form it gives loads."""
+        head = "schema_version: 1\nconnection: {host: nas}\n"
+        message = _yaml_message(tmp_path, head + "modules: {filestation, photos}\n")
+        assert message.endswith(
+            "to list a module with its defaults, give it a colon: `{filestation: , photos: }`."
+        )
+        assert "leave it out" not in message
+        config = load_config(_write(tmp_path, head + "modules: {filestation: , photos: }\n"))
+        assert sorted(config.modules) == ["filestation", "photos"]
+
+    def test_elsewhere_the_advice_is_to_leave_it_out(self, tmp_path: Path) -> None:
+        message = _yaml_message(tmp_path, "schema_version: 1\nconnection: {host: nas, https}\n")
+        assert message.endswith("to leave a setting empty, leave it out.")
 
 
 class TestEmptySections:
@@ -520,7 +600,7 @@ class TestHost:
 
         assert says in host_problems("http://nas", **kwargs)[0]
 
-    @pytest.mark.parametrize("host", ["xn--", "xn--zz", "xn--a"])
+    @pytest.mark.parametrize("host", ["xn--", "xn--zz", "xn--a", "XN--ZZ"])
     def test_a_malformed_a_label_is_refused_not_raised(self, host: str) -> None:
         """QA round 1 on #532: reading `url.host` decoded the `xn--` label, and idna's own
         error (a UnicodeError, its text decoded from the host) escaped. Pre-QA after it:
@@ -578,6 +658,42 @@ class TestHost:
         assert host_problems("a" * 63 + ".local") == []
         (problem,) = host_problems("a" * 64 + ".local")
         assert problem.startswith("isn't a valid host name or IP address")
+
+    @pytest.mark.parametrize(
+        ("host", "ok"),
+        [
+            ("xn--mnchen-3ya", True),
+            ("Bücher.local", True),
+            ("a" * 63, True),
+            # 64 characters as sent; `.host` decodes a first `xn--` part to 58.
+            ("xn--" + ("ü" * 58).encode("punycode").decode(), False),
+            ("xn--" + ("ü" * 57).encode("punycode").decode(), True),
+            ("é" * 64, False),
+        ],
+    )
+    def test_the_63_character_rule_measures_the_host_as_sent(self, host: str, ok: bool) -> None:
+        """QA round 2 on #532: a 67-character `xn--` label passed."""
+        from mcp_synology.core.config import host_problems
+
+        assert (host_problems(host) == []) is ok
+
+    @pytest.mark.parametrize("value", ["12345", "192.168", "true", "2024-01-02"])
+    def test_a_host_yaml_didnt_read_as_text_says_so(self, tmp_path: Path, value: str) -> None:
+        """QA round 2 on #532: with the value hidden, all that was left was "should be a
+        valid string", though the value looks like text in the file."""
+        message = _validation_message(
+            tmp_path, f"schema_version: 1\nconnection: {{host: {value}}}\n" + _MODULES
+        )
+        assert "isn't text: YAML read it as a number, date or true/false" in message
+        assert "put it in quotes" in message
+        assert value not in message.replace("true/false", "")
+
+    def test_a_blank_host_is_empty(self, tmp_path: Path) -> None:
+        """QA round 2 on #532: `host: ""` said so, and `host:` said "a valid string"."""
+        message = _validation_message(
+            tmp_path, "schema_version: 1\nconnection:\n  host:\n" + _MODULES
+        )
+        assert "must be a bare host name or IP address, and it is empty." in message
 
     @pytest.mark.parametrize(
         ("kwargs", "says"),
@@ -660,6 +776,46 @@ class TestPort:
 class TestEmptyValues:
     """#485 and the #511 comment: an empty value that names nothing is an error, not
     "unset"."""
+
+    @pytest.mark.parametrize("value", ["123", "1.5", "true", "2024-01-02"])
+    def test_an_instance_id_yaml_didnt_read_as_text_says_so(
+        self, tmp_path: Path, value: str
+    ) -> None:
+        """QA round 2 on #532, as for the host."""
+        message = _validation_message(
+            tmp_path,
+            f"schema_version: 1\ninstance_id: {value}\nconnection: {{host: nas}}\n" + _MODULES,
+        )
+        assert "isn't text: YAML read it as a number, date or true/false" in message
+        assert value not in message.replace("true/false", "")
+
+    def test_a_blank_instance_id_is_still_not_set(self, tmp_path: Path) -> None:
+        config = load_config(
+            _write(
+                tmp_path, "schema_version: 1\ninstance_id:\nconnection: {host: nas}\n" + _MODULES
+            )
+        )
+        assert config.instance_id == "nas"
+
+    @pytest.mark.parametrize(("length", "ok"), [(63, True), (64, False), (400, False)])
+    def test_an_instance_id_has_a_host_parts_limit(
+        self, tmp_path: Path, length: int, ok: bool
+    ) -> None:
+        """QA round 2 on #532: a very long one crashed setup with the keyring written."""
+        from mcp_synology.core.config import instance_id_problem
+
+        value = "a" * length
+        assert (instance_id_problem(value) is None) is ok
+        text = f"schema_version: 1\ninstance_id: {value}\nconnection: {{host: nas}}\n" + _MODULES
+        if ok:
+            assert load_config(_write(tmp_path, text)).instance_id == value
+            return
+        message = _validation_message(tmp_path, text)
+        assert "is longer than 63 characters" in message
+        assert value not in message
+        with pytest.raises(EnvVarError) as exc:
+            parse_env_value("SYNOLOGY_INSTANCE_ID", "instance_id", value)
+        assert "is longer than 63 characters" in str(exc.value)
 
     def test_an_instance_id_of_another_type_isnt_quoted(self, tmp_path: Path) -> None:
         """Pre-QA on #532: decision 4 hid a character error's value, but `instance_id: 123`

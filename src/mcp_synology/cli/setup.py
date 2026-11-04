@@ -72,7 +72,12 @@ def setup(config: str | None, list_configs: bool, verbose: bool) -> None:
 
 def _list_configurations() -> None:
     """List existing configuration files in the config directory."""
-    from mcp_synology.core.config import host_problems, instance_id_problem, parse_config_text
+    from mcp_synology.core.config import (
+        format_yaml_error,
+        host_problems,
+        instance_id_problem,
+        parse_config_text,
+    )
 
     if not _CONFIG_DIR.exists():
         click.echo("No configurations found.")
@@ -111,7 +116,12 @@ def _list_configurations() -> None:
             click.echo(f"    Name: {label}")
             click.echo(f"    Host: {host}")
             click.echo()
-        except (OSError, ValueError, yaml.YAMLError, AttributeError):
+        except yaml.YAMLError as e:
+            # The reason `check` gives; format_yaml_error never quotes the file (QA round 2
+            # on #532).
+            click.echo(f"  {f.name}  (could not parse)")
+            click.echo(f"    {format_yaml_error(e)}")
+        except (OSError, ValueError, AttributeError):
             click.echo(f"  {f.name}  (could not parse)")
 
 

@@ -564,6 +564,29 @@ class TestSetupInteractiveValidationFailure:
         assert result.output.count("Instance ID (names this config") == 3
         assert stored == ["mcp-synology/my-nas"]
 
+    def test_a_very_long_id_is_asked_again(self, tmp_path: Path) -> None:
+        """QA round 2 on #532: it was a traceback from the file name, with the keyring
+        already written."""
+        config_dir = tmp_path / "config"
+        stored: list[str] = []
+        with (
+            patch("mcp_synology.cli.setup._CONFIG_DIR", config_dir),
+            patch("mcp_synology.core.config.discover_config_path", side_effect=FileNotFoundError),
+            patch(
+                "mcp_synology.cli.setup._store_keyring",
+                side_effect=lambda service, *_: stored.append(service) and False,
+            ),
+            patch.dict(os.environ, self._clean_env(), clear=True),
+        ):
+            result = CliRunner().invoke(
+                main,
+                ["setup"],
+                input=f"my_nas\nn\n\nread\n{'a' * 400}\nmy-nas\n\nadmin\npw\n",
+            )
+        assert "  That instance ID is longer than 63 characters.\n" in result.output
+        assert result.output.count("Instance ID (names this config") == 2
+        assert stored == ["mcp-synology/my-nas"]
+
     @pytest.mark.parametrize(
         ("https", "port", "written"),
         [("n", "", None), ("y", "", None), ("n", "5555", 5555), ("y", "5000", 5000)],
@@ -739,6 +762,26 @@ def test_list_never_shows_a_mistagged_password(tmp_path: Path) -> None:
     assert "a.yaml  (could not parse)" in result.output
     assert "b.yaml  (could not parse)" in result.output
     assert "c.yaml  (could not parse)" in result.output  # not UTF-8: a ValueError
+
+
+def test_list_gives_the_reason_a_file_cant_be_read(tmp_path: Path) -> None:
+    """QA round 2 on #532: a repeated key was a bare "(could not parse)", where `check`
+    gives the lines. The reason names no value."""
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "a.yaml").write_text(
+        "schema_version: 1\nauth:\n  password: Hunter2x\n  password: Spring2y\n"
+    )
+    (config_dir / "b.yaml").write_text("schema_version: 1\nauth: {password: !!int Hunter2x}\n")
+    with patch("mcp_synology.cli.setup._CONFIG_DIR", config_dir):
+        result = CliRunner().invoke(main, ["setup", "--list"])
+    assert result.exit_code == 0, result.output
+    assert "a.yaml  (could not parse)" in result.output
+    assert "The config file has `password` twice in one section (lines 3 and 4)" in result.output
+    assert "b.yaml  (could not parse)" in result.output
+    assert "a value YAML can't build" in result.output
+    assert "hunter" not in result.output.casefold()
+    assert "spring" not in result.output.casefold()
 
 
 def test_list_shows_only_bare_hosts_and_text_names(tmp_path: Path) -> None:
