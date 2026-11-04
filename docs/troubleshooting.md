@@ -133,9 +133,11 @@ no second copy (seen on DSM 7.1.1, #220).
 ### A new HTTP task shows `waiting` for a few seconds
 
 **Why:** that's normal. A new HTTP task sat in `waiting` about 5 s before `downloading`, and a
-resumed one about 2 s, on DSM 7.1 and 7.2.2 (idle vdsm, probed 2026-10-19; #208, #243). Pause
-and resume themselves took effect at once there: `list_downloads` and `get_download_info`
-showed the new state on the next call. A BitTorrent or magnet task can stay in `waiting` much
+resumed one about 2 s, on DSM 7.1 and 7.2.2 (idle vdsm, probed 2026-10-19; #208, #243). Resume
+took effect at once there: `list_downloads` and `get_download_info` showed the new state on the
+next call. Pausing a task that's still `waiting` takes about 3 s more, because Download Station
+can undo that pause, so `pause_download` checks it and pauses again if needed (#243). A
+BitTorrent or magnet task can stay in `waiting` much
 longer, until it finds peers.
 
 **What to do:** nothing; check again after a few seconds. A task still in `waiting` after

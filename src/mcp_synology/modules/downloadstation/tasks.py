@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -47,6 +48,11 @@ _VALID_STATUS_FILTERS: set[str] = {"all", *STATUS_GROUPS.keys()}
 # DSM's own order (creation order, oldest first).
 _SORT_KEYS: dict[str, str] = {"created": "create_time", "completed": "completed_time"}
 _VALID_SORTS: set[str] = {"queue", *_SORT_KEYS}
+
+# How long pause_download watches a task it paused while still `waiting` (#243): the undo
+# showed within about a second of the pause, and nothing paused 3 s after creation undid.
+_PAUSE_HOLD_CHECKS = 6
+_PAUSE_HOLD_INTERVAL = 0.5
 
 
 def _format_epoch(epoch: int | None) -> str:
@@ -856,6 +862,50 @@ async def delete_download(
     return table
 
 
+async def _hold_pause(client: DsmClient, task_ids: list[str]) -> set[str]:
+    """Watch tasks paused while still `waiting`; return those that wouldn't stay paused.
+
+    DS can undo such a pause: `pause` answers ok, the task reads `paused`, then it goes to
+    `downloading` and stays there. It happened to about 3 in 10 magnet tasks paused 1.5 to
+    2 s after creation, on every DSM version tested, and to none paused once they had left
+    `waiting`. A second pause held every time (#243; the spec has the numbers). So each
+    task gets one more pause, and the reply says if that didn't hold either. A read that
+    fails leaves DSM's own answer standing.
+    """
+    paused_again: set[str] = set()
+    tasks = None
+    for _ in range(_PAUSE_HOLD_CHECKS):
+        await asyncio.sleep(_PAUSE_HOLD_INTERVAL)
+        tasks = await _read_tasks(client, task_ids)
+        if not tasks:
+            return set()
+        undone = [
+            task_id
+            for task_id in task_ids
+            if task_id not in paused_again and _pause_undone(tasks, task_id)
+        ]
+        if undone:
+            paused_again.update(undone)
+            try:
+                await client.request(
+                    "SYNO.DownloadStation.Task",
+                    "pause",
+                    version=1,
+                    params={"id": ",".join(undone)},
+                )
+            except (SynologyError, httpx.HTTPError) as e:
+                logger.debug("Couldn't pause %s again: %r", ",".join(undone), e)
+    tasks = await _read_tasks(client, task_ids)
+    return {t for t in task_ids if tasks and _pause_undone(tasks, t)}
+
+
+def _pause_undone(tasks: dict[str, dict[str, Any]], task_id: str) -> bool:
+    """Whether a task we paused is running again. Finished is its own answer; a task the
+    read left out says nothing."""
+    status = (tasks.get(task_id) or {}).get("status")
+    return status is not None and status not in ("paused", "finished")
+
+
 async def _task_state_change(
     client: DsmClient,
     *,
@@ -874,6 +924,9 @@ async def _task_state_change(
         )
 
     ids_joined = ",".join(task_ids)
+
+    # Before the pause: afterward, a task still starting reads `paused` like any other.
+    before = await _read_tasks(client, task_ids) if method == "pause" else None
 
     try:
         data = await client.request(
@@ -907,11 +960,15 @@ async def _task_state_change(
     rows, errors = _per_task_rows(results)
     done = [row[0] for row in rows if row[1] == "ok"]
     if method == "pause" and done:
+        starting = [t for t in done if (before or {}).get(t, {}).get("status") == "waiting"]
+        running = await _hold_pause(client, starting) if starting else set()
         # DS 3.9.5 answers ok for a finished task, which stays finished (#413).
         tasks = await _read_tasks(client, done)
         for row in rows:
             if tasks and (tasks.get(row[0]) or {}).get("status") == "finished":
                 row[1] = "not paused: already finished"
+            elif row[0] in running:
+                row[1] = "not paused: it was starting and kept running; pause it again"
     return format_table(
         headers=["Task ID", "Result"],
         rows=rows,

@@ -18,6 +18,7 @@ import respx
 from mcp.server.mcpserver.exceptions import ToolError
 
 from mcp_synology.core.formatting import format_timestamp
+from mcp_synology.modules.downloadstation import tasks as tasks_module
 from mcp_synology.modules.downloadstation.tasks import (
     create_download,
     delete_download,
@@ -1337,6 +1338,140 @@ class TestPauseResume:
         result = await pause_download(mock_client, task_ids=["dbid_1"])
         assert result.splitlines()[-1].split() == ["dbid_1", "ok"]
 
+    @staticmethod
+    def _statuses(*statuses: str) -> list[httpx.Response]:
+        """One getinfo answer per status, for one task (the last repeats)."""
+        answers = [
+            httpx.Response(200, json=ok({"tasks": [{"id": "dbid_1", "status": s}]}))
+            for s in statuses
+        ]
+        return answers + [answers[-1]] * 10
+
+    @staticmethod
+    def _rows(result: str) -> dict[str, str]:
+        return {
+            ln.split()[0]: " ".join(ln.split()[1:])
+            for ln in result.splitlines()
+            if ln.strip().startswith("dbid_")
+        }
+
+    @respx.mock
+    async def test_a_starting_task_whose_pause_is_undone_is_paused_again(
+        self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """#243: DS answers ok, the task reads paused, then goes back to downloading."""
+        monkeypatch.setattr(tasks_module, "_PAUSE_HOLD_INTERVAL", 0)
+        pause = get_route(TASK, "pause", version=1).respond(json=ok([{"error": 0, "id": "dbid_1"}]))
+        get_route(TASK, "getinfo", version=1).mock(
+            side_effect=self._statuses("waiting", "paused", "downloading", "paused")
+        )
+        result = await pause_download(mock_client, task_ids=["dbid_1"])
+        assert pause.call_count == 2
+        assert self._rows(result) == {"dbid_1": "ok"}
+
+    @respx.mock
+    async def test_a_starting_task_that_stays_paused_gets_one_pause(
+        self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(tasks_module, "_PAUSE_HOLD_INTERVAL", 0)
+        pause = get_route(TASK, "pause", version=1).respond(json=ok([{"error": 0, "id": "dbid_1"}]))
+        get_route(TASK, "getinfo", version=1).mock(side_effect=self._statuses("waiting", "paused"))
+        result = await pause_download(mock_client, task_ids=["dbid_1"])
+        assert pause.call_count == 1
+        assert self._rows(result) == {"dbid_1": "ok"}
+
+    @respx.mock
+    async def test_a_task_that_wont_stay_paused_is_reported_after_one_more_try(
+        self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The reply never says ok for a task the last read saw running, and it isn't
+        paused over and over."""
+        monkeypatch.setattr(tasks_module, "_PAUSE_HOLD_INTERVAL", 0)
+        pause = get_route(TASK, "pause", version=1).respond(json=ok([{"error": 0, "id": "dbid_1"}]))
+        get_route(TASK, "getinfo", version=1).mock(
+            side_effect=self._statuses("waiting", "downloading")
+        )
+        result = await pause_download(mock_client, task_ids=["dbid_1"])
+        assert pause.call_count == 2
+        assert self._rows(result) == {
+            "dbid_1": "not paused: it was starting and kept running; pause it again"
+        }
+
+    @respx.mock
+    @pytest.mark.parametrize("status", ["downloading", "seeding"])
+    async def test_a_task_past_starting_isnt_watched(
+        self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch, status: str
+    ) -> None:
+        """No undo was seen once a task had left `waiting` (0 of 96), so no wait."""
+
+        async def no_sleep(_: float) -> None:
+            raise AssertionError("waited")
+
+        monkeypatch.setattr(tasks_module.asyncio, "sleep", no_sleep)
+        pause = get_route(TASK, "pause", version=1).respond(json=ok([{"error": 0, "id": "dbid_1"}]))
+        get_route(TASK, "getinfo", version=1).mock(side_effect=self._statuses(status, "paused"))
+        result = await pause_download(mock_client, task_ids=["dbid_1"])
+        assert pause.call_count == 1
+        assert self._rows(result) == {"dbid_1": "ok"}
+
+    @respx.mock
+    async def test_a_failed_second_pause_is_reported_not_raised(
+        self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(tasks_module, "_PAUSE_HOLD_INTERVAL", 0)
+        get_route(TASK, "pause", version=1).mock(
+            side_effect=[
+                httpx.Response(200, json=ok([{"error": 0, "id": "dbid_1"}])),
+                httpx.ReadTimeout("slow"),
+            ]
+        )
+        get_route(TASK, "getinfo", version=1).mock(
+            side_effect=self._statuses("waiting", "downloading")
+        )
+        result = await pause_download(mock_client, task_ids=["dbid_1"])
+        assert "not paused: it was starting" in result
+
+    @respx.mock
+    async def test_a_read_failing_while_watching_keeps_dsms_answer(
+        self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(tasks_module, "_PAUSE_HOLD_INTERVAL", 0)
+        get_route(TASK, "pause", version=1).respond(json=ok([{"error": 0, "id": "dbid_1"}]))
+        get_route(TASK, "getinfo", version=1).mock(
+            side_effect=[
+                self._statuses("waiting")[0],
+                httpx.ReadTimeout("slow"),
+                httpx.ReadTimeout("slow"),
+            ]
+        )
+        result = await pause_download(mock_client, task_ids=["dbid_1"])
+        assert self._rows(result) == {"dbid_1": "ok"}
+
+    @respx.mock
+    async def test_the_watch_covers_only_the_tasks_that_were_starting(
+        self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(tasks_module, "_PAUSE_HOLD_INTERVAL", 0)
+        get_route(TASK, "pause", version=1).respond(
+            json=ok([{"error": 0, "id": "dbid_1"}, {"error": 0, "id": "dbid_2"}])
+        )
+        reads: list[str] = []
+
+        def answer(request: httpx.Request) -> httpx.Response:
+            asked = request.url.params["id"]
+            reads.append(asked)
+            first = {"dbid_1": "waiting", "dbid_2": "downloading"}
+            status = first if len(reads) == 1 else {"dbid_1": "paused", "dbid_2": "paused"}
+            ids = asked.split(",")
+            return httpx.Response(
+                200, json=ok({"tasks": [{"id": i, "status": status[i]} for i in ids]})
+            )
+
+        get_route(TASK, "getinfo", version=1).mock(side_effect=answer)
+        await pause_download(mock_client, task_ids=["dbid_1", "dbid_2"])
+        assert set(reads[1:-1]) == {"dbid_1"}
+        assert reads[0] == reads[-1] == "dbid_1,dbid_2"
+
     @respx.mock
     async def test_resume_reads_nothing_back(self, mock_client: DsmClient) -> None:
         get_route(TASK, "resume", version=1).respond(json=ok([{"error": 0, "id": "dbid_1"}]))
@@ -1663,6 +1798,7 @@ class TestTaskNotFoundOrNotYours:
         """QA on #146: pause's whole-call 101 also covers the caller's own task when it
         is finished or already paused, so the message can't say "not found"."""
         get_route(TASK, "pause", version=1).respond(json=err(101))
+        get_route(TASK, "getinfo", version=1).respond(json=err(404))
         with pytest.raises(ToolError) as exc:
             await pause_download(mock_client, task_ids=["dbid_9"])
         envelope = _envelope(exc.value)

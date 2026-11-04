@@ -428,7 +428,8 @@ Remove tasks.
 > finished one is refused for its id (error 405) or shown as `not paused: already finished`, and the
 > others are paused. When none can be paused (one finished or already-paused task alone, a missing
 > id, or another user's task), the whole call fails with invalid_parameter; list_downloads shows each
-> task's status.
+> task's status. A task still waiting to start takes about 3 s more, while the call checks that the
+> pause held.
 
 **Parameters:**
 
@@ -437,6 +438,22 @@ Remove tasks.
 | `task_ids` | `list[str]` | **Yes** | — | Task IDs to pause, from `list_downloads`. |
 
 **Response shape:** a per-task table under `Pause download — N task(s)`, plus the not-found hint when needed.
+
+**A pause on a task still starting can be undone (#243).** DS answers `ok` and the task reads `paused`, then it goes to `downloading` by itself, usually within a second, and stays there. Probed on vdsm, DSM 7.1, 7.2.2, 7.3.2 and 7.4.1 (2026-11-04), magnet tasks sampled for 6 s after the pause:
+
+| Pause sent after create | Undone |
+|---|---|
+| 0 to 0.4 s | 1 / 360 |
+| 0.7 s | 1 / 60 |
+| 1 s | 1 / 60 |
+| 1.5 s | 17 / 60 |
+| 2 s | 18 / 60 |
+| 3 s and 5 s | 0 / 120 |
+| as soon as the task left `waiting` (1.1 to 2.7 s) | 0 / 96 |
+
+A second pause held for all 67 undone tasks, for the 6 s sampled. Throttled HTTP tasks: 1 / 384 across 2 to 7 s. The first task after restarting Download Station: 0 / 96. That the scheduler's start overwrites the pause is inferred from the timing.
+
+So `pause_download` reads the tasks first, and for each one DSM said `ok` to that was `waiting`, checks every 0.5 s for 3 s and pauses it once more if it's running. One that's still running after that reads `not paused: it was starting and kept running; pause it again`. A read that fails leaves DSM's answer standing. Only a task that was `waiting` costs the wait.
 
 **Design notes:** pause is the one method that fails the **whole call** with 101 when no ID can be paused. That covers a missing ID, another user's task, and the caller's own finished or already-paused task (probed on DSM 7.1 and 7.2.2), so it becomes `invalid_parameter` naming the IDs and all three causes, not `not_found`. Within a mixed list, an already-paused or finished task is refused **per task** with 405 while the others are paused; the whole-call 101 happens only when nothing in the call is pausable (QA on #153, DSM 7.1 and 7.2.2). **Download Station 3.9.5 (DSM 7.1.1, a real DS1618+) once answered a finished task's pause with a per-task `ok`, and the task stayed finished** (0.10.0rc9 live test, #413: the task had finished 2 s earlier; resume of the same task got 405). In the 0.10.0rc10 live test the same NAS gave the whole-call 101 for a lone task that had finished about 20 s earlier, and for a lone already-paused task, as vdsm does (#421). The description therefore names both outcomes and keeps the per-task ones to calls where something else can be paused. So after a pause, the tasks DSM answered `ok` for are read back (`Task getinfo` v1, `additional=detail`), and a finished one's row says `not paused: already finished`. If the read-back fails (a DSM error or no answer), DSM's rows stand. Resume reads nothing back.
 

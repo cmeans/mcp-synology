@@ -164,7 +164,8 @@ MODULE_INFO = ModuleInfo(
                 "`not paused: already finished`, and the others are paused. When none can be "
                 "paused (one finished or already-paused task alone, a missing id, or another "
                 "user's task), the whole call fails with invalid_parameter; list_downloads "
-                "shows each task's status."
+                "shows each task's status. A task still waiting to start takes about 3 s more, "
+                "while the call checks that the pause held."
             ),
             permission_tier=PermissionTier.WRITE,
         ),

@@ -409,6 +409,31 @@ class TestVdsmDownloadStationTasks:
         assert "3 task(s) total; showing 3–3." in rest, rest
         assert sorted(_ids_in(first) + _ids_in(rest)) == sorted(ids)
 
+    async def test_pause_holds_on_a_task_still_starting(
+        self, nas_client: Any, _clean_queue: None
+    ) -> None:
+        """#243: a pause sent 1.5 to 2 s after create was undone about 3 times in 10. The
+        tool checks, and pauses again, so an `ok` is still true well after the window."""
+        from mcp_synology.modules.downloadstation.tasks import create_download, pause_download
+
+        client, _, _, _ = _unpack(nas_client)
+        for i, delay in enumerate([1.5, 2.0] * 4):
+            task_id = _ids_in(
+                await create_download(client, uri=_magnet(500 + i), destination="writable")
+            )[0]
+            await asyncio.sleep(delay)
+            reply = await pause_download(client, task_ids=[task_id])
+            assert "ok" in reply.split(), reply
+            await asyncio.sleep(2)
+            task = await _task(client, task_id)
+            assert task["status"] == "paused", (delay, task)
+            await client.request(
+                "SYNO.DownloadStation.Task",
+                "delete",
+                version=1,
+                params={"id": task_id, "force_complete": "false"},
+            )
+
     async def test_status_filter_looks_past_the_first_page(
         self, nas_client: Any, _clean_queue: None
     ) -> None:

@@ -1849,7 +1849,8 @@ class TestInstructionComments:
 # +175 by #510 (pre-QA): ... invisible padding and #recycle at a shared or home folder's top.
 # +135 by #515 (QA round 1): ... an invisible character anywhere Unicode doesn't use one, not
 # only padding at the ends.
-PAYLOAD_BUDGET_CHARS = 57_133
+# +95 by #243: pause_download says a task still starting takes about 3 s more.
+PAYLOAD_BUDGET_CHARS = 57_228
 
 
 class TestPayloadBudget:
