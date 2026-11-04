@@ -222,6 +222,14 @@ class TestDuplicateKeys:
             ),
             # After an alias to an anchor outside the mapping, whose marks are further back.
             ("x: &o z\nm: {&k host: 2, *o : 3, *k : 4}\n", "in the {…} at line 2"),
+            # The same, with that entry's value an alias too, so nothing in it moves forward.
+            ("x: &o z\ny: &v w\nm: {&k host: 2, *o : *v, *k : 4}\n", "in the {…} at line 3"),
+            # An anchor inside an earlier value (pre-QA r6 on #532).
+            ("connection: {a: {&k host: 1}, *k : 2, host: nas}\n", "in the {…} at line 1"),
+            (
+                "connection:\n  a:\n    &k host: 1\n  *k : 2\n  host: nas\n",
+                "in the section that starts at line 2",
+            ),
         ],
     )
     def test_an_alias_to_an_anchor_in_the_same_mapping(self, text: str, where: str) -> None:
@@ -231,6 +239,39 @@ class TestDuplicateKeys:
         message = format_yaml_error(exc.value)
         assert f"twice in one section ({where})" in message
         assert "columns" not in message
+
+    def test_keys_after_a_value_keep_their_own_places(self) -> None:
+        """The check for an anchor inside a value mustn't catch a key written after one."""
+        for text, where in (
+            ("c:\n  a:\n    b: 1\n  x: 1\n  x: 2\n", "lines 4 and 5"),
+            ("c:\n  a:\n  - 1\n  x: 1\n  x: 2\n", "lines 4 and 5"),
+            ("c: {a: 1,b: 2,b: 3}\n", "line 1, columns 10 and 15"),
+            ("e: &e\nc: {a: *e, b: 1, b: 2}\n", "line 2, columns 12 and 18"),
+        ):
+            with pytest.raises(yaml.YAMLError) as exc:
+                parse_config_text(text)
+            assert f"twice in one section ({where})" in format_yaml_error(exc.value), text
+
+    @pytest.mark.parametrize("entries", ["*m : *x, *m : *x", "*m : *x, <<: *x", "<<: *x, *m : *x"])
+    def test_two_merge_keys_by_alias_get_no_columns(self, entries: str) -> None:
+        """Pre-QA r6 on #532: as for any other key, "columns 4 and 4"."""
+        with pytest.raises(yaml.YAMLError) as exc:
+            parse_config_text(f"a: &m <<\nb: &x {{q: 1}}\nc: {{{entries}}}\n")
+        assert "`<<` twice in one section (in the {…} at line 3)" in format_yaml_error(exc.value)
+
+    def test_a_repeated_key_in_a_mapping_in_a_list_is_refused(self) -> None:
+        """Pre-QA r6 on #532: the walk into lists was unpinned."""
+        with pytest.raises(yaml.YAMLError) as exc:
+            parse_config_text("allowed_local_paths: [{a: 1, a: 2}]\n")
+        assert "a key twice in one section" in format_yaml_error(exc.value)
+
+    def test_a_repeated_key_directly_under_a_module_isnt_named_by_the_settings_rule(self) -> None:
+        """Pre-QA r6 on #532: only a key in `settings` is named, not one beside it."""
+        with pytest.raises(yaml.YAMLError) as exc:
+            parse_config_text(
+                "modules:\n  x:\n    permission:\n      Hunter2x: 1\n      Hunter2x: 2\n"
+            )
+        assert "Hunter2x" not in format_yaml_error(exc.value)
 
     def test_a_repeated_settings_key_that_could_forge_a_line_isnt_named(self) -> None:
         """QA round 2 on #532: a quoted key can hold a newline."""
@@ -688,6 +729,19 @@ class TestHost:
         assert "put it in quotes" in message
         assert value not in message.replace("true/false", "")
 
+    def test_a_longer_list_as_a_host_isnt_called_an_ipv6_address(self, tmp_path: Path) -> None:
+        """Pre-QA r6 on #532: the advice is for the one address `[fd00::1]` reads as."""
+        message = _validation_message(
+            tmp_path, "schema_version: 1\nconnection:\n  host: [a, b]\n" + _MODULES
+        )
+        assert "IPv6" not in message
+
+    def test_an_unbracketed_ipv6_variable_gets_no_quotes_advice(self) -> None:
+        """Pre-QA r6 on #532: quotes are for the file's form."""
+        with pytest.raises(EnvVarError) as exc:
+            parse_env_value("SYNOLOGY_HOST", "connection.host", "fd00::1")
+        assert "write it in square brackets, [fd00::1]." in str(exc.value)
+
     def test_a_blank_host_is_empty(self, tmp_path: Path) -> None:
         """QA round 2 on #532: `host: ""` said so, and `host:` said "a valid string"."""
         message = _validation_message(
@@ -788,6 +842,31 @@ class TestEmptyValues:
         )
         assert "isn't text: YAML read it as a number, date or true/false" in message
         assert value not in message.replace("true/false", "")
+
+    @pytest.mark.parametrize("key", ["username", "password", "device_id"])
+    @pytest.mark.parametrize("value", ["123456", "1.5", "true", "2024-01-02"])
+    def test_a_credential_yaml_didnt_read_as_text_says_so(
+        self, tmp_path: Path, key: str, value: str
+    ) -> None:
+        """Pre-QA r6 on #532: `password: 123456` said only "should be a valid string"."""
+        message = _validation_message(
+            tmp_path,
+            f"schema_version: 1\nconnection: {{host: nas}}\nauth: {{{key}: {value}}}\n" + _MODULES,
+        )
+        assert f"auth.{key}" in message
+        assert "isn't text: YAML read it as a number, date or true/false" in message
+        assert value not in message.replace("true/false", "")
+
+    def test_a_blank_or_quoted_credential_still_loads(self, tmp_path: Path) -> None:
+        config = load_config(
+            _write(
+                tmp_path,
+                "schema_version: 1\nconnection: {host: nas}\n"
+                'auth: {username: , password: "123456"}\n' + _MODULES,
+            )
+        )
+        assert config.auth.username is None
+        assert config.auth.password == "123456"
 
     def test_a_blank_instance_id_is_still_not_set(self, tmp_path: Path) -> None:
         config = load_config(

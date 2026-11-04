@@ -564,6 +564,19 @@ class TestSetupInteractiveValidationFailure:
         assert result.output.count("Instance ID (names this config") == 3
         assert stored == ["mcp-synology/my-nas"]
 
+    def test_an_unbracketed_ipv6_host_gets_no_quotes_advice(self, tmp_path: Path) -> None:
+        """Pre-QA r6 on #532: quotes are for the file's form, not an answer to a question."""
+        with (
+            patch("mcp_synology.cli.setup._CONFIG_DIR", tmp_path / "config"),
+            patch("mcp_synology.core.config.discover_config_path", side_effect=FileNotFoundError),
+            patch("mcp_synology.cli.setup._store_keyring", return_value=False),
+            patch.dict(os.environ, self._clean_env(), clear=True),
+        ):
+            result = CliRunner().invoke(
+                main, ["setup"], input="fd00::1\nnas.local\nn\n\nread\n\nadmin\npw\n"
+            )
+        assert "write it in square brackets, [fd00::1]." in result.output
+
     def test_a_very_long_id_is_asked_again(self, tmp_path: Path) -> None:
         """QA round 2 on #532: it was a traceback from the file name, with the keyring
         already written."""

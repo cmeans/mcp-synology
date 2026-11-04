@@ -305,6 +305,14 @@ class AuthConfig(BaseModel, extra="forbid"):
     password: str | None = None
     device_id: str | None = None
 
+    @field_validator("username", "password", "device_id", mode="before")
+    @classmethod
+    def _credential_as_yaml_read_it(cls, value: object) -> object:
+        # `password: 123456` looks like text, and these values are never shown (pre-QA r6
+        # on #532).
+        _unquoted_text_problem(value)
+        return value
+
 
 class ModuleConfig(BaseModel, extra="forbid"):
     """Per-module configuration.
@@ -954,7 +962,8 @@ class ConfigValueError(yaml.YAMLError):
 class ConfigKeyError(yaml.YAMLError):
     """A mapping in the config file repeats a key, or has a key with no value inside
     `{…}` (#464). ``message`` is the whole user-facing text, with line numbers and only
-    the config's own key names, never a value."""
+    the config's own key names, module names and keys in a module's settings, never a
+    value."""
 
     def __init__(self, message: str) -> None:
         super().__init__(message)
@@ -1011,15 +1020,16 @@ class _ConfigLoader(yaml.SafeLoader):
 
     def _check_mapping(self, node: yaml.MappingNode, path: tuple[str, ...] = ()) -> None:
         seen: dict[Any, tuple[int, int, bool]] = {}
-        merge_at: tuple[int, int] | None = None
+        merge_at: tuple[int, int, bool] | None = None
         furthest = -1
         for key_node, value_node in node.value:
             # A key given by alias (`{*k: …}`) has its anchor's marks, from before this
-            # mapping (pre-QA r4) or earlier in it (QA round 2 on #532): report the
-            # mapping's own place then. A key written here always moves past the last.
+            # mapping (pre-QA r4), in an earlier key or inside an earlier value (QA round 2
+            # on #532): report the mapping's own place then. A key written here always comes
+            # after the last entry. A block value's end mark is the next key's start.
             mark = key_node.start_mark
             clamped = mark.index < node.start_mark.index or mark.index <= furthest
-            furthest = max(furthest, mark.index)
+            furthest = max(furthest, mark.index, value_node.end_mark.index - 1)
             if clamped:
                 mark = node.start_mark
             line, column = mark.line + 1, mark.column + 1
@@ -1028,17 +1038,13 @@ class _ConfigLoader(yaml.SafeLoader):
                 # is a repeated key like any other (QA round 1 on #532). The first in a
                 # list wins, so the later one goes first to keep the result (QA round 2).
                 if merge_at is not None:
-                    where = (
-                        f"line {line}, columns {merge_at[1]} and {column}"
-                        if merge_at[0] == line
-                        else f"lines {merge_at[0]} and {line}"
-                    )
+                    where = _repeat_place(node, merge_at, line, column, clamped)
                     raise ConfigKeyError(
                         f"The config file has `<<` twice in one section ({where}), and YAML "
                         "would silently let the later one win. Merge both in one, later one "
                         "first, since the first in a list wins: `<<: [*later, *earlier]`."
                     )
-                merge_at = (line, column)
+                merge_at = (line, column, clamped)
                 continue
             if node.flow_style and _has_no_colon(node, key_node, value_node):
                 # Directly under `modules`, leaving it out would drop the module (QA round
@@ -1075,20 +1081,7 @@ class _ConfigLoader(yaml.SafeLoader):
                         )
                     )
                 )
-                # On one line (`{k: 1, k: 2}`), the columns say where (pre-QA r3), unless
-                # a key came by alias: its marks are then the mapping's, so "columns 4 and
-                # 4" (QA round 1 on #532); the mapping's own line is all there is.
-                if first[2] or clamped:
-                    start = node.start_mark.line + 1
-                    where = (
-                        f"in the {{…}} at line {start}"
-                        if node.flow_style
-                        else f"in the section that starts at line {start}"
-                    )
-                elif first[0] == line:
-                    where = f"line {line}, columns {first[1]} and {column}"
-                else:
-                    where = f"lines {first[0]} and {line}"
+                where = _repeat_place(node, first, line, column, clamped)
                 raise ConfigKeyError(
                     f"The config file has {f'`{key}`' if known else 'a key'} twice in one "
                     f"section ({where}), and YAML would silently keep only the last. "
@@ -1096,6 +1089,22 @@ class _ConfigLoader(yaml.SafeLoader):
                     + ("" if known else " The key isn't shown: it may be part of a password.")
                 )
             seen[key] = (line, column, clamped)
+
+
+def _repeat_place(
+    node: yaml.MappingNode, first: tuple[int, int, bool], line: int, column: int, clamped: bool
+) -> str:
+    """Where a repeated key is: both lines, or on one line (`{k: 1, k: 2}`) the columns
+    (pre-QA r3). If either came by alias, its marks are the mapping's, so "columns 4 and 4"
+    (QA round 1 on #532); the mapping's own line is all there is."""
+    if first[2] or clamped:
+        start = node.start_mark.line + 1
+        if node.flow_style:
+            return f"in the {{…}} at line {start}"
+        return f"in the section that starts at line {start}"
+    if first[0] == line:
+        return f"line {line}, columns {first[1]} and {column}"
+    return f"lines {first[0]} and {line}"
 
 
 def _has_no_colon(mapping: yaml.MappingNode, key_node: yaml.Node, value_node: yaml.Node) -> bool:
