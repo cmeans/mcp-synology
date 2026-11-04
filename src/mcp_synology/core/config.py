@@ -446,6 +446,14 @@ def _file_value(raw: dict[str, Any], dotted_path: str) -> Any:
 _BRACKETED_ADDRESS = re.compile(r"\[[0-9A-Fa-f:.]+\]")
 
 
+def _as_field_reads(dotted_path: str, value: Any) -> Any:
+    """``value`` through the field's own type, or as written if the field refuses it."""
+    try:
+        return TypeAdapter(_env_field_annotation(dotted_path)).validate_python(value)
+    except ValidationError:
+        return value
+
+
 def _as_compared(dotted_path: str, value: Any) -> Any:
     """``value`` as the loaded config would use it, for the override check.
 
@@ -458,14 +466,13 @@ def _as_compared(dotted_path: str, value: Any) -> Any:
     is `xn--bcher-kva.example`). A bracketed IPv6 address only ignores case. Anything else
     stays as written, so it differs: the client puts the host into a URL, where `A@nas`
     and `a@nas` are other users, `nas/X` and `nas/x` other paths, and `::1` is no address
-    at all. These are told apart before httpx, whose `URL(host=)` brackets a bare `::1`
-    and lowers, then escapes, `@` and `/`. Never read one from a URL string, where
-    `admin@nas` or `nas:5001` is just `nas`, which would hide the change.
+    at all. A `:` is told apart before httpx, whose `URL(host=)` brackets a bare `::1`.
+    `@` and `/` are told apart after it, by the `%` its escaping leaves in the lowered
+    host. httpx doesn't document that escaping and `httpx>=0.27` has no upper bound, so
+    `test_a_different_value_still_warns` pins it. Never read a host from a URL string,
+    where `admin@nas` or `nas:5001` is just `nas`, which would hide the change.
     """
-    try:
-        typed = TypeAdapter(_env_field_annotation(dotted_path)).validate_python(value)
-    except ValidationError:
-        return value
+    typed = _as_field_reads(dotted_path, value)
     if not isinstance(typed, str):
         return typed
     if dotted_path == "connection.host":
@@ -495,7 +502,8 @@ def _merge_env_overrides(raw: dict[str, Any], *, from_file: bool = False) -> dic
     before: dict[str, Any] = {}
     if from_file:
         before = {path: _file_value(raw, path) for path in _WATCHED_OVERRIDES}
-        file_host = before["connection.host"]
+        # As the field reads it: `host: !!binary bmFz` is `nas`, and derives its ID.
+        file_host = _as_field_reads("connection.host", before["connection.host"])
         if before["instance_id"] is None and isinstance(file_host, str) and file_host:
             before["instance_id"] = _derive_instance_id(file_host)
 

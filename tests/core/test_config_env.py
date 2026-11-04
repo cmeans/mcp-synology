@@ -698,6 +698,12 @@ def test_an_override_of_the_files_setting_warns_at_any_level(
         ),
         ("SYNOLOGY_HOST", "nas.example", {"host": "nas\uff0eexample"}),  # IDNA's dot
         ("SYNOLOGY_HOST", "[fe80::1]", {"host": "[FE80::1]", "instance_id": "home-nas"}),
+        # An IPv4-mapped address has dots (QA round 2 on #535).
+        (
+            "SYNOLOGY_HOST",
+            "[::ffff:1.2.3.4]",
+            {"host": "[::FFFF:1.2.3.4]", "instance_id": "home-nas"},
+        ),
     ],
 )
 def test_no_override_warning_when_nothing_the_file_sets_changes(
@@ -735,10 +741,8 @@ def test_no_override_warning_when_nothing_the_file_sets_changes(
         ("SYNOLOGY_HOST", "[::1]/DSM", "connection.host", {"host": "[::1]/dsm"}),
         ("SYNOLOGY_HOST", "[ADMIN:PW]@nas", "connection.host", {"host": "[admin:pw]@nas"}),
         ("SYNOLOGY_HOST", "[fe80::1%25ETH0]", "connection.host", {"host": "[fe80::1%25eth0]"}),
-        ("SYNOLOGY_HOST", "NAS.example:5001", "connection.host", {"host": "nas.example:5001"}),
         # A name httpx refuses stays as written, its case included.
         ("SYNOLOGY_HOST", "\uff2eas.example", "connection.host", {"host": "\uff4eas.example"}),
-        ("SYNOLOGY_HOST", "[::1]", "connection.host", {"host": "[0:0:0:0:0:0:0:1]"}),
         # Look-alikes are other hosts: Cyrillic a, and a name IDNA refuses.
         ("SYNOLOGY_HOST", "n\u0430s.example", "connection.host", {"host": "nas.example"}),
         ("SYNOLOGY_HOST", "nas.example", "connection.host", {"host": "\uff4eas.example"}),
@@ -750,7 +754,7 @@ def test_no_override_warning_when_nothing_the_file_sets_changes(
         ),
     ],
 )
-def test_a_different_value_in_any_spelling_still_warns(
+def test_a_different_value_still_warns(
     var: str,
     value: str,
     dotted: str,
@@ -763,6 +767,50 @@ def test_a_different_value_in_any_spelling_still_warns(
     # A set instance ID: an odd host derives none the config would accept.
     load_config(str(_file(tmp_path, instance_id="home-nas", **file_settings)))
     assert _override(var, dotted) in at_error.messages()
+
+
+@pytest.mark.parametrize(
+    ("value", "file_host"),
+    [
+        ("[::1]", "[0:0:0:0:0:0:0:1]"),
+        ("NAS.example:5001", "nas.example:5001"),
+    ],
+)
+def test_the_same_destination_written_another_way_warns(
+    value: str,
+    file_host: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    at_error: _Lines,
+) -> None:
+    """Outside a host name and a whole bracketed address, hosts compare as written, so
+    these warn though they reach the same place. A false alarm is the safe side."""
+    monkeypatch.setenv("SYNOLOGY_HOST", value)
+    load_config(str(_file(tmp_path, instance_id="home-nas", host=file_host)))
+    assert _override("SYNOLOGY_HOST", "connection.host") in at_error.messages()
+
+
+@pytest.mark.parametrize(("value", "warns"), [("other", True), ("nas", False)])
+def test_a_binary_host_derives_the_instance_id_the_config_uses(
+    value: str,
+    warns: bool,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    at_error: _Lines,
+) -> None:
+    """`host: !!binary bmFz` loads as `nas`, so its derived ID counts as set (QA round 2
+    on #535: the variable used to change the keyring entry with no warning)."""
+    config = tmp_path / "binary.yaml"
+    config.write_text(
+        "schema_version: 1\n"
+        "connection:\n  host: !!binary bmFz\n"
+        "modules:\n  filestation:\n    enabled: true\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SYNOLOGY_INSTANCE_ID", value)
+    assert load_config(str(config)).instance_id == value
+    expected = _override("SYNOLOGY_INSTANCE_ID", "instance_id")
+    assert (expected in at_error.messages()) is warns
 
 
 def test_only_the_instance_id_ignores_case_among_text_settings() -> None:
