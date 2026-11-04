@@ -399,7 +399,7 @@ class TestRequest:
 
     @respx.mock
     async def test_request_read_timeout_overrides_only_read(self) -> None:
-        """A per-request read timeout (#245: task stops) leaves connect/write/pool alone."""
+        """A longer per-request read timeout (#245: task stops) leaves connect/write/pool alone."""
         route = respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
             json={"success": True, "data": {}}
         )
@@ -410,6 +410,21 @@ class TestRequest:
         assert route.calls[1].request.extensions["timeout"] == {
             "connect": 30,
             "read": 90,
+            "write": 30,
+            "pool": 30,
+        }
+
+    @respx.mock
+    async def test_a_shorter_read_timeout_caps_connect_too(self) -> None:
+        """Pre-QA on #545: with connect left at 30 s, an unreachable NAS doubled to 60 s."""
+        route = respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": True, "data": {}}
+        )
+        async with _make_client(_default_cache()) as client:
+            await client.request("SYNO.FileStation.List", "list_share", version=2, read_timeout=5)
+        assert route.calls[0].request.extensions["timeout"] == {
+            "connect": 5,
+            "read": 5,
             "write": 30,
             "pool": 30,
         }

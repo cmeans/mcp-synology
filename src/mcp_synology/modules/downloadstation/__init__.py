@@ -165,8 +165,8 @@ MODULE_INFO = ModuleInfo(
                 "paused (one finished or already-paused task alone, a missing id, or another "
                 "user's task), the whole call fails with invalid_parameter; list_downloads "
                 "shows each task's status. If a task is still waiting to start, or an id in the "
-                "list doesn't exist, the call takes about 3 s more, since Download Station can "
-                "undo a pause sent while a task starts: it checks, and "
+                "list is missing or another user's, the call takes about 3 s more, since "
+                "Download Station can undo a pause sent while a task starts: it checks, and "
                 "pauses again once. A row saying `pause it again` means call this again; "
                 "`see list_downloads` means check the task there."
             ),

@@ -56,8 +56,8 @@ _PAUSE_HOLD_CHECKS = 6
 _PAUSE_HOLD_INTERVAL = 0.5
 # Seconds. The checks are 3 s of waiting when reads are quick; slow reads add to that.
 _PAUSE_HOLD_BUDGET = 6.0
-# Seconds, for the calls a pause adds. The client's default of 30 s would put a stalled NAS
-# past the roughly 60 s an MCP client waits (pre-QA r3 on #545).
+# Seconds, to connect and to read, for the calls a pause adds. The client's default of 30 s would
+# put a stalled or unreachable NAS past the roughly 60 s an MCP client waits (pre-QA on #545).
 _PAUSE_READ_TIMEOUT = 5.0
 _UNDONE = "not paused: it didn't stay paused; pause it again"
 _UNCONFIRMED = "not confirmed paused: couldn't check it; see list_downloads"
@@ -110,6 +110,7 @@ async def _read_tasks(
     *,
     read_timeout: float | None = None,
     each_alone: bool = True,
+    deadline: float | None = None,
 ) -> dict[str, dict[str, Any]] | None:
     """The tasks as DSM now reports them (with ``detail``), by ID; None if unreadable.
 
@@ -119,7 +120,8 @@ async def _read_tasks(
     is missing or another user's (spec: non-manager semantics), so then each ID is read
     on its own and the missing ones are left out, unless ``each_alone`` is False, for a read
     that has to stay one request: then that's an empty result, since the read says nothing
-    about the rest.
+    about the rest. Past ``deadline`` (``time.monotonic()``), reading each ID on its own stops,
+    and that's None: with many IDs, those reads alone could outlast the client's time limit.
     """
 
     async def read(ids: list[str]) -> dict[str, dict[str, Any]]:
@@ -141,12 +143,22 @@ async def _read_tasks(
             return await read(task_ids)
         except SynologyError as e:
             if e.code in _TASK_NOT_FOUND_CODES and not each_alone:
-                logger.info("An ID in %s is missing: no states read", ",".join(task_ids))
+                # Caller text, so %r: a newline in it can't forge a log line.
+                logger.info(
+                    "An ID in %r is missing or another user's: no states read, "
+                    "so any task paused is watched",
+                    task_ids,
+                )
                 return {}
             if e.code not in _TASK_NOT_FOUND_CODES or len(task_ids) == 1:
                 raise
         found: dict[str, dict[str, Any]] = {}
         for task_id in task_ids:
+            if deadline is not None and time.monotonic() > deadline:
+                logger.warning(
+                    "Couldn't read tasks %r: out of time reading them one by one", task_ids
+                )
+                return None
             try:
                 found.update(await read([task_id]))
             except SynologyError as e:
@@ -154,7 +166,7 @@ async def _read_tasks(
                     raise
         return found
     except _READ_FAILED as e:
-        logger.debug("Couldn't read tasks %s: %r", ",".join(task_ids), e)
+        logger.warning("Couldn't read tasks %r: %r", task_ids, e)
         return None
 
 
@@ -918,17 +930,21 @@ async def _hold_pause(client: DsmClient, task_ids: list[str]) -> bool:
     stays there, usually after reading `paused` for a moment (#243; the spec has the numbers
     per version). No pause sent once a task had left `waiting` was undone, so a task that has
     gone to `downloading` gets one more pause, and any other status gets none. The watch stops
-    at the first failed read, and past _PAUSE_HOLD_BUDGET: on a stalled or slow NAS, each
-    further read adds to the wait, and the reply would miss the client's time limit.
+    at the first failed read, and past _PAUSE_HOLD_BUDGET if there's a check left: on a stalled
+    or slow NAS, each further read adds to the wait, and the reply would miss the client's time
+    limit.
     """
     start = time.monotonic()
+    deadline = start + _PAUSE_HOLD_BUDGET
     remaining = task_ids
     paused_again: set[str] = set()
-    for _ in range(_PAUSE_HOLD_CHECKS):
+    for check in range(1, _PAUSE_HOLD_CHECKS + 1):
         await asyncio.sleep(_PAUSE_HOLD_INTERVAL)
-        tasks = await _read_tasks(client, remaining, read_timeout=_PAUSE_READ_TIMEOUT)
+        tasks = await _read_tasks(
+            client, remaining, read_timeout=_PAUSE_READ_TIMEOUT, deadline=deadline
+        )
         if tasks is None:
-            logger.warning("Stopped watching paused tasks: a read failed")
+            logger.warning("Stopped watching paused tasks %r: couldn't read them", remaining)
             return False
         # A task the read leaves out would cost one read per ID on every later check.
         remaining = [t for t in remaining if t in tasks]
@@ -943,8 +959,15 @@ async def _hold_pause(client: DsmClient, task_ids: list[str]) -> bool:
             await _pause_again(client, again)
         if not remaining:
             return True
-        if time.monotonic() - start > _PAUSE_HOLD_BUDGET:
-            logger.warning("Stopped watching paused tasks: reads too slow")
+        elapsed = time.monotonic() - start
+        # After the last check nothing's left to cut short, and that read succeeded.
+        if check < _PAUSE_HOLD_CHECKS and elapsed > _PAUSE_HOLD_BUDGET:
+            logger.warning(
+                "Stopped watching paused tasks %r: reads too slow, %.1f s after %d check(s)",
+                remaining,
+                elapsed,
+                check,
+            )
             return False
     return True
 
@@ -1035,7 +1058,14 @@ async def _task_state_change(
         ]
         watched = await _hold_pause(client, starting) if starting else True
         tasks = (
-            await _read_tasks(client, unique, read_timeout=_PAUSE_READ_TIMEOUT) if watched else None
+            await _read_tasks(
+                client,
+                unique,
+                read_timeout=_PAUSE_READ_TIMEOUT,
+                deadline=time.monotonic() + _PAUSE_HOLD_BUDGET,
+            )
+            if watched
+            else None
         )
         for row in rows:
             if row[0] not in done:

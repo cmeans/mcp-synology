@@ -1426,7 +1426,10 @@ class TestPauseResume:
 
     @respx.mock
     async def test_slow_reads_end_the_watch(
-        self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
+        self,
+        mock_client: DsmClient,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """QA round 1: the watch counted checks, not time, so each read added to it."""
         monkeypatch.setattr(tasks_module, "_PAUSE_HOLD_INTERVAL", 0)
@@ -1435,9 +1438,15 @@ class TestPauseResume:
         info = get_route(TASK, "getinfo", version=1).mock(
             side_effect=self._statuses("waiting", "paused")
         )
-        result = await pause_download(mock_client, task_ids=["dbid_1"])
+        with caplog.at_level("WARNING", logger=tasks_module.__name__):
+            result = await pause_download(mock_client, task_ids=["dbid_1"])
         assert info.call_count == 2
         assert self._rows(result) == {"dbid_1": tasks_module._UNCONFIRMED}
+        assert any(
+            m.startswith("Stopped watching paused tasks ['dbid_1']: reads too slow, ")
+            and m.endswith("after 1 check(s)")
+            for m in caplog.messages
+        )
 
     @respx.mock
     async def test_a_task_deleted_during_the_watch_isnt_read_again(
@@ -1489,8 +1498,11 @@ class TestPauseResume:
         )
         await pause_download(mock_client, task_ids=["dbid_1"])
         assert {c.request.extensions["timeout"]["read"] for c in info.calls} == {5.0}
+        assert {c.request.extensions["timeout"]["connect"] for c in info.calls} == {5.0}
         assert pause.calls.last.request.extensions["timeout"]["read"] == 5.0
+        assert pause.calls.last.request.extensions["timeout"]["connect"] == 5.0
         assert pause.calls[0].request.extensions["timeout"]["read"] != 5.0
+        assert pause.calls[0].request.extensions["timeout"]["connect"] != 5.0
 
     @respx.mock
     async def test_a_missing_id_makes_the_first_read_one_request(
@@ -1521,8 +1533,98 @@ class TestPauseResume:
             result = await pause_download(mock_client, task_ids=["dbid_1", "dbid_2"])
         assert set(reads[1:]) == {"dbid_1"}
         assert self._rows(result)["dbid_1"] == "ok"
-        assert "An ID in dbid_1,dbid_2 is missing: no states read" in caplog.messages
+        assert (
+            "An ID in ['dbid_1', 'dbid_2'] is missing or another user's: no states read, "
+            "so any task paused is watched"
+        ) in caplog.messages
         assert not [r for r in caplog.records if r.levelname == "WARNING"]
+
+    @respx.mock
+    async def test_a_newline_in_a_missing_id_cant_forge_a_log_line(
+        self,
+        mock_client: DsmClient,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Pre-QA on #545: a model passes task_ids, and the default log showed them raw."""
+        monkeypatch.setattr(tasks_module, "_PAUSE_HOLD_INTERVAL", 0)
+        get_route(TASK, "getinfo", version=1).respond(json=err(404))
+        get_route(TASK, "pause", version=1).respond(json=err(101))
+        with (
+            caplog.at_level("INFO", logger=tasks_module.__name__),
+            pytest.raises(ToolError),
+        ):
+            await pause_download(mock_client, task_ids=["dbid_1", "x\nWARNING forged"])
+        assert [m for m in caplog.messages if "forged" in m]
+        assert not [m for m in caplog.messages if "\n" in m]
+
+    @respx.mock
+    async def test_the_watch_stops_reading_ids_one_by_one_at_its_deadline(
+        self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Pre-QA on #545: with 70 tasks and 1 s reads, the first check after a task vanished
+        took 72 s, since the budget was only looked at after that read."""
+        monkeypatch.setattr(tasks_module, "_PAUSE_HOLD_INTERVAL", 0)
+        monkeypatch.setattr(tasks_module, "_PAUSE_HOLD_BUDGET", -1)
+        get_route(TASK, "pause", version=1).respond(
+            json=ok([{"error": 0, "id": "dbid_1"}, {"error": 0, "id": "dbid_2"}])
+        )
+        first = httpx.Response(
+            200,
+            json=ok(
+                {
+                    "tasks": [
+                        {"id": "dbid_1", "status": "waiting"},
+                        {"id": "dbid_2", "status": "waiting"},
+                    ]
+                }
+            ),
+        )
+        info = get_route(TASK, "getinfo", version=1).mock(
+            side_effect=[first, httpx.Response(200, json=err(404))]
+        )
+        result = await pause_download(mock_client, task_ids=["dbid_1", "dbid_2"])
+        assert info.call_count == 2
+        assert self._rows(result) == {
+            "dbid_1": tasks_module._UNCONFIRMED,
+            "dbid_2": tasks_module._UNCONFIRMED,
+        }
+
+    @respx.mock
+    async def test_the_last_read_stops_reading_ids_one_by_one_at_its_deadline(
+        self,
+        mock_client: DsmClient,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Pre-QA on #545: the same, in the read before the reply, for tasks not watched: they
+        keep DSM's answer."""
+        monkeypatch.setattr(tasks_module, "_PAUSE_HOLD_BUDGET", -1)
+        get_route(TASK, "pause", version=1).respond(
+            json=ok([{"error": 0, "id": "dbid_1"}, {"error": 0, "id": "dbid_2"}])
+        )
+        first = httpx.Response(
+            200,
+            json=ok(
+                {
+                    "tasks": [
+                        {"id": "dbid_1", "status": "downloading"},
+                        {"id": "dbid_2", "status": "downloading"},
+                    ]
+                }
+            ),
+        )
+        info = get_route(TASK, "getinfo", version=1).mock(
+            side_effect=[first, httpx.Response(200, json=err(404))]
+        )
+        with caplog.at_level("WARNING", logger=tasks_module.__name__):
+            result = await pause_download(mock_client, task_ids=["dbid_1", "dbid_2"])
+        assert info.call_count == 2
+        assert self._rows(result) == {"dbid_1": "ok", "dbid_2": "ok"}
+        assert (
+            "Couldn't read tasks ['dbid_1', 'dbid_2']: out of time reading them one by one"
+            in caplog.messages
+        )
 
     @respx.mock
     @pytest.mark.parametrize(
@@ -1632,6 +1734,36 @@ class TestPauseResume:
         assert self._rows(result) == {"dbid_1": tasks_module._UNCONFIRMED}
 
     @respx.mock
+    async def test_a_last_check_past_the_budget_still_counts(
+        self,
+        mock_client: DsmClient,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Pre-QA on #545: with reads over about 0.5 s, the budget ran out only at the last
+        check, so a healthy NAS's paused task read `couldn't check it`."""
+        now = [0.0]
+
+        def clock() -> float:
+            now[0] += 1.1
+            return now[0]
+
+        async def no_sleep(_: float) -> None:
+            return None
+
+        monkeypatch.setattr(tasks_module.asyncio, "sleep", no_sleep)
+        monkeypatch.setattr(tasks_module, "time", SimpleNamespace(monotonic=clock))
+        get_route(TASK, "pause", version=1).respond(json=ok([{"error": 0, "id": "dbid_1"}]))
+        info = get_route(TASK, "getinfo", version=1).mock(
+            side_effect=self._statuses("waiting", "paused")
+        )
+        with caplog.at_level("WARNING", logger=tasks_module.__name__):
+            result = await pause_download(mock_client, task_ids=["dbid_1"])
+        assert info.call_count == 8  # the first read, six checks, the read before the reply
+        assert self._rows(result) == {"dbid_1": "ok"}
+        assert not caplog.messages
+
+    @respx.mock
     async def test_the_only_watched_task_going_away_ends_the_watch(
         self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1700,7 +1832,8 @@ class TestPauseResume:
         )
         with caplog.at_level("WARNING", logger=tasks_module.__name__):
             await pause_download(mock_client, task_ids=["dbid_1"])
-        assert "Stopped watching paused tasks: a read failed" in caplog.messages
+        assert "Stopped watching paused tasks ['dbid_1']: couldn't read them" in caplog.messages
+        assert "Couldn't read tasks ['dbid_1']: ReadTimeout('slow')" in caplog.messages
 
     @staticmethod
     def _statuses(*statuses: str) -> list[httpx.Response]:
