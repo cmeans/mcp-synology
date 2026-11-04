@@ -26,6 +26,7 @@ from mcp_synology.core.local_paths import refuse_outside_roots
 from mcp_synology.core.redaction import redact_title, redact_url, redact_urls
 from mcp_synology.modules.downloadstation.helpers import (
     STATUS_GROUPS,
+    TASK_STATUSES,
     ds_is_manager,
     format_eta,
     format_speed,
@@ -972,6 +973,11 @@ async def _hold_pause(client: DsmClient, task_ids: list[str]) -> bool:
     return True
 
 
+def _may_be_starting(status: object) -> bool:
+    """`waiting`, or a status that isn't known, which may be a task starting too."""
+    return status == "waiting" or not isinstance(status, str) or status not in TASK_STATUSES
+
+
 def _not_paused_row(status: object) -> str | None:
     """The reply row for a task DSM said ok to pause, if its status says otherwise."""
     if status == "paused":
@@ -1008,9 +1014,15 @@ async def _task_state_change(
     ids_joined = ",".join(task_ids)
 
     # Before the pause: afterward, a task still starting reads `paused` like any other.
-    # One request, whatever's missing: a list with a missing ID then watches every task.
+    # One request, whatever's missing: a list with a missing ID then watches every task. Each ID
+    # once: for `X,X`, getinfo adds a second entry with an integer status, which hid `waiting`.
     before = (
-        await _read_tasks(client, task_ids, read_timeout=_PAUSE_READ_TIMEOUT, each_alone=False)
+        await _read_tasks(
+            client,
+            list(dict.fromkeys(task_ids)),
+            read_timeout=_PAUSE_READ_TIMEOUT,
+            each_alone=False,
+        )
         if method == "pause"
         else None
     )
@@ -1050,11 +1062,8 @@ async def _task_state_change(
         unique = list(dict.fromkeys(done))
         if before is None:
             logger.warning("Couldn't read tasks before pausing: watching all of them")
-        # A task whose status isn't known may be starting, so it's watched too.
         starting = [
-            t
-            for t in unique
-            if before is None or before.get(t, {}).get("status") in (None, "waiting")
+            t for t in unique if before is None or _may_be_starting(before.get(t, {}).get("status"))
         ]
         watched = await _hold_pause(client, starting) if starting else True
         tasks = (

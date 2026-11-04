@@ -1520,11 +1520,13 @@ class TestPauseResume:
         assert pause.calls[0].request.extensions["timeout"]["connect"] != 5.0
 
     @respx.mock
+    @pytest.mark.parametrize("code", [404, 544])
     async def test_a_missing_id_makes_the_first_read_one_request(
         self,
         mock_client: DsmClient,
         monkeypatch: pytest.MonkeyPatch,
         caplog: pytest.LogCaptureFixture,
+        code: int,
     ) -> None:
         """Pre-QA r3: one read per ID before the pause was sent, with no budget. QA round 2: a
         mistyped ID isn't a NAS problem, so it's no warning."""
@@ -1537,7 +1539,7 @@ class TestPauseResume:
         def answer(request: httpx.Request) -> httpx.Response:
             reads.append(request.url.params["id"])
             if len(reads) == 1:
-                return httpx.Response(200, json=err(404))
+                return httpx.Response(200, json=err(code))
             ids = reads[-1].split(",")
             return httpx.Response(
                 200, json=ok({"tasks": [{"id": i, "status": "paused"} for i in ids]})
@@ -1838,6 +1840,61 @@ class TestPauseResume:
         )
         await pause_download(mock_client, task_ids=["dbid_1", "dbid_1"])
         assert dict(pause.calls.last.request.url.params)["id"] == "dbid_1"
+
+    @respx.mock
+    async def test_a_duplicate_id_doesnt_turn_the_watch_off(
+        self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Pre-QA on #545. getinfo for `X,X` on all four DSM versions gives `waiting` and then an
+        integer status, and the last won, so the task wasn't watched: 18 false `ok`s in 64."""
+        monkeypatch.setattr(tasks_module, "_PAUSE_HOLD_INTERVAL", 0)
+        pause = get_route(TASK, "pause", version=1).respond(
+            json=ok([{"error": 0, "id": "dbid_1"}, {"error": 0, "id": "dbid_1"}])
+        )
+        statuses = iter(["waiting", "downloading", "paused"])
+
+        def answer(request: httpx.Request) -> httpx.Response:
+            tasks = [{"id": "dbid_1", "status": next(statuses, "paused")}]
+            if request.url.params["id"] == "dbid_1,dbid_1":
+                tasks.append({"id": "dbid_1", "status": 1})  # as captured
+            return httpx.Response(200, json=ok({"tasks": tasks}))
+
+        info = get_route(TASK, "getinfo", version=1).mock(side_effect=answer)
+        result = await pause_download(mock_client, task_ids=["dbid_1", "dbid_1"])
+        assert info.calls[0].request.url.params["id"] == "dbid_1"
+        assert pause.call_count == 2
+        assert self._rows(result) == {"dbid_1": "ok"}
+
+    @respx.mock
+    @pytest.mark.parametrize("status", ["queued", 1, ["waiting"]])
+    async def test_a_status_that_isnt_known_is_watched(
+        self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch, status: Any
+    ) -> None:
+        """It may be a task starting, under a name a new Download Station gives it."""
+        monkeypatch.setattr(tasks_module, "_PAUSE_HOLD_INTERVAL", 0)
+        pause = get_route(TASK, "pause", version=1).respond(json=ok([{"error": 0, "id": "dbid_1"}]))
+        get_route(TASK, "getinfo", version=1).mock(
+            side_effect=[
+                httpx.Response(200, json=ok({"tasks": [{"id": "dbid_1", "status": status}]})),
+                *self._statuses("downloading", "paused"),
+            ]
+        )
+        result = await pause_download(mock_client, task_ids=["dbid_1"])
+        assert pause.call_count == 2
+        assert self._rows(result) == {"dbid_1": "ok"}
+
+    @respx.mock
+    @pytest.mark.parametrize("status", ["hash_checking", "seeding", "downloading"])
+    async def test_a_known_status_past_starting_isnt_watched(
+        self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch, status: str
+    ) -> None:
+        monkeypatch.setattr(tasks_module, "_PAUSE_HOLD_INTERVAL", 0)
+        get_route(TASK, "pause", version=1).respond(json=ok([{"error": 0, "id": "dbid_1"}]))
+        info = get_route(TASK, "getinfo", version=1).mock(
+            side_effect=self._statuses(status, "paused")
+        )
+        await pause_download(mock_client, task_ids=["dbid_1"])
+        assert info.call_count == 2  # before the pause, and before the reply
 
     @respx.mock
     async def test_the_default_log_shows_a_second_pause(
