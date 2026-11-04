@@ -806,6 +806,8 @@ def test_list_survives_a_stdout_that_cant_encode_the_reason(tmp_path: Path, enco
     config_dir = tmp_path / ".config" / "mcp-synology"
     config_dir.mkdir(parents=True)
     (config_dir / "a.yaml").write_text("schema_version: 1\nauth: {username: me, secret}\n")
+    # Its name can't be encoded either (pre-QA on #532).
+    (config_dir / "b-ब.yaml").write_text("schema_version: 1\nauth: {username: me, secret}\n")
     (config_dir / "z.yaml").write_text("schema_version: 1\nconnection: {host: nas}\n")
     result = subprocess.run(
         [

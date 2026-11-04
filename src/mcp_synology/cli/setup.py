@@ -72,6 +72,12 @@ def setup(config: str | None, list_configs: bool, verbose: bool) -> None:
 
 def _list_configurations() -> None:
     """List existing configuration files in the config directory."""
+    # Stdout is strict about encoding, and a reason (`…`), a file's name or the folder's can
+    # hold what it can't encode: crashing would leave the later files unlisted (QA round 3
+    # and pre-QA on #532).
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(errors="backslashreplace")
+
     from mcp_synology.core.config import (
         format_yaml_error,
         host_problems,
@@ -120,11 +126,7 @@ def _list_configurations() -> None:
             # The reason `check` gives; format_yaml_error never quotes the file (QA round 2
             # on #532).
             click.echo(f"  {f.name}  (could not parse)")
-            # Stdout is strict about encoding, and these messages hold `…`: crashing here
-            # would leave the later files unlisted (QA round 3 on #532).
-            encoding = sys.stdout.encoding or "utf-8"
-            reason = format_yaml_error(e).encode(encoding, "backslashreplace").decode(encoding)
-            click.echo(f"    {reason}")
+            click.echo(f"    {format_yaml_error(e)}")
         except (OSError, ValueError, AttributeError):
             click.echo(f"  {f.name}  (could not parse)")
 

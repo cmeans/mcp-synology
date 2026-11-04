@@ -187,8 +187,9 @@ def host_problems(
 
 
 def _url_host(host: str) -> str | None:
-    """``host`` as httpx will use it (a name IDNA-mapped and lower-case, an IPv6 address as
-    written), or None if it refuses it.
+    """``host`` as httpx reads it, or None if it refuses it: a name IDNA-mapped and lower-case,
+    an IPv6 address as written. A name whose first part is `xn--` comes back decoded (`.host`
+    does that); `raw_host` is what's sent.
 
     Both steps can fail: building the URL (`httpx.InvalidURL`), and reading `.host`,
     which decodes an `xn--` first label and raises idna's own error (a UnicodeError)
