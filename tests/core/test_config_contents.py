@@ -11,6 +11,7 @@ import yaml
 from pydantic import ValidationError
 
 from mcp_synology.core.config import (
+    _INVALID_HOST,
     AppConfig,
     EnvVarError,
     format_validation_error,
@@ -461,11 +462,20 @@ class TestHost:
     """#476, #471, #504 item 1: `connection.host` is a bare host name or IP address, and a
     rejected host is never shown (it can hold a password)."""
 
-    @pytest.mark.parametrize("host", ["xn--bcher-kva.my_nas", "xn--bcher-kva.xn--zz"])
+    @pytest.mark.parametrize(
+        "host",
+        [
+            "xn--bcher-kva.my_nas",
+            "xn--bcher-kva.xn--zz",
+            # IDNA reads these as dots too.
+            "xn--bcher-kva\u3002my_nas",
+            "xn--bcher-kva\uff0emy_nas",
+            "xn--bcher-kva\uff61my_nas",
+        ],
+    )
     def test_a_bad_later_part_doesnt_blame_a_valid_first_one(self, host: str) -> None:
         """#543: the first part is good punycode, so that advice would be wrong."""
-        assert not any("punycode" in problem for problem in host_problems(host))
-        assert host_problems(host) != []
+        assert host_problems(host) == [_INVALID_HOST]
 
     @pytest.mark.parametrize("host", ["xn--zz", "XN--ZZ", "xn--zz.local"])
     def test_a_bad_first_part_keeps_the_punycode_advice(self, host: str) -> None:

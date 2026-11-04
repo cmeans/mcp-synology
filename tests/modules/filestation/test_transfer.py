@@ -20,7 +20,7 @@ from mcp_synology.modules.filestation.transfer import (
     download_file,
     upload_file,
 )
-from tests.conftest import BASE_URL
+from tests.conftest import BASE_URL, skip_unless_the_locale_can_encode
 
 # Root ignores file permission bits, so chmod can't provoke these errors there
 # (common in containers). Without the skip, the upload test reads the file,
@@ -123,6 +123,7 @@ class TestUploadFile:
         not 'retype' or 'write fewer variants' (pre-QA and QA round 4 on #515)."""
         from mcp_synology.modules.filestation import helpers
 
+        skip_unless_the_locale_can_encode(name)
         monkeypatch.setattr(helpers, "SELECTOR_LIMIT", 1)
         local_file = tmp_path / name
         local_file.write_text("x")

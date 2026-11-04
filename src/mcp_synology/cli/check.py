@@ -12,7 +12,7 @@ import click
 import httpx
 
 from mcp_synology.cli.logging_ import _init_early_logging
-from mcp_synology.cli.startup import load_or_exit
+from mcp_synology.cli.startup import escape_what_stdout_cant_encode, load_or_exit
 from mcp_synology.core.redaction import redact_urls
 
 if TYPE_CHECKING:
@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 @click.option("-v", "--verbose", is_flag=True, help="Enable debug logging")
 def check(config: str | None, verbose: bool) -> None:
     """Validate stored credentials can authenticate."""
+    escape_what_stdout_cant_encode()
     _init_early_logging(verbose=verbose)
 
     app_config = load_or_exit(config, configure_logging=not verbose)

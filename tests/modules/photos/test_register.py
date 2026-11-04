@@ -114,7 +114,7 @@ def test_every_api_called_is_declared() -> None:
     for path in Path(photos_pkg.__file__ or "").parent.glob("*.py"):
         if path.name == "__init__.py":
             continue
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
         used |= set(re.findall(_API_CALL, text))
         used |= {
             node.value

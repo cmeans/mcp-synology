@@ -166,7 +166,7 @@ def host_problems(
     if normalized is None:
         # Only if that part is what fails: the advice blamed a valid first part for a bad
         # later one (`xn--bcher-kva.my_nas`, #543).
-        first = host.split(".", 1)[0]
+        first = host.translate(_IDNA_DOTS).split(".", 1)[0]
         if first.lower().startswith("xn--") and _url_host(first) is None:
             return [_BAD_PUNYCODE]
         return [_INVALID_HOST]

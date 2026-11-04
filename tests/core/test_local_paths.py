@@ -185,6 +185,19 @@ class TestUnresolvablePaths:
         with pytest.raises(ValueError, match="can't be resolved"):
             outside_allowed_roots(str(tmp_path / "a\x00b"), [tmp_path.resolve()])
 
+    def test_a_path_the_locale_cant_encode_doesnt_show_the_codec_text(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Pre-QA on #541: `'ascii' codec can't encode character …` told the user nothing."""
+
+        def _refuse(self: Path, strict: bool = False) -> Path:
+            raise UnicodeEncodeError("ascii", str(self), 0, 1, "ordinal not in range(128)")
+
+        monkeypatch.setattr(Path, "resolve", _refuse)
+        with pytest.raises(ValueError, match="locale can't encode the path") as exc:
+            outside_allowed_roots(str(tmp_path / "x"), [tmp_path])
+        assert "codec" not in str(exc.value)
+
 
 class TestAllowedLocalPathsSetting:
     """QA R1 (#186): a relative entry would resolve against the server's working

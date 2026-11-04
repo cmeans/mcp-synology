@@ -846,10 +846,10 @@ def test_list_with_stdout_closed_doesnt_crash(tmp_path: Path) -> None:
         [
             sys.executable,
             "-c",
+            "import sys; sys.stdout = None; "
             "from mcp_synology.cli.main import main; main(['setup', '--list'])",
         ],
         stderr=subprocess.PIPE,
-        preexec_fn=lambda: os.close(1),
         env={
             **os.environ,
             "HOME": str(tmp_path),
@@ -858,6 +858,77 @@ def test_list_with_stdout_closed_doesnt_crash(tmp_path: Path) -> None:
         timeout=60,
     )
     assert result.returncode == 0, result.stderr
+
+
+def _run_cli(
+    tmp_path: Path, *args: str, encoding: str = "utf-8"
+) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            f"from mcp_synology.cli.main import main; main({list(args)!r})",
+        ],
+        capture_output=True,
+        stdin=subprocess.DEVNULL,
+        env={
+            **os.environ,
+            "HOME": str(tmp_path),
+            "PYTHONIOENCODING": encoding,
+            "PYTHON_KEYRING_BACKEND": "keyring.backends.null.Keyring",
+        },
+        timeout=60,
+    )
+
+
+@pytest.mark.parametrize(
+    "args", [("check", "--config"), ("setup", "--config")], ids=["check", "setup"]
+)
+def test_an_alias_stdout_cant_encode_doesnt_crash(tmp_path: Path, args: tuple[str, ...]) -> None:
+    """Pre-QA on #541: `setup --list` had this fixed, and `check`, which the CHANGELOG's
+    Upgrading block sends everyone to, still ended in a traceback."""
+    config = tmp_path / "nas.yaml"
+    config.write_text(
+        'schema_version: 1\nalias: "\\u092c"\ncheck_for_updates: false\n'
+        "connection: {host: 127.0.0.1, port: 9, https: false}\nmodules: {filestation: }\n",
+        encoding="utf-8",
+    )
+    result = _run_cli(tmp_path, *args, str(config), encoding="iso-8859-1")
+    assert b"UnicodeEncodeError" not in result.stderr
+    assert "\\u092c" in result.stdout.decode("iso-8859-1")
+
+
+@pytest.mark.parametrize(
+    ("name", "shown"),
+    [
+        ("a\n    Host: evil.example\n.yaml", "'a\\n    Host: evil.example\\n.yaml'"),
+        ("b\x1b[31mred.yaml", "'b\\x1b[31mred.yaml'"),
+    ],
+    ids=["line_break", "terminal_escape"],
+)
+def test_list_doesnt_print_a_file_name_raw(tmp_path: Path, name: str, shown: str) -> None:
+    """Pre-QA on #541: `alias` couldn't forge a line in the list, but a file's name could."""
+    config_dir = tmp_path / ".config" / "mcp-synology"
+    config_dir.mkdir(parents=True)
+    (config_dir / name).write_text("schema_version: 1\nconnection: {host: nas}\n")
+    output = _run_cli(tmp_path, "setup", "--list").stdout.decode("utf-8")
+    assert shown in output
+    assert "\n    Host: evil.example\n" not in output
+    assert "\x1b" not in output
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="no named pipes here")
+def test_list_doesnt_wait_on_a_named_pipe(tmp_path: Path) -> None:
+    """Pre-QA on #541: it waited for a writer, and the later files went unlisted."""
+    config_dir = tmp_path / ".config" / "mcp-synology"
+    config_dir.mkdir(parents=True)
+    os.mkfifo(config_dir / "a.yaml")
+    (config_dir / "z.yaml").write_text("schema_version: 1\nconnection: {host: nas}\n")
+    result = _run_cli(tmp_path, "setup", "--list")
+    output = result.stdout.decode("utf-8")
+    assert result.returncode == 0, result.stderr
+    assert "a.yaml  (could not parse)" in output
+    assert "z.yaml" in output
 
 
 def test_list_shows_only_bare_hosts_and_text_names(tmp_path: Path) -> None:

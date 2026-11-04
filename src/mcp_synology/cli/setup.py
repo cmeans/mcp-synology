@@ -16,7 +16,7 @@ import yaml
 
 from mcp_synology.cli.check import exit_on_connection_failure
 from mcp_synology.cli.logging_ import _configure_logging, _init_early_logging
-from mcp_synology.cli.startup import load_or_exit
+from mcp_synology.cli.startup import escape_what_stdout_cant_encode, load_or_exit
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +29,7 @@ _CONFIG_DIR = Path.home() / ".config" / "mcp-synology"
 @click.option("-v", "--verbose", is_flag=True, help="Enable debug logging")
 def setup(config: str | None, list_configs: bool, verbose: bool) -> None:
     """Interactive credential setup and 2FA bootstrap."""
+    escape_what_stdout_cant_encode()
     _init_early_logging(verbose=verbose)
 
     if list_configs:
@@ -57,14 +58,14 @@ def setup(config: str | None, list_configs: bool, verbose: bool) -> None:
     _setup_credential_flow(app_config, verbose)
 
 
+def _shown_name(name: str | Path) -> str:
+    """A name from the disk, quoted if it could forge a line or move the terminal (#541)."""
+    text = str(name)
+    return text if text.isprintable() else repr(text)
+
+
 def _list_configurations() -> None:
     """List existing configuration files in the config directory."""
-    # Stdout is strict about encoding, and a reason (`…`), a file's name or the folder's can
-    # hold what it can't encode: crashing would leave the later files unlisted (QA round 3
-    # and pre-QA on #532).
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(errors="backslashreplace")
-
     from mcp_synology.core.config import (
         alias_problem,
         format_yaml_error,
@@ -75,17 +76,22 @@ def _list_configurations() -> None:
 
     if not _CONFIG_DIR.exists():
         click.echo("No configurations found.")
-        click.echo(f"Config directory: {_CONFIG_DIR}")
+        click.echo(f"Config directory: {_shown_name(_CONFIG_DIR)}")
         return
 
     yaml_files = sorted(_CONFIG_DIR.glob("*.yaml"))
     if not yaml_files:
         click.echo("No configurations found.")
-        click.echo(f"Config directory: {_CONFIG_DIR}")
+        click.echo(f"Config directory: {_shown_name(_CONFIG_DIR)}")
         return
 
-    click.echo(f"Configurations in {_CONFIG_DIR}:\n")
+    click.echo(f"Configurations in {_shown_name(_CONFIG_DIR)}:\n")
     for f in yaml_files:
+        shown = _shown_name(f.name)
+        # A named pipe would wait for a writer, and the later files would go unlisted.
+        if not f.is_file():
+            click.echo(f"  {shown}  (could not parse)")
+            continue
         try:
             raw = parse_config_text(f.read_text(encoding="utf-8")) or {}
             # An empty `connection:` is no connection settings (#492).
@@ -105,19 +111,19 @@ def _list_configurations() -> None:
             elif isinstance(instance_id, str) and not instance_id_problem(instance_id):
                 label = instance_id.lower()  # as the server uses it
             else:
-                label = f.stem
-            click.echo(f"  {f.name}")
+                label = _shown_name(f.stem)
+            click.echo(f"  {shown}")
             click.echo(f"    Name: {label}")
             click.echo(f"    Host: {host}")
             click.echo()
         except yaml.YAMLError as e:
             # The reason `check` gives; format_yaml_error never quotes the file (QA round 2
             # on #532).
-            click.echo(f"  {f.name}  (could not parse)")
+            click.echo(f"  {shown}  (could not parse)")
             for line in format_yaml_error(e).splitlines():
                 click.echo(f"    {line}")
         except (OSError, ValueError, AttributeError):
-            click.echo(f"  {f.name}  (could not parse)")
+            click.echo(f"  {shown}  (could not parse)")
 
 
 def _setup_interactive(verbose: bool) -> None:

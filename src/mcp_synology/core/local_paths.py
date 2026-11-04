@@ -79,6 +79,9 @@ def _resolve(path: str | Path) -> Path:
     a NUL byte (every Python), or a symlink loop (``RuntimeError`` on 3.11/3.12)."""
     try:
         return Path(path).expanduser().resolve(strict=False)
+    except UnicodeEncodeError as e:  # a ValueError, whose text is Python's codec message
+        msg = f"{str(path)!r} can't be resolved: this system's locale can't encode the path"
+        raise ValueError(msg) from e
     except (OSError, ValueError, RuntimeError) as e:
         msg = f"{str(path)!r} can't be resolved: {e}"
         raise ValueError(msg) from e

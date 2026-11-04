@@ -14,6 +14,16 @@ if TYPE_CHECKING:
     from mcp_synology.core.config import AppConfig
 
 
+def escape_what_stdout_cant_encode() -> None:
+    """`check` and `setup` only, never `serve`, whose stdout is the MCP protocol. Stdout is
+    strict about encoding, and an alias, a file's name or a reason (`…`) can hold what it can't
+    encode: the crash left `check` without an answer and `setup --list`'s later files unlisted
+    (QA round 3 and pre-QA on #532, pre-QA on #541). `sys.stdout` is None if stdout is closed
+    (#543)."""
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(errors="backslashreplace")
+
+
 def _fail(message: str) -> NoReturn:
     click.echo(click.style(f"Error: {message}", fg="red"), err=True)
     sys.exit(1)
