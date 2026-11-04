@@ -21,6 +21,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
+  # `uv sync` and `uv run` refuse a uv.lock that doesn't match pyproject.toml (#115).
+  UV_LOCKED: "1"
   # Pins JavaScript-action Node runtime to Node 24 across all JS-based
   # GitHub Actions in this workflow. Matches the pattern used by the
   # other workflows in .github/workflows/ so CI behavior is consistent
@@ -217,7 +219,7 @@ jobs:
 
       - name: Install project with vdsm extras
         if: steps.scope.outputs.code == 'true'
-        run: uv sync --extra dev --extra vdsm
+        run: uv sync --locked --extra dev --extra vdsm
 
       # Only the bake drives a browser.
       - name: Install Playwright Chromium
