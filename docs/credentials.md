@@ -11,12 +11,12 @@ mcp-synology/{instance_id}
 ```
 
 Where `instance_id` is:
-- The value of `instance_id` in your config file, if set explicitly (any `[a-z0-9-]` string)
+- The value of `instance_id` in your config file, if set explicitly (up to 63 characters of `[a-z0-9-]`)
 - Derived from `connection.host` otherwise:
   - IP addresses: dots become hyphens (`192.168.1.100` -> `192-168-1-100`)
   - Hostnames: first component only (`nas.local` -> `nas`)
 
-The `instance_id` is the key that separates everything — keyring entries, state files, and log identification. Choose a meaningful name if you manage multiple NAS devices.
+The `instance_id` is the key that separates everything — keyring entries, session names, and log identification. Choose a meaningful name if you manage multiple NAS devices.
 
 ## Stored Keys
 
