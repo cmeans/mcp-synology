@@ -10,7 +10,7 @@ import ast
 import logging
 import os
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from click.testing import CliRunner
@@ -18,7 +18,7 @@ from click.testing import CliRunner
 import mcp_synology.cli
 from mcp_synology.cli import logging_
 from mcp_synology.cli.main import main
-from mcp_synology.core.config import ENV_VAR_MAP, load_config
+from mcp_synology.core.config import ENV_VAR_MAP, alias_problem, load_config
 from mcp_synology.modules import ModuleSettings, RegisterContext
 from mcp_synology.modules.filestation import FileStationSettings
 from mcp_synology.modules.photos import PhotosSettings
@@ -559,6 +559,144 @@ class TestOnePath:
 
 
 class TestEdgeCases:
+    @pytest.mark.parametrize(
+        "alias", ["x\\n    Host: evil", "a\\e[31mb", "a\\x85b", "a\\u2028b", "   "]
+    )
+    def test_setup_list_never_shows_a_bad_alias(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, alias: str
+    ) -> None:
+        """It reads the file raw, so the config's validator never runs there (pre-QA r2)."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        (config_dir / "a.yaml").write_text(
+            f'schema_version: 1\nalias: "{alias}"\nconnection: {{host: nas}}\n', encoding="utf-8"
+        )
+        monkeypatch.setattr("mcp_synology.cli.setup._CONFIG_DIR", config_dir)
+        _, output, _ = _run("setup", "--list")
+        assert "Name: a\n" in output
+        assert output.count("Host:") == 1
+        assert "\x1b" not in output
+
+    def test_an_alias_with_a_joiner_is_a_name(self) -> None:
+        assert alias_problem("\U0001f468\u200d\U0001f469") is None
+
+    def test_a_multi_line_reason_in_setup_list_is_indented(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        (config_dir / "a.yaml").write_text("x: 1\nx: 2\ny: 1\ny: 2\n", encoding="utf-8")
+        monkeypatch.setattr("mcp_synology.cli.setup._CONFIG_DIR", config_dir)
+        _, output, _ = _run("setup", "--list")
+        reasons = [line for line in output.splitlines() if "twice in one section" in line]
+        assert len(reasons) == 2
+        assert all(line.startswith("    ") for line in reasons)
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            'default_download_dir: "C:\\temp\\new"',
+            'allowed_local_paths: ["/tmp/a\\tb"]',
+            'allowed_local_paths: ["/tmp/a\\x85b"]',
+        ],
+    )
+    def test_a_control_character_in_a_module_path_is_refused(self, text: str) -> None:
+        import yaml
+
+        with pytest.raises(ValueError, match="control character"):
+            module_settings(
+                load_config_from({"filestation": {"settings": yaml.safe_load("{" + text + "}")}})
+            )
+
+    def test_a_c1_control_in_the_log_file_is_refused(self, tmp_path: Path) -> None:
+        path = tmp_path / "bad.yaml"
+        path.write_text(
+            f'{GOOD_HEAD}logging: {{file: "/tmp/a\\x85b.log"}}\nmodules: {{filestation: }}\n',
+            encoding="utf-8",
+        )
+        code, output, _ = _run("check", "--config", str(path))
+        assert code == 1
+        assert "control character" in output
+
+    def test_settings_and_the_log_file_count_as_one_block(self, tmp_path: Path) -> None:
+        path = tmp_path / "bad.yaml"
+        path.write_text(
+            f"{GOOD_HEAD}logging: {{file: /dev/null/x.log}}\n"
+            "modules: {photos: {settings: {task_timeout: on}}}\n",
+            encoding="utf-8",
+        )
+        _, output, _ = _run("check", "--config", str(path))
+        assert "(2 error(s))" in output
+        assert "  - logging.file: " in output
+        assert "a part of its folder path is a file" in output
+
+    def test_a_relative_log_file_is_shown_absolute(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """It depends on the folder an MCP client starts the server in (pre-QA r2)."""
+        (tmp_path / "a-file").write_text("x", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+        path = tmp_path / "bad.yaml"
+        path.write_text(
+            f"{GOOD_HEAD}logging: {{file: a-file/x.log}}\nmodules: {{filestation: }}\n",
+            encoding="utf-8",
+        )
+        _, output, _ = _run("check", "--config", str(path))
+        assert repr(str(tmp_path / "a-file" / "x.log")) in output
+
+    def test_a_bad_instance_id_shows_with_no_connection(self, tmp_path: Path) -> None:
+        path = tmp_path / "bad.yaml"
+        path.write_text('schema_version: 1\ninstance_id: "a b"\nmodules: {filestation: }\n')
+        _, output, _ = _run("check", "--config", str(path))
+        assert "(2 error(s))" in output
+        assert "instance_id" in output
+
+    def test_one_model_problem_reads_like_several(self, tmp_path: Path) -> None:
+        path = tmp_path / "bad.yaml"
+        path.write_text("schema_version: 1\nmodules: {filestation: }\n", encoding="utf-8")
+        _, output, _ = _run("check", "--config", str(path))
+        assert "<root>: connection.host is required" in output
+
+    def test_an_unknown_home_as_the_instructions_file_falls_back(self, tmp_path: Path) -> None:
+        path = tmp_path / "ok.yaml"
+        path.write_text(
+            f"{GOOD_HEAD}instructions_file: ~nosuchuser511/x.md\nmodules: {{filestation: }}\n",
+            encoding="utf-8",
+        )
+        config = validate_config(path)
+        assert any("isn't usable" in notice for notice in config_notices(config))
+        assert "SERVER IDENTITY" in (create_server(config).instructions or "")
+
+    def test_check_verbose_keeps_debug_logging(self, tmp_path: Path) -> None:
+        """`-v` stays on stderr at DEBUG: the file's `logging.level` doesn't apply."""
+        path = tmp_path / "ok.yaml"
+        path.write_text(
+            f"{GOOD_HEAD}logging: {{level: error}}\nmodules: {{filestation: }}\n",
+            encoding="utf-8",
+        )
+        with patch("mcp_synology.cli.startup._configure_logging") as configure:
+            _run("check", "-v", "--config", str(path))
+        configure.assert_not_called()
+
+    def test_a_blank_synology_host_isnt_named(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("SYNOLOGY_HOST", "  ")
+        path = tmp_path / "bad.yaml"
+        path.write_text(
+            "schema_version: 1\nconnection: {host: my_nas}\nmodules: {filestation: }\n",
+            encoding="utf-8",
+        )
+        _, output, _ = _run("check", "--config", str(path))
+        assert "connection.host gives no usable instance_id" in output
+
+    def test_a_third_repeat_names_its_own_lines(self, tmp_path: Path) -> None:
+        path = tmp_path / "bad.yaml"
+        path.write_text("a: 1\na: 2\na: 3\n", encoding="utf-8")
+        _, output, _ = _run("check", "--config", str(path))
+        assert "lines 1 and 2" in output
+        assert "lines 1 and 3" in output
+
     def test_several_on_one_line_are_in_column_order(self, tmp_path: Path) -> None:
         path = tmp_path / "bad.yaml"
         path.write_text(

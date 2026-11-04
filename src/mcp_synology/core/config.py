@@ -30,7 +30,11 @@ from pydantic import (
     model_validator,
 )
 
-from mcp_synology.core.local_paths import check_local_path_entries
+from mcp_synology.core.local_paths import (
+    CONTROL_CHARACTER_ADVICE,
+    check_local_path_entries,
+    has_control_character,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -349,15 +353,19 @@ def _no_empty_path(name: str, value: str | None) -> str | None:
     if value is not None and not value.strip():
         msg = f"is empty: give a file's path, or leave {name} out."
         raise ValueError(msg)
-    if value is not None and any(ord(c) < 32 or ord(c) == 127 for c in value):
-        # Inside double quotes a backslash starts an escape: "C:\temp\new.log" loaded with a
-        # real tab and newline, with no error (QA round 3 on #532).
-        msg = (
-            "has a control character. Inside double quotes a backslash starts an escape, so "
-            "write a Windows path in single quotes."
-        )
-        raise ValueError(msg)
+    if value is not None and has_control_character(value):
+        raise ValueError(CONTROL_CHARACTER_ADVICE)
     return value
+
+
+def alias_problem(value: str) -> str | None:
+    """Why ``value`` can't be an alias, or None. `setup` asks with the same rule, and
+    `setup --list` shows only an alias that passes."""
+    if not value.strip():
+        return "is empty: give a name, or leave alias out."
+    if has_control_character(value):
+        return "has a control character or line break: give a name on one line."
+    return None
 
 
 class LoggingConfig(BaseModel, extra="forbid"):
@@ -439,9 +447,8 @@ class AppConfig(BaseModel, extra="forbid"):
     def _alias_is_a_printable_name(cls, value: str | None) -> str | None:
         # It names the server and a line of `setup --list`: `x\n    Host: evil.example` forged
         # a Host line, and an escape sequence reached the terminal (QA round 3 on #532).
-        if value is not None and (not value.strip() or not value.isprintable()):
-            msg = "must be a name with printable characters, or left out."
-            raise ValueError(msg)
+        if value is not None and (problem := alias_problem(value)):
+            raise ValueError(problem)
         return value
 
     @field_validator("instructions_file")
@@ -490,36 +497,36 @@ class AppConfig(BaseModel, extra="forbid"):
                 "Enable at least one, e.g. filestation: {enabled: true}."
             )
 
+        derived = self.instance_id is None
         if self.connection is not None:
             # Apply default port from https setting
             if self.connection.port is None:
                 self.connection.port = 5001 if self.connection.https else 5000
 
             # Derive instance_id from host if not set
-            derived = self.instance_id is None
             if derived:
                 self.instance_id = _derive_instance_id(self.connection.host)
 
-            # Normalize and validate instance_id format. `is not None`: an empty one is
-            # refused too (#485).
-            if self.instance_id is not None:
-                problem = instance_id_problem(self.instance_id)
-                if derived and problem:
-                    # The host is already a bare name or address; what's left is an IPv6
-                    # address, or a name with characters outside a-z, 0-9 and hyphens. Name
-                    # where it came from: the file may look fine (QA round 2 on #532).
-                    from_env = (os.environ.get("SYNOLOGY_HOST") or "").strip()
-                    source = "SYNOLOGY_HOST" if from_env else "connection.host"
-                    problems.append(
-                        f"{source} gives no usable instance_id: its first part has "
-                        "characters other than letters a-z, digits and hyphens (an IPv6 address, "
-                        "an underscore, or a letter outside a-z). Set instance_id, or the "
-                        f"SYNOLOGY_INSTANCE_ID environment variable ({_INSTANCE_ID_RULE})."
-                    )
-                elif problem:
-                    problems.append(f"instance_id {problem}.")
-                else:
-                    self.instance_id = self.instance_id.lower()
+        # Normalize and validate instance_id format. `is not None`: an empty one is
+        # refused too (#485).
+        if self.instance_id is not None:
+            problem = instance_id_problem(self.instance_id)
+            if derived and problem:
+                # The host is already a bare name or address; what's left is an IPv6
+                # address, or a name with characters outside a-z, 0-9 and hyphens. Name
+                # where it came from: the file may look fine (QA round 2 on #532).
+                from_env = (os.environ.get("SYNOLOGY_HOST") or "").strip()
+                source = "SYNOLOGY_HOST" if from_env else "connection.host"
+                problems.append(
+                    f"{source} gives no usable instance_id: its first part has "
+                    "characters other than letters a-z, digits and hyphens (an IPv6 address, "
+                    "an underscore, or a letter outside a-z). Set instance_id, or the "
+                    f"SYNOLOGY_INSTANCE_ID environment variable ({_INSTANCE_ID_RULE})."
+                )
+            elif problem:
+                problems.append(f"instance_id {problem}.")
+            else:
+                self.instance_id = self.instance_id.lower()
 
         if problems:
             raise ValueError("\n".join(problems))
@@ -1435,7 +1442,7 @@ def format_config_errors(errors: list[Any]) -> str:
         suffix = ""
         if _may_show(err, loc_parts):
             suffix = f" (got {input_value!r})" if input_value not in (None, "") else ""
-        if "\n" in msg:  # several problems in one error: pydantic's prefix is only on the first
+        if not loc_parts:  # one wording for a model-level problem, alone or among several
             msg = msg.removeprefix("Value error, ")
         lines.extend(f"  - {loc}: {part}{suffix}" for part in msg.split("\n"))
     return "\n".join([f"Configuration validation failed ({len(lines)} error(s)):", *lines])

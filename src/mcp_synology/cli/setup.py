@@ -66,6 +66,7 @@ def _list_configurations() -> None:
         sys.stdout.reconfigure(errors="backslashreplace")
 
     from mcp_synology.core.config import (
+        alias_problem,
         format_yaml_error,
         host_problems,
         instance_id_problem,
@@ -99,7 +100,7 @@ def _list_configurations() -> None:
             # mapping (#476).
             alias = raw.get("alias")
             instance_id = raw.get("instance_id")
-            if isinstance(alias, str) and alias.strip():
+            if isinstance(alias, str) and not alias_problem(alias):
                 label = alias
             elif isinstance(instance_id, str) and not instance_id_problem(instance_id):
                 label = instance_id.lower()  # as the server uses it
@@ -113,7 +114,8 @@ def _list_configurations() -> None:
             # The reason `check` gives; format_yaml_error never quotes the file (QA round 2
             # on #532).
             click.echo(f"  {f.name}  (could not parse)")
-            click.echo(f"    {format_yaml_error(e)}")
+            for line in format_yaml_error(e).splitlines():
+                click.echo(f"    {line}")
         except (OSError, ValueError, AttributeError):
             click.echo(f"  {f.name}  (could not parse)")
 
@@ -122,7 +124,12 @@ def _setup_interactive(verbose: bool) -> None:
     """Interactive setup when no config file exists."""
     click.echo("No configuration file found. Let's create one.\n")
 
-    from mcp_synology.core.config import host_message, host_problems, instance_id_problem
+    from mcp_synology.core.config import (
+        alias_problem,
+        host_message,
+        host_problems,
+        instance_id_problem,
+    )
 
     # Prompt for connection details. The host is checked here, by the config's own rule,
     # so a URL, port or user name gets advice and another try instead of a failure after
@@ -184,8 +191,14 @@ def _setup_interactive(verbose: bool) -> None:
             click.echo(f"  That instance ID {'is empty' if not instance_id.strip() else problem}.")
 
     # Prompt for alias
-    alias_input = click.prompt("Alias (friendly name, optional)", default="", show_default=False)
-    alias: str | None = alias_input.strip() or None
+    while True:
+        alias_input = click.prompt(
+            "Alias (friendly name, optional)", default="", show_default=False
+        )
+        alias: str | None = alias_input.strip() or None
+        if alias is None or not (problem := alias_problem(alias)):
+            break
+        click.echo(f"  That alias {problem}")
 
     # Build config dict
     conn: dict[str, Any] = {"host": host}
@@ -245,7 +258,7 @@ def _setup_interactive(verbose: bool) -> None:
 
     # Suggest hostname as alias if we fetched one and user didn't set an alias
     nas_hostname = result.get("hostname")
-    if nas_hostname and not alias:
+    if nas_hostname and not alias and not alias_problem(nas_hostname):
         use_hostname = click.confirm(
             f'NAS reports hostname "{nas_hostname}". Use as alias?', default=True
         )

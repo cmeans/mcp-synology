@@ -27,7 +27,12 @@ from mcp_synology.core.auth import (
     resolve_credentials,
 )
 from mcp_synology.core.client import DsmClient, dsm_call_of
-from mcp_synology.core.config import config_file_note, format_config_errors, load_config
+from mcp_synology.core.config import (
+    _shown_path,
+    config_file_note,
+    format_config_errors,
+    load_config,
+)
 from mcp_synology.core.errors import ErrorCode, SynologyError, detached_copy
 from mcp_synology.core.formatting import error_response, synology_error_response
 from mcp_synology.core.redaction import redact_urls
@@ -869,7 +874,8 @@ def _read_instructions_file(config: AppConfig) -> tuple[str | None, str | None]:
         reason = "the path isn't usable"
     return (
         None,
-        f"instructions_file {str(path)!r} can't be read ({reason}): using the built-in text.",
+        f"instructions_file {_shown_path(path)!r} can't be read ({reason}): using the built-in "
+        "text.",
     )
 
 
@@ -915,6 +921,14 @@ def module_settings(config: AppConfig) -> dict[str, BaseModel | None]:
     as the rest of the config, so no value it may not show gets printed. A module that's
     disabled or unknown isn't loaded, so its settings aren't looked at.
     """
+    settings, errors = _module_settings(config)
+    if errors:
+        raise ValueError(format_config_errors(errors))
+    return settings
+
+
+def _module_settings(config: AppConfig) -> tuple[dict[str, BaseModel | None], list[Any]]:
+    """`module_settings`' result, and its problems as pydantic's error dicts."""
     settings: dict[str, BaseModel | None] = {}
     errors: list[Any] = []
     for name, mod_config in config.modules.items():
@@ -931,9 +945,7 @@ def module_settings(config: AppConfig) -> dict[str, BaseModel | None]:
             errors.extend(
                 {**err, "loc": ("modules", name, "settings", *err["loc"])} for err in e.errors()
             )
-    if errors:
-        raise ValueError(format_config_errors(errors))
-    return settings
+    return settings, errors
 
 
 def _log_file_problem(config: AppConfig) -> str | None:
@@ -953,11 +965,14 @@ def _log_file_problem(config: AppConfig) -> str | None:
             path.parent.mkdir(parents=True, exist_ok=True)
             with path.open("a", encoding="utf-8"):
                 return None
+    except FileExistsError:  # from mkdir: a file where a folder of the path belongs
+        reason = "a part of its folder path is a file"
     except OSError as e:
         reason = e.strerror or type(e).__name__
     except (RuntimeError, ValueError):  # an unknown ~user; a NUL
         reason = "the path isn't usable"
-    return f"logging.file {str(path)!r} can't be opened: {reason}. Fix the path, or leave it out."
+    # Absolute: a relative path depends on the folder an MCP client starts the server in.
+    return f"{_shown_path(path)!r} can't be opened: {reason}. Fix the path, or leave it out."
 
 
 def validate_config(path: str | Path | None = None) -> AppConfig:
@@ -969,15 +984,11 @@ def validate_config(path: str | Path | None = None) -> AppConfig:
     documented: it's in `config_notices`.
     """
     config = load_config(path)
-    problems = []
-    try:
-        module_settings(config)
-    except ValueError as e:
-        problems.append(str(e))
+    _, errors = _module_settings(config)
     if log_problem := _log_file_problem(config):
-        problems.append(log_problem)
-    if problems:
-        error = ValueError("\n".join(problems))
+        errors.append({"loc": ("logging", "file"), "msg": log_problem, "type": "value_error"})
+    if errors:
+        error = ValueError(format_config_errors(errors))
         if config._source_path is not None:
             error.add_note(config_file_note(config._source_path))
         raise error

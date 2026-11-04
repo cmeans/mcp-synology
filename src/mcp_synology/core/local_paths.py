@@ -23,6 +23,7 @@ import logging
 import os
 import re
 import sys
+import unicodedata
 from pathlib import Path
 from typing import TYPE_CHECKING, NoReturn
 
@@ -108,10 +109,28 @@ def expand_setting(setting: str, entry: str) -> Path:
         raise ValueError(msg) from e
 
 
+def has_control_character(value: str) -> bool:
+    """A control character or a line or paragraph separator: what can forge a line of output
+    or move the terminal. Joiners and the like are fine: names need them."""
+    return any(unicodedata.category(c) in ("Cc", "Zl", "Zp") for c in value)
+
+
+# Inside double quotes a backslash starts an escape: "C:\temp\new.log" loaded with a real tab
+# and newline, with no error (QA round 3 on #532).
+CONTROL_CHARACTER_ADVICE = (
+    "has a control character. Inside double quotes a backslash starts an escape, so write a "
+    "Windows path in single quotes."
+)
+
+
 def check_resolvable(setting: str, entry: str) -> Path:
-    """``~`` expanded, and the path checked to resolve (a NUL byte, a symlink loop). The
-    server resolves these when it starts, so a config that passes here starts: otherwise
-    `check` passed what `serve` crashed on (#511 PR 3)."""
+    """``~`` expanded, and the path checked to have no control character, which would reach
+    the model's instructions as written, and to resolve (a NUL byte; a symlink loop on Python
+    3.11 and 3.12). The server resolves these when it starts, so a config that passes here
+    starts: otherwise `check` passed what `serve` crashed on (#511 PR 3)."""
+    if has_control_character(entry):
+        msg = f"{setting} {CONTROL_CHARACTER_ADVICE}"
+        raise ValueError(msg)
     path = expand_setting(setting, entry)
     try:
         _resolve(path)
