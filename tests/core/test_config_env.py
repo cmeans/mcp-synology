@@ -730,6 +730,9 @@ def test_no_override_warning_when_nothing_the_file_sets_changes(
         ("SYNOLOGY_HOST", "nas.example/DSM", "connection.host", {"host": "nas.example/dsm"}),
         ("SYNOLOGY_HOST", "nas%2Fx", "connection.host", {"host": "nas/x"}),
         ("SYNOLOGY_HOST", "::1", "connection.host", {"host": "[::1]"}),
+        ("SYNOLOGY_HOST", "NAS.example:5001", "connection.host", {"host": "nas.example:5001"}),
+        # A name httpx refuses stays as written, its case included.
+        ("SYNOLOGY_HOST", "\uff2eas.example", "connection.host", {"host": "\uff4eas.example"}),
         ("SYNOLOGY_HOST", "[::1]", "connection.host", {"host": "[0:0:0:0:0:0:0:1]"}),
         # Look-alikes are other hosts: Cyrillic a, and a name IDNA refuses.
         ("SYNOLOGY_HOST", "n\u0430s.example", "connection.host", {"host": "nas.example"}),
