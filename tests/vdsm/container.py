@@ -81,12 +81,6 @@ def _ensure_docker_host() -> None:
     logger.warning("No Docker/Podman socket found. Set DOCKER_HOST or start Docker/Podman.")
 
 
-def _is_podman() -> bool:
-    """Detect if we're using Podman instead of Docker."""
-    docker_host = os.environ.get("DOCKER_HOST", "")
-    return "podman" in docker_host
-
-
 class VirtualDsmContainer:
     """Manages a virtual-dsm Docker container for integration testing.
 
@@ -130,11 +124,9 @@ class VirtualDsmContainer:
             "devices": ["/dev/kvm:/dev/kvm", "/dev/net/tun:/dev/net/tun"],
             "cap_add": ["NET_ADMIN"],
         }
-        # Podman's default passt networking doesn't forward ports properly
-        # for QEMU VMs. Use a bridge: Podman 6 removed slirp4netns, which this
-        # used before.
-        if _is_podman():
-            kwargs["network_mode"] = "bridge"
+        # No network_mode: each engine's default forwards the ports. Podman 6 removed the
+        # slirp4netns this used to ask for, and its default (pasta) passed the full suite and a
+        # bake of all four DSM versions (#540).
 
         container.with_kwargs(**kwargs)
 
