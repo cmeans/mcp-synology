@@ -123,10 +123,12 @@ class VirtualDsmContainer:
         kwargs: dict[str, Any] = {
             "devices": ["/dev/kvm:/dev/kvm", "/dev/net/tun:/dev/net/tun"],
             "cap_add": ["NET_ADMIN"],
+            "network_mode": "bridge",
         }
-        # No network_mode: each engine's default forwards the ports. Podman 6 removed the
-        # slirp4netns this used to ask for, and its default (pasta) passed the full suite and a
-        # bake of all four DSM versions (#540).
+        # Podman 6 removed the slirp4netns this used to ask for (#537). A bridge is what Podman's
+        # Docker-compatible API and Docker both give by default; set here so a machine's
+        # containers.conf can't change it: one run on pasta, Podman's CLI default, never became
+        # reachable through localhost (#540).
 
         container.with_kwargs(**kwargs)
 
