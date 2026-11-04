@@ -131,9 +131,10 @@ class VirtualDsmContainer:
             "cap_add": ["NET_ADMIN"],
         }
         # Podman's default passt networking doesn't forward ports properly
-        # for QEMU VMs. Use slirp4netns instead.
+        # for QEMU VMs. Use a bridge: Podman 6 removed slirp4netns, which this
+        # used before.
         if _is_podman():
-            kwargs["network_mode"] = "slirp4netns:port_handler=slirp4netns"
+            kwargs["network_mode"] = "bridge"
 
         container.with_kwargs(**kwargs)
 
