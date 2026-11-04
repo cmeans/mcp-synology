@@ -10,9 +10,9 @@ from typing import TYPE_CHECKING
 
 import click
 import httpx
-import yaml
 
-from mcp_synology.cli.logging_ import _configure_logging, _init_early_logging
+from mcp_synology.cli.logging_ import _init_early_logging
+from mcp_synology.cli.startup import load_or_exit
 from mcp_synology.core.redaction import redact_urls
 
 if TYPE_CHECKING:
@@ -26,25 +26,7 @@ def check(config: str | None, verbose: bool) -> None:
     """Validate stored credentials can authenticate."""
     _init_early_logging(verbose=verbose)
 
-    from pydantic import ValidationError
-
-    from mcp_synology.core.config import format_validation_error, format_yaml_error, load_config
-
-    try:
-        app_config = load_config(config)
-    except ValidationError as e:
-        # Must precede ValueError — pydantic.ValidationError subclasses it.
-        click.echo(click.style(f"Error: {format_validation_error(e)}", fg="red"), err=True)
-        sys.exit(1)
-    except yaml.YAMLError as e:
-        click.echo(click.style(f"Error: {format_yaml_error(e)}", fg="red"), err=True)
-        sys.exit(1)
-    except (FileNotFoundError, ValueError) as e:
-        click.echo(click.style(f"Error: {e}", fg="red"), err=True)
-        sys.exit(1)
-
-    if not verbose:
-        _configure_logging(app_config.logging.level, app_config.logging.file)
+    app_config = load_or_exit(config, configure_logging=not verbose)
 
     from mcp_synology.server import config_notices
 

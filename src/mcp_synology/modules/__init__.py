@@ -4,15 +4,45 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar, get_args
 
 from mcp.types import ToolAnnotations
+from pydantic import BaseModel, ValidationInfo, field_validator
 
 if TYPE_CHECKING:
     from mcp.server.mcpserver import MCPServer
-    from pydantic import BaseModel
 
     from mcp_synology.server import SharedClientManager
+
+_Settings = TypeVar("_Settings", bound=BaseModel)
+
+
+def _plain_types(annotation: Any) -> set[Any]:
+    """The types in an annotation, through `| None` and the like."""
+    args = get_args(annotation)
+    if not args:
+        return {annotation}
+    return {t for arg in args for t in _plain_types(arg)}
+
+
+class ModuleSettings(BaseModel):
+    """Base of every module's settings: the rules that hold for any setting (#511 PR 3)."""
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def _same_rules_as_the_config(cls, value: object, info: ValidationInfo) -> object:
+        field_name = info.field_name or ""
+        types = _plain_types(cls.model_fields[field_name].annotation)
+        # Pydantic reads a boolean as 1 or 0, so `task_timeout: on` loaded a 1 s timeout,
+        # as `port: yes` loaded port 1.
+        if isinstance(value, bool) and bool not in types and types & {int, float}:
+            msg = "must be a number, not true or false (YAML reads yes/no/on/off as those)."
+            raise ValueError(msg)
+        # An empty path names no folder: an error, not "none", as `logging.file` (#511).
+        if str in types and isinstance(value, str) and not value.strip():
+            msg = f"is empty: give a value, or leave {field_name} out."
+            raise ValueError(msg)
+        return value
 
 
 class PermissionTier(Enum):
@@ -84,7 +114,7 @@ class ModuleInfo:
     description: str
     required_apis: list[ApiRequirement] = field(default_factory=list)
     tools: list[ToolInfo] = field(default_factory=list)
-    settings_schema: type[BaseModel] | None = None
+    settings_schema: type[ModuleSettings] | None = None
 
 
 @dataclass
@@ -94,10 +124,20 @@ class RegisterContext:
     server: MCPServer
     manager: SharedClientManager
     allowed_tools: set[str]
-    settings_dict: dict[str, Any]
     display_name: str
+    # Already validated (server.module_settings); None means the module's defaults.
+    settings: BaseModel | None = None
     # The top-level allowed_local_paths, shared by every module (#257).
     allowed_local_paths: list[str] | None = None
+
+    def settings_as(self, schema: type[_Settings]) -> _Settings:
+        """This module's validated settings, or its defaults when none were given."""
+        if self.settings is None:
+            return schema()
+        if not isinstance(self.settings, schema):
+            msg = f"Expected {schema.__name__}, got {type(self.settings).__name__}"
+            raise TypeError(msg)
+        return self.settings
 
 
 def default_annotations(tier: PermissionTier) -> ToolAnnotations:

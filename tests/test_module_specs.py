@@ -86,7 +86,6 @@ def _registered(module: Any) -> dict[str, Any]:
             server=server,
             manager=MagicMock(),
             allowed_tools={t.name for t in module.MODULE_INFO.tools},
-            settings_dict={},
             display_name="spec-check",
         )
     )

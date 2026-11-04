@@ -16,6 +16,7 @@ import yaml
 
 from mcp_synology.cli.check import exit_on_connection_failure
 from mcp_synology.cli.logging_ import _configure_logging, _init_early_logging
+from mcp_synology.cli.startup import load_or_exit
 
 logger = logging.getLogger(__name__)
 
@@ -40,12 +41,8 @@ def setup(config: str | None, list_configs: bool, verbose: bool) -> None:
         return
 
     # Try to load an existing config via discovery
-    from pydantic import ValidationError
-
-    from mcp_synology.core.config import format_validation_error, format_yaml_error, load_config
-
     try:
-        app_config = load_config(None)
+        app_config = load_or_exit(None, configure_logging=False, missing_raises=True)
     except FileNotFoundError as e:
         # A file named by MCP_SYNOLOGY_CONFIG must exist: creating a config elsewhere
         # would ignore the variable without a word (#499).
@@ -55,16 +52,6 @@ def setup(config: str | None, list_configs: bool, verbose: bool) -> None:
         # No config file found — enter interactive creation mode
         _setup_interactive(verbose)
         return
-    except ValidationError as e:
-        # Must precede ValueError — pydantic.ValidationError subclasses it.
-        click.echo(click.style(f"Error: {format_validation_error(e)}", fg="red"), err=True)
-        sys.exit(1)
-    except yaml.YAMLError as e:
-        click.echo(click.style(f"Error: {format_yaml_error(e)}", fg="red"), err=True)
-        sys.exit(1)
-    except ValueError as e:
-        click.echo(click.style(f"Error: {e}", fg="red"), err=True)
-        sys.exit(1)
 
     # Config file exists — do credential setup against it
     _setup_credential_flow(app_config, verbose)
@@ -284,22 +271,7 @@ def _setup_interactive(verbose: bool) -> None:
 
 def _setup_with_config(config_path_str: str, verbose: bool) -> None:
     """Setup using an explicit config file path."""
-    from pydantic import ValidationError
-
-    from mcp_synology.core.config import format_validation_error, format_yaml_error, load_config
-
-    try:
-        app_config = load_config(config_path_str)
-    except ValidationError as e:
-        # Must precede ValueError — pydantic.ValidationError subclasses it.
-        click.echo(click.style(f"Error: {format_validation_error(e)}", fg="red"), err=True)
-        sys.exit(1)
-    except yaml.YAMLError as e:
-        click.echo(click.style(f"Error: {format_yaml_error(e)}", fg="red"), err=True)
-        sys.exit(1)
-    except (FileNotFoundError, ValueError) as e:
-        click.echo(click.style(f"Error: {e}", fg="red"), err=True)
-        sys.exit(1)
+    app_config = load_or_exit(config_path_str, configure_logging=False)
 
     _setup_credential_flow(app_config, verbose)
 

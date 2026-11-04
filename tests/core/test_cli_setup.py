@@ -836,6 +836,6 @@ def test_setup_reports_a_config_it_cant_read(tmp_path: Path) -> None:
     missing = tmp_path / "nope.yaml"
     result = CliRunner().invoke(main, ["setup", "--config", str(missing)])
     assert result.exit_code == 1 and "Error: " in result.output
-    with patch("mcp_synology.core.config.load_config", side_effect=ValueError("not UTF-8")):
+    with patch("mcp_synology.server.load_config", side_effect=ValueError("not UTF-8")):
         result = CliRunner().invoke(main, ["setup"])
     assert result.exit_code == 1 and "Error: not UTF-8" in result.output

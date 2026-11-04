@@ -25,7 +25,7 @@ def _registered(allowed: set[str] | None = None, settings: dict | None = None) -
             server=server,
             manager=manager,
             allowed_tools=allowed if allowed is not None else {t.name for t in MODULE_INFO.tools},
-            settings_dict=settings or {},
+            settings=PhotosSettings(**settings) if settings else None,
             display_name="test-nas",
         )
     )

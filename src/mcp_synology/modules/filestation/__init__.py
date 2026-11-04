@@ -13,12 +13,13 @@ from mcp.server.mcpserver import (
     Context,  # noqa: TC002 — runtime import needed for MCPServer context injection
 )
 from mcp.types import ToolAnnotations
-from pydantic import BaseModel, Field, field_validator
+from pydantic import Field, field_validator
 
 from mcp_synology.core.local_paths import check_local_path_entries, expand_setting
 from mcp_synology.modules import (
     ApiRequirement,
     ModuleInfo,
+    ModuleSettings,
     PermissionTier,
     ToolInfo,
     default_annotations,
@@ -46,7 +47,7 @@ _ANNO_DESTRUCTIVE = ToolAnnotations(read_only_hint=False, destructive_hint=True)
 _ANNO_LOCAL_WRITE = ToolAnnotations(read_only_hint=False, destructive_hint=True)
 
 
-class FileStationSettings(BaseModel):
+class FileStationSettings(ModuleSettings):
     """File Station module settings."""
 
     hide_recycle_in_listings: bool = False
@@ -330,7 +331,7 @@ def register(ctx: "RegisterContext") -> None:
     )
     from mcp_synology.modules.filestation.transfer import download_file, upload_file
 
-    settings = FileStationSettings(**ctx.settings_dict)
+    settings = ctx.settings_as(FileStationSettings)
     indicator = settings.file_type_indicator
     search_timeout = float(settings.search_timeout or settings.async_timeout)
     # Delete/copy/move/restore wait this long, then hand the task off to run on (#245).

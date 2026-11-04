@@ -17,6 +17,7 @@ import httpx
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError, UnexpectedToolError
 from mcp.types import CallToolResult, Icon, TextContent
+from pydantic import ValidationError
 
 from mcp_synology import __version__
 from mcp_synology.core.auth import (
@@ -26,6 +27,7 @@ from mcp_synology.core.auth import (
     resolve_credentials,
 )
 from mcp_synology.core.client import DsmClient, dsm_call_of
+from mcp_synology.core.config import config_file_note, format_config_errors, load_config
 from mcp_synology.core.errors import ErrorCode, SynologyError, detached_copy
 from mcp_synology.core.formatting import error_response, synology_error_response
 from mcp_synology.core.redaction import redact_urls
@@ -44,6 +46,7 @@ if TYPE_CHECKING:
     from mcp.server.mcpserver import Context
     from mcp.types import InputRequiredResult, ToolAnnotations
     from mcp.types import Tool as MCPTool
+    from pydantic import BaseModel
 
     from mcp_synology.core.config import AppConfig, ModuleConfig
 
@@ -731,7 +734,9 @@ def _withheld_tools_notice(config: AppConfig, plan: _ModulePlan) -> str:
     )
 
 
-def _local_paths_notice(config: AppConfig, plan: _ModulePlan) -> str:
+def _local_paths_notice(
+    config: AppConfig, plan: _ModulePlan, settings: dict[str, BaseModel | None]
+) -> str:
     """Name the local folders each module's tools may use (allowed_local_paths, #257)."""
     from mcp_synology.core.local_paths import allowed_local_roots
     from mcp_synology.modules.downloadstation import DownloadStationSettings
@@ -747,9 +752,10 @@ def _local_paths_notice(config: AppConfig, plan: _ModulePlan) -> str:
         return " and ".join(names) + (" only use" if len(names) > 1 else " only uses")
 
     lines: list[str] = []
-    for mod_name, _module, mod_config, allowed in plan:
+    for mod_name, _module, _mod_config, allowed in plan:
+        given = settings.get(mod_name)
         if mod_name == "filestation" and {"upload_file", "download_file"} & set(allowed):
-            fs = FileStationSettings(**mod_config.settings)
+            fs = given if isinstance(given, FileStationSettings) else FileStationSettings()
             default_dir = fs.default_download_dir
             roots = allowed_local_roots(
                 fs.allowed_local_paths,
@@ -762,7 +768,7 @@ def _local_paths_notice(config: AppConfig, plan: _ModulePlan) -> str:
                 f"these folders (or below them): {folders(roots)}."
             )
         elif mod_name == "downloadstation" and "create_download" in allowed:
-            ds = DownloadStationSettings(**mod_config.settings)
+            ds = given if isinstance(given, DownloadStationSettings) else DownloadStationSettings()
             roots = allowed_local_roots(
                 ds.allowed_local_paths,
                 shared_paths=config.allowed_local_paths,
@@ -773,7 +779,7 @@ def _local_paths_notice(config: AppConfig, plan: _ModulePlan) -> str:
                 f"inside these folders (or below them): {folders(roots)}."
             )
         elif mod_name == "photos" and {"upload_photos", "download_photos"} & set(allowed):
-            ph = PhotosSettings(**mod_config.settings)
+            ph = given if isinstance(given, PhotosSettings) else PhotosSettings()
             roots = allowed_local_roots(
                 ph.allowed_local_paths,
                 shared_paths=config.allowed_local_paths,
@@ -843,8 +849,26 @@ def _photos_notice(plan: _ModulePlan) -> str:
     return ""
 
 
+def _read_instructions_file(config: AppConfig) -> tuple[str | None, str | None]:
+    """The instructions file's text, or why it can't be used (never its bytes)."""
+    if not config.instructions_file:
+        return None, None
+    path = Path(config.instructions_file).expanduser()
+    try:
+        return path.read_text(encoding="utf-8"), None
+    except UnicodeDecodeError:
+        reason = "it isn't valid UTF-8"
+    except OSError as e:
+        reason = e.strerror or type(e).__name__
+    return (
+        None,
+        f"instructions_file {str(path)!r} can't be read ({reason}): using the built-in text.",
+    )
+
+
 def config_notices(config: AppConfig) -> list[str]:
-    """Warnings for config keys this version doesn't know: misspelled or newer.
+    """Warnings for what the config asks for and the server will do without: keys this
+    version doesn't know (misspelled or newer), and an instructions file it can't read.
 
     An unknown module name, or an unknown key in a module's `settings`, would otherwise
     be ignored without a word (an `allowed_local_paths` typo left the Downloads default in
@@ -853,6 +877,9 @@ def config_notices(config: AppConfig) -> list[str]:
     module are errors (`ModuleConfig`, extra="forbid").
     """
     notices = []
+    _, instructions_problem = _read_instructions_file(config)
+    if instructions_problem:
+        notices.append(instructions_problem)
     known = ", ".join(sorted(_MODULE_REGISTRY))
     for mod_name, mod_config in config.modules.items():
         module = _MODULE_REGISTRY.get(mod_name)
@@ -871,12 +898,81 @@ def config_notices(config: AppConfig) -> list[str]:
     return notices
 
 
+def module_settings(config: AppConfig) -> dict[str, BaseModel | None]:
+    """Each enabled module's settings, validated, by module name (#511 PR 3, #498).
+
+    Raises ValueError listing every problem in every module, through the same formatter
+    as the rest of the config, so no value it may not show gets printed. A module that's
+    disabled or unknown isn't loaded, so its settings aren't looked at.
+    """
+    settings: dict[str, BaseModel | None] = {}
+    errors: list[Any] = []
+    for name, mod_config in config.modules.items():
+        module = _MODULE_REGISTRY.get(name)
+        if module is None or not mod_config.enabled:
+            continue
+        schema = module.MODULE_INFO.settings_schema
+        if schema is None:
+            settings[name] = None
+            continue
+        try:
+            settings[name] = schema.model_validate(mod_config.settings)
+        except ValidationError as e:
+            errors.extend(
+                {**err, "loc": ("modules", name, "settings", *err["loc"])} for err in e.errors()
+            )
+    if errors:
+        raise ValueError(format_config_errors(errors))
+    return settings
+
+
+def _check_log_file(config: AppConfig) -> None:
+    """Make sure `logging.file` can be opened, creating its folder (#498).
+
+    `examples/config-power-user.yaml` names a folder a fresh machine doesn't have, and
+    `FileHandler` raised a traceback there.
+    """
+    if not config.logging.file:
+        return
+    path = Path(config.logging.file).expanduser()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8"):
+            pass
+    except OSError as e:
+        reason = e.strerror or type(e).__name__
+        msg = (
+            f"logging.file {str(path)!r} can't be opened: {reason}. Fix the path, or leave it out."
+        )
+        raise ValueError(msg) from e
+
+
+def validate_config(path: str | Path | None = None) -> AppConfig:
+    """The fully validated config: the one way `serve`, `check` and `setup` get a config
+    (#511), so what one accepts the others accept.
+
+    Everything `load_config` checks, plus each enabled module's settings and the log file.
+    An instructions file that can't be read isn't an error, as documented: it's in
+    `config_notices`.
+    """
+    config = load_config(path)
+    try:
+        module_settings(config)
+        _check_log_file(config)
+    except ValueError as e:
+        if config._source_path is not None:
+            e.add_note(config_file_note(config._source_path))
+        raise
+    return config
+
+
 def create_server(config: AppConfig) -> MCPServer:
     """Create and configure the MCP server.
 
     This sets up the MCP server instance and registers tools based on
     module configuration and permission tiers.
     """
+    settings = module_settings(config)
     for notice in config_notices(config):
         logger.warning("%s", notice)
     # Populate template variables in the instructions so Claude can
@@ -923,19 +1019,14 @@ def create_server(config: AppConfig) -> MCPServer:
             texts.append(_MODULE_WRITE_INSTRUCTIONS[name])
     builtin = "\n\n".join(_strip_html_comments(text).strip() for text in texts)
 
-    replacement: str | None = None
-    if config.instructions_file:
-        # Full replacement — user provides their own instructions file.
-        # They can start from the built-in server.md, filestation.md, filestation-write.md
-        # and local.md.
-        instructions_path = Path(config.instructions_file).expanduser()
-        try:
-            replacement = _strip_html_comments(
-                instructions_path.read_text(encoding="utf-8")
-            ).strip()
-        except OSError as e:
-            # Fall back to the full built-in instructions, generated sections included.
-            logger.error("Failed to load instructions_file '%s': %s", instructions_path, e)
+    # Full replacement — user provides their own instructions file. They can start from the
+    # built-in server.md, filestation.md, filestation-write.md and local.md. One that can't
+    # be read falls back to the full built-in instructions, generated sections included;
+    # config_notices, logged above, says so.
+    instructions_text, _ = _read_instructions_file(config)
+    replacement = None if instructions_text is None else _strip_html_comments(instructions_text)
+    if replacement is not None:
+        replacement = replacement.strip()
 
     if replacement is not None:
         instructions = replacement
@@ -954,7 +1045,7 @@ def create_server(config: AppConfig) -> MCPServer:
         instructions += _photos_notice(plan)
         instructions += _storage_notice(plan)
         instructions += _withheld_tools_notice(config, plan)
-        local_paths = _local_paths_notice(config, plan)
+        local_paths = _local_paths_notice(config, plan, settings)
         if local_paths:
             local_machine = _strip_html_comments(_LOCAL_MACHINE_INSTRUCTIONS).strip()
             instructions += "\n\n" + _fill_template(local_machine, template_vars) + local_paths
@@ -1005,7 +1096,7 @@ def create_server(config: AppConfig) -> MCPServer:
             server=server,
             manager=manager,
             allowed_tools=allowed_tools,
-            settings_dict=mod_config.settings,
+            settings=settings.get(mod_name),
             display_name=config.display_name,
             allowed_local_paths=config.allowed_local_paths,
         )

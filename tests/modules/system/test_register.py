@@ -37,7 +37,6 @@ def _make_ctx(allowed: set[str] | None = None) -> tuple[MCPServer, MagicMock, Re
         server=server,
         manager=manager,
         allowed_tools=allowed,
-        settings_dict={},
         display_name="test-nas",
     )
     return server, manager, ctx
