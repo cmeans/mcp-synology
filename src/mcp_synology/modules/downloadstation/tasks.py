@@ -60,6 +60,7 @@ _PAUSE_HOLD_BUDGET = 6.0
 # Seconds, to connect and to read, for the calls a pause adds. The client's default of 30 s would
 # put a stalled or unreachable NAS past the roughly 60 s an MCP client waits (pre-QA on #545).
 _PAUSE_READ_TIMEOUT = 5.0
+_IDS_SHOWN_IN_A_LOG_LINE = 20
 _UNDONE = "not paused: it didn't stay paused; pause it again"
 _UNCONFIRMED = "not confirmed paused: couldn't check it; see list_downloads"
 # DSM said no, no answer, or an answer without what DSM always sends. The client's own reply
@@ -105,6 +106,21 @@ def _per_task_rows(results: list[dict[str, Any]]) -> tuple[list[list[str]], list
     return rows, errors
 
 
+def _ids_for_log(task_ids: list[str]) -> str:
+    """Task IDs for a log line. They're caller text, or DSM's echo of it: quoted, so a newline
+    can't forge a line; URLs redacted, since a model may pass one as an ID (spec, Secrets in
+    URLs); and capped, since a list has no limit of its own."""
+    shown = redact_urls(repr(task_ids[:_IDS_SHOWN_IN_A_LOG_LINE]))
+    more = len(task_ids) - _IDS_SHOWN_IN_A_LOG_LINE
+    return f"{shown} and {more:,} more" if more > 0 else shown
+
+
+def _why_it_failed(e: Exception) -> str:
+    """DSM's own error, or only the type of any other: a transport error's text can quote the
+    request, session cookie included, as `_re_authenticate` in the client also allows for."""
+    return repr(e) if isinstance(e, SynologyError) else type(e).__name__
+
+
 async def _read_tasks(
     client: DsmClient,
     task_ids: list[str],
@@ -144,11 +160,10 @@ async def _read_tasks(
             return await read(task_ids)
         except SynologyError as e:
             if e.code in _TASK_NOT_FOUND_CODES and not each_alone:
-                # Caller text, so %r: a newline in it can't forge a log line.
                 logger.info(
-                    "An ID in %r is missing or another user's: no states read, "
+                    "An ID in %s is missing or another user's: no states read, "
                     "so any task paused is watched",
-                    task_ids,
+                    _ids_for_log(task_ids),
                 )
                 return {}
             if e.code not in _TASK_NOT_FOUND_CODES:
@@ -159,7 +174,8 @@ async def _read_tasks(
         for task_id in task_ids:
             if deadline is not None and time.monotonic() > deadline:
                 logger.warning(
-                    "Couldn't read tasks %r: out of time reading them one by one", task_ids
+                    "Couldn't read tasks %s: out of time reading them one by one",
+                    _ids_for_log(task_ids),
                 )
                 return None
             try:
@@ -169,7 +185,7 @@ async def _read_tasks(
                     raise
         return found
     except _READ_FAILED as e:
-        logger.warning("Couldn't read tasks %r: %r", task_ids, e)
+        logger.warning("Couldn't read tasks %s: %s", _ids_for_log(task_ids), _why_it_failed(e))
         return None
 
 
@@ -919,10 +935,14 @@ async def _pause_again(client: DsmClient, task_ids: list[str]) -> None:
         for result in results:
             if result.get("error"):
                 logger.warning(
-                    "Second pause of %s: DSM error %s", result.get("id"), result.get("error")
+                    "Second pause of %s: DSM error %r",
+                    _ids_for_log([str(result.get("id"))]),
+                    result.get("error"),
                 )
     except _READ_FAILED as e:
-        logger.warning("Couldn't pause %s a second time: %r", ",".join(task_ids), e)
+        logger.warning(
+            "Couldn't pause %s a second time: %s", _ids_for_log(task_ids), _why_it_failed(e)
+        )
 
 
 async def _hold_pause(client: DsmClient, task_ids: list[str]) -> bool:
@@ -946,7 +966,9 @@ async def _hold_pause(client: DsmClient, task_ids: list[str]) -> bool:
             client, remaining, read_timeout=_PAUSE_READ_TIMEOUT, deadline=deadline
         )
         if tasks is None:
-            logger.warning("Stopped watching paused tasks %r: couldn't read them", remaining)
+            logger.warning(
+                "Stopped watching paused tasks %s: couldn't read them", _ids_for_log(remaining)
+            )
             return False
         # A task the read leaves out would cost one read per ID on every later check.
         remaining = [t for t in remaining if t in tasks]
@@ -956,7 +978,9 @@ async def _hold_pause(client: DsmClient, task_ids: list[str]) -> bool:
             if t not in paused_again and tasks[t].get("status") == "downloading"
         ]
         if again:
-            logger.info("Pause undone for %s (reads downloading): pausing again", ",".join(again))
+            logger.info(
+                "Pause undone for %s (reads downloading): pausing again", _ids_for_log(again)
+            )
             paused_again.update(again)
             await _pause_again(client, again)
         if not remaining:
@@ -964,8 +988,8 @@ async def _hold_pause(client: DsmClient, task_ids: list[str]) -> bool:
         elapsed = time.monotonic() - start
         if elapsed > _PAUSE_HOLD_BUDGET:
             logger.info(
-                "Stopped watching paused tasks %r: reads are slow, %.1f s after %d check(s)",
-                remaining,
+                "Stopped watching paused tasks %s: reads are slow, %.1f s after %d check(s)",
+                _ids_for_log(remaining),
                 elapsed,
                 check,
             )
@@ -1082,12 +1106,16 @@ async def _task_state_change(
             status = (tasks or {}).get(row[0], {}).get("status")
             if status is not None:
                 row[1] = _not_paused_row(status) or row[1]
-            elif tasks is None and (before or {}).get(row[0], {}).get("status") == "finished":
-                # Finished before the pause, and nothing undoes that (#413).
-                row[1] = "not paused: already finished"
-            elif row[0] in starting:
-                # It may have been undone, with nothing left to say so: not DSM's plain ok.
+            elif tasks is not None or row[0] in starting:
+                # Watched, or the read left it out: it may have been undone or gone, with
+                # nothing left to say so, so not DSM's plain ok.
                 row[1] = _UNCONFIRMED
+            else:
+                # The read failed. What the first read knew still holds for a task past starting:
+                # a task in error or finished wasn't paused (#413). `downloading` keeps DSM's ok.
+                known = (before or {}).get(row[0], {}).get("status")
+                if known not in ("paused", "downloading"):
+                    row[1] = _not_paused_row(known) or row[1]
     return format_table(
         headers=["Task ID", "Result"],
         rows=rows,

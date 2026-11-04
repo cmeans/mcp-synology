@@ -1852,7 +1852,8 @@ class TestInstructionComments:
 # +98 by #243: pause_download says a task still starting takes about 3 s more.
 # +150 by #545 (QA round 1): ... and what its rows ask the model to do next.
 # +73 by #545 (QA round 2): ... and that an id that's missing or another user's costs the same.
-PAYLOAD_BUDGET_CHARS = 57_454
+# +167 by #545 (QA round 3): ... a failed first read too, a slow NAS, and when to stop retrying.
+PAYLOAD_BUDGET_CHARS = 57_621
 
 
 class TestPayloadBudget:

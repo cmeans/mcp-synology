@@ -1918,8 +1918,11 @@ class TestPauseResume:
         with caplog.at_level("INFO", logger=tasks_module.__name__):
             await pause_download(mock_client, task_ids=["dbid_1"])
         messages = [(r.levelname, r.getMessage()) for r in caplog.records]
-        assert ("INFO", "Pause undone for dbid_1 (reads downloading): pausing again") in messages
-        assert ("WARNING", "Second pause of dbid_1: DSM error 405") in messages
+        assert (
+            "INFO",
+            "Pause undone for ['dbid_1'] (reads downloading): pausing again",
+        ) in messages
+        assert ("WARNING", "Second pause of ['dbid_1']: DSM error 405") in messages
 
     @respx.mock
     async def test_a_stopped_watch_is_a_warning(
@@ -1936,7 +1939,144 @@ class TestPauseResume:
         with caplog.at_level("WARNING", logger=tasks_module.__name__):
             await pause_download(mock_client, task_ids=["dbid_1"])
         assert "Stopped watching paused tasks ['dbid_1']: couldn't read them" in caplog.messages
-        assert "Couldn't read tasks ['dbid_1']: ReadTimeout('slow')" in caplog.messages
+        assert "Couldn't read tasks ['dbid_1']: ReadTimeout" in caplog.messages
+
+    @respx.mock
+    async def test_a_transport_errors_text_stays_out_of_the_log(
+        self,
+        mock_client: DsmClient,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """QA round 3 on #545: its text can quote the request, session cookie included."""
+        monkeypatch.setattr(tasks_module, "_PAUSE_HOLD_INTERVAL", 0)
+        get_route(TASK, "pause", version=1).respond(json=ok([{"error": 0, "id": "dbid_1"}]))
+        get_route(TASK, "getinfo", version=1).mock(
+            side_effect=httpx.LocalProtocolError("Illegal header value b'id=SESSIONSECRET'")
+        )
+        with caplog.at_level("INFO", logger=tasks_module.__name__):
+            await pause_download(mock_client, task_ids=["dbid_1"])
+        assert "Couldn't read tasks ['dbid_1']: LocalProtocolError" in caplog.messages
+        assert not [m for m in caplog.messages if "SESSIONSECRET" in m]
+
+    @respx.mock
+    async def test_dsms_own_error_stays_in_the_log(
+        self,
+        mock_client: DsmClient,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """It separates a permissions problem from a timeout at the default log level."""
+        monkeypatch.setattr(tasks_module, "_PAUSE_HOLD_INTERVAL", 0)
+        get_route(TASK, "pause", version=1).respond(json=ok([{"error": 0, "id": "dbid_1"}]))
+        get_route(TASK, "getinfo", version=1).mock(
+            side_effect=[self._statuses("waiting")[0], httpx.Response(200, json=err(105))]
+        )
+        with caplog.at_level("WARNING", logger=tasks_module.__name__):
+            await pause_download(mock_client, task_ids=["dbid_1"])
+        assert any("Error(" in m and m.startswith("Couldn't read tasks") for m in caplog.messages)
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        ("first", "row"),
+        [
+            ("error", "not paused: the task is in error; see list_downloads"),
+            ("finished", "not paused: already finished"),
+            ("seeding", "not confirmed paused: it reads seeding; see list_downloads"),
+            ("downloading", "ok"),
+        ],
+    )
+    async def test_a_failed_last_read_keeps_what_the_first_read_knew(
+        self, mock_client: DsmClient, first: str, row: str
+    ) -> None:
+        """QA round 3 on #545: a task in error read `ok` here, and `in error` when the read worked.
+        `downloading` keeps DSM's ok by design: no pause sent past `waiting` was undone."""
+        get_route(TASK, "pause", version=1).respond(json=ok([{"error": 0, "id": "dbid_1"}]))
+        get_route(TASK, "getinfo", version=1).mock(
+            side_effect=[self._statuses(first)[0], httpx.ReadTimeout("slow")]
+        )
+        result = await pause_download(mock_client, task_ids=["dbid_1"])
+        assert self._rows(result) == {"dbid_1": row}
+
+    @respx.mock
+    async def test_a_task_not_watched_that_the_last_read_leaves_out_isnt_ok(
+        self, mock_client: DsmClient
+    ) -> None:
+        """Deleted during the call: DSM's ok says nothing about it now."""
+        get_route(TASK, "pause", version=1).respond(json=ok([{"error": 0, "id": "dbid_1"}]))
+        get_route(TASK, "getinfo", version=1).mock(
+            side_effect=[self._statuses("downloading")[0], httpx.Response(200, json=err(404))]
+        )
+        result = await pause_download(mock_client, task_ids=["dbid_1"])
+        assert self._rows(result) == {"dbid_1": tasks_module._UNCONFIRMED}
+
+    @respx.mock
+    @pytest.mark.parametrize("failure", ["missing", "transport", "deadline"])
+    async def test_a_url_passed_as_an_id_is_redacted_in_the_log(
+        self,
+        mock_client: DsmClient,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+        failure: str,
+    ) -> None:
+        """QA round 3 on #545: the spec's Secrets in URLs covers log lines, and this one reached
+        the default log. A model can pass a URL, since create_download gives no IDs."""
+        monkeypatch.setattr(tasks_module, "_PAUSE_HOLD_INTERVAL", 0)
+        if failure == "deadline":
+            monkeypatch.setattr(tasks_module, "_PAUSE_HOLD_BUDGET", -1)
+        url = "https://user:hunter2@tr.example/f.torrent?passkey=abc123"
+        get_route(TASK, "pause", version=1).respond(json=ok([{"error": 0, "id": "dbid_1"}]))
+        reply: Any = httpx.ReadTimeout("slow") if failure == "transport" else None
+        get_route(TASK, "getinfo", version=1).mock(
+            side_effect=reply or (lambda _: httpx.Response(200, json=err(404)))
+        )
+        with caplog.at_level("INFO", logger=tasks_module.__name__):
+            await pause_download(mock_client, task_ids=[url, "dbid_1"])
+        assert any("tr.example" in m for m in caplog.messages)
+        assert not [m for m in caplog.messages if "hunter2" in m or "abc123" in m]
+
+    @respx.mock
+    async def test_a_newline_in_an_id_dsm_echoes_cant_forge_a_log_line(
+        self,
+        mock_client: DsmClient,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        monkeypatch.setattr(tasks_module, "_PAUSE_HOLD_INTERVAL", 0)
+        forged = "A\nERROR forged"
+        get_route(TASK, "pause", version=1).respond(json=ok([{"error": 0, "id": forged}]))
+        statuses = iter(["waiting", "downloading"])
+
+        def answer(_: httpx.Request) -> httpx.Response:
+            status = next(statuses, "paused")
+            return httpx.Response(200, json=ok({"tasks": [{"id": forged, "status": status}]}))
+
+        get_route(TASK, "getinfo", version=1).mock(side_effect=answer)
+        with caplog.at_level("INFO", logger=tasks_module.__name__):
+            await pause_download(mock_client, task_ids=[forged])
+        assert any("Pause undone" in m for m in caplog.messages)
+        assert not [m for m in caplog.messages if "\n" in m]
+
+    @respx.mock
+    async def test_a_long_list_is_capped_in_a_log_line(
+        self,
+        mock_client: DsmClient,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        monkeypatch.setattr(tasks_module, "_PAUSE_HOLD_INTERVAL", 0)
+        ids = [f"dbid_{n}" for n in range(30)]
+        get_route(TASK, "pause", version=1).respond(json=err(101))
+        get_route(TASK, "getinfo", version=1).respond(json=err(404))
+        with (
+            caplog.at_level("INFO", logger=tasks_module.__name__),
+            pytest.raises(ToolError),
+        ):
+            await pause_download(mock_client, task_ids=ids)
+        line = next(m for m in caplog.messages if m.startswith("An ID in"))
+        assert "dbid_19" in line
+        assert "dbid_20" not in line
+        assert "and 10 more" in line
 
     @staticmethod
     def _statuses(*statuses: str) -> list[httpx.Response]:

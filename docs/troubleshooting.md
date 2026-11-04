@@ -136,10 +136,10 @@ no second copy (seen on DSM 7.1.1, #220).
 resumed one about 2 s, on DSM 7.1 and 7.2.2 (idle vdsm, probed 2026-10-19; #208, #243). Resume
 took effect at once there: `list_downloads` and `get_download_info` showed the new state on the
 next call. Pausing a task that's still `waiting` takes about 3 s more, because Download Station
-can undo that pause, so `pause_download` checks it and pauses again if needed (#243). A list with
-an ID that's missing or another user's takes the same 3 s, since the call can't then tell which
-tasks are starting. A BitTorrent or magnet task can stay in `waiting` much
-longer, until it finds peers.
+can undo that pause, so `pause_download` checks it and pauses again if needed (#243). A slow NAS
+takes longer. A list with an ID that's missing or another user's takes the same 3 s, since the
+call can't then tell which tasks are starting, unless none of them can be paused: that call fails
+at once. A BitTorrent or magnet task can stay in `waiting` much longer, until it finds peers.
 
 **What to do:** nothing; check again after a few seconds. A task still in `waiting` after
 minutes can have another cause, such as the one below.
@@ -193,11 +193,13 @@ and 7.2.2, #136, #146). With at least one pausable ID, the others are refused on
 such a task for about 3 s and pauses it once more if it starts, then reports what it last read.
 
 **What to do:**
-- `pause it again`: call `pause_download` again. If the task has paused by then, that call can
-  fail with `invalid_parameter` (above), which means there's nothing left to pause.
+- `pause it again`: call `pause_download` once more. If the task has paused by then, that call
+  can fail with `invalid_parameter` (above), which means there's nothing left to pause. If the task
+  still doesn't hold, stop and check it in Download Station.
 - `see list_downloads`: check the task's status there. `not confirmed paused: couldn't check it`
   means the NAS didn't answer in time or gave an error, or the task is gone, so the pause may or
-  may not have held.
+  may not have held. These checks wait at most 5 s for each answer, so the reply beats an MCP
+  client's limit, and raising `connection.timeout` doesn't change that.
 
 ### `create_download` returns no task IDs
 
