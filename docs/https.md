@@ -51,7 +51,8 @@ work. mcp-synology runs on your machine and only needs to reach the NAS on your 
 ## Checking it
 
 `mcp-synology check` connects with the settings in the file, so a certificate that doesn't
-verify fails there, with the reason. Without HTTPS, the server's log says:
+verify fails there, with the reason. Without HTTPS, the server prints this on stderr at any log
+level, `SYNOLOGY_LOG_LEVEL=error` included (it doesn't go to `logging.file`):
 
 ```
 HTTPS is disabled. Credentials will be sent in cleartext. Acceptable on a trusted LAN; to turn it on, see https://github.com/cmeans/mcp-synology/blob/main/docs/https.md

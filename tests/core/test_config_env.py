@@ -8,7 +8,10 @@ default. A config file named by ``MCP_SYNOLOGY_CONFIG`` must exist.
 from __future__ import annotations
 
 import logging
+import os
 import re
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +21,7 @@ import yaml
 from mcp_synology.core.config import (
     ENV_VAR_MAP,
     EnvVarError,
+    _as_compared,
     load_config,
     parse_env_value,
 )
@@ -600,3 +604,354 @@ def test_a_not_found_path_is_quoted_so_a_stray_character_shows(
     with pytest.raises(FileNotFoundError) as excinfo:
         load_config()
     assert repr(str(tmp_path / "c.yaml") + "\r") in str(excinfo.value)
+
+
+# -- #533: an env override of the file's connection settings is never silent ------------
+
+CONFIG_LOGGER = "mcp_synology.core.config"
+
+
+class _Lines(logging.Handler):
+    """A handler at NOTSET, as basicConfig's: the logger's own level does the filtering."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
+
+    def messages(self, level: int = logging.WARNING) -> list[str]:
+        return [r.getMessage() for r in self.records if r.levelno == level]
+
+
+@pytest.fixture
+def at_error() -> Any:
+    """The config logger at ERROR, as `SYNOLOGY_LOG_LEVEL=error` leaves it."""
+    log = logging.getLogger(CONFIG_LOGGER)
+    handler = _Lines()
+    old_level, old_propagate = log.level, log.propagate
+    log.addHandler(handler)
+    log.setLevel(logging.ERROR)
+    log.propagate = False
+    yield handler
+    log.removeHandler(handler)
+    log.setLevel(old_level)
+    log.propagate = old_propagate
+
+
+def _file(tmp_path: Path, *, instance_id: str | None = None, **connection: Any) -> Path:
+    path = tmp_path / "config.yaml"
+    raw: dict[str, Any] = {
+        "schema_version": 1,
+        "connection": {"host": "nas.example", **connection},
+        "modules": {"filestation": {"enabled": True}},
+    }
+    if instance_id is not None:
+        raw["instance_id"] = instance_id
+    path.write_text(yaml.safe_dump(raw))
+    return path
+
+
+def _override(var: str, path: str) -> str:
+    return f"{var} overrides {path} from the config file. Unset {var} if that isn't intended."
+
+
+@pytest.mark.parametrize(
+    ("var", "value", "dotted", "file_settings"),
+    [
+        ("SYNOLOGY_HOST", "other.example", "connection.host", {}),
+        ("SYNOLOGY_PORT", "5002", "connection.port", {"port": 5001}),
+        ("SYNOLOGY_HTTPS", "yes", "connection.https", {"https": False}),
+        ("SYNOLOGY_INSTANCE_ID", "other-nas", "instance_id", {"instance_id": "home-nas"}),
+    ],
+)
+def test_an_override_of_the_files_setting_warns_at_any_level(
+    var: str,
+    value: str,
+    dotted: str,
+    file_settings: dict[str, Any],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    at_error: _Lines,
+) -> None:
+    settings = dict(file_settings)
+    instance_id = settings.pop("instance_id", None)
+    path = _file(tmp_path, instance_id=instance_id, **settings)
+    monkeypatch.setenv(var, value)
+    load_config(str(path))
+    warnings = at_error.messages()
+    assert _override(var, dotted) in warnings
+    assert all(value not in w for w in warnings)
+
+
+_OVERRIDES_DERIVED_ID = (
+    "SYNOLOGY_INSTANCE_ID overrides the instance_id the config file's host gives. "
+    "Unset SYNOLOGY_INSTANCE_ID if that isn't intended."
+)
+
+
+def test_an_override_of_the_derived_instance_id_says_where_it_comes_from(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, at_error: _Lines
+) -> None:
+    """No instance_id in the file: it's derived from the host ("nas"), the variable picks
+    another keyring entry, and the warning doesn't send anyone looking for the key."""
+    monkeypatch.setenv("SYNOLOGY_INSTANCE_ID", "other-nas")
+    load_config(str(_file(tmp_path)))
+    warnings = at_error.messages()
+    assert _OVERRIDES_DERIVED_ID in warnings
+    assert all("other-nas" not in w for w in warnings)
+
+
+@pytest.mark.parametrize(
+    ("var", "value", "file_settings"),
+    [
+        ("SYNOLOGY_HOST", "nas.example", {}),  # the file's own value
+        ("SYNOLOGY_HTTPS", "on", {"https": True}),  # the same, in another spelling
+        ("SYNOLOGY_PORT", "5002", {}),  # the file doesn't set it
+        ("SYNOLOGY_INSTANCE_ID", "nas", {}),  # the ID the file's host gives
+        ("SYNOLOGY_LOG_LEVEL", "error", {}),  # not a connection setting
+        # The same value in another form (pre-QA on #533): the instance ID is lowered,
+        # DNS ignores a host's case, and pydantic reads a text port as the number.
+        ("SYNOLOGY_INSTANCE_ID", "home-nas", {"instance_id": "Home-NAS"}),
+        ("SYNOLOGY_HOST", "nas.example", {"host": "NAS.example"}),
+        ("SYNOLOGY_PORT", "5001", {"port": "5001"}),
+        # The spellings the config treats as the same (QA round 1 on #535): the file's
+        # value goes through the field's own type, and a host is compared as httpx sends it.
+        ("SYNOLOGY_HTTPS", "true", {"https": "on"}),
+        ("SYNOLOGY_HTTPS", "true", {"https": "yes"}),
+        ("SYNOLOGY_HTTPS", "true", {"https": 1}),
+        ("SYNOLOGY_HTTPS", "off", {"https": "no"}),
+        ("SYNOLOGY_PORT", "5001", {"port": " 5001 "}),
+        ("SYNOLOGY_HOST", "xn--bcher-kva.example", {"host": "b\u00fccher.example"}),
+        (
+            "SYNOLOGY_HOST",
+            "b\u00fccher.example",
+            {"host": "xn--bcher-kva.example", "instance_id": "home-nas"},
+        ),
+        (
+            "SYNOLOGY_HOST",
+            "B\u00dcCHER.example",
+            {"host": "XN--BCHER-KVA.example", "instance_id": "home-nas"},
+        ),
+        ("SYNOLOGY_HOST", "nas.example", {"host": "nas\uff0eexample"}),  # IDNA's dot
+        ("SYNOLOGY_HOST", "[fe80::1]", {"host": "[FE80::1]", "instance_id": "home-nas"}),
+        # An IPv4-mapped address has dots (QA round 2 on #535).
+        (
+            "SYNOLOGY_HOST",
+            "[::ffff:1.2.3.4]",
+            {"host": "[::FFFF:1.2.3.4]", "instance_id": "home-nas"},
+        ),
+    ],
+)
+def test_no_override_warning_when_nothing_the_file_sets_changes(
+    var: str,
+    value: str,
+    file_settings: dict[str, Any],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    at_error: _Lines,
+) -> None:
+    monkeypatch.setenv(var, value)
+    load_config(str(_file(tmp_path, **file_settings)))
+    assert not [w for w in at_error.messages() if "overrides" in w]
+
+
+@pytest.mark.parametrize(
+    ("var", "value", "dotted", "file_settings"),
+    [
+        ("SYNOLOGY_HTTPS", "on", "connection.https", {"https": "off"}),
+        # A file value its field refuses is compared as written: it can't equal anything.
+        ("SYNOLOGY_HTTPS", "on", "connection.https", {"https": "maybe"}),
+        ("SYNOLOGY_PORT", "5001", "connection.port", {"port": "nope"}),
+        # Reading these as a URL would leave just `nas.example`, hiding the change.
+        ("SYNOLOGY_HOST", "nas.example", "connection.host", {"host": "admin@nas.example"}),
+        ("SYNOLOGY_HOST", "nas.example", "connection.host", {"host": "nas.example:5001"}),
+        ("SYNOLOGY_HOST", "nas.example", "connection.host", {"host": "nas.example/x"}),
+        ("SYNOLOGY_HOST", "admin@nas.example", "connection.host", {"host": "nas.example"}),
+        # The URL the client builds keeps these apart: another user, another path, and
+        # a bare IPv6 address that isn't valid in a URL (pre-QA r2 on #535).
+        ("SYNOLOGY_HOST", "ADMIN@nas.example", "connection.host", {"host": "admin@nas.example"}),
+        ("SYNOLOGY_HOST", "nas.example/DSM", "connection.host", {"host": "nas.example/dsm"}),
+        ("SYNOLOGY_HOST", "nas%2Fx", "connection.host", {"host": "nas/x"}),
+        ("SYNOLOGY_HOST", "::1", "connection.host", {"host": "[::1]"}),
+        # Only an address ignores case: what follows `[` may not be one.
+        ("SYNOLOGY_HOST", "[::1]/DSM", "connection.host", {"host": "[::1]/dsm"}),
+        ("SYNOLOGY_HOST", "[ADMIN:PW]@nas", "connection.host", {"host": "[admin:pw]@nas"}),
+        ("SYNOLOGY_HOST", "[fe80::1%25ETH0]", "connection.host", {"host": "[fe80::1%25eth0]"}),
+        # A name httpx refuses stays as written, its case included.
+        ("SYNOLOGY_HOST", "\uff2eas.example", "connection.host", {"host": "\uff4eas.example"}),
+        # Look-alikes are other hosts: Cyrillic a, and a name IDNA refuses.
+        ("SYNOLOGY_HOST", "n\u0430s.example", "connection.host", {"host": "nas.example"}),
+        ("SYNOLOGY_HOST", "nas.example", "connection.host", {"host": "\uff4eas.example"}),
+        (
+            "SYNOLOGY_HOST",
+            "xn--bcher-kvb.example",
+            "connection.host",
+            {"host": "b\u00fccher.example"},
+        ),
+    ],
+)
+def test_a_different_value_still_warns(
+    var: str,
+    value: str,
+    dotted: str,
+    file_settings: dict[str, Any],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    at_error: _Lines,
+) -> None:
+    monkeypatch.setenv(var, value)
+    # A set instance ID: an odd host derives none the config would accept.
+    load_config(str(_file(tmp_path, instance_id="home-nas", **file_settings)))
+    assert _override(var, dotted) in at_error.messages()
+
+
+@pytest.mark.parametrize(
+    ("value", "file_host"),
+    [
+        ("[::1]", "[0:0:0:0:0:0:0:1]"),
+        ("NAS.example:5001", "nas.example:5001"),
+    ],
+)
+def test_the_same_destination_written_another_way_warns(
+    value: str,
+    file_host: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    at_error: _Lines,
+) -> None:
+    """Outside a host name and a whole bracketed address, hosts compare as written, so
+    these warn though they reach the same place. A false alarm is the safe side."""
+    monkeypatch.setenv("SYNOLOGY_HOST", value)
+    load_config(str(_file(tmp_path, instance_id="home-nas", host=file_host)))
+    assert _override("SYNOLOGY_HOST", "connection.host") in at_error.messages()
+
+
+@pytest.mark.parametrize(("value", "warns"), [("other", True), ("nas", False)])
+def test_a_binary_host_derives_the_instance_id_the_config_uses(
+    value: str,
+    warns: bool,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    at_error: _Lines,
+) -> None:
+    """`host: !!binary bmFz` loads as `nas`, so its derived ID counts as set (QA round 2
+    on #535: the variable used to change the keyring entry with no warning)."""
+    config = tmp_path / "binary.yaml"
+    config.write_text(
+        "schema_version: 1\n"
+        "connection:\n  host: !!binary bmFz\n"
+        "modules:\n  filestation:\n    enabled: true\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SYNOLOGY_INSTANCE_ID", value)
+    assert load_config(str(config)).instance_id == value
+    assert (_OVERRIDES_DERIVED_ID in at_error.messages()) is warns
+
+
+def test_only_the_instance_id_ignores_case_among_text_settings() -> None:
+    assert _as_compared("instance_id", "Home-NAS") == "home-nas"
+    assert _as_compared("auth.username", "Admin") == "Admin"
+
+
+def test_the_real_logging_setup_shows_the_warnings_at_error(tmp_path: Path) -> None:
+    """#533's repro through the CLI's own logging setup, not a test handler."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("SYNOLOGY_", "MCP_SYNOLOGY_"))}
+    env.update(
+        HOME=str(tmp_path),
+        SYNOLOGY_LOG_LEVEL="error",
+        SYNOLOGY_HTTPS="off",
+        PYTHONIOENCODING="utf-8",
+    )
+    script = (
+        "import sys\n"
+        "from mcp_synology.cli.logging_ import _init_early_logging\n"
+        "from mcp_synology.core.config import load_config\n"
+        "_init_early_logging()\n"
+        "load_config(sys.argv[1])\n"
+    )
+    done = subprocess.run(
+        [sys.executable, "-c", script, str(_file(tmp_path, https=True))],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert done.returncode == 0, done.stderr
+    assert _override("SYNOLOGY_HTTPS", "connection.https") in done.stderr
+    assert "HTTPS is disabled. Credentials will be sent in cleartext." in done.stderr
+
+
+def test_env_only_mode_has_no_override_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, at_error: _Lines
+) -> None:
+    # Every value comes from the environment, so there's nothing to override.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SYNOLOGY_HOST", "nas.example")
+    monkeypatch.setenv("SYNOLOGY_INSTANCE_ID", "other-nas")
+    monkeypatch.setenv("SYNOLOGY_HTTPS", "on")
+    load_config()
+    assert not [w for w in at_error.messages() if "overrides" in w]
+
+
+def test_https_turned_off_by_a_variable_is_never_silent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, at_error: _Lines
+) -> None:
+    """#533's repro: SYNOLOGY_HTTPS=off with SYNOLOGY_LOG_LEVEL=error printed nothing."""
+    monkeypatch.setenv("SYNOLOGY_HTTPS", "off")
+    load_config(str(_file(tmp_path, https=True)))
+    warnings = at_error.messages()
+    assert _override("SYNOLOGY_HTTPS", "connection.https") in warnings
+    assert any(
+        w.startswith("HTTPS is disabled. Credentials will be sent in cleartext.") for w in warnings
+    )
+
+
+@pytest.mark.parametrize(
+    ("settings", "start"),
+    [
+        ({"https": False}, "HTTPS is disabled."),
+        ({"https": True, "verify_ssl": False}, "SSL certificate verification is disabled."),
+    ],
+)
+def test_transport_warnings_show_at_any_level(
+    settings: dict[str, Any], start: str, tmp_path: Path, at_error: _Lines
+) -> None:
+    load_config(str(_file(tmp_path, **settings)))
+    assert [w for w in at_error.messages() if w.startswith(start)]
+
+
+@pytest.mark.parametrize("from_env", [False, True])
+def test_password_warnings_show_at_any_level(
+    from_env: bool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, at_error: _Lines
+) -> None:
+    """Pre-QA on #533: the plaintext-password warnings were still hidden at ERROR."""
+    path = tmp_path / "config.yaml"
+    raw: dict[str, Any] = {
+        "schema_version": 1,
+        "connection": {"host": "nas.example", "https": True},
+        "auth": {"username": "u"},
+        "modules": {"filestation": {"enabled": True}},
+    }
+    if from_env:
+        monkeypatch.setenv("SYNOLOGY_PASSWORD", "Hunter2x")
+        start = "Password provided via the SYNOLOGY_PASSWORD environment variable."
+    else:
+        raw["auth"]["password"] = "Hunter2x"
+        start = "Plaintext password found in config file."
+    path.write_text(yaml.safe_dump(raw))
+    load_config(str(path))
+    assert [w for w in at_error.messages() if w.startswith(start)]
+
+
+def test_an_override_warns_once_at_the_default_level(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("SYNOLOGY_HOST", "other.example")
+    with caplog.at_level(logging.INFO, logger=CONFIG_LOGGER):
+        load_config(str(_file(tmp_path)))
+    records = [r for r in caplog.records if "overrides" in r.getMessage()]
+    assert len(records) == 1
+    assert records[0].levelno == logging.WARNING

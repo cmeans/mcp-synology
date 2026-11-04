@@ -730,13 +730,105 @@ def parse_env_value(env_var: str, dotted_path: str, value: str) -> Any:
         ) from None
 
 
-def _merge_env_overrides(raw: dict[str, Any]) -> dict[str, Any]:
+def _warn_always(msg: str) -> None:
+    """Log ``msg`` as a WARNING even when the log level would hide it (#533).
+
+    For security warnings only: `SYNOLOGY_LOG_LEVEL=error` used to hide that HTTPS was
+    off, so `SYNOLOGY_HTTPS=off` turned it off without a word. `Logger.handle` skips the
+    level check, so the record still goes through the handlers in the usual format:
+    while the config loads, where these are logged, that's stderr only (`logging.file`
+    is set up after the load).
+    """
+    if logger.isEnabledFor(logging.WARNING):
+        logger.warning(msg)
+    else:
+        logger.handle(
+            logger.makeRecord(logger.name, logging.WARNING, "(unknown file)", 0, msg, (), None)
+        )
+
+
+# Settings an env var mustn't change silently over the config file's own value: they
+# say which NAS the credentials go to, how, and which keyring entry holds them (#533).
+_WATCHED_OVERRIDES = ("connection.host", "connection.port", "connection.https", "instance_id")
+
+
+def _file_value(raw: dict[str, Any], dotted_path: str) -> Any:
+    """The value the config file sets at ``dotted_path``, or None."""
+    target: Any = raw
+    for part in dotted_path.split("."):
+        if not isinstance(target, dict):
+            return None
+        target = target.get(part)
+    return target
+
+
+# Only an address: `[::1]/x`, `[a:b]@nas` or a zone (`[fe80::1%25eth0]`) can differ by case.
+_BRACKETED_ADDRESS = re.compile(r"\[[0-9A-Fa-f:.]+\]")
+
+
+def _as_field_reads(dotted_path: str, value: Any) -> Any:
+    """``value`` through the field's own type, or as written if the field refuses it."""
+    try:
+        return TypeAdapter(_env_field_annotation(dotted_path)).validate_python(value)
+    except ValidationError:
+        return value
+
+
+def _as_compared(dotted_path: str, value: Any) -> Any:
+    """``value`` as the loaded config would use it, for the override check.
+
+    It goes through the field's own type, so every spelling pydantic accepts in the file
+    compares equal (`https: 'on'`, `port: "5001"`; QA round 1 on #535). A value the field
+    refuses stays as written, so it differs: validation reports it unless the variable
+    replaces it. An instance ID is lowered, as the config does.
+
+    A host name is compared as httpx sends it: lower-case, IDNA-mapped (`bücher.example`
+    is `xn--bcher-kva.example`). A bracketed IPv6 address only ignores case. Anything else
+    stays as written, so it differs: the client puts the host into a URL, where `A@nas`
+    and `a@nas` are other users, `nas/X` and `nas/x` other paths, and `::1` is no address
+    at all. A `:` is told apart before httpx, whose `URL(host=)` brackets a bare `::1`.
+    `@` and `/` are told apart after it, by the `%` its escaping leaves in the lowered
+    host. httpx doesn't document that escaping and `httpx>=0.27` has no upper bound, so
+    `test_a_different_value_still_warns` pins it. Never read a host from a URL string,
+    where `admin@nas` or `nas:5001` is just `nas`, which would hide the change.
+    """
+    typed = _as_field_reads(dotted_path, value)
+    if not isinstance(typed, str):
+        return typed
+    if dotted_path == "connection.host":
+        if ":" in typed:
+            return typed.lower() if _BRACKETED_ADDRESS.fullmatch(typed) else typed
+        try:
+            sent = httpx.URL(scheme="https", host=typed).raw_host.decode("ascii")
+        except httpx.InvalidURL:
+            return typed
+        return typed if "%" in sent else sent
+    return typed.lower() if dotted_path == "instance_id" else typed
+
+
+def _merge_env_overrides(raw: dict[str, Any], *, from_file: bool = False) -> dict[str, Any]:
     """Merge environment variable overrides into the raw config dict.
 
     An empty (or blank) variable counts as unset, as the credentials already did
     (`auth.resolve_credentials`): `SYNOLOGY_HTTPS=` leaves the config's `https` alone
     instead of turning it off.
+
+    With ``from_file``, a variable that changes a connection setting or the instance
+    ID the file sets (or, for the instance ID, derives from its host) gets a WARNING
+    that a log level can't hide, naming the variable, never the value (#533). It used
+    to be DEBUG only, so `SYNOLOGY_HOST` sent the file's keyring credentials to another
+    host without a word.
     """
+    before: dict[str, Any] = {}
+    id_is_derived = False
+    if from_file:
+        before = {path: _file_value(raw, path) for path in _WATCHED_OVERRIDES}
+        # As the field reads it: `host: !!binary bmFz` is `nas`, and derives its ID.
+        file_host = _as_field_reads("connection.host", before["connection.host"])
+        if before["instance_id"] is None and isinstance(file_host, str) and file_host:
+            before["instance_id"] = _derive_instance_id(file_host)
+            id_is_derived = True
+
     for env_var, dotted_path in ENV_VAR_MAP.items():
         value = os.environ.get(env_var)
         if value is None or not value.strip():
@@ -744,6 +836,20 @@ def _merge_env_overrides(raw: dict[str, Any]) -> dict[str, Any]:
 
         logger.debug("Env override: %s -> %s", env_var, dotted_path)
         parsed = parse_env_value(env_var, dotted_path, value)
+        file_value = before.get(dotted_path)
+        if file_value is not None and _as_compared(dotted_path, file_value) != _as_compared(
+            dotted_path, parsed
+        ):
+            # A file with no `instance_id` key: someone checking it would find no such
+            # setting (pre-QA r4 on #535).
+            overridden = (
+                "the instance_id the config file's host gives"
+                if id_is_derived and dotted_path == "instance_id"
+                else f"{dotted_path} from the config file"
+            )
+            _warn_always(
+                f"{env_var} overrides {overridden}. Unset {env_var} if that isn't intended."
+            )
         parts = dotted_path.split(".")
         target = raw
         for part in parts[:-1]:
@@ -761,31 +867,34 @@ def _emit_warnings(config: AppConfig) -> None:
     """Emit warnings for insecure or unusual config."""
     # A username alone isn't a secret (keyring password + config username is the
     # recommended setup), so only a password triggers the warning (#167).
+    # At any log level, as the transport warnings below (pre-QA on #533).
     if config.auth.password:
         # Blank counts as unset (_merge_env_overrides): the password is then the file's.
         if (os.environ.get("SYNOLOGY_PASSWORD") or "").strip():
-            logger.warning(
+            _warn_always(
                 "Password provided via the SYNOLOGY_PASSWORD environment variable. "
-                "Consider using 'mcp-synology setup' to store them securely in the OS keyring."
+                "Consider using 'mcp-synology setup' to store them securely in the OS keyring.",
             )
         else:
-            logger.warning(
+            _warn_always(
                 "Plaintext password found in config file. "
-                "Use 'mcp-synology setup' to store credentials securely in the OS keyring."
+                "Use 'mcp-synology setup' to store credentials securely in the OS keyring.",
             )
 
     conn = config.connection
     if conn is not None:
+        # WARNINGs, as the risk warrants (#193), shown at any log level: at
+        # SYNOLOGY_LOG_LEVEL=error, `SYNOLOGY_HTTPS=off` used to turn HTTPS off with no
+        # output at all (#533).
         if not conn.https:
-            # A WARNING, as the risk warrants; it also survives SYNOLOGY_LOG_LEVEL=warning (#193).
-            logger.warning(
+            _warn_always(
                 "HTTPS is disabled. Credentials will be sent in cleartext. "
-                "Acceptable on a trusted LAN; to turn it on, see https://github.com/cmeans/mcp-synology/blob/main/docs/https.md"
+                "Acceptable on a trusted LAN; to turn it on, see https://github.com/cmeans/mcp-synology/blob/main/docs/https.md",
             )
         if conn.https and not conn.verify_ssl:
-            logger.warning(
+            _warn_always(
                 "SSL certificate verification is disabled. "
-                "Only use this on trusted networks with self-signed certificates."
+                "Only use this on trusted networks with self-signed certificates.",
             )
 
     for name, mod in config.modules.items():
@@ -1289,7 +1398,7 @@ def load_config(path: str | Path | None = None) -> AppConfig:
             "(schema_version: 1, connection: ...)"
         )
 
-    raw = _merge_env_overrides(raw)
+    raw = _merge_env_overrides(raw, from_file=True)
 
     config = AppConfig.model_validate(raw)
 
