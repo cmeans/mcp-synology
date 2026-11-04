@@ -101,7 +101,7 @@ jobs:
           deps_json = os.environ.get("DEPS_JSON") or "[]"
           # Prefer the named Dependabot group (matches PR title:
           # "Bump the <group> group across N directories with M updates").
-          # Fall back to the ecosystem identifier (pip / github-actions / ...).
+          # Fall back to the ecosystem identifier (uv / github-actions / ...).
           group = (os.environ.get("DEPENDENCY_GROUP") or "").strip()
           ecosystem = (os.environ.get("ECOSYSTEM") or "deps").strip()
           label = group if group else ecosystem
