@@ -117,6 +117,8 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
     "Topic :: System :: Systems Administration",
 ]
 dependencies = [
@@ -277,7 +279,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.11", "3.12", "3.13"]
+        python-version: ["3.11", "3.12", "3.13", "3.14", "3.15"]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
@@ -293,7 +295,7 @@ jobs:
 
 **CI Notes:**
 - Three parallel jobs: lint, typecheck, test. Fast feedback — failures are independent.
-- Test matrix: Python 3.11, 3.12, 3.13.
+- Test matrix: Python 3.11 to 3.15.
 - `uv` for CI via `astral-sh/setup-uv` — faster than pip.
 - Coverage collected on 3.12, uploaded to Codecov. Not a hard gate initially — just visibility.
 - Integration tests excluded by default (`addopts = "-m 'not integration'"` in pyproject.toml).
