@@ -353,7 +353,7 @@ class TestSetupInteractive:
             result = runner.invoke(
                 main,
                 ["setup"],
-                input="192.168.1.50\nn\nread\n\nadmin\npassword\ny\n",
+                input="192.168.1.50\nn\n\nread\n\nadmin\npassword\ny\n",
             )
 
         assert "Let's create one" in result.output
@@ -383,7 +383,7 @@ class TestSetupInteractive:
             result = runner.invoke(
                 main,
                 ["setup"],
-                input="192.168.1.50\nn\nread\n\nadmin\npassword\nn\n",
+                input="192.168.1.50\nn\n\nread\n\nadmin\npassword\nn\n",
             )
 
         assert "Aborted" in result.output
@@ -411,8 +411,9 @@ class TestSetupInteractive:
             result = runner.invoke(
                 main,
                 ["setup"],
-                # host, https(y), permission(write), alias(MyNAS), verify_ssl(n), username, password
-                input="nas.local\ny\nwrite\nMyNAS\nn\nadmin\npassword\n",
+                # host, https(y), port (default), permission(write), alias(MyNAS),
+                # verify_ssl(n), username, password
+                input="nas.local\ny\n\nwrite\nMyNAS\nn\nadmin\npassword\n",
             )
 
         assert result.exit_code == 0, result.output
@@ -446,7 +447,7 @@ class TestSetupInteractive:
             result = runner.invoke(
                 main,
                 ["setup"],
-                input=f"nas.local\n{answer}\nread\n\n{verify}admin\npassword\n",
+                input=f"nas.local\n{answer}\n\nread\n\n{verify}admin\npassword\n",
             )
         assert result.exit_code == 0, result.output
         import yaml
@@ -480,7 +481,7 @@ class TestSetupInteractive:
             result = runner.invoke(
                 main,
                 ["setup"],
-                input="192.168.1.50\nn\nread\n\nadmin\npassword\n",
+                input="192.168.1.50\nn\n\nread\n\nadmin\npassword\n",
             )
 
         assert result.exit_code == 0
@@ -508,7 +509,7 @@ class TestSetupInteractive:
             result = runner.invoke(
                 main,
                 ["setup"],
-                input="192.168.1.50\nn\nread\n\nadmin\npassword\n",
+                input="192.168.1.50\nn\n\nread\n\nadmin\npassword\n",
             )
 
         assert result.exit_code == 0
@@ -618,7 +619,7 @@ class TestEmitClaudeDesktopSnippet:
             result = runner.invoke(
                 main,
                 ["setup"],
-                input="192.168.1.50\nn\nread\n\nadmin\npassword\n",
+                input="192.168.1.50\nn\n\nread\n\nadmin\npassword\n",
             )
 
         assert result.exit_code == 0
@@ -646,7 +647,7 @@ class TestEmitClaudeDesktopSnippet:
             result = runner.invoke(
                 main,
                 ["setup"],
-                input="192.168.1.50\nn\nread\n\nadmin\npassword\n",
+                input="192.168.1.50\nn\n\nread\n\nadmin\npassword\n",
             )
 
         assert result.exit_code == 0

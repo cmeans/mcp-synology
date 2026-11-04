@@ -181,7 +181,7 @@ Two required sections:
   validated external input (config, API responses).
 - Async throughout — all DSM API calls and tool handlers are async.
 - Use `httpx` (async) for HTTP, never `requests`. Mock with `respx`.
-- Use `yaml.safe_load`, never `yaml.load`.
+- Always load YAML with a SafeLoader: `yaml.safe_load`, or `parse_config_text` for a config file (its loader subclasses SafeLoader to refuse repeated keys). Never `yaml.load` with any other loader.
 - Ruff: line length 100, rules `E/F/W/I/N/UP/B/SIM/TCH`.
 - All tool output goes through shared formatters in
   `core/formatting.py` — never format strings inline in tool handlers.

@@ -122,7 +122,7 @@ classifiers = [
 dependencies = [
     "mcp>=2.3,<3",            # Official MCP Python SDK 2.x (MCPServer)
     "httpx>=0.27",             # Async HTTP client for DSM API calls
-    "pyyaml>=6.0",             # YAML config parsing (safe_load only)
+    "pyyaml>=6.0",             # YAML config parsing (a SafeLoader only)
     "keyring>=25.0",           # OS-native credential storage
     "pydantic>=2.0",           # Config and settings validation
     "click>=8.0",              # CLI framework (serve, setup, check)
@@ -186,7 +186,7 @@ addopts = "-m 'not integration'"
 - **`httpx>=0.27`**: Async HTTP client. Used by the DSM API client for all NAS communication. Cleaner API than `aiohttp`, better testing story via `respx`.
 - **`keyring>=25.0`**: OS-native credential storage. Auto-detects macOS Keychain, Windows Credential Manager, or Linux Secret Service.
 - **`pydantic>=2.0`**: Config validation, module settings schemas, type coercion.
-- **`pyyaml>=6.0`**: Config file parsing. Always `yaml.safe_load()` — never `yaml.load()`.
+- **`pyyaml>=6.0`**: Config file parsing. Always a SafeLoader: `yaml.safe_load()`, or `core/config.py` `parse_config_text` for config files (a SafeLoader subclass that refuses repeated keys, #464) — never `yaml.load()` with any other loader.
 - **`click>=8.0`**: CLI framework. Three subcommands: `serve` (MCP server mode), `setup` (interactive credential bootstrap), `check` (validate credentials). Click handles prompts, password masking, and colored output for the interactive `setup` flow — things that would be tedious with argparse.
 - **`regex>=2026.9.29`**: Unicode properties the standard library lacks or has only in an old version: `Default_Ignorable_Code_Point`, joining type, combining class, Indic syllabic category, emoji properties and scripts, for File Station's rules on the names a tool creates (#515). Python 3.11's `unicodedata` is Unicode 14. Which names are refused follows the Unicode data of the installed `regex` (from 2024.11.6 to 2026.9.29, `Extended_Pictographic` lost 707 characters such as ★), so the floor is the version the tests run against, and `test_helpers.py` pins a case that changed. The repeated-mark check's NFD takes combining classes from `regex` too, and decompositions from `unicodedata` up to Python 3.11's Unicode (14.0; they never change once a character is assigned) and from the generated `filestation/decompositions.py` for every character assigned since, so its verdict is the same on every Python. Raise the floor and the data together: regenerate `filestation/standardized_variants.py` (`scripts/gen_standardized_variants.py`, from StandardizedVariants.txt and emoji-variation-sequences.txt) and `filestation/decompositions.py` (`scripts/gen_decompositions.py`, from UnicodeData.txt and DerivedAge.txt) from the Unicode version of the new floor's data. `regex` doesn't report that version: its release notes name it, and the header of `standardized_variants.py` records the one in use (18.0.0). It ships wheels for every platform. Its stubs, `types-regex`, are a dev dependency.
 - **`respx>=0.22`** (dev): httpx-native mock library. Much cleaner than `unittest.mock.patch` for HTTP testing.
@@ -434,7 +434,7 @@ and their rationale — don't reinvent or contradict them without discussion.
 - `mcp.server.mcpserver` from the official `mcp` package — NOT the standalone `fastmcp` by PrefectHQ
 - `httpx` for all HTTP (async), `respx` for mocking in tests
 - `click` for CLI, `pydantic` for validation, `keyring` for credentials
-- `yaml.safe_load()` ONLY — never `yaml.load()`
+- A SafeLoader ONLY (`yaml.safe_load()`, or `parse_config_text` for config files) — never `yaml.load()` with any other loader
 
 ### Code Style
 - Python 3.11+, async throughout

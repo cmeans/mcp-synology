@@ -95,7 +95,9 @@ INVALID = {
 }
 # Each typed variable's whole error message.
 MESSAGES = {
-    "SYNOLOGY_PORT": "SYNOLOGY_PORT must be a whole number (it sets connection.port).",
+    "SYNOLOGY_PORT": (
+        "SYNOLOGY_PORT must be a whole number from 1 to 65535 (it sets connection.port)."
+    ),
     "SYNOLOGY_HTTPS": (
         "SYNOLOGY_HTTPS must be true or false (also 1/0, yes/no, on/off) "
         "(it sets connection.https)."
@@ -392,19 +394,40 @@ def test_one_letter_booleans_are_errors(value: str) -> None:
     assert str(excinfo.value) == MESSAGES["SYNOLOGY_HTTPS"]
 
 
-@pytest.mark.parametrize("env_var", sorted(TEXT_VARS))
+# The text variables whose field has no rule of its own beyond being text.
+FREE_TEXT_VARS = TEXT_VARS - {"SYNOLOGY_HOST", "SYNOLOGY_INSTANCE_ID"}
+
+
+@pytest.mark.parametrize("env_var", sorted(FREE_TEXT_VARS))
 def test_text_values_are_taken_as_given(env_var: str) -> None:
     assert parse_env_value(env_var, ENV_VAR_MAP[env_var], " a b ") == " a b "
 
 
-def test_a_padded_instance_id_is_refused_as_in_the_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("env_var", "message"),
+    [
+        (
+            "SYNOLOGY_HOST",
+            "SYNOLOGY_HOST (it sets connection.host) must be a bare host name or IP address, "
+            "and it has a space or an invisible character. It isn't shown, since it may hold "
+            "a password.",
+        ),
+        (
+            "SYNOLOGY_INSTANCE_ID",
+            "SYNOLOGY_INSTANCE_ID may hold only lowercase letters, digits and hyphens; "
+            "capitals are lowered (it sets instance_id).",
+        ),
+    ],
+)
+def test_padded_text_with_a_rule_is_refused_naming_the_variable(
+    env_var: str, message: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from pydantic import ValidationError
-
-    monkeypatch.setenv("SYNOLOGY_INSTANCE_ID", " my-id ")
-    with pytest.raises(ValidationError, match="invalid characters"):
+    """Taken as given, as in the file, so padding breaks the field's rule; since #511 PR 2
+    the error names the variable, as for the typed ones."""
+    monkeypatch.setenv(env_var, " my-id ")
+    with pytest.raises(EnvVarError) as excinfo:
         load_config(_config(tmp_path))
+    assert str(excinfo.value) == message
 
 
 def test_a_relative_mcp_synology_config_is_shown_absolute(
@@ -745,28 +768,16 @@ def test_no_override_warning_when_nothing_the_file_sets_changes(
         ("SYNOLOGY_HOST", "nas.example", "connection.host", {"host": "admin@nas.example"}),
         ("SYNOLOGY_HOST", "nas.example", "connection.host", {"host": "nas.example:5001"}),
         ("SYNOLOGY_HOST", "nas.example", "connection.host", {"host": "nas.example/x"}),
-        ("SYNOLOGY_HOST", "admin@nas.example", "connection.host", {"host": "nas.example"}),
-        # The URL the client builds keeps these apart: another user, another path, and
-        # a bare IPv6 address that isn't valid in a URL (pre-QA r2 on #535).
-        ("SYNOLOGY_HOST", "ADMIN@nas.example", "connection.host", {"host": "admin@nas.example"}),
-        ("SYNOLOGY_HOST", "nas.example/DSM", "connection.host", {"host": "nas.example/dsm"}),
-        ("SYNOLOGY_HOST", "nas%2Fx", "connection.host", {"host": "nas/x"}),
-        ("SYNOLOGY_HOST", "::1", "connection.host", {"host": "[::1]"}),
-        # Only an address ignores case: what follows `[` may not be one.
-        ("SYNOLOGY_HOST", "[::1]/DSM", "connection.host", {"host": "[::1]/dsm"}),
-        ("SYNOLOGY_HOST", "[ADMIN:PW]@nas", "connection.host", {"host": "[admin:pw]@nas"}),
-        ("SYNOLOGY_HOST", "[fe80::1%25ETH0]", "connection.host", {"host": "[fe80::1%25eth0]"}),
-        # A name httpx refuses stays as written, its case included.
-        ("SYNOLOGY_HOST", "\uff2eas.example", "connection.host", {"host": "\uff4eas.example"}),
-        # Look-alikes are other hosts: Cyrillic a, and a name IDNA refuses.
+        # httpx would bracket a bare `::1`, and a path isn't part of the address (pre-QA r2
+        # and r3 on #535).
+        ("SYNOLOGY_HOST", "[::1]", "connection.host", {"host": "::1"}),
+        ("SYNOLOGY_HOST", "[::1]", "connection.host", {"host": "[::1]/dsm"}),
+        # A zone names an interface, so its case stays.
+        ("SYNOLOGY_HOST", "[fe80::1%ETH0]", "connection.host", {"host": "[fe80::1%eth0]"}),
+        # Look-alikes are other hosts: Cyrillic a, a name IDNA refuses, and another name.
         ("SYNOLOGY_HOST", "n\u0430s.example", "connection.host", {"host": "nas.example"}),
         ("SYNOLOGY_HOST", "nas.example", "connection.host", {"host": "\uff4eas.example"}),
-        (
-            "SYNOLOGY_HOST",
-            "xn--bcher-kvb.example",
-            "connection.host",
-            {"host": "b\u00fccher.example"},
-        ),
+        ("SYNOLOGY_HOST", "b\u00fccher.example", "connection.host", {"host": "bucher.example"}),
     ],
 )
 def test_a_different_value_still_warns(
@@ -788,7 +799,7 @@ def test_a_different_value_still_warns(
     ("value", "file_host"),
     [
         ("[::1]", "[0:0:0:0:0:0:0:1]"),
-        ("NAS.example:5001", "nas.example:5001"),
+        ("[::ffff:102:304]", "[::ffff:1.2.3.4]"),
     ],
 )
 def test_the_same_destination_written_another_way_warns(
@@ -798,11 +809,39 @@ def test_the_same_destination_written_another_way_warns(
     monkeypatch: pytest.MonkeyPatch,
     at_error: _Lines,
 ) -> None:
-    """Outside a host name and a whole bracketed address, hosts compare as written, so
-    these warn though they reach the same place. A false alarm is the safe side."""
+    """A bracketed address ignores only case, so these warn though they reach the same
+    place. A false alarm is the safe side."""
     monkeypatch.setenv("SYNOLOGY_HOST", value)
     load_config(str(_file(tmp_path, instance_id="home-nas", host=file_host)))
     assert _override("SYNOLOGY_HOST", "connection.host") in at_error.messages()
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "admin@nas.example",
+        "ADMIN@nas.example",
+        "nas.example/DSM",
+        "nas%2Fx",
+        "nas.example:5001",
+        "::2",  # not `::1`: the advice's own example, `[fd00::1]`, contains that
+        "[::1]/DSM",
+        "[ADMIN:PW]@nas",
+        "Ｎas.example",
+        "xn--bcher-kvb.example",
+    ],
+)
+def test_a_variable_that_isnt_bare_stops_before_any_comparison(
+    value: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, at_error: _Lines
+) -> None:
+    """Over any file value, so an override can't reach another user, path or port. The
+    error names the variable, never the value (#532)."""
+    monkeypatch.setenv("SYNOLOGY_HOST", value)
+    with pytest.raises(EnvVarError) as exc:
+        load_config(str(_file(tmp_path, instance_id="home-nas", host="nas.example")))
+    assert str(exc.value).startswith("SYNOLOGY_HOST (it sets connection.host) must be")
+    assert value not in str(exc.value)
+    assert not [w for w in at_error.messages() if "overrides" in w]
 
 
 @pytest.mark.parametrize(("value", "warns"), [("other", True), ("nas", False)])
