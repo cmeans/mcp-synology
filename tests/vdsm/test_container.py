@@ -43,8 +43,9 @@ class _FakeContainer:
 def test_network_mode_per_engine(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Any, docker_host: str, expected: str | None
 ) -> None:
-    """Podman 6 refuses slirp4netns, and its default doesn't forward ports for QEMU."""
+    """Podman 6 refuses slirp4netns, so Podman gets a bridge; Docker keeps its default."""
     monkeypatch.setenv("DOCKER_HOST", docker_host)
+    monkeypatch.setenv("TESTCONTAINERS_RYUK_DISABLED", "true")  # start() would set it for good
     monkeypatch.setattr(container_module, "DockerContainer", _FakeContainer)
     monkeypatch.setattr(container_module.VirtualDsmContainer, "_wait_for_dsm", lambda _self: None)
 
