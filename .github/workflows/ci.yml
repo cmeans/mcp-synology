@@ -31,7 +31,7 @@ jobs:
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           python-version: "3.12"
-      - run: uv sync --extra dev
+      - run: uv sync --locked --extra dev
       - run: uv run ruff check src/ tests/ scripts/
       - run: uv run ruff format --check src/ tests/ scripts/
 
@@ -60,7 +60,7 @@ jobs:
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           python-version: "3.12"
-      - run: uv sync --extra dev
+      - run: uv sync --locked --extra dev
       - run: uv run mypy src/ scripts/
 
   test:
@@ -74,7 +74,7 @@ jobs:
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           python-version: ${{ matrix.python-version }}
-      - run: uv sync --extra dev
+      - run: uv sync --locked --extra dev
       - run: uv run pytest -n auto --cov=mcp_synology --cov-report=xml
       - uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         if: matrix.python-version == '3.12'
@@ -95,7 +95,7 @@ jobs:
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           python-version: "3.12"
-      - run: uv sync --extra dev
+      - run: uv sync --locked --extra dev
       - name: Measure tool payload
         run: uv run python scripts/measure_tools.py --out tool-quality.json >> "$GITHUB_STEP_SUMMARY"
       - name: Upload report

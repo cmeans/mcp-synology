@@ -217,7 +217,7 @@ jobs:
 
       - name: Install project with vdsm extras
         if: steps.scope.outputs.code == 'true'
-        run: uv sync --extra dev --extra vdsm
+        run: uv sync --locked --extra dev --extra vdsm
 
       # Only the bake drives a browser.
       - name: Install Playwright Chromium

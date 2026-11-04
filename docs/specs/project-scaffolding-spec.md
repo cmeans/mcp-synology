@@ -261,7 +261,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
-      - run: uv sync --dev
+      - run: uv sync --locked --dev
       - run: uv run ruff check src/ tests/
       - run: uv run ruff format --check src/ tests/
 
@@ -270,7 +270,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
-      - run: uv sync --dev
+      - run: uv sync --locked --dev
       - run: uv run mypy src/
 
   test:
@@ -283,7 +283,7 @@ jobs:
       - uses: astral-sh/setup-uv@v4
         with:
           python-version: ${{ matrix.python-version }}
-      - run: uv sync --dev
+      - run: uv sync --locked --dev
       - run: uv run pytest -n auto --cov=mcp_synology --cov-report=xml
       - uses: codecov/codecov-action@v4
         if: matrix.python-version == '3.12'

@@ -68,6 +68,8 @@ uv run ruff format --check src/ tests/ scripts/          # format check
 uv run mypy src/ scripts/                                # typecheck (strict mode)
 ```
 
+If you change a dependency in `pyproject.toml`, run `uv lock` and commit `uv.lock`: CI refuses a stale lock.
+
 Tests are mocked at the HTTP boundary (`respx`), so they don't reach
 a real Synology NAS or require credentials to run.
 
