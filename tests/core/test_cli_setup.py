@@ -23,6 +23,8 @@ Coverage target per #14: cli/setup.py 63% → 90%+.
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -795,6 +797,38 @@ def test_list_gives_the_reason_a_file_cant_be_read(tmp_path: Path) -> None:
     assert "a value YAML can't build" in result.output
     assert "hunter" not in result.output.casefold()
     assert "spring" not in result.output.casefold()
+
+
+@pytest.mark.parametrize("encoding", ["iso-8859-1", "cp866", "utf-8"])
+def test_list_survives_a_stdout_that_cant_encode_the_reason(tmp_path: Path, encoding: str) -> None:
+    """QA round 3 on #532: the reason holds `…`, stdout is strict about encoding, and the
+    crash left the later files unlisted."""
+    config_dir = tmp_path / ".config" / "mcp-synology"
+    config_dir.mkdir(parents=True)
+    (config_dir / "a.yaml").write_text("schema_version: 1\nauth: {username: me, secret}\n")
+    # Its name can't be encoded either (pre-QA on #532).
+    (config_dir / "b-ब.yaml").write_text("schema_version: 1\nauth: {username: me, secret}\n")
+    (config_dir / "z.yaml").write_text("schema_version: 1\nconnection: {host: nas}\n")
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from mcp_synology.cli.main import main; main(['setup', '--list'])",
+        ],
+        capture_output=True,
+        env={
+            **os.environ,
+            "HOME": str(tmp_path),
+            "PYTHONIOENCODING": encoding,
+            "PYTHON_KEYRING_BACKEND": "keyring.backends.null.Keyring",
+        },
+        timeout=60,
+    )
+    output = result.stdout.decode(encoding)
+    assert result.returncode == 0, result.stderr
+    assert "a.yaml  (could not parse)" in output
+    assert "z.yaml" in output
+    assert "with no value inside" in output
 
 
 def test_list_shows_only_bare_hosts_and_text_names(tmp_path: Path) -> None:

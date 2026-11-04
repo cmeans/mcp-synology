@@ -73,7 +73,7 @@ _BAD_PUNYCODE = (
 # A last part that's a number (or 0x hex) makes the whole host an IPv4 address to URL
 # parsers and the resolver, which expand a short one: `192.168.1` is 192.168.0.1, the
 # router, not the NAS (WHATWG URL's "ends in a number" rule; pre-QA r3 on #511 PR 2).
-_NUMERIC_LABEL = re.compile(r"(?:\d+|0[xX][0-9a-fA-F]*)")
+_NUMERIC_LABEL = re.compile(r"(?:\d+|0[xX][0-9a-fA-F]*)", re.ASCII)
 _SHORT_IPV4 = (
     "ends in a number, so it's read as an IPv4 address, but it isn't a whole one: write all "
     "four numbers (192.168.1.100), or a name whose last part isn't a number"
@@ -188,7 +188,9 @@ def host_problems(
 
 
 def _url_host(host: str) -> str | None:
-    """``host`` as httpx will use it (IDNA-mapped, lower-case), or None if it refuses it.
+    """``host`` as httpx reads it, or None if it refuses it: a name IDNA-mapped and lower-case,
+    an IPv6 address as written. A name whose first part is `xn--` comes back decoded (`.host`
+    does that); `raw_host` is what's sent.
 
     Both steps can fail: building the URL (`httpx.InvalidURL`), and reading `.host`,
     which decodes an `xn--` first label and raises idna's own error (a UnicodeError)
@@ -1192,13 +1194,12 @@ class _ConfigLoader(yaml.SafeLoader):
         for key_node, value_node in node.value:
             # A key given by alias (`{*k: …}`) has its anchor's marks, from before this
             # mapping (pre-QA r4), in an earlier key or inside an earlier value (QA round 2
-            # on #532): report the mapping's own place then. A key written here always comes
-            # after the last entry. A block value's end mark is the next key's start.
+            # on #532): `_repeat_place` reports the mapping's own place then. A key written
+            # here always comes after the last entry. A block value's end mark is the next
+            # key's start.
             mark = key_node.start_mark
             clamped = mark.index < node.start_mark.index or mark.index <= furthest
             furthest = max(furthest, mark.index, value_node.end_mark.index - 1)
-            if clamped:
-                mark = node.start_mark
             line, column = mark.line + 1, mark.column + 1
             if key_node.tag == _MERGE_TAG:
                 # Its keys may be overridden: YAML's own rule, not a repeat. A second `<<`
