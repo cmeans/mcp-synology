@@ -1018,8 +1018,7 @@ def _log_file_problem(config: AppConfig) -> str | None:
     try:
         # What `FileHandler` will open, the way `_configure_logging` gives it: it collapses `..`
         # without following links, so `link/../pipe` is another file to it than to the kernel
-        # (pre-QA r7 on #541), and `os.path.expanduser` leaves `./~/x` alone, where
-        # `Path.expanduser` reads it as a home path (QA round 5).
+        # (pre-QA r7 on #541).
         expanded = os.path.expanduser(config.logging.file)
         if expanded.startswith("~"):  # an unknown ~user, which os.path leaves as is
             raise RuntimeError(expanded)
@@ -1052,7 +1051,6 @@ def _log_file_problem(config: AppConfig) -> str | None:
             f"{config.logging.file!r} can't be opened: the path isn't usable. "
             "Fix the path, or leave it out."
         )
-    # Absolute: a relative path depends on the folder an MCP client starts the server in.
     return f"{_shown_path(path)!r} can't be opened: {reason}. Fix the path, or leave it out."
 
 

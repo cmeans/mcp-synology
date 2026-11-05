@@ -256,7 +256,7 @@ modules:
 | `download_timeout` | `300` | 10–3600 s | Time limit for `download_file`. |
 | `search_poll_interval` | `1.0` | 0.5–10.0 s | How often `search_files` checks on DSM's search while it runs. |
 | `allowed_local_paths` | your Downloads folder | local folders | Local folders `upload_file` and `download_file` may use, including subfolders. See [Local path confinement](#features). |
-| `default_download_dir` | none | a local folder | Where `download_file` saves when no `dest_folder` is given. It's always allowed. |
+| `default_download_dir` | none | a local folder | Where `download_file` saves when no `dest_folder` is given. It's always allowed, with its subfolders. A relative path is from the config file's folder, so `.` would allow that folder, config file included. |
 | `default_upload_dir` | none | a NAS folder | Where `upload_file` uploads when no `dest_folder` is given. |
 
 **Accounts.** Any account. The tools see the shared folders that account can see, and can change only what its DSM permissions allow.
@@ -489,7 +489,7 @@ custom_instructions: |
 
 ```yaml
 # ~/.config/mcp-synology/config.yaml
-instructions_file: ~/.config/mcp-synology/my-instructions.md
+instructions_file: ~/.config/mcp-synology/my-instructions.md  # a relative path is from this file's folder
 ```
 
 Both support template variables: `{display_name}`, `{instance_id}`, `{host}`, `{port}`, `{home_dir}` (the local home folder) and `{platform}` (`Linux`, `macOS` or `Windows`). Any other brace is left as written, so JSON examples are fine (`{{` and `}}` are not escapes).
@@ -570,7 +570,7 @@ Or set it persistently in your config file:
 # ~/.config/mcp-synology/config.yaml
 logging:
   level: debug
-  file: ~/.local/state/mcp-synology/nas/server.log  # optional, logs to stderr by default
+  file: ~/.local/state/mcp-synology/nas/server.log  # optional, logs to stderr by default; a relative path is from this file's folder
 ```
 
 Debug output includes every DSM API request/response (passwords masked), credential resolution steps, config discovery, version negotiation, and module registration decisions.
