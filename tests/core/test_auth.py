@@ -1282,7 +1282,8 @@ class TestRefusalSuggestion:
                 {"username": "admin", "password": "wrong"},
                 {},
                 "The password comes from auth.password in the config file: correct it there "
-                "and restart the server ('mcp-synology setup' writes only the keyring). If the "
+                "and restart the server ('mcp-synology setup --config <your config file>' "
+                "writes only the keyring). If the "
                 "username is wrong, it comes from auth.username in the config file: correct it "
                 "there.",
                 SETUP_PW,

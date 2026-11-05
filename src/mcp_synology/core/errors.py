@@ -7,6 +7,23 @@ from typing import TypeVar
 
 import httpx
 
+# The CLI commands advice names. A config `setup` writes is `<instance_id>.yaml`, which
+# `setup` and `check` don't find on their own (#481), so advice names the file. Only with
+# no config file yet is the bare command right. tests/core/test_cli_advice.py fails on a
+# bare command written out in a message string or an instructions file.
+SETUP_COMMAND = "'mcp-synology setup --config <your config file>'"
+CHECK_COMMAND = "'mcp-synology check --config <your config file>'"
+SETUP_NEW_CONFIG = "'mcp-synology setup'"
+# For a message that can't see the config: running on variables alone (the Docker path)
+# there's no file to name, and the bare command works once that shell has the server's
+# variables (a client's `env` block doesn't reach it). SYNOLOGY_HOST alone would send the
+# password over plain HTTP to port 5000.
+CHECK_NO_FILE = "mcp-synology check"
+NO_FILE_NOTE = (
+    "(with no config file, set SYNOLOGY_HOST and SYNOLOGY_HTTPS, and SYNOLOGY_PORT if it "
+    "isn't DSM's default, to what the server has, and leave out --config)"
+)
+
 # Help URLs point at sections of our own error-code reference rather than
 # Synology's KB. The KB is sparsely indexed and rarely matches the semantics
 # of an MCP error — our page can say "use overwrite=true" and "run
@@ -311,7 +328,7 @@ AUTH_ERROR_CODES: dict[int, tuple[str, str]] = {
         "This account does not have permission to use this service. "
         "Check DSM > Control Panel > User > Applications.",
     ),
-    403: ("2FA required", "Run 'mcp-synology setup' to complete 2FA bootstrap."),
+    403: ("2FA required", f"Run {SETUP_COMMAND} to complete 2FA bootstrap."),
     404: (
         "2FA code failed",
         "The OTP code was incorrect or expired. Try again with a fresh code.",

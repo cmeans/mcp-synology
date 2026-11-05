@@ -24,6 +24,8 @@ if TYPE_CHECKING:
 import httpx
 
 from mcp_synology.core.errors import (
+    CHECK_COMMAND,
+    NO_FILE_NOTE,
     DsmHttpError,
     DsmReplyError,
     DsmTimeoutError,
@@ -68,7 +70,7 @@ _MAY_HAVE_APPLIED = "DSM may still have applied the request; check before retryi
 _NOT_A_REPLY = (
     "A reverse proxy or captive portal in front of the NAS may be answering instead of "
     "DSM (a login page, say). Try again shortly; if it keeps happening, check what's in "
-    "front of the NAS, and run 'mcp-synology check'."
+    f"front of the NAS, and run {CHECK_COMMAND} {NO_FILE_NOTE}."
 )
 
 
@@ -194,10 +196,12 @@ def _check_status(resp: httpx.Response, label: str) -> None:
     if status >= 500:
         suggestion = (
             "DSM, or a proxy in front of it, had a server error. Try again shortly; "
-            "if it keeps happening, run 'mcp-synology check'."
+            f"if it keeps happening, run {CHECK_COMMAND} {NO_FILE_NOTE}."
         )
     else:
-        suggestion = "Run 'mcp-synology check' to verify the host, port and https settings."
+        suggestion = (
+            f"Run {CHECK_COMMAND} {NO_FILE_NOTE} to verify the host, port and https settings."
+        )
     raise DsmHttpError(f"{label}: DSM answered HTTP {status}.", status, suggestion=suggestion)
 
 

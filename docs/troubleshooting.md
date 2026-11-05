@@ -12,7 +12,7 @@ when it's known, and the issue, PR, spec or error-codes section with the evidenc
 hasn't been reproduced says so. "vdsm" is the virtual DSM the test suite runs on.
 
 To see what mcp-synology sent and what DSM answered, turn on debug logging:
-`SYNOLOGY_LOG_LEVEL=debug` for the server, or `mcp-synology check -v`. Passwords and session IDs
+`SYNOLOGY_LOG_LEVEL=debug` for the server, or `mcp-synology check -v --config <your config file>`. Passwords and session IDs
 are masked.
 
 **Sections:** [Connection and sign-in](#connection-and-sign-in) ·
@@ -74,7 +74,9 @@ as your file (#282, #283, #292). See [unavailable](error-codes.md#unavailable).
 was removed in **Personal → Security → Sign-in Activity**. The message says DSM rejected the
 token (see [auth_failed](error-codes.md#auth_failed)).
 
-**What to do:** run `mcp-synology setup` and enter a new one-time code. If `device_id` is set in
+**What to do:** run `mcp-synology setup --config <your config file>` and enter a new one-time
+code (on a host with no keyring, see
+[2FA with no keyring](credentials.md#2fa-with-no-keyring)). If `device_id` is set in
 the environment (`SYNOLOGY_DEVICE_ID`) or the config file, it overrides the keyring `setup`
 writes: remove it there first, and restart the server after `setup`. The error's suggestion
 says where the token comes from.

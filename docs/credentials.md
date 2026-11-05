@@ -46,12 +46,20 @@ The entry is looked up by `instance_id`, and a derived one is only the host's fi
 
 For accounts with two-factor authentication enabled:
 
-1. Run `mcp-synology setup` — it detects 2FA (DSM error 403) and prompts for your OTP code
+1. Run `mcp-synology setup` (with `--config <your config file>` if you already have one) — it detects 2FA (DSM error 403) and prompts for your OTP code
 2. On successful OTP, DSM returns a device token which is stored as `device_id` in the keyring
 3. Subsequent logins include the device token, so DSM treats the server as a remembered device — no OTP required
-4. Device tokens have no fixed lifetime. If DSM stops accepting the stored token (for example, the trusted device was removed in **Personal → Security → Sign-in Activity**), the error says DSM rejected it; run `mcp-synology setup` again to sign in with a new 2FA code
+4. Device tokens have no fixed lifetime. If DSM stops accepting the stored token (for example, the trusted device was removed in **Personal → Security → Sign-in Activity**), the error says DSM rejected it; run `mcp-synology setup --config <your config file>` again to sign in with a new 2FA code
 
 The device token is specific to the `instance_id`. Multiple NAS configs with different 2FA accounts each get their own token.
+
+### 2FA With No Keyring
+
+On a host with no keyring, such as Docker, `setup` writes the config and lists the variables to set, but doesn't log in, so it can't ask for a code. It never prints a device token. To use a 2FA account there:
+
+1. Copy the config file to a machine with a keyring, and run `mcp-synology setup --config <your config file>` there, so it has the same `instance_id`. With no config file, set the same `SYNOLOGY_HOST`, `SYNOLOGY_HTTPS` and `SYNOLOGY_PORT` there and run `mcp-synology setup`.
+2. Read the token there, in your own terminal rather than through a chat: `uvx keyring get mcp-synology/<instance_id> device_id`.
+3. Set it in `SYNOLOGY_DEVICE_ID` on the host with no keyring, beside `SYNOLOGY_USERNAME` and `SYNOLOGY_PASSWORD`.
 
 ## Platform Support
 
@@ -60,7 +68,7 @@ The device token is specific to the `instance_id`. Multiple NAS configs with dif
 | macOS | Keychain | Works | May prompt once for keychain access |
 | Windows | Credential Manager | Works | Runs as logged-in user |
 | Linux | GNOME Keyring / KWallet | Works | Uses standard D-Bus socket path |
-| Docker | None | N/A | Use env vars or config file credentials |
+| Docker | None | N/A | Use env vars or config file credentials; for 2FA, see [above](#2fa-with-no-keyring) |
 
 ### Linux and Claude Desktop
 
@@ -74,22 +82,19 @@ You can inspect stored credentials using your OS keyring tools or Python's `keyr
 
 ```bash
 # Check what's stored for a given instance
-python -m keyring get mcp-synology/192-168-1-100 username
-
-# Or using the keyring CLI directly
-keyring get mcp-synology/nas-primary username
+uvx keyring get mcp-synology/192-168-1-100 username
 
 # Check if a device token is stored (2FA)
-keyring get mcp-synology/nas-primary device_id
+uvx keyring get mcp-synology/nas-primary device_id
 ```
 
 ## Removing Credentials
 
 ```bash
-keyring del mcp-synology/192-168-1-100 username
-keyring del mcp-synology/192-168-1-100 password
-keyring del mcp-synology/192-168-1-100 device_id
-keyring del mcp-synology/192-168-1-100 host
+uvx keyring del mcp-synology/192-168-1-100 username
+uvx keyring del mcp-synology/192-168-1-100 password
+uvx keyring del mcp-synology/192-168-1-100 device_id
+uvx keyring del mcp-synology/192-168-1-100 host
 ```
 
 ## Credential Resolution Order
