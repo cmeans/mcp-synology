@@ -29,7 +29,7 @@ has() { echo "$LABELS" | grep -qx "$1"; }
 # Dev Active means dev isn't done: don't relabel. on-unlabel in pr-labels.yml takes over.
 if has "Dev Active"; then
   echo "Dev Active present, skipping" >&2
-  echo "$STATE"
+  echo dev-active
   exit 0
 fi
 
@@ -55,6 +55,10 @@ case "$STATE" in
       # doesn't hold QA up.
       if has "Merge conflict"; then
         echo "Merge conflict present: checks passed, Ready for QA withheld" >&2
+      elif has "QA Active" || has "Ready for QA Signoff" || has "QA Approved" || has "QA Failed"; then
+        # A stranded PR QA already picked up: it's past Ready for QA, and these writes trigger
+        # nothing that would clean up (pre-QA on #549).
+        echo "Already past Ready for QA, not adding it" >&2
       else
         gh pr edit "$PR" --repo "$REPO" --add-label "Ready for QA" >&2
       fi

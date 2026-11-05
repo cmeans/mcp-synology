@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # The recheck that doesn't depend on an event (#549, #339). A green PR can strand on Awaiting CI
 # when GitHub's run or job listings lag behind the last CI event, as nothing checks again after
-# that. So: settle each open PR on Awaiting CI, and each same-repository PR with no workflow label
-# at all. If a result is still missing long after its runs finished, comment once on the PR.
+# that. So: settle each open PR on Awaiting CI or CI Failed, and each same-repository PR with no
+# workflow label at all. If a result is still missing long after its runs finished, comment once on the PR.
 #
-# Env: REPO, GH_TOKEN. STRANDED_AFTER_MINUTES defaults to 30. Fork PRs without Awaiting CI are left
+# Env: REPO, GH_TOKEN. STRANDED_AFTER_MINUTES defaults to 30. Fork PRs with neither of those labels are left
 # alone: their runs wait for the maintainer's approval, and the label is the maintainer's call.
 set -e
 
@@ -25,8 +25,10 @@ PRS=$(gh pr list --repo "$REPO" --state open --base main --limit 100 \
       else empty end
     | @tsv')
 
+echo "PRs to settle: $(printf '%s' "$PRS" | grep -c . || true)" >&2
 DETAILS=$(mktemp)
-while IFS=$'\t' read -r PR SHA ADOPT; do
+# On its own descriptor, so a command in the loop that reads stdin can't take the list.
+while IFS=$'\t' read -r PR SHA ADOPT <&3; do
   if [ -z "$PR" ]; then continue; fi
   echo "PR #$PR at $SHA (adopt: $ADOPT)" >&2
   : > "$DETAILS"
@@ -36,18 +38,28 @@ while IFS=$'\t' read -r PR SHA ADOPT; do
     FAILED=1
     continue
   fi
-  if [ "$STATE" != pending ] || grep -qx running "$DETAILS"; then continue; fi
+  if [ "$STATE" != pending ]; then continue; fi
+  if grep -qx running "$DETAILS"; then
+    echo "PR #$PR: a run is still going, or waiting for approval" >&2
+    continue
+  fi
   MISSING=$(sed -n 's/^missing //p' "$DETAILS")
   # The latest time a finished run changed. With no run listed at all, nothing has been waiting.
   UPDATED=$(sed -n 's/^updated //p' "$DETAILS" | sort | tail -n 1)
-  if [ -z "$MISSING" ] || [ -z "$UPDATED" ]; then continue; fi
+  if [ -z "$MISSING" ] || [ -z "$UPDATED" ]; then
+    echo "PR #$PR: no run has finished yet" >&2
+    continue
+  fi
   if ! UPDATED_AT=$(date -u -d "$UPDATED" +%s); then
     echo "PR #$PR: can't read the time $UPDATED" >&2
     FAILED=1
     continue
   fi
   AGE=$(( ($(date -u +%s) - UPDATED_AT) / 60 ))
-  if [ "$AGE" -lt "$STRANDED_AFTER_MINUTES" ]; then continue; fi
+  if [ "$AGE" -lt "$STRANDED_AFTER_MINUTES" ]; then
+    echo "PR #$PR: results missing, $AGE minutes after its runs finished" >&2
+    continue
+  fi
   # Only this job's own comments count, so nobody can post the marker to silence it. A read that
   # fails isn't "no comment yet": that would post one every 15 minutes.
   MARKER="<!-- pr-labels-recheck $SHA -->"
@@ -57,7 +69,10 @@ while IFS=$'\t' read -r PR SHA ADOPT; do
     FAILED=1
     continue
   fi
-  if printf '%s\n' "$COMMENTS" | grep -qF "$MARKER"; then continue; fi
+  if printf '%s\n' "$COMMENTS" | grep -qF "$MARKER"; then
+    echo "PR #$PR: already commented on $SHA" >&2
+    continue
+  fi
   if ! gh pr comment "$PR" --repo "$REPO" --body "$MARKER
 The label automation has no result for these on \`$SHA\`, $AGE minutes after its runs finished:
 
@@ -65,10 +80,10 @@ The label automation has no result for these on \`$SHA\`, $AGE minutes after its
 $MISSING
 \`\`\`
 
-It rechecks every 15 minutes. If this is stuck, re-run the job in Actions, or apply \`Ready for QA\` by hand once \`gh pr checks $PR\` shows every check passed." >&2; then
+A lagging listing usually clears on a later recheck, every 15 minutes. If it doesn't, re-run the workflow in Actions, or apply \`Ready for QA\` by hand once \`gh pr checks $PR\` shows every check passed except \`QA Gate\`." >&2; then
     echo "PR #$PR: couldn't comment" >&2
     FAILED=1
   fi
-done <<< "$PRS"
+done 3<<< "$PRS"
 rm -f "$DETAILS"
 exit "$FAILED"
