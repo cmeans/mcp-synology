@@ -255,7 +255,7 @@ def _setup_interactive(verbose: bool, not_loaded: str | None = None) -> None:
     # Validate before writing
     from pydantic import ValidationError
 
-    from mcp_synology.core.config import AppConfig, format_validation_error
+    from mcp_synology.core.config import AppConfig, format_validation_error, warn_if_proxied
 
     try:
         app_config = AppConfig(**config_dict)
@@ -263,6 +263,10 @@ def _setup_interactive(verbose: bool, not_loaded: str | None = None) -> None:
         # Screened like every config error: pydantic's own text quotes the input (#471).
         click.echo(click.style(f"Error: {format_validation_error(e)}", fg="red"), err=True)
         sys.exit(1)
+
+    # This path doesn't go through load_config. Before the password is typed (#558).
+    if app_config.connection is not None:
+        warn_if_proxied(app_config.connection)
 
     # Prompt for credentials
     click.echo()
