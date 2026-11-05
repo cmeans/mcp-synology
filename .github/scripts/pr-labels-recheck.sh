@@ -64,7 +64,7 @@ while IFS=$'\t' read -r PR SHA ADOPT <&3; do
   # fails isn't "no comment yet": that would post one every 15 minutes.
   MARKER="<!-- pr-labels-recheck $SHA -->"
   if ! COMMENTS=$(gh pr view "$PR" --repo "$REPO" --json comments \
-    --jq '.comments[] | select(.author.login == "github-actions") | .body'); then
+    --jq '.comments[] | select(.author.login | test("^github-actions(\\[bot\\])?$")) | .body'); then
     echo "PR #$PR: couldn't read its comments" >&2
     FAILED=1
     continue
@@ -80,7 +80,7 @@ The label automation has no result for these on \`$SHA\`, $AGE minutes after its
 $MISSING
 \`\`\`
 
-A lagging listing usually clears on a later recheck, every 15 minutes. If it doesn't, re-run the workflow in Actions, or apply \`Ready for QA\` by hand once \`gh pr checks $PR\` shows every check passed except \`QA Gate\`." >&2; then
+A lagging listing usually clears on a later recheck, every 15 minutes. If it doesn't, re-run the workflow in Actions, or, if the PR has no QA or \`Merge conflict\` label, apply \`Ready for QA\` by hand once \`gh pr checks $PR\` shows every check passed except \`QA Gate\`." >&2; then
     echo "PR #$PR: couldn't comment" >&2
     FAILED=1
   fi

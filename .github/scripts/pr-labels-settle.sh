@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Settles a PR's labels from its head commit's checks: Ready for QA once CI and vdsm have passed,
 # CI Failed as soon as either has a failed job, nothing while a result is missing. Used by
-# pr-labels-ci.yml on each CI or vdsm completion, and by pr-labels-recheck.yml on a schedule.
+# pr-labels-ci.yml on each CI or vdsm completion, pr-labels.yml when Dev Active comes off, and
+# pr-labels-recheck.yml on a schedule.
 #
 # Usage: pr-labels-settle.sh <pr> <head sha>. Env: REPO, GH_TOKEN, PENDING_DETAILS (see
 # pr-checks-state.sh). ADOPT=1 is for a PR with no workflow label at all: it's labeled as if it
@@ -33,7 +34,8 @@ if has "Dev Active"; then
   exit 0
 fi
 
-# The list ADOPT came from can be minutes old, and someone may have labeled the PR since. These
+# The state took a while to read, and a list ADOPT came from can be minutes old, so someone may
+# have labeled the PR since. These
 # writes trigger nothing that would clean up after them (pre-QA on #549).
 for LABEL in "Awaiting CI" "Ready for QA" "QA Active" "Ready for QA Signoff" "QA Approved" \
   "QA Failed" "CI Failed"; do

@@ -18,6 +18,8 @@ jobs:
   recheck:
     if: github.repository == 'cmeans/mcp-synology'
     runs-on: ubuntu-latest
+    # A hung call mustn't hold the concurrency group below for hours.
+    timeout-minutes: 15
     # A run that outlasts the interval shouldn't overlap the next.
     concurrency:
       group: pr-labels-recheck
