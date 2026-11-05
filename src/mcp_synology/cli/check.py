@@ -134,7 +134,12 @@ def exit_on_connection_failure(base_url: str, host: str) -> Iterator[None]:
 
 
 def _stdin_is_a_terminal() -> bool:
-    return sys.stdin.isatty()
+    """False with stdin closed, as under cron or a service: `sys.stdin` is then None (QA round 4
+    on #559)."""
+    try:
+        return sys.stdin is not None and sys.stdin.isatty()
+    except ValueError:  # closed
+        return False
 
 
 def _asked_to_send(config: AppConfig, instance: str) -> bool:
@@ -143,6 +148,12 @@ def _asked_to_send(config: AppConfig, instance: str) -> bool:
     holds Ctrl-C back from a blocking prompt until the second press, so it gets Python's handler
     here (pre-QA on #559)."""
     if not _stdin_is_a_terminal():
+        # Says why, so a failing script or a model knows a person can settle it (QA round 4).
+        click.echo(
+            f"Keyring entry {instance!r} doesn't say which NAS it's for, and this needs someone "
+            "at a terminal to answer.",
+            err=True,
+        )
         return False
     connection = config.connection
     plain = "" if connection is not None and connection.https else " over plain HTTP"

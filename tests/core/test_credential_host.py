@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import io
 import signal
+import sys
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -21,6 +23,7 @@ from click.testing import CliRunner, Result
 from keyring.errors import KeyringError, KeyringLocked, NoKeyringError, PasswordDeleteError
 from mcp.server.mcpserver.exceptions import ToolError
 
+from mcp_synology.cli.check import _stdin_is_a_terminal
 from mcp_synology.cli.main import main
 from mcp_synology.cli.setup import _attempt_login, _may_replace_entry, _store_keyring
 from mcp_synology.core.auth import AuthManager, check_route, how_to_record, resolve_credentials
@@ -565,8 +568,36 @@ class TestAnEntryWithNoRecordedHost:
                 main, ["check", "--config", str(_file(tmp_path, "nas.office"))], input="y\n"
             )
         assert result.exit_code == 1
+        assert "this needs someone at a terminal to answer" in result.output
         assert "Nothing was sent" in result.output
         request.assert_not_awaited()
+
+    @pytest.mark.parametrize("stdin", [None, "closed"], ids=["none", "closed"])
+    def test_stdin_closed_is_no_terminal(
+        self, monkeypatch: pytest.MonkeyPatch, stdin: str | None
+    ) -> None:
+        """QA round 4 on #559: `check <&-`, as under cron, was a traceback."""
+        handle = None
+        if stdin:
+            handle = io.StringIO()
+            handle.close()
+        monkeypatch.setattr(sys, "stdin", handle)
+        assert _stdin_is_a_terminal() is False
+
+    def test_the_question_goes_to_stderr(self, store: MemoryKeyring, tmp_path: Path) -> None:
+        """QA round 4 on #559: `check > log` must still show it."""
+        _entry(store, "nas")
+        with (
+            patch(
+                "mcp_synology.core.client.DsmClient.query_api_info", AsyncMock(return_value=None)
+            ),
+            patch("mcp_synology.cli.check._stdin_is_a_terminal", return_value=True),
+        ):
+            result = CliRunner().invoke(
+                main, ["check", "--config", str(_file(tmp_path, "nas.office"))], input="n\n"
+            )
+        assert "Send its stored password" in result.stderr
+        assert "Send its stored password" not in result.stdout
 
     def test_a_keyring_that_fails_the_first_read_cant_skip_the_question(
         self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1740,11 +1771,24 @@ class TestTheMigrationScript:
         _migrate_script().cleanup_keyring({"nas"}, dry_run=True)
         assert "DELETE keyring synology-mcp/nas/password" in capsys.readouterr().out
 
-    def test_it_doesnt_say_all_migrated_after_skipping_one(self, store: MemoryKeyring) -> None:
+    def test_it_doesnt_say_all_migrated_after_skipping_one(
+        self,
+        store: MemoryKeyring,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """QA round 4 on #559: `_any_skipped` was right, and nothing held the line that uses it."""
         self._old(store)
         store.values[("mcp-synology/nas", "host")] = "nas.office"
         store.values[("mcp-synology/nas", "password")] = "office-pw"
-        assert _migrate_script()._any_skipped({"nas"})
+        monkeypatch.setenv("HOME", str(tmp_path))
+        (tmp_path / ".local" / "state" / "synology-mcp" / "nas").mkdir(parents=True)
+        monkeypatch.setattr(sys, "argv", ["migrate", "--apply"])
+        _migrate_script().main()
+        out = capsys.readouterr().out
+        assert "SKIP  keyring mcp-synology/nas" in out
+        assert "all keyring entries already migrated" not in out
 
 
 class TestQaRoundThree:
@@ -1784,6 +1828,28 @@ class TestQaRoundThree:
         assert check_route(load_config(_file(tmp_path, "nas.home"))) is None
         monkeypatch.setenv("SYNOLOGY_USERNAME", "u")
         assert check_route(load_config(_file(tmp_path, "nas.home"))) is not None
+
+    def test_a_refused_password_from_elsewhere_isnt_told_about_the_entry(
+        self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """QA round 4 on #559: the login never used the entry."""
+        _entry(store, "nas")
+        monkeypatch.setenv("SYNOLOGY_USERNAME", "u")
+        monkeypatch.setenv("SYNOLOGY_PASSWORD", "p")
+        with (
+            patch(
+                "mcp_synology.core.client.DsmClient.query_api_info", AsyncMock(return_value=None)
+            ),
+            patch(
+                "mcp_synology.core.client.DsmClient.request",
+                AsyncMock(side_effect=AuthenticationError("wrong password", code=400)),
+            ),
+        ):
+            result = CliRunner().invoke(
+                main, ["check", "--config", str(_file(tmp_path, "nas.office"))]
+            )
+        assert result.exit_code == 1
+        assert "If these are another NAS's credentials" not in result.output
 
     def test_a_refused_login_on_an_unrecorded_entry_offers_its_own_id(
         self, store: MemoryKeyring, tmp_path: Path
