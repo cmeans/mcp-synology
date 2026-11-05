@@ -10,10 +10,13 @@ Four-step loading:
 from __future__ import annotations
 
 import difflib
+import errno
 import ipaddress
 import logging
 import os
 import re
+import shlex
+import stat
 import unicodedata
 from datetime import date
 from pathlib import Path
@@ -597,16 +600,79 @@ def _shown_path(path: Path) -> str:
         return str(path)
 
 
-def _working_folder_is_searchable() -> bool:
-    """By `stat`, with the same IDs as the check it follows: `os.access` uses the real user ID
-    (QA round 3 on #541)."""
+class WorkingFolderConfigNotLoadedError(FileNotFoundError):
+    """A `./mcp-synology.yaml` is there, and it counts only when it's named (#552).
+
+    A folder someone merely opened could otherwise name another host and be sent the password
+    stored for this one, or ask for more access. A FileNotFoundError, so `setup` can still make
+    a config from here, but `load_config` never answers it with env-only mode: that would move
+    someone relying on this file from HTTPS to plain HTTP, the downgrade #499 refuses.
+    """
+
+
+def quoted_path(path: Path) -> str:
+    """An absolute path as a POSIX shell takes it (on Windows, for reading only: see below), for a
+    message that says to use it: `repr` switches to double quotes around a `'`, where `$(...)` in a
+    folder's name runs when pasted (QA on #555). Each character that could forge a line is escaped,
+    and only those, so the path stays readable; a path with one isn't one to use as shown."""
+    text = _shown_path(path)
+    return _quoted_for_a_shell(
+        "".join(c if c.isprintable() else c.encode("unicode_escape").decode() for c in text)
+    )
+
+
+def _quoted_for_a_shell(text: str, *, windows: bool = os.name == "nt") -> str:
+    """Quoted for a POSIX shell. On Windows, only double quotes, for reading: no one form is safe
+    in both cmd.exe and PowerShell (`%VAR%` and `$(...)` still act inside them), and none of it
+    could be run here. A hostile folder's safe route there is the relative --config (QA on #555)."""
+    return f'"{text}"' if windows else shlex.quote(text)
+
+
+def _refuse_a_working_folder_config() -> None:
+    local_config = Path("mcp-synology.yaml")
     try:
-        os.stat(".")
-    except PermissionError:
-        return False
-    except OSError:  # any other error isn't about searching it
-        pass
-    return True
+        try:
+            # Only a regular file is taken for someone's config. A pipe can be named, but not
+            # one in a folder that's only been opened: reading it would wait for its writer.
+            if not stat.S_ISREG(local_config.stat().st_mode):
+                return
+        except PermissionError:
+            # A link into a locked folder is someone's config, so it refuses too. In a working
+            # folder that can't be searched, `lstat` fails as well, and nothing can be said about
+            # any file.
+            try:
+                local_config.lstat()
+            except PermissionError:
+                return
+    except OSError as e:
+        # Not there, or a dangling link or link loop (the name itself is fixed, so only a link's
+        # target can be too long). Anything else (a stale mount) may be someone's config, and
+        # env-only mode would be the downgrade the class refuses.
+        if e.errno in (errno.ENOENT, errno.ENOTDIR, errno.ELOOP, errno.ENAMETOOLONG):
+            return
+        msg = (
+            f"{_shown_path(local_config)!r} can't be checked: {e.strerror or type(e).__name__}. "
+            "Fix the path or its permissions, or name a config file with --config."
+        )
+        raise OSError(msg) from e
+    # "If you trust" and the full path: a model repairing a failed server, or someone editing an
+    # MCP client's args, would otherwise paste the flag in as it stands, and whatever folder that
+    # client starts in next would be loaded as named. "Don't copy": the same model could move the
+    # file to the home location, which applies it in every folder.
+    env_only = (
+        "SYNOLOGY_HOST alone isn't used while this file is here. "
+        if os.environ.get("SYNOLOGY_HOST", "").strip()
+        else ""
+    )
+    msg = (
+        f"{quoted_path(local_config)} isn't loaded automatically: a config in the folder "
+        "you're in could send your stored credentials to another host. "
+        f"{env_only}If you trust this file (it chooses the host your stored password goes to), "
+        "pass --config ./mcp-synology.yaml, or its full path, without shell quotes, in an MCP "
+        "client's config. To run without it, start from another folder or move it out of this "
+        "one. Don't copy it to the home location unless you trust it."
+    )
+    raise WorkingFolderConfigNotLoadedError(msg)
 
 
 def _expanded_config_path(value: str, source: str) -> Path:
@@ -624,7 +690,8 @@ def discover_config_path(explicit_path: str | None = None) -> Path:
     1. Explicit --config flag
     2. MCP_SYNOLOGY_CONFIG env var
     3. ~/.config/mcp-synology/config.yaml
-    4. ./mcp-synology.yaml
+
+    A ./mcp-synology.yaml is never found here: it has to be named (#552).
     """
     # An empty path names no file, so it's an error, the same as a missing one (#499;
     # maintainer, 2026-11-02): `--config ''` used to fall through to the default
@@ -678,29 +745,7 @@ def discover_config_path(explicit_path: str | None = None) -> Path:
     if home_found:
         logger.info("Config: %r", str(home_config))
         return home_config
-    # Relative: that needs no permission on the folders above it, and in a deleted folder the
-    # file is just absent (#483, QA rounds 1 and 2 on #541).
-    local_config = Path("mcp-synology.yaml")
-    # Quoted: the working folder's name could forge a log line (QA round 3 on #529).
-    logger.debug("Checking default config path: %r", _shown_path(local_config))
-    try:
-        found = _config_exists(local_config)
-    except OSError as e:
-        # A config there that can't be read stays an error, never env-only mode. Only a folder
-        # that can't be searched leaves nothing to report but that.
-        if _working_folder_is_searchable():
-            msg = f"{e}. Fix the path or its permissions, or name a config file with --config."
-            raise OSError(msg) from e
-        # At any log level: a config passed over can leave env-only mode, read-only over plain HTTP.
-        _warn_always(f"The working folder can't be searched for a config file: {e}")
-        found = False
-    if found:
-        logger.info("Config: %r", _shown_path(local_config))
-        try:
-            return local_config.absolute()
-        except OSError:  # a working folder outside this process's root has no name
-            return local_config
-
+    _refuse_a_working_folder_config()
     msg = (
         "No config file found. Create one at ~/.config/mcp-synology/config.yaml "
         "or specify with --config. See examples/ for sample configs."
@@ -1549,11 +1594,13 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         path: Explicit config file path, or None for auto-discovery.
 
     Falls back to env-var-only mode if no config file is found but
-    SYNOLOGY_HOST is set, unless --config or MCP_SYNOLOGY_CONFIG names a file:
-    that file must exist (#499).
+    SYNOLOGY_HOST is set, unless --config or MCP_SYNOLOGY_CONFIG names a file, which must
+    exist (#499), or a ./mcp-synology.yaml is there, which has to be named or moved (#552).
     """
     try:
         config_path = discover_config_path(None if path is None else str(path))
+    except WorkingFolderConfigNotLoadedError:
+        raise  # never env-only mode: see the class
     except FileNotFoundError:
         # A file named by --config or MCP_SYNOLOGY_CONFIG must exist: never fall back
         # to env-only mode (#499).
