@@ -12,6 +12,14 @@ import httpx
 # of an MCP error — our page can say "use overwrite=true" and "run
 # mcp-synology check -v", which the vendor docs never will.
 #
+# The CLI commands advice names. A config `setup` writes is `<instance_id>.yaml`, which
+# `setup` and `check` don't find on their own (#481), so advice names the file. Only with
+# no config file yet is the bare command right. tests/core/test_cli_advice.py holds every
+# message to these.
+SETUP_COMMAND = "'mcp-synology setup --config <your config file>'"
+CHECK_COMMAND = "'mcp-synology check --config <your config file>'"
+SETUP_NEW_CONFIG = "'mcp-synology setup'"
+
 # Adding a new error code: add a member to ErrorCode below AND add a
 # matching `## <code>` section to docs/error-codes.md. The unit test in
 # tests/core/test_help_urls.py will fail if the two drift out of sync.
@@ -311,7 +319,7 @@ AUTH_ERROR_CODES: dict[int, tuple[str, str]] = {
         "This account does not have permission to use this service. "
         "Check DSM > Control Panel > User > Applications.",
     ),
-    403: ("2FA required", "Run 'mcp-synology setup' to complete 2FA bootstrap."),
+    403: ("2FA required", f"Run {SETUP_COMMAND} to complete 2FA bootstrap."),
     404: (
         "2FA code failed",
         "The OTP code was incorrect or expired. Try again with a fresh code.",

@@ -18,6 +18,9 @@ import keyring as kr
 from keyring.errors import KeyringError
 
 from mcp_synology.core.errors import (
+    CHECK_COMMAND,
+    SETUP_COMMAND,
+    SETUP_NEW_CONFIG,
     AuthenticationError,
     CredentialHostError,
     LoginRefusedError,
@@ -163,7 +166,7 @@ def _setup_command(config: AppConfig, *, new_instance: bool = False) -> str:
     on #559), or can't connect with the host but not the port or HTTPS (QA round 2). With no
     config file, plain `setup` takes the host from SYNOLOGY_HOST. ``new_instance``: the instance
     ID is changing through that variable, so it's to be set, and not to the same value."""
-    command = _SETUP if config._source_path else "'mcp-synology setup'"
+    command = SETUP_COMMAND if config._source_path else SETUP_NEW_CONFIG
     variables = [
         v
         for v in _host_variables() + _connection_variables()
@@ -409,7 +412,7 @@ def resolve_credentials(config: AppConfig) -> tuple[str, str, str | None]:
                 # recover. Closes #38 (the operator-actionable hint).
                 logger.info(
                     "D-Bus socket not found at %s; OS keyring is unavailable. "
-                    "Run 'mcp-synology setup' from a real desktop session "
+                    f"Run {_setup_command(config)} from a real desktop session "
                     "(or under 'dbus-run-session'), or set credentials via the "
                     "SYNOLOGY_USERNAME / SYNOLOGY_PASSWORD / SYNOLOGY_DEVICE_ID "
                     "env vars to bypass the keyring entirely.",
@@ -473,7 +476,7 @@ def resolve_credentials(config: AppConfig) -> tuple[str, str, str | None]:
         raise AuthenticationError(
             "No credentials found.",
             suggestion=(
-                "Run 'mcp-synology setup' to store credentials in the OS keyring, "
+                f"Run {_setup_command(config)} to store credentials in the OS keyring, "
                 "or set SYNOLOGY_USERNAME and SYNOLOGY_PASSWORD environment variables."
             ),
         )
@@ -517,10 +520,6 @@ def credential_sources(config: AppConfig, *, cli: bool = False) -> dict[str, str
 
 
 _SETUP_PICKED_UP = "the running server picks it up"
-# The config file a user set up is usually `<instance_id>.yaml`, which `setup` and `check`
-# don't find on their own (pre-QA on QA round 3, #461).
-_SETUP = "'mcp-synology setup --config <your config file>'"
-_CHECK = "'mcp-synology check --config <your config file>'"
 _RECORD_HOST = "'mcp-synology check --config <full path to your config file>'"
 _TWO_FA = (403, 404, 406)
 
@@ -537,11 +536,11 @@ def refusal_advice(
     if code == 400:
         password, username = sources.get("password"), sources.get("username")
         if password == KEYRING:
-            advice = f"Run {_SETUP} to store the right password{picked}"
+            advice = f"Run {SETUP_COMMAND} to store the right password{picked}"
         else:
             advice = (
                 f"The password comes from {password}: correct it there{restart} "
-                "('mcp-synology setup' writes only the keyring)"
+                f"({SETUP_COMMAND} writes only the keyring)"
             )
         if username != KEYRING:
             advice += f". If the username is wrong, it comes from {username}: correct it there"
@@ -551,11 +550,11 @@ def refusal_advice(
     if code in _TWO_FA:
         device = sources.get("device_id")
         if device is None:
-            advice = f"Run {_SETUP} to sign in with a new 2FA code{picked}"
+            advice = f"Run {SETUP_COMMAND} to sign in with a new 2FA code{picked}"
         else:
             advice = (
                 f"The device token comes from {device}, which overrides the keyring: remove "
-                f"it there, then run {_SETUP} to sign in with a new 2FA code"
+                f"it there, then run {SETUP_COMMAND} to sign in with a new 2FA code"
                 + ("" if cli else ", and restart the server")
             )
         return f"{first}. Then: {advice[0].lower()}{advice[1:]}" if code == 406 else advice
@@ -572,7 +571,7 @@ def refusal_advice(
     explicit = sorted({v for k, v in sources.items() if v and v != KEYRING})
     where = (
         "mcp-synology tries again once the credentials change ("
-        f"{_SETUP} stores "
+        f"{SETUP_COMMAND} stores "
         f"new ones in the keyring; {_SETUP_PICKED_UP})"
     )
     if explicit:
@@ -638,7 +637,7 @@ class LoginRefusals:
             "from the NAS.",
             code=error.code,
             suggestion=(
-                f"{where}. After the fix, {_CHECK} tests the login once (each "
+                f"{where}. After the fix, {CHECK_COMMAND} tests the login once (each "
                 "failed check counts toward Auto Block)."
             ),
         )
@@ -805,7 +804,7 @@ class AuthManager:
                 raise AuthenticationError(
                     message,
                     code=_ERROR_2FA_REQUIRED,
-                    suggestion="Run: mcp-synology setup --config <your-config>",
+                    suggestion=f"Run {_setup_command(self._config)}.",
                 ) from e
             raise
 

@@ -2315,7 +2315,8 @@ class TestFirstLogin:
         # SYNOLOGY_USERNAME/PASSWORD are set (the fixture): `setup` can't change them.
         assert err["suggestion"] == (
             "The password comes from SYNOLOGY_PASSWORD in the server's environment (the MCP "
-            "client's config): correct it there and restart the server ('mcp-synology setup' "
+            "client's config): correct it there and restart the server "
+            "('mcp-synology setup --config <your config file>' "
             "writes only the keyring). If the username is wrong, it comes from "
             "SYNOLOGY_USERNAME in the server's environment (the MCP client's config): correct "
             "it there. After the fix, 'mcp-synology check --config <your config file>' tests the "

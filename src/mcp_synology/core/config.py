@@ -37,6 +37,7 @@ from pydantic import (
     model_validator,
 )
 
+from mcp_synology.core.errors import SETUP_COMMAND, SETUP_NEW_CONFIG
 from mcp_synology.core.local_paths import (
     CONTROL_CHARACTER_ADVICE,
     check_local_path_entries,
@@ -96,7 +97,7 @@ def host_problems(
     port_setting: str = "set connection.port",
     https_setting: str = "set https: true",
     ipv6_form: str = _IPV6_FILE_FORM,
-    credentials_setting: str = "go under auth or in the keyring (mcp-synology setup)",
+    credentials_setting: str = f"go under auth or in the keyring ({SETUP_COMMAND})",
 ) -> list[str]:
     """What keeps ``host`` from being a bare host name or IP address, as advice (#511 PR 2).
 
@@ -630,7 +631,11 @@ def quoted_path(path: Path) -> str:
     message that says to use it: `repr` switches to double quotes around a `'`, where `$(...)` in a
     folder's name runs when pasted (QA on #555). Each character that could forge a line is escaped,
     and only those, so the path stays readable; a path with one isn't one to use as shown."""
-    text = _shown_path(path)
+    return quoted_text(_shown_path(path))
+
+
+def quoted_text(text: str) -> str:
+    """Text as a POSIX shell takes it, each unprintable character written as an escape."""
     return _quoted_for_a_shell(
         "".join(c if c.isprintable() else c.encode("unicode_escape").decode() for c in text)
     )
@@ -762,8 +767,9 @@ def discover_config_path(explicit_path: str | None = None) -> Path:
         return home_config
     _refuse_a_working_folder_config()
     msg = (
-        "No config file found. Create one at ~/.config/mcp-synology/config.yaml "
-        "or specify with --config. See examples/ for sample configs."
+        f"No config file found. Run {SETUP_NEW_CONFIG} to create one, or name one with "
+        "--config: a file `setup` wrote isn't found without it, unless it's "
+        "~/.config/mcp-synology/config.yaml."
     )
     raise FileNotFoundError(msg)
 
@@ -867,7 +873,7 @@ def parse_env_value(env_var: str, dotted_path: str, value: str) -> Any:
                 ipv6_form="[fd00::1]",
                 credentials_setting=(
                     "go in SYNOLOGY_USERNAME and SYNOLOGY_PASSWORD or in the keyring "
-                    "(mcp-synology setup)"
+                    f"({SETUP_COMMAND})"
                 ),
             )
         ):
@@ -1136,12 +1142,12 @@ def _emit_warnings(config: AppConfig) -> None:
         if (os.environ.get("SYNOLOGY_PASSWORD") or "").strip():
             _warn_always(
                 "Password provided via the SYNOLOGY_PASSWORD environment variable. "
-                "Consider using 'mcp-synology setup' to store them securely in the OS keyring.",
+                f"Consider using {SETUP_COMMAND} to store it securely in the OS keyring.",
             )
         else:
             _warn_always(
                 "Plaintext password found in config file. "
-                "Use 'mcp-synology setup' to store credentials securely in the OS keyring.",
+                f"Use {SETUP_COMMAND} to store credentials securely in the OS keyring.",
             )
 
     conn = config.connection

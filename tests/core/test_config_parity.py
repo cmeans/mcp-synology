@@ -1239,7 +1239,7 @@ class TestAWorkingFolderConfigIsntLoaded:
         # What it says works, past the file that stopped the bare command.
         assert load_config(str(written)).connection is not None
 
-    def test_setup_says_nothing_extra_with_no_file_here(
+    def test_setup_names_the_file_with_no_file_here_too(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.chdir(tmp_path)
@@ -1247,8 +1247,13 @@ class TestAWorkingFolderConfigIsntLoaded:
         monkeypatch.delenv("SYNOLOGY_HOST", raising=False)
         self._no_nas(tmp_path, monkeypatch)
         result = CliRunner().invoke(main, ["setup"], input=self._ANSWERS)
-        assert (tmp_path / "home'configs" / "10-0-0-9.yaml").exists(), result.output
-        assert "To use it, name it" not in result.output
+        written = tmp_path / "home'configs" / "10-0-0-9.yaml"
+        assert written.exists(), result.output
+        # A bare `check` doesn't find `<instance_id>.yaml` either (QA on #555).
+        assert f"To use it, name it: mcp-synology check --config {shlex.quote(str(written))}" in (
+            result.output
+        )
+        assert "isn't loaded" not in result.output
 
     def test_named_with_config_it_loads(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -511,7 +511,7 @@ class TestSetupInteractive:
             assert "self-signed" not in result.output
 
     def test_interactive_setup_keyring_failure(self, tmp_path: Path) -> None:
-        """When keyring fails, show env var instructions and return."""
+        """When keyring fails, the config is still written: the variables need it (#481)."""
         runner = CliRunner()
         config_dir = tmp_path / "config"
 
@@ -532,8 +532,10 @@ class TestSetupInteractive:
             )
 
         assert result.exit_code == 0
-        # Should NOT have written a config file since keyring failed
-        assert not (config_dir / "192-168-1-50.yaml").exists()
+        written = config_dir / "192-168-1-50.yaml"
+        assert written.exists()
+        assert f"test it: mcp-synology check --config {written}" in result.output
+        assert "Connecting to NAS" not in result.output
 
     def test_interactive_setup_login_failure(self, tmp_path: Path) -> None:
         """When login fails, don't write a config file."""
@@ -1325,7 +1327,8 @@ class TestCheckLogin:
                 {},
                 "Authentication failed: No such account or incorrect password. The password "
                 "comes from auth.password in the config file: correct it there ('mcp-synology "
-                "setup' writes only the keyring). If the username is wrong, it comes from "
+                "setup --config <your config file>' writes only the keyring). If the username "
+                "is wrong, it comes from "
                 "auth.username in the config file: correct it there.",
             ),
             (
