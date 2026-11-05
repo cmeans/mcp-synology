@@ -369,20 +369,30 @@ def _setup_credential_flow(app_config: Any, verbose: bool) -> None:
 def _may_replace_entry(service: str, host: str, instance: str) -> bool:
     """Ask before replacing a keyring entry that isn't this host's (#536): two NAS with the same
     first label derive the same instance ID, and the other's config would then send this one's
-    password there. A keyring that can't be read says so itself when it's written to."""
+    password there. With no keyring at all there's nothing to replace, and writing says so. One
+    that fails now may work when written to, and another host's credentials would go unasked, so
+    that stops here (QA round 1 on #559). Any exception counts: backends raise their own types."""
     from mcp_synology.core.config import comparable_host
 
     try:
         import keyring
-        from keyring.errors import KeyringError
+        from keyring.errors import NoKeyringError
 
         recorded = (keyring.get_password(service, "host") or "").strip() or None
         # A record on its own, left by removing the rest, holds no credentials to replace.
         stored = any(
             keyring.get_password(service, k) for k in ("username", "password", "device_id")
         )
-    except (ImportError, KeyringError, OSError):
+    except (ImportError, NoKeyringError):
         return True
+    except Exception as e:
+        logger.debug("Keyring error reading entry %r: %s", instance, e, exc_info=True)
+        click.echo(
+            f"\nCouldn't read keyring entry {instance!r}, so nothing was changed. Check that the "
+            "OS keyring is unlocked and try again, or set SYNOLOGY_USERNAME and SYNOLOGY_PASSWORD "
+            "instead."
+        )
+        return False
     if not stored or recorded == comparable_host(host):
         return True
     whose = "for another host" if recorded else "with no host recorded"
@@ -393,10 +403,19 @@ def _may_replace_entry(service: str, host: str, instance: str) -> bool:
         default=False,
     ):
         return True
-    click.echo(
-        "Aborted, nothing changed. To keep both, give this NAS its own instance_id in a config "
-        "file, then run 'mcp-synology setup --config <that file>'."
+    keep_both = (
+        "To keep both, give this NAS its own instance_id in a config file, then run "
+        "'mcp-synology setup --config <that file>'."
     )
+    if recorded:
+        click.echo(f"Aborted, nothing changed. {keep_both}")
+    else:
+        # It may well be this NAS's own entry, from before hosts were recorded.
+        click.echo(
+            "Aborted, nothing changed. If these are this NAS's credentials, 'mcp-synology check "
+            "--config <full path to your config file>' records the host and keeps any 2FA device "
+            f"token. If they're another NAS's: {keep_both}"
+        )
     return False
 
 
@@ -411,25 +430,31 @@ def _store_keyring(service: str, username: str, password: str, host: str) -> boo
     """
     from mcp_synology.core.config import comparable_host
 
+    removed: list[str] = []
     try:
         import keyring
         from keyring.errors import PasswordDeleteError
 
         recorded = comparable_host(host)
         if (keyring.get_password(service, "host") or "").strip() != recorded:
-            for key in ("device_id", "password"):
+            for key in ("device_id", "password", "username"):
+                held = keyring.get_password(service, key)
                 with contextlib.suppress(PasswordDeleteError):  # there may be none
                     keyring.delete_password(service, key)
                 if keyring.get_password(service, key):
                     raise PasswordDeleteError(f"{key} is still stored")
+                if held:
+                    removed.append(key)
             keyring.set_password(service, "host", recorded)
         keyring.set_password(service, "username", username)
         keyring.set_password(service, "password", password)
         click.echo("\nCredentials stored in OS keyring.")
         return True
-    except Exception:
+    except Exception as e:
+        logger.debug("Keyring error storing credentials: %s", e, exc_info=True)
+        gone = f" Already removed from this entry: {', '.join(removed)}." if removed else ""
         click.echo(
-            "\nKeyring not available. Set environment variables instead:\n"
+            f"\nKeyring not available.{gone} Set environment variables instead:\n"
             f"  export SYNOLOGY_USERNAME={username}\n"
             f"  export SYNOLOGY_PASSWORD=<your-password>"
         )

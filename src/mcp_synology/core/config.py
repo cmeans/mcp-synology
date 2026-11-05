@@ -419,6 +419,8 @@ class AppConfig(BaseModel, extra="forbid"):
     # Whether a keyring entry with no recorded host may record this config's host (#536): only
     # from --config, with no variable changing the host or the entry.
     _host_may_be_recorded: bool = PrivateAttr(default=False)
+    # Credentials are resolved on every tool call, and this warning says the same each time.
+    _device_token_warned: bool = PrivateAttr(default=False)
 
     @property
     def host_may_be_recorded(self) -> bool:
@@ -1636,11 +1638,12 @@ def load_config(path: str | Path | None = None) -> AppConfig:
     config._source_path = config_path
     # Only --config: an `env` block can name a file with MCP_SYNOLOGY_CONFIG, or supply the default
     # location's through HOME (maintainer, 2026-11-05), and a `~/...` value's the same way (no
-    # shell expands it in an MCP client's args). Any value in the two variables counts, even an
-    # equal one, since only `setup` should settle a doubt.
+    # shell expands it in an MCP client's args). Only a full path: a relative one is whatever the
+    # client's working folder holds, such as a cloned repo (QA round 1 on #559). Any value in the
+    # two variables counts, even an equal one, since only `setup` should settle a doubt.
     config._host_may_be_recorded = (
         path is not None
-        and not str(path).startswith("~")
+        and Path(path).is_absolute()
         and not any(
             os.environ.get(v, "").strip() for v in ("SYNOLOGY_HOST", "SYNOLOGY_INSTANCE_ID")
         )

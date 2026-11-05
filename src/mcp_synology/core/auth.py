@@ -49,6 +49,11 @@ def _present_or_none(value: str | None) -> str | None:
     return value if (value and value.strip()) else None
 
 
+def _recorded_host(service: str) -> str | None:
+    """The host this keyring entry records, if any. Raises what the keyring raises."""
+    return (kr.get_password(service, "host") or "").strip() or None
+
+
 def _entry_is_for_this_host(config: AppConfig, service: str) -> tuple[bool, str | None]:
     """Whether this keyring entry is for ``connection.host``, and the host it records (#536).
 
@@ -60,7 +65,7 @@ def _entry_is_for_this_host(config: AppConfig, service: str) -> tuple[bool, str 
     from mcp_synology.core.config import comparable_host
 
     host = comparable_host(config.connection.host)
-    recorded = (kr.get_password(service, "host") or "").strip() or None
+    recorded = _recorded_host(service)
     if recorded is None and config.host_may_be_recorded:
         kr.set_password(service, "host", host)
         logger.info(
@@ -74,18 +79,57 @@ def _entry_is_for_this_host(config: AppConfig, service: str) -> tuple[bool, str 
 def _device_token_may_be_sent(config: AppConfig, service: str) -> bool:
     """A device token alone doesn't block a login with credentials from elsewhere, which carries
     none of the keyring's secrets, but it mustn't go to another host (maintainer, 2026-11-05).
-    Without it, a 2FA account gets DSM's own error and its advice."""
+    Without it, a 2FA account gets DSM's own error and its advice.
+
+    Only reads: a login that uses none of the entry's password shouldn't settle whose it is. An
+    entry with no record isn't known to be this host's, so its token stays out (QA round 1 on
+    #559: recording here pinned another NAS's password to this host, and refused its real config).
+    The server resolves credentials on every call, so this warns once per config.
+    """
+    if config.connection is None:  # the config's own validation requires it
+        raise RuntimeError("Config missing connection settings")
+    from mcp_synology.core.config import comparable_host
+
     try:
-        matches = _entry_is_for_this_host(config, service)[0]
-    except (KeyringError, OSError) as e:
-        logger.debug("Keyring error reading or recording the host: %s", e, exc_info=True)
+        matches = _recorded_host(service) == comparable_host(config.connection.host)
+    except Exception as e:  # backends raise their own types
+        logger.debug("Keyring error reading the host: %s", e, exc_info=True)
         matches = False
-    if not matches:
+    if not matches and not config._device_token_warned:
+        config._device_token_warned = True
         logger.warning(
             "Not sending the device token in keyring entry %r: it isn't recorded for this host",
             config.instance_id or "default",
         )
     return matches
+
+
+def _refusal_advice(config: AppConfig, host: str, recorded: str | None) -> str:
+    """What to do about a refused entry. The variables aren't in a terminal's environment when a
+    client's `env` block set them, and `setup` then stores for the file's host or instance, so it
+    has to run with the same ones; recording with `check` keeps a 2FA device token, which `setup`
+    removes (QA round 1 on #559)."""
+    import os
+
+    variables = [
+        v for v in ("SYNOLOGY_HOST", "SYNOLOGY_INSTANCE_ID") if os.environ.get(v, "").strip()
+    ]
+    # With no config file, plain `setup` takes the host from SYNOLOGY_HOST.
+    run_setup = _SETUP if config._source_path else "'mcp-synology setup'"
+    if variables:
+        run_setup += f" with the same {' and '.join(variables)} as this server"
+    if recorded is None and config._source_path and not variables:
+        fix = (
+            f"run {_RECORD_HOST} to record it, which keeps any 2FA device token, or {run_setup} "
+            "to store new credentials"
+        )
+    else:
+        fix = f"run {run_setup} to store credentials for it"
+    return (
+        f"If {host!r} is the right NAS, {fix}. If it isn't, check connection.host, SYNOLOGY_HOST "
+        "and the instance ID. A NAS reached by two addresses needs a second config with its own "
+        "instance_id."
+    )
 
 
 def _refuse_another_hosts_credentials(config: AppConfig, service: str) -> None:
@@ -99,40 +143,28 @@ def _refuse_another_hosts_credentials(config: AppConfig, service: str) -> None:
     if config.connection is None:  # the config's own validation requires it
         raise RuntimeError("Config missing connection settings")
     instance = config.instance_id or "default"
-    # With no config file, plain `setup` takes the host from SYNOLOGY_HOST.
-    run_setup = _SETUP if config._source_path else "'mcp-synology setup'"
-    advice = (
-        f"If {config.connection.host!r} is the right NAS, run {run_setup} to store credentials "
-        "for it. If it isn't, check connection.host, SYNOLOGY_HOST and the instance ID. A NAS "
-        "reached by two addresses needs a second config with its own instance_id."
-    )
     try:
         matches, recorded = _entry_is_for_this_host(config, service)
-    except (KeyringError, OSError) as e:
+    except Exception as e:  # backends raise their own types
         logger.debug("Keyring error reading or recording the host: %s", e, exc_info=True)
         raise CredentialHostError(
             f"Couldn't check which host the credentials in keyring entry {instance!r} are for, "
             f"so they aren't being sent to {config.connection.host!r}.",
             suggestion=(
-                "Unlock the OS keyring and try again, or set the credentials in "
-                "SYNOLOGY_USERNAME and SYNOLOGY_PASSWORD."
+                "Check that the OS keyring is unlocked and can be written to, then try again, or "
+                "set the credentials in SYNOLOGY_USERNAME and SYNOLOGY_PASSWORD."
             ),
         ) from None
     if matches:
         return
     # Not naming the recorded host in the text: an `env` block's author would learn the real NAS's
-    # name from the reply. `check` adds it.
-    reason = (
-        "are for another host"
-        if recorded
-        else "don't say which host they're for, and only a config named with --config, by a path "
-        "not starting with ~, with no SYNOLOGY_HOST or SYNOLOGY_INSTANCE_ID, can say so on its "
-        "first use"
-    )
+    # name from the reply. `check` adds it. The first-use conditions are in the docs, not here: a
+    # model that can edit a client's config shouldn't get them as a recipe.
+    reason = "are for another host" if recorded else "don't say which host they're for"
     error = CredentialHostError(
         f"The credentials in keyring entry {instance!r} {reason}, so they aren't being sent to "
         f"{config.connection.host!r}.",
-        suggestion=advice,
+        suggestion=_refusal_advice(config, config.connection.host, recorded),
     )
     error.recorded_host = recorded
     raise error
@@ -301,6 +333,7 @@ _SETUP_PICKED_UP = "the running server picks it up"
 # don't find on their own (pre-QA on QA round 3, #461).
 _SETUP = "'mcp-synology setup --config <your config file>'"
 _CHECK = "'mcp-synology check --config <your config file>'"
+_RECORD_HOST = "'mcp-synology check --config <full path to your config file>'"
 _TWO_FA = (403, 404, 406)
 
 

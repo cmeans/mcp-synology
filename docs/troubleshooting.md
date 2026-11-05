@@ -66,7 +66,7 @@ as your file (#282, #283, #292). See [unavailable](error-codes.md#unavailable).
 
 **Why:** a keyring entry is tied to the host it was set up for, and this config points elsewhere, or the entry is from an older version and this config can't say which host is meant. No credential was sent. `mcp-synology check` names the host it was set up for.
 
-**What to do:** if this host is the right NAS, run `mcp-synology setup --config <your config file>`. If it isn't, fix `connection.host`, `SYNOLOGY_HOST` or `instance_id`. Two NAS whose names start the same need their own `instance_id`. See [Credentials Are Tied to a Host](credentials.md#credentials-are-tied-to-a-host).
+**What to do:** for an entry from an older version, if this host is the right NAS, run `mcp-synology check --config <full path to your config file>` at a terminal: it records the host and keeps any 2FA device token. Otherwise, if this host is the right NAS, run `mcp-synology setup --config <your config file>`, which removes the token; if the client's `env` block sets `SYNOLOGY_HOST` or `SYNOLOGY_INSTANCE_ID`, run it with the same value. If it isn't, fix `connection.host`, `SYNOLOGY_HOST` or `instance_id`. Two NAS whose names start the same need their own `instance_id`. See [Credentials Are Tied to a Host](credentials.md#credentials-are-tied-to-a-host).
 
 ### Sign-in worked, then fails with `auth_failed` on a 2FA account
 
