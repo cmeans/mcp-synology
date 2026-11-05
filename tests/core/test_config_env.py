@@ -501,9 +501,9 @@ def test_a_newline_in_the_path_cant_forge_a_log_line(
 
 
 def test_a_newline_in_the_working_folder_cant_forge_a_log_line(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """QA round 3 on #529: a line naming the working folder was unquoted. Now the warning that a
+    """QA round 3 on #529: a line naming the working folder was unquoted. Now the error that a
     config there isn't loaded names it (#552)."""
     folder = tmp_path / "evil\n2026-11-02 [WARNING] fake: injected"
     folder.mkdir()
@@ -512,16 +512,10 @@ def test_a_newline_in_the_working_folder_cant_forge_a_log_line(
     monkeypatch.delenv("SYNOLOGY_HOST", raising=False)
     monkeypatch.chdir(folder)
     _config(tmp_path).rename(folder / "mcp-synology.yaml")
-    with (
-        caplog.at_level(logging.DEBUG, logger="mcp_synology.core.config"),
-        pytest.raises(FileNotFoundError),
-    ):
+    with pytest.raises(FileNotFoundError) as excinfo:
         load_config()
-    lines = [r.getMessage() for r in caplog.records if "evil" in r.getMessage()]
-    assert lines
-    for line in lines:
-        assert "\n" not in line
-        assert "\\n2026-11-02 [WARNING] fake" in line
+    assert "\n" not in str(excinfo.value)
+    assert "\\n2026-11-02 [WARNING] fake" in str(excinfo.value)
 
 
 # -- maintainer decision on #529: an empty config path is an error ----------------------
@@ -539,8 +533,9 @@ def test_a_blank_mcp_synology_config_is_an_error(
     # Even with a default config file present and SYNOLOGY_HOST set: an unfilled ""
     # in a client's env block mustn't drop the config it was meant to name.
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.chdir(tmp_path)
-    _config(tmp_path).rename(tmp_path / "mcp-synology.yaml")
+    home_config = tmp_path / "home" / ".config" / "mcp-synology" / "config.yaml"
+    home_config.parent.mkdir(parents=True)
+    _config(tmp_path).rename(home_config)
     monkeypatch.setenv("SYNOLOGY_HOST", "nas.example")
     monkeypatch.setenv("MCP_SYNOLOGY_CONFIG", value)
     with pytest.raises(FileNotFoundError) as excinfo:
@@ -552,10 +547,11 @@ def test_a_blank_mcp_synology_config_is_an_error(
 def test_an_empty_config_flag_is_an_error(
     value: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # It used to fall through to the default locations, and to env-only mode.
+    # It used to fall through to the default location, and to env-only mode.
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.chdir(tmp_path)
-    _config(tmp_path).rename(tmp_path / "mcp-synology.yaml")
+    home_config = tmp_path / "home" / ".config" / "mcp-synology" / "config.yaml"
+    home_config.parent.mkdir(parents=True)
+    _config(tmp_path).rename(home_config)
     monkeypatch.setenv("SYNOLOGY_HOST", "nas.example")
     with pytest.raises(FileNotFoundError) as excinfo:
         load_config(value)

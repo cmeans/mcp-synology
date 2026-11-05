@@ -597,21 +597,30 @@ def _shown_path(path: Path) -> str:
         return str(path)
 
 
-def _say_a_working_folder_config_isnt_loaded() -> None:
-    """A folder someone merely opened could otherwise name another host and be sent the password
-    stored for this one, or ask for more access (#552). So a file there counts only when it's
-    named, and this says so at any log level, since it may be why the config seems ignored."""
+class WorkingFolderConfigNotLoadedError(FileNotFoundError):
+    """A `./mcp-synology.yaml` is there, and it counts only when it's named (#552).
+
+    A folder someone merely opened could otherwise name another host and be sent the password
+    stored for this one, or ask for more access. A FileNotFoundError, so `setup` can still make
+    a config from here, but `load_config` never answers it with env-only mode: that would move
+    someone relying on this file from HTTPS to plain HTTP, the downgrade #499 refuses.
+    """
+
+
+def _refuse_a_working_folder_config() -> None:
     local_config = Path("mcp-synology.yaml")
     try:
-        if not _config_exists(local_config):
+        if not local_config.is_file():
             return
-    except OSError:  # a link into a locked folder, a folder that can't be searched: not loaded
+    except OSError:  # a link into a locked folder, on the Pythons where is_file raises
         return
-    shown = _shown_path(local_config)
-    _warn_always(
-        f"{shown!r} isn't loaded automatically: a config in the folder you're in could send your "
-        f"stored credentials to another host. To use it, pass --config {shown!r}."
+    msg = (
+        f"{_shown_path(local_config)!r} isn't loaded automatically: a config in the folder you're "
+        "in could send your stored credentials to another host. To use it, pass "
+        "--config ./mcp-synology.yaml. To run without it, move it, or put your config at "
+        "~/.config/mcp-synology/config.yaml."
     )
+    raise WorkingFolderConfigNotLoadedError(msg)
 
 
 def _expanded_config_path(value: str, source: str) -> Path:
@@ -684,7 +693,7 @@ def discover_config_path(explicit_path: str | None = None) -> Path:
     if home_found:
         logger.info("Config: %r", str(home_config))
         return home_config
-    _say_a_working_folder_config_isnt_loaded()
+    _refuse_a_working_folder_config()
     msg = (
         "No config file found. Create one at ~/.config/mcp-synology/config.yaml "
         "or specify with --config. See examples/ for sample configs."
@@ -1536,6 +1545,8 @@ def load_config(path: str | Path | None = None) -> AppConfig:
     """
     try:
         config_path = discover_config_path(None if path is None else str(path))
+    except WorkingFolderConfigNotLoadedError:
+        raise  # never env-only mode: see the class
     except FileNotFoundError:
         # A file named by --config or MCP_SYNOLOGY_CONFIG must exist: never fall back
         # to env-only mode (#499).

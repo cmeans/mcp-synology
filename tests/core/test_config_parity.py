@@ -23,6 +23,7 @@ from click.testing import CliRunner
 import mcp_synology.cli
 from mcp_synology.cli import logging_
 from mcp_synology.cli.main import main
+from mcp_synology.cli.startup import load_or_exit
 from mcp_synology.core import config as config_module
 from mcp_synology.core import local_paths
 from mcp_synology.core.config import (
@@ -899,15 +900,24 @@ class TestRound2OnPr541:
         folder.chmod(0o000)
         request.addfinalizer(lambda: folder.chmod(0o700))
 
-    @pytest.mark.parametrize("state", ["under a locked folder", "a link into one", "locked"])
-    def test_a_working_folder_it_cant_read_is_simply_no_config(
+    @pytest.mark.parametrize(
+        ("state", "message"),
+        [
+            # Its relative name works from inside, so the file is there to name.
+            ("under a locked folder", "isn't loaded automatically"),
+            ("a link into one", "No config file found"),
+            ("locked", "No config file found"),
+        ],
+    )
+    def test_a_working_folder_it_cant_read_never_loads(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
         request: pytest.FixtureRequest,
         state: str,
+        message: str,
     ) -> None:
-        """Nothing there would be loaded anyway (#552), so no state of it can stop a command."""
+        """Nothing there would be loaded anyway (#552), and no state of it is a traceback."""
         locked = tmp_path / "locked"
         locked.mkdir()
         here = locked / "here" if state == "under a locked folder" else tmp_path / "here"
@@ -918,7 +928,7 @@ class TestRound2OnPr541:
             (here / "mcp-synology.yaml").write_text("{}\n", encoding="utf-8")
         monkeypatch.chdir(here)
         self._locked(here if state == "locked" else locked, request)
-        with pytest.raises(FileNotFoundError, match="No config file found"):
+        with pytest.raises(FileNotFoundError, match=message):
             discover_config_path()
 
     def test_a_locked_config_folder_stops_and_suggests_config(
@@ -978,78 +988,73 @@ class TestAWorkingFolderConfigIsntLoaded:
         monkeypatch.delenv("MCP_SYNOLOGY_CONFIG", raising=False)
         return path
 
-    def test_with_no_other_config_its_no_config(
+    def test_with_no_other_config_it_stops_and_says_what_to_do(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        self._in_this_folder(tmp_path, monkeypatch)
+        path = self._in_this_folder(tmp_path, monkeypatch)
         monkeypatch.delenv("SYNOLOGY_HOST", raising=False)
-        with pytest.raises(FileNotFoundError, match="No config file found"):
+        with pytest.raises(FileNotFoundError) as excinfo:
             load_config()
+        text = str(excinfo.value)
+        assert text.startswith(f"{str(path)!r} isn't loaded automatically")
+        # Literal, so it works pasted into a shell from any folder's name.
+        assert "pass --config ./mcp-synology.yaml." in text
 
-    def test_with_synology_host_its_env_only_and_nothing_of_it_applies(
+    def test_with_synology_host_it_still_stops(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """Env-only mode would move someone relying on this file from HTTPS to plain HTTP, the
+        downgrade #499 refuses for a named file."""
         self._in_this_folder(tmp_path, monkeypatch)
         monkeypatch.setenv("SYNOLOGY_HOST", "nas.example")
-        config = load_config()
-        assert config.connection is not None
-        assert config.connection.host == "nas.example"
-        assert config.instance_id == "nas"
-        assert config.allowed_local_paths is None
-        assert config.instructions_file is None
-        assert config.logging.file is None
-        assert {m.permission for m in config.modules.values()} == {"read"}
+        with pytest.raises(FileNotFoundError, match="isn't loaded automatically"):
+            load_config()
 
-    def test_the_home_config_wins_and_nothing_is_said(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        caplog: pytest.LogCaptureFixture,
-    ) -> None:
+    def test_the_home_config_wins(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         self._in_this_folder(tmp_path, monkeypatch)
         home_config = Path.home() / ".config" / "mcp-synology" / "config.yaml"
         home_config.parent.mkdir(parents=True)
         home_config.write_text(f"{GOOD_HEAD}modules: {{filestation: }}\n", encoding="utf-8")
-        with caplog.at_level("WARNING", logger=config_module.__name__):
-            assert discover_config_path() == home_config
-        assert not [m for m in caplog.messages if "isn't loaded" in m]
+        assert discover_config_path() == home_config
 
-    def test_the_warning_shows_at_any_log_level_and_says_what_to_do(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        request: pytest.FixtureRequest,
-        caplog: pytest.LogCaptureFixture,
+    @pytest.mark.parametrize("kind", ["folder", "link to nothing", "pipe"])
+    def test_what_isnt_a_regular_file_is_ignored(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
     ) -> None:
-        """It may be why a config seems ignored, and `SYNOLOGY_LOG_LEVEL=error` mustn't hide it."""
-        path = self._in_this_folder(tmp_path, monkeypatch)
-        # The logger's level only: `caplog.at_level` also sets its handler's, which would drop
-        # the record however it's logged.
-        level = config_module.logger.level
-        config_module.logger.setLevel(logging.ERROR)
-        request.addfinalizer(lambda: config_module.logger.setLevel(level))
-        with pytest.raises(FileNotFoundError):
+        """It couldn't be used as a config, so advice to pass it would only fail next. And with
+        `SYNOLOGY_HOST` set, env-only mode carries on."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("MCP_SYNOLOGY_CONFIG", raising=False)
+        name = tmp_path / "mcp-synology.yaml"
+        if kind == "folder":
+            name.mkdir()
+        elif kind == "pipe":
+            if not hasattr(os, "mkfifo"):
+                pytest.skip("no named pipes here")
+            os.mkfifo(name)
+        else:
+            name.symlink_to(tmp_path / "nothing")
+        with pytest.raises(FileNotFoundError, match="No config file found"):
             discover_config_path()
-        shown = repr(str(path))
-        assert any(
-            m.startswith(f"{shown} isn't loaded automatically") and f"--config {shown}" in m
-            for m in caplog.messages
-        )
+        monkeypatch.setenv("SYNOLOGY_HOST", "nas.example")
+        assert load_config().connection is not None
 
-    def test_nothing_is_said_with_no_file_there(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        caplog: pytest.LogCaptureFixture,
+    def test_no_file_there_is_the_plain_no_config_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.chdir(tmp_path)
         monkeypatch.delenv("MCP_SYNOLOGY_CONFIG", raising=False)
-        with (
-            caplog.at_level("WARNING", logger=config_module.__name__),
-            pytest.raises(FileNotFoundError),
-        ):
+        with pytest.raises(FileNotFoundError, match="No config file found"):
             discover_config_path()
-        assert not [m for m in caplog.messages if "isn't loaded" in m]
+
+    def test_setup_can_still_make_a_config_from_here(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A FileNotFoundError, which `setup` answers by asking; `check` and `serve` stop."""
+        self._in_this_folder(tmp_path, monkeypatch)
+        monkeypatch.delenv("SYNOLOGY_HOST", raising=False)
+        with pytest.raises(FileNotFoundError):
+            load_or_exit(None, configure_logging=False, missing_raises=True)
 
     def test_named_with_config_it_loads(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1074,14 +1079,13 @@ class TestAWorkingFolderConfigIsntLoaded:
     def test_a_real_command_shows_it_at_the_error_log_level(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, run_capped: Any, command: str
     ) -> None:
-        """In a child: the warning goes to the real stderr, which `CliRunner` doesn't capture."""
         self._in_this_folder(tmp_path, monkeypatch)
-        monkeypatch.delenv("SYNOLOGY_HOST", raising=False)
+        monkeypatch.setenv("SYNOLOGY_HOST", "127.0.0.2")
         monkeypatch.setenv("SYNOLOGY_LOG_LEVEL", "error")
         result = run_capped("-c", "from mcp_synology.cli import main; main()", command)
         assert result.returncode == 1
-        assert "isn't loaded automatically" in result.stderr
-        assert "No config file found" in result.stderr + result.stdout
+        assert "isn't loaded automatically" in result.stderr + result.stdout
+        assert "attacker.example" not in result.stderr + result.stdout
 
 
 class TestPreQa5OnPr541:
@@ -1438,21 +1442,21 @@ class TestRound1OnPr541:
         home_config = tmp_path / ".config" / "mcp-synology" / "config.yaml"
         home_config.parent.mkdir(parents=True)
         home_config.write_text(f"{GOOD_HEAD}modules: {{filestation: }}\n", encoding="utf-8")
-
-        def gone() -> Path:
-            raise FileNotFoundError(2, "No such file or directory")
-
-        monkeypatch.setattr(Path, "cwd", staticmethod(gone))
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        gone = tmp_path / "gone"
+        gone.mkdir()
+        monkeypatch.chdir(gone)
+        gone.rmdir()
         monkeypatch.setenv("SYNOLOGY_HOST", "nas")
         assert discover_config_path() == home_config
 
     def test_a_deleted_working_folder_with_no_config_says_so(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        def gone() -> Path:
-            raise FileNotFoundError(2, "No such file or directory")
-
-        monkeypatch.setattr(Path, "cwd", staticmethod(gone))
+        gone = tmp_path / "gone"
+        gone.mkdir()
+        monkeypatch.chdir(gone)
+        gone.rmdir()
         with pytest.raises(FileNotFoundError, match="No config file found"):
             discover_config_path()
 
