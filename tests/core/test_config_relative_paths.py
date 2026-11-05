@@ -176,8 +176,23 @@ def test_a_download_folder_that_isnt_utf8_gets_the_settings_own_error(
     tmp_path: Path, working_folder: Path
 ) -> None:
     """QA round 3 on #561: left for the schema, whose error names the setting."""
-    with pytest.raises(ValueError, match=r"modules\.filestation\.settings\.default_download_dir"):
+    with pytest.raises(ValueError, match="default_download_dir: Input should be a valid string"):
         validate_config(_binary_download_folder(tmp_path / "home-config", "//4="))
+
+
+@pytest.mark.parametrize("value", ["[dl]", "{a: b}", "5"], ids=["list", "mapping", "number"])
+def test_a_download_folder_that_isnt_text_gets_the_settings_own_error(
+    tmp_path: Path, working_folder: Path, value: str
+) -> None:
+    """Pre-QA on #561: the resolver leaves it for the schema, rather than crashing on it."""
+    path = _file(tmp_path / "home-config", "")
+    path.write_text(
+        "schema_version: 1\nconnection: {host: nas}\n"
+        f"modules: {{filestation: {{settings: {{default_download_dir: {value}}}}}}}\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="default_download_dir: Input should be a valid string"):
+        validate_config(path)
 
 
 def test_every_module_setting_named_as_a_local_path_is_accounted_for() -> None:

@@ -59,6 +59,10 @@ BAD_CONFIGS: dict[str, tuple[str, str]] = {
         "no value inside",
     ),
     "not_a_mapping": ("- a\n- b\n", "must be a YAML mapping"),
+    "blank_binary_setting": (
+        f"{GOOD_HEAD}modules: {{filestation: {{settings: {{default_download_dir: !!binary wqA=}}}}}}\n",
+        "modules.filestation.settings.default_download_dir",
+    ),
     "no_known_module": (f"{GOOD_HEAD}modules: {{filestaton: }}\n", "No known module is enabled"),
     "bad_yaml": (f"schema_version: 1\nauth: {{password: *{SECRET}\n", "isn't valid YAML"),
     "unknown_key": (f"{GOOD_HEAD}modules: {{filestation: }}\npasword: {SECRET}\n", "pasword"),
