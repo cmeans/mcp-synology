@@ -467,6 +467,7 @@ def _store_keyring(service: str, username: str, password: str, host: str) -> boo
     backends raise the same error for "no such password" and for a real failure, and a chain of
     backends deletes from only the first. Any exception counts: backends raise their own types.
     """
+    from mcp_synology.core.auth import NO_KEYRING_2FA_ADVICE, no_keyring_here
     from mcp_synology.core.config import comparable_host, quoted_text
 
     removed: list[str] = []
@@ -499,6 +500,8 @@ def _store_keyring(service: str, username: str, password: str, host: str) -> boo
             f"  SYNOLOGY_USERNAME={quoted_text(username)}\n"
             "  SYNOLOGY_PASSWORD=<your password>"
         )
+        if no_keyring_here():
+            click.echo(f"If this account uses 2FA: {NO_KEYRING_2FA_ADVICE}.")
         return False
 
 

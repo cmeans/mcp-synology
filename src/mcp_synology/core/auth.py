@@ -522,6 +522,26 @@ def credential_sources(config: AppConfig, *, cli: bool = False) -> dict[str, str
 _SETUP_PICKED_UP = "the running server picks it up"
 _RECORD_HOST = "'mcp-synology check --config <full path to your config file>'"
 _TWO_FA = (403, 404, 406)
+# `setup` never prints the token (maintainer, 2026-11-05), so it comes from a machine that
+# can store one. Naming `setup` alone sent a host with no keyring in a circle (#481).
+NO_KEYRING_2FA_ADVICE = (
+    "This host has no OS keyring, so a 2FA device token can't be stored here: run "
+    f"{SETUP_COMMAND} on a machine with one, read the token there with 'keyring get "
+    "mcp-synology/<instance_id> device_id', and set it in SYNOLOGY_DEVICE_ID here"
+)
+
+
+def no_keyring_here() -> bool:
+    """True when `keyring` found no backend, as on Docker. A locked or failing keyring is
+    still one that `setup` can use once it works."""
+    try:
+        import keyring
+        from keyring.backends.fail import Keyring
+
+        return isinstance(keyring.get_keyring(), Keyring)
+    except Exception as e:  # backends raise their own types
+        logger.debug("Keyring backend check failed: %s", e, exc_info=True)
+        return False
 
 
 def refusal_advice(
@@ -549,7 +569,11 @@ def refusal_advice(
         return advice
     if code in _TWO_FA:
         device = sources.get("device_id")
-        if device is None:
+        if no_keyring_here():
+            advice = NO_KEYRING_2FA_ADVICE + restart
+            if device is not None:
+                advice = f"The device token comes from {device}. {advice}"
+        elif device is None:
             advice = f"Run {SETUP_COMMAND} to sign in with a new 2FA code{picked}"
         else:
             advice = (

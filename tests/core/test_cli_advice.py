@@ -21,7 +21,9 @@ from keyring.backends.fail import Keyring
 
 import mcp_synology
 from mcp_synology.cli.main import main
+from mcp_synology.core.auth import KEYRING, NO_KEYRING_2FA_ADVICE, refusal_advice
 from mcp_synology.core.config import discover_config_path, load_config
+from tests.memory_keyring import MemoryKeyring
 
 SRC = Path(mcp_synology.__file__).parent
 BARE = re.compile(r"mcp-synology (setup|check)\b(?! --config)")
@@ -134,6 +136,53 @@ class TestSetupWithNoKeyring:
         result = CliRunner().invoke(main, ["setup", "--config", str(config)], input="me\nhunter2\n")
         assert result.exit_code == 0, result.output
         assert f"test it: mcp-synology check --config {shlex.quote(str(config))}" in result.output
+
+
+@pytest.mark.usefixtures("no_keyring")
+class TestTwoFactorWithNoKeyring:
+    """`setup` can't keep a token here and never prints one, so naming it alone went in a
+    circle (#481)."""
+
+    SOURCES = {"username": "env", "password": "env", "device_id": None}
+
+    @pytest.mark.parametrize("code", [403, 404])
+    def test_the_advice_names_the_variable(self, code: int) -> None:
+        advice = refusal_advice(code, "", self.SOURCES, cli=True)
+        assert advice == NO_KEYRING_2FA_ADVICE
+        assert "SYNOLOGY_DEVICE_ID" in advice
+        assert "keyring get mcp-synology/<instance_id> device_id" in advice
+
+    def test_a_running_server_needs_the_restart(self) -> None:
+        advice = refusal_advice(403, "", self.SOURCES)
+        assert advice.endswith(" and restart the server")
+
+    def test_a_rejected_token_says_where_it_came_from(self) -> None:
+        sources = {**self.SOURCES, "device_id": "SYNOLOGY_DEVICE_ID in this shell"}
+        advice = refusal_advice(403, "", sources, cli=True)
+        assert advice.startswith("The device token comes from SYNOLOGY_DEVICE_ID in this shell.")
+        assert "remove it" not in advice
+
+    def test_setup_says_it_up_front(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "config"
+        with (
+            patch("mcp_synology.cli.setup._CONFIG_DIR", config_dir),
+            patch("mcp_synology.core.config.discover_config_path", side_effect=FileNotFoundError),
+        ):
+            result = CliRunner().invoke(main, ["setup"], input=_ANSWERS)
+        assert f"If this account uses 2FA: {NO_KEYRING_2FA_ADVICE}." in result.output
+
+
+def test_a_keyring_keeps_the_usual_advice(no_keyring: None) -> None:
+    previous = keyring.get_keyring()
+    keyring.set_keyring(MemoryKeyring())
+    try:
+        advice = refusal_advice(
+            403, "", {"username": KEYRING, "password": KEYRING, "device_id": None}, cli=True
+        )
+    finally:
+        keyring.set_keyring(previous)
+    assert advice.startswith("Run 'mcp-synology setup --config <your config file>'")
+    assert "SYNOLOGY_DEVICE_ID" not in advice
 
 
 def test_no_config_says_setup_makes_one(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

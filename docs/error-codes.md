@@ -47,7 +47,9 @@ Fix:
 1. Run `mcp-synology check -v`. The verbose output exercises the full auth chain
    and reports which step fails (lookup → request → response).
 2. If 2FA is required, or DSM rejected the stored device token, run
-   `mcp-synology setup` and complete the OTP exchange. This stores a new device
+   `mcp-synology setup --config <your config file>` and complete the OTP exchange
+   (on a host with no keyring, see
+   [2FA with no keyring](credentials.md#2fa-with-no-keyring)). This stores a new device
    token in the keyring so subsequent runs do not need the OTP code. A `device_id`
    set in the environment or the config file overrides the keyring: remove it there
    first (the error's suggestion says where it comes from).
