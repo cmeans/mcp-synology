@@ -417,7 +417,7 @@ class AppConfig(BaseModel, extra="forbid"):
     # The file this came from, for errors found after loading; None in env-var-only mode.
     _source_path: Path | None = PrivateAttr(default=None)
     # Whether a keyring entry with no recorded host may record this config's host (#536): only
-    # from the default location or --config, with no variable changing the host or the entry.
+    # from --config, with no variable changing the host or the entry.
     _host_may_be_recorded: bool = PrivateAttr(default=False)
 
     @property
@@ -1634,11 +1634,12 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         e.add_note(config_file_note(config_path))
         raise
     config._source_path = config_path
-    # MCP_SYNOLOGY_CONFIG is left out: the same `env` block that sets it can set the rest. Any
-    # value in these two counts, even an equal one, since only `setup` should settle a doubt.
-    config._host_may_be_recorded = (
-        path is not None or os.environ.get("MCP_SYNOLOGY_CONFIG") is None
-    ) and not any(os.environ.get(v, "").strip() for v in ("SYNOLOGY_HOST", "SYNOLOGY_INSTANCE_ID"))
+    # Only --config: an `env` block can name a file with MCP_SYNOLOGY_CONFIG, or supply the default
+    # location's through HOME (maintainer, 2026-11-05). Any value in these two counts, even an
+    # equal one, since only `setup` should settle a doubt.
+    config._host_may_be_recorded = path is not None and not any(
+        os.environ.get(v, "").strip() for v in ("SYNOLOGY_HOST", "SYNOLOGY_INSTANCE_ID")
+    )
 
     logger.debug(
         "Config loaded: instance_id=%s, host=%s, port=%s, https=%s, modules=%s",

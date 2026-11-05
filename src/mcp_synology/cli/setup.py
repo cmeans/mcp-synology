@@ -377,15 +377,19 @@ def _may_replace_entry(service: str, host: str, instance: str) -> bool:
         from keyring.errors import KeyringError
 
         recorded = keyring.get_password(service, "host")
-        stored = recorded or keyring.get_password(service, "password")
+        # A record on its own, left by removing the rest, holds no credentials to replace.
+        stored = any(
+            keyring.get_password(service, k) for k in ("username", "password", "device_id")
+        )
     except (ImportError, KeyringError, OSError):
         return True
     if not stored or recorded == comparable_host(host):
         return True
     whose = "for another host" if recorded else "with no host recorded"
     if click.confirm(
-        f"\nKeyring entry {instance!r} already holds credentials {whose}. Replacing it stops any "
-        f"config using that entry from logging in until it's set up again. Replace it for {host}?",
+        f"\nKeyring entry {instance!r} already holds credentials {whose}. Replacing it removes any "
+        "2FA device token, and stops any other config using that entry from logging in until "
+        f"it's set up again. Replace it for {host}?",
         default=False,
     ):
         return True
@@ -399,9 +403,9 @@ def _may_replace_entry(service: str, host: str, instance: str) -> bool:
 def _store_keyring(service: str, username: str, password: str, host: str) -> bool:
     """Store credentials and the host they're for in the OS keyring. True on success.
 
-    The host goes last: stopped partway, the old host's record over a new password refuses the
-    next login, instead of sending the password anywhere. A device token from another host goes
-    first: it would otherwise be sent to this one.
+    When the host changes, the old secrets go first and the new host before the new password, so
+    a stop partway leaves nothing to send to the wrong host. The old device token would otherwise
+    be sent to this one.
     """
     from mcp_synology.core.config import comparable_host
 
@@ -411,11 +415,12 @@ def _store_keyring(service: str, username: str, password: str, host: str) -> boo
 
         recorded = comparable_host(host)
         if keyring.get_password(service, "host") != recorded:
-            with contextlib.suppress(PasswordDeleteError):  # there may be none
-                keyring.delete_password(service, "device_id")
+            for key in ("device_id", "password"):
+                with contextlib.suppress(PasswordDeleteError):  # there may be none
+                    keyring.delete_password(service, key)
+            keyring.set_password(service, "host", recorded)
         keyring.set_password(service, "username", username)
         keyring.set_password(service, "password", password)
-        keyring.set_password(service, "host", recorded)
         click.echo("\nCredentials stored in OS keyring.")
         return True
     except (ImportError, KeyringError, OSError):

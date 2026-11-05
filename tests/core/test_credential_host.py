@@ -193,11 +193,10 @@ class TestAMismatchRefuses:
             await AuthManager(config, client).login()
         client.request.assert_not_called()
 
-    @pytest.mark.parametrize("key", ["username", "password", "device_id"])
-    def test_any_one_value_from_the_keyring_refuses(
+    @pytest.mark.parametrize("key", ["username", "password"])
+    def test_a_username_or_password_alone_from_the_keyring_refuses(
         self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, key: str
     ) -> None:
-        """A stale device token goes to DSM as well, so it's tied to the host too."""
         service = "mcp-synology/nas"
         store.values[(service, key)] = "from-keyring"
         store.values[(service, "host")] = "nas.home"
@@ -211,7 +210,7 @@ class TestAMismatchRefuses:
     def test_a_keyring_that_cant_answer_about_the_host_refuses(
         self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failing: str
     ) -> None:
-        """The read's own handler would otherwise carry on with what it had already read."""
+        """Its own message, not "no credentials found", which the read's handler would give."""
         _entry(store, "nas")
         real = getattr(store, failing)
 
@@ -280,7 +279,24 @@ class TestAnEntryWithNoRecordedHost:
         assert resolve_credentials(load_config(_file(tmp_path, "NAS.home")))[1] == "hunter2"
         assert store.values[("mcp-synology/nas", "host")] == "nas.home"
 
-    def test_the_default_location_records_it(
+    def test_the_default_location_doesnt_record_it(
+        self, store: MemoryKeyring, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Pre-QA on #536: it's found through HOME, which an `env` block can set, so a planted
+        `config.yaml` chose the host and got the password."""
+        monkeypatch.chdir(tmp_path)
+        home_config = Path.home() / ".config" / "mcp-synology" / "config.yaml"
+        home_config.parent.mkdir(parents=True)
+        home_config.write_text(
+            "schema_version: 1\nconnection: {host: nas.home}\nmodules: {filestation: {}}\n",
+            encoding="utf-8",
+        )
+        _entry(store, "nas")
+        with pytest.raises(AuthenticationError, match="don't say which host"):
+            resolve_credentials(load_config())
+        assert ("mcp-synology/nas", "host") not in store.values
+
+    def test_the_default_location_logs_in_once_recorded(
         self, store: MemoryKeyring, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         monkeypatch.chdir(tmp_path)
@@ -290,9 +306,40 @@ class TestAnEntryWithNoRecordedHost:
             "schema_version: 1\nconnection: {host: nas.home}\nmodules: {filestation: {}}\n",
             encoding="utf-8",
         )
-        _entry(store, "nas")
+        _entry(store, "nas", "nas.home")
         assert resolve_credentials(load_config())[1] == "hunter2"
+
+    def test_config_wins_over_the_variable(
+        self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """--config names the file, so MCP_SYNOLOGY_CONFIG beside it changes nothing."""
+        _entry(store, "nas")
+        monkeypatch.setenv("MCP_SYNOLOGY_CONFIG", str(tmp_path / "elsewhere.yaml"))
+        assert resolve_credentials(load_config(_file(tmp_path, "nas.home")))[1] == "hunter2"
         assert store.values[("mcp-synology/nas", "host")] == "nas.home"
+
+    @pytest.mark.parametrize("var", ["SYNOLOGY_HOST", "SYNOLOGY_INSTANCE_ID"])
+    def test_a_blank_variable_counts_as_unset(
+        self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, var: str
+    ) -> None:
+        _entry(store, "nas")
+        monkeypatch.setenv(var, "   ")
+        assert resolve_credentials(load_config(_file(tmp_path, "nas.home")))[1] == "hunter2"
+
+    def test_a_blank_recorded_host_counts_as_no_record(
+        self, store: MemoryKeyring, tmp_path: Path
+    ) -> None:
+        _entry(store, "nas", "   ")
+        assert resolve_credentials(load_config(_file(tmp_path, "nas.home")))[1] == "hunter2"
+        assert store.values[("mcp-synology/nas", "host")] == "nas.home"
+
+    def test_an_equal_synology_host_doesnt_record_it_either(
+        self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _entry(store, "nas")
+        monkeypatch.setenv("SYNOLOGY_HOST", "nas.home")
+        with pytest.raises(AuthenticationError, match="don't say which host"):
+            resolve_credentials(load_config(_file(tmp_path, "nas.home")))
 
     def test_then_another_host_is_refused(self, store: MemoryKeyring, tmp_path: Path) -> None:
         _entry(store, "nas")
@@ -331,13 +378,96 @@ class TestAnEntryWithNoRecordedHost:
             resolve_credentials(load_config())
 
 
+class TestADeviceTokenAlone:
+    """Credentials from elsewhere log in as before, but the token doesn't go to another host
+    (maintainer, 2026-11-05)."""
+
+    @staticmethod
+    def _token(store: MemoryKeyring, host: str | None) -> None:
+        store.values[("mcp-synology/nas", "device_id")] = "token"
+        if host:
+            store.values[("mcp-synology/nas", "host")] = host
+
+    @staticmethod
+    def _creds_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SYNOLOGY_USERNAME", "u")
+        monkeypatch.setenv("SYNOLOGY_PASSWORD", "p")
+
+    def test_for_another_host_its_left_out(
+        self,
+        store: MemoryKeyring,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        self._token(store, "nas.home")
+        self._creds_from_env(monkeypatch)
+        config = load_config(_file(tmp_path, "nas.office"))
+        with caplog.at_level("WARNING"):
+            assert resolve_credentials(config) == ("u", "p", None)
+        assert any("Not sending the device token" in m for m in caplog.messages)
+        assert not [m for m in caplog.messages if "nas.home" in m or "token'" in m]
+
+    def test_for_this_host_its_sent(
+        self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._token(store, "nas.home")
+        self._creds_from_env(monkeypatch)
+        assert resolve_credentials(load_config(_file(tmp_path, "nas.home"))) == ("u", "p", "token")
+
+    def test_with_no_record_from_config_it_records_and_sends(
+        self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._token(store, None)
+        self._creds_from_env(monkeypatch)
+        assert resolve_credentials(load_config(_file(tmp_path, "nas.home")))[2] == "token"
+        assert store.values[("mcp-synology/nas", "host")] == "nas.home"
+
+    def test_with_no_record_and_env_only_its_left_out(
+        self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The usual Docker shape beside an old token: main sent it."""
+        monkeypatch.chdir(tmp_path)
+        self._token(store, None)
+        self._creds_from_env(monkeypatch)
+        monkeypatch.setenv("SYNOLOGY_HOST", "nas.home")
+        assert resolve_credentials(load_config()) == ("u", "p", None)
+
+    @pytest.mark.parametrize("error", [KeyringError("locked"), OSError("gone")], ids=["key", "os"])
+    def test_a_keyring_that_cant_answer_leaves_it_out(
+        self,
+        store: MemoryKeyring,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        error: Exception,
+    ) -> None:
+        self._token(store, "nas.home")
+        self._creds_from_env(monkeypatch)
+        real = store.get_password
+
+        def fails(service: str, key: str) -> str | None:
+            if key == "host":
+                raise error
+            return real(service, key)
+
+        monkeypatch.setattr(store, "get_password", fails)
+        assert resolve_credentials(load_config(_file(tmp_path, "nas.home")))[2] is None
+
+    def test_a_device_token_beside_a_keyring_password_refuses(
+        self, store: MemoryKeyring, tmp_path: Path
+    ) -> None:
+        _entry(store, "nas", "nas.home")
+        store.values[("mcp-synology/nas", "device_id")] = "token"
+        with pytest.raises(AuthenticationError, match="are for another host"):
+            resolve_credentials(load_config(_file(tmp_path, "nas.office")))
+
+
 class TestSetup:
     def test_store_records_the_host_as_compared(self, store: MemoryKeyring) -> None:
         assert _store_keyring("mcp-synology/nas", "admin", "pw", "NAS.home")
         assert store.values[("mcp-synology/nas", "host")] == comparable_host("NAS.home")
 
-    def test_the_host_is_written_after_the_password(self, store: MemoryKeyring) -> None:
-        """Stopped partway, the old record over a new password refuses the next login."""
+    def test_a_new_host_is_written_before_the_new_password(self, store: MemoryKeyring) -> None:
         order: list[str] = []
         real = store.set_password
 
@@ -347,13 +477,105 @@ class TestSetup:
 
         with patch.object(store, "set_password", recording):
             _store_keyring("mcp-synology/nas", "admin", "pw", "nas.home")
-        assert order == ["username", "password", "host"]
+        assert order == ["host", "username", "password"]
+
+    @pytest.mark.parametrize("old_host", ["nas.home", None], ids=["another host", "no record"])
+    def test_a_stop_partway_leaves_nothing_to_send(
+        self,
+        store: MemoryKeyring,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        old_host: str | None,
+    ) -> None:
+        """Pre-QA on #536: with no old record, a new password stayed with no host, and the next
+        config with that first label recorded its own and got that password."""
+        _entry(store, "nas", old_host)
+        real = store.set_password
+
+        def fails(service: str, key: str, value: str) -> None:
+            if key == "username":
+                raise KeyringError("locked")
+            real(service, key, value)
+
+        monkeypatch.setattr(store, "set_password", fails)
+        assert not _store_keyring("mcp-synology/nas", "admin", "new-pw", "nas.office")
+        assert ("mcp-synology/nas", "password") not in store.values
+        assert store.values[("mcp-synology/nas", "host")] == "nas.office"
+
+    def test_the_same_host_keeps_the_old_password_until_the_new_one(
+        self, store: MemoryKeyring
+    ) -> None:
+        _entry(store, "nas", "nas.home")
+        _store_keyring("mcp-synology/nas", "admin", "new-pw", "NAS.home")
+        assert store.values[("mcp-synology/nas", "password")] == "new-pw"
 
     def test_another_hosts_device_token_is_dropped(self, store: MemoryKeyring) -> None:
         _entry(store, "nas", "nas.home")
         store.values[("mcp-synology/nas", "device_id")] = "token"
         _store_keyring("mcp-synology/nas", "admin", "pw", "nas.office")
         assert ("mcp-synology/nas", "device_id") not in store.values
+
+    def test_a_record_with_no_credentials_isnt_asked_about(self, store: MemoryKeyring) -> None:
+        """Pre-QA on #536: left by removing the rest, it said it "holds credentials"."""
+        store.values[("mcp-synology/nas", "host")] = "nas.home"
+        with patch("click.confirm") as confirm:
+            assert _may_replace_entry("mcp-synology/nas", "nas.office", "nas")
+        confirm.assert_not_called()
+
+    def test_a_keyring_that_cant_be_read_isnt_asked_about(
+        self, store: MemoryKeyring, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Writing it reports the problem."""
+
+        def fails(_service: str, _key: str) -> None:
+            raise KeyringError("locked")
+
+        monkeypatch.setattr(store, "get_password", fails)
+        with patch("click.confirm") as confirm:
+            assert _may_replace_entry("mcp-synology/nas", "nas.office", "nas")
+        confirm.assert_not_called()
+
+    def test_accepting_replaces_it(self, store: MemoryKeyring, tmp_path: Path) -> None:
+        _entry(store, "nas", "nas.home")
+        with patch("mcp_synology.cli.setup._setup_login", AsyncMock(return_value=None)):
+            result = CliRunner().invoke(
+                main,
+                ["setup", "--config", str(_file(tmp_path, "nas.office"))],
+                input="y\nadmin2\nnew-pw\n",
+            )
+        assert result.exit_code == 0, result.output
+        assert store.values[("mcp-synology/nas", "host")] == "nas.office"
+        assert store.values[("mcp-synology/nas", "password")] == "new-pw"
+
+    def test_env_only_advice_names_plain_setup(
+        self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Pre-QA on #536: an env-only user has no config file to name."""
+        monkeypatch.chdir(tmp_path)
+        _entry(store, "nas", "nas.home")
+        monkeypatch.setenv("SYNOLOGY_HOST", "nas.office")
+        with pytest.raises(AuthenticationError) as exc:
+            resolve_credentials(load_config())
+        assert "'mcp-synology setup'" in (exc.value.suggestion or "")
+        assert "--config" not in (exc.value.suggestion or "")
+
+    def test_a_locked_keyring_gets_advice_that_works(
+        self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Pre-QA on #536: it said to run `setup`, which then couldn't store anything."""
+        _entry(store, "nas")
+        real = store.get_password
+
+        def fails(service: str, key: str) -> str | None:
+            if key == "host":
+                raise OSError("locked")
+            return real(service, key)
+
+        monkeypatch.setattr(store, "get_password", fails)
+        with pytest.raises(AuthenticationError) as exc:
+            resolve_credentials(load_config(_file(tmp_path, "nas.home")))
+        assert "Unlock the OS keyring" in (exc.value.suggestion or "")
+        assert "setup" not in (exc.value.suggestion or "")
 
     def test_the_same_hosts_device_token_stays(self, store: MemoryKeyring) -> None:
         _entry(store, "nas", "nas.home")

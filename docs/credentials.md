@@ -31,12 +31,12 @@ Each service stores up to four keys:
 
 ## Credentials Are Tied to a Host
 
-The entry is looked up by `instance_id`, and a derived one is only the host's first part, so `nas.home` and `nas.office` would share an entry. So `setup` records the host beside the password, and any login using a value from the keyring compares it with `connection.host`. On a mismatch, nothing is sent, and the error says to run `setup` again. `mcp-synology check` also says which host the entry was set up for. There's no setting to skip this.
+The entry is looked up by `instance_id`, and a derived one is only the host's first part, so `nas.home` and `nas.office` would share an entry. So `setup` records the host beside the password, and any login using a value from the keyring compares it with `connection.host`. On a mismatch, no credential is sent, and the error says to run `setup` again. `mcp-synology check` also says which host the entry was set up for. There's no setting to skip this.
 
-- **Entries from an older version** have no recorded host. It's recorded the first time the config comes from the default location or `--config`, with neither `SYNOLOGY_HOST` nor `SYNOLOGY_INSTANCE_ID` set. Otherwise the login is refused until you run `setup`.
-- **`setup` asks first** before replacing an entry recorded for another host or with no host recorded. Declining changes nothing. Replacing it means any other config using that entry is refused until it's set up again, and a 2FA device token from another host is removed.
+- **Entries from an older version** have no recorded host. It's recorded the first time the config is named with `--config`, with neither `SYNOLOGY_HOST` nor `SYNOLOGY_INSTANCE_ID` set. Otherwise, including from the default location or `MCP_SYNOLOGY_CONFIG`, the login is refused until you run `setup`.
+- **`setup` asks first** before replacing an entry recorded for another host or with no host recorded. Declining changes nothing. Replacing it means any other config using that entry is refused until it's set up again, and the entry's 2FA device token is removed.
 - **A NAS reached by two addresses** (LAN and DDNS) uses a second config with its own `instance_id`.
-- **Credentials from environment variables or the config file** don't use the keyring, so none of this applies to them.
+- **Credentials from environment variables or the config file** don't use the keyring's username or password, so they aren't refused. A device token in the keyring is sent beside them only if it's for this host; otherwise it's left out, with a warning, and a 2FA account gets DSM's own error.
 
 ## 2FA Device Tokens
 
@@ -85,6 +85,7 @@ keyring get mcp-synology/nas-primary device_id
 keyring del mcp-synology/192-168-1-100 username
 keyring del mcp-synology/192-168-1-100 password
 keyring del mcp-synology/192-168-1-100 device_id
+keyring del mcp-synology/192-168-1-100 host
 ```
 
 ## Credential Resolution Order
