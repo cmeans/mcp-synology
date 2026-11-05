@@ -1140,7 +1140,7 @@ class TestPreQa5OnPr541:
 
     @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="no named pipes here")
     def test_a_dot_dot_after_a_link_cant_get_a_pipe_past_the_check(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _pipe_timeout: None
     ) -> None:
         """Pre-QA r7: the check followed `link`, while `FileHandler` collapses `link/..`, so a
         pipe passed the check, and opening it hung every command."""
@@ -1154,8 +1154,35 @@ class TestPreQa5OnPr541:
         assert not (tmp_path / "other" / "pipe").exists()
 
     @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="no named pipes here")
+    def test_the_log_handler_opens_a_folder_named_tilde_where_the_guard_looks(
+        self, tmp_path: Path
+    ) -> None:
+        """The other half of the guard's promise: reverting `logging_.py` to `Path.expanduser`
+        would bring the bypass back with every guard test still passing."""
+        home = tmp_path / "home"
+        home.mkdir()
+        here = tmp_path / "here"
+        (here / "~").mkdir(parents=True)
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "from mcp_synology.cli.logging_ import _configure_logging; "
+                "_configure_logging('info', './~/x.log')",
+            ],
+            capture_output=True,
+            text=True,
+            cwd=here,
+            env={**os.environ, "HOME": str(home)},
+            timeout=60,
+        )
+        assert result.returncode == 0, result.stderr
+        assert (here / "~" / "x.log").exists()
+        assert not (home / "x.log").exists()
+
+    @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="no named pipes here")
     def test_a_pipe_in_a_folder_named_tilde_is_refused(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _pipe_timeout: None
     ) -> None:
         """QA round 5: `Path("./~/x")` drops the `./`, so the check read it as a home path, while
         the handler opened `<working folder>/~/x`: the same bypass as `link/../`."""
