@@ -150,6 +150,20 @@ def test_a_pipe_has_no_folder_to_find_a_relative_path_from(
         writer.join(timeout=5)
 
 
+def test_a_working_folder_with_no_name_still_loads(
+    working_folder: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """QA round 1 on #561: `realpath` needs the working folder's name, which a chroot or a deleted
+    folder doesn't give, and this was a traceback at startup before #541."""
+    _file(working_folder, "logging: {file: syn.log}")
+
+    def no_name() -> str:
+        raise FileNotFoundError(2, "No such file or directory")
+
+    monkeypatch.setattr(os, "getcwd", no_name)
+    assert load_config("c.yaml").logging.file == "syn.log"
+
+
 def test_a_folder_reached_through_a_link_is_where_the_kernel_finds_it(
     tmp_path: Path, working_folder: Path
 ) -> None:
