@@ -47,7 +47,8 @@ updates:
       include: "scope"
 
   # GitHub Actions used by .github/workflows/*.yml (ci, vdsm, publish,
-  # test-publish, qa-gate, pr-labels, pr-labels-ci, dependabot-changelog)
+  # test-publish, qa-gate, pr-labels, pr-labels-ci, pr-labels-recheck,
+  # dependabot-changelog, deps-newest, pr-behind-main, pr-labeler)
   # and the local composite action at .github/actions/install-mcp-publisher.
   - package-ecosystem: "github-actions"
     directory: "/"

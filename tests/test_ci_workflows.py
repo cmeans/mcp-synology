@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
+import shutil
 import subprocess
+import sys
 import tomllib
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -301,3 +304,593 @@ def test_python_updates_keep_the_lock_current() -> None:
     ecosystems = {update["package-ecosystem"] for update in config["updates"]}
     assert "uv" in ecosystems
     assert "pip" not in ecosystems
+
+
+_SCRIPTS = GITHUB / "scripts"
+
+
+class _FakeGitHub:
+    """A stand-in `gh` for the label scripts, which can't run on a PR: `workflow_run` and `schedule`
+    run from main. It answers what `--jq` would have given, and logs every write."""
+
+    def __init__(self, folder: Path) -> None:
+        self.folder = folder
+        self.log = folder / "writes.log"
+        self.answers = folder / "answers"
+        self.answers.mkdir()
+        stub = folder / "gh"
+        stub.write_text(
+            rf"""#!/bin/bash
+ANSWERS="{self.answers}"
+case "$*" in
+  *workflows/ci.yml/runs?head_sha=abc\&*) cat "$ANSWERS/ci_run" 2>/dev/null; exit 0 ;;
+  *workflows/vdsm.yml/runs?head_sha=abc\&*) cat "$ANSWERS/vdsm_run" 2>/dev/null; exit 0 ;;
+  *actions/runs/1/jobs*) cat "$ANSWERS/ci_jobs" 2>/dev/null; exit 0 ;;
+  *actions/runs/2/jobs*) cat "$ANSWERS/vdsm_jobs" 2>/dev/null; exit 0 ;;
+  "pr view"*"--json headRefOid"*) cat "$ANSWERS/head"; exit 0 ;;
+  "pr view"*"--json labels"*) cat "$ANSWERS/labels" 2>/dev/null; exit 0 ;;
+  "pr view"*"--json comments"*) [ -f "$ANSWERS/comments_fail" ] && exit 1
+    cat "$ANSWERS/comments" 2>/dev/null; exit 0 ;;
+  "pr list"*) if [ -f "$ANSWERS/prs_json" ]; then
+      while [ "$1" != --jq ]; do shift; done
+      jq -r "$2" "$ANSWERS/prs_json"
+    else
+      cat "$ANSWERS/prs" 2>/dev/null
+    fi
+    exit 0 ;;
+esac
+echo "$*" >> "{self.log}"
+""",
+            encoding="utf-8",
+        )
+        stub.chmod(0o755)
+        self.answer(head="abc")
+
+    def answer(self, **files: str) -> None:
+        for name, text in files.items():
+            (self.answers / name).write_text(text, encoding="utf-8")
+
+    def runs(
+        self,
+        ci: str = "completed success",
+        vdsm: str = "completed success",
+        updated: str = "2026-01-01T00:00:00Z",
+    ) -> None:
+        self.answer(ci_run=f"1 {ci} {updated}\n", vdsm_run=f"2 {vdsm} {updated}\n")
+
+    def writes(self) -> list[str]:
+        return self.log.read_text(encoding="utf-8").splitlines() if self.log.exists() else []
+
+    def run(self, script: str, *args: str, **env: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["bash", str(_SCRIPTS / script), *args],
+            env={
+                **os.environ,
+                "PATH": f"{self.folder}{os.pathsep}{os.environ['PATH']}",
+                "REPO": "o/r",
+                # Only the script that takes it from the environment: the others must pass it on.
+                **({"HEAD_SHA": "abc"} if script == "pr-checks-state.sh" else {}),
+                "RECHECK_SECONDS": "0",
+                **env,
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+
+@pytest.fixture
+def github(tmp_path: Path) -> _FakeGitHub:
+    return _FakeGitHub(tmp_path)
+
+
+_GOOD = "completed\tsuccess\tbuild\n"
+_GNU_DATE = pytest.mark.skipif(sys.platform == "darwin", reason="the script runs on ubuntu")
+
+
+@pytest.mark.parametrize(
+    ("ci_jobs", "vdsm_jobs", "expected"),
+    [
+        (_GOOD, _GOOD, "pass"),
+        (_GOOD, "completed\tskipped\tbuild\n", "pass"),
+        (_GOOD, "completed\tfailure\tvdsm (7.1)\n", "fail"),
+        (_GOOD, "in_progress\tnone\tvdsm (7.1)\n", "pending"),
+        (_GOOD, "completed\tnone\tvdsm (7.1)\n", "pending"),
+        (_GOOD, "", "pending"),
+    ],
+    ids=["passed", "skipped", "failed job", "job running", "no conclusion", "no jobs listed"],
+)
+def test_the_state_is_judged_job_by_job(
+    github: _FakeGitHub, ci_jobs: str, vdsm_jobs: str, expected: str
+) -> None:
+    github.runs()
+    github.answer(ci_jobs=ci_jobs, vdsm_jobs=vdsm_jobs)
+    done = github.run("pr-checks-state.sh")
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == expected
+
+
+def test_a_run_not_listed_is_pending(github: _FakeGitHub) -> None:
+    """#339: the listing came back empty for a CI run that had finished."""
+    github.answer(vdsm_run="2 completed success 2026-01-01T00:00:00Z\n", vdsm_jobs=_GOOD)
+    assert github.run("pr-checks-state.sh").stdout.strip() == "pending"
+
+
+def test_a_run_that_failed_before_any_job_is_failed(github: _FakeGitHub) -> None:
+    github.runs(ci="completed startup_failure")
+    assert github.run("pr-checks-state.sh").stdout.strip() == "fail"
+
+
+@pytest.mark.parametrize(
+    ("labels", "state_jobs", "adopt", "expected"),
+    [
+        ("Awaiting CI\n", _GOOD, "", ["--remove-label Awaiting CI", "--add-label Ready for QA"]),
+        ("CI Failed\n", _GOOD, "", ["--remove-label CI Failed", "--add-label Ready for QA"]),
+        ("Awaiting CI\nMerge conflict\n", _GOOD, "", ["--remove-label Awaiting CI"]),
+        ("Ready for QA Signoff\n", _GOOD, "", []),
+        ("Awaiting CI\nDev Active\n", _GOOD, "", []),
+        ("", _GOOD, "1", ["--add-label Ready for QA"]),
+        ("", "", "1", ["--add-label Awaiting CI"]),
+        ("", "completed\tfailure\tx\n", "1", ["--add-label CI Failed"]),
+        (
+            "Awaiting CI\n",
+            "completed\tfailure\tx\n",
+            "",
+            ["--remove-label Awaiting CI", "--add-label CI Failed"],
+        ),
+        ("Awaiting CI\n", "", "", []),
+    ],
+    ids=[
+        "pass",
+        "green again",
+        "pass with a conflict",
+        "later label left alone",
+        "dev isn't done",
+        "adopted, pass",
+        "adopted, pending",
+        "adopted, fail",
+        "fail",
+        "pending",
+    ],
+)
+def test_settling_the_labels(
+    github: _FakeGitHub, labels: str, state_jobs: str, adopt: str, expected: list[str]
+) -> None:
+    github.runs()
+    github.answer(ci_jobs=state_jobs, vdsm_jobs=state_jobs, labels=labels)
+    done = github.run("pr-labels-settle.sh", "7", "abc", ADOPT=adopt)
+    assert done.returncode == 0, done.stderr
+    assert [write.split(" --repo o/r ")[1] for write in github.writes()] == expected
+
+
+def test_a_commit_that_moved_on_is_left_to_its_own_runs(github: _FakeGitHub) -> None:
+    github.runs()
+    github.answer(ci_jobs=_GOOD, vdsm_jobs=_GOOD, labels="Awaiting CI\n", head="newer")
+    done = github.run("pr-labels-settle.sh", "7", "abc")
+    assert done.stdout.strip() == "moved"
+    assert github.writes() == []
+
+
+def test_the_recheck_promotes_a_stranded_green_pr(github: _FakeGitHub) -> None:
+    """#549 and #339: nothing checked again after the last CI event."""
+    github.runs()
+    github.answer(ci_jobs=_GOOD, vdsm_jobs=_GOOD, labels="Awaiting CI\n", prs="7\tabc\t0\n")
+    done = github.run("pr-labels-recheck.sh")
+    assert done.returncode == 0, done.stderr
+    assert any("--add-label Ready for QA" in write for write in github.writes())
+
+
+@pytest.mark.skipif(sys.platform == "darwin", reason="the script runs on ubuntu")
+def test_the_recheck_comments_once_when_a_result_never_comes(github: _FakeGitHub) -> None:
+    github.runs()
+    github.answer(
+        ci_jobs=_GOOD,
+        vdsm_jobs="in_progress\tnone\tvdsm (7.1)\n",
+        labels="Awaiting CI\n",
+        prs="7\tabc\t0\n",
+    )
+    assert github.run("pr-labels-recheck.sh").returncode == 0
+    comments = [write for write in github.writes() if write.startswith("pr comment 7")]
+    assert len(comments) == 1
+    assert "vdsm (7.1)" in " ".join(github.writes())
+    marker = "<!-- pr-labels-recheck abc -->"
+    assert marker in " ".join(github.writes())
+    github.answer(comments=f"{marker}\n")
+    assert github.run("pr-labels-recheck.sh").returncode == 0
+    assert len([write for write in github.writes() if write.startswith("pr comment 7")]) == 1
+
+
+@pytest.mark.parametrize(
+    "setup",
+    ["running", "approval", pytest.param("recent", marks=_GNU_DATE), "no run listed"],
+)
+def test_the_recheck_says_nothing_while_it_can_still_come(github: _FakeGitHub, setup: str) -> None:
+    github.answer(labels="Awaiting CI\n", prs="7\tabc\t0\n", ci_jobs=_GOOD)
+    if setup == "running":
+        # A finished run's job has no result, but another run still going can yet settle it.
+        github.runs(ci="in_progress null")
+        github.answer(vdsm_jobs="completed\tnone\tx\n")
+    elif setup == "approval":
+        github.runs(ci="completed action_required")
+        github.answer(vdsm_jobs="completed\tnone\tx\n")
+    elif setup == "recent":
+        now = subprocess.run(
+            ["date", "-u", "+%Y-%m-%dT%H:%M:%SZ"], capture_output=True, text=True, check=True
+        ).stdout.strip()
+        github.runs(updated=now)
+        github.answer(vdsm_jobs="in_progress\tnone\tx\n")
+    assert github.run("pr-labels-recheck.sh").returncode == 0
+    assert not [write for write in github.writes() if write.startswith("pr comment")]
+
+
+def test_the_recheck_carries_on_after_one_prs_error(github: _FakeGitHub) -> None:
+    """One bad PR mustn't strand the rest, and the run still ends red for it."""
+    github.runs()
+    github.answer(
+        ci_jobs=_GOOD, vdsm_jobs=_GOOD, labels="Awaiting CI\n", prs="7\tabc\t0\n8\tabc\t0\n"
+    )
+    stub = github.folder / "gh"
+    stub.write_text(
+        stub.read_text(encoding="utf-8").replace(
+            'case "$*" in',
+            'if [ "$1 $2 $3" = "pr view 7" ]; then exit 1; fi\ncase "$*" in',
+        ),
+        encoding="utf-8",
+    )
+    done = github.run("pr-labels-recheck.sh")
+    assert done.returncode == 1
+    assert any(write.startswith("pr edit 8") for write in github.writes())
+
+
+def test_the_recheck_runs_on_a_schedule_with_only_what_it_needs() -> None:
+    workflow = _workflows()["pr-labels-recheck.yml"]
+    # PyYAML reads the `on` key as True.
+    assert "schedule" in workflow[True]
+    job = workflow["jobs"]["recheck"]
+    assert workflow["permissions"] == {}
+    assert job["permissions"] == {"contents": "read", "pull-requests": "write", "actions": "read"}
+    assert "pr-labels-recheck.sh" in job["steps"][-1]["run"]
+
+
+def test_the_checks_are_read_in_one_place() -> None:
+    """Two copies of this logic had to be kept in sync by hand, and a third was coming (#549)."""
+    for name in ("pr-labels.yml", "pr-labels-ci.yml", "pr-labels-recheck.yml"):
+        text = (GITHUB / "workflows" / name).read_text(encoding="utf-8")
+        assert "actions/runs/" not in text, name
+
+
+_NEEDS_JQ = pytest.mark.skipif(shutil.which("jq") is None, reason="needs jq")
+
+
+def _pr(number: int, *labels: str, draft: bool = False, fork: bool = False) -> dict[str, Any]:
+    return {
+        "number": number,
+        "headRefOid": "abc",
+        "isDraft": draft,
+        "isCrossRepository": fork,
+        "labels": [{"name": label} for label in labels],
+    }
+
+
+@_NEEDS_JQ
+@pytest.mark.parametrize(
+    ("pr", "expected"),
+    [
+        (_pr(7, "Awaiting CI"), "7\tabc\t0"),
+        (_pr(7, "CI Failed"), "7\tabc\t0"),
+        (_pr(7, "Awaiting CI", fork=True), "7\tabc\t0"),
+        (_pr(7, "CI Failed", fork=True), "7\tabc\t0"),
+        (_pr(7), "7\tabc\t1"),
+        (_pr(7, "bug"), "7\tabc\t1"),
+        (_pr(7, draft=True), None),
+        (_pr(7, fork=True), None),
+        (_pr(7, "Dev Active"), None),
+        (_pr(7, "QA Active"), None),
+        (_pr(7, "Ready for QA Signoff"), None),
+        (_pr(7, "QA Approved"), None),
+        (_pr(7, "Ready for QA"), None),
+        (_pr(7, "QA Failed"), None),
+    ],
+    ids=[
+        "awaiting CI",
+        "CI failed, may be green again",
+        "a fork on awaiting CI",
+        "a fork on CI failed",
+        "no labels",
+        "another label only",
+        "a draft",
+        "a fork",
+        "dev active",
+        "QA active",
+        "signoff",
+        "approved",
+        "ready for QA",
+        "QA failed",
+    ],
+)
+def test_which_prs_the_recheck_settles(
+    github: _FakeGitHub, pr: dict[str, Any], expected: str | None
+) -> None:
+    """Pre-QA on #549: with the filter's output canned, nothing tested the filter."""
+    github.runs(ci="in_progress null", vdsm="in_progress null")
+    github.answer(prs_json=json.dumps([pr]), labels="")
+    done = github.run("pr-labels-recheck.sh")
+    assert done.returncode == 0, done.stderr
+    assert (
+        (f"PR #7 at abc (adopt: {expected.split(chr(9))[2]})" in done.stderr)
+        if expected
+        else ("PR #7" not in done.stderr)
+    )
+
+
+def test_the_recheck_lists_only_prs_into_main() -> None:
+    assert "--base main" in (_SCRIPTS / "pr-labels-recheck.sh").read_text(encoding="utf-8")
+
+
+def test_a_fork_run_waiting_for_approval_isnt_a_failure(github: _FakeGitHub) -> None:
+    """Pre-QA on #549: it reads completed, with no jobs, and went to CI Failed."""
+    github.runs(ci="completed action_required", vdsm="completed action_required")
+    github.answer(labels="Awaiting CI\n", prs="7\tabc\t0\n")
+    assert github.run("pr-labels-recheck.sh").returncode == 0
+    assert github.writes() == []
+
+
+@pytest.mark.parametrize("label", ["QA Approved", "QA Failed", "Ready for QA Signoff"])
+def test_adopting_goes_by_the_labels_now(github: _FakeGitHub, label: str) -> None:
+    """Pre-QA on #549: the list is minutes old by the time a later PR's turn comes."""
+    github.runs()
+    github.answer(ci_jobs=_GOOD, vdsm_jobs=_GOOD, labels=f"{label}\n")
+    assert github.run("pr-labels-settle.sh", "7", "abc", ADOPT="1").returncode == 0
+    assert github.writes() == []
+
+
+def test_settling_prints_only_the_state(github: _FakeGitHub) -> None:
+    """Pre-QA on #549: `gh pr edit` prints the PR's URL, and the recheck captures stdout."""
+    stub = github.folder / "gh"
+    stub.write_text(
+        stub.read_text(encoding="utf-8") + 'echo "https://github.com/o/r/pull/7"\n',
+        encoding="utf-8",
+    )
+    github.runs()
+    github.answer(ci_jobs="", vdsm_jobs="", labels="")
+    done = github.run("pr-labels-settle.sh", "7", "abc", ADOPT="1")
+    assert done.stdout.strip() == "pending"
+
+
+@_GNU_DATE
+def test_a_comment_that_fails_doesnt_stop_the_others(github: _FakeGitHub) -> None:
+    """Pre-QA on #549: `set -e` ended the loop there."""
+    github.runs()
+    github.answer(
+        ci_jobs=_GOOD,
+        vdsm_jobs="in_progress\tnone\tx\n",
+        labels="Awaiting CI\n",
+        prs="7\tabc\t0\n8\tabc\t0\n",
+    )
+    stub = github.folder / "gh"
+    stub.write_text(
+        stub.read_text(encoding="utf-8").replace(
+            'case "$*" in', 'if [ "$1 $2 $3" = "pr comment 7" ]; then exit 1; fi\ncase "$*" in'
+        ),
+        encoding="utf-8",
+    )
+    done = github.run("pr-labels-recheck.sh")
+    assert done.returncode == 1
+    assert any(write.startswith("pr comment 8") for write in github.writes())
+
+
+@_GNU_DATE
+def test_comments_it_cant_read_arent_no_comments(github: _FakeGitHub) -> None:
+    """Pre-QA on #549: it would have posted again at every run."""
+    github.runs()
+    github.answer(
+        ci_jobs=_GOOD,
+        vdsm_jobs="in_progress\tnone\tx\n",
+        labels="Awaiting CI\n",
+        prs="7\tabc\t0\n",
+        comments_fail="",
+    )
+    assert github.run("pr-labels-recheck.sh").returncode == 1
+    assert not [write for write in github.writes() if write.startswith("pr comment")]
+
+
+def test_only_this_jobs_comments_count_for_the_marker() -> None:
+    """Pre-QA on #549: anyone could post the marker to silence it."""
+    text = (_SCRIPTS / "pr-labels-recheck.sh").read_text(encoding="utf-8")
+    assert 'test("^github-actions(\\\\[bot\\\\])?$")' in text
+
+
+def test_the_check_ignores_only_the_report_job_and_other_events() -> None:
+    text = (_SCRIPTS / "pr-checks-state.sh").read_text(encoding="utf-8")
+    assert 'select(.name != "tool-quality")' in text
+    assert "event=pull_request" in text
+
+
+@pytest.mark.parametrize(
+    ("workflow", "job"),
+    [
+        ("pr-labels.yml", "on-unlabel"),
+        ("pr-labels-ci.yml", "on-checks-complete"),
+        ("pr-labels-recheck.yml", "recheck"),
+    ],
+)
+def test_each_job_checks_out_the_script_it_runs(workflow: str, job: str) -> None:
+    steps = _workflows()[workflow]["jobs"][job]["steps"]
+    assert "actions/checkout@" in steps[0].get("uses", ""), "no checkout first"
+    assert steps[0]["with"]["persist-credentials"] is False
+    run = steps[-1]["run"]
+    named = re.findall(r"\.github/scripts/[\w.-]+", run)
+    assert named
+    for script in named:
+        assert (GITHUB.parent / script).is_file(), script
+
+
+def test_a_push_reads_the_labels_now_not_from_the_event() -> None:
+    """#565: the event's stale list said Awaiting CI was there, after on-label had removed it."""
+    step = _workflows()["pr-labels.yml"]["jobs"]["on-push"]["steps"][0]
+    assert "PR_LABELS" not in step["env"]
+    assert 'gh pr view "$PR" --repo "$REPO" --json labels' in step["run"]
+
+
+@pytest.mark.parametrize("label", ["QA Active", "Ready for QA Signoff", "QA Approved", "QA Failed"])
+def test_a_pr_past_ready_for_qa_isnt_sent_back(github: _FakeGitHub, label: str) -> None:
+    """Pre-QA on #549: on Awaiting CI as well, the recheck added Ready for QA beside it, and these
+    writes trigger nothing that would clean up."""
+    github.runs()
+    github.answer(ci_jobs=_GOOD, vdsm_jobs=_GOOD, labels=f"Awaiting CI\n{label}\n")
+    assert github.run("pr-labels-settle.sh", "7", "abc").returncode == 0
+    assert not [write for write in github.writes() if "--add-label Ready for QA" in write]
+
+
+def test_dev_active_gets_no_comment(github: _FakeGitHub) -> None:
+    """Pre-QA on #549: it told someone to apply Ready for QA while dev wasn't done."""
+    github.runs()
+    github.answer(
+        ci_jobs=_GOOD,
+        vdsm_jobs="completed\tnone\tx\n",
+        labels="Awaiting CI\nDev Active\n",
+        prs="7\tabc\t0\n",
+    )
+    assert github.run("pr-labels-recheck.sh").returncode == 0
+    assert github.writes() == []
+
+
+@_GNU_DATE
+def test_a_run_not_listed_beside_a_finished_one_is_named_in_the_comment(
+    github: _FakeGitHub,
+) -> None:
+    """#339's own case."""
+    github.answer(
+        vdsm_run="2 completed success 2026-01-01T00:00:00Z\n",
+        vdsm_jobs=_GOOD,
+        labels="Awaiting CI\n",
+        prs="7\tabc\t0\n",
+    )
+    assert github.run("pr-labels-recheck.sh").returncode == 0
+    assert "ci.yml: no run listed" in " ".join(github.writes())
+
+
+@_GNU_DATE
+def test_the_latest_finished_run_decides_how_long_it_has_waited(github: _FakeGitHub) -> None:
+    now = subprocess.run(
+        ["date", "-u", "+%Y-%m-%dT%H:%M:%SZ"], capture_output=True, text=True, check=True
+    ).stdout.strip()
+    github.answer(
+        ci_run="1 completed success 2026-01-01T00:00:00Z\n",
+        vdsm_run=f"2 completed success {now}\n",
+        ci_jobs=_GOOD,
+        vdsm_jobs="completed\tnone\tx\n",
+        labels="Awaiting CI\n",
+        prs="7\tabc\t0\n",
+    )
+    assert github.run("pr-labels-recheck.sh").returncode == 0
+    assert not [write for write in github.writes() if write.startswith("pr comment")]
+
+
+def test_a_failure_takes_ready_for_qa_away(github: _FakeGitHub) -> None:
+    github.runs()
+    github.answer(ci_jobs="completed\tfailure\tx\n", vdsm_jobs=_GOOD, labels="Ready for QA\n")
+    assert github.run("pr-labels-settle.sh", "7", "abc").returncode == 0
+    assert any("--remove-label Ready for QA" in write for write in github.writes())
+
+
+def test_a_command_reading_stdin_cant_take_the_list_of_prs(github: _FakeGitHub) -> None:
+    """Every PR still gets its turn if something in the loop reads stdin."""
+    stub = github.folder / "gh"
+    stub.write_text(
+        stub.read_text(encoding="utf-8").replace(
+            'case "$*" in',
+            'if [ "$1" = pr ] && [ "$2" = view ]; then cat >/dev/null; fi\ncase "$*" in',
+        ),
+        encoding="utf-8",
+    )
+    github.runs()
+    github.answer(
+        ci_jobs=_GOOD, vdsm_jobs=_GOOD, labels="Awaiting CI\n", prs="7\tabc\t0\n8\tabc\t0\n"
+    )
+    done = subprocess.run(
+        ["bash", str(_SCRIPTS / "pr-labels-recheck.sh")],
+        env={
+            **os.environ,
+            "PATH": f"{github.folder}{os.pathsep}{os.environ['PATH']}",
+            "REPO": "o/r",
+            "RECHECK_SECONDS": "0",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+        stdin=subprocess.DEVNULL,
+    )
+    assert done.returncode == 0, done.stderr
+    assert any(write.startswith("pr edit 8") for write in github.writes())
+
+
+@pytest.mark.parametrize(
+    ("vdsm_jobs", "added"),
+    [("in_progress\tnone\tx\n", "Awaiting CI"), ("completed\tfailure\tx\n", "CI Failed")],
+    ids=["pending", "fail"],
+)
+def test_a_stale_adopt_adds_nothing_beside_a_label_set_since(
+    github: _FakeGitHub, vdsm_jobs: str, added: str
+) -> None:
+    """QA round 2 on #567: only a passing state was covered, where another check also stops it."""
+    github.runs()
+    github.answer(ci_jobs=_GOOD, vdsm_jobs=vdsm_jobs, labels="QA Active\n")
+    assert github.run("pr-labels-settle.sh", "7", "abc", ADOPT="1").returncode == 0
+    assert not [write for write in github.writes() if f"--add-label {added}" in write]
+
+
+def test_a_job_that_appears_on_a_later_read_counts(github: _FakeGitHub) -> None:
+    """#298: a run read completed before its jobs had results."""
+    github.runs()
+    github.answer(ci_jobs=_GOOD)
+    stub = github.folder / "gh"
+    jobs = github.answers / "vdsm_jobs"
+    stub.write_text(
+        stub.read_text(encoding="utf-8").replace(
+            'case "$*" in',
+            f"""case "$*" in
+  *actions/runs/2/jobs*)
+    if [ -f "{jobs}" ]; then cat "{jobs}"; else printf '{_GOOD}' > "{jobs}"; fi; exit 0 ;;
+esac
+case "$*" in""",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    assert github.run("pr-checks-state.sh").stdout.strip() == "pass"
+
+
+def test_a_skipped_run_with_no_jobs_is_pending(github: _FakeGitHub) -> None:
+    github.runs(ci="completed skipped")
+    assert github.run("pr-checks-state.sh").stdout.strip() == "pending"
+
+
+def test_a_time_it_cant_read_ends_the_run_red(github: _FakeGitHub) -> None:
+    github.runs(updated="not-a-time")
+    github.answer(
+        ci_jobs=_GOOD,
+        vdsm_jobs="completed\tnone\tx\n",
+        labels="Awaiting CI\n",
+        prs="7\tabc\t0\n",
+    )
+    assert github.run("pr-labels-recheck.sh").returncode == 1
+
+
+def test_the_schedule_is_every_15_minutes() -> None:
+    assert _workflows()["pr-labels-recheck.yml"][True]["schedule"] == [{"cron": "*/15 * * * *"}]
+
+
+@pytest.mark.parametrize("label", ["Ready for QA Signoff", "QA Active", "QA Approved", "QA Failed"])
+def test_dev_active_coming_off_doesnt_send_a_pr_back(github: _FakeGitHub, label: str) -> None:
+    """Pre-QA on #567: on-unlabel added Ready for QA beside QA Approved, a pair that must never
+    coexist, and these writes trigger nothing that would clean up."""
+    github.runs()
+    github.answer(ci_jobs=_GOOD, vdsm_jobs=_GOOD, labels=f"{label}\n")
+    assert github.run("pr-labels-settle.sh", "7", "abc", ADOPT="1").returncode == 0
+    assert github.writes() == []
+
+
+def test_dev_active_coming_off_uses_the_shared_script() -> None:
+    run = _workflows()["pr-labels.yml"]["jobs"]["on-unlabel"]["steps"][-1]["run"]
+    assert 'ADOPT=1 bash .github/scripts/pr-labels-settle.sh "$PR" "$HEAD_SHA"' in run
