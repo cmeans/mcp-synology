@@ -133,9 +133,11 @@ no second copy (seen on DSM 7.1.1, #220).
 ### A new HTTP task shows `waiting` for a few seconds
 
 **Why:** that's normal. A new HTTP task sat in `waiting` about 5 s before `downloading`, and a
-resumed one about 2 s, on DSM 7.1 and 7.2.2 (idle vdsm, probed 2026-10-19; #208, #243). Pause
-and resume themselves took effect at once there: `list_downloads` and `get_download_info`
-showed the new state on the next call. A BitTorrent or magnet task can stay in `waiting` much
+resumed one about 2 s, on DSM 7.1 and 7.2.2 (idle vdsm, probed 2026-10-19; #208, #243). Resume
+took effect at once there: `list_downloads` and `get_download_info` showed the new state on the
+next call. A pause takes about 3 s, or longer on a slow NAS, because Download Station can undo one
+while tasks start, so `pause_download` checks and pauses again if needed (#243). A call where none
+of the tasks can be paused fails at once. A BitTorrent or magnet task can stay in `waiting` much
 longer, until it finds peers.
 
 **What to do:** nothing; check again after a few seconds. A task still in `waiting` after
@@ -183,6 +185,23 @@ and 7.2.2, #136, #146). With at least one pausable ID, the others are refused on
 
 **What to do:** check each task's status with `list_downloads`. See
 [invalid_parameter](error-codes.md#invalid_parameter).
+
+### `pause_download` says a task isn't paused
+
+**Why:** Download Station can undo a pause while tasks are starting (#243). The tool checks each
+task for about 3 s and pauses it once more if it starts, then reports what it last read.
+
+**What to do:**
+- `pause it again`: call `pause_download` once more. If the task has paused by then, that call
+  can fail with `invalid_parameter` (above), which means there's nothing left to pause. If the task
+  still doesn't hold, stop and check it in Download Station.
+- `see list_downloads`: check the task's status there. `not confirmed paused: couldn't check it`
+  means the NAS didn't answer in time or gave an error, the task is gone, or another task in a long
+  list went missing and reading the rest one by one ran out of time, so the pause may or may not
+  have held. These checks wait at most 5 s for data, so the reply normally beats an MCP client's
+  limit (a reply that trickles can take longer), and raising `connection.timeout` doesn't change
+  that. The log gives the reason at
+  the default level. For `ConnectError`, `mcp-synology check` gives the error underneath it.
 
 ### `create_download` returns no task IDs
 

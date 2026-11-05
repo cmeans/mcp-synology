@@ -16,10 +16,11 @@ from mcp_synology.modules.filestation.paths import check_parts
 if TYPE_CHECKING:
     from mcp_synology.core.client import DsmClient
 
-# DSM Download Station task statuses. The v1, v2 and v3 Task APIs all return
-# these as strings (official DS Web API guide, Appendix A; verified live on
-# DSM 7.2.2 / DS 4.1-5012 in #123). Only the separate SYNO.DownloadStation2.Task
-# API returns integers, and nothing in this module reads status from it.
+# DSM Download Station task statuses. The v1, v2 and v3 Task APIs return these as strings
+# (official DS Web API guide, Appendix A; verified live on DSM 7.2.2 / DS 4.1-5012 in #123),
+# with one exception: `Task getinfo` for a list of IDs gives a string only to the first entry
+# and an integer to the rest (`named_status`). The separate SYNO.DownloadStation2.Task API
+# returns integers too, and nothing in this module reads status from it.
 TASK_STATUSES: frozenset[str] = frozenset(
     {
         "waiting",
@@ -77,6 +78,24 @@ def task_error_detail(task: dict[str, Any]) -> object:
     """DSM's reason for an ``error`` task (``status_extra.error_detail``), or None."""
     extra = task.get("status_extra")
     return extra.get("error_detail") if isinstance(extra, dict) else None
+
+
+# What `Task getinfo` gives after the first entry of a list, read beside a single read of each
+# task on all four DSM versions (#545). Other statuses weren't produced, so they stay unknown.
+_LISTED_STATUS: dict[int, str] = {1: "waiting", 2: "downloading", 3: "paused", 5: "finished"}
+
+
+def named_status(task: dict[str, Any]) -> object:
+    """A task's status as a string where it's known: `Task getinfo` for a list of IDs gives only
+    the first entry a string. A failed task's integer varies with its reason (101 for
+    ``broken_link``), and it has ``status_extra``. An integer not seen stays as it is, so a
+    caller reports it as unknown."""
+    status = task.get("status")
+    if not isinstance(status, int) or isinstance(status, bool):
+        return status
+    if status in _LISTED_STATUS:
+        return _LISTED_STATUS[status]
+    return "error" if task_error_detail(task) else status
 
 
 # Every tool argument that names a NAS folder. Each goes through `normalize_destination`

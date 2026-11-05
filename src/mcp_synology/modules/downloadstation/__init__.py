@@ -165,7 +165,12 @@ MODULE_INFO = ModuleInfo(
                 "`not paused: already finished`, and the others are paused. When none can be "
                 "paused (one finished or already-paused task alone, a missing id, or another "
                 "user's task), the whole call fails with invalid_parameter; list_downloads "
-                "shows each task's status."
+                "shows each task's status. A pause takes about 3 s, or longer on a slow NAS, since "
+                "Download Station can undo one while tasks start: it checks, and pauses again "
+                "once. A row saying `pause it again` means call this once more: if it still "
+                "doesn't hold, tell the user, and invalid_parameter then means there's nothing "
+                "left to pause; list_downloads shows its state. "
+                "`see list_downloads` means check the task there."
             ),
             permission_tier=PermissionTier.WRITE,
         ),

@@ -120,7 +120,8 @@ class TestValidateSchedulePlan:
 
 
 class TestFormatTaskStatus:
-    """DS v1/v2/v3 Task APIs return status as a string (vdsm-verified, #123)."""
+    """DS v1/v2/v3 Task APIs return status as a string (vdsm-verified, #123), except `getinfo` for
+    a list of IDs after its first entry (`named_status`, #545)."""
 
     @pytest.mark.parametrize(
         "status",

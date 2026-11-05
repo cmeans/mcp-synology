@@ -590,9 +590,11 @@ class DsmClient:
         an empty body fails with 101. File Station and Download Station stay on GET.
 
         ``read_timeout`` (seconds) replaces the client's read timeout for this request
-        only; connect, write and pool keep the client's default, so an unreachable NAS
-        still fails fast. File Station task stops use it (#245): DSM 7.1 sometimes
-        answers a Delete ``stop`` only after ~60 s, although the stop takes effect at once.
+        only. Write and pool keep the client's default, and so does connect unless
+        ``read_timeout`` is shorter: then it's the connect timeout too, or an unreachable
+        NAS would still take the client's default to fail (#545). File Station task stops
+        use 90 s (#245): DSM 7.1 sometimes answers a Delete ``stop`` only after ~60 s,
+        although the stop takes effect at once.
         """
 
         # Resolve API path and version
@@ -637,7 +639,9 @@ class DsmClient:
         req_timeout = (
             httpx.USE_CLIENT_DEFAULT
             if read_timeout is None
-            else httpx.Timeout(self._timeout, read=read_timeout)
+            else httpx.Timeout(
+                self._timeout, read=read_timeout, connect=min(self._timeout, read_timeout)
+            )
         )
         # Login never sends a session: a re-login keeps the expired one in place
         # until the new one exists (#359).
