@@ -1651,7 +1651,8 @@ def _config_has_a_folder(config_path: Path) -> bool:
         folder = os.path.realpath(os.path.dirname(_shown_path(config_path)))
     except OSError:
         return True
-    return folder != "/dev" and not folder.startswith("/proc/")
+    # `/dev/fd` is a link into /proc on Linux and a real folder on macOS and BSD.
+    return folder not in ("/dev", "/dev/fd") and not folder.startswith("/proc/")
 
 
 def _resolve_paths_against_the_file(
@@ -1674,14 +1675,17 @@ def _resolve_paths_against_the_file(
     except OSError:  # a working folder with no name
         folder = os.path.dirname(_shown_path(config_path))
 
+    problems: list[str] = []
+
     def resolved(setting: str, value: str) -> str:
         if value.startswith("~") or os.path.isabs(value):
             return value
         if not has_a_folder:
-            raise ValueError(
+            problems.append(
                 f"{setting} {value!r} is relative, and this config has no folder to find it from: "
                 "it was read from a pipe or a redirect. Use an absolute path or ~/..."
             )
+            return value
         return os.path.join(folder, value)
 
     if config.instructions_file:
@@ -1693,6 +1697,8 @@ def _resolve_paths_against_the_file(
         value = filestation.settings.get("default_download_dir")
         if isinstance(value, str) and value.strip():
             filestation.settings["default_download_dir"] = resolved("default_download_dir", value)
+    if problems:
+        raise ValueError("\n".join(problems))
 
 
 def config_file_note(path: Path) -> str:

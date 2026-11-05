@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 
 from mcp_synology.cli.logging_ import _configure_logging
-from mcp_synology.core.config import AppConfig, load_config
+from mcp_synology.core.config import AppConfig, _config_has_a_folder, load_config
 from mcp_synology.server import _read_instructions_file, validate_config
 
 
@@ -129,7 +129,8 @@ def _load_from_a_pipe(tmp_path: Path, text: str, *, then_remove: bool = False) -
         if then_remove:
             pipe.unlink()
 
-    writer = threading.Thread(target=feed)
+    # daemon: a regression that doesn't read the pipe mustn't keep pytest from exiting.
+    writer = threading.Thread(target=feed, daemon=True)
     writer.start()
     try:
         return load_config(pipe)
@@ -154,7 +155,7 @@ _HEAD = "schema_version: 1\nconnection: {host: nas}\n"
 )
 @pytest.mark.parametrize("then_remove", [False, True], ids=["pipe", "pipe its writer removed"])
 def test_a_pipe_has_no_folder_to_find_a_relative_path_from(
-    tmp_path: Path, line: str, setting: str, then_remove: bool
+    tmp_path: Path, line: str, setting: str, then_remove: bool, _pipe_timeout: None
 ) -> None:
     """Pre-QA on #553: `--config <(generate)` looked under /dev/fd, and the log's error said to
     fix a path nobody wrote. Pre-QA on #561: a pipe already removed counted as having a folder,
@@ -175,9 +176,62 @@ def test_a_pipe_has_no_folder_to_find_a_relative_path_from(
     ],
     ids=["disabled File Station", "disabled module", "another module", "unknown module"],
 )
-def test_a_setting_that_isnt_read_isnt_refused_on_a_pipe(tmp_path: Path, modules: str) -> None:
+def test_a_setting_that_isnt_read_isnt_refused_on_a_pipe(
+    tmp_path: Path, modules: str, _pipe_timeout: None
+) -> None:
     """Pre-QA on #561: every module's was read, so a pipe config failed on one never loaded."""
     assert _load_from_a_pipe(tmp_path, f"{_HEAD}modules: {modules}\n") is not None
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="no named pipes here")
+def test_every_relative_path_on_a_pipe_is_reported_at_once(
+    tmp_path: Path, _pipe_timeout: None
+) -> None:
+    """Pre-QA on #561: only the first, so a user fixed one and failed again."""
+    with pytest.raises(ValueError) as exc:
+        _load_from_a_pipe(
+            tmp_path,
+            f"{_HEAD}modules: {{filestation: {{settings: {{default_download_dir: dl}}}}}}\n"
+            "instructions_file: notes.md\nlogging: {file: x.log}\n",
+        )
+    for setting in ("instructions_file", "logging.file", "default_download_dir"):
+        assert f"{setting} " in str(exc.value)
+
+
+def test_standard_input_has_no_folder(tmp_path: Path) -> None:
+    """Pre-QA on #561: `--config /dev/stdin < c.yaml`, whose folder is `/dev`."""
+    real = tmp_path / "real.yaml"
+    real.write_text(f"{_HEAD}modules: {{filestation: }}\nlogging: {{file: x.log}}\n", "utf-8")
+    saved = os.dup(0)
+    fd = os.open(real, os.O_RDONLY)
+    try:
+        os.dup2(fd, 0)
+        with pytest.raises(ValueError, match="logging.file .* has no folder"):
+            load_config("/dev/stdin")
+    finally:
+        os.dup2(saved, 0)
+        os.close(saved)
+        os.close(fd)
+
+
+@pytest.mark.parametrize(
+    "folder", ["/dev", "/dev/fd", "/proc/123/fd"], ids=["dev", "dev fd", "proc fd"]
+)
+def test_a_folder_that_only_holds_descriptors_isnt_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, folder: str
+) -> None:
+    """Pre-QA on #561: `/dev/fd` is a real folder on macOS and BSD, and only Linux runs here."""
+    real = tmp_path / "real.yaml"
+    real.write_text("{}\n", "utf-8")
+    monkeypatch.setattr(os.path, "realpath", lambda _path: folder)
+    assert _config_has_a_folder(real) is False
+
+
+def test_a_real_folder_under_dev_stays_one(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    real = tmp_path / "real.yaml"
+    real.write_text("{}\n", "utf-8")
+    monkeypatch.setattr(os.path, "realpath", lambda _path: "/dev/shm/x")
+    assert _config_has_a_folder(real) is True
 
 
 @pytest.mark.skipif(not os.path.exists("/dev/fd"), reason="no /dev/fd here")

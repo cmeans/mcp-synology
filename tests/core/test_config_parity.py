@@ -11,12 +11,11 @@ import errno
 import logging
 import os
 import shlex
-import signal
 import socket
 import subprocess
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -173,24 +172,7 @@ def _restore_logging() -> object:
     logging_._early_records = None
 
 
-if TYPE_CHECKING:
-    from collections.abc import Iterator
-
 _NEEDS_PIPES = pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="no named pipes here")
-
-
-@pytest.fixture
-def _pipe_timeout() -> Iterator[None]:
-    """A regression here would wait on the pipe forever: fail instead (QA round 1 on #541)."""
-
-    def fail(*_: object) -> None:
-        raise TimeoutError("waited on a named pipe")
-
-    previous = signal.signal(signal.SIGALRM, fail)
-    signal.alarm(30)
-    yield
-    signal.alarm(0)
-    signal.signal(signal.SIGALRM, previous)
 
 
 def _run(*args: str) -> tuple[int, str, BaseException | None]:
@@ -870,9 +852,19 @@ def _unknown_home(tmp_path: Path) -> tuple[Path, str]:
     return Path("~nosuchuser541/x.yaml"), "nosuchuser541"
 
 
+def _redirected_relative_log(tmp_path: Path) -> tuple[Path, str]:
+    real = tmp_path / "real.yaml"
+    real.write_text(
+        f"{GOOD_HEAD}logging: {{file: x.log}}\nmodules: {{filestation: }}\n", encoding="utf-8"
+    )
+    # Left open for the test: each command opens the descriptor's file again.
+    return Path(f"/dev/fd/{os.open(real, os.O_RDONLY)}"), "has no folder"
+
+
 @_NEEDS_PIPES
 @pytest.mark.parametrize(
-    "build", [_folder, _not_utf8, _pipe_log, _log_is_the_config, _unknown_home]
+    "build",
+    [_folder, _not_utf8, _pipe_log, _log_is_the_config, _unknown_home, _redirected_relative_log],
 )
 def test_every_command_refuses_a_bad_file_the_same_way(
     build: Any, tmp_path: Path, _pipe_timeout: None
