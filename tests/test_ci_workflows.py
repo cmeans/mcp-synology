@@ -500,13 +500,17 @@ def test_the_recheck_comments_once_when_a_result_never_comes(github: _FakeGitHub
 
 @pytest.mark.parametrize(
     "setup",
-    ["running", "recent", "no run listed"],
+    ["running", "approval", "recent", "no run listed"],
 )
 def test_the_recheck_says_nothing_while_it_can_still_come(github: _FakeGitHub, setup: str) -> None:
     github.answer(labels="Awaiting CI\n", prs="7\tabc\t0\n", ci_jobs=_GOOD)
     if setup == "running":
-        # CI not listed yet is "missing", but a run still going can yet settle it.
-        github.answer(vdsm_run="2 in_progress null 2026-01-01T00:00:00Z\\n")
+        # A finished run's job has no result, but another run still going can yet settle it.
+        github.runs(ci="in_progress null")
+        github.answer(vdsm_jobs="completed\tnone\tx\n")
+    elif setup == "approval":
+        github.runs(ci="completed action_required")
+        github.answer(vdsm_jobs="completed\tnone\tx\n")
     elif setup == "recent":
         now = subprocess.run(
             ["date", "-u", "+%Y-%m-%dT%H:%M:%SZ"], capture_output=True, text=True, check=True
