@@ -434,6 +434,65 @@ class TestVdsmDownloadStationTasks:
                 params={"id": task_id, "force_complete": "false"},
             )
 
+    async def test_pause_of_several_tasks_reads_each_one(
+        self, nas_client: Any, _clean_queue: None
+    ) -> None:
+        """#545: `getinfo` for a list gives a string status only to the first task and an integer
+        to the rest, so every task after the first read as unknown, and one that was undone got
+        no second pause. In the window on purpose, as a multi-ID call meets it."""
+        from mcp_synology.modules.downloadstation.tasks import create_download, pause_download
+
+        client, _, _, _ = _unpack(nas_client)
+        for round_number, delay in enumerate([1.5, 2.0]):
+            ids = [
+                _ids_in(
+                    await create_download(
+                        client, uri=_magnet(600 + round_number * 10 + i), destination="writable"
+                    )
+                )[0]
+                for i in range(3)
+            ]
+            await asyncio.sleep(delay)
+            reply = await pause_download(client, task_ids=ids)
+            for task_id in ids:
+                row = next(ln for ln in reply.splitlines() if task_id in ln)
+                assert row.split()[1:] == ["ok"], reply
+            await asyncio.sleep(2)
+            for task_id in ids:
+                task = await _task(client, task_id)
+                assert task["status"] == "paused", (delay, task)
+
+    async def test_a_finished_task_after_the_first_says_so(
+        self, nas_client: Any, _clean_queue: None, _local_source: str
+    ) -> None:
+        """#545: the same list read, for `finished` and a failed task, whose integer varies with
+        its reason. Pins the translation against what each DSM version sends."""
+        from mcp_synology.modules.downloadstation.helpers import named_status
+        from mcp_synology.modules.downloadstation.tasks import create_download
+
+        client, _, _, _ = _unpack(nas_client)
+        finished = _ids_in(
+            await create_download(client, uri=_local_source, destination="writable")
+        )[0]
+        await _wait_for(client, finished, lambda t: t["status"] == "finished", timeout=120)
+        failed = _ids_in(
+            await create_download(
+                client, uri="http://127.0.0.1:5000/mcp-synology-missing.iso", destination="writable"
+            )
+        )[0]
+        await _wait_for(client, failed, lambda t: t["status"] == "error", timeout=60)
+        running = _ids_in(await create_download(client, uri=_magnet(620), destination="writable"))[
+            0
+        ]
+        data = await client.request(
+            "SYNO.DownloadStation.Task",
+            "getinfo",
+            version=1,
+            params={"id": ",".join([running, finished, failed]), "additional": "detail"},
+        )
+        assert {t["id"]: named_status(t) for t in data["tasks"]}.get(finished) == "finished", data
+        assert {t["id"]: named_status(t) for t in data["tasks"]}.get(failed) == "error", data
+
     async def test_status_filter_looks_past_the_first_page(
         self, nas_client: Any, _clean_queue: None
     ) -> None:

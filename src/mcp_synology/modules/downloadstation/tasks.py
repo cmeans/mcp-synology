@@ -33,6 +33,7 @@ from mcp_synology.modules.downloadstation.helpers import (
     format_task_size,
     format_task_status,
     format_transfer_progress,
+    named_status,
     normalize_destination,
     task_error_detail,
     task_size_unknown,
@@ -61,6 +62,7 @@ _PAUSE_HOLD_BUDGET = 6.0
 # put a stalled or unreachable NAS past the roughly 60 s an MCP client waits (pre-QA on #545).
 _PAUSE_READ_TIMEOUT = 5.0
 _IDS_SHOWN_IN_A_LOG_LINE = 20
+_ID_CHARS_SHOWN_IN_A_LOG_LINE = 200
 _UNDONE = "not paused: it didn't stay paused; pause it again"
 _UNCONFIRMED = "not confirmed paused: couldn't check it; see list_downloads"
 # DSM said no, no answer, or an answer without what DSM always sends. The client's own reply
@@ -108,9 +110,15 @@ def _per_task_rows(results: list[dict[str, Any]]) -> tuple[list[list[str]], list
 
 def _ids_for_log(task_ids: list[str]) -> str:
     """Task IDs for a log line. They're caller text, or DSM's echo of it: quoted, so a newline
-    can't forge a line; URLs redacted, since a model may pass one as an ID (spec, Secrets in
-    URLs); and capped, since a list has no limit of its own."""
-    shown = redact_urls(repr(task_ids[:_IDS_SHOWN_IN_A_LOG_LINE]))
+    can't forge a line; URLs redacted, as a whole first, since a space or quote ends the pattern
+    `redact_urls` looks for and a model may pass one as an ID (spec, Secrets in URLs); and capped
+    by count and by length, since neither has a limit of its own."""
+    shown = repr(
+        [
+            redact_urls(redact_url(task_id))[:_ID_CHARS_SHOWN_IN_A_LOG_LINE]
+            for task_id in task_ids[:_IDS_SHOWN_IN_A_LOG_LINE]
+        ]
+    )
     more = len(task_ids) - _IDS_SHOWN_IN_A_LOG_LINE
     return f"{shown} and {more:,} more" if more > 0 else shown
 
@@ -153,7 +161,11 @@ async def _read_tasks(
         if not isinstance(entries, list):
             msg = "getinfo gave no task list"
             raise ValueError(msg)
-        return {str(t.get("id")): t for t in entries if isinstance(t, dict)}
+        return {
+            str(t.get("id")): {**t, "status": named_status(t)}
+            for t in entries
+            if isinstance(t, dict)
+        }
 
     try:
         try:
@@ -1006,8 +1018,8 @@ def _not_paused_row(status: object) -> str | None:
     """The reply row for a task DSM said ok to pause, if its status says otherwise."""
     if status == "paused":
         return None
-    if not re.fullmatch(r"[a-z_]+", str(status)):
-        # A reply goes to the model, so only what looks like a status goes into it.
+    if not isinstance(status, str) or status not in {*TASK_STATUSES, "captcha_needed"}:
+        # A reply goes to the model, so only a status Download Station has goes into it.
         return "not confirmed paused: it reads an unknown status; see list_downloads"
     return {
         # DS 3.9.5 answers ok for a finished task, which stays finished (#413).
@@ -1039,7 +1051,7 @@ async def _task_state_change(
 
     # Before the pause: afterward, a task still starting reads `paused` like any other.
     # One request, whatever's missing: a list with a missing ID then watches every task. Each ID
-    # once: for `X,X`, getinfo adds a second entry with an integer status, which hid `waiting`.
+    # once, since getinfo gives a repeated ID a second entry.
     before = (
         await _read_tasks(
             client,
