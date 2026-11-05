@@ -60,7 +60,7 @@ def _entry_is_for_this_host(config: AppConfig, service: str) -> tuple[bool, str 
     from mcp_synology.core.config import comparable_host
 
     host = comparable_host(config.connection.host)
-    recorded = _present_or_none(kr.get_password(service, "host"))
+    recorded = (kr.get_password(service, "host") or "").strip() or None
     if recorded is None and config.host_may_be_recorded:
         kr.set_password(service, "host", host)
         logger.info(
@@ -125,8 +125,9 @@ def _refuse_another_hosts_credentials(config: AppConfig, service: str) -> None:
     reason = (
         "are for another host"
         if recorded
-        else "don't say which host they're for, and only a config named with --config, with no "
-        "SYNOLOGY_HOST or SYNOLOGY_INSTANCE_ID, can say so on its first use"
+        else "don't say which host they're for, and only a config named with --config, by a path "
+        "not starting with ~, with no SYNOLOGY_HOST or SYNOLOGY_INSTANCE_ID, can say so on its "
+        "first use"
     )
     error = CredentialHostError(
         f"The credentials in keyring entry {instance!r} {reason}, so they aren't being sent to "
@@ -214,7 +215,6 @@ def resolve_credentials(config: AppConfig) -> tuple[str, str, str | None]:
                 _refuse_another_hosts_credentials(config, service)
             elif (
                 kr_device
-                and not device_id
                 and username
                 and password
                 and not _device_token_may_be_sent(config, service)

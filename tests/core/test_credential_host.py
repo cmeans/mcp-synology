@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, patch
 import keyring
 import pytest
 from click.testing import CliRunner
-from keyring.errors import KeyringError
+from keyring.errors import KeyringError, PasswordDeleteError
 from mcp.server.mcpserver.exceptions import ToolError
 
 from mcp_synology.cli.main import main
@@ -470,6 +470,15 @@ class TestADeviceTokenAlone:
             resolve_credentials(load_config(_file(tmp_path, "nas.home")))
         assert ("mcp-synology/nas", "host") not in store.values
 
+    def test_a_login_with_no_username_records_nothing(
+        self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._token(store, None)
+        monkeypatch.setenv("SYNOLOGY_PASSWORD", "p")
+        with pytest.raises(AuthenticationError, match="No credentials"):
+            resolve_credentials(load_config(_file(tmp_path, "nas.home")))
+        assert ("mcp-synology/nas", "host") not in store.values
+
     @pytest.mark.parametrize("error", [KeyringError("locked"), OSError("gone")], ids=["key", "os"])
     def test_a_keyring_that_cant_answer_leaves_it_out(
         self,
@@ -552,6 +561,46 @@ class TestSetup:
         _store_keyring("mcp-synology/nas", "admin", "pw", "nas.office")
         assert ("mcp-synology/nas", "device_id") not in store.values
 
+    @pytest.mark.parametrize(
+        "refusal",
+        [PasswordDeleteError("denied"), RuntimeError("prompt dismissed")],
+        ids=["the same error as no such password", "a backend's own type"],
+    )
+    def test_a_delete_that_doesnt_take_stops_with_the_old_record(
+        self,
+        store: MemoryKeyring,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        refusal: Exception,
+    ) -> None:
+        """Pre-QA on #559: the old device token stayed, under the new host, and went to it."""
+        _entry(store, "nas", "nas.home")
+        store.values[("mcp-synology/nas", "device_id")] = "OLD-TOKEN"
+
+        def refuses(_service: str, _key: str) -> None:
+            raise refusal
+
+        monkeypatch.setattr(store, "delete_password", refuses)
+        assert not _store_keyring("mcp-synology/nas", "admin", "new-pw", "nas.office")
+        assert store.values[("mcp-synology/nas", "host")] == "nas.home"
+        assert store.values[("mcp-synology/nas", "password")] == "hunter2"
+        with pytest.raises(AuthenticationError, match="are for another host"):
+            resolve_credentials(load_config(_file(tmp_path, "nas.office")))
+
+    def test_a_padded_record_reads_the_same_everywhere(
+        self, store: MemoryKeyring, tmp_path: Path
+    ) -> None:
+        """Pre-QA on #559: `setup` called it the same host, then deleted the token, and the login
+        refused it."""
+        _entry(store, "nas", "nas.home\n")
+        store.values[("mcp-synology/nas", "device_id")] = "token"
+        with patch("click.confirm") as confirm:
+            assert _may_replace_entry("mcp-synology/nas", "nas.home", "nas")
+        confirm.assert_not_called()
+        assert _store_keyring("mcp-synology/nas", "admin", "pw", "nas.home")
+        assert store.values[("mcp-synology/nas", "device_id")] == "token"
+        assert resolve_credentials(load_config(_file(tmp_path, "nas.home")))[2] == "token"
+
     def test_an_entry_with_only_a_device_token_is_asked_about(self, store: MemoryKeyring) -> None:
         store.values[("mcp-synology/nas", "device_id")] = "token"
         with patch("click.confirm", return_value=False) as confirm:
@@ -608,7 +657,7 @@ class TestSetup:
         assert "'mcp-synology setup'" in (exc.value.suggestion or "")
         assert "--config" not in (exc.value.suggestion or "")
 
-    def test_a_locked_keyring_gets_advice_that_works(
+    def test_a_keyring_that_fails_on_the_host_read_gets_advice_that_works(
         self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Pre-QA on #536: it said to run `setup`, which then couldn't store anything."""

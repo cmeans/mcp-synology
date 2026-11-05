@@ -405,25 +405,29 @@ def _store_keyring(service: str, username: str, password: str, host: str) -> boo
 
     When the host changes, the old secrets go first and the new host before the new password, so
     a stop partway leaves nothing to send to the wrong host. The old device token would otherwise
-    be sent to this one.
+    be sent to this one. A delete that didn't take stops here, with the old record still there: the
+    backends raise the same error for "no such password" and for a real failure, and a chain of
+    backends deletes from only the first. Any exception counts: backends raise their own types.
     """
     from mcp_synology.core.config import comparable_host
 
     try:
         import keyring
-        from keyring.errors import KeyringError, PasswordDeleteError
+        from keyring.errors import PasswordDeleteError
 
         recorded = comparable_host(host)
-        if keyring.get_password(service, "host") != recorded:
+        if (keyring.get_password(service, "host") or "").strip() != recorded:
             for key in ("device_id", "password"):
                 with contextlib.suppress(PasswordDeleteError):  # there may be none
                     keyring.delete_password(service, key)
+                if keyring.get_password(service, key):
+                    raise PasswordDeleteError(f"{key} is still stored")
             keyring.set_password(service, "host", recorded)
         keyring.set_password(service, "username", username)
         keyring.set_password(service, "password", password)
         click.echo("\nCredentials stored in OS keyring.")
         return True
-    except (ImportError, KeyringError, OSError):
+    except Exception:
         click.echo(
             "\nKeyring not available. Set environment variables instead:\n"
             f"  export SYNOLOGY_USERNAME={username}\n"
