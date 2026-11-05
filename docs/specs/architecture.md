@@ -268,15 +268,9 @@ Service: mcp-synology/{instance_id}
 Accounts: username, password, device_id
 ```
 
-### Separate State File
+### Runtime State
 
-Non-sensitive server-managed runtime state is stored in a separate state file (not in the YAML config):
-
-- **Location:** `~/.local/state/mcp-synology/{instance_id}/state.yaml` (or alongside the config file)
-- **Contents:** SYNO.API.Info cache (API name → path/version map), last successful connection timestamp, negotiated API versions
-- **Not stored here:** credentials, device tokens, session IDs (these go in the keyring or are ephemeral)
-
-**Rationale:** Config files are user-managed input; state files are server-managed output. The config remains read-only from the server's perspective. No surprising mutations to user-edited files.
+Nothing is kept per instance: the `SYNO.API.Info` cache and the negotiated versions are in memory, refreshed when the server starts. The update check's `~/.local/state/mcp-synology/global.yaml` is the one state file (#538). The config stays read-only from the server's perspective.
 
 ### Session Lifecycle
 

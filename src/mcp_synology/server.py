@@ -29,6 +29,7 @@ from mcp_synology.core.auth import (
 )
 from mcp_synology.core.client import DsmClient, dsm_call_of
 from mcp_synology.core.config import (
+    _printable,
     _shown_path,
     config_file_note,
     format_config_errors,
@@ -38,7 +39,6 @@ from mcp_synology.core.errors import ErrorCode, SynologyError, detached_copy
 from mcp_synology.core.formatting import error_response, synology_error_response
 from mcp_synology.core.local_paths import has_control_character
 from mcp_synology.core.redaction import redact_urls
-from mcp_synology.core.state import ServerState
 from mcp_synology.modules import PermissionTier, RegisterContext, filter_tools_by_permission
 from mcp_synology.modules import downloadstation as _downloadstation_mod
 from mcp_synology.modules import filestation as _filestation_mod
@@ -465,7 +465,6 @@ class SharedClientManager:
         self._config = config
         self._client: DsmClient | None = None
         self._auth: AuthManager | None = None
-        self._server_state: ServerState = ServerState()
         self._update_notice: str | None = None
         self._pending_version: str | None = None
         # The version this session already announced (in the instructions or a result),
@@ -955,6 +954,25 @@ def _module_settings(config: AppConfig) -> tuple[dict[str, BaseModel | None], li
     return settings, errors
 
 
+def _no_known_module_problem(config: AppConfig) -> list[Any]:
+    """`modules: {filestaton: {}}` has a module listed, so `load_config` passes it, and the server
+    would start with no tools (#538). An unknown name beside a known one stays a warning, so a
+    config written for a newer version still starts."""
+    if any(name in _MODULE_REGISTRY and mod.enabled for name, mod in config.modules.items()):
+        return []
+    listed = ", ".join(_printable(name) for name in sorted(config.modules))
+    return [
+        {
+            "loc": ("modules",),
+            "msg": (
+                f"No known module is enabled (listed: {listed}). "
+                f"The modules are {', '.join(sorted(_MODULE_REGISTRY))}."
+            ),
+            "type": "value_error",
+        }
+    ]
+
+
 def _is_this_stderr(path: Path) -> bool:
     """Whether a path is this process's own stderr. `/dev/stderr` is the usual spelling. If it's
     a pipe, it has a reader, so opening it doesn't wait. An MCP client on Node gives a socket
@@ -1079,6 +1097,7 @@ def validate_config(path: str | Path | None = None) -> AppConfig:
     """
     config = load_config(path)
     settings, errors = _module_settings(config)
+    errors.extend(_no_known_module_problem(config))
     errors.extend(_local_root_problems(config, settings))
     if log_problem := _log_file_problem(config):
         errors.append({"loc": ("logging", "file"), "msg": log_problem, "type": "value_error"})

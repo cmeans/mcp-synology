@@ -22,7 +22,7 @@ mcp-synology/
 │       │   ├── config.py            # YAML config loading + Pydantic validation
 │       │   ├── formatting.py        # Shared response formatters (table, kv, status, tree, error)
 │       │   ├── errors.py            # Typed exception hierarchy, error code mapping
-│       │   └── state.py             # State file read/write
+│       │   └── state.py             # The SYNO.API.Info cache entry
 │       │
 │       └── modules/
 │           ├── __init__.py          # ModuleInfo dataclass, registration helpers
