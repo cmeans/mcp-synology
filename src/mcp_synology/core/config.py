@@ -1,10 +1,11 @@
 """YAML config loading + Pydantic validation.
 
-Four-step loading:
+Five-step loading:
 1. Discover config file path
 2. Parse YAML
 3. Merge environment variable overrides
 4. Apply defaults and validate with Pydantic
+5. Resolve relative local paths against the config file's folder
 """
 
 from __future__ import annotations
@@ -1711,14 +1712,17 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         raise
 
     logger.debug("Loading config from %r", str(config_path))  # quoted, as the INFO line
+    # Before reading it: a pipe's writer can remove it once it's been read.
+    has_a_folder = _config_has_a_folder(config_path)
     try:
         config = _load_file(config_path)
+        config._source_path = config_path
+        _resolve_paths_against_the_file(config, config_path, has_a_folder)
     except EnvVarError:
         raise  # names the variable; nothing in the file to look at
     except (ValueError, yaml.YAMLError) as e:
         e.add_note(config_file_note(config_path))
         raise
-    config._source_path = config_path
     # Only --config: an `env` block can name a file with MCP_SYNOLOGY_CONFIG, or supply the default
     # location's through HOME (maintainer, 2026-11-05), and a `~/...` value's the same way (no
     # shell expands it in an MCP client's args). Only a full path: a relative one is whatever the
@@ -1747,6 +1751,70 @@ def load_config(path: str | Path | None = None) -> AppConfig:
 
     _emit_warnings(config)
     return config
+
+
+def _config_has_a_folder(config_path: Path) -> bool:
+    """Whether a relative path in this config has a folder to be found from. A pipe doesn't, and
+    a redirect (`--config /dev/stdin < c.yaml`, `/dev/fd/3`) is a regular file whose folder is
+    only `/dev` or `/proc/<pid>/fd`: errors would name a path nobody wrote (pre-QA on #561). A
+    file that can't be read gets its own error from the read."""
+    try:
+        if not stat.S_ISREG(config_path.stat().st_mode):
+            return False
+        folder = os.path.realpath(os.path.dirname(_shown_path(config_path)))
+    except OSError:
+        return True
+    # `/dev/fd` is a link into /proc on Linux and a real folder on macOS and BSD.
+    return folder not in ("/dev", "/dev/fd") and not folder.startswith("/proc/")
+
+
+def _resolve_paths_against_the_file(
+    config: AppConfig, config_path: Path, has_a_folder: bool
+) -> None:
+    """A relative local path in the config is from the config file's folder (#553; maintainer,
+    2026-11-05), not the working folder: `instructions_file`, `logging.file` and File Station's
+    `default_download_dir`, which also becomes an allowed local folder. From the working folder,
+    a folder someone merely opened could supply text that reaches the model, or become where the
+    file tools may write, and the result depended on how an MCP client started the server.
+
+    `~` isn't relative, and a `~user` that doesn't exist keeps its own error. No environment
+    variable sets these, so env-only mode has none. The folder has its links followed, as the
+    kernel did to open `link/../c.yaml`; a link to the config file itself is that link's folder.
+    With no folder (`_config_has_a_folder`), a relative path is an error. Only an enabled File
+    Station's setting counts: another module's isn't read, and only gets its usual warning.
+    """
+    try:
+        folder = os.path.realpath(os.path.dirname(_shown_path(config_path)))
+    except OSError:  # a working folder with no name
+        folder = os.path.dirname(_shown_path(config_path))
+
+    problems: list[str] = []
+
+    def resolved(setting: str, value: str) -> str:
+        if value.startswith("~") or os.path.isabs(value):
+            return value
+        if not has_a_folder:
+            problems.append(
+                f"{setting} {value!r} is relative, and this config has no folder to find it from: "
+                "it was read from a pipe or a redirect. Use an absolute path or ~/..."
+            )
+            return value
+        return os.path.join(folder, value)
+
+    if config.instructions_file:
+        config.instructions_file = resolved("instructions_file", config.instructions_file)
+    if config.logging.file:
+        config.logging.file = resolved("logging.file", config.logging.file)
+    filestation = config.modules.get("filestation")
+    if filestation is not None and filestation.enabled:
+        value = filestation.settings.get("default_download_dir")
+        if isinstance(value, bytes):  # YAML's !!binary, which the settings schema would decode
+            with contextlib.suppress(UnicodeDecodeError):  # left for the schema to refuse
+                value = value.decode()
+        if isinstance(value, str) and value.strip():
+            filestation.settings["default_download_dir"] = resolved("default_download_dir", value)
+    if problems:
+        raise ValueError("\n".join(problems))
 
 
 def config_file_note(path: Path) -> str:

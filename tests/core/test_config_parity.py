@@ -11,12 +11,11 @@ import errno
 import logging
 import os
 import shlex
-import signal
 import socket
 import subprocess
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -60,6 +59,11 @@ BAD_CONFIGS: dict[str, tuple[str, str]] = {
         "no value inside",
     ),
     "not_a_mapping": ("- a\n- b\n", "must be a YAML mapping"),
+    "blank_binary_setting": (
+        f"{GOOD_HEAD}modules: {{filestation: {{settings: "
+        "{default_download_dir: !!binary wqA=}}}\n",
+        "modules.filestation.settings.default_download_dir",
+    ),
     "no_known_module": (f"{GOOD_HEAD}modules: {{filestaton: }}\n", "No known module is enabled"),
     "bad_yaml": (f"schema_version: 1\nauth: {{password: *{SECRET}\n", "isn't valid YAML"),
     "unknown_key": (f"{GOOD_HEAD}modules: {{filestation: }}\npasword: {SECRET}\n", "pasword"),
@@ -174,24 +178,7 @@ def _restore_logging() -> object:
     logging_._early_records = None
 
 
-if TYPE_CHECKING:
-    from collections.abc import Iterator
-
 _NEEDS_PIPES = pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="no named pipes here")
-
-
-@pytest.fixture
-def _pipe_timeout() -> Iterator[None]:
-    """A regression here would wait on the pipe forever: fail instead (QA round 1 on #541)."""
-
-    def fail(*_: object) -> None:
-        raise TimeoutError("waited on a named pipe")
-
-    previous = signal.signal(signal.SIGALRM, fail)
-    signal.alarm(30)
-    yield
-    signal.alarm(0)
-    signal.signal(signal.SIGALRM, previous)
 
 
 def _run(*args: str) -> tuple[int, str, BaseException | None]:
@@ -670,7 +657,7 @@ class TestEdgeCases:
     def test_a_relative_log_file_is_shown_absolute(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """It depends on the folder an MCP client starts the server in (pre-QA r2)."""
+        """From the config's folder since #553, and shown absolute (pre-QA r2)."""
         (tmp_path / "a-file").write_text("x", encoding="utf-8")
         monkeypatch.chdir(tmp_path)
         path = tmp_path / "bad.yaml"
@@ -871,9 +858,19 @@ def _unknown_home(tmp_path: Path) -> tuple[Path, str]:
     return Path("~nosuchuser541/x.yaml"), "nosuchuser541"
 
 
+def _redirected_relative_log(tmp_path: Path) -> tuple[Path, str]:
+    real = tmp_path / "real.yaml"
+    real.write_text(
+        f"{GOOD_HEAD}logging: {{file: x.log}}\nmodules: {{filestation: }}\n", encoding="utf-8"
+    )
+    # Left open for the test: each command opens the descriptor's file again.
+    return Path(f"/dev/fd/{os.open(real, os.O_RDONLY)}"), "has no folder"
+
+
 @_NEEDS_PIPES
 @pytest.mark.parametrize(
-    "build", [_folder, _not_utf8, _pipe_log, _log_is_the_config, _unknown_home]
+    "build",
+    [_folder, _not_utf8, _pipe_log, _log_is_the_config, _unknown_home, _redirected_relative_log],
 )
 def test_every_command_refuses_a_bad_file_the_same_way(
     build: Any, tmp_path: Path, _pipe_timeout: None
@@ -1437,11 +1434,12 @@ class TestPreQa5OnPr541:
     def test_a_pipe_in_a_folder_named_tilde_is_refused(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _pipe_timeout: None
     ) -> None:
-        """QA round 5: `Path("./~/x")` drops the `./`, so the check read it as a home path, while
-        the handler opened `<working folder>/~/x`: the same bypass as `link/../`."""
+        """QA round 5: `Path("./~/x")` drops the `./`, so the check read it as a home path. Since
+        #553 the value is absolute, from the config's folder, before either reads it."""
         (tmp_path / "~").mkdir()
+        (tmp_path / "elsewhere").mkdir()
+        monkeypatch.chdir(tmp_path / "elsewhere")  # and a regression can't write into the checkout
         os.mkfifo(tmp_path / "~" / "x")
-        monkeypatch.chdir(tmp_path)
         path = _in_a_config(tmp_path, "logging: {file: ./~/x}")
         with pytest.raises(ValueError, match="it's a named pipe"):
             validate_config(path)
@@ -1451,10 +1449,11 @@ class TestPreQa5OnPr541:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         (tmp_path / "~").mkdir()
-        monkeypatch.chdir(tmp_path)
+        (tmp_path / "elsewhere").mkdir()
+        monkeypatch.chdir(tmp_path / "elsewhere")
         path = tmp_path / "~" / "c.yaml"
         path.write_text(
-            f"{GOOD_HEAD}logging: {{file: ./~/c.yaml}}\nmodules: {{filestation: }}\n",
+            f"{GOOD_HEAD}logging: {{file: ./c.yaml}}\nmodules: {{filestation: }}\n",
             encoding="utf-8",
         )
         with pytest.raises(ValueError, match="it's the config file"):

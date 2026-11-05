@@ -42,8 +42,11 @@ class ModuleSettings(BaseModel):
         if isinstance(value, bool) and bool not in types and types & {int, float}:
             msg = "must be a number, not true or false (YAML reads yes/no/on/off as those)."
             raise ValueError(msg)
-        # An empty path names no folder: an error, not "none", as `logging.file` (#511).
-        if str in types and isinstance(value, str) and not value.strip():
+        # An empty path names no folder: an error, not "none", as `logging.file` (#511). Bytes
+        # are YAML's `!!binary`, which pydantic would decode into a text setting (#553), and
+        # `bytes.strip` leaves a no-break space, so it's judged as the text it would become.
+        text = value.decode(errors="replace") if isinstance(value, bytes) else value
+        if str in types and isinstance(text, str) and not text.strip():
             msg = f"is empty: give a value, or leave {field_name} out."
             raise ValueError(msg)
         return value

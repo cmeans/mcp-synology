@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
 import sys
 from typing import TYPE_CHECKING, Any
@@ -18,6 +19,20 @@ from mcp_synology.core.client import DsmClient
 from mcp_synology.core.config import AppConfig
 from mcp_synology.core.state import ApiInfoEntry
 from tests.personas import ReauthSpy, reauth_spy_on
+
+
+@pytest.fixture
+def _pipe_timeout() -> Iterator[None]:
+    """A regression here would wait on the pipe forever: fail instead (QA round 1 on #541)."""
+
+    def fail(*_: object) -> None:
+        raise TimeoutError("waited on a named pipe")
+
+    previous = signal.signal(signal.SIGALRM, fail)
+    signal.alarm(30)
+    yield
+    signal.alarm(0)
+    signal.signal(signal.SIGALRM, previous)
 
 
 def capped_memory_limit(soft: int, hard: int, unlimited: int) -> int:
