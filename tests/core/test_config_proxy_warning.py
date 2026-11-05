@@ -16,23 +16,7 @@ from mcp_synology.core.config import _no_proxy_entry, _proxy_applies, load_confi
 if TYPE_CHECKING:
     from pathlib import Path
 
-_VARS = (
-    "HTTP_PROXY",
-    "HTTPS_PROXY",
-    "ALL_PROXY",
-    "NO_PROXY",
-    "http_proxy",
-    "https_proxy",
-    "all_proxy",
-    "no_proxy",
-)
 _SECRET_PROXY = "http://user:hunter2@proxy.example:3128"
-
-
-@pytest.fixture(autouse=True)
-def no_proxies(monkeypatch: pytest.MonkeyPatch) -> None:
-    for var in _VARS:
-        monkeypatch.delenv(var, raising=False)
 
 
 def _config(tmp_path: Path, host: str = "nas.home", https: str = "true") -> Path:
@@ -170,6 +154,7 @@ def test_env_only_mode_warns_too(
         "10.0.0.0/8",
         "10.0.0.5/32",
         "localhost",
+        "LOCALHOST",
         "::1",
     ],
 )
@@ -202,7 +187,15 @@ def _httpx_uses_a_proxy(url: str) -> bool:
 
 @pytest.mark.parametrize(
     "host",
-    ["nas.home", "10.0.0.5", "localhost", "[fd00::1]", "bücher.example", "xn--bcher-kva.example"],
+    [
+        "nas.home",
+        "10.0.0.5",
+        "localhost",
+        "[fd00::1]",
+        "bücher.example",
+        "xn--bcher-kva.example",
+        "XN--BCHER-KVA.EXAMPLE",
+    ],
 )
 def test_following_the_warnings_advice_works(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, host: str
