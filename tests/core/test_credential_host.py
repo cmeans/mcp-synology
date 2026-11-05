@@ -1822,6 +1822,33 @@ class TestQaRoundThree:
         route = check_route(load_config(_file(tmp_path, "nas.home"))) or ""
         assert "with the same SYNOLOGY_USERNAME and no SYNOLOGY_PASSWORD" in route
 
+    def test_the_route_doesnt_name_a_username_the_entry_holds(
+        self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """QA round 5 on #559."""
+        _entry(store, "nas")
+        monkeypatch.setenv("SYNOLOGY_USERNAME", "u")
+        route = check_route(load_config(_file(tmp_path, "nas.home"))) or ""
+        assert "mcp-synology check" in route
+        assert "SYNOLOGY_USERNAME" not in route
+
+    def test_a_failed_read_of_the_username_gives_no_route(
+        self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """QA round 5 on #559: it was outside the `try`, so `how_to_record` raised."""
+        store.values[("mcp-synology/nas", "password")] = "hunter2"
+        monkeypatch.setenv("SYNOLOGY_USERNAME", "u")
+        config = load_config(_file(tmp_path, "nas.home"))
+        real = store.get_password
+
+        def fails(service: str, key: str) -> str | None:
+            if key == "username":
+                raise RuntimeError("a backend's own type")
+            return real(service, key)
+
+        monkeypatch.setattr(store, "get_password", fails)
+        assert check_route(config) is None
+
     def test_setup_with_stdin_closed_says_so(self, tmp_path: Path) -> None:
         """Pre-QA on #559: a traceback. `sys.stdin` is None, which `CliRunner` can't arrange."""
         path = _file(tmp_path, "nas.home")

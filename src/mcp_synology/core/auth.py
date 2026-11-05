@@ -229,10 +229,14 @@ def check_route(config: AppConfig) -> str | None:
     # use HTTPS (pre-QA on #559).
     connection = _connection_variables()
     # A username only in a variable has to be at the terminal too (pre-QA on #559).
-    if _present_or_none(os.environ.get("SYNOLOGY_USERNAME")) and not _present_or_none(
-        kr.get_password(service, "username")
-    ):
-        connection.append("SYNOLOGY_USERNAME")
+    if _present_or_none(os.environ.get("SYNOLOGY_USERNAME")):
+        try:
+            kept = _present_or_none(kr.get_password(service, "username"))
+        except Exception as e:  # backends raise their own types
+            logger.debug("Keyring error reading the entry: %s", e, exc_info=True)
+            return None
+        if not kept:
+            connection.append("SYNOLOGY_USERNAME")
     same = f" with the same {' and '.join(connection)} and" if connection else " with"
     # This is often read at a terminal, which can't see a client's `env` block, so it goes by what
     # the terminal does know (QA round 3 on #559).
