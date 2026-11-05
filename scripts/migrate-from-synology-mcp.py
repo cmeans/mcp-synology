@@ -99,6 +99,8 @@ def migrate_keyring(instances: set[str], *, dry_run: bool) -> int:
             try:
                 existing = kr.get_password(new_service, key)
                 if existing:
+                    if existing != value:
+                        print(f"  SKIP  keyring {new_service}/{key}: holds a different value")
                     continue
             except Exception:
                 pass

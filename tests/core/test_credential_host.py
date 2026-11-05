@@ -25,7 +25,7 @@ from click.testing import CliRunner, Result
 from keyring.errors import KeyringError, KeyringLocked, NoKeyringError, PasswordDeleteError
 from mcp.server.mcpserver.exceptions import ToolError
 
-from mcp_synology.cli.check import _stdin_is_a_terminal
+from mcp_synology.cli.check import _asked_to_send, _stdin_is_a_terminal
 from mcp_synology.cli.main import main
 from mcp_synology.cli.setup import _attempt_login, _may_replace_entry, _store_keyring
 from mcp_synology.core.auth import AuthManager, check_route, how_to_record, resolve_credentials
@@ -600,6 +600,20 @@ class TestAnEntryWithNoRecordedHost:
             )
         assert "Send its stored password" in result.stderr
         assert "Send its stored password" not in result.stdout
+
+    def test_the_question_puts_back_the_interrupt_handler(
+        self, store: MemoryKeyring, tmp_path: Path
+    ) -> None:
+        """Pre-QA on #559: asyncio's own handler cancels the login cleanly."""
+        _entry(store, "nas")
+        config = load_config(_file(tmp_path, "nas.office"))
+        before = signal.getsignal(signal.SIGINT)
+        with (
+            patch("mcp_synology.cli.check._stdin_is_a_terminal", return_value=True),
+            patch("click.confirm", return_value=True),
+        ):
+            assert _asked_to_send(config, "nas") is True
+        assert signal.getsignal(signal.SIGINT) is before
 
     def test_a_keyring_that_fails_the_first_read_cant_skip_the_question(
         self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1766,6 +1780,26 @@ class TestTheMigrationScript:
         script.cleanup_keyring({"nas"}, dry_run=False)
         assert store.values[("synology-mcp/nas", "password")] == "home-pw"
 
+    def test_a_dry_run_previews_keeping_it_for_a_recorded_entry(
+        self, store: MemoryKeyring, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Migration skips an entry recorded for a host, so nothing would be copied there."""
+        self._old(store)
+        store.values[("mcp-synology/nas", "host")] = "nas.office"
+        _migrate_script().cleanup_keyring({"nas"}, dry_run=True)
+        assert "KEEP  keyring synology-mcp/nas" in capsys.readouterr().out
+
+    def test_it_says_when_it_left_a_different_value(
+        self, store: MemoryKeyring, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Pre-QA on #559: the entry was left in silence."""
+        self._old(store)
+        store.values[("mcp-synology/nas", "password")] = "new-pw"
+        _migrate_script().migrate_keyring({"nas"}, dry_run=False)
+        assert "SKIP  keyring mcp-synology/nas/password: holds a different value" in (
+            capsys.readouterr().out
+        )
+
     def test_a_dry_run_previews_the_delete_of_what_would_be_copied(
         self, store: MemoryKeyring, capsys: pytest.CaptureFixture[str]
     ) -> None:
@@ -1934,3 +1968,25 @@ class TestQaRoundThree:
         assert result.exit_code == 1
         assert "Authentication failed" in result.output
         assert "If these are another NAS's credentials, give this NAS its own" in result.output
+
+    def test_interactive_setup_records_the_host_and_doesnt_ask_again(
+        self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Pre-QA on #559: the newcomer's main path, which nothing pinned."""
+        monkeypatch.chdir(tmp_path)
+        answers = "NAS.Home\ny\n5001\nread\n\nn\nu\npw\n"
+        for _ in range(2):
+            with (
+                patch("mcp_synology.cli.setup._CONFIG_DIR", tmp_path / "config"),
+                patch(
+                    "mcp_synology.core.config.discover_config_path",
+                    side_effect=FileNotFoundError,
+                ),
+                patch(
+                    "mcp_synology.cli.setup._connect_and_login",
+                    AsyncMock(return_value={"success": False}),
+                ),
+            ):
+                result = CliRunner().invoke(main, ["setup"], input=answers)
+            assert store.values[("mcp-synology/nas", "host")] == "nas.home", result.output
+            assert "already holds" not in result.output
