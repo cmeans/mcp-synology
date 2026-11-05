@@ -42,6 +42,7 @@ def test_setup_records_the_host_and_another_host_is_refused(
     tmp_path: Path,
     request: pytest.FixtureRequest,
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     store = MemoryKeyring()
     previous = keyring.get_keyring()
@@ -64,36 +65,39 @@ def test_setup_records_the_host_and_another_host_is_refused(
     home_nas = _config(tmp_path / "a.yaml", "localhost", port)
     other = _config(tmp_path / "b.yaml", "127.0.0.1", port)
 
-    result = runner.invoke(
-        main,
-        ["setup", "--config", home_nas],
-        input=f"{meta['test_user']}\n{meta['test_password']}\n",
+    def run(*args: str, stdin: str | None = None) -> tuple[int, str]:
+        """Exit code and output. CI's --log-cli-level resumes pytest's capture around each log
+        record, which puts sys.stdout back mid-command, so the rest of the output lands there."""
+        result = runner.invoke(main, list(args), input=stdin)
+        captured = capsys.readouterr()
+        return result.exit_code, result.output + captured.out + captured.err
+
+    code, output = run(
+        "setup", "--config", home_nas, stdin=f"{meta['test_user']}\n{meta['test_password']}\n"
     )
-    assert result.exit_code == 0, result.output
-    assert "Login successful" in result.output
+    assert code == 0, output
+    assert "Login successful" in output
     assert store.values[(f"mcp-synology/{_INSTANCE}", "host")] == "localhost"
 
-    result = runner.invoke(main, ["check", "--config", home_nas])
-    assert "Authentication successful!" in result.output, result.output
+    code, output = run("check", "--config", home_nas)
+    assert "Authentication successful!" in output, output
 
-    result = runner.invoke(main, ["check", "--config", other])
-    assert result.exit_code == 1, result.output
-    assert "are for another host" in result.output
-    assert "They were set up for 'localhost'" in result.output
+    code, output = run("check", "--config", other)
+    assert code == 1, output
+    assert "are for another host" in output
+    assert "They were set up for 'localhost'" in output
 
     # Run again for another host: asked first, and declining changes nothing.
     before = dict(store.values)
-    result = runner.invoke(main, ["setup", "--config", other], input="n\n")
-    assert "already holds credentials for another host" in result.output
+    code, output = run("setup", "--config", other, stdin="n\n")
+    assert "already holds credentials for another host" in output
     assert store.values == before
 
     # Accepted, the record moves, and the first config is the one refused.
-    result = runner.invoke(
-        main,
-        ["setup", "--config", other],
-        input=f"y\n{meta['test_user']}\n{meta['test_password']}\n",
+    code, output = run(
+        "setup", "--config", other, stdin=f"y\n{meta['test_user']}\n{meta['test_password']}\n"
     )
-    assert "Login successful" in result.output, result.output
+    assert "Login successful" in output, output
     assert store.values[(f"mcp-synology/{_INSTANCE}", "host")] == "127.0.0.1"
-    assert "Authentication successful!" in runner.invoke(main, ["check", "--config", other]).output
-    assert "are for another host" in runner.invoke(main, ["check", "--config", home_nas]).output
+    assert "Authentication successful!" in run("check", "--config", other)[1]
+    assert "are for another host" in run("check", "--config", home_nas)[1]
