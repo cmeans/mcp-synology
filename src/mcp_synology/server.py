@@ -38,7 +38,6 @@ from mcp_synology.core.errors import ErrorCode, SynologyError, detached_copy
 from mcp_synology.core.formatting import error_response, synology_error_response
 from mcp_synology.core.local_paths import has_control_character
 from mcp_synology.core.redaction import redact_urls
-from mcp_synology.core.state import ServerState
 from mcp_synology.modules import PermissionTier, RegisterContext, filter_tools_by_permission
 from mcp_synology.modules import downloadstation as _downloadstation_mod
 from mcp_synology.modules import filestation as _filestation_mod
@@ -465,7 +464,6 @@ class SharedClientManager:
         self._config = config
         self._client: DsmClient | None = None
         self._auth: AuthManager | None = None
-        self._server_state: ServerState = ServerState()
         self._update_notice: str | None = None
         self._pending_version: str | None = None
         # The version this session already announced (in the instructions or a result),
@@ -893,7 +891,8 @@ def config_notices(config: AppConfig) -> list[str]:
     An unknown module name, or an unknown key in a module's `settings`, would otherwise
     be ignored without a word (an `allowed_local_paths` typo left the Downloads default in
     force). They're warnings, not errors, so a config written for a newer version still
-    starts; `serve` logs them and `check` prints them. Unknown keys directly under a
+    starts, unless no known module is enabled (`_no_known_module_problem`); `serve` logs them
+    and `check` prints them. Unknown keys directly under a
     module are errors (`ModuleConfig`, extra="forbid").
     """
     _, instructions_problem = _read_instructions_file(config)
@@ -953,6 +952,26 @@ def _module_settings(config: AppConfig) -> tuple[dict[str, BaseModel | None], li
                 {**err, "loc": ("modules", name, "settings", *err["loc"])} for err in e.errors()
             )
     return settings, errors
+
+
+def _no_known_module_problem(config: AppConfig) -> list[Any]:
+    """`modules: {filestaton: {}}` has a module listed, so `load_config` passes it, and the server
+    would start with no tools (#538). An unknown name beside a known one stays a warning, so a
+    config written for a newer version still starts."""
+    if any(name in _MODULE_REGISTRY and mod.enabled for name, mod in config.modules.items()):
+        return []
+    listed = ", ".join(repr(name) for name in sorted(config.modules))
+    return [
+        {
+            "loc": ("modules",),
+            "msg": (
+                f"No known module is enabled (listed: {listed}). This version's modules are "
+                f"{', '.join(sorted(_MODULE_REGISTRY))}. Fix the name, or enable one "
+                "(filestation: {enabled: true})."
+            ),
+            "type": "value_error",
+        }
+    ]
 
 
 def _is_this_stderr(path: Path) -> bool:
@@ -1077,6 +1096,7 @@ def validate_config(path: str | Path | None = None) -> AppConfig:
     """
     config = load_config(path)
     settings, errors = _module_settings(config)
+    errors.extend(_no_known_module_problem(config))
     errors.extend(_local_root_problems(config, settings))
     if log_problem := _log_file_problem(config):
         errors.append({"loc": ("logging", "file"), "msg": log_problem, "type": "value_error"})
