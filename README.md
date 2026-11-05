@@ -587,7 +587,7 @@ python migrate-from-synology-mcp.py          # dry run — preview changes
 python migrate-from-synology-mcp.py --apply  # apply changes
 ```
 
-The moved keyring entries don't say which host they're for, so a login is refused until the host is recorded. The error says how.
+The moved keyring entries don't say which host they're for. Unless the config is named by its full path, a login is refused until the host is recorded; see [Credentials Are Tied to a Host](docs/credentials.md#credentials-are-tied-to-a-host).
 
 ## Contributing
 

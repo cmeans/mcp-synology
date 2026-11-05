@@ -11,7 +11,7 @@ import os
 import shutil
 import sys
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import click
 import yaml
@@ -19,6 +19,9 @@ import yaml
 from mcp_synology.cli.check import exit_on_connection_failure
 from mcp_synology.cli.logging_ import _configure_logging, _init_early_logging
 from mcp_synology.cli.startup import escape_what_stdout_cant_encode, load_or_exit
+
+if TYPE_CHECKING:
+    from mcp_synology.core.config import AppConfig
 
 logger = logging.getLogger(__name__)
 
@@ -352,7 +355,7 @@ def _setup_credential_flow(app_config: Any, verbose: bool) -> None:
 
     service = f"mcp-synology/{app_config.instance_id}"
     instance = str(app_config.instance_id)
-    if not _may_replace_entry(service, app_config.connection.host, instance):
+    if not _may_replace_entry(service, app_config.connection.host, instance, app_config):
         return
 
     username = click.prompt("DSM username").strip()
@@ -366,12 +369,16 @@ def _setup_credential_flow(app_config: Any, verbose: bool) -> None:
     asyncio.run(_setup_login(app_config, username, password, service))
 
 
-def _may_replace_entry(service: str, host: str, instance: str) -> bool:
+def _may_replace_entry(
+    service: str, host: str, instance: str, config: AppConfig | None = None
+) -> bool:
     """Ask before replacing a keyring entry that isn't this host's (#536): two NAS with the same
     first label derive the same instance ID, and the other's config would then send this one's
     password there. With no keyring at all there's nothing to replace, and writing says so. One
     that fails now may work when written to, and another host's credentials would go unasked, so
-    that stops here (QA round 1 on #559). Any exception counts: backends raise their own types."""
+    that stops here (QA round 1 on #559). Any exception counts: backends raise their own types.
+    ``config`` is the file being set up; interactive setup hasn't written one yet."""
+    from mcp_synology.core.auth import check_route
     from mcp_synology.core.config import comparable_host
 
     try:
@@ -403,19 +410,19 @@ def _may_replace_entry(service: str, host: str, instance: str) -> bool:
         default=False,
     ):
         return True
-    keep_both = (
-        "To keep both, give this NAS its own instance_id in a config file, then run "
+    own_id = (
+        "give this NAS its own instance_id in a config file, then run "
         "'mcp-synology setup --config <that file>'."
     )
-    if recorded:
-        click.echo(f"Aborted, nothing changed. {keep_both}")
-    else:
-        # It may well be this NAS's own entry, from before hosts were recorded.
+    # An entry with no record may well be this NAS's own, from before hosts were recorded.
+    route = None if recorded or config is None else check_route(config)
+    if route:
         click.echo(
-            "Aborted, nothing changed. If these are this NAS's credentials, 'mcp-synology check "
-            "--config <full path to your config file>' records the host and keeps any 2FA device "
-            f"token. If they're another NAS's: {keep_both}"
+            f"Aborted, nothing changed. If these are this NAS's own credentials, {route}. "
+            f"If they're another NAS's, {own_id}"
         )
+    else:
+        click.echo(f"Aborted, nothing changed. To keep both, {own_id}")
     return False
 
 

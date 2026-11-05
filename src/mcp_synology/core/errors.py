@@ -121,10 +121,11 @@ class AuthenticationError(SynologyError):
 
 class CredentialHostError(AuthenticationError):
     """A keyring entry isn't for this config's host, so nothing was sent (#536). Its text reaches
-    the model, so it doesn't name the recorded host; ``recorded_host`` is for `check`, which is
-    someone at their own terminal."""
+    the model, so it doesn't name the recorded host or a command that records one; these two are
+    for `check`, which is someone at their own terminal."""
 
     recorded_host: str | None = None
+    terminal_suggestion: str | None = None
 
 
 class LoginRefusedError(AuthenticationError):

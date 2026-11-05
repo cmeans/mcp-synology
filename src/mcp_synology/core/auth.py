@@ -110,14 +110,19 @@ def _device_token_may_be_sent(config: AppConfig, service: str) -> bool:
         matches = _recorded_host(service) == comparable_host(config.connection.host)
     except Exception as e:  # backends raise their own types
         logger.debug("Keyring error reading the host: %s", e, exc_info=True)
-        matches = False
+        # Not "isn't recorded", and the one warning below stays for a real mismatch (QA round 2).
+        logger.warning(
+            "Not sending the device token in keyring entry %r: couldn't read which host it's for.",
+            config.instance_id or "default",
+        )
+        return False
     if not matches and not config._device_token_warned:
         config._device_token_warned = True
         # The login's own error is DSM's and doesn't mention the token (maintainer, 2026-11-05),
         # so this is the only place that gives the way out.
         logger.warning(
             "Not sending the device token in keyring entry %r: it isn't recorded for this host. "
-            "If this is the right NAS, %s.",
+            "%s.",
             config.instance_id or "default",
             how_to_record(config),
         )
@@ -133,35 +138,37 @@ def _host_variables() -> list[str]:
 
 def _setup_command(config: AppConfig) -> str:
     """`setup` as this server needs it run. The variables aren't in a terminal's environment when
-    a client's `env` block set them, and it then stores for the file's host or instance (QA round
-    1 on #559). With no config file, plain `setup` takes the host from SYNOLOGY_HOST."""
+    a client's `env` block set them: it then stores for the file's host or instance (QA round 1
+    on #559), or can't connect with the host but not the port or HTTPS (QA round 2). With no
+    config file, plain `setup` takes the host from SYNOLOGY_HOST."""
+    import os
+
     command = _SETUP if config._source_path else "'mcp-synology setup'"
-    if variables := _host_variables():
-        command += f" with the same {' and '.join(variables)} as this server"
+    connection = [v for v in ("SYNOLOGY_PORT", "SYNOLOGY_HTTPS") if os.environ.get(v, "").strip()]
+    if variables := _host_variables() + connection:
+        command += f" with the same {' and '.join(variables)}"
     return command
 
 
-def how_to_record(config: AppConfig) -> str:
-    """How to tie this config's keyring entry to its host, as a clause. Every message that advises
-    it comes through here, so none names a route that can't work (QA round 1 and pre-QA on #559):
-    `check` records only an entry with no record, using its password, from a config named by its
-    full path with neither host variable. It keeps a 2FA device token, which `setup` removes."""
+def check_route(config: AppConfig) -> str | None:
+    """How `check` would record this config's keyring entry, as a clause, or None if it can't: it
+    records only an entry with no record, using its password, from a config named by its full path
+    with neither host variable (QA round 1 and pre-QA on #559). It asks for nothing, so whoever
+    offers it must first ask whose credentials these are (QA round 2 on #559)."""
     import os
 
-    setup = f"run {_setup_command(config)}, which replaces any 2FA device token"
     service = f"mcp-synology/{config.instance_id or 'default'}"
     try:
-        check_can_record = (
-            config._source_path is not None
-            and not _host_variables()
-            and _recorded_host(service) is None
-            and _present_or_none(kr.get_password(service, "password")) is not None
-        )
+        if (
+            config._source_path is None
+            or _host_variables()
+            or _recorded_host(service) is not None
+            or _present_or_none(kr.get_password(service, "password")) is None
+        ):
+            return None
     except Exception as e:  # backends raise their own types
         logger.debug("Keyring error reading the entry: %s", e, exc_info=True)
-        check_can_record = False
-    if not check_can_record:
-        return setup
+        return None
     # The config's value is the variable's when that's set (_merge_env_overrides), and a terminal
     # has its own environment.
     in_the_file = _present_or_none(config.auth.password) and not _present_or_none(
@@ -169,17 +176,50 @@ def how_to_record(config: AppConfig) -> str:
     )
     remove = "remove auth.password from the config and " if in_the_file else ""
     return (
-        f"{remove}run {_RECORD_HOST} at a terminal, with no SYNOLOGY_USERNAME or SYNOLOGY_PASSWORD "
-        f"set, which keeps any 2FA device token, or {setup}"
+        f"{remove}run {_RECORD_HOST} at a terminal, with no SYNOLOGY_PASSWORD set, which keeps any "
+        "2FA device token"
     )
 
 
-def _refusal_advice(config: AppConfig, host: str) -> str:
-    """What to do about a refused entry."""
+def _setup_clause(config: AppConfig) -> str:
+    return f"run {_setup_command(config)}, which asks for the password and replaces any 2FA token"
+
+
+def how_to_record(config: AppConfig) -> str:
+    """What someone at a terminal can do about this entry. Whether this is the right NAS isn't the
+    question: `nas.office` is right for its own config while the entry holds `nas.home`'s password,
+    and `check` would send it there (QA round 2 on #559). So the route that asks for nothing is
+    offered only to someone who knows whose credentials these are; `setup` asks for the password.
+    A tool's reply gets `_advice_for_the_model` instead."""
+    host = config.connection.host if config.connection else None
+    route = check_route(config)
+    if route:
+        return (
+            f"If these are {host!r}'s own credentials, {route}. If you aren't sure, or they "
+            f"aren't, {_setup_clause(config)}"
+        )
+    return f"If {host!r} is the right NAS, {_setup_clause(config)}"
+
+
+_WRONG_NAS = (
+    "check connection.host, SYNOLOGY_HOST and the instance ID. A NAS reached by two addresses "
+    "needs a second config with its own instance_id."
+)
+
+
+def _advice_for_the_model(config: AppConfig, host: str) -> str:
+    """A tool's reply names no command that records the host: that needs no person, and a model
+    can't know whose credentials these are, least of all from a config in a folder it was pointed
+    at (QA round 2 on #559). `setup` asks someone for the password."""
+    keep_token = (
+        " If the user knows these are its own credentials, they can keep the token instead: see "
+        "'Credentials Are Tied to a Host' in docs/credentials.md."
+        if check_route(config)
+        else ""
+    )
     return (
-        f"If {host!r} is the right NAS, {how_to_record(config)}. If it isn't, check "
-        "connection.host, SYNOLOGY_HOST and the instance ID. A NAS reached by two addresses needs "
-        "a second config with its own instance_id."
+        f"If {host!r} is the right NAS, ask the user to {_setup_clause(config)}.{keep_token} If it "
+        f"isn't, {_WRONG_NAS}"
     )
 
 
@@ -209,15 +249,17 @@ def _refuse_another_hosts_credentials(config: AppConfig, service: str, *, may_re
     if matches:
         return
     # Not naming the recorded host in the text: an `env` block's author would learn the real NAS's
-    # name from the reply. `check` adds it. The first-use conditions are in the docs, not here: a
-    # model that can edit a client's config shouldn't get them as a recipe.
+    # name from the reply. `check` adds it. The first-use conditions and the command that records
+    # are in the docs and `check`'s output, not here: see `_advice_for_the_model`.
+    host = config.connection.host
     reason = "are for another host" if recorded else "don't say which host they're for"
     error = CredentialHostError(
         f"The credentials in keyring entry {instance!r} {reason}, so they aren't being sent to "
-        f"{config.connection.host!r}.",
-        suggestion=_refusal_advice(config, config.connection.host),
+        f"{host!r}.",
+        suggestion=_advice_for_the_model(config, host),
     )
     error.recorded_host = recorded
+    error.terminal_suggestion = f"{how_to_record(config)}. If it's the wrong NAS, {_WRONG_NAS}"
     raise error
 
 
@@ -596,8 +638,11 @@ class AuthManager:
             if _recorded_host(service) is not None:
                 return
             kr.set_password(service, "host", host)
+            recorded = _recorded_host(service)  # `check` tells people to rely on what it says
         except Exception as e:  # backends raise their own types
             logger.debug("Keyring error recording the host: %s", e, exc_info=True)
+            recorded = None
+        if recorded != host:
             logger.warning(
                 "Couldn't record this host in keyring entry %r. Check that the OS keyring can be "
                 "written to; the next login tries again.",

@@ -24,7 +24,7 @@ from mcp_synology.cli.setup import _may_replace_entry, _store_keyring
 from mcp_synology.core.auth import AuthManager, how_to_record, resolve_credentials
 from mcp_synology.core.client import DsmClient
 from mcp_synology.core.config import AppConfig, comparable_host, load_config
-from mcp_synology.core.errors import AuthenticationError
+from mcp_synology.core.errors import AuthenticationError, CredentialHostError
 from mcp_synology.core.formatting import synology_error_response
 from tests.memory_keyring import MemoryKeyring
 
@@ -383,9 +383,11 @@ class TestAnEntryWithNoRecordedHost:
             "modules: {filestation: {}}\n",
             encoding="utf-8",
         )
-        with pytest.raises(AuthenticationError) as exc:
+        with pytest.raises(CredentialHostError) as exc:
             resolve_credentials(load_config(path))
-        assert "remove auth.password from the config and run" in (exc.value.suggestion or "")
+        assert "remove auth.password from the config and run" in (
+            exc.value.terminal_suggestion or ""
+        )
 
     def test_a_username_with_no_stored_password_gets_only_setup(
         self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -566,12 +568,59 @@ class TestAnEntryWithNoRecordedHost:
         _entry(store, "nas")
         config = load_config(_file(tmp_path, "nas.home"))
         config._host_may_be_recorded = False
-        with pytest.raises(AuthenticationError) as exc:
+        with pytest.raises(CredentialHostError) as exc:
             resolve_credentials(config)
-        suggestion = exc.value.suggestion or ""
-        assert "'mcp-synology check --config <full path to your config file>'" in suggestion
-        assert "keeps any 2FA device token" in suggestion
-        assert "mcp-synology setup --config" in suggestion
+        advice = exc.value.terminal_suggestion or ""
+        assert "'mcp-synology check --config <full path to your config file>'" in advice
+        assert "keeps any 2FA device token" in advice
+        assert "mcp-synology setup --config" in advice
+
+    def test_the_advice_asks_whose_credentials_these_are(
+        self, store: MemoryKeyring, tmp_path: Path
+    ) -> None:
+        """QA round 2 on #559: `nas.office` is the right NAS for its own config while the entry
+        holds `nas.home`'s password, and following "if this is the right NAS" sent it there."""
+        _entry(store, "nas")
+        config = load_config(_file(tmp_path, "nas.office"))
+        config._host_may_be_recorded = False
+        with pytest.raises(CredentialHostError) as exc:
+            resolve_credentials(config)
+        advice = exc.value.terminal_suggestion or ""
+        route = advice.index("mcp-synology check")
+        assert advice.index("If these are 'nas.office''s own credentials") < route
+        assert "If you aren't sure, or they aren't, run 'mcp-synology setup" in advice
+
+    def test_a_tool_reply_names_no_command_that_records_it(
+        self, store: MemoryKeyring, tmp_path: Path
+    ) -> None:
+        """QA round 2 on #559: `check` needs no person, and the reply for a config in a folder the
+        model was pointed at told it to name that file by its full path."""
+        _entry(store, "nas")
+        config = load_config(_file(tmp_path, "nas.home"))
+        config._host_may_be_recorded = False
+        with pytest.raises(CredentialHostError) as exc:
+            resolve_credentials(config)
+        with pytest.raises(ToolError) as tool:
+            synology_error_response("List files", exc.value)
+        reply = str(tool.value)
+        assert "mcp-synology check" not in reply
+        assert "full path" not in reply
+        assert "ask the user to run 'mcp-synology setup" in reply
+        assert "docs/credentials.md" in reply
+
+    def test_check_gives_the_terminal_advice(
+        self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _entry(store, "nas")
+        monkeypatch.chdir(tmp_path)
+        _file(tmp_path, "nas.home")
+        with patch(
+            "mcp_synology.core.client.DsmClient.query_api_info", AsyncMock(return_value=None)
+        ):
+            result = CliRunner().invoke(main, ["check", "--config", "named.yaml"])
+        assert result.exit_code == 1
+        assert "If these are 'nas.home''s own credentials" in result.output
+        assert "mcp-synology check --config <full path" in result.output
 
     @pytest.mark.parametrize(
         ("variables", "named"),
@@ -598,8 +647,21 @@ class TestAnEntryWithNoRecordedHost:
         with pytest.raises(AuthenticationError) as exc:
             resolve_credentials(load_config(_file(tmp_path, "nas.home")))
         suggestion = exc.value.suggestion or ""
-        assert f"with the same {named} as this server" in suggestion
+        assert f"with the same {named}" in suggestion
         assert "mcp-synology check" not in suggestion
+
+    @pytest.mark.parametrize("variable", ["SYNOLOGY_PORT", "SYNOLOGY_HTTPS"])
+    def test_the_advice_keeps_the_rest_of_the_connection(
+        self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, variable: str
+    ) -> None:
+        """QA round 2 on #559: `setup` with the host alone couldn't connect."""
+        monkeypatch.chdir(tmp_path)
+        _entry(store, "nas")
+        monkeypatch.setenv("SYNOLOGY_HOST", "nas.home")
+        monkeypatch.setenv(variable, "5001" if variable == "SYNOLOGY_PORT" else "true")
+        with pytest.raises(AuthenticationError) as exc:
+            resolve_credentials(load_config())
+        assert f"with the same SYNOLOGY_HOST and {variable}" in (exc.value.suggestion or "")
 
     def test_config_wins_over_the_variable(
         self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -734,7 +796,7 @@ class TestADeviceTokenAlone:
         warning = next(m for m in caplog.messages if "Not sending the device token" in m)
         # `check` can't record it with the variable set, or with no password stored.
         assert "mcp-synology check" not in warning
-        assert "with the same SYNOLOGY_HOST as this server" in warning
+        assert "with the same SYNOLOGY_HOST" in warning
 
     @pytest.mark.parametrize(
         ("host", "routes_to_check"),
@@ -1087,14 +1149,15 @@ class TestSetup:
     @pytest.mark.parametrize(
         ("recorded", "says", "doesnt"),
         [
-            ("nas.home", "To keep both", "records the host"),
-            (None, "records the host and keeps any 2FA device token", "\0"),
+            ("nas.home", "To keep both", "mcp-synology check"),
+            (None, "If these are this NAS's own credentials, run 'mcp-synology check", "To keep"),
         ],
         ids=["another host", "no host recorded"],
     )
     def test_declining_gives_advice_that_fits(
         self,
         store: MemoryKeyring,
+        tmp_path: Path,
         capsys: pytest.CaptureFixture[str],
         recorded: str | None,
         says: str,
@@ -1102,11 +1165,81 @@ class TestSetup:
     ) -> None:
         """QA round 1 on #559: "keep both" is wrong when an old entry is this NAS's own."""
         _entry(store, "nas", recorded)
+        config = load_config(_file(tmp_path, "nas.office"))
         with patch("click.confirm", return_value=False):
-            assert not _may_replace_entry("mcp-synology/nas", "nas.office", "nas")
+            assert not _may_replace_entry("mcp-synology/nas", "nas.office", "nas", config)
         out = capsys.readouterr().out
         assert says in out
         assert doesnt not in out
+
+    def test_declining_names_no_route_that_cant_work(
+        self,
+        store: MemoryKeyring,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """QA round 2 on #559: `check` with a token and no password says "No credentials found",
+        with SYNOLOGY_HOST set it's refused again, and interactive setup has no file to name."""
+        store.values[("mcp-synology/nas", "device_id")] = "token"
+        config = load_config(_file(tmp_path, "nas.office"))
+        with patch("click.confirm", return_value=False):
+            _may_replace_entry("mcp-synology/nas", "nas.office", "nas", config)
+        assert "mcp-synology check" not in capsys.readouterr().out
+        _entry(store, "nas")
+        with patch("click.confirm", return_value=False):
+            _may_replace_entry("mcp-synology/nas", "nas.office", "nas")
+        assert "mcp-synology check" not in capsys.readouterr().out
+        monkeypatch.setenv("SYNOLOGY_HOST", "nas.office")
+        config = load_config(_file(tmp_path, "nas.office"))
+        with patch("click.confirm", return_value=False):
+            _may_replace_entry("mcp-synology/nas", "nas.office", "nas", config)
+        assert "mcp-synology check" not in capsys.readouterr().out
+
+    def test_a_write_that_doesnt_take_isnt_reported_as_recorded(
+        self,
+        store: MemoryKeyring,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """QA round 2 on #559: `check` said "now recorded" with nothing there."""
+        _entry(store, "nas")
+        monkeypatch.setattr(store, "set_password", lambda *_args: None)
+        with caplog.at_level("WARNING"):
+            auth = _log_in(load_config(_file(tmp_path, "nas.home")))
+        assert auth.recorded_host is None
+        assert any("Couldn't record this host" in m for m in caplog.messages)
+
+    def test_a_failed_read_isnt_called_a_mismatch(
+        self,
+        store: MemoryKeyring,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """QA round 2 on #559: it said "isn't recorded", with advice that can remove the token, and
+        used up the one warning, so a real mismatch later said nothing."""
+        store.values[("mcp-synology/nas", "device_id")] = "token"
+        store.values[("mcp-synology/nas", "host")] = "nas.other"
+        monkeypatch.setenv("SYNOLOGY_USERNAME", "u")
+        monkeypatch.setenv("SYNOLOGY_PASSWORD", "p")
+        config = load_config(_file(tmp_path, "nas.home"))
+        real = store.get_password
+
+        def fails(service: str, key: str) -> str | None:
+            if key == "host":
+                raise RuntimeError("a backend's own type")
+            return real(service, key)
+
+        with caplog.at_level("WARNING"), monkeypatch.context() as patched:
+            patched.setattr(store, "get_password", fails)
+            assert resolve_credentials(config)[2] is None
+        assert any("couldn't read which host" in m for m in caplog.messages)
+        assert not any("isn't recorded for this host" in m for m in caplog.messages)
+        with caplog.at_level("WARNING"):
+            assert resolve_credentials(config)[2] is None
+        assert any("isn't recorded for this host" in m for m in caplog.messages)
 
     def test_accepting_replaces_it(self, store: MemoryKeyring, tmp_path: Path) -> None:
         _entry(store, "nas", "nas.home")

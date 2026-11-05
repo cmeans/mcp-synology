@@ -417,7 +417,7 @@ class AppConfig(BaseModel, extra="forbid"):
     # The file this came from, for errors found after loading; None in env-var-only mode.
     _source_path: Path | None = PrivateAttr(default=None)
     # Whether a keyring entry with no recorded host may record this config's host (#536): only
-    # from --config, with no variable changing the host or the entry.
+    # from --config by a full path, with no variable changing the host or the entry.
     _host_may_be_recorded: bool = PrivateAttr(default=False)
     # Credentials are resolved for each call while a refused login is remembered.
     _device_token_warned: bool = PrivateAttr(default=False)
@@ -1641,8 +1641,10 @@ def load_config(path: str | Path | None = None) -> AppConfig:
     # Only --config: an `env` block can name a file with MCP_SYNOLOGY_CONFIG, or supply the default
     # location's through HOME (maintainer, 2026-11-05), and a `~/...` value's the same way (no
     # shell expands it in an MCP client's args). Only a full path: a relative one is whatever the
-    # client's working folder holds, such as a cloned repo (QA round 1 on #559). Any value in the
-    # two variables counts, even an equal one, since only `setup` should settle a doubt.
+    # client's working folder holds, such as a cloned repo (QA round 1 on #559). So is the absolute
+    # `/proc/self/cwd/...`, though whoever can write that could name any path of their own. Any
+    # value in the two variables counts, even an equal one, since only `setup` should settle a
+    # doubt.
     config._host_may_be_recorded = (
         path is not None
         and Path(path).is_absolute()

@@ -183,8 +183,8 @@ async def _check_login(config: object) -> None:
                 elif entry_left_unrecorded(config):
                     click.echo(
                         f"Keyring entry {instance!r} still has no recorded host: this login "
-                        "didn't use its password, or the host couldn't be recorded. To record "
-                        f"it, {how_to_record(config)}."
+                        f"didn't use its password, or the host couldn't be recorded. "
+                        f"{how_to_record(config)}."
                     )
                 await auth.logout()
             except DsmReplyError:
@@ -213,6 +213,8 @@ async def _check_login(config: object) -> None:
                 text = str(e).rstrip()
                 if text and text[-1] not in ".!?":
                     text += "."  # DSM's messages have no final period
+                if isinstance(e, CredentialHostError):
+                    hint = e.terminal_suggestion or hint
                 if isinstance(e, CredentialHostError) and e.recorded_host:
                     # Not in the error's own text, which reaches the model (#536). Quoted: it
                     # comes from the keyring, so a newline in it mustn't forge a line.
