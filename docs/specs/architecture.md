@@ -274,15 +274,9 @@ An entry from before this has no record. It takes the config's host on first use
 
 `setup` asks before replacing an entry recorded for another host or with no record, and before overwriting a config file, ahead of the credential prompts, so declining writes nothing. A keyring that fails on that first read stops there with nothing changed, since it may work again by the write, and replace another host's entry unasked; only no keyring at all carries on, to say so when writing and name the variables to set. When the host changes, it deletes the old device token, password and username first, then writes the new host, then the username and password, so a stop partway leaves nothing to send to the wrong host, and the message says what was already removed. The old device token would otherwise be sent to this one.
 
-### Separate State File
+### Runtime State
 
-Non-sensitive server-managed runtime state is stored in a separate state file (not in the YAML config):
-
-- **Location:** `~/.local/state/mcp-synology/{instance_id}/state.yaml` (or alongside the config file)
-- **Contents:** SYNO.API.Info cache (API name → path/version map), last successful connection timestamp, negotiated API versions
-- **Not stored here:** credentials, device tokens, session IDs (these go in the keyring or are ephemeral)
-
-**Rationale:** Config files are user-managed input; state files are server-managed output. The config remains read-only from the server's perspective. No surprising mutations to user-edited files.
+There's no per-instance state file: `DsmClient` keeps the `SYNO.API.Info` cache in memory, read when the first call builds the client, and versions are computed from it per call. The update check's `~/.local/state/mcp-synology/global.yaml` is the one state file (#538). The config stays read-only from the server's perspective.
 
 ### Session Lifecycle
 
