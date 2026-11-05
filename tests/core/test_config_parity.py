@@ -7,8 +7,10 @@ A new way a config can fail goes in BAD_CONFIGS. Each one must stop `check`, `se
 from __future__ import annotations
 
 import ast
+import errno
 import logging
 import os
+import shlex
 import signal
 import socket
 import subprocess
@@ -981,7 +983,7 @@ class TestAWorkingFolderConfigIsntLoaded:
     @staticmethod
     def _in_this_folder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         here = tmp_path / "cloned-repo"
-        here.mkdir()
+        here.mkdir(parents=True)
         path = here / "mcp-synology.yaml"
         path.write_text(HOSTILE_FOLDER_CONFIG, encoding="utf-8")
         monkeypatch.chdir(here)
@@ -996,13 +998,74 @@ class TestAWorkingFolderConfigIsntLoaded:
         with pytest.raises(FileNotFoundError) as excinfo:
             load_config()
         text = str(excinfo.value)
-        assert text.startswith(f"{str(path)!r} isn't loaded automatically")
+        assert text.startswith(f"{shlex.quote(str(path))} isn't loaded automatically")
         # Literal, so it works pasted into a shell from any folder's name.
         assert "pass --config ./mcp-synology.yaml," in text
         # Naming it is consent: a model repairing a failed server would paste a bare flag in.
         assert "If you trust this file" in text
         # A relative path in a client's args would load whatever folder it starts in next.
         assert "full path in an MCP client's config" in text
+        # QA on #555: the same model could move it to where it applies in every folder.
+        assert "start from another folder or move it out of this one" in text
+        assert "Don't copy it to the home location unless you trust it" in text
+        assert "SYNOLOGY_HOST" not in text
+
+    def test_the_path_shown_is_safe_to_paste(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """QA on #555: `repr` double-quoted a name with a `'`, and the message says to use it."""
+        marker = tmp_path / "PWN"
+        here = tmp_path / "a'$(touch PWN)b"
+        path = self._in_this_folder(here, monkeypatch)
+        monkeypatch.delenv("SYNOLOGY_HOST", raising=False)
+        with pytest.raises(FileNotFoundError) as excinfo:
+            load_config()
+        shown = str(excinfo.value).split(" isn't loaded automatically")[0]
+        assert shlex.split(shown) == [str(path)]
+        subprocess.run(["sh", "-c", f"ls {shown}"], cwd=tmp_path, capture_output=True, check=True)
+        assert not marker.exists()
+
+    def test_a_newline_in_the_folder_cant_forge_a_line(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._in_this_folder(tmp_path / "a\nERROR forged'$(x)", monkeypatch)
+        monkeypatch.delenv("SYNOLOGY_HOST", raising=False)
+        with pytest.raises(FileNotFoundError) as excinfo:
+            load_config()
+        assert "\n" not in str(excinfo.value)
+        assert len(shlex.split(str(excinfo.value).split(" isn't loaded")[0])) == 1
+
+    @pytest.mark.parametrize(
+        ("code", "name"),
+        [(errno.ESTALE, "Stale file handle"), (errno.EIO, "Input/output error")],
+    )
+    def test_another_stat_error_isnt_no_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, code: int, name: str
+    ) -> None:
+        """QA on #555: a stale mount went to env-only, the downgrade the class refuses."""
+        self._in_this_folder(tmp_path, monkeypatch)
+        monkeypatch.setenv("SYNOLOGY_HOST", "nas.example")
+        real_stat = Path.stat
+
+        def stat_fails(self: Path, **kwargs: Any) -> os.stat_result:
+            if self.name == "mcp-synology.yaml":
+                raise OSError(code, name)
+            return real_stat(self, **kwargs)
+
+        monkeypatch.setattr(Path, "stat", stat_fails)
+        with pytest.raises(OSError, match=f"can't be checked: {name}"):
+            load_config()
+
+    def test_a_link_loop_is_no_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """QA on #555: narrowing the errors to FileNotFoundError passed every test."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("MCP_SYNOLOGY_CONFIG", raising=False)
+        name = tmp_path / "mcp-synology.yaml"
+        name.symlink_to(name)
+        with pytest.raises(FileNotFoundError, match="No config file found"):
+            discover_config_path()
+        monkeypatch.setenv("SYNOLOGY_HOST", "nas.example")
+        assert load_config().connection is not None
 
     def test_a_link_to_a_file_counts_as_a_file(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1023,8 +1086,9 @@ class TestAWorkingFolderConfigIsntLoaded:
         downgrade #499 refuses for a named file."""
         self._in_this_folder(tmp_path, monkeypatch)
         monkeypatch.setenv("SYNOLOGY_HOST", "nas.example")
-        with pytest.raises(FileNotFoundError, match="isn't loaded automatically"):
+        with pytest.raises(FileNotFoundError, match="isn't loaded automatically") as excinfo:
             load_config()
+        assert "SYNOLOGY_HOST alone isn't used while this file is here" in str(excinfo.value)
 
     def test_the_home_config_wins(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         self._in_this_folder(tmp_path, monkeypatch)
@@ -1037,8 +1101,8 @@ class TestAWorkingFolderConfigIsntLoaded:
     def test_what_isnt_a_regular_file_is_ignored(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
     ) -> None:
-        """It couldn't be used as a config, so advice to pass it would only fail next. And with
-        `SYNOLOGY_HOST` set, env-only mode carries on."""
+        """Only a regular file is taken for someone's config. With `SYNOLOGY_HOST` set, env-only
+        mode carries on."""
         monkeypatch.chdir(tmp_path)
         monkeypatch.delenv("MCP_SYNOLOGY_CONFIG", raising=False)
         name = tmp_path / "mcp-synology.yaml"
@@ -1070,9 +1134,53 @@ class TestAWorkingFolderConfigIsntLoaded:
         path = self._in_this_folder(tmp_path, monkeypatch)
         monkeypatch.delenv("SYNOLOGY_HOST", raising=False)
         result = CliRunner().invoke(main, ["setup"], input="")
-        assert f"{str(path)!r} isn't loaded automatically" in result.output
+        assert f"{shlex.quote(str(path))} isn't loaded automatically" in result.output
         assert "No configuration file found" not in result.output
         assert "To make a new config at the home location instead" in result.output
+
+    # Host, HTTPS, port, permission, alias, verify, username, password.
+    _ANSWERS = "10.0.0.9\ny\n5001\nread\n\nn\nadmin\nsecret\n"
+
+    @staticmethod
+    def _no_nas(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Setup as far as writing its file: no keyring, no NAS, and a home folder of its own."""
+
+        async def logged_in(*_: Any) -> dict[str, Any]:
+            return {"success": True}
+
+        monkeypatch.setattr("mcp_synology.cli.setup._CONFIG_DIR", tmp_path / "home-configs")
+        monkeypatch.setattr("mcp_synology.cli.setup._store_keyring", lambda *_: True)
+        monkeypatch.setattr("mcp_synology.cli.setup._connect_and_login", logged_in)
+
+    def test_setup_says_how_to_use_the_config_it_makes_here(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """QA on #555: it writes `<instance>.yaml`, which discovery doesn't read, so a bare `check`
+        came straight back to the same refusal. And the prompts had never been run past the first:
+        the test above gives them no input."""
+        self._in_this_folder(tmp_path, monkeypatch)
+        monkeypatch.delenv("SYNOLOGY_HOST", raising=False)
+        self._no_nas(tmp_path, monkeypatch)
+        result = CliRunner().invoke(main, ["setup"], input=self._ANSWERS)
+        written = tmp_path / "home-configs" / "10-0-0-9.yaml"
+        assert written.exists(), result.output
+        assert (
+            f"In this folder, name it: mcp-synology check --config {shlex.quote(str(written))}"
+            in result.output
+        )
+        # What it says works, past the file that stopped the bare command.
+        assert load_config(str(written)).connection is not None
+
+    def test_setup_says_nothing_extra_with_no_file_here(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("MCP_SYNOLOGY_CONFIG", raising=False)
+        monkeypatch.delenv("SYNOLOGY_HOST", raising=False)
+        self._no_nas(tmp_path, monkeypatch)
+        result = CliRunner().invoke(main, ["setup"], input=self._ANSWERS)
+        assert (tmp_path / "home-configs" / "10-0-0-9.yaml").exists(), result.output
+        assert "In this folder" not in result.output
 
     def test_named_with_config_it_loads(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

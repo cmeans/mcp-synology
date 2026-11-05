@@ -137,7 +137,7 @@ mcp-synology check
 
 ### Alternative: env-var-only mode
 
-No config file needed if `SYNOLOGY_HOST` is set, as long as no `./mcp-synology.yaml` is in the working folder: one there stops the server until it's named or moved. This is useful for Docker or CI environments:
+No config file needed if `SYNOLOGY_HOST` is set, as long as no `./mcp-synology.yaml` is in the working folder: one there stops the server until it's named or moved, or you start from another folder, so give an MCP client a fixed working folder if it has that setting. This is useful for Docker or CI environments:
 
 ```json
 {

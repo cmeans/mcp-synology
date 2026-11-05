@@ -10,10 +10,12 @@ Four-step loading:
 from __future__ import annotations
 
 import difflib
+import errno
 import ipaddress
 import logging
 import os
 import re
+import shlex
 import stat
 import unicodedata
 from datetime import date
@@ -608,29 +610,53 @@ class WorkingFolderConfigNotLoadedError(FileNotFoundError):
     """
 
 
+def pasteable_path(path: Path) -> str:
+    """An absolute path as a shell takes it, for a message that says to use it: `repr` switches to
+    double quotes around a `'`, where `$(...)` in a folder's name runs when pasted (QA on #555). A
+    character that could forge a line is escaped, so that form only fails to name the file."""
+    text = _shown_path(path)
+    return shlex.quote(text if text.isprintable() else text.encode("unicode_escape").decode())
+
+
 def _refuse_a_working_folder_config() -> None:
     local_config = Path("mcp-synology.yaml")
     try:
-        if not stat.S_ISREG(local_config.stat().st_mode):
-            return  # a folder or pipe couldn't be used as a config, so naming it would only fail
-    except PermissionError:
-        # A link into a locked folder is someone's config, so it refuses too. In a working folder
-        # that can't be searched, `lstat` fails as well, and nothing can be said about any file.
         try:
-            local_config.lstat()
-        except OSError:
+            # Only a regular file is taken for someone's config. A pipe can be named, but not
+            # one in a folder that's only been opened: reading it would wait for its writer.
+            if not stat.S_ISREG(local_config.stat().st_mode):
+                return
+        except PermissionError:
+            # A link into a locked folder is someone's config, so it refuses too. In a working
+            # folder that can't be searched, `lstat` fails as well, and nothing can be said about
+            # any file.
+            try:
+                local_config.lstat()
+            except PermissionError:
+                return
+    except OSError as e:
+        # Not there, a dangling link, a link loop. Anything else (a stale mount) may be someone's
+        # config, and env-only mode would be the downgrade the class refuses.
+        if e.errno in (errno.ENOENT, errno.ENOTDIR, errno.ELOOP):
             return
-    except (OSError, ValueError):  # not there, a dangling link, a link loop
-        return
+        msg = f"{_shown_path(local_config)!r} can't be checked: {e.strerror or type(e).__name__}"
+        raise OSError(msg) from e
     # "If you trust" and the full path: a model repairing a failed server, or someone editing an
     # MCP client's args, would otherwise paste the flag in as it stands, and whatever folder that
-    # client starts in next would be loaded as named.
+    # client starts in next would be loaded as named. "Don't copy": the same model could move the
+    # file to the home location, which applies it in every folder.
+    env_only = (
+        "SYNOLOGY_HOST alone isn't used while this file is here. "
+        if os.environ.get("SYNOLOGY_HOST")
+        else ""
+    )
     msg = (
-        f"{_shown_path(local_config)!r} isn't loaded automatically: a config in the folder you're "
-        "in could send your stored credentials to another host. If you trust this file (it "
-        "chooses the host your stored password goes to), pass --config ./mcp-synology.yaml, or "
-        "its full path in an MCP client's config. To run without it, move it, or put your config "
-        "at ~/.config/mcp-synology/config.yaml."
+        f"{pasteable_path(local_config)} isn't loaded automatically: a config in the folder "
+        "you're in could send your stored credentials to another host. "
+        f"{env_only}If you trust this file (it chooses the host your stored password goes to), "
+        "pass --config ./mcp-synology.yaml, or its full path in an MCP client's config. To run "
+        "without it, start from another folder or move it out of this one. Don't copy it to the "
+        "home location unless you trust it."
     )
     raise WorkingFolderConfigNotLoadedError(msg)
 
