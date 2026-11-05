@@ -215,6 +215,7 @@ class TestSetupWithNoKeyring:
         result = CliRunner().invoke(main, ["setup", "--config", str(config)], input="me\nhunter2\n")
         assert result.exit_code == 0, result.output
         assert f"test it: mcp-synology check --config {shlex.quote(str(config))}" in result.output
+        assert "If this account uses 2FA" in result.output
 
     def test_on_variables_alone_the_bare_check_is_named(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -419,6 +420,12 @@ class TestWhereNoFileIsPossible:
             result = CliRunner().invoke(main, ["setup"], input=_ANSWERS)
         assert result.exit_code == 1
         assert "SYNOLOGY_HOST, SYNOLOGY_PORT and SYNOLOGY_HTTPS" in result.output
+
+
+def test_the_no_file_note_names_all_three_variables() -> None:
+    """SYNOLOGY_HOST alone sends the password over plain HTTP to port 5000 (pre-QA on #481)."""
+    for variable in ("SYNOLOGY_HOST", "SYNOLOGY_HTTPS", "SYNOLOGY_PORT"):
+        assert variable in NO_FILE_NOTE
 
 
 def test_no_config_says_setup_makes_one(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
