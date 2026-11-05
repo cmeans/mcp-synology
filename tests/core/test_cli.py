@@ -360,6 +360,53 @@ class TestSetupInteractive:
         assert result.exit_code == 0
         assert (config_dir / "192-168-1-50.yaml").exists()
 
+    def test_interactive_setup_asks_again_for_a_bad_alias(self, tmp_path: Path) -> None:
+        """QA round 1 on #541: it wrote a config that then refused to load."""
+        config_dir = tmp_path / "config"
+        clean_env = {k: v for k, v in os.environ.items() if not k.startswith("SYNOLOGY_")}
+        with (
+            patch("mcp_synology.cli.setup._CONFIG_DIR", config_dir),
+            patch("mcp_synology.core.config.discover_config_path", side_effect=FileNotFoundError),
+            patch("mcp_synology.cli.setup._store_keyring", return_value=True),
+            patch(
+                "mcp_synology.cli.setup.asyncio.run",
+                return_value={"success": True, "hostname": None},
+            ),
+            patch.dict(os.environ, clean_env, clear=True),
+        ):
+            result = CliRunner().invoke(
+                main,
+                ["setup"],
+                input="192.168.1.50\nn\n\nread\nx\x1by\nOffice\nadmin\npassword\n",
+            )
+        assert result.exit_code == 0, result.output
+        assert "That alias has a control character" in result.output
+        written = (config_dir / "192-168-1-50.yaml").read_text()
+        assert "alias: Office" in written
+
+    @pytest.mark.parametrize("hostname", ["x\x1by", 5])
+    def test_interactive_setup_doesnt_offer_a_bad_hostname(
+        self, tmp_path: Path, hostname: object
+    ) -> None:
+        """QA round 1 on #541: taking the offer wrote a config that then refused to load."""
+        config_dir = tmp_path / "config"
+        clean_env = {k: v for k, v in os.environ.items() if not k.startswith("SYNOLOGY_")}
+        with (
+            patch("mcp_synology.cli.setup._CONFIG_DIR", config_dir),
+            patch("mcp_synology.core.config.discover_config_path", side_effect=FileNotFoundError),
+            patch("mcp_synology.cli.setup._store_keyring", return_value=True),
+            patch(
+                "mcp_synology.cli.setup.asyncio.run",
+                return_value={"success": True, "hostname": hostname},
+            ),
+            patch.dict(os.environ, clean_env, clear=True),
+        ):
+            result = CliRunner().invoke(
+                main, ["setup"], input="192.168.1.50\nn\n\nread\n\nadmin\npassword\n"
+            )
+        assert result.exit_code == 0, result.output
+        assert "Use as alias" not in result.output
+
     def test_interactive_setup_aborts_on_overwrite_decline(self, tmp_path: Path) -> None:
         """If config file exists and user declines overwrite, abort."""
         runner = CliRunner()

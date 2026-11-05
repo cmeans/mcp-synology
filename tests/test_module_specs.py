@@ -86,7 +86,6 @@ def _registered(module: Any) -> dict[str, Any]:
             server=server,
             manager=MagicMock(),
             allowed_tools={t.name for t in module.MODULE_INFO.tools},
-            settings_dict={},
             display_name="spec-check",
         )
     )
@@ -102,7 +101,7 @@ def test_every_registered_module_has_a_spec() -> None:
 @pytest.mark.parametrize("module_name", sorted(SPECS))
 def test_spec_matches_shipped_tools(module_name: str) -> None:
     module = _MODULE_REGISTRY[module_name]
-    sections = _sections((SPEC_DIR / SPECS[module_name]).read_text())
+    sections = _sections((SPEC_DIR / SPECS[module_name]).read_text(encoding="utf-8"))
     tools = {t.name: t for t in module.MODULE_INFO.tools}
     assert set(sections) == set(tools), f"{SPECS[module_name]}: tool headings differ from code"
 

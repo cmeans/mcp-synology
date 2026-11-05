@@ -25,7 +25,7 @@ MODULE_INFO = ModuleInfo(
         ApiRequirement(api_name="SYNO.DownloadStation2.Settings.Scheduler", min_version=1, optional=True),
     ],
     tools=[...],  # 5 READ + 7 WRITE, below
-    settings_schema=DownloadStationSettings,  # no fields yet
+    settings_schema=DownloadStationSettings,
 )
 ```
 

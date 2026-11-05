@@ -327,14 +327,17 @@ At startup, the config is validated with Pydantic. Validation failures produce c
 - Unknown top-level keys, and unknown keys in `connection`, `auth`, `logging` or directly under `modules.<name>` (catch typos early — strict schema, #386)
 - `permission` value is not one of `read`, `write`, `admin`
 - `logging.level` value is not one of `debug`, `info`, `warning`, `error`
-- Module settings fail Pydantic validation (if the module provides a `settings_schema`)
+- An enabled module's settings fail Pydantic validation (if the module provides a `settings_schema`; #498). Errors give the place (`modules.photos.settings.task_timeout`), for every module at once. A disabled or unknown module isn't loaded, so its settings aren't read. Every schema extends `ModuleSettings`, which also refuses true or false for a number (`task_timeout: on` loaded a 1 s timeout) and an empty or blank text setting (`default_download_dir: ""` meant none)
+- The config file can't be read: a folder, a device (`/dev/zero` would read until memory ran out), or no permission (#483). `logging.file` can't be opened (its folder is created first; a folder at that path, a socket, or no permission, is the error, #498)
+
+`serve`, `check` and `setup` all run this validation (`server.validate_config`, #511 PR 3), so `check` refuses what `serve` would. `check` and `setup` make `logging.file`'s folder and file too, since it's the same pass; a relative `logging.file` depends on the working folder, so the error shows it made absolute. Records logged while the config loads reach the file only once the whole config has passed, and not under `check -v` or `setup -v`. An error lists the problems of one stage together, and fixing them shows the next stage's: repeated and colon-less keys in file order (the first 50, then a count), then the fields, then the model-level rules, then module settings and the log file. It ends with `Config file: '<path>'`, at any log level, except an `EnvVarError`, which names its variable and has nothing to do with the file. `allowed_local_paths` and `default_download_dir` must resolve (not a NUL; not a symlink loop, on Python 3.11 and 3.12, where it would crash the server), and so must the Downloads default each module falls back to; none of them can resolve to a path with a control character, since the instructions print it. Those two, `logging.file` and `instructions_file` can't hold a control character, a line or paragraph separator or a lone surrogate as written, and `default_upload_dir` can't hold one either. `custom_instructions` can't hold a lone surrogate. `logging.file` can't be a named pipe, other than the server's own stderr (`/dev/stderr`, when that's a pipe, has a reader by definition: there's no way to test another pipe for one, since opening it to look gives its reader end-of-file), the config file or the instructions file, followed through links. A socket can't be opened by name, and an MCP client on Node gives its server's stderr as one (seen on Node 22), so `/dev/stderr` is refused there, with the reason; leaving `logging.file` out logs to stderr anyway; every command appends to it, so the next run would read log lines. `logging.file` is checked as the log handler will open it, with `..` collapsed without following links, so `link/../pipe` can't pass as another file. A config that fails validation can still create the log's folder, which is accepted. `alias` can't be only whitespace or hold control characters, line or paragraph separators or a lone surrogate; joiners are fine, and so are direction marks and an alias of only invisible characters, which can't forge a line (#538). A named pipe as the config file itself isn't refused, since `--config <(generate)` is one, so a pipe nothing writes to waits. An `instructions_file` that can't be used (missing, not UTF-8, not a regular file) falls back to the built-in text: `check` warns, and `serve` logs an ERROR, since the model then gets other instructions than the config names. A derived `instance_id` that fails names `SYNOLOGY_HOST` when that's where the host came from.
 
 ### Warnings (server starts, but user is alerted)
 
 - `auth.password` is present in the config file → warn about a plaintext password, recommend keyring. A password from `SYNOLOGY_PASSWORD` gets an env-var variant of the warning instead. `auth.username` alone isn't a secret and gets no warning: a config username with the password in the keyring is the recommended setup (#167)
 - `connection.https` is `false` → warning that credentials are sent in cleartext (acceptable on a trusted LAN, risky otherwise), linking `docs/https.md` (#374; it was info-level). `mcp-synology setup` writes `https: true` unless the user declines
 - `connection.verify_ssl` is `false` → warn that SSL verification is disabled
-- The password, cleartext and SSL-verification warnings above are shown at any log level (#533): logged as WARNING through the handlers in place while the config loads (stderr; `logging.file` is set up after) even when `SYNOLOGY_LOG_LEVEL=error` would filter them (`core/config.py` `_warn_always`). At `error`, `SYNOLOGY_HTTPS=off` used to turn HTTPS off with no output at all
+- The password, cleartext and SSL-verification warnings above are shown at any log level (#533): logged as WARNING through the handlers in place while the config loads (stderr, and replayed into `logging.file` once it's open, #511 PR 3) even when `SYNOLOGY_LOG_LEVEL=error` would filter them (`core/config.py` `_warn_always`). At `error`, `SYNOLOGY_HTTPS=off` used to turn HTTPS off with no output at all
 - A `SYNOLOGY_*` variable changes a value the config file sets for `connection.host`, `connection.port`, `connection.https` or `instance_id` (including the `instance_id` the file's host derives when the file sets none) → a WARNING at any log level, naming the variable and the setting, never the value: `SYNOLOGY_HOST overrides connection.host from the config file. Unset SYNOLOGY_HOST if that isn't intended.` (#533), or, for a derived ID, `SYNOLOGY_INSTANCE_ID overrides the instance_id the config file's host gives. …`. These say which NAS the credentials go to, how, and which keyring entry holds them; it used to be DEBUG only, so `SYNOLOGY_HOST` sent the file's keyring credentials to another host without a word. A variable equal to the file's value in a spelling the config treats as the same (a boolean or port as pydantic reads it, `https: 'on'`, `port: "5001"`; an instance ID in any case; a host name as httpx sends it, in any case, and an international name as its `xn--` form; a bracketed IPv6 address in any case, unless it has a zone, which names an interface and is compared as written), a setting the file doesn't set, and env-only mode get no warning. A variable must itself be a bare host (Hard Errors, above, never a comparison), so anything else in a host is on the file's side, and differs: `nas` over `admin@nas` or `nas:5001`, and `[::1]` over `::1` or `[::1]/dsm`, all warn, and the variable's host replaces the one the file's rule would refuse. Two spellings of one address the comparison doesn't recognize warn too, `[::1]` over `[0:0:0:0:0:0:0:1]`: a false alarm is the safe side
 - A module is listed but `enabled: false` → info-level note (helps users remember they disabled something)
 - Unknown keys within `modules.*.settings`, and unknown module names → warn but don't fail (forward-compatible for module updates). The warning names the key and the valid ones; `serve` logs it and `check` prints it (`server.config_notices`, #368). Before #368 nothing warned: an `allowed_local_paths` typo silently left the Downloads default in force
@@ -385,7 +388,9 @@ The server finds its config file in this order:
    - `./mcp-synology.yaml` (current directory)
 4. **Env-var-only mode:** no config file found by 1–3 and `SYNOLOGY_HOST` set
 
-The source used is logged at INFO (to stderr only: it's logged while the config loads, before `logging.file` is set up), with the path made absolute and quoted, as in the not-found errors, since an MCP client starts the server in a working folder the user rarely knows, and a newline in a folder's name would otherwise forge a log line (`Config: '<path>' (from --config)`, `… (from MCP_SYNOLOGY_CONFIG)`, `Config: '<path>'`, or `Config: environment variables only …`; the host isn't logged at INFO, since it can hold credentials; DEBUG's `Config loaded:` line has it). The not-found and empty errors say only to fix the path: "leave it out to use the defaults" would lead, with `SYNOLOGY_HOST` set and no default file, to env-var-only mode, the downgrade they refuse (QA round 2 on #529).
+"Found" means the file is there, or can't be told not to be: a default location that can't be checked is an error, not a reason to go on to the next one or to env-var-only mode (#483). So `~/.config` without permission stops the server even with `./mcp-synology.yaml` or `SYNOLOGY_HOST` present, and the error suggests `--config`. So does a `./mcp-synology.yaml` that's a link into a folder without permission. A working folder under a locked one, or deeper than the system's path limit, is different: the check finds the file by its relative name, then reading it by its full path fails with the usual "can't be read", which names no way out beyond the file itself. The exceptions are a working folder that can't be searched, which logs a WARNING and counts as holding no config, since the server can't see whether it does, and a deleted one, where the file is simply absent.
+
+The source used is logged at INFO (while the config loads, and replayed into `logging.file` if the level allows, #511 PR 3), with the path made absolute and quoted, as in the not-found errors, since an MCP client starts the server in a working folder the user rarely knows, and a newline in a folder's name would otherwise forge a log line (`Config: '<path>' (from --config)`, `… (from MCP_SYNOLOGY_CONFIG)`, `Config: '<path>'`, or `Config: environment variables only …`; the host isn't logged at INFO, since it can hold credentials; DEBUG's `Config loaded:` line has it). The not-found and empty errors say only to fix the path: "leave it out to use the defaults" would lead, with `SYNOLOGY_HOST` set and no default file, to env-var-only mode, the downgrade they refuse (QA round 2 on #529).
 
 For multi-NAS setups, users must use the `--config` flag to specify which config to load:
 
@@ -580,7 +585,7 @@ Current schema version: `1`. The version increments only on breaking changes to 
 
 ### 6. Hybrid Module Settings Validation ✓
 
-**Decision: Modules may optionally declare a Pydantic settings model. If they do, the core validates against it. If not, settings are passed through as an untyped dict.**
+**Decision: Modules may optionally declare a Pydantic settings model. If they do, the core validates against it. If not, the module takes no settings, and any it's given are reported as unknown.**
 
 The module interface for this:
 
@@ -591,25 +596,24 @@ class ModuleInfo:
     description: str
     required_apis: list[ApiRequirement]
     tools: list[ToolInfo]
-    settings_schema: type[BaseModel] | None = None  # Optional Pydantic model
+    settings_schema: type[ModuleSettings] | None = None  # Optional; a Pydantic model
 ```
 
 If `settings_schema` is provided:
-- The core validates `modules.*.settings` against it at startup
+- The core validates `modules.*.settings` against it at startup (`server.module_settings`)
 - Invalid settings produce clear error messages with field names and expected types
-- The module receives a validated, typed settings object
+- The module receives a validated, typed settings object (`ctx.settings_as(FileStationSettings)`)
 
 If `settings_schema` is `None`:
-- The core passes `modules.*.settings` as a `dict[str, Any]`
-- The module is responsible for its own validation (or lack thereof)
+- The module receives no settings
 - Any key there produces a warning ("<module> has no settings"), but not an error
 
-This gives mature modules (like File Station) full type safety while letting experimental or third-party modules iterate quickly without fighting the schema.
+This gives a module with settings full type safety.
 
 Example for File Station:
 
 ```python
-class FileStationSettings(BaseModel):
+class FileStationSettings(ModuleSettings):
     hide_recycle_in_listings: bool = False
     file_type_indicator: Literal["emoji", "text"] = "emoji"
     async_timeout: int = Field(default=120, ge=10, le=3600)

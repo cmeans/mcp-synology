@@ -992,7 +992,7 @@ def _boot_id(host: str, ssh_port: int, admin_password: str) -> str | None:
         rc, out = _ssh(
             host, ssh_port, admin_password, "cat /proc/sys/kernel/random/boot_id", sudo=False
         )
-    except subprocess.TimeoutExpired:  # slirp accepts the connection while sshd is down
+    except subprocess.TimeoutExpired:  # the port forward accepts while sshd is down
         return None
     return out.strip() if rc == 0 and out.strip() else None
 

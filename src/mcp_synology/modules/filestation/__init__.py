@@ -13,12 +13,17 @@ from mcp.server.mcpserver import (
     Context,  # noqa: TC002 — runtime import needed for MCPServer context injection
 )
 from mcp.types import ToolAnnotations
-from pydantic import BaseModel, Field, field_validator
+from pydantic import Field, field_validator
 
-from mcp_synology.core.local_paths import check_local_path_entries, expand_setting
+from mcp_synology.core.local_paths import (
+    check_local_path_entries,
+    check_resolvable,
+    has_control_character,
+)
 from mcp_synology.modules import (
     ApiRequirement,
     ModuleInfo,
+    ModuleSettings,
     PermissionTier,
     ToolInfo,
     default_annotations,
@@ -46,7 +51,7 @@ _ANNO_DESTRUCTIVE = ToolAnnotations(read_only_hint=False, destructive_hint=True)
 _ANNO_LOCAL_WRITE = ToolAnnotations(read_only_hint=False, destructive_hint=True)
 
 
-class FileStationSettings(BaseModel):
+class FileStationSettings(ModuleSettings):
     """File Station module settings."""
 
     hide_recycle_in_listings: bool = False
@@ -69,11 +74,21 @@ class FileStationSettings(BaseModel):
     def _absolute_local_paths(cls, value: list[str] | None) -> list[str] | None:
         return check_local_path_entries("allowed_local_paths", value)
 
+    @field_validator("default_upload_dir")
+    @classmethod
+    def _upload_dir_on_one_line(cls, value: str | None) -> str | None:
+        if value and has_control_character(value):
+            raise ValueError(
+                "has a control character, line break or lone surrogate: give a NAS path on one "
+                "line."
+            )
+        return value
+
     @field_validator("default_download_dir")
     @classmethod
     def _expandable_download_dir(cls, value: str | None) -> str | None:
         if value:
-            expand_setting("default_download_dir", value)
+            check_resolvable("default_download_dir", value)
         return value
 
     search_poll_interval: float = Field(default=1.0, ge=0.5, le=10.0)
@@ -330,7 +345,7 @@ def register(ctx: "RegisterContext") -> None:
     )
     from mcp_synology.modules.filestation.transfer import download_file, upload_file
 
-    settings = FileStationSettings(**ctx.settings_dict)
+    settings = ctx.settings_as(FileStationSettings)
     indicator = settings.file_type_indicator
     search_timeout = float(settings.search_timeout or settings.async_timeout)
     # Delete/copy/move/restore wait this long, then hand the task off to run on (#245).

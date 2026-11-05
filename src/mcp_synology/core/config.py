@@ -14,6 +14,7 @@ import ipaddress
 import logging
 import os
 import re
+import unicodedata
 from datetime import date
 from pathlib import Path
 from typing import Annotated, Any, Literal, get_args, get_origin
@@ -23,13 +24,18 @@ import yaml
 from pydantic import (
     BaseModel,
     Field,
+    PrivateAttr,
     TypeAdapter,
     ValidationError,
     field_validator,
     model_validator,
 )
 
-from mcp_synology.core.local_paths import check_local_path_entries
+from mcp_synology.core.local_paths import (
+    CONTROL_CHARACTER_ADVICE,
+    check_local_path_entries,
+    has_control_character,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -159,7 +165,10 @@ def host_problems(
     # fails with a traceback (pre-QA r2 on #511 PR 2).
     normalized = _url_host(host)
     if normalized is None:
-        if host.split(".", 1)[0].lower().startswith("xn--"):
+        # Only if that part is what fails: the advice blamed a valid first part for a bad
+        # later one (`xn--bcher-kva.my_nas`, #543).
+        first = host.translate(_IDNA_DOTS).split(".", 1)[0]
+        if first.lower().startswith("xn--") and _url_host(first) is None:
             return [_BAD_PUNYCODE]
         return [_INVALID_HOST]
     if bracketed:
@@ -313,6 +322,10 @@ class AuthConfig(BaseModel, extra="forbid"):
         # `password: 123456` looks like text, and these values are never shown (pre-QA r6
         # on #532).
         _unquoted_text_problem(value)
+        # A lone surrogate, also from a variable with bytes that aren't UTF-8, ended in a
+        # traceback hashing the credentials (pre-QA r4 on #541).
+        if isinstance(value, str) and any(unicodedata.category(c) == "Cs" for c in value):
+            raise ValueError("has a lone surrogate or bytes that aren't UTF-8.")
         return value
 
 
@@ -348,7 +361,19 @@ def _no_empty_path(name: str, value: str | None) -> str | None:
     if value is not None and not value.strip():
         msg = f"is empty: give a file's path, or leave {name} out."
         raise ValueError(msg)
+    if value is not None and has_control_character(value):
+        raise ValueError(CONTROL_CHARACTER_ADVICE)
     return value
+
+
+def alias_problem(value: str) -> str | None:
+    """Why ``value`` can't be an alias, or None. `setup` asks with the same rule, and
+    `setup --list` shows only an alias that passes."""
+    if not value.strip():
+        return "is empty: give a name, or leave alias out."
+    if has_control_character(value):
+        return "has a control character, line break or lone surrogate: give a name on one line."
+    return None
 
 
 class LoggingConfig(BaseModel, extra="forbid"):
@@ -386,6 +411,8 @@ class AppConfig(BaseModel, extra="forbid"):
     # Local folders every module's tools may use; each module's own allowed_local_paths
     # adds to it (#257). Unset keeps the per-module rule from before #257.
     allowed_local_paths: list[str] | None = Field(default=None, min_length=1)
+    # The file this came from, for errors found after loading; None in env-var-only mode.
+    _source_path: Path | None = PrivateAttr(default=None)
 
     @field_validator("schema_version", mode="before")
     @classmethod
@@ -423,6 +450,23 @@ class AppConfig(BaseModel, extra="forbid"):
         _unquoted_text_problem(value)  # left blank (None) is still "not set"
         return value
 
+    @field_validator("alias")
+    @classmethod
+    def _alias_has_no_control_character(cls, value: str | None) -> str | None:
+        # It names the server and a line of `setup --list`: `x\n    Host: evil.example` forged
+        # a Host line, and an escape sequence reached the terminal (QA round 3 on #532).
+        if value is not None and (problem := alias_problem(value)):
+            raise ValueError(problem)
+        return value
+
+    @field_validator("custom_instructions")
+    @classmethod
+    def _instructions_can_be_sent(cls, value: str | None) -> str | None:
+        # A lone surrogate crashes the server's first reply, where `check` can't see it.
+        if value is not None and any(unicodedata.category(c) == "Cs" for c in value):
+            raise ValueError("has a lone surrogate, which can't be sent to a client.")
+        return value
+
     @field_validator("instructions_file")
     @classmethod
     def _instructions_file_not_empty(cls, value: str | None) -> str | None:
@@ -441,61 +485,67 @@ class AppConfig(BaseModel, extra="forbid"):
 
     @model_validator(mode="after")
     def _validate_config(self) -> AppConfig:
+        # Every problem together (#511 PR 3). One line each: format_validation_error lists
+        # them as separate errors.
+        problems: list[str] = []
         if self.schema_version != CURRENT_SCHEMA_VERSION:
-            msg = (
+            problems.append(
                 f"Config schema_version is {self.schema_version}, "
                 f"but this server expects {CURRENT_SCHEMA_VERSION}."
             )
-            raise ValueError(msg)
 
         if self.connection is None:
-            msg = (
+            problems.append(
                 "connection.host is required. "
                 "Set it in the config file or via the SYNOLOGY_HOST environment variable."
             )
-            raise ValueError(msg)
 
         if not self.modules:
-            msg = (
+            problems.append(
                 "At least one module must be configured, "
                 "e.g. modules: {filestation: {enabled: true}}."
             )
-            raise ValueError(msg)
-        if not any(mod.enabled for mod in self.modules.values()):
+        elif not any(mod.enabled for mod in self.modules.values()):
             # A server with no enabled module has 0 tools: almost certainly a config mistake.
-            listed = ", ".join(sorted(self.modules))
-            msg = (
+            listed = ", ".join(_printable(name) for name in sorted(self.modules))
+            problems.append(
                 f"No module is enabled (listed with enabled: false: {listed}). "
                 "Enable at least one, e.g. filestation: {enabled: true}."
             )
-            raise ValueError(msg)
 
-        # Apply default port from https setting
-        if self.connection.port is None:
-            self.connection.port = 5001 if self.connection.https else 5000
-
-        # Derive instance_id from host if not set
         derived = self.instance_id is None
-        if derived:
-            self.instance_id = _derive_instance_id(self.connection.host)
+        if self.connection is not None:
+            # Apply default port from https setting
+            if self.connection.port is None:
+                self.connection.port = 5001 if self.connection.https else 5000
+
+            # Derive instance_id from host if not set
+            if derived:
+                self.instance_id = _derive_instance_id(self.connection.host)
 
         # Normalize and validate instance_id format. `is not None`: an empty one is
         # refused too (#485).
         if self.instance_id is not None:
-            if derived and instance_id_problem(self.instance_id):
+            problem = instance_id_problem(self.instance_id)
+            if derived and problem:
                 # The host is already a bare name or address; what's left is an IPv6
-                # address, or a name with characters outside a-z, 0-9 and hyphens.
-                msg = (
-                    "connection.host gives no usable instance_id: its first part has "
+                # address, or a name with characters outside a-z, 0-9 and hyphens. Name
+                # where it came from: the file may look fine (QA round 2 on #532).
+                from_env = (os.environ.get("SYNOLOGY_HOST") or "").strip()
+                source = "SYNOLOGY_HOST" if from_env else "connection.host"
+                problems.append(
+                    f"{source} gives no usable instance_id: its first part has "
                     "characters other than letters a-z, digits and hyphens (an IPv6 address, "
                     "an underscore, or a letter outside a-z). Set instance_id, or the "
                     f"SYNOLOGY_INSTANCE_ID environment variable ({_INSTANCE_ID_RULE})."
                 )
-                raise ValueError(msg)
-            if problem := instance_id_problem(self.instance_id):
-                raise ValueError(f"instance_id {problem}.")
-            self.instance_id = self.instance_id.lower()
+            elif problem:
+                problems.append(f"instance_id {problem}.")
+            else:
+                self.instance_id = self.instance_id.lower()
 
+        if problems:
+            raise ValueError("\n".join(problems))
         return self
 
 
@@ -515,6 +565,26 @@ def _derive_instance_id(host: str) -> str:
     return host.split(".")[0].lower()
 
 
+def _printable(name: str) -> str:
+    """A name from the config as is, or quoted if it could forge a line (QA round 1 on #541)."""
+    return name if name.isprintable() else repr(name)
+
+
+def _config_exists(path: Path) -> bool:
+    """Whether the config file is there. An error that isn't "no such file" stays an error, with
+    the path: a folder without permission, a name too long. Never FileNotFoundError, which
+    would mean env-only mode, ignoring the file (#483). By `stat`: `Path.exists` swallows
+    every OSError on Python 3.14 (pre-QA r4 on #541)."""
+    try:
+        path.stat()
+    except (FileNotFoundError, NotADirectoryError, ValueError):  # ValueError: a NUL
+        return False
+    except OSError as e:
+        msg = f"Config file can't be read: {_shown_path(path)!r}: {e.strerror or type(e).__name__}"
+        raise OSError(msg) from e
+    return True
+
+
 def _shown_path(path: Path) -> str:
     """The path made absolute for messages, or as given if it can't be.
 
@@ -525,6 +595,27 @@ def _shown_path(path: Path) -> str:
         return str(path.absolute())
     except OSError:
         return str(path)
+
+
+def _working_folder_is_searchable() -> bool:
+    """By `stat`, with the same IDs as the check it follows: `os.access` uses the real user ID
+    (QA round 3 on #541)."""
+    try:
+        os.stat(".")
+    except PermissionError:
+        return False
+    except OSError:  # any other error isn't about searching it
+        pass
+    return True
+
+
+def _expanded_config_path(value: str, source: str) -> Path:
+    """``~`` expanded; an unknown ``~user`` is RuntimeError, a traceback in every command."""
+    try:
+        return Path(value).expanduser()
+    except RuntimeError:
+        msg = f"Config file not found (from {source}): {value!r}: no such home folder."
+        raise FileNotFoundError(msg) from None
 
 
 def discover_config_path(explicit_path: str | None = None) -> Path:
@@ -545,10 +636,10 @@ def discover_config_path(explicit_path: str | None = None) -> Path:
             # round 2 on #529).
             msg = "--config is empty: give a config file's path."
             raise FileNotFoundError(msg)
-        path = Path(explicit_path).expanduser()
+        path = _expanded_config_path(explicit_path, "--config")
         # Absolute in messages: an MCP client starts the server in a working folder the
         # user rarely knows (QA round 1 on #529).
-        if not path.exists():
+        if not _config_exists(path):
             # Quoted: a stray \r or space at the end would otherwise be invisible.
             msg = f"Config file not found: {_shown_path(path)!r}"
             raise FileNotFoundError(msg)
@@ -565,8 +656,8 @@ def discover_config_path(explicit_path: str | None = None) -> Path:
         if not env_path.strip():
             msg = "MCP_SYNOLOGY_CONFIG is set but empty: set it to a config file's path."
             raise FileNotFoundError(msg)
-        path = Path(env_path).expanduser()
-        if not path.exists():
+        path = _expanded_config_path(env_path, "MCP_SYNOLOGY_CONFIG")
+        if not _config_exists(path):
             # An error, never env-only mode: that would run read-only over plain HTTP
             # instead of the config the variable names (#499).
             msg = (
@@ -577,16 +668,38 @@ def discover_config_path(explicit_path: str | None = None) -> Path:
         logger.info("Config: %r (from MCP_SYNOLOGY_CONFIG)", _shown_path(path))
         return path
 
-    default_paths = [
-        Path.home() / ".config" / "mcp-synology" / "config.yaml",
-        Path.cwd() / "mcp-synology.yaml",
-    ]
-    for path in default_paths:
-        # Quoted: the working folder's name could forge a log line (QA round 3 on #529).
-        logger.debug("Checking default config path: %r", str(path))
-        if path.exists():
-            logger.info("Config: %r", str(path.absolute()))
-            return path
+    home_config = Path.home() / ".config" / "mcp-synology" / "config.yaml"
+    logger.debug("Checking default config path: %r", str(home_config))
+    try:
+        home_found = _config_exists(home_config)
+    except OSError as e:
+        msg = f"{e}. Fix the path or its permissions, or name a config file with --config."
+        raise OSError(msg) from e
+    if home_found:
+        logger.info("Config: %r", str(home_config))
+        return home_config
+    # Relative: that needs no permission on the folders above it, and in a deleted folder the
+    # file is just absent (#483, QA rounds 1 and 2 on #541).
+    local_config = Path("mcp-synology.yaml")
+    # Quoted: the working folder's name could forge a log line (QA round 3 on #529).
+    logger.debug("Checking default config path: %r", _shown_path(local_config))
+    try:
+        found = _config_exists(local_config)
+    except OSError as e:
+        # A config there that can't be read stays an error, never env-only mode. Only a folder
+        # that can't be searched leaves nothing to report but that.
+        if _working_folder_is_searchable():
+            msg = f"{e}. Fix the path or its permissions, or name a config file with --config."
+            raise OSError(msg) from e
+        # At any log level: a config passed over can leave env-only mode, read-only over plain HTTP.
+        _warn_always(f"The working folder can't be searched for a config file: {e}")
+        found = False
+    if found:
+        logger.info("Config: %r", _shown_path(local_config))
+        try:
+            return local_config.absolute()
+        except OSError:  # a working folder outside this process's root has no name
+            return local_config
 
     msg = (
         "No config file found. Create one at ~/.config/mcp-synology/config.yaml "
@@ -723,7 +836,7 @@ def parse_env_value(env_var: str, dotted_path: str, value: str) -> Any:
     ):
         text = text.lower()
     bounds = _env_field_bounds(dotted_path)
-    field_type = Annotated[annotation, *bounds] if bounds else annotation
+    field_type: Any = Annotated[annotation, *bounds] if bounds else annotation
     try:
         return TypeAdapter(field_type).validate_python(text)
     except ValidationError:
@@ -737,16 +850,23 @@ def _warn_always(msg: str) -> None:
 
     For security warnings only: `SYNOLOGY_LOG_LEVEL=error` used to hide that HTTPS was
     off, so `SYNOLOGY_HTTPS=off` turned it off without a word. `Logger.handle` skips the
-    level check, so the record still goes through the handlers in the usual format:
-    while the config loads, where these are logged, that's stderr only (`logging.file`
-    is set up after the load).
+    level check, so the record still goes through the handlers in the usual format. While
+    the config loads, where these are logged, that's stderr and the CLI's early-records
+    buffer, which replays them into `logging.file` once it's open, whatever the level
+    (`show_always`; `cli/logging_.py`, #511 PR 3).
     """
-    if logger.isEnabledFor(logging.WARNING):
-        logger.warning(msg)
-    else:
-        logger.handle(
-            logger.makeRecord(logger.name, logging.WARNING, "(unknown file)", 0, msg, (), None)
+    logger.handle(
+        logger.makeRecord(
+            logger.name,
+            logging.WARNING,
+            "(unknown file)",
+            0,
+            msg,
+            (),
+            None,
+            extra={"show_always": True},
         )
+    )
 
 
 # Settings an env var mustn't change silently over the config file's own value: they
@@ -899,7 +1019,7 @@ def _emit_warnings(config: AppConfig) -> None:
 
     for name, mod in config.modules.items():
         if not mod.enabled:
-            logger.info("Module '%s' is listed but disabled.", name)
+            logger.info("Module %r is listed but disabled.", name)
 
 
 def _synthesize_env_config() -> AppConfig | None:
@@ -931,6 +1051,9 @@ def _may_show(err: Any, loc_parts: list[str]) -> bool:
     missing-field error carries as its input (`auth` and env-var overrides included), is
     never shown."""
     if not isinstance(err.get("input"), str | int | float | bool):
+        return False
+    # Text of any length, and its message says what's wrong.
+    if loc_parts[:1] == ["custom_instructions"]:
         return False
     # A mapping key that failed (`settings.2024.[key]`): the input is the key itself.
     if "[key]" in err.get("loc", ()):
@@ -1086,6 +1209,8 @@ _VALUE_TAG = "tag:yaml.org,2002:value"
 # A repeated module or settings key is named only in this form, so it can't forge a line
 # of the error (QA round 2 on #532).
 _NAMEABLE_KEY = re.compile(r"[\w.-]+")
+# A pasted or generated file could repeat thousands of keys; nobody fixes those one by one.
+_MAX_KEY_PROBLEMS = 50
 
 
 class _ConfigLoader(yaml.SafeLoader):
@@ -1105,12 +1230,17 @@ class _ConfigLoader(yaml.SafeLoader):
         # own), so a check while building would see an override as a repeat, both in the
         # merging mapping and in an anchor reused by alias after it was flattened.
         self._check_written_keys(node)
-        return super().construct_document(node)  # type: ignore[no-untyped-call]
+        # Only some types-PyYAML versions type this call, and mypy's strict mode fails on an ignore
+        # it doesn't need, hence `unused-ignore` (#551). Its arguments are still checked.
+        return super().construct_document(node)  # type: ignore[no-untyped-call,unused-ignore]
 
     def _check_written_keys(self, root: yaml.Node) -> None:
+        # Every problem together, in file order (#511 PR 3): through an MCP client, each
+        # round of fixing one and rerunning is a client restart.
         # Each node with the keys leading to it, so a repeat under `modules` or a module's
         # `settings` can be named (pre-QA on #532); a node shared by alias is checked once,
         # at the first path reached.
+        problems: list[tuple[int, int, str]] = []
         stack: list[tuple[yaml.Node, tuple[str, ...]]] = [(root, ())]
         visited: set[int] = set()
         while stack:  # a loop, not recursion: an alias can make the graph share nodes
@@ -1119,15 +1249,27 @@ class _ConfigLoader(yaml.SafeLoader):
                 continue
             visited.add(id(node))
             if isinstance(node, yaml.MappingNode):
-                self._check_mapping(node, path)
-                for key_node, value_node in node.value:
-                    stack.append((key_node, path))
+                problems.extend(self._check_mapping(node, path))
+                # Reversed, so nodes pop in file order, and a node shared by alias is checked
+                # where it's written: under `auth`, its keys stay hidden (QA round 3 on #532).
+                for key_node, value_node in reversed(node.value):
                     name = key_node.value if isinstance(key_node, yaml.ScalarNode) else ""
                     stack.append((value_node, (*path, str(name))))
+                    stack.append((key_node, path))
             elif isinstance(node, yaml.SequenceNode):
-                stack.extend((item, path) for item in node.value)
+                stack.extend((item, path) for item in reversed(node.value))
+        if problems:
+            texts = [text for *_, text in sorted(problems)]
+            more = len(texts) - _MAX_KEY_PROBLEMS
+            if more > 0:
+                texts = [*texts[:_MAX_KEY_PROBLEMS], f"… and {more} more like these."]
+            raise ConfigKeyError("\n".join(texts))
 
-    def _check_mapping(self, node: yaml.MappingNode, path: tuple[str, ...] = ()) -> None:
+    def _check_mapping(
+        self, node: yaml.MappingNode, path: tuple[str, ...] = ()
+    ) -> list[tuple[int, int, str]]:
+        """This mapping's problems, each with the line and column it's on."""
+        problems: list[tuple[int, int, str]] = []
         seen: dict[Any, tuple[int, int, bool]] = {}
         merge_at: tuple[int, int, bool] | None = None
         furthest = -1
@@ -1147,10 +1289,14 @@ class _ConfigLoader(yaml.SafeLoader):
                 # list wins, so the later one goes first to keep the result (QA round 2).
                 if merge_at is not None:
                     where = _repeat_place(node, merge_at, line, column, clamped)
-                    raise ConfigKeyError(
-                        f"The config file has `<<` twice in one section ({where}), and YAML "
-                        "would silently let the later one win. Merge both in one, later one "
-                        "first, since the first in a list wins: `<<: [*later, *earlier]`."
+                    problems.append(
+                        (
+                            line,
+                            column,
+                            f"The config file has `<<` twice in one section ({where}), and YAML "
+                            "would silently let the later one win. Merge both in one, later one "
+                            "first, since the first in a list wins: `<<: [*later, *earlier]`.",
+                        )
                     )
                 merge_at = (line, column, clamped)
                 continue
@@ -1163,16 +1309,21 @@ class _ConfigLoader(yaml.SafeLoader):
                     if path == ("modules",)
                     else "to leave a setting empty, leave it out"
                 )
-                raise ConfigKeyError(
-                    f"The config file has a key with no value inside {{…}} (line {line}). "
-                    "It isn't shown, since it may be part of a password. A colon needs a "
-                    f"space after it (`host: nas`, not `host:nas`); {_SPLIT_HINT}; "
-                    f"{empty_advice}."
+                problems.append(
+                    (
+                        line,
+                        column,
+                        f"The config file has a key with no value inside {{…}} (line {line}). "
+                        "It isn't shown, since it may be part of a password. A colon needs a "
+                        f"space after it (`host: nas`, not `host:nas`); {_SPLIT_HINT}; "
+                        f"{empty_advice}.",
+                    )
                 )
+                continue
             if not isinstance(key_node, yaml.ScalarNode):
                 continue  # a list or mapping as a key: SafeLoader's own error follows
             key = (
-                key_node.value if key_node.tag == _VALUE_TAG else self.construct_object(key_node)  # type: ignore[no-untyped-call]
+                key_node.value if key_node.tag == _VALUE_TAG else self.construct_object(key_node)  # type: ignore[no-untyped-call,unused-ignore]
             )
             first = seen.get(key)
             if first is not None:
@@ -1190,13 +1341,19 @@ class _ConfigLoader(yaml.SafeLoader):
                     )
                 )
                 where = _repeat_place(node, first, line, column, clamped)
-                raise ConfigKeyError(
-                    f"The config file has {f'`{key}`' if known else 'a key'} twice in one "
-                    f"section ({where}), and YAML would silently keep only the last. "
-                    "Remove one."
-                    + ("" if known else " The key isn't shown: it may be part of a password.")
+                problems.append(
+                    (
+                        line,
+                        column,
+                        f"The config file has {f'`{key}`' if known else 'a key'} twice in one "
+                        f"section ({where}), and YAML would silently keep only the last. "
+                        "Remove one."
+                        + ("" if known else " The key isn't shown: it may be part of a password."),
+                    )
                 )
+                continue
             seen[key] = (line, column, clamped)
+        return problems
 
 
 def _repeat_place(
@@ -1341,18 +1498,48 @@ def format_validation_error(exc: Any) -> str:
     errors = exc.errors()
     if not errors:
         return f"Configuration validation failed: {exc}"
-    lines = [f"Configuration validation failed ({len(errors)} error(s)):"]
+    return format_config_errors(errors)
+
+
+def format_config_errors(errors: list[Any]) -> str:
+    """The block `format_validation_error` prints, for pydantic's error dicts.
+
+    A model-level error holds one problem per line (`AppConfig._validate_config`), each
+    listed and counted as its own.
+    """
+    lines: list[str] = []
     non_text_keys = _non_text_keys(errors)
     for err in errors:
         loc_parts = [str(p) for p in err.get("loc", ())]
-        loc = _shown_location(err, loc_parts, non_text_keys)
-        msg = err.get("msg", "validation error")
+        loc = _printable(_shown_location(err, loc_parts, non_text_keys))
+        msg = str(err.get("msg", "validation error"))
         input_value = err.get("input")
         suffix = ""
         if _may_show(err, loc_parts):
             suffix = f" (got {input_value!r})" if input_value not in (None, "") else ""
-        lines.append(f"  - {loc}: {msg}{suffix}")
-    return "\n".join(lines)
+        if not loc_parts:  # one wording for a model-level problem, alone or among several
+            msg = msg.removeprefix("Value error, ")
+        lines.extend(f"  - {loc}: {part}{suffix}" for part in msg.split("\n"))
+    head = f"Configuration validation failed ({len(lines)} error(s)):"
+    more = len(lines) - _MAX_KEY_PROBLEMS
+    if more > 0:
+        lines = [*lines[:_MAX_KEY_PROBLEMS], f"  … and {more} more like these."]
+    return "\n".join([head, *lines])
+
+
+def config_error_text(exc: Exception) -> str:
+    """What `serve`, `check` and `setup` print for an error from loading a config.
+
+    Line numbers point nowhere without the file, and at SYNOLOGY_LOG_LEVEL=warning the
+    `Config:` line doesn't show (QA round 2 on #532), so the path is part of the error.
+    """
+    if isinstance(exc, ValidationError):
+        text = format_validation_error(exc)
+    elif isinstance(exc, yaml.YAMLError):
+        text = format_yaml_error(exc)
+    else:
+        text = str(exc)
+    return "\n".join([text, *getattr(exc, "__notes__", [])])
 
 
 def load_config(path: str | Path | None = None) -> AppConfig:
@@ -1380,6 +1567,41 @@ def load_config(path: str | Path | None = None) -> AppConfig:
 
     logger.debug("Loading config from %r", str(config_path))  # quoted, as the INFO line
     try:
+        config = _load_file(config_path)
+    except EnvVarError:
+        raise  # names the variable; nothing in the file to look at
+    except (ValueError, yaml.YAMLError) as e:
+        e.add_note(config_file_note(config_path))
+        raise
+    config._source_path = config_path
+
+    logger.debug(
+        "Config loaded: instance_id=%s, host=%s, port=%s, https=%s, modules=%s",
+        config.instance_id,
+        config.connection.host if config.connection else None,
+        config.connection.port if config.connection else None,
+        config.connection.https if config.connection else None,
+        list(config.modules.keys()),
+    )
+    for name, mod in config.modules.items():
+        logger.debug("  Module %r: enabled=%s, permission=%s", name, mod.enabled, mod.permission)
+
+    _emit_warnings(config)
+    return config
+
+
+def config_file_note(path: Path) -> str:
+    """The line an error adds to say which file it's about: quoted, so a newline in a
+    folder's name can't forge a line of the error."""
+    return f"Config file: {_shown_path(path)!r}"
+
+
+def _load_file(config_path: Path) -> AppConfig:
+    """Read, parse, merge the environment over, and validate one config file."""
+    try:
+        # `/dev/zero` would read until memory ran out. A pipe stays allowed: `--config <(generate)`.
+        if config_path.is_char_device() or config_path.is_block_device():
+            raise ValueError("The config file can't be read: it's a device, not a file.")
         raw_text = config_path.read_text(encoding="utf-8")
     except UnicodeDecodeError as e:
         # Its message quotes the byte, which may be one of a password's (QA round 2 on #469).
@@ -1388,6 +1610,11 @@ def load_config(path: str | Path | None = None) -> AppConfig:
             f"The config file isn't valid UTF-8 (line {line}). Save it as UTF-8 (in Notepad: "
             "File > Save as, Encoding: UTF-8)."
         ) from None
+    except FileNotFoundError:
+        raise  # removed since discovery: the callers' own "not found" handling
+    except OSError as e:
+        # A directory, or no permission (#483). ValueError: every command prints it.
+        raise ValueError(f"The config file can't be read: {e.strerror or type(e).__name__}.") from e
     raw = parse_config_text(raw_text)
     if raw is None:
         raw = {}
@@ -1399,18 +1626,4 @@ def load_config(path: str | Path | None = None) -> AppConfig:
 
     raw = _merge_env_overrides(raw, from_file=True)
 
-    config = AppConfig.model_validate(raw)
-
-    logger.debug(
-        "Config loaded: instance_id=%s, host=%s, port=%s, https=%s, modules=%s",
-        config.instance_id,
-        config.connection.host if config.connection else None,
-        config.connection.port if config.connection else None,
-        config.connection.https if config.connection else None,
-        list(config.modules.keys()),
-    )
-    for name, mod in config.modules.items():
-        logger.debug("  Module '%s': enabled=%s, permission=%s", name, mod.enabled, mod.permission)
-
-    _emit_warnings(config)
-    return config
+    return AppConfig.model_validate(raw)
