@@ -1936,6 +1936,30 @@ class TestPauseResume:
         assert "Task ['dbid_1'] reads no status after the pause" in caplog.messages
 
     @respx.mock
+    async def test_a_second_pause_just_under_the_budget_still_gets_its_time(
+        self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Pre-QA on #545: sent at 5.5 s, its next check crossed the budget with nothing new to
+        pause again, so the read before the reply came 0.5 s after it, and read a false `ok`."""
+        now = [0.0]
+        waits = iter([5.5, 0.6])
+        slept: list[float] = []
+
+        async def sleep(seconds: float) -> None:
+            slept.append(seconds)
+            now[0] += next(waits, seconds)
+
+        monkeypatch.setattr(tasks_module.asyncio, "sleep", sleep)
+        monkeypatch.setattr(tasks_module, "time", SimpleNamespace(monotonic=lambda: now[0]))
+        get_route(TASK, "pause", version=1).respond(json=ok([{"error": 0, "id": "dbid_1"}]))
+        get_route(TASK, "getinfo", version=1).mock(
+            side_effect=self._statuses("downloading", "paused", "downloading")
+        )
+        result = await pause_download(mock_client, task_ids=["dbid_1"])
+        assert slept == [0.5, 0.5, 0.5]
+        assert self._rows(result) == {"dbid_1": tasks_module._UNDONE}
+
+    @respx.mock
     async def test_a_second_pause_past_the_budget_still_gets_time_before_the_last_read(
         self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
