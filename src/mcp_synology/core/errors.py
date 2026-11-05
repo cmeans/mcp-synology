@@ -7,25 +7,28 @@ from typing import TypeVar
 
 import httpx
 
+# The CLI commands advice names. A config `setup` writes is `<instance_id>.yaml`, which
+# `setup` and `check` don't find on their own (#481), so advice names the file. Only with
+# no config file yet is the bare command right. tests/core/test_cli_advice.py fails on a
+# bare command written out in a message string or an instructions file.
+SETUP_COMMAND = "'mcp-synology setup --config <your config file>'"
+CHECK_COMMAND = "'mcp-synology check --config <your config file>'"
+SETUP_NEW_CONFIG = "'mcp-synology setup'"
+# For a message that can't see the config: running on variables alone (the Docker path)
+# there's no file to name, and the bare command works once that shell has the server's
+# variables (a client's `env` block doesn't reach it). SYNOLOGY_HOST alone would send the
+# password over plain HTTP to port 5000.
+CHECK_NO_FILE = "mcp-synology check"
+NO_FILE_NOTE = (
+    "(with no config file, set SYNOLOGY_HOST and SYNOLOGY_HTTPS, and SYNOLOGY_PORT if it "
+    "isn't DSM's default, to what the server has, and leave out --config)"
+)
+
 # Help URLs point at sections of our own error-code reference rather than
 # Synology's KB. The KB is sparsely indexed and rarely matches the semantics
 # of an MCP error — our page can say "use overwrite=true" and "run
 # mcp-synology check -v", which the vendor docs never will.
 #
-# The CLI commands advice names. A config `setup` writes is `<instance_id>.yaml`, which
-# `setup` and `check` don't find on their own (#481), so advice names the file. Only with
-# no config file yet is the bare command right. tests/core/test_cli_advice.py holds every
-# message to these.
-SETUP_COMMAND = "'mcp-synology setup --config <your config file>'"
-CHECK_COMMAND = "'mcp-synology check --config <your config file>'"
-SETUP_NEW_CONFIG = "'mcp-synology setup'"
-# For a message that can't see the config: running on variables alone (the Docker path)
-# there's no file to name, and the bare command works as long as SYNOLOGY_HOST is set in
-# that shell (a client's `env` block doesn't reach it).
-CHECK_NO_FILE = "mcp-synology check"
-NO_FILE_NOTE = "(with no config file, set SYNOLOGY_HOST and leave out --config)"
-
-
 # Adding a new error code: add a member to ErrorCode below AND add a
 # matching `## <code>` section to docs/error-codes.md. The unit test in
 # tests/core/test_help_urls.py will fail if the two drift out of sync.

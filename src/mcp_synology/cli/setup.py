@@ -337,9 +337,14 @@ def _setup_interactive(verbose: bool, not_loaded: str | None = None) -> None:
     try:
         atomic_write_text(config_path, header + raw_yaml)
     except OSError as e:
-        # A read-only home is plausible where there's no keyring (Docker).
+        # This path can now be reached with no login first, as on Docker. An unwritable home
+        # stops earlier, at the state lock (#455).
         click.echo(
-            click.style(f"Couldn't write {_shown_name(config_path)}: {e.strerror}", fg="red"),
+            click.style(
+                f"Couldn't write {_shown_name(config_path)}: {e.strerror}. Fix the folder and run "
+                "this again.",
+                fg="red",
+            ),
             err=True,
         )
         sys.exit(1)
@@ -349,6 +354,8 @@ def _setup_interactive(verbose: bool, not_loaded: str | None = None) -> None:
 
     lead = "To use it, name it" if keyring_ok else "With those variables set, test it"
     click.echo(f"{lead}: mcp-synology check --config {quoted_path(config_path)}")
+
+    _echo_two_fa_advice()
 
     # Emit Claude Desktop JSON snippet
     _emit_claude_desktop_snippet(
@@ -405,7 +412,11 @@ def _setup_credential_flow(app_config: Any, verbose: bool) -> None:
                 f"{quoted_path(path)}"
             )
         else:
-            click.echo(f"With those variables and SYNOLOGY_HOST set, test it: {CHECK_NO_FILE}")
+            click.echo(
+                "With those variables and the server's SYNOLOGY_HOST, SYNOLOGY_HTTPS and "
+                f"SYNOLOGY_PORT set, test it: {CHECK_NO_FILE}"
+            )
+        _echo_two_fa_advice()
         return
 
     click.echo("\nAttempting login...")
@@ -480,6 +491,14 @@ def _may_replace_entry(
     return False
 
 
+def _echo_two_fa_advice() -> None:
+    """After the file exists: the advice says to copy it (pre-QA)."""
+    from mcp_synology.core.auth import no_keyring_2fa_advice, no_keyring_here
+
+    if no_keyring_here():
+        click.echo(f"\nIf this account uses 2FA: {no_keyring_2fa_advice(cli=True)}.")
+
+
 def _variable_lines(username: str, *, windows: bool = os.name == "nt") -> str:
     """The credential variables as a shell sets them. `NAME=value` alone doesn't reach a command
     run after it, and PowerShell is what a Windows terminal opens."""
@@ -504,7 +523,7 @@ def _store_keyring(service: str, username: str, password: str, host: str) -> boo
     backends raise the same error for "no such password" and for a real failure, and a chain of
     backends deletes from only the first. Any exception counts: backends raise their own types.
     """
-    from mcp_synology.core.auth import NO_KEYRING_2FA_ADVICE, no_keyring_here
+    from mcp_synology.core.auth import no_keyring_here
     from mcp_synology.core.config import comparable_host
 
     removed: list[str] = []
@@ -530,15 +549,16 @@ def _store_keyring(service: str, username: str, password: str, host: str) -> boo
     except Exception as e:
         logger.debug("Keyring error storing credentials: %s", e, exc_info=True)
         gone = f" Already removed from this entry: {', '.join(removed)}." if removed else ""
-        absent = no_keyring_here()
-        lead = "Keyring not available." if absent else "Couldn't store these in the keyring."
+        lead = (
+            "Keyring not available."
+            if no_keyring_here()
+            else "Couldn't store these in the keyring."
+        )
         click.echo(
             f"\n{lead}{gone} Set these environment variables where the server runs instead: "
             "in the `env` block of your MCP client's config, or in your shell, with your "
             "password in place of the placeholder:\n" + _variable_lines(username)
         )
-        if absent:
-            click.echo(f"If this account uses 2FA: {NO_KEYRING_2FA_ADVICE}.")
         return False
 
 

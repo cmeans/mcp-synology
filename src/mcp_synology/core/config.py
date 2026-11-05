@@ -768,8 +768,8 @@ def discover_config_path(explicit_path: str | None = None) -> Path:
     _refuse_a_working_folder_config()
     msg = (
         f"No config file found. Run {SETUP_NEW_CONFIG} to create one, or name one with "
-        "--config: a file `setup` wrote isn't found without it, unless it's "
-        "~/.config/mcp-synology/config.yaml."
+        "--config: `setup` writes `<instance_id>.yaml`, which needs it. Only "
+        "~/.config/mcp-synology/config.yaml is found without it."
     )
     raise FileNotFoundError(msg)
 

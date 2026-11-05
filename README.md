@@ -500,7 +500,7 @@ HTML comments (`<!-- ... -->`) are removed from both before the text is sent, so
 
 mcp-synology fully supports DSM accounts with two-factor authentication. It's auto-detected — you don't need to configure anything special:
 
-1. **Bootstrap** — `mcp-synology setup --config <your config file>` detects 2FA, prompts for your OTP code, and stores a device token in the keyring
+1. **Bootstrap** — `mcp-synology setup` (with `--config <your config file>` if you already have one) detects 2FA, prompts for your OTP code, and stores a device token in the keyring
 2. **Silent re-auth** — subsequent logins use the device token automatically (no OTP prompts)
 3. **Per-instance** — each NAS config gets its own device token, so mixed 2FA/non-2FA setups work fine
 
@@ -563,7 +563,7 @@ Two ways to enable debug logging:
 
 ```bash
 mcp-synology check --verbose --config <your config file>   # --verbose flag on setup/check
-SYNOLOGY_LOG_LEVEL=debug mcp-synology serve           # env var, works for all commands
+SYNOLOGY_LOG_LEVEL=debug mcp-synology serve --config <your config file>   # env var, works for all commands
 ```
 
 Or set it persistently in your config file:

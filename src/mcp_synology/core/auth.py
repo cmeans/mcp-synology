@@ -528,13 +528,28 @@ _RECORD_HOST = "'mcp-synology check --config <full path to your config file>'"
 _TWO_FA = (403, 404, 406)
 # `setup` never prints the token (maintainer, 2026-11-05), so it comes from a machine that
 # can store one. Naming `setup` alone sent a host with no keyring in a circle (#481).
-NO_KEYRING_2FA_ADVICE = (
-    "No OS keyring was found here, so a 2FA device token can't be stored here (if this "
-    "machine has one, run this from a desktop session or under dbus-run-session). On a "
-    f"machine with one, copy this config there and run {SETUP_COMMAND} {NO_FILE_NOTE}, "
-    "read the token with 'uvx keyring get mcp-synology/<instance_id> device_id', and "
-    "set it in SYNOLOGY_DEVICE_ID here"
+_GET_THE_TOKEN = (
+    f"On a machine with a keyring, copy this config there and run {SETUP_COMMAND} {NO_FILE_NOTE}. "
+    "Then read the token in your own terminal, not through a chat, with 'uvx keyring get "
+    "mcp-synology/<instance_id> device_id', and set it in SYNOLOGY_DEVICE_ID"
 )
+
+
+def no_keyring_2fa_advice(*, cli: bool) -> str:
+    """Where a 2FA device token comes from with no keyring to store one. `keyring` finds none too
+    on a desktop whose shell or client has no D-Bus address, so that's named. ``cli``: `check` and
+    `setup`, in a terminal; otherwise a server its client started."""
+    if cli:
+        return (
+            "No OS keyring was found, so a 2FA device token can't be stored on this machine (if it "
+            f"has a keyring, run this from a desktop session). {_GET_THE_TOKEN} here"
+        )
+    return (
+        "No OS keyring was found, so a 2FA device token can't be stored on this machine (if it "
+        "has a keyring, set DBUS_SESSION_BUS_ADDRESS in the MCP client's config). "
+        f"{_GET_THE_TOKEN} in the server's environment (the MCP client's config), and restart the "
+        "server"
+    )
 
 
 def no_keyring_here() -> bool:
@@ -575,7 +590,7 @@ def refusal_advice(
     if code in _TWO_FA:
         device = sources.get("device_id")
         if no_keyring_here():
-            advice = NO_KEYRING_2FA_ADVICE + restart
+            advice = no_keyring_2fa_advice(cli=cli)
             if device is not None:
                 advice = f"The device token comes from {device}. {advice}"
         elif device is None:

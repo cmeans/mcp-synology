@@ -35,7 +35,8 @@ Common causes:
   names that host. The error's suggestion says what to do; see
   [Credentials Are Tied to a Host](credentials.md#credentials-are-tied-to-a-host).
 - Wrong username or password in the credential store.
-- 2FA is enforced on the account but has not been bootstrapped via `mcp-synology setup`.
+- 2FA is enforced on the account but has not been bootstrapped via `mcp-synology setup`, with `--config <your config file>`
+  if you have one.
 - 2FA is set up, but DSM rejected the stored device token (the message says so),
   for example because the trusted device was removed in **Personal → Security →
   Sign-in Activity**.

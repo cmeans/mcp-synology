@@ -12,7 +12,7 @@ import json
 import re
 import shlex
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import keyring
@@ -26,7 +26,8 @@ from mcp_synology.cli.main import main
 from mcp_synology.cli.setup import _variable_lines
 from mcp_synology.core.auth import (
     KEYRING,
-    NO_KEYRING_2FA_ADVICE,
+    no_keyring_2fa_advice,
+    no_keyring_here,
     refusal_advice,
     resolve_credentials,
 )
@@ -37,7 +38,13 @@ from mcp_synology.core.config import (
     host_problems,
     load_config,
 )
-from mcp_synology.core.errors import NO_FILE_NOTE, AuthenticationError, DsmHttpError
+from mcp_synology.core.errors import (
+    AUTH_ERROR_CODES,
+    NO_FILE_NOTE,
+    SETUP_COMMAND,
+    AuthenticationError,
+    DsmHttpError,
+)
 from mcp_synology.core.fs import atomic_write_text
 from tests.memory_keyring import MemoryKeyring
 
@@ -187,7 +194,10 @@ class TestSetupWithNoKeyring:
         assert _variable_lines("o'brien", windows=True) == (
             "  $env:SYNOLOGY_USERNAME = 'o''brien'\n  $env:SYNOLOGY_PASSWORD = '<your password>'"
         )
-        assert "'o\u2019\u2019brien'" in _variable_lines("o\u2019brien", windows=True)
+
+    @pytest.mark.parametrize("quote", ["\u2018", "\u2019", "\u201a", "\u201b"])
+    def test_powershell_takes_curly_quotes_as_closing(self, quote: str) -> None:
+        assert f"'o{quote}{quote}brien'" in _variable_lines(f"o{quote}brien", windows=True)
 
     def test_the_client_snippet_sets_them(self, tmp_path: Path) -> None:
         _, output = self._setup(tmp_path)
@@ -215,9 +225,10 @@ class TestSetupWithNoKeyring:
         with patch("mcp_synology.core.config.Path.home", return_value=tmp_path):
             result = CliRunner().invoke(main, ["setup"], input="me\nhunter2\n")
         assert result.exit_code == 0, result.output
-        assert "With those variables and SYNOLOGY_HOST set, test it: mcp-synology check\n" in (
-            result.output
-        )
+        assert (
+            "With those variables and the server's SYNOLOGY_HOST, SYNOLOGY_HTTPS and SYNOLOGY_PORT "
+            "set, test it: mcp-synology check\n"
+        ) in result.output
 
 
 @pytest.mark.usefixtures("no_keyring")
@@ -275,7 +286,7 @@ class TestTwoFactorWithNoKeyring:
     @pytest.mark.parametrize("code", [403, 404, 406])
     def test_the_advice_names_the_variable(self, code: int) -> None:
         advice = refusal_advice(code, "", self.SOURCES, cli=True)
-        assert advice.endswith(NO_KEYRING_2FA_ADVICE[1:])
+        assert advice.endswith(no_keyring_2fa_advice(cli=True)[1:])
         assert "SYNOLOGY_DEVICE_ID" in advice
         assert "uvx keyring get mcp-synology/<instance_id> device_id" in advice
         assert "copy this config there" in advice
@@ -284,7 +295,9 @@ class TestTwoFactorWithNoKeyring:
 
     def test_a_running_server_needs_the_restart(self) -> None:
         advice = refusal_advice(403, "", self.SOURCES)
-        assert advice.endswith(" and restart the server")
+        assert advice.endswith("(the MCP client's config), and restart the server")
+        assert "DBUS_SESSION_BUS_ADDRESS" in advice
+        assert "desktop session" not in advice
 
     def test_a_rejected_token_says_where_it_came_from(self) -> None:
         sources = {**self.SOURCES, "device_id": "SYNOLOGY_DEVICE_ID in this shell"}
@@ -299,7 +312,64 @@ class TestTwoFactorWithNoKeyring:
             patch("mcp_synology.core.config.discover_config_path", side_effect=FileNotFoundError),
         ):
             result = CliRunner().invoke(main, ["setup"], input=_ANSWERS)
-        assert f"If this account uses 2FA: {NO_KEYRING_2FA_ADVICE}." in result.output
+        advice = f"If this account uses 2FA: {no_keyring_2fa_advice(cli=True)}."
+        assert advice in result.output
+        assert result.output.index("Config written") < result.output.index(advice)
+
+
+class TestSetupWithAKeyringThatWorks:
+    def test_the_snippet_sets_no_credentials(
+        self, request: pytest.FixtureRequest, no_keyring: None, tmp_path: Path
+    ) -> None:
+        """Pasted, a variable beats the keyring: the placeholder would be sent as the password."""
+        previous = keyring.get_keyring()
+        keyring.set_keyring(MemoryKeyring())
+        request.addfinalizer(lambda: keyring.set_keyring(previous))
+        with (
+            patch("mcp_synology.cli.setup._CONFIG_DIR", tmp_path / "config"),
+            patch("mcp_synology.core.config.discover_config_path", side_effect=FileNotFoundError),
+            patch(
+                "mcp_synology.cli.setup._connect_and_login",
+                AsyncMock(return_value={"success": True}),
+            ),
+        ):
+            result = CliRunner().invoke(main, ["setup"], input=_ANSWERS)
+        assert result.exit_code == 0, result.output
+        assert "Config written" in result.output
+        assert "SYNOLOGY_USERNAME" not in result.output
+        assert "SYNOLOGY_PASSWORD" not in result.output
+
+
+class TestWordingOfTheOtherPaths:
+    def test_a_config_keeps_the_short_form_for_a_locked_keyring(
+        self, request: pytest.FixtureRequest, no_keyring: None, tmp_path: Path
+    ) -> None:
+        class ReadFails(MemoryKeyring):
+            def get_password(self, service: str, username: str) -> str | None:
+                raise KeyringLocked("locked")
+
+        config = tmp_path / "mynas.yaml"
+        config.write_text(
+            "schema_version: 1\nconnection:\n  host: 192.168.1.50\n"
+            "modules:\n  filestation:\n    enabled: true\n"
+        )
+        previous = keyring.get_keyring()
+        keyring.set_keyring(ReadFails())
+        request.addfinalizer(lambda: keyring.set_keyring(previous))
+        result = CliRunner().invoke(main, ["setup", "--config", str(config)], input="me\nx\n")
+        assert "SYNOLOGY_PASSWORD instead." in result.output
+        assert "write yourself" not in result.output
+
+    def test_a_failing_check_isnt_called_no_keyring(self) -> None:
+        with patch("mcp_synology.core.auth.kr.get_keyring", side_effect=RuntimeError("broken")):
+            assert no_keyring_here() is False
+
+    def test_the_2fa_required_text_names_the_file(self) -> None:
+        assert AUTH_ERROR_CODES[403][1] == f"Run {SETUP_COMMAND} to complete 2FA bootstrap."
+
+    def test_the_download_error_says_what_to_do_with_no_file(self) -> None:
+        source = (SRC / "modules/filestation/transfer.py").read_text(encoding="utf-8")
+        assert "{CHECK_COMMAND} {NO_FILE_NOTE}" in source
 
 
 def test_a_keyring_keeps_the_usual_advice(no_keyring: None) -> None:
