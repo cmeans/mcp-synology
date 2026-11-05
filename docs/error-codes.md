@@ -29,7 +29,7 @@ credentials are for another host, so they weren't sent.**
 Common causes:
 
 - The keyring entry is from an older version, with no host recorded, and this config can't
-  say which host is meant (the message says so). `mcp-synology check` gives the steps; see
+  say which host is meant (the message says so). `mcp-synology check` asks, or gives the steps; see
   [Credentials Are Tied to a Host](credentials.md#credentials-are-tied-to-a-host).
 - The keyring entry was set up for another host (the message says so). `mcp-synology check`
   names that host. The error's suggestion says what to do; see

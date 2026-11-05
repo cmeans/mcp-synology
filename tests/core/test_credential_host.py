@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import signal
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -290,6 +291,7 @@ def _check(path: Path, answer: str = "y\n") -> Result:
     with (
         patch("mcp_synology.core.client.DsmClient.query_api_info", AsyncMock(return_value=None)),
         patch("mcp_synology.core.client.DsmClient.request", AsyncMock(return_value={"sid": "s"})),
+        patch("mcp_synology.cli.check._stdin_is_a_terminal", return_value=True),
     ):
         result = CliRunner().invoke(main, ["check", "--config", str(path)], input=answer)
     assert result.exit_code == 0, result.output
@@ -538,15 +540,100 @@ class TestAnEntryWithNoRecordedHost:
                 "mcp_synology.core.client.DsmClient.query_api_info", AsyncMock(return_value=None)
             ),
             patch("mcp_synology.core.client.DsmClient.request", request),
+            patch("mcp_synology.cli.check._stdin_is_a_terminal", return_value=True),
         ):
             result = CliRunner().invoke(
                 main, ["check", "--config", str(_file(tmp_path, "nas.office"))], input=answer
             )
         assert result.exit_code == 1
-        assert "Send its stored password to 'nas.office' over plain HTTP" in result.output
+        assert "and any 2FA token to 'nas.office' over plain HTTP" in result.output
         assert "Nothing was sent" in result.output
         request.assert_not_awaited()
         assert ("mcp-synology/nas", "host") not in store.values
+
+    def test_a_pipe_answering_yes_sends_nothing(self, store: MemoryKeyring, tmp_path: Path) -> None:
+        """Pre-QA on #559: `printf 'y' | check` sent it, and a pipe left open waited forever."""
+        _entry(store, "nas")
+        request = AsyncMock(return_value={"sid": "s"})
+        with (
+            patch(
+                "mcp_synology.core.client.DsmClient.query_api_info", AsyncMock(return_value=None)
+            ),
+            patch("mcp_synology.core.client.DsmClient.request", request),
+        ):
+            result = CliRunner().invoke(
+                main, ["check", "--config", str(_file(tmp_path, "nas.office"))], input="y\n"
+            )
+        assert result.exit_code == 1
+        assert "Nothing was sent" in result.output
+        request.assert_not_awaited()
+
+    def test_a_keyring_that_fails_the_first_read_cant_skip_the_question(
+        self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Pre-QA on #559: the question's own read failed, and the login's read then recorded.
+        Secret Service does this when someone dismisses its unlock dialog."""
+        _entry(store, "nas")
+        real = store.get_password
+        calls = iter([KeyringLocked("dismissed")])
+
+        def fails_once(service: str, key: str) -> str | None:
+            for error in calls:
+                raise error
+            return real(service, key)
+
+        monkeypatch.setattr(store, "get_password", fails_once)
+        request = AsyncMock(return_value={"sid": "s"})
+        with (
+            patch(
+                "mcp_synology.core.client.DsmClient.query_api_info", AsyncMock(return_value=None)
+            ),
+            patch("mcp_synology.core.client.DsmClient.request", request),
+        ):
+            result = CliRunner().invoke(
+                main, ["check", "--config", str(_file(tmp_path, "nas.office"))]
+            )
+        assert result.exit_code == 1
+        request.assert_not_awaited()
+        assert ("mcp-synology/nas", "host") not in store.values
+
+    def test_one_ctrl_c_leaves_the_question(self, store: MemoryKeyring, tmp_path: Path) -> None:
+        """Pre-QA on #559: asyncio holds Ctrl-C back from a blocking prompt until the second."""
+        _entry(store, "nas")
+        seen: list[object] = []
+
+        def confirm(*_args: object, **_kwargs: object) -> bool:
+            seen.append(signal.getsignal(signal.SIGINT))
+            return False
+
+        with (
+            patch(
+                "mcp_synology.core.client.DsmClient.query_api_info", AsyncMock(return_value=None)
+            ),
+            patch("mcp_synology.cli.check._stdin_is_a_terminal", return_value=True),
+            patch("click.confirm", confirm),
+        ):
+            CliRunner().invoke(main, ["check", "--config", str(_file(tmp_path, "nas.office"))])
+        assert seen == [signal.default_int_handler]
+
+    def test_a_password_with_no_username_isnt_asked_about(
+        self, store: MemoryKeyring, tmp_path: Path
+    ) -> None:
+        """A login that can't work doesn't need the question, and with none asked, it can't
+        record: the same refusal as a read that failed."""
+        store.values[("mcp-synology/nas", "password")] = "hunter2"
+        with (
+            patch(
+                "mcp_synology.core.client.DsmClient.query_api_info", AsyncMock(return_value=None)
+            ),
+            patch("mcp_synology.cli.check._stdin_is_a_terminal", return_value=True),
+        ):
+            result = CliRunner().invoke(
+                main, ["check", "--config", str(_file(tmp_path, "nas.home"))]
+            )
+        assert result.exit_code == 1
+        assert "don't say which host" in result.output
+        assert "Send its stored password" not in result.output
 
     def test_check_doesnt_ask_about_a_recorded_entry(
         self, store: MemoryKeyring, tmp_path: Path
@@ -1626,6 +1713,33 @@ class TestTheMigrationScript:
         _migrate_script().cleanup_keyring({"nas"}, dry_run=False)
         assert store.values[("synology-mcp/nas", "password")] == "home-pw"
 
+    def test_cleanup_keeps_it_after_a_read_that_failed_during_the_copy(
+        self, store: MemoryKeyring, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Pre-QA on #559: the copy skipped it, cleanup's read then worked and saw no record, and
+        the only copy was deleted."""
+        self._old(store)
+        script = _migrate_script()
+        real = store.get_password
+
+        def fails(service: str, key: str) -> str | None:
+            if service == "mcp-synology/nas":
+                raise RuntimeError("a backend's own type")
+            return real(service, key)
+
+        with monkeypatch.context() as patched:
+            patched.setattr(store, "get_password", fails)
+            assert script.migrate_keyring({"nas"}, dry_run=False) == 0
+        script.cleanup_keyring({"nas"}, dry_run=False)
+        assert store.values[("synology-mcp/nas", "password")] == "home-pw"
+
+    def test_a_dry_run_previews_the_delete_of_what_would_be_copied(
+        self, store: MemoryKeyring, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._old(store)
+        _migrate_script().cleanup_keyring({"nas"}, dry_run=True)
+        assert "DELETE keyring synology-mcp/nas/password" in capsys.readouterr().out
+
     def test_it_doesnt_say_all_migrated_after_skipping_one(self, store: MemoryKeyring) -> None:
         self._old(store)
         store.values[("mcp-synology/nas", "host")] = "nas.office"
@@ -1683,6 +1797,7 @@ class TestQaRoundThree:
                 "mcp_synology.core.client.DsmClient.request",
                 AsyncMock(side_effect=AuthenticationError("wrong password", code=400)),
             ),
+            patch("mcp_synology.cli.check._stdin_is_a_terminal", return_value=True),
         ):
             result = CliRunner().invoke(
                 main, ["check", "--config", str(_file(tmp_path, "nas.office"))], input="y\n"

@@ -120,21 +120,23 @@ def migrate_keyring(instances: set[str], *, dry_run: bool) -> int:
     return count
 
 
-def _holds_what_migration_skipped(kr: Any, instance_id: str) -> bool:
-    """Whether the old entry's secrets exist only there: the new entry can't be read, or it records
-    a host and holds something else. Deleting them then couldn't be undone. An entry migrated
-    earlier and recorded since holds the same values, so its old copy can go."""
+def _holds_what_migration_skipped(kr: Any, instance_id: str, *, dry_run: bool = False) -> bool:
+    """Whether some of the old entry's secrets exist only there: the new entry can't be read, or
+    doesn't hold the same value. Deleting them then couldn't be undone. A read of the new entry can
+    work here after failing during the copy, so nothing about it is assumed from the copy. On a dry
+    run nothing was copied, so a value the new entry lacks would be."""
     old_service = f"{OLD_NAME}/{instance_id}"
     new_service = f"{NEW_NAME}/{instance_id}"
     try:
-        if not (kr.get_password(new_service, "host") or "").strip():
-            return False
-        return any(
-            (old := kr.get_password(old_service, key)) and old != kr.get_password(new_service, key)
-            for key in KEYRING_KEYS
-        )
+        recorded = (kr.get_password(new_service, "host") or "").strip()
+        for key in KEYRING_KEYS:
+            old = kr.get_password(old_service, key)
+            new = kr.get_password(new_service, key)
+            if old and old != new and (new or recorded or not dry_run):
+                return True
     except Exception:
         return True
+    return False
 
 
 def _any_skipped(instances: set[str]) -> bool:
@@ -154,8 +156,8 @@ def cleanup_keyring(instances: set[str], *, dry_run: bool) -> None:
 
     for instance_id in sorted(instances):
         old_service = f"{OLD_NAME}/{instance_id}"
-        if _holds_what_migration_skipped(kr, instance_id):
-            print(f"  KEEP  keyring {old_service}: not migrated, as its new entry is for a host")
+        if _holds_what_migration_skipped(kr, instance_id, dry_run=dry_run):
+            print(f"  KEEP  keyring {old_service}: its new entry doesn't hold the same credentials")
             continue
         for key in KEYRING_KEYS:
             try:

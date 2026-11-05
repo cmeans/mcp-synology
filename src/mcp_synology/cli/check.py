@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import signal
 import ssl
 import sys
 from typing import TYPE_CHECKING
@@ -17,6 +18,8 @@ from mcp_synology.core.redaction import redact_urls
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+
+    from mcp_synology.core.config import AppConfig
 
 
 @click.command()
@@ -130,6 +133,34 @@ def exit_on_connection_failure(base_url: str, host: str) -> Iterator[None]:
     sys.exit(1)
 
 
+def _stdin_is_a_terminal() -> bool:
+    return sys.stdin.isatty()
+
+
+def _asked_to_send(config: AppConfig, instance: str) -> bool:
+    """Whether someone at a terminal says to send this entry's secrets. A pipe isn't someone, and
+    one left open would wait forever. On stderr, so `check > log` still shows the question. asyncio
+    holds Ctrl-C back from a blocking prompt until the second press, so it gets Python's handler
+    here (pre-QA on #559)."""
+    if not _stdin_is_a_terminal():
+        return False
+    connection = config.connection
+    plain = "" if connection is not None and connection.https else " over plain HTTP"
+    host = connection.host if connection is not None else None
+    previous = signal.signal(signal.SIGINT, signal.default_int_handler)
+    try:
+        return click.confirm(
+            f"Keyring entry {instance!r} doesn't say which NAS it's for. Send its stored password "
+            f"and any 2FA token to {host!r}{plain} and tie it to that NAS?",
+            default=False,
+            err=True,
+        )
+    except click.Abort:
+        return False
+    finally:
+        signal.signal(signal.SIGINT, previous)
+
+
 async def _check_login(config: object) -> None:
     """Validate credentials by attempting a login."""
     from mcp_synology.core.auth import (
@@ -176,22 +207,12 @@ async def _check_login(config: object) -> None:
                 sys.exit(1)
 
             # On a full path nothing else stops this first send, so whose password it is has to be
-            # asked here (QA round 3 on #559; maintainer, 2026-11-05). With no person to answer,
-            # nothing is sent.
+            # asked here (QA round 3 on #559; maintainer, 2026-11-05). With no person at a terminal
+            # to answer, nothing is sent.
             instance = config.instance_id or "default"
             first_use = host_this_login_would_record(config)
             if first_use:
-                plain = "" if config.connection.https else " over plain HTTP"
-                try:
-                    send = click.confirm(
-                        f"Keyring entry {instance!r} doesn't say which NAS it's for. Send its "
-                        f"stored password to {config.connection.host!r}{plain} and tie it to "
-                        "that NAS?",
-                        default=False,
-                    )
-                except click.Abort:
-                    send = False
-                if not send:
+                if not _asked_to_send(config, instance):
                     click.echo(
                         click.style(
                             f"Nothing was sent, and entry {instance!r} is unchanged. If these are "
@@ -201,6 +222,10 @@ async def _check_login(config: object) -> None:
                         err=True,
                     )
                     sys.exit(1)
+            else:
+                # This login wasn't asked about, so it can't record, even if the keyring answers
+                # differently next time (a dismissed unlock dialog; pre-QA on #559).
+                config._host_may_be_recorded = False
 
             auth = AuthManager(config, client)
             try:
