@@ -1635,10 +1635,15 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         raise
     config._source_path = config_path
     # Only --config: an `env` block can name a file with MCP_SYNOLOGY_CONFIG, or supply the default
-    # location's through HOME (maintainer, 2026-11-05). Any value in these two counts, even an
+    # location's through HOME (maintainer, 2026-11-05), and a `~/...` value's the same way (no
+    # shell expands it in an MCP client's args). Any value in the two variables counts, even an
     # equal one, since only `setup` should settle a doubt.
-    config._host_may_be_recorded = path is not None and not any(
-        os.environ.get(v, "").strip() for v in ("SYNOLOGY_HOST", "SYNOLOGY_INSTANCE_ID")
+    config._host_may_be_recorded = (
+        path is not None
+        and not str(path).startswith("~")
+        and not any(
+            os.environ.get(v, "").strip() for v in ("SYNOLOGY_HOST", "SYNOLOGY_INSTANCE_ID")
+        )
     )
 
     logger.debug(

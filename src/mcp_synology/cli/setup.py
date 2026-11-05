@@ -376,7 +376,7 @@ def _may_replace_entry(service: str, host: str, instance: str) -> bool:
         import keyring
         from keyring.errors import KeyringError
 
-        recorded = keyring.get_password(service, "host")
+        recorded = (keyring.get_password(service, "host") or "").strip() or None
         # A record on its own, left by removing the rest, holds no credentials to replace.
         stored = any(
             keyring.get_password(service, k) for k in ("username", "password", "device_id")

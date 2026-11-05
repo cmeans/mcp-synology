@@ -309,6 +309,18 @@ class TestAnEntryWithNoRecordedHost:
         _entry(store, "nas", "nas.home")
         assert resolve_credentials(load_config())[1] == "hunter2"
 
+    def test_a_config_value_expanded_through_home_doesnt_record_it(
+        self, store: MemoryKeyring, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Pre-QA on #536: `--config ~/...` in a client's args, with only HOME set in `env`."""
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
+        _file(tmp_path, "nas.home")
+        _entry(store, "nas")
+        with pytest.raises(AuthenticationError, match="don't say which host"):
+            resolve_credentials(load_config("~/named.yaml"))
+        assert ("mcp-synology/nas", "host") not in store.values
+
     def test_config_wins_over_the_variable(
         self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -433,6 +445,31 @@ class TestADeviceTokenAlone:
         monkeypatch.setenv("SYNOLOGY_HOST", "nas.home")
         assert resolve_credentials(load_config()) == ("u", "p", None)
 
+    def test_a_token_from_the_environment_isnt_checked(
+        self,
+        store: MemoryKeyring,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """It's the one used, so the keyring's is neither sent nor reported."""
+        self._token(store, "nas.home")
+        self._creds_from_env(monkeypatch)
+        monkeypatch.setenv("SYNOLOGY_DEVICE_ID", "env-token")
+        with caplog.at_level("WARNING"):
+            config = load_config(_file(tmp_path, "nas.office"))
+            assert resolve_credentials(config) == ("u", "p", "env-token")
+        assert not [m for m in caplog.messages if "device token" in m]
+
+    def test_a_login_with_no_password_records_nothing(
+        self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._token(store, None)
+        monkeypatch.setenv("SYNOLOGY_USERNAME", "u")
+        with pytest.raises(AuthenticationError, match="No credentials"):
+            resolve_credentials(load_config(_file(tmp_path, "nas.home")))
+        assert ("mcp-synology/nas", "host") not in store.values
+
     @pytest.mark.parametrize("error", [KeyringError("locked"), OSError("gone")], ids=["key", "os"])
     def test_a_keyring_that_cant_answer_leaves_it_out(
         self,
@@ -514,6 +551,18 @@ class TestSetup:
         store.values[("mcp-synology/nas", "device_id")] = "token"
         _store_keyring("mcp-synology/nas", "admin", "pw", "nas.office")
         assert ("mcp-synology/nas", "device_id") not in store.values
+
+    def test_an_entry_with_only_a_device_token_is_asked_about(self, store: MemoryKeyring) -> None:
+        store.values[("mcp-synology/nas", "device_id")] = "token"
+        with patch("click.confirm", return_value=False) as confirm:
+            assert not _may_replace_entry("mcp-synology/nas", "nas.office", "nas")
+        assert "with no host recorded" in confirm.call_args.args[0]
+
+    def test_a_blank_record_reads_as_no_record(self, store: MemoryKeyring) -> None:
+        _entry(store, "nas", "   ")
+        with patch("click.confirm", return_value=False) as confirm:
+            _may_replace_entry("mcp-synology/nas", "nas.office", "nas")
+        assert "with no host recorded" in confirm.call_args.args[0]
 
     def test_a_record_with_no_credentials_isnt_asked_about(self, store: MemoryKeyring) -> None:
         """Pre-QA on #536: left by removing the rest, it said it "holds credentials"."""

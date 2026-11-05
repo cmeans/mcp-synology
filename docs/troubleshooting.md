@@ -62,6 +62,12 @@ as your file (#282, #283, #292). See [unavailable](error-codes.md#unavailable).
 **What to do:** check what sits between this machine and the NAS, and the configured port. Run
 `mcp-synology check`, which reports it as "didn't return a DSM API response".
 
+### `auth_failed`: the keyring's credentials "are for another host" or "don't say which host"
+
+**Why:** a keyring entry is tied to the host it was set up for, and this config points elsewhere, or the entry is from an older version and this config can't say which host is meant. No credential was sent. `mcp-synology check` names the host it was set up for.
+
+**What to do:** if this host is the right NAS, run `mcp-synology setup --config <your config file>`. If it isn't, fix `connection.host`, `SYNOLOGY_HOST` or `instance_id`. Two NAS whose names start the same need their own `instance_id`. See [Credentials Are Tied to a Host](credentials.md#credentials-are-tied-to-a-host).
+
 ### Sign-in worked, then fails with `auth_failed` on a 2FA account
 
 **Why:** DSM no longer accepts the stored device token, for example because the trusted device
