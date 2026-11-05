@@ -89,6 +89,10 @@ def _fake_home(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPath
     mp.setenv("HOME", str(home))
     mp.setenv("USERPROFILE", str(home))  # Path.home() on Windows
     mp.delenv("XDG_CONFIG_HOME", raising=False)
+    # A proxy in the developer's shell would add a warning to what tests read (#558).
+    for scheme in ("http", "https", "all", "no"):
+        mp.delenv(f"{scheme}_proxy", raising=False)
+        mp.delenv(f"{scheme.upper()}_PROXY", raising=False)
     previous = keyring.get_keyring()
     keyring.set_keyring(NullKeyring())
     request.addfinalizer(lambda: keyring.set_keyring(previous))
