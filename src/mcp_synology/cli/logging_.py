@@ -96,3 +96,5 @@ def _configure_logging(level: str, log_file: str | None = None) -> None:
             if record.levelno >= root.level or getattr(record, "show_always", False):
                 file_handler.handle(record)
         root.addHandler(file_handler)
+        # A relative path is from the config's folder (#553), so say where it went.
+        logging.getLogger(__name__).info("Logging to %r", file_handler.baseFilename)
