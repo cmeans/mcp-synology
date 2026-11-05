@@ -136,6 +136,34 @@ def test_a_download_folder_written_as_binary_is_resolved_too(
     assert settings["default_download_dir"] == os.path.join(os.path.realpath(home), "dl")
 
 
+def _binary_download_folder(folder: Path, value: str) -> Path:
+    path = _file(folder, "")
+    path.write_text(
+        "schema_version: 1\nconnection: {host: nas}\n"
+        f"modules: {{filestation: {{settings: {{default_download_dir: !!binary {value}}}}}}}\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+@pytest.mark.parametrize("value", ["ICAg", "''"], ids=["spaces", "empty"])
+def test_a_blank_download_folder_written_as_binary_is_refused(
+    tmp_path: Path, working_folder: Path, value: str
+) -> None:
+    """QA round 3 on #561: three spaces in bytes stayed unresolved, and the schema decoded them
+    into an allowed folder under the working folder."""
+    with pytest.raises(ValueError, match="default_download_dir: Value error, is empty"):
+        validate_config(_binary_download_folder(tmp_path / "home-config", value))
+
+
+def test_a_download_folder_that_isnt_utf8_gets_the_settings_own_error(
+    tmp_path: Path, working_folder: Path
+) -> None:
+    """QA round 3 on #561: left for the schema, whose error names the setting."""
+    with pytest.raises(ValueError, match=r"modules\.filestation\.settings\.default_download_dir"):
+        validate_config(_binary_download_folder(tmp_path / "home-config", "//4="))
+
+
 def test_every_module_setting_named_as_a_local_path_is_accounted_for() -> None:
     """Pre-QA on #561: core resolves one module's setting by name, so a new local-path setting in
     another module would depend on the working folder with no test failing. Add it to
