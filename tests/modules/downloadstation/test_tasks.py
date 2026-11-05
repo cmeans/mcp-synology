@@ -1917,7 +1917,9 @@ class TestPauseResume:
         )
         with caplog.at_level("INFO", logger=tasks_module.__name__):
             await pause_download(mock_client, task_ids=["dbid_1"])
-        assert f"A task read after the pause reads an unknown status: {shown}" in caplog.messages
+        assert (
+            f"Task ['dbid_1'] reads an unknown status after the pause: {shown}" in caplog.messages
+        )
 
     @respx.mock
     async def test_a_null_status_isnt_logged_as_left_out(

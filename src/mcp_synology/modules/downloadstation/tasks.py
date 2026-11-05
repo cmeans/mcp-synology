@@ -1023,7 +1023,7 @@ async def _hold_pause(client: DsmClient, task_ids: list[str]) -> bool:
     return True
 
 
-def _not_paused_row(status: object) -> str | None:
+def _not_paused_row(status: object, task_id: str) -> str | None:
     """The reply row for a task DSM said ok to pause, if its status says otherwise."""
     if status == "paused":
         return None
@@ -1031,7 +1031,8 @@ def _not_paused_row(status: object) -> str | None:
         # A reply goes to the model, so only a status Download Station has goes into it. The log
         # is how a real NAS would show an integer not seen yet (the spec's list read).
         logger.info(
-            "A task read after the pause reads an unknown status: %s",
+            "Task %s reads an unknown status after the pause: %s",
+            _ids_for_log([task_id]),
             status if isinstance(status, int) else type(status).__name__,
         )
         return "not confirmed paused: it reads an unknown status; see list_downloads"
@@ -1064,7 +1065,7 @@ async def _check_pause_rows(client: DsmClient, rows: list[list[str]], done: list
             continue
         status = (tasks or {}).get(row[0], {}).get("status")
         if status is not None:
-            row[1] = _not_paused_row(status) or row[1]
+            row[1] = _not_paused_row(status, row[0]) or row[1]
             if row[1] == _UNDONE:
                 # The signal that a NAS undoes a pause later than the watch looks.
                 logger.warning("Pause of %s didn't hold, after the watch", _ids_for_log([row[0]]))
