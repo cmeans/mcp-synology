@@ -818,3 +818,18 @@ def test_a_command_reading_stdin_cant_take_the_list_of_prs(github: _FakeGitHub) 
     )
     assert done.returncode == 0, done.stderr
     assert any(write.startswith("pr edit 8") for write in github.writes())
+
+
+@pytest.mark.parametrize(
+    ("vdsm_jobs", "added"),
+    [("in_progress\tnone\tx\n", "Awaiting CI"), ("completed\tfailure\tx\n", "CI Failed")],
+    ids=["pending", "fail"],
+)
+def test_a_stale_adopt_adds_nothing_beside_a_label_set_since(
+    github: _FakeGitHub, vdsm_jobs: str, added: str
+) -> None:
+    """QA round 2 on #567: only a passing state was covered, where another check also stops it."""
+    github.runs()
+    github.answer(ci_jobs=_GOOD, vdsm_jobs=vdsm_jobs, labels="QA Active\n")
+    assert github.run("pr-labels-settle.sh", "7", "abc", ADOPT="1").returncode == 0
+    assert not [write for write in github.writes() if f"--add-label {added}" in write]
