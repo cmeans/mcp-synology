@@ -610,11 +610,11 @@ class WorkingFolderConfigNotLoadedError(FileNotFoundError):
     """
 
 
-def pasteable_path(path: Path) -> str:
-    """An absolute path as a shell takes it, for a message that says to use it: `repr` switches to
-    double quotes around a `'`, where `$(...)` in a folder's name runs when pasted (QA on #555).
-    Each character that could forge a line is escaped, and only those, so the path stays readable;
-    a path with one isn't one to use as shown."""
+def quoted_path(path: Path) -> str:
+    """An absolute path as a POSIX shell takes it (on Windows, for reading only: see below), for a
+    message that says to use it: `repr` switches to double quotes around a `'`, where `$(...)` in a
+    folder's name runs when pasted (QA on #555). Each character that could forge a line is escaped,
+    and only those, so the path stays readable; a path with one isn't one to use as shown."""
     text = _shown_path(path)
     return _quoted_for_a_shell(
         "".join(c if c.isprintable() else c.encode("unicode_escape").decode() for c in text)
@@ -665,7 +665,7 @@ def _refuse_a_working_folder_config() -> None:
         else ""
     )
     msg = (
-        f"{pasteable_path(local_config)} isn't loaded automatically: a config in the folder "
+        f"{quoted_path(local_config)} isn't loaded automatically: a config in the folder "
         "you're in could send your stored credentials to another host. "
         f"{env_only}If you trust this file (it chooses the host your stored password goes to), "
         "pass --config ./mcp-synology.yaml, or its full path, without shell quotes, in an MCP "

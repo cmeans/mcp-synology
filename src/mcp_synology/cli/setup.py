@@ -18,7 +18,6 @@ import yaml
 from mcp_synology.cli.check import exit_on_connection_failure
 from mcp_synology.cli.logging_ import _configure_logging, _init_early_logging
 from mcp_synology.cli.startup import escape_what_stdout_cant_encode, load_or_exit
-from mcp_synology.core.config import WorkingFolderConfigNotLoadedError
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +52,10 @@ def setup(config: str | None, list_configs: bool, verbose: bool) -> None:
             click.echo(click.style(f"Error: {e}", fg="red"), err=True)
             sys.exit(1)
         # No config file found — enter interactive creation mode. One that's there and isn't
-        # loaded is named, since "no file found" would be false (#552).
+        # loaded is named, since "no file found" would be false (#552). Imported here: at the top,
+        # every command would load pydantic, `--version` included.
+        from mcp_synology.core.config import WorkingFolderConfigNotLoadedError
+
         _setup_interactive(
             verbose, str(e) if isinstance(e, WorkingFolderConfigNotLoadedError) else None
         )
@@ -313,9 +315,9 @@ def _setup_interactive(verbose: bool, not_loaded: str | None = None) -> None:
     click.echo(f"\nConfig written to {config_path}")
     if not_loaded:
         # Discovery reads config.yaml, so a bare `check` here would stop at the same file again.
-        from mcp_synology.core.config import pasteable_path
+        from mcp_synology.core.config import quoted_path
 
-        click.echo(f"To use it, name it: mcp-synology check --config {pasteable_path(config_path)}")
+        click.echo(f"To use it, name it: mcp-synology check --config {quoted_path(config_path)}")
 
     # Emit Claude Desktop JSON snippet
     _emit_claude_desktop_snippet(app_config, config_path)

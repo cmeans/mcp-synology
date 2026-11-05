@@ -1036,6 +1036,14 @@ class TestAWorkingFolderConfigIsntLoaded:
         assert "a\\nERROR forged" in str(excinfo.value)
         assert len(shlex.split(str(excinfo.value).split(" isn't loaded")[0])) == 1
 
+    def test_the_cli_doesnt_load_the_config_module_at_import(self) -> None:
+        """Pre-QA on #555: a top-level import in `setup` loaded pydantic for `--version` too."""
+        code = (
+            "import sys, mcp_synology.cli; "
+            "sys.exit('pydantic' in sys.modules or 'mcp_synology.core.config' in sys.modules)"
+        )
+        assert subprocess.run([sys.executable, "-c", code], check=False).returncode == 0
+
     def test_one_character_that_draws_nothing_doesnt_escape_the_whole_path(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
