@@ -54,11 +54,16 @@ def _recorded_host(service: str) -> str | None:
     return (kr.get_password(service, "host") or "").strip() or None
 
 
-def _entry_is_for_this_host(config: AppConfig, service: str) -> tuple[bool, str | None]:
+def _entry_is_for_this_host(
+    config: AppConfig, service: str, *, may_record: bool
+) -> tuple[bool, str | None]:
     """Whether this keyring entry is for ``connection.host``, and the host it records (#536).
 
-    An entry from before the host was recorded takes it here only when the config says which host
-    is meant (``host_may_be_recorded``). Raises what the keyring raises.
+    An entry from before the host was recorded may take it only when the config says which host
+    is meant (``host_may_be_recorded``) and this login uses its password. That's written by
+    ``AuthManager.login`` once DSM accepts the password, not here: a host that's down, or another
+    NAS refusing it, would otherwise pin the entry and refuse its real config (pre-QA on #559).
+    Raises what the keyring raises.
     """
     if config.connection is None:  # the config's own validation requires it
         raise RuntimeError("Config missing connection settings")
@@ -66,14 +71,24 @@ def _entry_is_for_this_host(config: AppConfig, service: str) -> tuple[bool, str 
 
     host = comparable_host(config.connection.host)
     recorded = _recorded_host(service)
-    if recorded is None and config.host_may_be_recorded:
-        kr.set_password(service, "host", host)
-        logger.info(
-            "Keyring entry %r is now recorded for this config's host",
-            config.instance_id or "default",
-        )
+    if recorded is None and may_record and config.host_may_be_recorded:
+        config._host_to_record = host
         return True, host
     return recorded == host, recorded
+
+
+def entry_left_unrecorded(config: AppConfig) -> bool:
+    """Whether this config's keyring entry holds credentials and no host. For `check`, whose
+    login may not have used it (credentials from elsewhere), so nothing recorded it."""
+    service = f"mcp-synology/{config.instance_id or 'default'}"
+    try:
+        return _recorded_host(service) is None and any(
+            _present_or_none(kr.get_password(service, key))
+            for key in ("username", "password", "device_id")
+        )
+    except Exception as e:  # backends raise their own types
+        logger.debug("Keyring error reading the entry: %s", e, exc_info=True)
+        return False
 
 
 def _device_token_may_be_sent(config: AppConfig, service: str) -> bool:
@@ -97,28 +112,41 @@ def _device_token_may_be_sent(config: AppConfig, service: str) -> bool:
         matches = False
     if not matches and not config._device_token_warned:
         config._device_token_warned = True
+        # The login's own error is DSM's and doesn't mention the token (maintainer, 2026-11-05),
+        # so this is the only place that gives the way out.
         logger.warning(
-            "Not sending the device token in keyring entry %r: it isn't recorded for this host",
+            "Not sending the device token in keyring entry %r: it isn't recorded for this host. "
+            "To record it, run %s at a terminal, with no SYNOLOGY_USERNAME or SYNOLOGY_PASSWORD "
+            "set, or run %s, which replaces the token.",
             config.instance_id or "default",
+            _RECORD_HOST,
+            _setup_command(config),
         )
     return matches
 
 
-def _refusal_advice(config: AppConfig, host: str, recorded: str | None) -> str:
-    """What to do about a refused entry. The variables aren't in a terminal's environment when a
-    client's `env` block set them, and `setup` then stores for the file's host or instance, so it
-    has to run with the same ones; recording with `check` keeps a 2FA device token, which `setup`
-    removes (QA round 1 on #559)."""
+def _host_variables() -> list[str]:
+    """The variables that stop a first use from recording the host, set for this server."""
     import os
 
-    variables = [
-        v for v in ("SYNOLOGY_HOST", "SYNOLOGY_INSTANCE_ID") if os.environ.get(v, "").strip()
-    ]
-    # With no config file, plain `setup` takes the host from SYNOLOGY_HOST.
-    run_setup = _SETUP if config._source_path else "'mcp-synology setup'"
-    if variables:
-        run_setup += f" with the same {' and '.join(variables)} as this server"
-    if recorded is None and config._source_path and not variables:
+    return [v for v in ("SYNOLOGY_HOST", "SYNOLOGY_INSTANCE_ID") if os.environ.get(v, "").strip()]
+
+
+def _setup_command(config: AppConfig) -> str:
+    """`setup` as this server needs it run. The variables aren't in a terminal's environment when
+    a client's `env` block set them, and it then stores for the file's host or instance (QA round
+    1 on #559). With no config file, plain `setup` takes the host from SYNOLOGY_HOST."""
+    command = _SETUP if config._source_path else "'mcp-synology setup'"
+    if variables := _host_variables():
+        command += f" with the same {' and '.join(variables)} as this server"
+    return command
+
+
+def _refusal_advice(config: AppConfig, host: str, recorded: str | None) -> str:
+    """What to do about a refused entry: recording with `check` keeps a 2FA device token, which
+    `setup` removes (QA round 1 on #559)."""
+    run_setup = _setup_command(config)
+    if recorded is None and config._source_path and not _host_variables():
         fix = (
             f"run {_RECORD_HOST} to record it, which keeps any 2FA device token, or {run_setup} "
             "to store new credentials"
@@ -132,7 +160,7 @@ def _refusal_advice(config: AppConfig, host: str, recorded: str | None) -> str:
     )
 
 
-def _refuse_another_hosts_credentials(config: AppConfig, service: str) -> None:
+def _refuse_another_hosts_credentials(config: AppConfig, service: str, *, may_record: bool) -> None:
     """Stop before login unless this keyring entry is for ``connection.host`` (#536).
 
     It's found by instance ID alone, and a derived ID is only the host's first label, so
@@ -144,15 +172,15 @@ def _refuse_another_hosts_credentials(config: AppConfig, service: str) -> None:
         raise RuntimeError("Config missing connection settings")
     instance = config.instance_id or "default"
     try:
-        matches, recorded = _entry_is_for_this_host(config, service)
+        matches, recorded = _entry_is_for_this_host(config, service, may_record=may_record)
     except Exception as e:  # backends raise their own types
-        logger.debug("Keyring error reading or recording the host: %s", e, exc_info=True)
+        logger.debug("Keyring error reading the host: %s", e, exc_info=True)
         raise CredentialHostError(
             f"Couldn't check which host the credentials in keyring entry {instance!r} are for, "
             f"so they aren't being sent to {config.connection.host!r}.",
             suggestion=(
-                "Check that the OS keyring is unlocked and can be written to, then try again, or "
-                "set the credentials in SYNOLOGY_USERNAME and SYNOLOGY_PASSWORD."
+                "Check that the OS keyring is unlocked and try again, or set the credentials in "
+                "SYNOLOGY_USERNAME and SYNOLOGY_PASSWORD."
             ),
         ) from None
     if matches:
@@ -243,8 +271,12 @@ def resolve_credentials(config: AppConfig) -> tuple[str, str, str | None]:
             kr_user = _present_or_none(kr.get_password(service, "username"))
             kr_pass = _present_or_none(kr.get_password(service, "password"))
             kr_device = _present_or_none(kr.get_password(service, "device_id"))
-            if (kr_user and not username) or (kr_pass and not password):
-                _refuse_another_hosts_credentials(config, service)
+            uses_password = bool(kr_pass and not password)
+            # A username with no password anywhere can't log in, so nothing's sent, and the
+            # error below ("No credentials found") is the true one.
+            if uses_password or (kr_user and not username and password):
+                # Only its password settles whose entry it is (pre-QA on #559).
+                _refuse_another_hosts_credentials(config, service, may_record=uses_password)
             elif (
                 kr_device
                 and username
@@ -483,6 +515,8 @@ class AuthManager:
         # caches (e.g. filestation's `recycle_status`) can invalidate any
         # state that may have changed on the NAS between sessions. See #37.
         self._on_reauth_callbacks: list[Callable[[], None]] = []
+        # Set when a login recorded the keyring entry's host, for `check` to say so.
+        self.recorded_host: str | None = None
 
         # Register ourselves as the re-auth callback
         self._client.set_re_auth_callback(self._re_authenticate)
@@ -521,6 +555,30 @@ class AuthManager:
         """Resolve credentials from the storage hierarchy (``resolve_credentials``)."""
         return resolve_credentials(self._config)
 
+    def _record_host(self) -> None:
+        """Record the host of a keyring entry that had none, now DSM has accepted its password
+        (#536). A failure doesn't undo the login: the next one tries again. Another login may have
+        recorded a host since this one read the entry, and that one stays."""
+        host, self._config._host_to_record = self._config._host_to_record, None
+        if host is None:
+            return
+        instance = self._config.instance_id or "default"
+        service = f"mcp-synology/{instance}"
+        try:
+            if _recorded_host(service) is not None:
+                return
+            kr.set_password(service, "host", host)
+        except Exception as e:  # backends raise their own types
+            logger.debug("Keyring error recording the host: %s", e, exc_info=True)
+            logger.warning(
+                "Couldn't record this host in keyring entry %r. Check that the OS keyring can be "
+                "written to; the next login tries again.",
+                instance,
+            )
+            return
+        self.recorded_host = host
+        logger.info("Keyring entry %r is now recorded for this config's host", instance)
+
     async def login(self) -> str:
         """Authenticate with the NAS and return a session ID.
 
@@ -548,6 +606,8 @@ class AuthManager:
         try:
             data = await self._send_login(params, device_id)
         except AuthenticationError as e:
+            if e.code in _TWO_FA:  # DSM asks for a second factor once the password is right
+                self._record_host()
             if e.code is None:
                 raise
             raise self._refusals.refuse(fingerprint, e, credential_sources(self._config)) from e
@@ -556,6 +616,7 @@ class AuthManager:
         if not sid:
             raise AuthenticationError("Login succeeded but no session ID returned.")
 
+        self._record_host()
         self._refusals.clear()
         self._client.sid = sid
         logger.info("Authenticated as '%s' (session: %s)", username, self._session_name)

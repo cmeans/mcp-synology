@@ -421,6 +421,8 @@ class AppConfig(BaseModel, extra="forbid"):
     _host_may_be_recorded: bool = PrivateAttr(default=False)
     # Credentials are resolved on every tool call, and this warning says the same each time.
     _device_token_warned: bool = PrivateAttr(default=False)
+    # The host a keyring entry with no record takes once DSM accepts its password (#536).
+    _host_to_record: str | None = PrivateAttr(default=None)
 
     @property
     def host_may_be_recorded(self) -> bool:

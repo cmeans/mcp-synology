@@ -132,7 +132,12 @@ def exit_on_connection_failure(base_url: str, host: str) -> Iterator[None]:
 
 async def _check_login(config: object) -> None:
     """Validate credentials by attempting a login."""
-    from mcp_synology.core.auth import AuthManager, credential_sources, refusal_advice
+    from mcp_synology.core.auth import (
+        AuthManager,
+        credential_sources,
+        entry_left_unrecorded,
+        refusal_advice,
+    )
     from mcp_synology.core.client import DsmClient
     from mcp_synology.core.config import AppConfig
 
@@ -170,6 +175,17 @@ async def _check_login(config: object) -> None:
             try:
                 await auth.login()
                 click.echo(click.style("Authentication successful!", fg="green"))
+                # The upgrade advice sends people here to record it, so say whether it did.
+                instance = config.instance_id or "default"
+                if auth.recorded_host:
+                    click.echo(f"Keyring entry {instance!r} is now recorded for this host.")
+                elif entry_left_unrecorded(config):
+                    click.echo(
+                        f"Keyring entry {instance!r} still has no recorded host: this login "
+                        "didn't use its password, or the host couldn't be recorded. To record it, "
+                        "run this with the config's full path, and with no SYNOLOGY_USERNAME, "
+                        "SYNOLOGY_PASSWORD, SYNOLOGY_HOST or SYNOLOGY_INSTANCE_ID set."
+                    )
                 await auth.logout()
             except DsmReplyError:
                 raise  # a login page, not DSM: exit_on_connection_failure says so
