@@ -1621,6 +1621,7 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         e.add_note(config_file_note(config_path))
         raise
     config._source_path = config_path
+    _resolve_paths_against_the_file(config, config_path)
 
     logger.debug(
         "Config loaded: instance_id=%s, host=%s, port=%s, https=%s, modules=%s",
@@ -1635,6 +1636,25 @@ def load_config(path: str | Path | None = None) -> AppConfig:
 
     _emit_warnings(config)
     return config
+
+
+def _resolve_paths_against_the_file(config: AppConfig, config_path: Path) -> None:
+    """A relative `instructions_file` or `logging.file` is from the config file's folder (#553;
+    maintainer, 2026-11-05). From the working folder, a folder someone merely opened could supply
+    text that reaches the model, and the result depended on how an MCP client started the server.
+    `~` isn't relative, and a `~user` that doesn't exist keeps its own error. No environment
+    variable sets these, so env-only mode has none.
+    """
+
+    def resolved(value: str) -> str:
+        if value.startswith("~") or os.path.isabs(value):
+            return value
+        return os.path.join(os.path.dirname(_shown_path(config_path)), value)
+
+    if config.instructions_file:
+        config.instructions_file = resolved(config.instructions_file)
+    if config.logging.file:
+        config.logging.file = resolved(config.logging.file)
 
 
 def config_file_note(path: Path) -> str:

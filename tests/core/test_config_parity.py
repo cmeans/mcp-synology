@@ -1453,7 +1453,7 @@ class TestPreQa5OnPr541:
         monkeypatch.chdir(tmp_path)
         path = tmp_path / "~" / "c.yaml"
         path.write_text(
-            f"{GOOD_HEAD}logging: {{file: ./~/c.yaml}}\nmodules: {{filestation: }}\n",
+            f"{GOOD_HEAD}logging: {{file: ./c.yaml}}\nmodules: {{filestation: }}\n",
             encoding="utf-8",
         )
         with pytest.raises(ValueError, match="it's the config file"):
