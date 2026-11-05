@@ -23,6 +23,7 @@ import logging
 import os
 import re
 import sys
+import unicodedata
 from pathlib import Path
 from typing import TYPE_CHECKING, NoReturn
 
@@ -40,9 +41,13 @@ _XDG_DOWNLOAD = re.compile(r'^\s*XDG_DOWNLOAD_DIR\s*=\s*"(?P<value>[^"]*)"\s*$')
 def _xdg_downloads_dir() -> Path | None:
     """The Downloads folder from ``user-dirs.dirs`` (xdg-user-dirs), if set."""
     config_home = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
+    dirs_file = Path(config_home) / "user-dirs.dirs"
     try:
-        text = (Path(config_home) / "user-dirs.dirs").read_text(encoding="utf-8")
-    except OSError:
+        # Every command gets here: a device would read until memory ran out, a pipe would wait.
+        if not dirs_file.is_file():
+            return None
+        text = dirs_file.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
         return None
     home = Path.home()
     for line in text.splitlines():
@@ -78,6 +83,9 @@ def _resolve(path: str | Path) -> Path:
     a NUL byte (every Python), or a symlink loop (``RuntimeError`` on 3.11/3.12)."""
     try:
         return Path(path).expanduser().resolve(strict=False)
+    except UnicodeEncodeError as e:  # a ValueError, whose text is Python's codec message
+        msg = f"{str(path)!r} can't be resolved: this system's locale can't encode the path"
+        raise ValueError(msg) from e
     except (OSError, ValueError, RuntimeError) as e:
         msg = f"{str(path)!r} can't be resolved: {e}"
         raise ValueError(msg) from e
@@ -108,6 +116,46 @@ def expand_setting(setting: str, entry: str) -> Path:
         raise ValueError(msg) from e
 
 
+def has_control_character(value: str) -> bool:
+    """A control character, a line or paragraph separator or a lone surrogate: what can forge a
+    line of output, move the terminal, or crash the server's first reply, which can't encode a
+    surrogate. Joiners and the like are fine: names need them."""
+    return any(unicodedata.category(c) in ("Cc", "Zl", "Zp", "Cs") for c in value)
+
+
+# Inside double quotes a backslash starts an escape: "C:\temp\new.log" loaded with a real tab
+# and newline, with no error (QA round 3 on #532).
+CONTROL_CHARACTER_ADVICE = (
+    "has a control character, line break or lone surrogate. Inside double quotes a backslash "
+    "starts an escape, so write a Windows path in single quotes."
+)
+
+
+def check_resolvable(setting: str, entry: str) -> Path:
+    """``~`` expanded, and the path checked to have no control character, which would reach
+    the model's instructions as written, and to resolve (a NUL byte; a symlink loop on Python
+    3.11 and 3.12). The server resolves these when it starts, so a config that passes here
+    starts: otherwise `check` passed what `serve` crashed on (#511 PR 3). The instructions
+    print the resolved path, so that's checked too: a link can lead to a folder with a line
+    break in its name (QA round 1 on #541)."""
+    if has_control_character(entry):
+        msg = f"{setting} {CONTROL_CHARACTER_ADVICE}"
+        raise ValueError(msg)
+    path = expand_setting(setting, entry)
+    try:
+        resolved = _resolve(path)
+    except ValueError as e:
+        msg = f"{setting}: {e}"
+        raise ValueError(msg) from e
+    if has_control_character(str(resolved)):
+        msg = (
+            f"{setting} resolves to a path with a control character, line break or lone surrogate: "
+            f"{str(resolved)!r}"
+        )
+        raise ValueError(msg)
+    return path
+
+
 def check_local_path_entries(setting: str, value: list[str] | None) -> list[str] | None:
     """Validate an ``allowed_local_paths`` list: every entry absolute or starting with ``~``.
 
@@ -115,7 +163,7 @@ def check_local_path_entries(setting: str, value: list[str] | None) -> list[str]
     depends on how the MCP client launched it (QA R1 on #186).
     """
     for entry in value or []:
-        if not expand_setting(setting, entry).is_absolute():
+        if not check_resolvable(setting, entry).is_absolute():
             msg = f"{setting} entries must be absolute (or start with ~): {entry!r}"
             raise ValueError(msg)
     return value
@@ -143,17 +191,16 @@ def allowed_local_roots(
         raw += [(f"{module} setting allowed_local_paths", e) for e in own]
     if default_download_dir:
         raw.append((f"{module} setting default_download_dir", default_download_dir))
-    roots: list[Path] = []
+    roots: dict[Path, None] = {}  # in order, without repeats
     for setting, entry in raw:
         try:
             root = _resolve(entry)
         except ValueError as e:
             msg = f"{setting}: {e}"
             raise ValueError(msg) from e
-        if root not in roots:
-            roots.append(root)
+        roots[root] = None
     logger.debug("Allowed local paths: %s", [str(r) for r in roots])
-    return roots
+    return list(roots)
 
 
 def roots_for_description(roots: list[Path]) -> str:

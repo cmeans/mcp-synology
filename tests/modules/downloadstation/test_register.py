@@ -13,7 +13,7 @@ import pytest
 from mcp.server.mcpserver import MCPServer
 
 from mcp_synology.modules import RegisterContext
-from mcp_synology.modules.downloadstation import MODULE_INFO, register
+from mcp_synology.modules.downloadstation import MODULE_INFO, DownloadStationSettings, register
 
 
 def _make_ctx(
@@ -33,7 +33,7 @@ def _make_ctx(
         server=server,
         manager=manager,
         allowed_tools=allowed,
-        settings_dict=settings or {},
+        settings=DownloadStationSettings(**settings) if settings else None,
         display_name="test-nas",
         allowed_local_paths=shared_paths,
     )

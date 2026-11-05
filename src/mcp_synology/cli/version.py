@@ -319,11 +319,12 @@ def _global_state_path() -> Path:
 def _load_global_state() -> dict[str, Any]:
     """Load global (non-instance) state for version tracking."""
     path = _global_state_path()
-    if not path.exists():
-        return {}
     from mcp_synology.core.config import parse_config_text
 
     try:
+        # A device would read until memory ran out, a pipe would wait (QA round 2 on #541).
+        if not path.is_file():
+            return {}
         # Through parse_config_text: a tag that doesn't fit its value (`!!bool x`) made
         # PyYAML raise KeyError or AttributeError, which crashed every command with the
         # value in the traceback (#475); it raises them as a YAMLError. Without the key

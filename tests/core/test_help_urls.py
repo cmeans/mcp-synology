@@ -74,7 +74,7 @@ def _all_synology_error_subclasses() -> list[type[SynologyError]]:
 @pytest.fixture(scope="module")
 def anchors() -> set[str]:
     assert DOCS_PATH.is_file(), f"Troubleshooting doc missing at {DOCS_PATH}"
-    return _extract_h2_anchors(DOCS_PATH.read_text())
+    return _extract_h2_anchors(DOCS_PATH.read_text(encoding="utf-8"))
 
 
 class TestHelpUrlsResolveToRealAnchors:

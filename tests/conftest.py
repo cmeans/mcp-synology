@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Iterator
+    from collections.abc import AsyncGenerator, Callable, Iterator
 
 import keyring
 import pytest
@@ -16,6 +18,41 @@ from mcp_synology.core.client import DsmClient
 from mcp_synology.core.config import AppConfig
 from mcp_synology.core.state import ApiInfoEntry
 from tests.personas import ReauthSpy, reauth_spy_on
+
+
+def capped_memory_limit(soft: int, hard: int, unlimited: int) -> int:
+    """At most 2 GiB, and never above a limit already in place, such as a developer's own cap,
+    since a child can't raise a hard limit, and shouldn't lift a soft one (QA round 3 on #541)."""
+    return min(x for x in (soft, hard, 2**31) if x != unlimited)
+
+
+@pytest.fixture
+def run_capped() -> Callable[..., subprocess.CompletedProcess[str]]:
+    """Run Python in a child with a soft memory limit of at most 2 GiB, and a time limit.
+
+    For any test that puts an endless source (`/dev/zero`, a pipe nothing writes to) in front of
+    the code. In-process, a lost guard read until the kernel killed pytest at 57 GiB, and systemd
+    then stopped the whole terminal scope with every session in it (QA round 2 on #541). In a
+    child, the same mistake fails the test with a MemoryError or a timeout. (Whether macOS
+    enforces the limit isn't known, so there it may be only the timeout.)
+    """
+    resource = pytest.importorskip("resource")
+
+    def cap() -> None:
+        soft, hard = resource.getrlimit(resource.RLIMIT_AS)
+        limit = capped_memory_limit(soft, hard, resource.RLIM_INFINITY)
+        resource.setrlimit(resource.RLIMIT_AS, (limit, hard))
+
+    def run(*args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, *args],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            preexec_fn=cap,
+        )
+
+    return run
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -182,3 +219,12 @@ def reauth_spy(nas_client: Any) -> Iterator[ReauthSpy]:
     _, auth, _, _ = nas_client
     with reauth_spy_on(auth) as spy:
         yield spy
+
+
+def skip_unless_the_locale_can_encode(value: str) -> None:
+    """Skip a test whose file name or environment variable this locale can't hold (#543):
+    it would fail before reaching what it tests. CI runs UTF-8, so it never skips there."""
+    try:
+        os.fsencode(value)
+    except UnicodeEncodeError:
+        pytest.skip(f"this locale can't encode {value!r}")

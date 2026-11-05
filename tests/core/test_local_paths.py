@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -12,6 +14,37 @@ from mcp_synology.core.local_paths import (
     default_downloads_dir,
     outside_allowed_roots,
 )
+
+
+class TestUserDirsFileThatCantBeRead:
+    """QA round 2 on #541: every command reads this file, so it can't hang or crash them."""
+
+    @pytest.mark.parametrize("kind", ["device", "pipe"])
+    def test_a_device_or_pipe_means_no_setting(
+        self, tmp_path: Path, run_capped: Any, kind: str
+    ) -> None:
+        dirs_file = tmp_path / "user-dirs.dirs"
+        if kind == "pipe":
+            os.mkfifo(dirs_file)
+        else:
+            dirs_file.symlink_to("/dev/zero")
+        result = run_capped(
+            "-c",
+            "import os, sys\n"
+            "os.environ['XDG_CONFIG_HOME'] = sys.argv[1]\n"
+            "from mcp_synology.core.local_paths import _xdg_downloads_dir\n"
+            "print(_xdg_downloads_dir())",
+            str(tmp_path),
+        )
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == "None"
+
+    def test_bytes_that_arent_utf8_mean_no_setting(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        (tmp_path / "user-dirs.dirs").write_bytes(b'XDG_DOWNLOAD_DIR="/data/t\xe9l\xe9"\n')
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+        assert default_downloads_dir(platform="linux") == Path.home() / "Downloads"
 
 
 class TestDefaultDownloadsDir:
@@ -184,6 +217,19 @@ class TestUnresolvablePaths:
     def test_outside_allowed_roots_raises_value_error_for_nul(self, tmp_path: Path) -> None:
         with pytest.raises(ValueError, match="can't be resolved"):
             outside_allowed_roots(str(tmp_path / "a\x00b"), [tmp_path.resolve()])
+
+    def test_a_path_the_locale_cant_encode_doesnt_show_the_codec_text(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Pre-QA on #541: `'ascii' codec can't encode character …` told the user nothing."""
+
+        def _refuse(self: Path, strict: bool = False) -> Path:
+            raise UnicodeEncodeError("ascii", str(self), 0, 1, "ordinal not in range(128)")
+
+        monkeypatch.setattr(Path, "resolve", _refuse)
+        with pytest.raises(ValueError, match="locale can't encode the path") as exc:
+            outside_allowed_roots(str(tmp_path / "x"), [tmp_path])
+        assert "codec" not in str(exc.value)
 
 
 class TestAllowedLocalPathsSetting:

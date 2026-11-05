@@ -1,4 +1,4 @@
-"""Check command: validate stored credentials."""
+"""Check command: validate the config, then the stored credentials."""
 
 from __future__ import annotations
 
@@ -10,9 +10,9 @@ from typing import TYPE_CHECKING
 
 import click
 import httpx
-import yaml
 
-from mcp_synology.cli.logging_ import _configure_logging, _init_early_logging
+from mcp_synology.cli.logging_ import _init_early_logging
+from mcp_synology.cli.startup import escape_what_stdout_cant_encode, load_or_exit
 from mcp_synology.core.redaction import redact_urls
 
 if TYPE_CHECKING:
@@ -23,28 +23,11 @@ if TYPE_CHECKING:
 @click.option("-c", "--config", type=click.Path(), help="Path to config file")
 @click.option("-v", "--verbose", is_flag=True, help="Enable debug logging")
 def check(config: str | None, verbose: bool) -> None:
-    """Validate stored credentials can authenticate."""
+    """Validate the config, as serve does, then check the stored credentials can log in."""
+    escape_what_stdout_cant_encode()
     _init_early_logging(verbose=verbose)
 
-    from pydantic import ValidationError
-
-    from mcp_synology.core.config import format_validation_error, format_yaml_error, load_config
-
-    try:
-        app_config = load_config(config)
-    except ValidationError as e:
-        # Must precede ValueError — pydantic.ValidationError subclasses it.
-        click.echo(click.style(f"Error: {format_validation_error(e)}", fg="red"), err=True)
-        sys.exit(1)
-    except yaml.YAMLError as e:
-        click.echo(click.style(f"Error: {format_yaml_error(e)}", fg="red"), err=True)
-        sys.exit(1)
-    except (FileNotFoundError, ValueError) as e:
-        click.echo(click.style(f"Error: {e}", fg="red"), err=True)
-        sys.exit(1)
-
-    if not verbose:
-        _configure_logging(app_config.logging.level, app_config.logging.file)
+    app_config = load_or_exit(config, configure_logging=not verbose)
 
     from mcp_synology.server import config_notices
 

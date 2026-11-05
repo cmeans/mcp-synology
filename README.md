@@ -114,7 +114,7 @@ On Linux, the server auto-detects the D-Bus session socket for keyring access. I
 ### 3. Verify
 
 ```bash
-uvx mcp-synology check                # Validates credentials work
+uvx mcp-synology check                # Validates the config and credentials
 uvx mcp-synology setup --list         # Shows all configured NAS instances
 ```
 
@@ -122,7 +122,7 @@ uvx mcp-synology setup --list         # Shows all configured NAS instances
 
 1. **Install the package on the NAS** (Synology Photos or Download Station) from Package Center, if it isn't installed already. Without it the module's tools still appear, but every call fails with [`api_not_found`](docs/error-codes.md#api_not_found).
 2. **Edit your config file**: the one `setup` wrote (the file your client's `--config` names), or the per-NAS file such as `home-nas.yaml` if you use [Multi-NAS](#multi-nas). Add the module **inside the existing `modules:` section**; don't add a second `modules:` key. Each module below has a block to copy.
-3. **Check the config:** `mcp-synology check --config <your config file>` reports YAML or validation mistakes, names misspelled settings and modules, and confirms the login still works.
+3. **Check the config:** `mcp-synology check --config <your config file>` runs the same validation as `serve`, so it lists the YAML, setting and module-setting mistakes it finds and names the file. It also names misspelled settings and modules, and confirms the login still works.
 4. **Restart your MCP client** (for example, Claude Desktop). The server reads its config only at startup.
 
 ### Alternative: global install

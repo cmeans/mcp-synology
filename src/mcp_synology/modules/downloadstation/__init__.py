@@ -13,7 +13,7 @@ resume/edit, set_download_config, set_schedule. BT search + RSS are planned.
 from typing import TYPE_CHECKING, Annotated
 
 from mcp.types import ToolAnnotations
-from pydantic import BaseModel, Field, field_validator
+from pydantic import Field, field_validator
 
 from mcp_synology.core.local_paths import (
     allowed_local_roots,
@@ -23,6 +23,7 @@ from mcp_synology.core.local_paths import (
 from mcp_synology.modules import (
     ApiRequirement,
     ModuleInfo,
+    ModuleSettings,
     PermissionTier,
     ToolInfo,
     default_annotations,
@@ -41,7 +42,7 @@ _ANNO_DESTRUCTIVE_IDEMPOTENT = ToolAnnotations(
 )
 
 
-class DownloadStationSettings(BaseModel):
+class DownloadStationSettings(ModuleSettings):
     """Download Station module settings."""
 
     # Local folders create_download may read torrent files from, added to the top-level
@@ -236,7 +237,7 @@ def register(ctx: "RegisterContext") -> None:
         list_downloads,
     )
 
-    settings = DownloadStationSettings(**ctx.settings_dict)
+    settings = ctx.settings_as(DownloadStationSettings)
     # Folders create_download may read torrent files from (#257).
     local_roots = allowed_local_roots(
         settings.allowed_local_paths,

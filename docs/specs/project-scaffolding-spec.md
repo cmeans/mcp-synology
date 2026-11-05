@@ -232,7 +232,7 @@ def setup(config: str | None):
 @main.command()
 @click.option("--config", type=click.Path(exists=True), help="Path to config file")
 def check(config: str | None):
-    """Validate stored credentials can authenticate."""
+    """Validate the config, as serve does, then check the stored credentials can log in."""
     # Load config → load credentials → attempt login → report
     ...
 ```

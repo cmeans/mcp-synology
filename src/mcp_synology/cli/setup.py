@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import fnmatch
 import json
 import logging
 import os
@@ -16,6 +17,7 @@ import yaml
 
 from mcp_synology.cli.check import exit_on_connection_failure
 from mcp_synology.cli.logging_ import _configure_logging, _init_early_logging
+from mcp_synology.cli.startup import escape_what_stdout_cant_encode, load_or_exit
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +30,7 @@ _CONFIG_DIR = Path.home() / ".config" / "mcp-synology"
 @click.option("-v", "--verbose", is_flag=True, help="Enable debug logging")
 def setup(config: str | None, list_configs: bool, verbose: bool) -> None:
     """Interactive credential setup and 2FA bootstrap."""
+    escape_what_stdout_cant_encode()
     _init_early_logging(verbose=verbose)
 
     if list_configs:
@@ -40,12 +43,8 @@ def setup(config: str | None, list_configs: bool, verbose: bool) -> None:
         return
 
     # Try to load an existing config via discovery
-    from pydantic import ValidationError
-
-    from mcp_synology.core.config import format_validation_error, format_yaml_error, load_config
-
     try:
-        app_config = load_config(None)
+        app_config = load_or_exit(None, configure_logging=False, missing_raises=True)
     except FileNotFoundError as e:
         # A file named by MCP_SYNOLOGY_CONFIG must exist: creating a config elsewhere
         # would ignore the variable without a word (#499).
@@ -55,50 +54,54 @@ def setup(config: str | None, list_configs: bool, verbose: bool) -> None:
         # No config file found — enter interactive creation mode
         _setup_interactive(verbose)
         return
-    except ValidationError as e:
-        # Must precede ValueError — pydantic.ValidationError subclasses it.
-        click.echo(click.style(f"Error: {format_validation_error(e)}", fg="red"), err=True)
-        sys.exit(1)
-    except yaml.YAMLError as e:
-        click.echo(click.style(f"Error: {format_yaml_error(e)}", fg="red"), err=True)
-        sys.exit(1)
-    except ValueError as e:
-        click.echo(click.style(f"Error: {e}", fg="red"), err=True)
-        sys.exit(1)
 
     # Config file exists — do credential setup against it
     _setup_credential_flow(app_config, verbose)
 
 
+def _shown_name(name: str | Path) -> str:
+    """A name from the disk, quoted if it could forge a line or move the terminal (#541)."""
+    text = str(name)
+    return text if text.isprintable() else repr(text)
+
+
 def _list_configurations() -> None:
     """List existing configuration files in the config directory."""
-    # Stdout is strict about encoding, and a reason (`…`), a file's name or the folder's can
-    # hold what it can't encode: crashing would leave the later files unlisted (QA round 3
-    # and pre-QA on #532).
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(errors="backslashreplace")
-
     from mcp_synology.core.config import (
+        alias_problem,
         format_yaml_error,
         host_problems,
         instance_id_problem,
         parse_config_text,
     )
 
-    if not _CONFIG_DIR.exists():
-        click.echo("No configurations found.")
-        click.echo(f"Config directory: {_CONFIG_DIR}")
+    # By scandir: `Path.exists` swallows every OSError on Python 3.14, and `glob` on all of them,
+    # which would read as no configurations (QA round 2 on #541).
+    try:
+        with os.scandir(_CONFIG_DIR) as entries:
+            yaml_files = sorted(
+                _CONFIG_DIR / entry.name
+                for entry in entries
+                if fnmatch.fnmatch(entry.name, "*.yaml")
+            )
+    except (FileNotFoundError, NotADirectoryError):
+        yaml_files = []
+    except OSError as e:
+        click.echo(f"Config directory can't be read: {_shown_name(_CONFIG_DIR)}: {e.strerror}")
         return
-
-    yaml_files = sorted(_CONFIG_DIR.glob("*.yaml"))
     if not yaml_files:
         click.echo("No configurations found.")
-        click.echo(f"Config directory: {_CONFIG_DIR}")
+        click.echo(f"Config directory: {_shown_name(_CONFIG_DIR)}")
         return
 
-    click.echo(f"Configurations in {_CONFIG_DIR}:\n")
+    click.echo(f"Configurations in {_shown_name(_CONFIG_DIR)}:\n")
     for f in yaml_files:
+        shown = _shown_name(f.name)
         try:
+            # A named pipe would wait for a writer, and the later files would go unlisted.
+            if not f.is_file():
+                click.echo(f"  {shown}  (could not parse)")
+                continue
             raw = parse_config_text(f.read_text(encoding="utf-8")) or {}
             # An empty `connection:` is no connection settings (#492).
             host = (raw.get("connection") or {}).get("host")
@@ -112,30 +115,36 @@ def _list_configurations() -> None:
             # mapping (#476).
             alias = raw.get("alias")
             instance_id = raw.get("instance_id")
-            if isinstance(alias, str) and alias.strip():
+            if isinstance(alias, str) and not alias_problem(alias):
                 label = alias
             elif isinstance(instance_id, str) and not instance_id_problem(instance_id):
                 label = instance_id.lower()  # as the server uses it
             else:
-                label = f.stem
-            click.echo(f"  {f.name}")
+                label = _shown_name(f.stem)
+            click.echo(f"  {shown}")
             click.echo(f"    Name: {label}")
             click.echo(f"    Host: {host}")
             click.echo()
         except yaml.YAMLError as e:
             # The reason `check` gives; format_yaml_error never quotes the file (QA round 2
             # on #532).
-            click.echo(f"  {f.name}  (could not parse)")
-            click.echo(f"    {format_yaml_error(e)}")
+            click.echo(f"  {shown}  (could not parse)")
+            for line in format_yaml_error(e).splitlines():
+                click.echo(f"    {line}")
         except (OSError, ValueError, AttributeError):
-            click.echo(f"  {f.name}  (could not parse)")
+            click.echo(f"  {shown}  (could not parse)")
 
 
 def _setup_interactive(verbose: bool) -> None:
     """Interactive setup when no config file exists."""
     click.echo("No configuration file found. Let's create one.\n")
 
-    from mcp_synology.core.config import host_message, host_problems, instance_id_problem
+    from mcp_synology.core.config import (
+        alias_problem,
+        host_message,
+        host_problems,
+        instance_id_problem,
+    )
 
     # Prompt for connection details. The host is checked here, by the config's own rule,
     # so a URL, port or user name gets advice and another try instead of a failure after
@@ -197,8 +206,14 @@ def _setup_interactive(verbose: bool) -> None:
             click.echo(f"  That instance ID {'is empty' if not instance_id.strip() else problem}.")
 
     # Prompt for alias
-    alias_input = click.prompt("Alias (friendly name, optional)", default="", show_default=False)
-    alias: str | None = alias_input.strip() or None
+    while True:
+        alias_input = click.prompt(
+            "Alias (friendly name, optional)", default="", show_default=False
+        )
+        alias: str | None = alias_input.strip() or None
+        if alias is None or not (problem := alias_problem(alias)):
+            break
+        click.echo(f"  That alias {problem}")
 
     # Build config dict
     conn: dict[str, Any] = {"host": host}
@@ -258,7 +273,12 @@ def _setup_interactive(verbose: bool) -> None:
 
     # Suggest hostname as alias if we fetched one and user didn't set an alias
     nas_hostname = result.get("hostname")
-    if nas_hostname and not alias:
+    if (
+        isinstance(nas_hostname, str)
+        and nas_hostname
+        and not alias
+        and not alias_problem(nas_hostname)
+    ):
         use_hostname = click.confirm(
             f'NAS reports hostname "{nas_hostname}". Use as alias?', default=True
         )
@@ -290,22 +310,7 @@ def _setup_interactive(verbose: bool) -> None:
 
 def _setup_with_config(config_path_str: str, verbose: bool) -> None:
     """Setup using an explicit config file path."""
-    from pydantic import ValidationError
-
-    from mcp_synology.core.config import format_validation_error, format_yaml_error, load_config
-
-    try:
-        app_config = load_config(config_path_str)
-    except ValidationError as e:
-        # Must precede ValueError — pydantic.ValidationError subclasses it.
-        click.echo(click.style(f"Error: {format_validation_error(e)}", fg="red"), err=True)
-        sys.exit(1)
-    except yaml.YAMLError as e:
-        click.echo(click.style(f"Error: {format_yaml_error(e)}", fg="red"), err=True)
-        sys.exit(1)
-    except (FileNotFoundError, ValueError) as e:
-        click.echo(click.style(f"Error: {e}", fg="red"), err=True)
-        sys.exit(1)
+    app_config = load_or_exit(config_path_str, configure_logging=False)
 
     _setup_credential_flow(app_config, verbose)
 

@@ -58,7 +58,7 @@ def _make_ctx(
         server=server,
         manager=manager,
         allowed_tools=allowed,
-        settings_dict=settings or {},
+        settings=FileStationSettings(**settings) if settings else None,
         display_name="test-nas",
         allowed_local_paths=shared_paths,
     )
@@ -139,7 +139,7 @@ class TestFilestationModuleRegister:
         assert server._tool_manager._tools == {}
 
     def test_register_applies_custom_settings(self) -> None:
-        """Custom settings_dict is parsed via FileStationSettings."""
+        """Custom settings reach the tools."""
         server, _manager, ctx = _make_ctx(
             settings={
                 "file_type_indicator": "text",

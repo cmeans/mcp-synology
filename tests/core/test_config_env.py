@@ -25,6 +25,7 @@ from mcp_synology.core.config import (
     load_config,
     parse_env_value,
 )
+from tests.conftest import skip_unless_the_locale_can_encode
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -234,7 +235,9 @@ def test_the_config_source_is_logged_at_info(
 
 def _documented(doc: Path) -> set[str]:
     """The env vars in a doc's override table: rows starting with `SYNOLOGY_…`."""
-    return set(re.findall(r"^\| `(SYNOLOGY_[A-Z_]+)` \|", doc.read_text(), re.MULTILINE))
+    return set(
+        re.findall(r"^\| `(SYNOLOGY_[A-Z_]+)` \|", doc.read_text(encoding="utf-8"), re.MULTILINE)
+    )
 
 
 @pytest.mark.parametrize("doc", ["README.md", "docs/specs/config-schema-spec.md"])
@@ -243,7 +246,7 @@ def test_the_documented_env_table_matches_the_code(doc: str) -> None:
 
 
 def test_the_readme_documents_mcp_synology_config() -> None:
-    assert "MCP_SYNOLOGY_CONFIG" in (ROOT / "README.md").read_text()
+    assert "MCP_SYNOLOGY_CONFIG" in (ROOT / "README.md").read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("command", ["check", "serve"])
@@ -752,6 +755,7 @@ def test_no_override_warning_when_nothing_the_file_sets_changes(
     monkeypatch: pytest.MonkeyPatch,
     at_error: _Lines,
 ) -> None:
+    skip_unless_the_locale_can_encode(value)
     monkeypatch.setenv(var, value)
     load_config(str(_file(tmp_path, **file_settings)))
     assert not [w for w in at_error.messages() if "overrides" in w]
@@ -789,6 +793,7 @@ def test_a_different_value_still_warns(
     monkeypatch: pytest.MonkeyPatch,
     at_error: _Lines,
 ) -> None:
+    skip_unless_the_locale_can_encode(value)
     monkeypatch.setenv(var, value)
     # A set instance ID: an odd host derives none the config would accept.
     load_config(str(_file(tmp_path, instance_id="home-nas", **file_settings)))
@@ -836,6 +841,7 @@ def test_a_variable_that_isnt_bare_stops_before_any_comparison(
 ) -> None:
     """Over any file value, so an override can't reach another user, path or port. The
     error names the variable, never the value (#532)."""
+    skip_unless_the_locale_can_encode(value)
     monkeypatch.setenv("SYNOLOGY_HOST", value)
     with pytest.raises(EnvVarError) as exc:
         load_config(str(_file(tmp_path, instance_id="home-nas", host="nas.example")))
