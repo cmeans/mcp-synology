@@ -132,6 +132,17 @@ class TestDuplicateKeys:
         )
 
     @pytest.mark.parametrize(
+        "text",
+        ["1: a\n0x1: b\n", "true: a\nyes: b\n", "~: a\nnull: b\n"],
+        ids=["an integer", "a boolean", "null"],
+    )
+    def test_keys_are_repeats_by_value_not_by_spelling(self, text: str) -> None:
+        """YAML would keep only the last, and nothing pinned this comparison."""
+        with pytest.raises(yaml.YAMLError) as exc:
+            parse_config_text(text)
+        assert "twice in one section (lines 1 and 2)" in format_yaml_error(exc.value)
+
+    @pytest.mark.parametrize(
         ("text", "where"),
         [
             # Block style: there's no {…}, and the alias's marks are its anchor's (pre-QA
