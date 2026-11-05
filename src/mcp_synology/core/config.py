@@ -597,16 +597,21 @@ def _shown_path(path: Path) -> str:
         return str(path)
 
 
-def _working_folder_is_searchable() -> bool:
-    """By `stat`, with the same IDs as the check it follows: `os.access` uses the real user ID
-    (QA round 3 on #541)."""
+def _say_a_working_folder_config_isnt_loaded() -> None:
+    """A folder someone merely opened could otherwise name another host and be sent the password
+    stored for this one, or ask for more access (#552). So a file there counts only when it's
+    named, and this says so at any log level, since it may be why the config seems ignored."""
+    local_config = Path("mcp-synology.yaml")
     try:
-        os.stat(".")
-    except PermissionError:
-        return False
-    except OSError:  # any other error isn't about searching it
-        pass
-    return True
+        if not _config_exists(local_config):
+            return
+    except OSError:  # a link into a locked folder, a folder that can't be searched: not loaded
+        return
+    shown = _shown_path(local_config)
+    _warn_always(
+        f"{shown!r} isn't loaded automatically: a config in the folder you're in could send your "
+        f"stored credentials to another host. To use it, pass --config {shown!r}."
+    )
 
 
 def _expanded_config_path(value: str, source: str) -> Path:
@@ -624,7 +629,8 @@ def discover_config_path(explicit_path: str | None = None) -> Path:
     1. Explicit --config flag
     2. MCP_SYNOLOGY_CONFIG env var
     3. ~/.config/mcp-synology/config.yaml
-    4. ./mcp-synology.yaml
+
+    A ./mcp-synology.yaml is never found here: it has to be named (#552).
     """
     # An empty path names no file, so it's an error, the same as a missing one (#499;
     # maintainer, 2026-11-02): `--config ''` used to fall through to the default
@@ -678,29 +684,7 @@ def discover_config_path(explicit_path: str | None = None) -> Path:
     if home_found:
         logger.info("Config: %r", str(home_config))
         return home_config
-    # Relative: that needs no permission on the folders above it, and in a deleted folder the
-    # file is just absent (#483, QA rounds 1 and 2 on #541).
-    local_config = Path("mcp-synology.yaml")
-    # Quoted: the working folder's name could forge a log line (QA round 3 on #529).
-    logger.debug("Checking default config path: %r", _shown_path(local_config))
-    try:
-        found = _config_exists(local_config)
-    except OSError as e:
-        # A config there that can't be read stays an error, never env-only mode. Only a folder
-        # that can't be searched leaves nothing to report but that.
-        if _working_folder_is_searchable():
-            msg = f"{e}. Fix the path or its permissions, or name a config file with --config."
-            raise OSError(msg) from e
-        # At any log level: a config passed over can leave env-only mode, read-only over plain HTTP.
-        _warn_always(f"The working folder can't be searched for a config file: {e}")
-        found = False
-    if found:
-        logger.info("Config: %r", _shown_path(local_config))
-        try:
-            return local_config.absolute()
-        except OSError:  # a working folder outside this process's root has no name
-            return local_config
-
+    _say_a_working_folder_config_isnt_loaded()
     msg = (
         "No config file found. Create one at ~/.config/mcp-synology/config.yaml "
         "or specify with --config. See examples/ for sample configs."

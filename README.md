@@ -177,7 +177,7 @@ Without a config file, mcp-synology always runs **File Station, read-only**. No 
 
 Each value is read as its config field's type, and choices in any case (`SYNOLOGY_LOG_LEVEL=DEBUG`); `SYNOLOGY_UPDATE_NOTICES` also takes `no`/`yes` as the config file does. A value of the wrong type is an error that names the variable, and the server doesn't start: `SYNOLOGY_HTTPS=sure` never means off. An empty or blank variable counts as unset.
 
-`MCP_SYNOLOGY_CONFIG=/path/to/config.yaml` points to a config file instead of the default locations (`~/.config/mcp-synology/config.yaml`, then `./mcp-synology.yaml`); `--config` takes precedence over it. If the file it names doesn't exist, or the variable is set but empty, that's an error: mcp-synology doesn't fall back to the default locations or to env-var-only mode. An empty `--config ""` is an error too. The log says which config was used, at INFO.
+`MCP_SYNOLOGY_CONFIG=/path/to/config.yaml` points to a config file instead of the default location, `~/.config/mcp-synology/config.yaml`; `--config` takes precedence over it. If the file it names doesn't exist, or the variable is set but empty, that's an error: mcp-synology doesn't fall back to the default location or to env-var-only mode. An empty `--config ""` is an error too. The log says which config was used, at INFO. A config in the folder you're in is loaded only when you name it, with `--config ./mcp-synology.yaml`: a folder you merely opened could otherwise send your stored credentials to another host.
 
 ## Modules
 

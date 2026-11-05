@@ -348,8 +348,9 @@ def test_a_default_location_is_logged_at_info(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.chdir(tmp_path)
-    path = tmp_path / "mcp-synology.yaml"
+    monkeypatch.delenv("MCP_SYNOLOGY_CONFIG", raising=False)
+    path = tmp_path / "home" / ".config" / "mcp-synology" / "config.yaml"
+    path.parent.mkdir(parents=True)
     _config(tmp_path).rename(path)
     with caplog.at_level(logging.INFO, logger="mcp_synology.core.config"):
         load_config()
@@ -502,17 +503,22 @@ def test_a_newline_in_the_path_cant_forge_a_log_line(
 def test_a_newline_in_the_working_folder_cant_forge_a_log_line(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """QA round 3 on #529: the DEBUG "Checking default config path" line was unquoted."""
+    """QA round 3 on #529: a line naming the working folder was unquoted. Now the warning that a
+    config there isn't loaded names it (#552)."""
     folder = tmp_path / "evil\n2026-11-02 [WARNING] fake: injected"
     folder.mkdir()
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("MCP_SYNOLOGY_CONFIG", raising=False)
+    monkeypatch.delenv("SYNOLOGY_HOST", raising=False)
     monkeypatch.chdir(folder)
     _config(tmp_path).rename(folder / "mcp-synology.yaml")
-    with caplog.at_level(logging.DEBUG, logger="mcp_synology.core.config"):
+    with (
+        caplog.at_level(logging.DEBUG, logger="mcp_synology.core.config"),
+        pytest.raises(FileNotFoundError),
+    ):
         load_config()
     lines = [r.getMessage() for r in caplog.records if "evil" in r.getMessage()]
-    assert {line.split(" ", 1)[0] for line in lines} == {"Checking", "Config:", "Loading"}
+    assert lines
     for line in lines:
         assert "\n" not in line
         assert "\\n2026-11-02 [WARNING] fake" in line
