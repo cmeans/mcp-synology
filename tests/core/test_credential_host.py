@@ -10,7 +10,9 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import io
+import os
 import signal
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -568,7 +570,7 @@ class TestAnEntryWithNoRecordedHost:
                 main, ["check", "--config", str(_file(tmp_path, "nas.office"))], input="y\n"
             )
         assert result.exit_code == 1
-        assert "this needs someone at a terminal to answer" in result.output
+        assert "this needs someone at a terminal to answer" in result.stderr
         assert "Nothing was sent" in result.output
         request.assert_not_awaited()
 
@@ -1810,6 +1812,40 @@ class TestQaRoundThree:
         assert "goes over plain HTTP" in (
             check_route(load_config(_file(tmp_path, "nas.home"))) or ""
         )
+
+    def test_the_route_names_a_username_only_in_a_variable(
+        self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Pre-QA on #559: followed at a terminal without it, `check` refused again."""
+        store.values[("mcp-synology/nas", "password")] = "hunter2"
+        monkeypatch.setenv("SYNOLOGY_USERNAME", "u")
+        route = check_route(load_config(_file(tmp_path, "nas.home"))) or ""
+        assert "with the same SYNOLOGY_USERNAME and no SYNOLOGY_PASSWORD" in route
+
+    def test_setup_with_stdin_closed_says_so(self, tmp_path: Path) -> None:
+        """Pre-QA on #559: a traceback. `sys.stdin` is None, which `CliRunner` can't arrange."""
+        path = _file(tmp_path, "nas.home")
+        done = subprocess.run(
+            [
+                "bash",
+                "-c",
+                f"exec '{sys.executable}' -c "
+                "'from mcp_synology.cli.main import main; main()' "
+                f"setup --config '{path}' <&-",
+            ],
+            env={
+                **os.environ,
+                "HOME": str(tmp_path),
+                "PYTHON_KEYRING_BACKEND": "keyring.backends.null.Keyring",
+                "DBUS_SESSION_BUS_ADDRESS": "",
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert done.returncode == 1
+        assert "stdin is closed" in done.stderr
+        assert "Traceback" not in done.stderr
 
     def test_the_route_is_quiet_on_https(self, store: MemoryKeyring, tmp_path: Path) -> None:
         _entry(store, "nas")

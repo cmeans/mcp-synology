@@ -41,6 +41,17 @@ def setup(config: str | None, list_configs: bool, verbose: bool) -> None:
         _list_configurations()
         return
 
+    # Every path below asks something. A pipe can answer, but with stdin closed, as under cron,
+    # the first question was a traceback (pre-QA on #559).
+    if sys.stdin is None:
+        click.echo(
+            click.style(
+                "Error: setup asks questions, and stdin is closed. Run it at a terminal.", fg="red"
+            ),
+            err=True,
+        )
+        sys.exit(1)
+
     # If --config is given, use the existing config-file flow
     if config is not None:  # an empty --config is an error there, not "no flag"
         _setup_with_config(config, verbose)

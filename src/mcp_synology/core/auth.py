@@ -228,6 +228,11 @@ def check_route(config: AppConfig) -> str | None:
     # Without them it can't connect, or sends the password over plain HTTP where the server would
     # use HTTPS (pre-QA on #559).
     connection = _connection_variables()
+    # A username only in a variable has to be at the terminal too (pre-QA on #559).
+    if _present_or_none(os.environ.get("SYNOLOGY_USERNAME")) and not _present_or_none(
+        kr.get_password(service, "username")
+    ):
+        connection.append("SYNOLOGY_USERNAME")
     same = f" with the same {' and '.join(connection)} and" if connection else " with"
     # This is often read at a terminal, which can't see a client's `env` block, so it goes by what
     # the terminal does know (QA round 3 on #559).
