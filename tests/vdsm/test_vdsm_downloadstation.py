@@ -462,7 +462,7 @@ class TestVdsmDownloadStationTasks:
                 task = await _task(client, task_id)
                 assert task["status"] == "paused", (delay, task)
 
-    async def test_a_finished_task_after_the_first_says_so(
+    async def test_a_list_reads_finished_and_failed_tasks_after_the_first(
         self, nas_client: Any, _clean_queue: None, _local_source: str
     ) -> None:
         """#545: the same list read, for `finished` and a failed task, whose integer varies with

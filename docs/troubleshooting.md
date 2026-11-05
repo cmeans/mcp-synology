@@ -135,11 +135,10 @@ no second copy (seen on DSM 7.1.1, #220).
 **Why:** that's normal. A new HTTP task sat in `waiting` about 5 s before `downloading`, and a
 resumed one about 2 s, on DSM 7.1 and 7.2.2 (idle vdsm, probed 2026-10-19; #208, #243). Resume
 took effect at once there: `list_downloads` and `get_download_info` showed the new state on the
-next call. Pausing a task that's still `waiting` takes about 3 s more, because Download Station
-can undo that pause, so `pause_download` checks it and pauses again if needed (#243). A slow NAS
-takes longer. A list with an ID that's missing or another user's takes the same 3 s, since the
-call can't then tell which tasks are starting, unless none of them can be paused: that call fails
-at once. A BitTorrent or magnet task can stay in `waiting` much longer, until it finds peers.
+next call. A pause takes about 3 s, or longer on a slow NAS, because Download Station can undo one
+while tasks start, so `pause_download` checks and pauses again if needed (#243). A call where none
+of the tasks can be paused fails at once. A BitTorrent or magnet task can stay in `waiting` much
+longer, until it finds peers.
 
 **What to do:** nothing; check again after a few seconds. A task still in `waiting` after
 minutes can have another cause, such as the one below.
@@ -189,8 +188,8 @@ and 7.2.2, #136, #146). With at least one pausable ID, the others are refused on
 
 ### `pause_download` says a task isn't paused
 
-**Why:** Download Station can undo a pause sent while a task is starting (#243). The tool checks
-such a task for about 3 s and pauses it once more if it starts, then reports what it last read.
+**Why:** Download Station can undo a pause while tasks are starting (#243). The tool checks each
+task for about 3 s and pauses it once more if it starts, then reports what it last read.
 
 **What to do:**
 - `pause it again`: call `pause_download` once more. If the task has paused by then, that call

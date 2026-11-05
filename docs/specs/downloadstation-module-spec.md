@@ -428,9 +428,8 @@ Remove tasks.
 > finished one is refused for its id (error 405) or shown as `not paused: already finished`, and the
 > others are paused. When none can be paused (one finished or already-paused task alone, a missing
 > id, or another user's task), the whole call fails with invalid_parameter; list_downloads shows each
-> task's status. If a task is still waiting to start, an id in the list is missing or another user's,
-> or the tasks can't be read first, the call takes about 3 s more, or longer on a slow NAS, since
-> Download Station can undo a pause sent while a task starts: it checks, and pauses again once. A row
+> task's status. A pause takes about 3 s, or longer on a slow NAS, since Download Station can undo one
+> while tasks start: it checks, and pauses again once. A row
 > saying `pause it again` means call this once more: if it still doesn't hold, tell the user, and
 > invalid_parameter then means it's already paused or finished. `see list_downloads` means check the
 > task there.

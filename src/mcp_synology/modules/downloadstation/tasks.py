@@ -52,8 +52,8 @@ _VALID_STATUS_FILTERS: set[str] = {"all", *STATUS_GROUPS.keys()}
 _SORT_KEYS: dict[str, str] = {"created": "create_time", "completed": "completed_time"}
 _VALID_SORTS: set[str] = {"queue", *_SORT_KEYS}
 
-# How long pause_download watches a task it paused while still `waiting` (#243): the undo
-# showed within about a second of the pause, and nothing paused 3 s after creation undid.
+# How long pause_download watches the tasks it paused (#243): the undo showed within about a
+# second of the pause.
 _PAUSE_HOLD_CHECKS = 6
 _PAUSE_HOLD_INTERVAL = 0.5
 # Seconds. The checks are 3 s of waiting when reads are quick; slow reads add to that.
@@ -62,7 +62,7 @@ _PAUSE_HOLD_BUDGET = 6.0
 # put a stalled or unreachable NAS past the roughly 60 s an MCP client waits (pre-QA on #545).
 _PAUSE_READ_TIMEOUT = 5.0
 _IDS_SHOWN_IN_A_LOG_LINE = 20
-_ID_CHARS_SHOWN_IN_A_LOG_LINE = 200
+_LOGGABLE_ID = re.compile(r"[\w.-]{1,64}")
 _UNDONE = "not paused: it didn't stay paused; pause it again"
 _UNCONFIRMED = "not confirmed paused: couldn't check it; see list_downloads"
 # DSM said no, no answer, or an answer without what DSM always sends. The client's own reply
@@ -109,24 +109,25 @@ def _per_task_rows(results: list[dict[str, Any]]) -> tuple[list[list[str]], list
 
 
 def _ids_for_log(task_ids: list[str]) -> str:
-    """Task IDs for a log line. They're caller text, or DSM's echo of it: quoted, so a newline
-    can't forge a line; URLs redacted, as a whole first, since a space or quote ends the pattern
-    `redact_urls` looks for and a model may pass one as an ID (spec, Secrets in URLs); and capped
-    by count and by length, since neither has a limit of its own."""
-    shown = repr(
-        [
-            redact_urls(redact_url(task_id))[:_ID_CHARS_SHOWN_IN_A_LOG_LINE]
-            for task_id in task_ids[:_IDS_SHOWN_IN_A_LOG_LINE]
-        ]
-    )
+    """Task IDs for a log line. They're caller text, or DSM's echo of it, and a model may pass a
+    URL as one (spec, Secrets in URLs). Redacting that kept missing shapes: a quote or a space, a
+    URL inside other text. So only what looks like an ID is shown, and anything else by its length.
+    Capped, since a list has no limit of its own."""
+
+    def shown(task_id: object) -> str:
+        text = str(task_id)
+        return text if _LOGGABLE_ID.fullmatch(text) else f"<not an ID, {len(text)} chars>"
+
+    listed = repr([shown(task_id) for task_id in task_ids[:_IDS_SHOWN_IN_A_LOG_LINE]])
     more = len(task_ids) - _IDS_SHOWN_IN_A_LOG_LINE
-    return f"{shown} and {more:,} more" if more > 0 else shown
+    return f"{listed} and {more:,} more" if more > 0 else listed
 
 
 def _why_it_failed(e: Exception) -> str:
-    """DSM's own error, or only the type of any other: a transport error's text can quote the
-    request, session cookie included, as `_re_authenticate` in the client also allows for."""
-    return repr(e) if isinstance(e, SynologyError) else type(e).__name__
+    """DSM's own error with its code, for docs/error-codes.md, or only the type of any other: a
+    transport error's text can quote the request, session cookie included, as `_re_authenticate`
+    in the client also allows for."""
+    return f"DSM error {e.code}: {e!r}" if isinstance(e, SynologyError) else type(e).__name__
 
 
 async def _read_tasks(
@@ -134,7 +135,6 @@ async def _read_tasks(
     task_ids: list[str],
     *,
     read_timeout: float | None = None,
-    each_alone: bool = True,
     deadline: float | None = None,
 ) -> dict[str, dict[str, Any]] | None:
     """The tasks as DSM now reports them (with ``detail``), by ID; None if unreadable.
@@ -143,10 +143,10 @@ async def _read_tasks(
     finished task with a per-task ``ok`` (#413), and an edit of one with no per-task
     result at all, changing nothing (#412). ``getinfo`` fails the whole call when one ID
     is missing or another user's (spec: non-manager semantics), so then each ID is read
-    on its own and the missing ones are left out, unless ``each_alone`` is False, for a read
-    that has to stay one request: then that's an empty result, since the read says nothing
-    about the rest. Past ``deadline`` (``time.monotonic()``), reading each ID on its own stops,
-    and that's None: with many IDs, those reads alone could outlast the client's time limit.
+    on its own and the missing ones are left out. Past ``deadline`` (``time.monotonic()``),
+    reading each ID on its own stops, and that's None: with many IDs, those reads alone could
+    outlast the client's time limit. Statuses are strings here, whatever list position they
+    were in (``named_status``).
     """
 
     async def read(ids: list[str]) -> dict[str, dict[str, Any]]:
@@ -171,13 +171,6 @@ async def _read_tasks(
         try:
             return await read(task_ids)
         except SynologyError as e:
-            if e.code in _TASK_NOT_FOUND_CODES and not each_alone:
-                logger.info(
-                    "An ID in %s is missing or another user's: no states read, "
-                    "so any task paused is watched",
-                    _ids_for_log(task_ids),
-                )
-                return {}
             if e.code not in _TASK_NOT_FOUND_CODES:
                 raise
             if len(task_ids) == 1:
@@ -958,12 +951,13 @@ async def _pause_again(client: DsmClient, task_ids: list[str]) -> None:
 
 
 async def _hold_pause(client: DsmClient, task_ids: list[str]) -> bool:
-    """Watch tasks paused while still `waiting`; False if a read failed, so nothing is known.
+    """Watch tasks just paused; False if a read failed, so nothing is known.
 
-    DS can undo such a pause: `pause` answers ok, then the task goes to `downloading` and
-    stays there, usually after reading `paused` for a moment (#243; the spec has the numbers
-    per version). No pause sent once a task had left `waiting` was undone, so a task that has
-    gone to `downloading` gets one more pause, and any other status gets none. The watch stops
+    DS can undo a pause: `pause` answers ok, then the task goes to `downloading` and stays
+    there, usually after reading `paused` for a moment (#243; the spec has the numbers per
+    version). That's a task still starting, or one that's left `waiting` with others starting
+    nearby, so every task is watched. A task that goes to `downloading` gets one more pause, and
+    any other status gets none. The watch stops
     at the first failed read, and past _PAUSE_HOLD_BUDGET: on a stalled or slow NAS, each further
     read adds to the wait, and the reply would miss the client's time limit. By the budget the
     3 s have gone by, so the read before the reply still says what's known.
@@ -1009,11 +1003,6 @@ async def _hold_pause(client: DsmClient, task_ids: list[str]) -> bool:
     return True
 
 
-def _may_be_starting(status: object) -> bool:
-    """`waiting`, or a status that isn't known, which may be a task starting too."""
-    return status == "waiting" or not isinstance(status, str) or status not in TASK_STATUSES
-
-
 def _not_paused_row(status: object) -> str | None:
     """The reply row for a task DSM said ok to pause, if its status says otherwise."""
     if status == "paused":
@@ -1049,20 +1038,6 @@ async def _task_state_change(
 
     ids_joined = ",".join(task_ids)
 
-    # Before the pause: afterward, a task still starting reads `paused` like any other.
-    # One request, whatever's missing: a list with a missing ID then watches every task. Each ID
-    # once, since getinfo gives a repeated ID a second entry.
-    before = (
-        await _read_tasks(
-            client,
-            list(dict.fromkeys(task_ids)),
-            read_timeout=_PAUSE_READ_TIMEOUT,
-            each_alone=False,
-        )
-        if method == "pause"
-        else None
-    )
-
     try:
         data = await client.request(
             "SYNO.DownloadStation.Task",
@@ -1095,13 +1070,9 @@ async def _task_state_change(
     rows, errors = _per_task_rows(results)
     done = [row[0] for row in rows if row[1] == "ok"]
     if method == "pause" and done:
+        # Each ID once, since getinfo gives a repeated ID a second entry.
         unique = list(dict.fromkeys(done))
-        if before is None:
-            logger.warning("Couldn't read tasks before pausing: watching all of them")
-        starting = [
-            t for t in unique if before is None or _may_be_starting(before.get(t, {}).get("status"))
-        ]
-        watched = await _hold_pause(client, starting) if starting else True
+        watched = await _hold_pause(client, unique)
         tasks = (
             await _read_tasks(
                 client,
@@ -1118,16 +1089,18 @@ async def _task_state_change(
             status = (tasks or {}).get(row[0], {}).get("status")
             if status is not None:
                 row[1] = _not_paused_row(status) or row[1]
-            elif tasks is not None or row[0] in starting:
-                # Watched, or the read left it out: it may have been undone or gone, with
-                # nothing left to say so, so not DSM's plain ok.
-                row[1] = _UNCONFIRMED
+                if row[1] == _UNDONE:
+                    # The signal that a NAS undoes a pause later than the watch looks.
+                    logger.warning(
+                        "Pause of %s didn't hold, after the watch", _ids_for_log([row[0]])
+                    )
             else:
-                # The read failed. What the first read knew still holds for a task past starting:
-                # a task in error or finished wasn't paused (#413). `downloading` keeps DSM's ok.
-                known = (before or {}).get(row[0], {}).get("status")
-                if known not in ("paused", "downloading"):
-                    row[1] = _not_paused_row(known) or row[1]
+                # It may have been undone or gone, with nothing left to say so: not DSM's plain ok.
+                row[1] = _UNCONFIRMED
+                if tasks is not None:
+                    logger.info(
+                        "Task %s was left out of the read after the pause", _ids_for_log([row[0]])
+                    )
     return format_table(
         headers=["Task ID", "Result"],
         rows=rows,
