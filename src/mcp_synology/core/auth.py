@@ -476,7 +476,10 @@ def resolve_credentials(config: AppConfig) -> tuple[str, str, str | None]:
         raise AuthenticationError(
             "No credentials found.",
             suggestion=(
-                f"Run {_setup_command(config)} to store credentials in the OS keyring, "
+                "Set the SYNOLOGY_USERNAME and SYNOLOGY_PASSWORD environment variables: this host "
+                "has no OS keyring."
+                if no_keyring_here()
+                else f"Run {_setup_command(config)} to store credentials in the OS keyring, "
                 "or set SYNOLOGY_USERNAME and SYNOLOGY_PASSWORD environment variables."
             ),
         )
@@ -525,9 +528,10 @@ _TWO_FA = (403, 404, 406)
 # `setup` never prints the token (maintainer, 2026-11-05), so it comes from a machine that
 # can store one. Naming `setup` alone sent a host with no keyring in a circle (#481).
 NO_KEYRING_2FA_ADVICE = (
-    "This host has no OS keyring, so a 2FA device token can't be stored here: run "
-    f"{SETUP_COMMAND} on a machine with one, read the token there with 'keyring get "
-    "mcp-synology/<instance_id> device_id', and set it in SYNOLOGY_DEVICE_ID here"
+    "This host has no OS keyring, so a 2FA device token can't be stored here. On a machine "
+    f"with one, copy this config there and run {SETUP_COMMAND}, read the token with "
+    "'uvx keyring get mcp-synology/<instance_id> device_id', and set it in "
+    "SYNOLOGY_DEVICE_ID here"
 )
 
 

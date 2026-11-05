@@ -114,7 +114,7 @@ On Linux, the server auto-detects the D-Bus session socket for keyring access. I
 ### 3. Verify
 
 ```bash
-uvx mcp-synology check                # Validates the config and credentials
+uvx mcp-synology check --config <the file setup wrote>   # Validates the config and credentials
 uvx mcp-synology setup --list         # Shows all configured NAS instances
 ```
 
@@ -132,7 +132,7 @@ If you prefer a persistent install (avoids download on each invocation). Require
 ```bash
 uv tool install mcp-synology
 mcp-synology setup
-mcp-synology check
+mcp-synology check --config <the file setup wrote>
 ```
 
 ### Alternative: env-var-only mode
@@ -500,11 +500,11 @@ HTML comments (`<!-- ... -->`) are removed from both before the text is sent, so
 
 mcp-synology fully supports DSM accounts with two-factor authentication. It's auto-detected — you don't need to configure anything special:
 
-1. **Bootstrap** — `mcp-synology setup` detects 2FA, prompts for your OTP code, and stores a device token in the keyring
+1. **Bootstrap** — `mcp-synology setup --config <your config file>` detects 2FA, prompts for your OTP code, and stores a device token in the keyring
 2. **Silent re-auth** — subsequent logins use the device token automatically (no OTP prompts)
 3. **Per-instance** — each NAS config gets its own device token, so mixed 2FA/non-2FA setups work fine
 
-Device tokens have no fixed lifetime: they last until the trusted device is removed in DSM (Personal > Security > Sign-in Activity) or DSM otherwise stops accepting it. If DSM rejects the stored token, the error says so; run `mcp-synology setup` again to sign in with a new 2FA code (if `device_id` is set in the environment, `SYNOLOGY_DEVICE_ID`, or the config file, it overrides the keyring: remove it there first, then restart the server after `setup`).
+Device tokens have no fixed lifetime: they last until the trusted device is removed in DSM (Personal > Security > Sign-in Activity) or DSM otherwise stops accepting it. If DSM rejects the stored token, the error says so; run `mcp-synology setup --config <your config file>` again to sign in with a new 2FA code (if `device_id` is set in the environment, `SYNOLOGY_DEVICE_ID`, or the config file, it overrides the keyring: remove it there first, then restart the server after `setup`).
 
 ## Keyring & Credentials
 

@@ -385,13 +385,15 @@ def _setup_credential_flow(app_config: Any, verbose: bool) -> None:
 
     keyring_ok = _store_keyring(service, username, password, app_config.connection.host)
     if not keyring_ok:
-        if app_config._source_path is not None:
-            from mcp_synology.core.config import quoted_path
+        from mcp_synology.core.config import quoted_path
+        from mcp_synology.core.errors import CHECK_NO_FILE
 
-            click.echo(
-                "With those variables set, test it: mcp-synology check --config "
-                f"{quoted_path(app_config._source_path)}"
-            )
+        # On variables alone (the Docker path) there's no file, and the bare command finds them.
+        path = app_config._source_path
+        command = (
+            f"mcp-synology check --config {quoted_path(path)}" if path else CHECK_NO_FILE.strip("'")
+        )
+        click.echo(f"With those variables set, test it: {command}")
         return
 
     click.echo("\nAttempting login...")
@@ -426,7 +428,13 @@ def _may_replace_entry(
         click.echo(
             f"\nCouldn't read keyring entry {instance!r}, so nothing was changed. Check that the "
             "OS keyring is unlocked and try again, or set SYNOLOGY_USERNAME and SYNOLOGY_PASSWORD "
-            "instead."
+            "instead"
+            + (
+                "."
+                if config is not None
+                # No file exists yet, and the variables alone don't say which NAS.
+                else ", with SYNOLOGY_HOST or a config file you write yourself."
+            )
         )
         sys.exit(1)
     if not stored or recorded == comparable_host(host):
@@ -458,6 +466,20 @@ def _may_replace_entry(
     return False
 
 
+def _variable_lines(username: str, *, windows: bool = os.name == "nt") -> str:
+    """The credential variables as a shell sets them. `NAME=value` alone doesn't reach a command
+    run after it, and PowerShell is what a Windows terminal opens."""
+    from mcp_synology.core.config import quoted_text
+
+    if windows:
+        name = "'" + username.replace("'", "''") + "'"  # PowerShell needs quotes around any text
+        return f"  $env:SYNOLOGY_USERNAME = {name}\n  $env:SYNOLOGY_PASSWORD = '<your password>'"
+    return (
+        f"  export SYNOLOGY_USERNAME={quoted_text(username)}\n"
+        "  export SYNOLOGY_PASSWORD='<your password>'"
+    )
+
+
 def _store_keyring(service: str, username: str, password: str, host: str) -> bool:
     """Store credentials and the host they're for in the OS keyring. True on success.
 
@@ -468,7 +490,7 @@ def _store_keyring(service: str, username: str, password: str, host: str) -> boo
     backends deletes from only the first. Any exception counts: backends raise their own types.
     """
     from mcp_synology.core.auth import NO_KEYRING_2FA_ADVICE, no_keyring_here
-    from mcp_synology.core.config import comparable_host, quoted_text
+    from mcp_synology.core.config import comparable_host
 
     removed: list[str] = []
     try:
@@ -493,14 +515,14 @@ def _store_keyring(service: str, username: str, password: str, host: str) -> boo
     except Exception as e:
         logger.debug("Keyring error storing credentials: %s", e, exc_info=True)
         gone = f" Already removed from this entry: {', '.join(removed)}." if removed else ""
+        absent = no_keyring_here()
+        lead = "Keyring not available." if absent else "Couldn't store these in the keyring."
         click.echo(
-            f"\nKeyring not available.{gone} Set these environment variables where the "
-            "server runs instead (the `env` block of your MCP client's config, or your "
-            "shell):\n"
-            f"  SYNOLOGY_USERNAME={quoted_text(username)}\n"
-            "  SYNOLOGY_PASSWORD=<your password>"
+            f"\n{lead}{gone} Set these environment variables where the server runs instead: "
+            "in the `env` block of your MCP client's config, or in your shell:\n"
+            + _variable_lines(username)
         )
-        if no_keyring_here():
+        if absent:
             click.echo(f"If this account uses 2FA: {NO_KEYRING_2FA_ADVICE}.")
         return False
 

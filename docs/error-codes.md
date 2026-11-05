@@ -44,7 +44,7 @@ Common causes:
 
 Fix:
 
-1. Run `mcp-synology check -v`. The verbose output exercises the full auth chain
+1. Run `mcp-synology check -v --config <your config file>`. The verbose output exercises the full auth chain
    and reports which step fails (lookup → request → response).
 2. If 2FA is required, or DSM rejected the stored device token, run
    `mcp-synology setup --config <your config file>` and complete the OTP exchange

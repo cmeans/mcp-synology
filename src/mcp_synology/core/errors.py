@@ -19,6 +19,10 @@ import httpx
 SETUP_COMMAND = "'mcp-synology setup --config <your config file>'"
 CHECK_COMMAND = "'mcp-synology check --config <your config file>'"
 SETUP_NEW_CONFIG = "'mcp-synology setup'"
+# For a message that can't see the config: running on variables alone (the Docker path)
+# there's no file to name, and the bare command works.
+CHECK_NO_FILE = "'mcp-synology check'"
+NO_FILE_NOTE = "(with no config file, leave out --config)"
 
 # Adding a new error code: add a member to ErrorCode below AND add a
 # matching `## <code>` section to docs/error-codes.md. The unit test in

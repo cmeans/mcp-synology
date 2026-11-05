@@ -57,8 +57,8 @@ The device token is specific to the `instance_id`. Multiple NAS configs with dif
 
 On a host with no keyring, such as Docker, `setup` writes the config and lists the variables to set, but doesn't log in, so it can't ask for a code. It never prints a device token. To use a 2FA account there:
 
-1. Run `mcp-synology setup --config <your config file>` on a machine with a keyring, using the same `instance_id`.
-2. Read the token there: `keyring get mcp-synology/<instance_id> device_id`.
+1. Copy the config file to a machine with a keyring, and run `mcp-synology setup --config <your config file>` there, so it has the same `instance_id`.
+2. Read the token there: `uvx keyring get mcp-synology/<instance_id> device_id`.
 3. Set it in `SYNOLOGY_DEVICE_ID` on the host with no keyring, beside `SYNOLOGY_USERNAME` and `SYNOLOGY_PASSWORD`.
 
 ## Platform Support

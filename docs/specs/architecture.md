@@ -259,7 +259,7 @@ Three secrets need to persist: username, password, and (after 2FA bootstrap) dev
 2. **YAML config values** — directly in the config file. A username here is fine: it isn't a secret, and a config username with the password in the keyring is the recommended setup. A password (or device_id) here is stored in plaintext on disk; the server warns about a config password at startup (#167).
 3. **OS keyring** (the default) — via the Python `keyring` library. Delegates to macOS Keychain, Windows Credential Manager, or Linux Secret Service (GNOME Keyring / KWallet). The setup CLI writes credentials here by default. This is the secure-by-default path; the explicit sources above override it.
 
-All three secrets (including device_id) are stored in the keyring when available. The keyring library auto-detects the appropriate backend; on headless systems without a keyring daemon, the setup CLI warns the user and falls back to env var guidance.
+All three secrets (including device_id) are stored in the keyring when available. The keyring library auto-detects the appropriate backend; on headless systems without a keyring daemon, the setup CLI says so, still writes the config (it holds no secret), and lists the variables to set, without logging in. It never prints a device token: a 2FA account there gets one from a machine with a keyring, as `SYNOLOGY_DEVICE_ID` (#481).
 
 **Service name convention for keyring:**
 

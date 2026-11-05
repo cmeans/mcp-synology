@@ -13,6 +13,7 @@ import httpx
 
 from mcp_synology.core.errors import (
     CHECK_COMMAND,
+    NO_FILE_NOTE,
     DownloadHttpError,
     DsmHttpError,
     DsmReplyError,
@@ -420,7 +421,9 @@ async def download_file(
                 f"Download failed: DSM, or a proxy in front of it, answered HTTP {e.status} "
                 + where,
                 retryable=True,
-                suggestion=f"Try again shortly; if it keeps happening, run {CHECK_COMMAND}.",
+                suggestion=(
+                    f"Try again shortly; if it keeps happening, run {CHECK_COMMAND} {NO_FILE_NOTE}."
+                ),
             )
         synology_error_response("Download", e)
     except OSError as e:
