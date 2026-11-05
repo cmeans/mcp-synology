@@ -31,7 +31,7 @@ Common causes:
 - The keyring entry is from an older version, with no host recorded, and this config can't
   say which host is meant (the message says so). The error's suggestion says how to record it.
 - The keyring entry was set up for another host (the message says so). `mcp-synology check`
-  names that host. If this one is the right NAS, run `mcp-synology setup`; see
+  names that host. The error's suggestion says what to do; see
   [Credentials Are Tied to a Host](credentials.md#credentials-are-tied-to-a-host).
 - Wrong username or password in the credential store.
 - 2FA is enforced on the account but has not been bootstrapped via `mcp-synology setup`.

@@ -623,7 +623,7 @@ class TestAnEntryWithNoRecordedHost:
             resolve_credentials(config)
         advice = exc.value.terminal_suggestion or ""
         assert "'mcp-synology check --config <full path to your config file>'" in advice
-        assert "keeps any 2FA device token" in advice
+        assert "keeps any 2FA token" in advice
         assert "mcp-synology setup --config" in advice
 
     def test_the_advice_asks_whose_credentials_these_are(
@@ -638,8 +638,11 @@ class TestAnEntryWithNoRecordedHost:
             resolve_credentials(config)
         advice = exc.value.terminal_suggestion or ""
         route = advice.index("mcp-synology check")
-        assert advice.index("If these are 'nas.office''s own credentials") < route
-        assert "If you aren't sure, or they aren't, run 'mcp-synology setup" in advice
+        assert advice.index("If you know these are the credentials for 'nas.office'") < route
+        assert "It sends the stored password there without asking" in advice
+        assert "Otherwise, give this NAS its own instance_id in the config, then run" in advice
+        assert "leaves this entry alone" in advice
+        assert "If it's the wrong NAS, check connection.host" in advice
 
     def test_a_tool_reply_names_no_command_that_records_it(
         self, store: MemoryKeyring, tmp_path: Path
@@ -656,7 +659,7 @@ class TestAnEntryWithNoRecordedHost:
         reply = str(tool.value)
         assert "mcp-synology check" not in reply
         assert "full path" not in reply
-        assert "ask the user to run 'mcp-synology setup" in reply
+        assert "ask the user to give it its own instance_id in the config, then run" in reply
         assert "docs/credentials.md" in reply
 
     def test_check_gives_the_terminal_advice(
@@ -670,15 +673,63 @@ class TestAnEntryWithNoRecordedHost:
         ):
             result = CliRunner().invoke(main, ["check", "--config", "named.yaml"])
         assert result.exit_code == 1
-        assert "If these are 'nas.home''s own credentials" in result.output
+        assert "If you know these are the credentials for 'nas.home'" in result.output
         assert "mcp-synology check --config <full path" in result.output
+
+    def test_a_recorded_mismatch_separates_an_old_address_from_another_nas(
+        self, store: MemoryKeyring, tmp_path: Path
+    ) -> None:
+        """Pre-QA on #559: "run setup" alone replaces the other NAS's entry, and its token."""
+        _entry(store, "nas", "nas.home")
+        with pytest.raises(CredentialHostError) as exc:
+            resolve_credentials(load_config(_file(tmp_path, "nas.office")))
+        advice = exc.value.terminal_suggestion or ""
+        assert "this NAS's old address, run 'mcp-synology setup --config" in advice
+        assert "and replace the entry" in advice
+        assert "If it's another NAS, give this one its own instance_id" in advice
+        assert "nas.home" not in advice  # `check` prints it before this, and logs share the text
+        assert "mcp-synology check" not in advice
+
+    def test_changing_the_instance_id_doesnt_keep_the_variable(
+        self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """ "Its own instance_id" with "the same SYNOLOGY_INSTANCE_ID" would contradict itself."""
+        _entry(store, "nas")
+        monkeypatch.setenv("SYNOLOGY_INSTANCE_ID", "nas")
+        with pytest.raises(CredentialHostError) as exc:
+            resolve_credentials(load_config(_file(tmp_path, "nas.home")))
+        assert "the same SYNOLOGY_INSTANCE_ID" not in (exc.value.terminal_suggestion or "")
+        assert "Give this NAS its own instance_id with SYNOLOGY_INSTANCE_ID" in (
+            exc.value.terminal_suggestion or ""
+        )
+
+    def test_declining_with_no_route_doesnt_say_keep_both(
+        self,
+        store: MemoryKeyring,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Pre-QA on #559: wrong when both are the same NAS."""
+        _entry(store, "nas")
+        monkeypatch.setenv("SYNOLOGY_HOST", "nas.office")
+        config = load_config(_file(tmp_path, "nas.office"))
+        with patch("click.confirm", return_value=False):
+            _may_replace_entry("mcp-synology/nas", "nas.office", "nas", config)
+        out = capsys.readouterr().out
+        assert "To keep both" not in out
+        assert "run this again and answer yes" in out
+        assert "If they're another NAS's, give this NAS its own instance_id" in out
 
     @pytest.mark.parametrize(
         ("variables", "named"),
         [
-            (["SYNOLOGY_HOST"], "SYNOLOGY_HOST"),
-            (["SYNOLOGY_INSTANCE_ID"], "SYNOLOGY_INSTANCE_ID"),
-            (["SYNOLOGY_HOST", "SYNOLOGY_INSTANCE_ID"], "SYNOLOGY_HOST and SYNOLOGY_INSTANCE_ID"),
+            (["SYNOLOGY_HOST"], "the same SYNOLOGY_HOST"),
+            (["SYNOLOGY_INSTANCE_ID"], "its own instance_id with SYNOLOGY_INSTANCE_ID"),
+            (
+                ["SYNOLOGY_HOST", "SYNOLOGY_INSTANCE_ID"],
+                "with the same SYNOLOGY_HOST, which asks",
+            ),
         ],
     )
     def test_the_advice_with_a_variable_says_setup_needs_it_too(
@@ -698,7 +749,7 @@ class TestAnEntryWithNoRecordedHost:
         with pytest.raises(AuthenticationError) as exc:
             resolve_credentials(load_config(_file(tmp_path, "nas.home")))
         suggestion = exc.value.suggestion or ""
-        assert f"with the same {named}" in suggestion
+        assert named in suggestion
         assert "mcp-synology check" not in suggestion
 
     @pytest.mark.parametrize("variable", ["SYNOLOGY_PORT", "SYNOLOGY_HTTPS"])

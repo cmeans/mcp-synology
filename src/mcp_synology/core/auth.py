@@ -139,18 +139,38 @@ def _host_variables() -> list[str]:
     return [v for v in ("SYNOLOGY_HOST", "SYNOLOGY_INSTANCE_ID") if os.environ.get(v, "").strip()]
 
 
-def _setup_command(config: AppConfig) -> str:
+def _setup_command(config: AppConfig, *, new_instance: bool = False) -> str:
     """`setup` as this server needs it run. The variables aren't in a terminal's environment when
     a client's `env` block set them: it then stores for the file's host or instance (QA round 1
     on #559), or can't connect with the host but not the port or HTTPS (QA round 2). With no
-    config file, plain `setup` takes the host from SYNOLOGY_HOST."""
+    config file, plain `setup` takes the host from SYNOLOGY_HOST. ``new_instance``: the instance
+    ID is about to change, so that variable isn't to be kept."""
     import os
 
     command = _SETUP if config._source_path else "'mcp-synology setup'"
     connection = [v for v in ("SYNOLOGY_PORT", "SYNOLOGY_HTTPS") if os.environ.get(v, "").strip()]
-    if variables := _host_variables() + connection:
+    variables = [
+        v
+        for v in _host_variables() + connection
+        if not (new_instance and v == "SYNOLOGY_INSTANCE_ID")
+    ]
+    if variables:
         command += f" with the same {' and '.join(variables)}"
     return command
+
+
+def own_instance_id_clause(config: AppConfig, nas: str = "this NAS") -> str:
+    """The way that leaves the entry alone, as a clause: `setup` on the same entry replaces it, and
+    it may be another NAS's (pre-QA on #559; the maintainer's wording, 2026-11-05)."""
+    import os
+
+    in_the_file = config._source_path and not os.environ.get("SYNOLOGY_INSTANCE_ID", "").strip()
+    where = "in the config" if in_the_file else "with SYNOLOGY_INSTANCE_ID"
+    return (
+        f"give {nas} its own instance_id {where}, then run "
+        f"{_setup_command(config, new_instance=True)}, which asks for the password and leaves this "
+        "entry alone"
+    )
 
 
 def check_route(config: AppConfig) -> str | None:
@@ -179,29 +199,40 @@ def check_route(config: AppConfig) -> str | None:
     )
     remove = "remove auth.password from the config and " if in_the_file else ""
     return (
-        f"{remove}run {_RECORD_HOST} at a terminal, with no SYNOLOGY_PASSWORD set, which keeps any "
-        "2FA device token"
+        f"{remove}run {_RECORD_HOST} at a terminal, with no SYNOLOGY_PASSWORD set. It sends the "
+        "stored password there without asking, and keeps any 2FA token"
     )
 
 
-def _setup_clause(config: AppConfig) -> str:
-    return f"run {_setup_command(config)}, which asks for the password and replaces any 2FA token"
-
-
 def how_to_record(config: AppConfig) -> str:
-    """What someone at a terminal can do about this entry. Whether this is the right NAS isn't the
-    question: `nas.office` is right for its own config while the entry holds `nas.home`'s password,
-    and `check` would send it there (QA round 2 on #559). So the route that asks for nothing is
-    offered only to someone who knows whose credentials these are; `setup` asks for the password.
-    A tool's reply gets `_advice_for_the_model` instead."""
+    """What someone at a terminal can do about this entry (the maintainer's wording, 2026-11-05,
+    after QA round 2 and pre-QA on #559). Whether this is the right NAS isn't the question:
+    `nas.office` is right for its own config while the entry holds `nas.home`'s password. `check`
+    would send it there unasked, so it's only for someone who knows whose credentials these are,
+    and `setup` on this entry would replace the other NAS's. It doesn't name a recorded host, as
+    it's also in a log; `check` prints that just before. A tool's reply gets
+    `_advice_for_the_model` instead."""
     host = config.connection.host if config.connection else None
     route = check_route(config)
     if route:
         return (
-            f"If these are {host!r}'s own credentials, {route}. If you aren't sure, or they "
-            f"aren't, {_setup_clause(config)}"
+            f"If you know these are the credentials for {host!r}, {route}. Otherwise, "
+            f"{own_instance_id_clause(config)}"
         )
-    return f"If {host!r} is the right NAS, {_setup_clause(config)}"
+    service = f"mcp-synology/{config.instance_id or 'default'}"
+    try:
+        recorded = _recorded_host(service)
+    except Exception as e:  # backends raise their own types
+        logger.debug("Keyring error reading the entry: %s", e, exc_info=True)
+        recorded = None
+    if recorded:
+        return (
+            "If the host they were set up for is this NAS's old address, run "
+            f"{_setup_command(config)} and replace the entry. If it's another NAS, "
+            f"{own_instance_id_clause(config, 'this one')}"
+        )
+    clause = own_instance_id_clause(config)
+    return clause[0].upper() + clause[1:]
 
 
 _WRONG_NAS = (
@@ -211,18 +242,15 @@ _WRONG_NAS = (
 
 
 def _advice_for_the_model(config: AppConfig, host: str) -> str:
-    """A tool's reply names no command that records the host: that needs no person, and a model
-    can't know whose credentials these are, least of all from a config in a folder it was pointed
-    at (QA round 2 on #559). `setup` asks someone for the password."""
-    keep_token = (
-        " If the user knows these are its own credentials, they can keep the token instead: see "
-        "'Credentials Are Tied to a Host' in docs/credentials.md."
-        if check_route(config)
-        else ""
-    )
+    """This refusal's reply names no command that records the host: that needs no person, and a
+    model can't know whose credentials these are, least of all from a config in a folder it was
+    pointed at (QA round 2 on #559). `setup` asks someone for the password. The older unreachable,
+    busy and refused-login replies still name `check` (the maintainer, 2026-11-05)."""
     return (
-        f"If {host!r} is the right NAS, ask the user to {_setup_clause(config)}.{keep_token} If it "
-        f"isn't, {_WRONG_NAS}"
+        f"If {host!r} is the right NAS, ask the user to {own_instance_id_clause(config, 'it')}. If "
+        "they know these are its own credentials, or it's a new address for the same NAS, see "
+        f"'Credentials Are Tied to a Host' in docs/credentials.md. If it's the wrong NAS, "
+        f"{_WRONG_NAS}"
     )
 
 

@@ -416,13 +416,14 @@ def _may_replace_entry(
     )
     # An entry with no record may well be this NAS's own, from before hosts were recorded.
     route = None if recorded or config is None else check_route(config)
-    if route:
+    if recorded:
+        click.echo(f"Aborted, nothing changed. To keep both, {own_id}")
+    else:
+        own = route or "run this again and answer yes"
         click.echo(
-            f"Aborted, nothing changed. If these are this NAS's own credentials, {route}. "
+            f"Aborted, nothing changed. If these are this NAS's own credentials, {own}. "
             f"If they're another NAS's, {own_id}"
         )
-    else:
-        click.echo(f"Aborted, nothing changed. To keep both, {own_id}")
     return False
 
 
