@@ -17,6 +17,7 @@ import os
 import re
 import shlex
 import stat
+import subprocess
 import unicodedata
 from datetime import date
 from pathlib import Path
@@ -615,7 +616,14 @@ def pasteable_path(path: Path) -> str:
     double quotes around a `'`, where `$(...)` in a folder's name runs when pasted (QA on #555). A
     character that could forge a line is escaped, so that form only fails to name the file."""
     text = _shown_path(path)
-    return shlex.quote(text if text.isprintable() else text.encode("unicode_escape").decode())
+    return _quoted_for_a_shell(
+        text if text.isprintable() else text.encode("unicode_escape").decode()
+    )
+
+
+def _quoted_for_a_shell(text: str, *, windows: bool = os.name == "nt") -> str:
+    """Single quotes aren't quotes in cmd.exe (pre-QA on #555)."""
+    return subprocess.list2cmdline([text]) if windows else shlex.quote(text)
 
 
 def _refuse_a_working_folder_config() -> None:
@@ -635,11 +643,15 @@ def _refuse_a_working_folder_config() -> None:
             except PermissionError:
                 return
     except OSError as e:
-        # Not there, a dangling link, a link loop. Anything else (a stale mount) may be someone's
-        # config, and env-only mode would be the downgrade the class refuses.
-        if e.errno in (errno.ENOENT, errno.ENOTDIR, errno.ELOOP):
+        # Not there, or a dangling link or link loop (the name itself is fixed, so only a link's
+        # target can be too long). Anything else (a stale mount) may be someone's config, and
+        # env-only mode would be the downgrade the class refuses.
+        if e.errno in (errno.ENOENT, errno.ENOTDIR, errno.ELOOP, errno.ENAMETOOLONG):
             return
-        msg = f"{_shown_path(local_config)!r} can't be checked: {e.strerror or type(e).__name__}"
+        msg = (
+            f"{_shown_path(local_config)!r} can't be checked: {e.strerror or type(e).__name__}. "
+            "Fix the path or its permissions, or name a config file with --config."
+        )
         raise OSError(msg) from e
     # "If you trust" and the full path: a model repairing a failed server, or someone editing an
     # MCP client's args, would otherwise paste the flag in as it stands, and whatever folder that
@@ -647,16 +659,16 @@ def _refuse_a_working_folder_config() -> None:
     # file to the home location, which applies it in every folder.
     env_only = (
         "SYNOLOGY_HOST alone isn't used while this file is here. "
-        if os.environ.get("SYNOLOGY_HOST")
+        if os.environ.get("SYNOLOGY_HOST", "").strip()
         else ""
     )
     msg = (
         f"{pasteable_path(local_config)} isn't loaded automatically: a config in the folder "
         "you're in could send your stored credentials to another host. "
         f"{env_only}If you trust this file (it chooses the host your stored password goes to), "
-        "pass --config ./mcp-synology.yaml, or its full path in an MCP client's config. To run "
-        "without it, start from another folder or move it out of this one. Don't copy it to the "
-        "home location unless you trust it."
+        "pass --config ./mcp-synology.yaml, or its full path, without shell quotes, in an MCP "
+        "client's config. To run without it, start from another folder or move it out of this "
+        "one. Don't copy it to the home location unless you trust it."
     )
     raise WorkingFolderConfigNotLoadedError(msg)
 

@@ -315,9 +315,7 @@ def _setup_interactive(verbose: bool, not_loaded: str | None = None) -> None:
         # Discovery reads config.yaml, so a bare `check` here would stop at the same file again.
         from mcp_synology.core.config import pasteable_path
 
-        click.echo(
-            f"In this folder, name it: mcp-synology check --config {pasteable_path(config_path)}"
-        )
+        click.echo(f"To use it, name it: mcp-synology check --config {pasteable_path(config_path)}")
 
     # Emit Claude Desktop JSON snippet
     _emit_claude_desktop_snippet(app_config, config_path)

@@ -1004,7 +1004,7 @@ class TestAWorkingFolderConfigIsntLoaded:
         # Naming it is consent: a model repairing a failed server would paste a bare flag in.
         assert "If you trust this file" in text
         # A relative path in a client's args would load whatever folder it starts in next.
-        assert "full path in an MCP client's config" in text
+        assert "its full path, without shell quotes, in an MCP client's config" in text
         # QA on #555: the same model could move it to where it applies in every folder.
         assert "start from another folder or move it out of this one" in text
         assert "Don't copy it to the home location unless you trust it" in text
@@ -1033,7 +1033,25 @@ class TestAWorkingFolderConfigIsntLoaded:
         with pytest.raises(FileNotFoundError) as excinfo:
             load_config()
         assert "\n" not in str(excinfo.value)
+        assert "a\\nERROR forged" in str(excinfo.value)
         assert len(shlex.split(str(excinfo.value).split(" isn't loaded")[0])) == 1
+
+    def test_on_windows_the_path_gets_double_quotes(self) -> None:
+        """Pre-QA on #555: single quotes aren't quotes in cmd.exe."""
+        quoted = config_module._quoted_for_a_shell(
+            r"C:\Users\My Name\mcp-synology.yaml", windows=True
+        )
+        assert quoted == r'"C:\Users\My Name\mcp-synology.yaml"'
+
+    def test_a_blank_synology_host_isnt_mentioned(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Pre-QA on #555: blank counts as unset everywhere else."""
+        self._in_this_folder(tmp_path, monkeypatch)
+        monkeypatch.setenv("SYNOLOGY_HOST", "   ")
+        with pytest.raises(FileNotFoundError) as excinfo:
+            load_config()
+        assert "SYNOLOGY_HOST" not in str(excinfo.value)
 
     @pytest.mark.parametrize(
         ("code", "name"),
@@ -1053,15 +1071,47 @@ class TestAWorkingFolderConfigIsntLoaded:
             return real_stat(self, **kwargs)
 
         monkeypatch.setattr(Path, "stat", stat_fails)
-        with pytest.raises(OSError, match=f"can't be checked: {name}"):
+        with pytest.raises(OSError, match=f"can't be checked: {name}. Fix the path"):
             load_config()
 
-    def test_a_link_loop_is_no_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """QA on #555: narrowing the errors to FileNotFoundError passed every test."""
+    def test_another_error_at_the_second_look_isnt_no_file_either(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A `stat` refused, then an `lstat` that fails some other way."""
+        self._in_this_folder(tmp_path, monkeypatch)
+        monkeypatch.setenv("SYNOLOGY_HOST", "nas.example")
+        real_stat, real_lstat = Path.stat, Path.lstat
+
+        def stat_refused(self: Path, **kwargs: Any) -> os.stat_result:
+            if self.name == "mcp-synology.yaml":
+                raise PermissionError(errno.EACCES, "Permission denied")
+            return real_stat(self, **kwargs)
+
+        def lstat_fails(self: Path) -> os.stat_result:
+            if self.name == "mcp-synology.yaml":
+                raise OSError(errno.ESTALE, "Stale file handle")
+            return real_lstat(self)
+
+        monkeypatch.setattr(Path, "stat", stat_refused)
+        monkeypatch.setattr(Path, "lstat", lstat_fails)
+        with pytest.raises(OSError, match="can't be checked: Stale file handle"):
+            load_config()
+
+    @pytest.mark.parametrize(
+        "target",
+        ["mcp-synology.yaml", "a-file/x", "a" * 300],
+        ids=["link loop", "through a file", "target name too long"],
+    )
+    def test_a_link_that_leads_nowhere_is_no_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str
+    ) -> None:
+        """QA on #555: narrowing the errors to FileNotFoundError passed every test. Pre-QA: a
+        target name that's too long stopped, where any other dangling link doesn't."""
         monkeypatch.chdir(tmp_path)
         monkeypatch.delenv("MCP_SYNOLOGY_CONFIG", raising=False)
+        (tmp_path / "a-file").write_text("", encoding="utf-8")
         name = tmp_path / "mcp-synology.yaml"
-        name.symlink_to(name)
+        name.symlink_to(target)
         with pytest.raises(FileNotFoundError, match="No config file found"):
             discover_config_path()
         monkeypatch.setenv("SYNOLOGY_HOST", "nas.example")
@@ -1148,7 +1198,7 @@ class TestAWorkingFolderConfigIsntLoaded:
         async def logged_in(*_: Any) -> dict[str, Any]:
             return {"success": True}
 
-        monkeypatch.setattr("mcp_synology.cli.setup._CONFIG_DIR", tmp_path / "home-configs")
+        monkeypatch.setattr("mcp_synology.cli.setup._CONFIG_DIR", tmp_path / "home'configs")
         monkeypatch.setattr("mcp_synology.cli.setup._store_keyring", lambda *_: True)
         monkeypatch.setattr("mcp_synology.cli.setup._connect_and_login", logged_in)
 
@@ -1162,10 +1212,10 @@ class TestAWorkingFolderConfigIsntLoaded:
         monkeypatch.delenv("SYNOLOGY_HOST", raising=False)
         self._no_nas(tmp_path, monkeypatch)
         result = CliRunner().invoke(main, ["setup"], input=self._ANSWERS)
-        written = tmp_path / "home-configs" / "10-0-0-9.yaml"
+        written = tmp_path / "home'configs" / "10-0-0-9.yaml"
         assert written.exists(), result.output
         assert (
-            f"In this folder, name it: mcp-synology check --config {shlex.quote(str(written))}"
+            f"To use it, name it: mcp-synology check --config {shlex.quote(str(written))}"
             in result.output
         )
         # What it says works, past the file that stopped the bare command.
@@ -1179,8 +1229,8 @@ class TestAWorkingFolderConfigIsntLoaded:
         monkeypatch.delenv("SYNOLOGY_HOST", raising=False)
         self._no_nas(tmp_path, monkeypatch)
         result = CliRunner().invoke(main, ["setup"], input=self._ANSWERS)
-        assert (tmp_path / "home-configs" / "10-0-0-9.yaml").exists(), result.output
-        assert "In this folder" not in result.output
+        assert (tmp_path / "home'configs" / "10-0-0-9.yaml").exists(), result.output
+        assert "To use it, name it" not in result.output
 
     def test_named_with_config_it_loads(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

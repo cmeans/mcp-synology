@@ -500,24 +500,6 @@ def test_a_newline_in_the_path_cant_forge_a_log_line(
         assert "\\n2026-11-02 [WARNING] fake" in line
 
 
-def test_a_newline_in_the_working_folder_cant_forge_a_log_line(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """QA round 3 on #529: a line naming the working folder was unquoted. Now the error that a
-    config there isn't loaded names it (#552)."""
-    folder = tmp_path / "evil\n2026-11-02 [WARNING] fake: injected"
-    folder.mkdir()
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("MCP_SYNOLOGY_CONFIG", raising=False)
-    monkeypatch.delenv("SYNOLOGY_HOST", raising=False)
-    monkeypatch.chdir(folder)
-    _config(tmp_path).rename(folder / "mcp-synology.yaml")
-    with pytest.raises(FileNotFoundError) as excinfo:
-        load_config()
-    assert "\n" not in str(excinfo.value)
-    assert "\\n2026-11-02 [WARNING] fake" in str(excinfo.value)
-
-
 # -- maintainer decision on #529: an empty config path is an error ----------------------
 
 # No "leave it out to use the defaults" advice: with SYNOLOGY_HOST set and no default
