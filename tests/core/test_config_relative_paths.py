@@ -146,7 +146,11 @@ def _binary_download_folder(folder: Path, value: str) -> Path:
     return path
 
 
-@pytest.mark.parametrize("value", ["ICAg", "''"], ids=["spaces", "empty"])
+@pytest.mark.parametrize(
+    "value",
+    ["ICAg", "''", "wqA=", "4oCD", "IMKgIA=="],
+    ids=["spaces", "empty", "no-break space", "em space", "mixed"],
+)
 def test_a_blank_download_folder_written_as_binary_is_refused(
     tmp_path: Path, working_folder: Path, value: str
 ) -> None:
@@ -154,6 +158,18 @@ def test_a_blank_download_folder_written_as_binary_is_refused(
     into an allowed folder under the working folder."""
     with pytest.raises(ValueError, match="default_download_dir: Value error, is empty"):
         validate_config(_binary_download_folder(tmp_path / "home-config", value))
+
+
+def test_a_blank_upload_folder_written_as_binary_is_refused(tmp_path: Path) -> None:
+    """Pre-QA on #561: the shared rule covers every module's text settings."""
+    path = _file(tmp_path, "")
+    path.write_text(
+        "schema_version: 1\nconnection: {host: nas}\n"
+        "modules: {filestation: {settings: {default_upload_dir: !!binary wqA=}}}\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="default_upload_dir: Value error, is empty"):
+        validate_config(path)
 
 
 def test_a_download_folder_that_isnt_utf8_gets_the_settings_own_error(
