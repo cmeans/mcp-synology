@@ -178,6 +178,7 @@ disallow_untyped_defs = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 markers = ["integration: requires a real Synology NAS (not run in CI)"]
 addopts = "-m 'not integration'"
 ```
