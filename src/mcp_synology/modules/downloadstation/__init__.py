@@ -168,8 +168,8 @@ MODULE_INFO = ModuleInfo(
                 "shows each task's status. A pause takes about 3 s, or longer on a slow NAS, since "
                 "Download Station can undo one while tasks start: it checks, and pauses again "
                 "once. A row saying `pause it again` means call this once more: if it still "
-                "doesn't hold, tell the user, and invalid_parameter then means it's already "
-                "paused or finished. "
+                "doesn't hold, tell the user, and invalid_parameter then means there's nothing "
+                "left to pause; list_downloads shows its state. "
                 "`see list_downloads` means check the task there."
             ),
             permission_tier=PermissionTier.WRITE,

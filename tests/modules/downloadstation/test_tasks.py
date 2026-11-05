@@ -2415,6 +2415,20 @@ class TestPauseResume:
         assert "not paused: it didn't stay paused" in result
 
     @respx.mock
+    async def test_an_early_second_pause_doesnt_shorten_the_watch(
+        self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Pre-QA on #545: only a late one extends the watch. Nothing pinned that an early one
+        leaves the documented 3 s alone."""
+        monkeypatch.setattr(tasks_module, "_PAUSE_HOLD_INTERVAL", 0)
+        get_route(TASK, "pause", version=1).respond(json=ok([{"error": 0, "id": "dbid_1"}]))
+        info = get_route(TASK, "getinfo", version=1).mock(
+            side_effect=self._statuses("downloading", "paused")
+        )
+        await pause_download(mock_client, task_ids=["dbid_1"])
+        assert info.call_count == 7  # six checks, the read before the reply
+
+    @respx.mock
     async def test_the_watch_lasts_what_the_docs_say(
         self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
