@@ -1153,6 +1153,50 @@ class TestPreQa5OnPr541:
             validate_config(path)
         assert not (tmp_path / "other" / "pipe").exists()
 
+    @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="no named pipes here")
+    def test_a_pipe_in_a_folder_named_tilde_is_refused(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """QA round 5: `Path("./~/x")` drops the `./`, so the check read it as a home path, while
+        the handler opened `<working folder>/~/x`: the same bypass as `link/../`."""
+        (tmp_path / "~").mkdir()
+        os.mkfifo(tmp_path / "~" / "x")
+        monkeypatch.chdir(tmp_path)
+        path = _in_a_config(tmp_path, "logging: {file: ./~/x}")
+        with pytest.raises(ValueError, match="it's a named pipe"):
+            validate_config(path)
+        assert not (Path.home() / "x").exists()
+
+    def test_the_config_in_a_folder_named_tilde_is_refused_as_the_log(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        (tmp_path / "~").mkdir()
+        monkeypatch.chdir(tmp_path)
+        path = tmp_path / "~" / "c.yaml"
+        path.write_text(
+            f"{GOOD_HEAD}logging: {{file: ./~/c.yaml}}\nmodules: {{filestation: }}\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="it's the config file"):
+            validate_config(path)
+
+    def test_the_instructions_in_a_folder_named_tilde_are_refused_as_the_log(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        (tmp_path / "~").mkdir()
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "~" / "i.md").write_text("hello\n", encoding="utf-8")
+        path = _in_a_config(
+            tmp_path, f"instructions_file: {tmp_path / '~' / 'i.md'}\nlogging: {{file: ./~/i.md}}"
+        )
+        with pytest.raises(ValueError, match="it's the instructions file"):
+            validate_config(path)
+
+    def test_an_unknown_user_in_the_log_file_still_says_so(self, tmp_path: Path) -> None:
+        path = _in_a_config(tmp_path, "logging: {file: ~nosuchuser545/x.log}")
+        with pytest.raises(ValueError, match="the path isn't usable"):
+            validate_config(path)
+
     def test_a_dot_dot_after_a_link_cant_make_the_log_the_config(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

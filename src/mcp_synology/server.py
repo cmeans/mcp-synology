@@ -997,9 +997,14 @@ def _log_file_problem(config: AppConfig) -> str | None:
         return None
     path = Path(config.logging.file)
     try:
-        # What `FileHandler` will open: it collapses `..` without following links, so
-        # `link/../pipe` is another file to it than to the kernel (pre-QA r7 on #541).
-        path = Path(os.path.abspath(path.expanduser()))
+        # What `FileHandler` will open, the way `_configure_logging` gives it: it collapses `..`
+        # without following links, so `link/../pipe` is another file to it than to the kernel
+        # (pre-QA r7 on #541), and `os.path.expanduser` leaves `./~/x` alone, where
+        # `Path.expanduser` reads it as a home path (QA round 5).
+        expanded = os.path.expanduser(config.logging.file)
+        if expanded.startswith("~"):  # an unknown ~user, which os.path leaves as is
+            raise RuntimeError(expanded)
+        path = Path(os.path.abspath(expanded))
         # Every command appends to it, so these would break the next run, or reach the model.
         if _is_same_file(path, config._source_path):
             reason = "it's the config file"
