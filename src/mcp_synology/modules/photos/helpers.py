@@ -64,16 +64,17 @@ def space_label(space: Space) -> str:
 
 def check_space(operation: str, space: str) -> Space:
     """``space`` as a ``Space``, or an invalid_parameter error."""
-    if space not in SPACES:
-        error_response(
-            ErrorCode.INVALID_PARAMETER,
-            f"{operation} failed: unknown space {space!r}.",
-            retryable=False,
-            param="space",
-            value=space,
-            valid=list(SPACES),
-        )
-    return space  # type: ignore[return-value]
+    for known in SPACES:
+        if known == space:
+            return known
+    error_response(
+        ErrorCode.INVALID_PARAMETER,
+        f"{operation} failed: unknown space {space!r}.",
+        retryable=False,
+        param="space",
+        value=space,
+        valid=list(SPACES),
+    )
 
 
 def invalid(
