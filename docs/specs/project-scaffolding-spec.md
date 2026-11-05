@@ -299,6 +299,7 @@ jobs:
 - Test matrix: Python 3.11 to 3.15.
 - `uv` for CI via `astral-sh/setup-uv` — faster than pip.
 - `UV_LOCKED: "1"` at the top of every workflow that runs uv, so `uv sync` and `uv run` refuse a `uv.lock` that doesn't match `pyproject.toml`. `tests/test_ci_workflows.py` checks it. Dependabot's Python updates use its `uv` ecosystem, which updates the lock.
+- `deps-newest.yml` is the one exception (#115): weekly, by hand, and on PRs touching `pyproject.toml`, `uv.lock` or the workflow, it runs the unit tests on the newest versions those allow, on the newest Python CI tests, since a user's resolver takes them and the lock doesn't. Not required. A failure on main opens or updates one issue, and a pass closes it, from a job with no checkout that never runs on a PR. Known limit: the lock resolves all extras together, so a cap in the `dev` or `vdsm` extra can hold a runtime dependency back from what a user gets.
 - Coverage collected on 3.12, uploaded to Codecov. Not a hard gate initially — just visibility.
 - Integration tests excluded by default (`addopts = "-m 'not integration'"` in pyproject.toml).
 
