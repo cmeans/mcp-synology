@@ -79,6 +79,7 @@ def test_setup_records_the_host_and_another_host_is_refused(
     result = runner.invoke(main, ["check", "--config", other])
     assert result.exit_code == 1, result.output
     assert "are for another host" in result.output
+    assert "They were set up for 'localhost'" in result.output
 
     # Run again for another host: asked first, and declining changes nothing.
     before = dict(store.values)

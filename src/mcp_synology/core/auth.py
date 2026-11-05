@@ -19,6 +19,7 @@ from keyring.errors import KeyringError
 
 from mcp_synology.core.errors import (
     AuthenticationError,
+    CredentialHostError,
     LoginRefusedError,
     RememberedRefusalError,
     SessionExpiredError,
@@ -76,25 +77,28 @@ def _refuse_another_hosts_credentials(config: AppConfig, service: str) -> None:
             return
     except (KeyringError, OSError) as e:
         logger.debug("Keyring error reading or recording the host: %s", e, exc_info=True)
-        raise AuthenticationError(
+        raise CredentialHostError(
             f"Couldn't check which host the credentials in keyring entry {instance!r} are for, "
             f"so they aren't being sent to {config.connection.host!r}.",
             suggestion=advice,
         ) from None
     if recorded == host:
         return
-    # Not naming the recorded host: an `env` block's author would learn the real NAS's name.
+    # Not naming the recorded host in the text: an `env` block's author would learn the real NAS's
+    # name from the reply. `check` adds it.
     reason = (
         "are for another host"
         if recorded
         else "don't say which host they're for, and this one didn't come from the default config "
         "file or --config with no SYNOLOGY_HOST or SYNOLOGY_INSTANCE_ID"
     )
-    raise AuthenticationError(
+    error = CredentialHostError(
         f"The credentials in keyring entry {instance!r} {reason}, so they aren't being sent to "
         f"{config.connection.host!r}.",
         suggestion=advice,
     )
+    error.recorded_host = recorded
+    raise error
 
 
 def resolve_credentials(config: AppConfig) -> tuple[str, str, str | None]:

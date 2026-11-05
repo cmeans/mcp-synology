@@ -151,6 +151,7 @@ async def _check_login(config: object) -> None:
             timeout=config.connection.timeout,
         ) as client:
             from mcp_synology.core.errors import (
+                CredentialHostError,
                 DsmHttpError,
                 DsmReplyError,
                 LoginRefusedError,
@@ -196,6 +197,10 @@ async def _check_login(config: object) -> None:
                 text = str(e).rstrip()
                 if text and text[-1] not in ".!?":
                     text += "."  # DSM's messages have no final period
+                if isinstance(e, CredentialHostError) and e.recorded_host:
+                    # Not in the error's own text, which reaches the model (#536). Quoted: it
+                    # comes from the keyring, so a newline in it mustn't forge a line.
+                    text += f" They were set up for {e.recorded_host!r}."
                 detail = f"{text} {hint.rstrip('.')}." if hint else text
                 click.echo(click.style(f"Authentication failed: {detail}", fg="red"), err=True)
                 sys.exit(1)

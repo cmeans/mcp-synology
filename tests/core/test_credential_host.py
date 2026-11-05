@@ -15,6 +15,7 @@ import keyring
 import pytest
 from click.testing import CliRunner
 from keyring.errors import KeyringError
+from mcp.server.mcpserver.exceptions import ToolError
 
 from mcp_synology.cli.main import main
 from mcp_synology.cli.setup import _may_replace_entry, _store_keyring
@@ -22,6 +23,7 @@ from mcp_synology.core.auth import AuthManager, resolve_credentials
 from mcp_synology.core.client import DsmClient
 from mcp_synology.core.config import comparable_host, load_config
 from mcp_synology.core.errors import AuthenticationError
+from mcp_synology.core.formatting import synology_error_response
 from tests.memory_keyring import MemoryKeyring
 
 
@@ -74,6 +76,59 @@ class TestAMismatchRefuses:
         # An `env` block's author mustn't learn the real NAS's name from the reply.
         assert "nas.home" not in str(exc.value) + (exc.value.suggestion or "")
         assert "hunter2" not in str(exc.value)
+
+    def test_check_says_which_host_the_entry_is_for(
+        self, store: MemoryKeyring, tmp_path: Path
+    ) -> None:
+        """The maintainer, on #536: it's someone at their own terminal, not the model."""
+        _entry(store, "nas", "nas.home")
+        with patch(
+            "mcp_synology.core.client.DsmClient.query_api_info", AsyncMock(return_value=None)
+        ):
+            result = CliRunner().invoke(
+                main, ["check", "--config", str(_file(tmp_path, "nas.office"))]
+            )
+        assert result.exit_code == 1
+        assert "They were set up for 'nas.home'" in result.output
+        assert "hunter2" not in result.output
+
+    def test_check_quotes_a_recorded_host_that_could_forge_a_line(
+        self, store: MemoryKeyring, tmp_path: Path
+    ) -> None:
+        _entry(store, "nas", "x\nError: forged")
+        with patch(
+            "mcp_synology.core.client.DsmClient.query_api_info", AsyncMock(return_value=None)
+        ):
+            result = CliRunner().invoke(
+                main, ["check", "--config", str(_file(tmp_path, "nas.office"))]
+            )
+        assert "'x\\nError: forged'" in result.output
+
+    def test_check_has_nothing_to_add_with_no_recorded_host(
+        self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _entry(store, "nas")
+        monkeypatch.setenv("SYNOLOGY_INSTANCE_ID", "nas")
+        with patch(
+            "mcp_synology.core.client.DsmClient.query_api_info", AsyncMock(return_value=None)
+        ):
+            result = CliRunner().invoke(
+                main, ["check", "--config", str(_file(tmp_path, "nas.home"))]
+            )
+        assert "don't say which host" in result.output
+        assert "They were set up for" not in result.output
+
+    def test_a_tool_error_doesnt_name_the_recorded_host(
+        self, store: MemoryKeyring, tmp_path: Path
+    ) -> None:
+        """What reaches the model: `recorded_host` stays out of the envelope."""
+        _entry(store, "nas", "nas.home")
+        with pytest.raises(AuthenticationError) as exc:
+            resolve_credentials(load_config(_file(tmp_path, "nas.office")))
+        with pytest.raises(ToolError) as tool:
+            synology_error_response("List files", exc.value)
+        assert "nas.home" not in str(tool.value)
+        assert "nas.office" in str(tool.value)
 
     @pytest.mark.parametrize(
         ("env", "instance"),

@@ -31,7 +31,7 @@ Each service stores up to four keys:
 
 ## Credentials Are Tied to a Host
 
-The entry is looked up by `instance_id`, and a derived one is only the host's first part, so `nas.home` and `nas.office` would share an entry. So `setup` records the host beside the password, and any login using a value from the keyring compares it with `connection.host`. On a mismatch, nothing is sent, and the error says to run `setup` again. There's no setting to skip this.
+The entry is looked up by `instance_id`, and a derived one is only the host's first part, so `nas.home` and `nas.office` would share an entry. So `setup` records the host beside the password, and any login using a value from the keyring compares it with `connection.host`. On a mismatch, nothing is sent, and the error says to run `setup` again. `mcp-synology check` also says which host the entry was set up for. There's no setting to skip this.
 
 - **Entries from an older version** have no recorded host. It's recorded the first time the config comes from the default location or `--config`, with neither `SYNOLOGY_HOST` nor `SYNOLOGY_INSTANCE_ID` set. Otherwise the login is refused until you run `setup`.
 - **`setup` asks first** before replacing an entry recorded for another host or with no host recorded. Declining changes nothing. Replacing it means any other config using that entry is refused until it's set up again, and a 2FA device token from another host is removed.
