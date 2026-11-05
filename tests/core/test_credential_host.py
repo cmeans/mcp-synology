@@ -607,13 +607,20 @@ class TestAnEntryWithNoRecordedHost:
         """Pre-QA on #559: asyncio's own handler cancels the login cleanly."""
         _entry(store, "nas")
         config = load_config(_file(tmp_path, "nas.office"))
-        before = signal.getsignal(signal.SIGINT)
-        with (
-            patch("mcp_synology.cli.check._stdin_is_a_terminal", return_value=True),
-            patch("click.confirm", return_value=True),
-        ):
-            assert _asked_to_send(config, "nas") is True
-        assert signal.getsignal(signal.SIGINT) is before
+
+        def handler(*_: object) -> None:
+            """Not Python's default, which is what the question sets."""
+
+        before = signal.signal(signal.SIGINT, handler)
+        try:
+            with (
+                patch("mcp_synology.cli.check._stdin_is_a_terminal", return_value=True),
+                patch("click.confirm", return_value=True),
+            ):
+                assert _asked_to_send(config, "nas") is True
+            assert signal.getsignal(signal.SIGINT) is handler
+        finally:
+            signal.signal(signal.SIGINT, before)
 
     def test_a_keyring_that_fails_the_first_read_cant_skip_the_question(
         self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1788,6 +1795,17 @@ class TestTheMigrationScript:
         store.values[("mcp-synology/nas", "host")] = "nas.office"
         _migrate_script().cleanup_keyring({"nas"}, dry_run=True)
         assert "KEEP  keyring synology-mcp/nas" in capsys.readouterr().out
+
+    def test_it_says_nothing_about_a_value_already_copied(
+        self, store: MemoryKeyring, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """QA round 6 on #559: every rerun would have reported a value that's the same."""
+        self._old(store)
+        script = _migrate_script()
+        script.migrate_keyring({"nas"}, dry_run=False)
+        capsys.readouterr()
+        script.migrate_keyring({"nas"}, dry_run=False)
+        assert "holds a different value" not in capsys.readouterr().out
 
     def test_it_says_when_it_left_a_different_value(
         self, store: MemoryKeyring, capsys: pytest.CaptureFixture[str]
