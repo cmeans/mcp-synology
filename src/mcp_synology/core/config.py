@@ -18,6 +18,7 @@ import re
 import shlex
 import stat
 import unicodedata
+import urllib.request
 from datetime import date
 from pathlib import Path
 from typing import Annotated, Any, Literal, get_args, get_origin
@@ -1028,6 +1029,53 @@ def _merge_env_overrides(raw: dict[str, Any], *, from_file: bool = False) -> dic
     return raw
 
 
+def _no_proxy_covers(entry: str, target: httpx.URL) -> bool:
+    """Whether httpx lets this `NO_PROXY` entry send `target` direct. Its rules, not the standard
+    library's: `.nas.home` leaves `nas.home` on the proxy, and an entry can name a port or a
+    scheme. An entry with no host only reorders httpx's proxy choices, so it counts as no cover:
+    at worst a warning too many."""
+    if "://" in entry:
+        pattern = entry
+    else:
+        try:
+            address = ipaddress.ip_address(entry.split("/")[0])
+        except ValueError:
+            address = None
+        if address is None:
+            pattern = f"all://{entry}" if entry.lower() == "localhost" else f"all://*{entry}"
+        else:
+            pattern = f"all://[{entry}]" if address.version == 6 else f"all://{entry}"
+    try:
+        url = httpx.URL(pattern)
+    except httpx.InvalidURL:
+        return False
+    if url.scheme not in ("all", target.scheme) or url.port not in (None, target.port):
+        return False
+    if url.host.startswith("*."):
+        return target.host.endswith(url.host[1:]) and target.host != url.host[1:]
+    if url.host.startswith("*"):
+        return target.host == url.host[1:] or target.host.endswith(f".{url.host[1:]}")
+    return bool(url.host) and target.host == url.host
+
+
+def _proxy_applies(conn: ConnectionConfig) -> bool:
+    """Whether httpx would send requests to this host through a proxy from the environment or the
+    system (#558): `trust_env` is on by default, so an MCP client's `env` block can route the
+    login through one. httpx's own reading is private; a test compares this with it."""
+    scheme = "https" if conn.https else "http"
+    proxies = urllib.request.getproxies()
+    if not (proxies.get(scheme) or proxies.get("all")):
+        return False
+    try:
+        target = httpx.URL(f"{scheme}://{conn.host}:{conn.port}")
+    except httpx.InvalidURL:
+        return False
+    entries = [entry.strip() for entry in proxies.get("no", "").split(",")]
+    if "*" in entries:
+        return False
+    return not any(_no_proxy_covers(entry, target) for entry in entries if entry)
+
+
 def _emit_warnings(config: AppConfig) -> None:
     """Emit warnings for insecure or unusual config."""
     # A username alone isn't a secret (keyring password + config username is the
@@ -1060,6 +1108,13 @@ def _emit_warnings(config: AppConfig) -> None:
             _warn_always(
                 "SSL certificate verification is disabled. "
                 "Only use this on trusted networks with self-signed certificates.",
+            )
+        if _proxy_applies(conn):
+            # Never its value: a proxy URL can hold a password.
+            _warn_always(
+                "Requests to this NAS, the login included, go through a proxy set in the "
+                "environment or the system (HTTP_PROXY, HTTPS_PROXY, ALL_PROXY). If that isn't "
+                "intended, unset it, or add the host to NO_PROXY."
             )
 
     for name, mod in config.modules.items():
