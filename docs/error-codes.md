@@ -108,7 +108,7 @@ Common causes:
 Fix:
 
 1. Identify which DSM account mcp-synology is using: check your config file or
-   run `mcp-synology check -v`.
+   run `mcp-synology check -v --config <your config file>`.
 2. For shared-folder operations: **Control Panel → Shared Folder → [folder] →
    Edit → Permissions**. Confirm the account has the access level the tool needs
    (read-only is not enough for upload, copy, move, delete, rename, create_folder).
@@ -155,7 +155,7 @@ Fix:
 1. Check the DSM version: **Control Panel → Info Center → General → DSM Version**.
 2. Verify File Station is installed and running: **Package Center → Installed**.
    If missing, install it from **Package Center**.
-3. Run `mcp-synology check -v`. Debug logging dumps the cached API list returned
+3. Run `mcp-synology check -v --config <your config file>`. Debug logging dumps the cached API list returned
    by `SYNO.API.Info`, which shows exactly which APIs the NAS reports.
 4. If the API should exist but is not listed, restart the relevant package via
    **Package Center → [package] → Action → Stop / Run**, or reboot the NAS.
@@ -613,7 +613,7 @@ Otherwise:
    See `permission_denied` for the rationale.
 3. Open **Resource Monitor** in DSM directly. If the panel is empty or
    incomplete there too, the issue is on the NAS side, not in mcp-synology.
-4. Run `mcp-synology check -v` and reproduce the call — the debug log shows
+4. Run `mcp-synology check -v --config <your config file>` and reproduce the call — the debug log shows
    the raw DSM response, which usually tells you which field is missing.
 
 ---
@@ -665,7 +665,7 @@ DSM error code mcp-synology does not recognize yet.
 
 Fix:
 
-1. Run `mcp-synology check -v` and reproduce the failing operation. Debug logs
+1. Run `mcp-synology check -v --config <your config file>` and reproduce the failing operation. Debug logs
    include the raw DSM response with the exact error code.
 2. Check **Log Center** in DSM for matching events around the same timestamp.
 3. If you see a recurring DSM error code that mcp-synology does not handle

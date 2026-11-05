@@ -12,7 +12,7 @@ when it's known, and the issue, PR, spec or error-codes section with the evidenc
 hasn't been reproduced says so. "vdsm" is the virtual DSM the test suite runs on.
 
 To see what mcp-synology sent and what DSM answered, turn on debug logging:
-`SYNOLOGY_LOG_LEVEL=debug` for the server, or `mcp-synology check -v`. Passwords and session IDs
+`SYNOLOGY_LOG_LEVEL=debug` for the server, or `mcp-synology check -v --config <your config file>`. Passwords and session IDs
 are masked.
 
 **Sections:** [Connection and sign-in](#connection-and-sign-in) ·

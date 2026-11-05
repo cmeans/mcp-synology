@@ -114,7 +114,7 @@ On Linux, the server auto-detects the D-Bus session socket for keyring access. I
 ### 3. Verify
 
 ```bash
-uvx mcp-synology check --config <the file setup wrote>   # Validates the config and credentials
+uvx mcp-synology check --config <your config file>   # Validates the config and credentials (setup prints this line; ~/.config/mcp-synology/config.yaml needs no flag)
 uvx mcp-synology setup --list         # Shows all configured NAS instances
 ```
 
@@ -132,7 +132,7 @@ If you prefer a persistent install (avoids download on each invocation). Require
 ```bash
 uv tool install mcp-synology
 mcp-synology setup
-mcp-synology check --config <the file setup wrote>
+mcp-synology check --config <your config file>
 ```
 
 ### Alternative: env-var-only mode
@@ -562,7 +562,7 @@ An error's `help_url` points to its section in [docs/error-codes.md](docs/error-
 Two ways to enable debug logging:
 
 ```bash
-mcp-synology check --verbose                          # --verbose flag on setup/check
+mcp-synology check --verbose --config <your config file>   # --verbose flag on setup/check
 SYNOLOGY_LOG_LEVEL=debug mcp-synology serve           # env var, works for all commands
 ```
 

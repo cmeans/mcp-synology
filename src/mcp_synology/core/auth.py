@@ -19,6 +19,7 @@ from keyring.errors import KeyringError
 
 from mcp_synology.core.errors import (
     CHECK_COMMAND,
+    NO_FILE_NOTE,
     SETUP_COMMAND,
     SETUP_NEW_CONFIG,
     AuthenticationError,
@@ -476,8 +477,8 @@ def resolve_credentials(config: AppConfig) -> tuple[str, str, str | None]:
         raise AuthenticationError(
             "No credentials found.",
             suggestion=(
-                "Set the SYNOLOGY_USERNAME and SYNOLOGY_PASSWORD environment variables: this host "
-                "has no OS keyring."
+                "Set the SYNOLOGY_USERNAME and SYNOLOGY_PASSWORD environment variables: no OS "
+                "keyring was found here."
                 if no_keyring_here()
                 else f"Run {_setup_command(config)} to store credentials in the OS keyring, "
                 "or set SYNOLOGY_USERNAME and SYNOLOGY_PASSWORD environment variables."
@@ -528,10 +529,11 @@ _TWO_FA = (403, 404, 406)
 # `setup` never prints the token (maintainer, 2026-11-05), so it comes from a machine that
 # can store one. Naming `setup` alone sent a host with no keyring in a circle (#481).
 NO_KEYRING_2FA_ADVICE = (
-    "This host has no OS keyring, so a 2FA device token can't be stored here. On a machine "
-    f"with one, copy this config there and run {SETUP_COMMAND}, read the token with "
-    "'uvx keyring get mcp-synology/<instance_id> device_id', and set it in "
-    "SYNOLOGY_DEVICE_ID here"
+    "No OS keyring was found here, so a 2FA device token can't be stored here (if this "
+    "machine has one, run this from a desktop session or under dbus-run-session). On a "
+    f"machine with one, copy this config there and run {SETUP_COMMAND} {NO_FILE_NOTE}, "
+    "read the token with 'uvx keyring get mcp-synology/<instance_id> device_id', and "
+    "set it in SYNOLOGY_DEVICE_ID here"
 )
 
 
@@ -539,10 +541,9 @@ def no_keyring_here() -> bool:
     """True when `keyring` found no backend, as on Docker. A locked or failing keyring is
     still one that `setup` can use once it works."""
     try:
-        import keyring
         from keyring.backends.fail import Keyring
 
-        return isinstance(keyring.get_keyring(), Keyring)
+        return isinstance(kr.get_keyring(), Keyring)
     except Exception as e:  # backends raise their own types
         logger.debug("Keyring backend check failed: %s", e, exc_info=True)
         return False

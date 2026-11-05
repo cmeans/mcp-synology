@@ -6,7 +6,7 @@
 #   2. Config file auth section (below)
 #   3. OS keyring (set by 'mcp-synology setup')
 #
-# For 2FA NAS, run 'mcp-synology setup' first to store the device token in keyring.
+# For 2FA NAS, run 'mcp-synology setup --config <your config file>' first to store the device token in keyring.
 
 schema_version: 1
 

@@ -82,22 +82,19 @@ You can inspect stored credentials using your OS keyring tools or Python's `keyr
 
 ```bash
 # Check what's stored for a given instance
-python -m keyring get mcp-synology/192-168-1-100 username
-
-# Or using the keyring CLI directly
-keyring get mcp-synology/nas-primary username
+uvx keyring get mcp-synology/192-168-1-100 username
 
 # Check if a device token is stored (2FA)
-keyring get mcp-synology/nas-primary device_id
+uvx keyring get mcp-synology/nas-primary device_id
 ```
 
 ## Removing Credentials
 
 ```bash
-keyring del mcp-synology/192-168-1-100 username
-keyring del mcp-synology/192-168-1-100 password
-keyring del mcp-synology/192-168-1-100 device_id
-keyring del mcp-synology/192-168-1-100 host
+uvx keyring del mcp-synology/192-168-1-100 username
+uvx keyring del mcp-synology/192-168-1-100 password
+uvx keyring del mcp-synology/192-168-1-100 device_id
+uvx keyring del mcp-synology/192-168-1-100 host
 ```
 
 ## Credential Resolution Order

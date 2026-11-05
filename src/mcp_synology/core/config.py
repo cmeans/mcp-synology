@@ -37,7 +37,7 @@ from pydantic import (
     model_validator,
 )
 
-from mcp_synology.core.errors import NO_FILE_NOTE, SETUP_COMMAND, SETUP_NEW_CONFIG
+from mcp_synology.core.errors import SETUP_COMMAND, SETUP_NEW_CONFIG
 from mcp_synology.core.local_paths import (
     CONTROL_CHARACTER_ADVICE,
     check_local_path_entries,
@@ -873,7 +873,7 @@ def parse_env_value(env_var: str, dotted_path: str, value: str) -> Any:
                 ipv6_form="[fd00::1]",
                 credentials_setting=(
                     "go in SYNOLOGY_USERNAME and SYNOLOGY_PASSWORD or in the keyring "
-                    f"({SETUP_COMMAND} {NO_FILE_NOTE})"
+                    f"({SETUP_NEW_CONFIG}, with --config <your config file> if you have one)"
                 ),
             )
         ):
@@ -1142,8 +1142,8 @@ def _emit_warnings(config: AppConfig) -> None:
         if (os.environ.get("SYNOLOGY_PASSWORD") or "").strip():
             _warn_always(
                 "Password provided via the SYNOLOGY_PASSWORD environment variable. "
-                f"Consider using {SETUP_COMMAND} {NO_FILE_NOTE} to store it securely in the OS "
-                "keyring.",
+                f"Consider using {SETUP_NEW_CONFIG}, with --config <your config file> if you have "
+                "one, to store it securely in the OS keyring.",
             )
         else:
             _warn_always(
