@@ -10,6 +10,8 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NoReturn
 
+import httpx
+
 from mcp_synology.core.errors import ApiNotFoundError, ErrorCode, SynologyError
 from mcp_synology.core.formatting import (
     error_response,
@@ -125,12 +127,16 @@ def _ids_for_log(task_ids: list[str]) -> str:
 
 def _why_it_failed(e: Exception) -> str:
     """DSM's own error with its code, for docs/error-codes.md; one with no code, from a reverse
-    proxy's reply or a reply that isn't DSM's, as it is, which names no URL; or only the type of any
-    other: a transport error's text can quote the request, session cookie included, as
-    `_re_authenticate` in the client also allows for."""
+    proxy's reply or a reply that isn't DSM's; both with any URL they echo redacted (spec, Secrets
+    in URLs). Or only the type of any other: a transport error's text can quote the request, session
+    cookie included, as `_re_authenticate` in the client also allows for. Anything that's neither is
+    likely a bug, not the NAS, so its traceback goes to the debug log."""
     if not isinstance(e, SynologyError):
+        if not isinstance(e, httpx.HTTPError):
+            logger.debug("Unexpected error in a task read or second pause", exc_info=e)
         return type(e).__name__
-    return f"DSM error {e.code}: {e!r}" if e.code is not None else repr(e)
+    shown = redact_urls(repr(e))
+    return f"DSM error {e.code}: {shown}" if e.code is not None else shown
 
 
 async def _read_tasks(
@@ -941,11 +947,12 @@ async def _pause_again(client: DsmClient, task_ids: list[str]) -> None:
         )
         results = data if isinstance(data, list) else data.get("results", [])
         for result in results:
-            if result.get("error"):
+            if error := result.get("error"):
+                # A code, or only the type of anything else, which could echo a URL.
                 logger.warning(
-                    "Second pause of %s: DSM error %r",
+                    "Second pause of %s: DSM error %s",
                     _ids_for_log([str(result.get("id"))]),
-                    result.get("error"),
+                    error if isinstance(error, int) else type(error).__name__,
                 )
     except _READ_FAILED as e:
         logger.warning(
@@ -1002,11 +1009,14 @@ async def _hold_pause(client: DsmClient, task_ids: list[str]) -> bool:
         elapsed = time.monotonic() - start
         if elapsed > _PAUSE_HOLD_BUDGET:
             logger.info(
-                "Stopped watching paused tasks %s: reads are slow, %.1f s after %d check(s)",
+                "Stopped watching paused tasks %s: past the time budget, %.1f s after %d check(s)",
                 _ids_for_log(remaining),
                 elapsed,
                 check,
             )
+            if again:
+                # Its checks won't run, but the read before the reply can still see it undone.
+                await asyncio.sleep(_PAUSE_HOLD_INTERVAL * _PAUSE_CHECKS_AFTER_A_SECOND)
             return True
     return True
 
@@ -1016,7 +1026,12 @@ def _not_paused_row(status: object) -> str | None:
     if status == "paused":
         return None
     if not isinstance(status, str) or status not in TASK_STATUSES:
-        # A reply goes to the model, so only a status Download Station has goes into it.
+        # A reply goes to the model, so only a status Download Station has goes into it. The log
+        # is how a real NAS would show an integer not seen yet (the spec's list read).
+        logger.info(
+            "A task read after the pause reads an unknown status: %s",
+            status if isinstance(status, int) else type(status).__name__,
+        )
         return "not confirmed paused: it reads an unknown status; see list_downloads"
     return {
         # DS 3.9.5 answers ok for a finished task, which stays finished (#413).
@@ -1107,7 +1122,9 @@ async def _task_state_change(
                 row[1] = _UNCONFIRMED
                 if tasks is not None:
                     logger.info(
-                        "Task %s was left out of the read after the pause", _ids_for_log([row[0]])
+                        "Task %s %s after the pause",
+                        _ids_for_log([row[0]]),
+                        "reads no status" if row[0] in tasks else "was left out of the read",
                     )
     return format_table(
         headers=["Task ID", "Result"],

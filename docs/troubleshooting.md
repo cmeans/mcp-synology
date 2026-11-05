@@ -199,7 +199,8 @@ task for about 3 s and pauses it once more if it starts, then reports what it la
   means the NAS didn't answer in time or gave an error, the task is gone, or another task in a long
   list went missing and reading the rest one by one ran out of time, so the pause may or may not
   have held. These checks wait at most 5 s for each answer, so the reply beats an MCP
-  client's limit, and raising `connection.timeout` doesn't change that.
+  client's limit, and raising `connection.timeout` doesn't change that. The log gives the reason at
+  the default level. For `ConnectError`, `mcp-synology check` gives the error underneath it.
 
 ### `create_download` returns no task IDs
 

@@ -1382,7 +1382,7 @@ class TestPauseResume:
         assert info.call_count == 2  # one check, the read before the reply
         assert self._rows(result) == {"dbid_1": "ok"}
         assert any(
-            m.startswith("Stopped watching paused tasks ['dbid_1']: reads are slow, ")
+            m.startswith("Stopped watching paused tasks ['dbid_1']: past the time budget, ")
             and m.endswith("after 1 check(s)")
             for m in caplog.messages
         )
@@ -1550,7 +1550,7 @@ class TestPauseResume:
             "captcha_needed",  # no source says Download Station has it
         ],
     )
-    async def test_a_status_that_doesnt_look_like_one_isnt_quoted(
+    async def test_a_status_the_code_doesnt_know_isnt_quoted(
         self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch, status: Any
     ) -> None:
         monkeypatch.setattr(tasks_module, "_PAUSE_HOLD_INTERVAL", 0)
@@ -1829,7 +1829,133 @@ class TestPauseResume:
         )
         with caplog.at_level("WARNING", logger=tasks_module.__name__):
             await pause_download(mock_client, task_ids=["dbid_1"])
-        assert any("Error(" in m and m.startswith("Couldn't read tasks") for m in caplog.messages)
+        assert any(
+            "Error(" in m and m.startswith("Couldn't read tasks ['dbid_1']: DSM error 105: ")
+            for m in caplog.messages
+        )
+
+    @respx.mock
+    async def test_a_url_a_dsm_error_echoes_is_redacted_in_the_log(
+        self,
+        mock_client: DsmClient,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """QA round 4 on #545: these lines were debug on main, so who sees the text changed."""
+        monkeypatch.setattr(tasks_module, "_PAUSE_HOLD_INTERVAL", 0)
+        url = "http://user:hunter2@tracker.example/announce?passkey=abc"
+        get_route(TASK, "pause", version=1).mock(
+            side_effect=[
+                httpx.Response(200, json=ok([{"error": 0, "id": "dbid_1"}])),
+                httpx.Response(200, json=ok([{"error": url, "id": "dbid_1"}])),
+            ]
+        )
+        reads = [self._statuses("downloading")[0], httpx.Response(200, text=url)]
+        get_route(TASK, "getinfo", version=1).mock(side_effect=reads)
+        with caplog.at_level("INFO", logger=tasks_module.__name__):
+            await pause_download(mock_client, task_ids=["dbid_1"])
+        assert "Second pause of ['dbid_1']: DSM error str" in caplog.messages
+        assert any(m.startswith("Couldn't read tasks") for m in caplog.messages)
+        assert not [m for m in caplog.messages if "hunter2" in m or "abc" in m]
+
+    def test_a_coded_dsm_error_is_redacted_too(self) -> None:
+        error = tasks_module.SynologyError(
+            "http://user:hunter2@tracker.example/a?passkey=abc", code=120
+        )
+        shown = tasks_module._why_it_failed(error)
+        assert shown.startswith("DSM error 120: ")
+        assert "hunter2" not in shown
+        assert "abc" not in shown
+
+    @respx.mock
+    async def test_an_unexpected_error_leaves_its_traceback_in_the_debug_log(
+        self,
+        mock_client: DsmClient,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """QA round 4 on #545: a bug looked like a flaky NAS, at every log level."""
+        monkeypatch.setattr(tasks_module, "_PAUSE_HOLD_INTERVAL", 0)
+        get_route(TASK, "pause", version=1).respond(json=ok([{"error": 0, "id": "dbid_1"}]))
+        get_route(TASK, "getinfo", version=1).mock(side_effect=KeyError("x"))
+        with caplog.at_level("DEBUG", logger=tasks_module.__name__):
+            await pause_download(mock_client, task_ids=["dbid_1"])
+        assert [r.exc_info for r in caplog.records if r.levelname == "DEBUG" and r.exc_info], (
+            caplog.messages
+        )
+
+    @respx.mock
+    async def test_a_transport_error_leaves_no_traceback(
+        self,
+        mock_client: DsmClient,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Its text can quote the request, session cookie included."""
+        monkeypatch.setattr(tasks_module, "_PAUSE_HOLD_INTERVAL", 0)
+        get_route(TASK, "pause", version=1).respond(json=ok([{"error": 0, "id": "dbid_1"}]))
+        get_route(TASK, "getinfo", version=1).mock(side_effect=httpx.ReadTimeout("x"))
+        with caplog.at_level("DEBUG", logger=tasks_module.__name__):
+            await pause_download(mock_client, task_ids=["dbid_1"])
+        assert not [r for r in caplog.records if r.exc_info]
+
+    @respx.mock
+    @pytest.mark.parametrize(("status", "shown"), [(7, "7"), ("queued", "str"), (["x"], "list")])
+    async def test_an_unknown_status_is_logged(
+        self,
+        mock_client: DsmClient,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+        status: Any,
+        shown: str,
+    ) -> None:
+        """QA round 4 on #545: this is how a real NAS would show an integer not seen yet."""
+        monkeypatch.setattr(tasks_module, "_PAUSE_HOLD_INTERVAL", 0)
+        get_route(TASK, "pause", version=1).respond(json=ok([{"error": 0, "id": "dbid_1"}]))
+        get_route(TASK, "getinfo", version=1).respond(
+            json=ok({"tasks": [{"id": "dbid_1", "status": status}]})
+        )
+        with caplog.at_level("INFO", logger=tasks_module.__name__):
+            await pause_download(mock_client, task_ids=["dbid_1"])
+        assert f"A task read after the pause reads an unknown status: {shown}" in caplog.messages
+
+    @respx.mock
+    async def test_a_null_status_isnt_logged_as_left_out(
+        self,
+        mock_client: DsmClient,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        monkeypatch.setattr(tasks_module, "_PAUSE_HOLD_INTERVAL", 0)
+        get_route(TASK, "pause", version=1).respond(json=ok([{"error": 0, "id": "dbid_1"}]))
+        get_route(TASK, "getinfo", version=1).respond(
+            json=ok({"tasks": [{"id": "dbid_1", "status": None}]})
+        )
+        with caplog.at_level("INFO", logger=tasks_module.__name__):
+            await pause_download(mock_client, task_ids=["dbid_1"])
+        assert "Task ['dbid_1'] reads no status after the pause" in caplog.messages
+
+    @respx.mock
+    async def test_a_second_pause_past_the_budget_still_gets_time_before_the_last_read(
+        self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """QA round 4 on #545: on a slow NAS, the read before the reply came straight after it,
+        and a task undone again 0.7 s later read `ok`."""
+        slept: list[float] = []
+
+        async def sleep(seconds: float) -> None:
+            slept.append(seconds)
+
+        monkeypatch.setattr(tasks_module.asyncio, "sleep", sleep)
+        monkeypatch.setattr(tasks_module, "_PAUSE_HOLD_BUDGET", -1)
+        pause = get_route(TASK, "pause", version=1).respond(json=ok([{"error": 0, "id": "dbid_1"}]))
+        get_route(TASK, "getinfo", version=1).mock(
+            side_effect=self._statuses("downloading", "downloading")
+        )
+        result = await pause_download(mock_client, task_ids=["dbid_1"])
+        assert pause.call_count == 2
+        assert slept == [0.5, 1.0]
+        assert self._rows(result) == {"dbid_1": tasks_module._UNDONE}
 
     @respx.mock
     @pytest.mark.parametrize("failure", ["missing", "transport", "deadline"])
