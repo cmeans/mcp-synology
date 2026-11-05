@@ -10,8 +10,6 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NoReturn
 
-import httpx
-
 from mcp_synology.core.errors import ApiNotFoundError, ErrorCode, SynologyError
 from mcp_synology.core.formatting import (
     error_response,
@@ -56,6 +54,7 @@ _VALID_SORTS: set[str] = {"queue", *_SORT_KEYS}
 # second of the pause.
 _PAUSE_HOLD_CHECKS = 6
 _PAUSE_HOLD_INTERVAL = 0.5
+_PAUSE_CHECKS_AFTER_A_SECOND = 2
 # Seconds. The checks are 3 s of waiting when reads are quick; slow reads add to that.
 _PAUSE_HOLD_BUDGET = 6.0
 # Seconds, to connect and to read, for the calls a pause adds. The client's default of 30 s would
@@ -65,9 +64,10 @@ _IDS_SHOWN_IN_A_LOG_LINE = 20
 _LOGGABLE_ID = re.compile(r"[\w.-]{1,64}")
 _UNDONE = "not paused: it didn't stay paused; pause it again"
 _UNCONFIRMED = "not confirmed paused: couldn't check it; see list_downloads"
-# DSM said no, no answer, or an answer without what DSM always sends. The client's own reply
-# handling raises TypeError and AttributeError on some of those (`data: null`, `error: "x"`).
-_READ_FAILED = (SynologyError, httpx.HTTPError, ValueError, TypeError, AttributeError)
+# Anything: by then the pause has been sent, so the rows must still come back, or a model retries
+# and gets 101. The client's own reply handling alone raises TypeError, AttributeError and
+# RecursionError on odd replies. As File Station and Photos do for a task's status (pre-QA on #545).
+_READ_FAILED = Exception
 
 
 def _format_epoch(epoch: int | None) -> str:
@@ -114,20 +114,23 @@ def _ids_for_log(task_ids: list[str]) -> str:
     URL inside other text. So only what looks like an ID is shown, and anything else by its length.
     Capped, since a list has no limit of its own."""
 
-    def shown(task_id: object) -> str:
+    def loggable(task_id: object) -> str:
         text = str(task_id)
         return text if _LOGGABLE_ID.fullmatch(text) else f"<not an ID, {len(text)} chars>"
 
-    listed = repr([shown(task_id) for task_id in task_ids[:_IDS_SHOWN_IN_A_LOG_LINE]])
+    listed = repr([loggable(task_id) for task_id in task_ids[:_IDS_SHOWN_IN_A_LOG_LINE]])
     more = len(task_ids) - _IDS_SHOWN_IN_A_LOG_LINE
     return f"{listed} and {more:,} more" if more > 0 else listed
 
 
 def _why_it_failed(e: Exception) -> str:
-    """DSM's own error with its code, for docs/error-codes.md, or only the type of any other: a
-    transport error's text can quote the request, session cookie included, as `_re_authenticate`
-    in the client also allows for."""
-    return f"DSM error {e.code}: {e!r}" if isinstance(e, SynologyError) else type(e).__name__
+    """DSM's own error with its code, for docs/error-codes.md; one with no code, from a reverse
+    proxy's reply or a reply that isn't DSM's, as it is, which names no URL; or only the type of any
+    other: a transport error's text can quote the request, session cookie included, as
+    `_re_authenticate` in the client also allows for."""
+    if not isinstance(e, SynologyError):
+        return type(e).__name__
+    return f"DSM error {e.code}: {e!r}" if e.code is not None else repr(e)
 
 
 async def _read_tasks(
@@ -966,7 +969,10 @@ async def _hold_pause(client: DsmClient, task_ids: list[str]) -> bool:
     deadline = start + _PAUSE_HOLD_BUDGET
     remaining = task_ids
     paused_again: set[str] = set()
-    for check in range(1, _PAUSE_HOLD_CHECKS + 1):
+    check = 0
+    last_check = _PAUSE_HOLD_CHECKS
+    while check < last_check:
+        check += 1
         await asyncio.sleep(_PAUSE_HOLD_INTERVAL)
         tasks = await _read_tasks(
             client, remaining, read_timeout=_PAUSE_READ_TIMEOUT, deadline=deadline
@@ -989,6 +995,8 @@ async def _hold_pause(client: DsmClient, task_ids: list[str]) -> bool:
             )
             paused_again.update(again)
             await _pause_again(client, again)
+            # A second pause gets its own time to be undone in, however late it was sent.
+            last_check = max(last_check, check + _PAUSE_CHECKS_AFTER_A_SECOND)
         if not remaining:
             return True
         elapsed = time.monotonic() - start
@@ -1007,7 +1015,7 @@ def _not_paused_row(status: object) -> str | None:
     """The reply row for a task DSM said ok to pause, if its status says otherwise."""
     if status == "paused":
         return None
-    if not isinstance(status, str) or status not in {*TASK_STATUSES, "captcha_needed"}:
+    if not isinstance(status, str) or status not in TASK_STATUSES:
         # A reply goes to the model, so only a status Download Station has goes into it.
         return "not confirmed paused: it reads an unknown status; see list_downloads"
     return {

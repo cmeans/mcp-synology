@@ -416,7 +416,8 @@ class TestRequest:
 
     @respx.mock
     async def test_a_shorter_read_timeout_caps_connect_too(self) -> None:
-        """Pre-QA on #545: with connect left at 30 s, an unreachable NAS doubled to 60 s."""
+        """Pre-QA on #545: with connect left at 30 s, a NAS that goes dark after the pause would
+        take 30 s for that read, not 5 s."""
         route = respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
             json={"success": True, "data": {}}
         )

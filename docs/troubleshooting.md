@@ -196,8 +196,9 @@ task for about 3 s and pauses it once more if it starts, then reports what it la
   can fail with `invalid_parameter` (above), which means there's nothing left to pause. If the task
   still doesn't hold, stop and check it in Download Station.
 - `see list_downloads`: check the task's status there. `not confirmed paused: couldn't check it`
-  means the NAS didn't answer in time or gave an error, or the task is gone, so the pause may or
-  may not have held. These checks wait at most 5 s for each answer, so the reply beats an MCP
+  means the NAS didn't answer in time or gave an error, the task is gone, or another task in a long
+  list went missing and reading the rest one by one ran out of time, so the pause may or may not
+  have held. These checks wait at most 5 s for each answer, so the reply beats an MCP
   client's limit, and raising `connection.timeout` doesn't change that.
 
 ### `create_download` returns no task IDs
