@@ -1032,8 +1032,9 @@ def _merge_env_overrides(raw: dict[str, Any], *, from_file: bool = False) -> dic
 def _no_proxy_covers(entry: str, target: httpx.URL) -> bool:
     """Whether httpx lets this `NO_PROXY` entry send `target` direct. Its rules, not the standard
     library's: `.nas.home` leaves `nas.home` on the proxy, and an entry can name a port or a
-    scheme. An entry with no host only reorders httpx's proxy choices, so it counts as no cover:
-    at worst a warning too many."""
+    scheme. An entry with no host or `*` as its host counts as no cover, though `https://` can
+    replace httpx's proxy for that scheme, and so does one that can't be read: at worst a warning
+    too many."""
     if "://" in entry:
         pattern = entry
     else:
@@ -1047,15 +1048,18 @@ def _no_proxy_covers(entry: str, target: httpx.URL) -> bool:
             pattern = f"all://[{entry}]" if address.version == 6 else f"all://{entry}"
     try:
         url = httpx.URL(pattern)
-    except httpx.InvalidURL:
+        host = url.host  # decoding a bad `xn--` label raises idna's UnicodeError
+    except (httpx.InvalidURL, UnicodeError):
         return False
-    if url.scheme not in ("all", target.scheme) or url.port not in (None, target.port):
+    if host == "*" or url.scheme not in ("all", target.scheme):
         return False
-    if url.host.startswith("*."):
-        return target.host.endswith(url.host[1:]) and target.host != url.host[1:]
-    if url.host.startswith("*"):
-        return target.host == url.host[1:] or target.host.endswith(f".{url.host[1:]}")
-    return bool(url.host) and target.host == url.host
+    if url.port not in (None, target.port):
+        return False
+    if host.startswith("*."):
+        return target.host.endswith(host[1:]) and target.host != host[1:]
+    if host.startswith("*"):
+        return target.host == host[1:] or target.host.endswith(f".{host[1:]}")
+    return target.host == host
 
 
 def _proxy_applies(conn: ConnectionConfig) -> bool:
@@ -1066,14 +1070,33 @@ def _proxy_applies(conn: ConnectionConfig) -> bool:
     proxies = urllib.request.getproxies()
     if not (proxies.get(scheme) or proxies.get("all")):
         return False
-    try:
-        target = httpx.URL(f"{scheme}://{conn.host}:{conn.port}")
-    except httpx.InvalidURL:
-        return False
+    target = httpx.URL(f"{scheme}://{conn.host}:{conn.port}")
     entries = [entry.strip() for entry in proxies.get("no", "").split(",")]
     if "*" in entries:
         return False
     return not any(_no_proxy_covers(entry, target) for entry in entries if entry)
+
+
+def _no_proxy_entry(host: str) -> str:
+    """The `NO_PROXY` entry that sends this host direct. The host's own spelling can't always be
+    it: httpx refuses `[fd00::1]` and `bücher.example` when it builds a client, and an `xn--` name
+    stays on the proxy, as httpx compares the decoded form."""
+    if host.startswith("["):
+        return host[1:-1]
+    if not host.isascii() or "xn--" in host.lower():
+        return f"all://{host}"
+    return host
+
+
+def warn_if_proxied(conn: ConnectionConfig) -> None:
+    """Warn when a proxy from the environment or the system applies to this NAS (#558), at any
+    log level. Never its value: a proxy URL can hold a password."""
+    if _proxy_applies(conn):
+        _warn_always(
+            "Requests to this NAS, the login included, go through a proxy set in the environment "
+            "or the system (HTTP_PROXY, HTTPS_PROXY, ALL_PROXY). If that isn't intended, unset "
+            f"it, or add {_no_proxy_entry(conn.host)} to NO_PROXY."
+        )
 
 
 def _emit_warnings(config: AppConfig) -> None:
@@ -1109,13 +1132,7 @@ def _emit_warnings(config: AppConfig) -> None:
                 "SSL certificate verification is disabled. "
                 "Only use this on trusted networks with self-signed certificates.",
             )
-        if _proxy_applies(conn):
-            # Never its value: a proxy URL can hold a password.
-            _warn_always(
-                "Requests to this NAS, the login included, go through a proxy set in the "
-                "environment or the system (HTTP_PROXY, HTTPS_PROXY, ALL_PROXY). If that isn't "
-                "intended, unset it, or add the host to NO_PROXY."
-            )
+        warn_if_proxied(conn)
 
     for name, mod in config.modules.items():
         if not mod.enabled:

@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import logging
 from typing import TYPE_CHECKING
+from unittest.mock import patch
 
 import httpx
 import pytest
+from click.testing import CliRunner
 
-from mcp_synology.core.config import _proxy_applies, load_config
+from mcp_synology.cli.main import main
+from mcp_synology.core.config import _no_proxy_entry, _proxy_applies, load_config
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -172,7 +175,7 @@ def test_env_only_mode_warns_too(
 )
 @pytest.mark.parametrize("proxy_var", ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", None])
 @pytest.mark.parametrize("https", [True, False], ids=["https", "http"])
-@pytest.mark.parametrize("host", ["nas.home", "10.0.0.5", "localhost", "[::1]"])
+@pytest.mark.parametrize("host", ["nas.home", "10.0.0.5", "localhost", "sub.localhost", "[::1]"])
 def test_it_agrees_with_what_httpx_does(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -189,6 +192,69 @@ def test_it_agrees_with_what_httpx_does(
     conn = load_config(_config(tmp_path, host=f'"{host}"', https=str(https).lower())).connection
     assert conn is not None
     scheme = "https" if https else "http"
-    with httpx.Client() as client:
-        transport = client._transport_for_url(httpx.URL(f"{scheme}://{host}:{conn.port}/"))
-    assert _proxy_applies(conn) is (transport is not client._transport)
+    assert _proxy_applies(conn) is _httpx_uses_a_proxy(f"{scheme}://{host}:{conn.port}/")
+
+
+def _httpx_uses_a_proxy(url: str) -> bool:
+    with httpx.Client(verify=False) as client:  # no certificate loading: this many would be slow
+        return client._transport_for_url(httpx.URL(url)) is not client._transport
+
+
+@pytest.mark.parametrize(
+    "host",
+    ["nas.home", "10.0.0.5", "localhost", "[fd00::1]", "bücher.example", "xn--bcher-kva.example"],
+)
+def test_following_the_warnings_advice_works(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, host: str
+) -> None:
+    """Pre-QA on #558: `NO_PROXY=[fd00::1]`, the host's own spelling, crashed httpx at client
+    build, as `bücher.example` did, and an `xn--` name stayed on the proxy."""
+    monkeypatch.setenv("HTTPS_PROXY", _SECRET_PROXY)
+    warnings = _warnings(caplog, tmp_path, host=f'"{host}"')
+    entry = _no_proxy_entry(host)
+    assert warnings[0].endswith(f"or add {entry} to NO_PROXY.")
+    monkeypatch.setenv("NO_PROXY", entry)
+    conn = load_config(tmp_path / "c.yaml").connection
+    assert conn is not None
+    assert not _proxy_applies(conn)
+    assert not _httpx_uses_a_proxy(f"https://{host}:{conn.port}/")
+
+
+@pytest.mark.parametrize(
+    "no_proxy", ["[::1]", "https://xn--a.example", "all://xn--a.example", "https://", "all://*"]
+)
+def test_an_entry_it_cant_use_still_warns_and_loads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    no_proxy: str,
+) -> None:
+    """Pre-QA on #558: a bad `xn--` label raised out of `load_config`, and `all://*` left a
+    trailing-dot host silently proxied."""
+    monkeypatch.setenv("HTTPS_PROXY", _SECRET_PROXY)
+    monkeypatch.setenv("NO_PROXY", no_proxy)
+    assert _warnings(caplog, tmp_path, host="nas.home.")
+
+
+def test_interactive_setup_warns_before_asking_for_the_password(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Pre-QA on #558: it builds its config without `load_config`, and the typed password went
+    through the proxy with nothing said. The answers stop at the username prompt, so the warning
+    can only have come before it."""
+    for var in ("SYNOLOGY_HOST", "SYNOLOGY_INSTANCE_ID", "MCP_SYNOLOGY_CONFIG"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("HTTP_PROXY", _SECRET_PROXY)
+    with (
+        patch("mcp_synology.cli.setup._CONFIG_DIR", tmp_path / "config"),
+        patch("mcp_synology.core.config.discover_config_path", side_effect=FileNotFoundError),
+        patch("keyring.get_password", return_value=None),  # never the real keyring
+        patch("keyring.set_password", side_effect=AssertionError("wrote to the keyring")),
+        caplog.at_level("WARNING"),
+    ):
+        result = CliRunner().invoke(main, ["setup"], input="nas.local\nn\n\nread\n\n")
+    assert "DSM username" in result.output
+    assert "DSM password:" not in result.output
+    warnings = [m for m in caplog.messages if "go through a proxy" in m]
+    assert len(warnings) == 1
+    assert "hunter2" not in warnings[0]
