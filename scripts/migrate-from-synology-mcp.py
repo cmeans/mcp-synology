@@ -73,6 +73,16 @@ def migrate_keyring(instances: set[str], *, dry_run: bool) -> int:
         old_service = f"{OLD_NAME}/{instance_id}"
         new_service = f"{NEW_NAME}/{instance_id}"
 
+        # An entry recorded for a host is that host's, so the old NAS's secrets don't go in it
+        # (#536): the host check would then send them there.
+        try:
+            recorded = kr.get_password(new_service, "host")
+        except Exception:
+            recorded = None
+        if recorded:
+            print(f"  SKIP  keyring {new_service}: already set up for a host")
+            continue
+
         migrated_any = False
         for key in KEYRING_KEYS:
             try:

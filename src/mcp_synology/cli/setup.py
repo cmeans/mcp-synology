@@ -526,6 +526,7 @@ async def _attempt_login(
                         keyring.set_password(service, "device_id", device_id)
                     except Exception as e3:  # backends raise their own types
                         logger.debug("Keyring error storing the token: %s", e3, exc_info=True)
+                        result["token_not_stored"] = True
                         click.echo(
                             click.style(
                                 "Login successful, but the 2FA device token couldn't be stored in "
@@ -552,7 +553,8 @@ async def _attempt_login(
     sid = data.get("sid")
     if sid:
         client.sid = sid
-        if not result.get("success"):
+        # After the warning that the token wasn't stored, this would read as all's well.
+        if not result.get("success") and not result.get("token_not_stored"):
             click.echo(click.style("Login successful!", fg="green"))
     result["success"] = True
     result["sid"] = sid

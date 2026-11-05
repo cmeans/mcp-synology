@@ -151,15 +151,18 @@ def _setup_command(config: AppConfig, *, new_instance: bool = False) -> str:
     a client's `env` block set them: it then stores for the file's host or instance (QA round 1
     on #559), or can't connect with the host but not the port or HTTPS (QA round 2). With no
     config file, plain `setup` takes the host from SYNOLOGY_HOST. ``new_instance``: the instance
-    ID is about to change, so that variable isn't to be kept."""
+    ID is changing through that variable, so it's to be set, and not to the same value."""
     command = _SETUP if config._source_path else "'mcp-synology setup'"
     variables = [
         v
         for v in _host_variables() + _connection_variables()
         if not (new_instance and v == "SYNOLOGY_INSTANCE_ID")
     ]
+    parts = ["that SYNOLOGY_INSTANCE_ID"] if new_instance else []
     if variables:
-        command += f" with the same {' and '.join(variables)}"
+        parts.append(f"the same {' and '.join(variables)}")
+    if parts:
+        command += f" with {' and '.join(parts)}"
     return command
 
 
@@ -170,10 +173,12 @@ def own_instance_id_clause(config: AppConfig, nas: str = "this NAS") -> str:
 
     in_the_file = config._source_path and not os.environ.get("SYNOLOGY_INSTANCE_ID", "").strip()
     where = "in the config" if in_the_file else "with SYNOLOGY_INSTANCE_ID"
+    # At a terminal, without that variable, `setup` would ask about this same entry (pre-QA on
+    # #559).
+    command = _setup_command(config, new_instance=not in_the_file)
     return (
-        f"give {nas} its own instance_id {where}, then run "
-        f"{_setup_command(config, new_instance=True)}, which asks for the password and leaves this "
-        "entry alone"
+        f"give {nas} its own instance_id {where}, then run {command}, which asks for the password "
+        "and leaves this entry alone"
     )
 
 

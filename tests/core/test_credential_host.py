@@ -8,6 +8,7 @@ the config was found.
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -458,7 +459,9 @@ class TestAnEntryWithNoRecordedHost:
         with patch("click.prompt", return_value="123456"):
             result = asyncio.run(_attempt_login(client, "admin", "pw", "mcp-synology/nas"))
         assert result["success"]
-        assert "couldn't be stored" in capsys.readouterr().out
+        out = capsys.readouterr().out
+        assert "couldn't be stored" in out
+        assert "Login successful!\n" not in out  # pre-QA on #559: it read as all's well
 
     def test_a_host_recorded_meanwhile_stays(self, store: MemoryKeyring, tmp_path: Path) -> None:
         """A second process got there during this login's round trip."""
@@ -723,6 +726,8 @@ class TestAnEntryWithNoRecordedHost:
         with pytest.raises(CredentialHostError) as exc:
             resolve_credentials(load_config(_file(tmp_path, "nas.home")))
         assert "the same SYNOLOGY_INSTANCE_ID" not in (exc.value.terminal_suggestion or "")
+        # At a terminal, without it, `setup` would ask about this same entry (pre-QA on #559).
+        assert "with that SYNOLOGY_INSTANCE_ID" in (exc.value.terminal_suggestion or "")
         assert "Give this NAS its own instance_id with SYNOLOGY_INSTANCE_ID" in (
             exc.value.terminal_suggestion or ""
         )
@@ -768,7 +773,7 @@ class TestAnEntryWithNoRecordedHost:
             (["SYNOLOGY_INSTANCE_ID"], "its own instance_id with SYNOLOGY_INSTANCE_ID"),
             (
                 ["SYNOLOGY_HOST", "SYNOLOGY_INSTANCE_ID"],
-                "with the same SYNOLOGY_HOST, which asks",
+                "with that SYNOLOGY_INSTANCE_ID and the same SYNOLOGY_HOST, which asks",
             ),
         ],
     )
@@ -803,7 +808,7 @@ class TestAnEntryWithNoRecordedHost:
         monkeypatch.setenv(variable, "5001" if variable == "SYNOLOGY_PORT" else "true")
         with pytest.raises(AuthenticationError) as exc:
             resolve_credentials(load_config())
-        assert f"with the same SYNOLOGY_HOST and {variable}" in (exc.value.suggestion or "")
+        assert f"the same SYNOLOGY_HOST and {variable}" in (exc.value.suggestion or "")
 
     def test_config_wins_over_the_variable(
         self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1496,3 +1501,36 @@ class TestSetup:
         assert "already exists. Overwrite?" in result.output
         assert "DSM username" not in result.output
         assert store.values == {}
+
+
+def _migrate_script() -> Any:
+    path = Path(__file__).parents[2] / "scripts" / "migrate-from-synology-mcp.py"
+    spec = importlib.util.spec_from_file_location("migrate_from_synology_mcp", path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class TestTheMigrationScript:
+    """Pre-QA on #559: it wrote around the record, so the check passed the old NAS's secrets."""
+
+    @staticmethod
+    def _old(store: MemoryKeyring) -> None:
+        store.values[("synology-mcp/nas", "username")] = "homeuser"
+        store.values[("synology-mcp/nas", "password")] = "home-pw"
+
+    def test_an_entry_recorded_for_a_host_is_left_alone(self, store: MemoryKeyring) -> None:
+        self._old(store)
+        store.values[("mcp-synology/nas", "host")] = "nas.office"
+        assert _migrate_script().migrate_keyring({"nas"}, dry_run=False) == 0
+        assert ("mcp-synology/nas", "password") not in store.values
+
+    def test_an_entry_with_no_record_takes_them_and_stays_unrecorded(
+        self, store: MemoryKeyring
+    ) -> None:
+        self._old(store)
+        assert _migrate_script().migrate_keyring({"nas"}, dry_run=False) == 1
+        assert store.values[("mcp-synology/nas", "password")] == "home-pw"
+        assert ("mcp-synology/nas", "host") not in store.values
