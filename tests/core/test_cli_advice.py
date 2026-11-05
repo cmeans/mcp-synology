@@ -230,6 +230,7 @@ class TestSetupWithNoKeyring:
             "With those variables and the server's SYNOLOGY_HOST, SYNOLOGY_HTTPS and SYNOLOGY_PORT "
             "set, test it: mcp-synology check\n"
         ) in result.output
+        assert "If this account uses 2FA" in result.output
 
 
 @pytest.mark.usefixtures("no_keyring")
@@ -275,6 +276,21 @@ class TestSetupWithAKeyringThatFails:
         assert "Keyring not available" not in output
         assert "If this account uses 2FA" not in output
         assert (tmp_path / "config" / "192-168-1-50.yaml").exists()
+
+    def test_setup_with_a_config_skips_the_2fa_line_too(
+        self, request: pytest.FixtureRequest, no_keyring: None, tmp_path: Path
+    ) -> None:
+        config = tmp_path / "mynas.yaml"
+        config.write_text(
+            "schema_version: 1\nconnection:\n  host: 192.168.1.50\n"
+            "modules:\n  filestation:\n    enabled: true\n"
+        )
+        previous = keyring.get_keyring()
+        keyring.set_keyring(_WriteFails())
+        request.addfinalizer(lambda: keyring.set_keyring(previous))
+        result = CliRunner().invoke(main, ["setup", "--config", str(config)], input="me\nx\n")
+        assert "Couldn't store these in the keyring." in result.output
+        assert "If this account uses 2FA" not in result.output
 
 
 @pytest.mark.usefixtures("no_keyring")
