@@ -1275,7 +1275,9 @@ class _ConfigLoader(yaml.SafeLoader):
         # own), so a check while building would see an override as a repeat, both in the
         # merging mapping and in an anchor reused by alias after it was flattened.
         self._check_written_keys(node)
-        return super().construct_document(node)  # type: ignore[no-untyped-call]
+        # Only some types-PyYAML versions type this call, and mypy's strict mode fails on an ignore
+        # it doesn't need, hence `unused-ignore` (#551). Its arguments are still checked.
+        return super().construct_document(node)  # type: ignore[no-untyped-call,unused-ignore]
 
     def _check_written_keys(self, root: yaml.Node) -> None:
         # Every problem together, in file order (#511 PR 3): through an MCP client, each
@@ -1366,7 +1368,7 @@ class _ConfigLoader(yaml.SafeLoader):
             if not isinstance(key_node, yaml.ScalarNode):
                 continue  # a list or mapping as a key: SafeLoader's own error follows
             key = (
-                key_node.value if key_node.tag == _VALUE_TAG else self.construct_object(key_node)  # type: ignore[no-untyped-call]
+                key_node.value if key_node.tag == _VALUE_TAG else self.construct_object(key_node)  # type: ignore[no-untyped-call,unused-ignore]
             )
             first = seen.get(key)
             if first is not None:
