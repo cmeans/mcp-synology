@@ -1,4 +1,5 @@
-"""A relative `instructions_file` or `logging.file` is from the config file's folder (#553)."""
+"""A relative `instructions_file`, `logging.file` or `default_download_dir` is from the config
+file's folder (#553)."""
 
 from __future__ import annotations
 
@@ -11,7 +12,7 @@ from typing import Any
 import pytest
 
 from mcp_synology.cli.logging_ import _configure_logging
-from mcp_synology.core.config import load_config
+from mcp_synology.core.config import AppConfig, load_config
 from mcp_synology.server import _read_instructions_file, validate_config
 
 
@@ -119,35 +120,78 @@ def test_a_download_folder_is_from_the_config_files_folder(
     assert validate_config(path) is not None
 
 
-@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="no named pipes here")
-@pytest.mark.parametrize(
-    ("line", "setting"),
-    [
-        ("instructions_file: notes.md", "instructions_file"),
-        ("logging: {file: x.log}", "logging.file"),
-    ],
-)
-def test_a_pipe_has_no_folder_to_find_a_relative_path_from(
-    tmp_path: Path, line: str, setting: str
-) -> None:
-    """Pre-QA on #553: `--config <(generate)` looked under /dev/fd, and the log's error said to
-    fix a path nobody wrote."""
+def _load_from_a_pipe(tmp_path: Path, text: str, *, then_remove: bool = False) -> AppConfig:
     pipe = tmp_path / "pipe"
     os.mkfifo(pipe)
 
     def feed() -> None:
-        pipe.write_text(
-            f"schema_version: 1\nconnection: {{host: nas}}\nmodules: {{filestation: }}\n{line}\n",
-            encoding="utf-8",
-        )
+        pipe.write_text(text, encoding="utf-8")
+        if then_remove:
+            pipe.unlink()
 
     writer = threading.Thread(target=feed)
     writer.start()
     try:
-        with pytest.raises(ValueError, match=f"{setting} .* has no folder"):
-            load_config(pipe)
+        return load_config(pipe)
     finally:
         writer.join(timeout=5)
+
+
+_HEAD = "schema_version: 1\nconnection: {host: nas}\n"
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="no named pipes here")
+@pytest.mark.parametrize(
+    ("line", "setting"),
+    [
+        ("modules: {filestation: }\ninstructions_file: notes.md", "instructions_file"),
+        ("modules: {filestation: }\nlogging: {file: x.log}", "logging.file"),
+        (
+            "modules: {filestation: {settings: {default_download_dir: dl}}}",
+            "default_download_dir",
+        ),
+    ],
+)
+@pytest.mark.parametrize("then_remove", [False, True], ids=["pipe", "pipe its writer removed"])
+def test_a_pipe_has_no_folder_to_find_a_relative_path_from(
+    tmp_path: Path, line: str, setting: str, then_remove: bool
+) -> None:
+    """Pre-QA on #553: `--config <(generate)` looked under /dev/fd, and the log's error said to
+    fix a path nobody wrote. Pre-QA on #561: a pipe already removed counted as having a folder,
+    and the error didn't end by naming the config file, as every other one does."""
+    with pytest.raises(ValueError, match=f"{setting} .* has no folder") as exc:
+        _load_from_a_pipe(tmp_path, f"{_HEAD}{line}\n", then_remove=then_remove)
+    assert any(note.startswith("Config file:") for note in exc.value.__notes__)
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="no named pipes here")
+@pytest.mark.parametrize(
+    "modules",
+    [
+        "{system: , filestation: {enabled: false, settings: {default_download_dir: dl}}}",
+        "{filestation: , photos: {enabled: false, settings: {default_download_dir: dl}}}",
+        "{filestation: , photos: {settings: {default_download_dir: dl}}}",
+        "{filestation: , nosuch: {settings: {default_download_dir: dl}}}",
+    ],
+    ids=["disabled File Station", "disabled module", "another module", "unknown module"],
+)
+def test_a_setting_that_isnt_read_isnt_refused_on_a_pipe(tmp_path: Path, modules: str) -> None:
+    """Pre-QA on #561: every module's was read, so a pipe config failed on one never loaded."""
+    assert _load_from_a_pipe(tmp_path, f"{_HEAD}modules: {modules}\n") is not None
+
+
+@pytest.mark.skipif(not os.path.exists("/dev/fd"), reason="no /dev/fd here")
+def test_a_redirected_file_has_no_folder_either(tmp_path: Path) -> None:
+    """Pre-QA on #561: `--config /dev/fd/3 3< c.yaml` is a regular file, so a relative log path
+    became `/proc/<pid>/fd/x.log`, and the error said to fix that."""
+    real = tmp_path / "real.yaml"
+    real.write_text(f"{_HEAD}modules: {{filestation: }}\nlogging: {{file: x.log}}\n", "utf-8")
+    fd = os.open(real, os.O_RDONLY)
+    try:
+        with pytest.raises(ValueError, match="logging.file .* has no folder"):
+            load_config(f"/dev/fd/{fd}")
+    finally:
+        os.close(fd)
 
 
 def test_a_working_folder_with_no_name_still_loads(

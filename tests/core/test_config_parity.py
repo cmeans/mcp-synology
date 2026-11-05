@@ -1439,6 +1439,8 @@ class TestPreQa5OnPr541:
         """QA round 5: `Path("./~/x")` drops the `./`, so the check read it as a home path. Since
         #553 the value is absolute, from the config's folder, before either reads it."""
         (tmp_path / "~").mkdir()
+        (tmp_path / "elsewhere").mkdir()
+        monkeypatch.chdir(tmp_path / "elsewhere")  # and a regression can't write into the checkout
         os.mkfifo(tmp_path / "~" / "x")
         path = _in_a_config(tmp_path, "logging: {file: ./~/x}")
         with pytest.raises(ValueError, match="it's a named pipe"):
@@ -1449,7 +1451,8 @@ class TestPreQa5OnPr541:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         (tmp_path / "~").mkdir()
-        monkeypatch.chdir(tmp_path)
+        (tmp_path / "elsewhere").mkdir()
+        monkeypatch.chdir(tmp_path / "elsewhere")
         path = tmp_path / "~" / "c.yaml"
         path.write_text(
             f"{GOOD_HEAD}logging: {{file: ./c.yaml}}\nmodules: {{filestation: }}\n",
