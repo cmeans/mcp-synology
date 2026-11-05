@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import signal
 import ssl
 import sys
 from typing import TYPE_CHECKING
@@ -17,6 +18,8 @@ from mcp_synology.core.redaction import redact_urls
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+
+    from mcp_synology.core.config import AppConfig
 
 
 @click.command()
@@ -130,9 +133,57 @@ def exit_on_connection_failure(base_url: str, host: str) -> Iterator[None]:
     sys.exit(1)
 
 
+def _stdin_is_a_terminal() -> bool:
+    """False with stdin closed, as under cron or a service: `sys.stdin` is then None (QA round 4
+    on #559)."""
+    try:
+        return sys.stdin is not None and sys.stdin.isatty()
+    except ValueError:  # closed
+        return False
+
+
+def _asked_to_send(config: AppConfig, instance: str) -> bool:
+    """Whether someone at a terminal says to send this entry's secrets. A pipe isn't someone, and
+    one left open would wait forever. On stderr, so `check > log` still shows the question. asyncio
+    holds Ctrl-C back from a blocking prompt until the second press, so it gets Python's handler
+    here (pre-QA on #559)."""
+    if not _stdin_is_a_terminal():
+        # Says why, so a failing script or a model knows a person can settle it (QA round 4).
+        click.echo(
+            f"Keyring entry {instance!r} doesn't say which NAS it's for, and this needs someone "
+            "at a terminal to answer.",
+            err=True,
+        )
+        return False
+    connection = config.connection
+    plain = "" if connection is not None and connection.https else " over plain HTTP"
+    host = connection.host if connection is not None else None
+    previous = signal.signal(signal.SIGINT, signal.default_int_handler)
+    try:
+        return click.confirm(
+            f"Keyring entry {instance!r} doesn't say which NAS it's for. Send its stored password "
+            f"and any 2FA token to {host!r}{plain} and tie it to that NAS?",
+            default=False,
+            err=True,
+        )
+    except click.Abort:
+        return False
+    finally:
+        signal.signal(signal.SIGINT, previous)
+
+
 async def _check_login(config: object) -> None:
     """Validate credentials by attempting a login."""
-    from mcp_synology.core.auth import AuthManager, credential_sources, refusal_advice
+    from mcp_synology.core.auth import (
+        KEYRING,
+        AuthManager,
+        credential_sources,
+        entry_left_unrecorded,
+        host_this_login_would_record,
+        how_to_record,
+        own_instance_id_clause,
+        refusal_advice,
+    )
     from mcp_synology.core.client import DsmClient
     from mcp_synology.core.config import AppConfig
 
@@ -151,6 +202,7 @@ async def _check_login(config: object) -> None:
             timeout=config.connection.timeout,
         ) as client:
             from mcp_synology.core.errors import (
+                CredentialHostError,
                 DsmHttpError,
                 DsmReplyError,
                 LoginRefusedError,
@@ -165,10 +217,40 @@ async def _check_login(config: object) -> None:
                 click.echo(click.style(f"Error: DSM API query failed: {e}", fg="red"), err=True)
                 sys.exit(1)
 
+            # On a full path nothing else stops this first send, so whose password it is has to be
+            # asked here (QA round 3 on #559; maintainer, 2026-11-05). With no person at a terminal
+            # to answer, nothing is sent.
+            instance = config.instance_id or "default"
+            first_use = host_this_login_would_record(config)
+            if first_use:
+                if not _asked_to_send(config, instance):
+                    click.echo(
+                        click.style(
+                            f"Nothing was sent, and entry {instance!r} is unchanged. If these are "
+                            f"another NAS's credentials, {own_instance_id_clause(config)}.",
+                            fg="red",
+                        ),
+                        err=True,
+                    )
+                    sys.exit(1)
+            else:
+                # This login wasn't asked about, so it can't record, even if the keyring answers
+                # differently next time (a dismissed unlock dialog; pre-QA on #559).
+                config._host_may_be_recorded = False
+
             auth = AuthManager(config, client)
             try:
                 await auth.login()
                 click.echo(click.style("Authentication successful!", fg="green"))
+                # The upgrade advice sends people here to record it, so say whether it did.
+                if auth.recorded_host:
+                    click.echo(f"Keyring entry {instance!r} is now recorded for this host.")
+                elif entry_left_unrecorded(config):
+                    click.echo(
+                        f"Keyring entry {instance!r} still has no recorded host: this login "
+                        f"didn't use its password, or the host couldn't be recorded. "
+                        f"{how_to_record(config)}."
+                    )
                 await auth.logout()
             except DsmReplyError:
                 raise  # a login page, not DSM: exit_on_connection_failure says so
@@ -192,10 +274,24 @@ async def _check_login(config: object) -> None:
                         credential_sources(config, cli=True),
                         cli=True,
                     )
+                    # A refusal is the strongest sign an unrecorded entry is another NAS's, and
+                    # `setup` on it would replace them (QA round 3 on #559).
+                    sources = credential_sources(config, cli=True)
+                    if sources["password"] == KEYRING and entry_left_unrecorded(config):
+                        hint = (
+                            f"{hint.rstrip('.')}. If these are another NAS's credentials, "
+                            f"{own_instance_id_clause(config)} instead"
+                        )
                     e = dsm
                 text = str(e).rstrip()
                 if text and text[-1] not in ".!?":
                     text += "."  # DSM's messages have no final period
+                if isinstance(e, CredentialHostError):
+                    hint = e.terminal_suggestion or hint
+                if isinstance(e, CredentialHostError) and e.recorded_host:
+                    # Not in the error's own text, which reaches the model (#536). Quoted: it
+                    # comes from the keyring, so a newline in it mustn't forge a line.
+                    text += f" They were set up for {e.recorded_host!r}."
                 detail = f"{text} {hint.rstrip('.')}." if hint else text
                 click.echo(click.style(f"Authentication failed: {detail}", fg="red"), err=True)
                 sys.exit(1)

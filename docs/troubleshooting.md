@@ -62,6 +62,12 @@ as your file (#282, #283, #292). See [unavailable](error-codes.md#unavailable).
 **What to do:** check what sits between this machine and the NAS, and the configured port. Run
 `mcp-synology check`, which reports it as "didn't return a DSM API response".
 
+### `auth_failed`: the keyring's credentials "are for another host" or "don't say which host"
+
+**Why:** a keyring entry is tied to the host it was set up for, and this config points elsewhere, or the entry is from an older version and this config can't say which host is meant. No credential was sent. `mcp-synology check` names the host it was set up for.
+
+**What to do:** for an entry from an older version, if you know these are this host's own credentials, run `mcp-synology check --config <full path to your config file>` at a terminal, with no `SYNOLOGY_PASSWORD` set and no `auth.password` in the file: it records the host and keeps any 2FA device token, and asks first, as it sends the stored password there. Otherwise, give this NAS its own `instance_id` in the config, then run `mcp-synology setup --config <your config file>`, which asks for the password and leaves the entry alone. For an entry set up for another host: if that's this NAS's old address, run `setup` and replace the entry; if it's another NAS, give this one its own `instance_id` first. If the client's `env` block sets `SYNOLOGY_HOST`, `SYNOLOGY_INSTANCE_ID`, `SYNOLOGY_PORT` or `SYNOLOGY_HTTPS`, run `setup` with the same value, and `check` with the same `SYNOLOGY_PORT` and `SYNOLOGY_HTTPS`. After changing the config or an `env` block, restart the MCP client, as the server reads them once. If it's the wrong NAS, fix `connection.host`, `SYNOLOGY_HOST` or `instance_id`. Two NAS whose names start the same need their own `instance_id`. See [Credentials Are Tied to a Host](credentials.md#credentials-are-tied-to-a-host).
+
 ### Sign-in worked, then fails with `auth_failed` on a 2FA account
 
 **Why:** DSM no longer accepts the stored device token, for example because the trusted device

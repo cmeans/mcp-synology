@@ -419,6 +419,18 @@ class AppConfig(BaseModel, extra="forbid"):
     allowed_local_paths: list[str] | None = Field(default=None, min_length=1)
     # The file this came from, for errors found after loading; None in env-var-only mode.
     _source_path: Path | None = PrivateAttr(default=None)
+    # Whether a keyring entry with no recorded host may record this config's host (#536): only
+    # from --config by a full path, with no variable changing the host or the entry.
+    _host_may_be_recorded: bool = PrivateAttr(default=False)
+    # Credentials are resolved for each call while a refused login is remembered.
+    _device_token_warned: bool = PrivateAttr(default=False)
+    _device_token_read_warned: bool = PrivateAttr(default=False)
+    # The host a keyring entry with no record takes once DSM accepts its password (#536).
+    _host_to_record: str | None = PrivateAttr(default=None)
+
+    @property
+    def host_may_be_recorded(self) -> bool:
+        return self._host_may_be_recorded
 
     @field_validator("schema_version", mode="before")
     @classmethod
@@ -972,6 +984,19 @@ def _as_compared(dotted_path: str, value: Any) -> Any:
         except httpx.InvalidURL:
             return typed
     return typed.lower() if dotted_path == "instance_id" else typed
+
+
+def comparable_host(host: str) -> str:
+    """A host as a keyring entry records it and is compared with it (#536): `NAS.home`, an IDN's
+    `xn--` form, `nas.home.` and `[fd00:0::1]` aren't different hosts, and treating them as
+    different would cost a 2FA token (QA round 3 on #559). Always a string: `connection.host` is
+    one."""
+    compared = str(_as_compared("connection.host", host))
+    if compared.startswith("[") and compared.endswith("]"):
+        with contextlib.suppress(ValueError):
+            return f"[{ipaddress.IPv6Address(compared[1:-1]).compressed}]"
+        return compared
+    return compared[:-1] if compared.endswith(".") else compared
 
 
 def _merge_env_overrides(raw: dict[str, Any], *, from_file: bool = False) -> dict[str, Any]:
@@ -1698,6 +1723,20 @@ def load_config(path: str | Path | None = None) -> AppConfig:
     except (ValueError, yaml.YAMLError) as e:
         e.add_note(config_file_note(config_path))
         raise
+    # Only --config: an `env` block can name a file with MCP_SYNOLOGY_CONFIG, or supply the default
+    # location's through HOME (maintainer, 2026-11-05), and a `~/...` value's the same way (no
+    # shell expands it in an MCP client's args). Only a full path: a relative one is whatever the
+    # client's working folder holds, such as a cloned repo (QA round 1 on #559). So is the absolute
+    # `/proc/self/cwd/...`, though whoever can write that could name any path of their own. Any
+    # value in the two variables counts, even an equal one, since only `setup` should settle a
+    # doubt.
+    config._host_may_be_recorded = (
+        path is not None
+        and Path(path).is_absolute()
+        and not any(
+            os.environ.get(v, "").strip() for v in ("SYNOLOGY_HOST", "SYNOLOGY_INSTANCE_ID")
+        )
+    )
 
     logger.debug(
         "Config loaded: instance_id=%s, host=%s, port=%s, https=%s, modules=%s",

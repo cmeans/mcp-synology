@@ -91,6 +91,7 @@ uv run pytest -n auto --cov=mcp_synology   # Tests with coverage
 ### Auth
 - Strategy chain auto-detects 2FA vs non-2FA on login attempt
 - Credential lookup: env vars → config file → keyring, each value resolved separately (explicit sources override the keyring default). Only a password in the config file gets the plaintext warning; a config username with the password in the keyring is the recommended setup (#167)
+- A keyring entry is tied to its host (#536): `setup` records it; a username or password from the keyring refuses another host before any credential is sent; a device token alone is left out. An entry with no record takes the host only once DSM accepts its password, from a full `--config` path, with no `SYNOLOGY_HOST` or `SYNOLOGY_INSTANCE_ID`. No bypass variable. On a refusal, `check` names the recorded host; a tool's reply doesn't
 - DSM session name format: `MCPSynology_{instance_id}_{unique_id}`
 - Lazy keepalive (re-auth on next request, no proactive pings)
 - One login at a time: parallel first calls share one client and login, and requests that meet the same expired session share one re-login; the expired session stays until the new one exists (#359). A login DSM refused (`AuthenticationError`: 400, 401, 403, 404, 406) isn't sent again until the resolved credentials change or the server restarts, so retries can't trip DSM's Auto Block (#447); a failed re-login raises the login's own error, not the session error (#448)

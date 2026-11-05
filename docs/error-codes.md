@@ -23,10 +23,17 @@ _Authentication and access_
 
 ## auth_failed
 
-**DSM rejected the credentials, requires 2FA, or the account is locked.**
+**DSM rejected the credentials, requires 2FA, or the account is locked; or the keyring's
+credentials are for another host, so they weren't sent.**
 
 Common causes:
 
+- The keyring entry is from an older version, with no host recorded, and this config can't
+  say which host is meant (the message says so). `mcp-synology check` asks, or gives the steps; see
+  [Credentials Are Tied to a Host](credentials.md#credentials-are-tied-to-a-host).
+- The keyring entry was set up for another host (the message says so). `mcp-synology check`
+  names that host. The error's suggestion says what to do; see
+  [Credentials Are Tied to a Host](credentials.md#credentials-are-tied-to-a-host).
 - Wrong username or password in the credential store.
 - 2FA is enforced on the account but has not been bootstrapped via `mcp-synology setup`.
 - 2FA is set up, but DSM rejected the stored device token (the message says so),

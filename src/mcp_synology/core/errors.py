@@ -119,6 +119,15 @@ class AuthenticationError(SynologyError):
     error_code = ErrorCode.AUTH_FAILED
 
 
+class CredentialHostError(AuthenticationError):
+    """A keyring entry isn't for this config's host, so nothing was sent (#536). Its text reaches
+    the model, so it doesn't name the recorded host or a command that records one; these two are
+    for `check`, which is someone at their own terminal."""
+
+    recorded_host: str | None = None
+    terminal_suggestion: str | None = None
+
+
 class LoginRefusedError(AuthenticationError):
     """DSM refused the login; the text says what the running server does next (#447). Its
     ``__cause__`` is DSM's own error, which `check` prints instead."""

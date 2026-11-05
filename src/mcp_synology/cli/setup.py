@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import fnmatch
 import json
 import logging
@@ -10,7 +11,7 @@ import os
 import shutil
 import sys
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import click
 import yaml
@@ -18,6 +19,9 @@ import yaml
 from mcp_synology.cli.check import exit_on_connection_failure
 from mcp_synology.cli.logging_ import _configure_logging, _init_early_logging
 from mcp_synology.cli.startup import escape_what_stdout_cant_encode, load_or_exit
+
+if TYPE_CHECKING:
+    from mcp_synology.core.config import AppConfig
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +40,17 @@ def setup(config: str | None, list_configs: bool, verbose: bool) -> None:
     if list_configs:
         _list_configurations()
         return
+
+    # Every path below asks something. A pipe can answer, but with stdin closed, as under cron,
+    # the first question was a traceback (pre-QA on #559).
+    if sys.stdin is None:
+        click.echo(
+            click.style(
+                "Error: setup asks questions, and stdin is closed. Run it at a terminal.", fg="red"
+            ),
+            err=True,
+        )
+        sys.exit(1)
 
     # If --config is given, use the existing config-file flow
     if config is not None:  # an empty --config is an error there, not "no flag"
@@ -268,14 +283,24 @@ def _setup_interactive(verbose: bool, not_loaded: str | None = None) -> None:
     if app_config.connection is not None:
         warn_if_proxied(app_config.connection)
 
+    # Nothing is written until these are answered (#536).
+    service = f"mcp-synology/{instance_id}"
+    if not _may_replace_entry(service, host, instance_id):
+        return
+    config_path = _CONFIG_DIR / f"{instance_id}.yaml"
+    if config_path.exists() and not click.confirm(
+        f"\n{config_path} already exists. Overwrite?", default=False
+    ):
+        click.echo("Aborted.")
+        return
+
     # Prompt for credentials
     click.echo()
     username = click.prompt("DSM username").strip()
     password = click.prompt("DSM password", hide_input=True)
 
     # Store in keyring
-    service = f"mcp-synology/{instance_id}"
-    keyring_ok = _store_keyring(service, username, password)
+    keyring_ok = _store_keyring(service, username, password, host)
     if not keyring_ok:
         return
 
@@ -301,14 +326,6 @@ def _setup_interactive(verbose: bool, not_loaded: str | None = None) -> None:
             config_dict["alias"] = alias
             # Re-validate
             app_config = AppConfig(**config_dict)
-
-    # Check for existing file before writing
-    config_path = _CONFIG_DIR / f"{instance_id}.yaml"
-    if config_path.exists() and not click.confirm(
-        f"\n{config_path} already exists. Overwrite?", default=False
-    ):
-        click.echo("Aborted.")
-        return
 
     # Write config file atomically (closes #70)
     from mcp_synology.core.fs import atomic_write_text
@@ -351,11 +368,15 @@ def _setup_credential_flow(app_config: Any, verbose: bool) -> None:
     click.echo(f"  Instance: {app_config.instance_id}")
     click.echo()
 
+    service = f"mcp-synology/{app_config.instance_id}"
+    instance = str(app_config.instance_id)
+    if not _may_replace_entry(service, app_config.connection.host, instance, app_config):
+        return
+
     username = click.prompt("DSM username").strip()
     password = click.prompt("DSM password", hide_input=True)
 
-    service = f"mcp-synology/{app_config.instance_id}"
-    keyring_ok = _store_keyring(service, username, password)
+    keyring_ok = _store_keyring(service, username, password, app_config.connection.host)
     if not keyring_ok:
         return
 
@@ -363,19 +384,102 @@ def _setup_credential_flow(app_config: Any, verbose: bool) -> None:
     asyncio.run(_setup_login(app_config, username, password, service))
 
 
-def _store_keyring(service: str, username: str, password: str) -> bool:
-    """Store credentials in the OS keyring. Returns True on success."""
+def _may_replace_entry(
+    service: str, host: str, instance: str, config: AppConfig | None = None
+) -> bool:
+    """Ask before replacing a keyring entry that isn't this host's (#536): two NAS with the same
+    first label derive the same instance ID, and the other's config would then send this one's
+    password there. With no keyring at all there's nothing to replace, and writing says so. One
+    that fails now may work when written to, and another host's credentials would go unasked, so
+    that stops here (QA round 1 on #559). Any exception counts: backends raise their own types.
+    ``config`` is the file being set up; interactive setup hasn't written one yet."""
+    from mcp_synology.core.auth import check_route, own_instance_id_clause
+    from mcp_synology.core.config import comparable_host
+
     try:
         import keyring
-        from keyring.errors import KeyringError
+        from keyring.errors import NoKeyringError
 
+        recorded = (keyring.get_password(service, "host") or "").strip() or None
+        # A record on its own, left by removing the rest, holds no credentials to replace.
+        stored = any(
+            keyring.get_password(service, k) for k in ("username", "password", "device_id")
+        )
+    except (ImportError, NoKeyringError):
+        return True
+    except Exception as e:
+        logger.debug("Keyring error reading entry %r: %s", instance, e, exc_info=True)
+        click.echo(
+            f"\nCouldn't read keyring entry {instance!r}, so nothing was changed. Check that the "
+            "OS keyring is unlocked and try again, or set SYNOLOGY_USERNAME and SYNOLOGY_PASSWORD "
+            "instead."
+        )
+        sys.exit(1)
+    if not stored or recorded == comparable_host(host):
+        return True
+    whose = "for another host" if recorded else "with no host recorded"
+    if click.confirm(
+        f"\nKeyring entry {instance!r} already holds credentials {whose}. Replacing it removes any "
+        "2FA device token, and stops any other config using that entry from logging in until "
+        f"it's set up again. Replace it for {host}?",
+        default=False,
+    ):
+        return True
+    own_id = (
+        f"{own_instance_id_clause(config)}."
+        if config is not None
+        else "give this NAS its own instance_id in a config file, then run "
+        "'mcp-synology setup --config <that file>'."
+    )
+    # An entry with no record may well be this NAS's own, from before hosts were recorded.
+    route = None if recorded or config is None else check_route(config)
+    if recorded:
+        click.echo(f"Aborted, nothing changed. To keep both, {own_id}")
+    else:
+        own = route or "run this again and answer yes"
+        click.echo(
+            f"Aborted, nothing changed. If these are this NAS's own credentials, {own}. "
+            f"If they're another NAS's, {own_id}"
+        )
+    return False
+
+
+def _store_keyring(service: str, username: str, password: str, host: str) -> bool:
+    """Store credentials and the host they're for in the OS keyring. True on success.
+
+    When the host changes, the old secrets go first and the new host before the new password, so
+    a stop partway leaves nothing to send to the wrong host. The old device token would otherwise
+    be sent to this one. A delete that didn't take stops here, with the old record still there: the
+    backends raise the same error for "no such password" and for a real failure, and a chain of
+    backends deletes from only the first. Any exception counts: backends raise their own types.
+    """
+    from mcp_synology.core.config import comparable_host
+
+    removed: list[str] = []
+    try:
+        import keyring
+        from keyring.errors import PasswordDeleteError
+
+        recorded = comparable_host(host)
+        if (keyring.get_password(service, "host") or "").strip() != recorded:
+            for key in ("device_id", "password", "username"):
+                held = keyring.get_password(service, key)
+                with contextlib.suppress(PasswordDeleteError):  # there may be none
+                    keyring.delete_password(service, key)
+                if keyring.get_password(service, key):
+                    raise PasswordDeleteError(f"{key} is still stored")
+                if held:
+                    removed.append(key)
+            keyring.set_password(service, "host", recorded)
         keyring.set_password(service, "username", username)
         keyring.set_password(service, "password", password)
         click.echo("\nCredentials stored in OS keyring.")
         return True
-    except (ImportError, KeyringError, OSError):
+    except Exception as e:
+        logger.debug("Keyring error storing credentials: %s", e, exc_info=True)
+        gone = f" Already removed from this entry: {', '.join(removed)}." if removed else ""
         click.echo(
-            "\nKeyring not available. Set environment variables instead:\n"
+            f"\nKeyring not available.{gone} Set environment variables instead:\n"
             f"  export SYNOLOGY_USERNAME={username}\n"
             f"  export SYNOLOGY_PASSWORD=<your-password>"
         )
@@ -429,9 +533,22 @@ async def _attempt_login(
                 if device_id:
                     import keyring
 
-                    keyring.set_password(service, "device_id", device_id)
-                    click.echo(click.style("2FA bootstrap complete!", fg="green"))
-                    click.echo("Device token stored in keyring.")
+                    try:
+                        keyring.set_password(service, "device_id", device_id)
+                    except Exception as e3:  # backends raise their own types
+                        logger.debug("Keyring error storing the token: %s", e3, exc_info=True)
+                        result["token_not_stored"] = True
+                        click.echo(
+                            click.style(
+                                "Login successful, but the 2FA device token couldn't be stored in "
+                                "the keyring, so the server can't log in without a code. Check "
+                                "that the keyring can be written to, and run this again.",
+                                fg="yellow",
+                            )
+                        )
+                    else:
+                        click.echo(click.style("2FA bootstrap complete!", fg="green"))
+                        click.echo("Device token stored in keyring.")
                 else:
                     click.echo(click.style("Login successful!", fg="green"))
             except SynologyError as e2:
@@ -447,7 +564,8 @@ async def _attempt_login(
     sid = data.get("sid")
     if sid:
         client.sid = sid
-        if not result.get("success"):
+        # After the warning that the token wasn't stored, this would read as all's well.
+        if not result.get("success") and not result.get("token_not_stored"):
             click.echo(click.style("Login successful!", fg="green"))
     result["success"] = True
     result["sid"] = sid
