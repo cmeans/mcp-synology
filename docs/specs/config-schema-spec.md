@@ -34,7 +34,7 @@ That's it. Everything else has sensible defaults:
 - HTTPS defaults to `false` (most home LANs use HTTP internally)
 - Instance ID auto-generated from hostname if not specified
 - Permission tier defaults to `read`
-- Credentials come from the keyring (populated by `mcp-synology setup`), and are tied to the host (architecture spec, Credential Storage; #536)
+- Credentials come from the keyring (populated by `mcp-synology setup`), and are tied to the host and port (architecture spec, Credential Storage; #536)
 
 ---
 

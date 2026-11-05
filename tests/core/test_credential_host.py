@@ -42,7 +42,13 @@ def store(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> Me
     previous = keyring.get_keyring()
     keyring.set_keyring(backend)
     request.addfinalizer(lambda: keyring.set_keyring(previous))
-    for var in ("SYNOLOGY_HOST", "SYNOLOGY_INSTANCE_ID", "MCP_SYNOLOGY_CONFIG"):
+    for var in (
+        "SYNOLOGY_HOST",
+        "SYNOLOGY_PORT",
+        "SYNOLOGY_HTTPS",
+        "SYNOLOGY_INSTANCE_ID",
+        "MCP_SYNOLOGY_CONFIG",
+    ):
         monkeypatch.delenv(var, raising=False)
     for var in ("SYNOLOGY_USERNAME", "SYNOLOGY_PASSWORD", "SYNOLOGY_DEVICE_ID"):
         monkeypatch.delenv(var, raising=False)
@@ -537,7 +543,7 @@ class TestAnEntryWithNoRecordedHost:
         """Pre-QA on #559: the upgrade advice sends people to `check`, which gave no sign."""
         _entry(store, "nas")
         result = _check(_file(tmp_path, "nas.home"))
-        assert "is now recorded for this host" in result.output
+        assert "is now recorded for nas.home:5000" in result.output
 
     @pytest.mark.parametrize("answer", ["n\n", "\n", ""], ids=["no", "the default", "no person"])
     def test_check_sends_nothing_unless_told_yes(
@@ -558,7 +564,7 @@ class TestAnEntryWithNoRecordedHost:
                 main, ["check", "--config", str(_file(tmp_path, "nas.office"))], input=answer
             )
         assert result.exit_code == 1
-        assert "and any 2FA token to 'nas.office' over plain HTTP" in result.output
+        assert "and any 2FA token to 'nas.office:5000' over plain HTTP" in result.output
         assert "Nothing was sent" in result.output
         request.assert_not_awaited()
         assert ("mcp-synology/nas", "host") not in store.values
@@ -826,7 +832,7 @@ class TestAnEntryWithNoRecordedHost:
             resolve_credentials(config)
         advice = exc.value.terminal_suggestion or ""
         route = advice.index("mcp-synology check")
-        assert advice.index("If you know these are the credentials for 'nas.office'") < route
+        assert advice.index("If you know these are the credentials for 'nas.office:5000'") < route
         assert "It asks before sending the stored password there" in advice
         assert "Otherwise, give this NAS its own instance_id in the config, then run" in advice
         assert "leaves this entry alone" in advice
@@ -861,7 +867,7 @@ class TestAnEntryWithNoRecordedHost:
         ):
             result = CliRunner().invoke(main, ["check", "--config", "named.yaml"])
         assert result.exit_code == 1
-        assert "If you know these are the credentials for 'nas.home'" in result.output
+        assert "If you know these are the credentials for 'nas.home:5000'" in result.output
         assert "mcp-synology check --config <full path" in result.output
 
     def test_a_recorded_mismatch_separates_an_old_address_from_another_nas(
@@ -2084,6 +2090,37 @@ class TestAnEntryIsTiedToItsPort:
         with pytest.raises(CredentialHostError):
             resolve_credentials(load_config(_port_file(tmp_path, None, https=True)))
 
+    def test_a_host_named_like_the_start_of_the_record_is_another_host(
+        self, store: MemoryKeyring, tmp_path: Path
+    ) -> None:
+        store.values[("mcp-synology/nas", "username")] = "admin"
+        store.values[("mcp-synology/nas", "password")] = "hunter2"
+        store.values[("mcp-synology/nas", "host")] = "nas.homelab:5000"
+        with pytest.raises(CredentialHostError) as exc:
+            resolve_credentials(load_config(_port_file(tmp_path, None)))
+        assert "are for another host" in str(exc.value)
+
+    def test_check_asks_about_the_port_and_says_what_it_recorded(
+        self, store: MemoryKeyring, tmp_path: Path
+    ) -> None:
+        _entry(store, "nas")
+        with (
+            patch("mcp_synology.cli.check._stdin_is_a_terminal", return_value=True),
+            patch(
+                "mcp_synology.core.client.DsmClient.query_api_info", AsyncMock(return_value=None)
+            ),
+            patch(
+                "mcp_synology.core.auth.AuthManager._send_login",
+                AsyncMock(return_value={"sid": "s", "did": ""}),
+            ),
+            patch("mcp_synology.core.auth.AuthManager.logout", AsyncMock(return_value=None)),
+        ):
+            result = CliRunner().invoke(
+                main, ["check", "--config", str(_port_file(tmp_path, 18103))], input="y\n"
+            )
+        assert "'nas.home:18103'" in result.output
+        assert "is now recorded for nas.home:18103." in result.output
+
     def test_an_ipv6_host_records_its_port(self) -> None:
         assert comparable_target("[fd00:0::1]", 5001) == "[fd00::1]:5001"
 
@@ -2105,6 +2142,30 @@ class TestSetupForAnotherPort:
             assert not _may_replace_entry("mcp-synology/nas", "nas.home", 18103, "nas")
         assert "for another port on this host" in confirm.call_args.args[0]
         assert "Replace it for nas.home:18103?" in confirm.call_args.args[0]
+
+    def test_setup_with_a_config_uses_its_port(self, store: MemoryKeyring, tmp_path: Path) -> None:
+        _entry(store, "nas", "nas.home")
+        with patch("mcp_synology.cli.setup._setup_login", AsyncMock(return_value=None)):
+            declined = CliRunner().invoke(
+                main, ["setup", "--config", str(_port_file(tmp_path, 18103))], input="n\n"
+            )
+            assert "nas.home:18103" in declined.output
+            assert "for another port on this host" in declined.output
+            assert store.values[("mcp-synology/nas", "host")] == "nas.home:5000"
+            CliRunner().invoke(
+                main,
+                ["setup", "--config", str(_port_file(tmp_path, 18103))],
+                input="y\nadmin\npw\n",
+            )
+        assert store.values[("mcp-synology/nas", "host")] == "nas.home:18103"
+
+    def test_a_host_named_like_the_start_of_the_record_is_asked_as_another_host(
+        self, store: MemoryKeyring
+    ) -> None:
+        _entry(store, "nas", "nas.homelab")
+        with patch("click.confirm", return_value=False) as confirm:
+            _may_replace_entry("mcp-synology/nas", "nas.home", 5000, "nas")
+        assert "for another host" in confirm.call_args.args[0]
 
     def test_the_same_port_isnt_asked_about(self, store: MemoryKeyring) -> None:
         _entry(store, "nas", "nas.home")
@@ -2163,6 +2224,15 @@ class TestARecordWithNoPort:
             assert not _may_replace_entry("mcp-synology/nas", "nas.home", 5000, "nas")
         assert "with no port recorded" in confirm.call_args.args[0]
 
+    def test_declining_offers_the_way_that_records_it(
+        self, store: MemoryKeyring, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._old_entry(store)
+        config = load_config(_port_file(tmp_path, None))
+        with patch("click.confirm", return_value=False):
+            assert not _may_replace_entry("mcp-synology/nas", "nas.home", 5000, "nas", config)
+        assert "mcp-synology check --config <full path" in capsys.readouterr().out
+
 
 def test_synology_port_stops_a_first_use_from_recording(
     store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -2175,3 +2245,28 @@ def test_synology_port_stops_a_first_use_from_recording(
     with pytest.raises(CredentialHostError):
         resolve_credentials(config)
     assert check_route(config) is None
+
+
+class TestTheWordingOfAPortRefusal:
+    def test_what_a_person_is_told(self, store: MemoryKeyring, tmp_path: Path) -> None:
+        _entry(store, "nas", "nas.home")
+        with pytest.raises(CredentialHostError) as exc:
+            resolve_credentials(load_config(_port_file(tmp_path, 18103)))
+        terminal = exc.value.terminal_suggestion or ""
+        assert "If the host and port they were set up for are this NAS's old address" in terminal
+        assert "connection.port" in terminal
+        assert "SYNOLOGY_PORT" in terminal
+
+    def test_what_a_model_is_told(self, store: MemoryKeyring, tmp_path: Path) -> None:
+        _entry(store, "nas", "nas.home")
+        with pytest.raises(CredentialHostError) as exc:
+            resolve_credentials(load_config(_port_file(tmp_path, 18103)))
+        assert "a new address or port for the same NAS" in (exc.value.suggestion or "")
+
+    @pytest.mark.parametrize("https", [False, True], ids=["http", "https"])
+    def test_the_route_warns_that_https_can_change_the_port(
+        self, store: MemoryKeyring, tmp_path: Path, https: bool
+    ) -> None:
+        _entry(store, "nas")
+        route = check_route(load_config(_port_file(tmp_path, None, https=https))) or ""
+        assert "can change the port recorded" in route

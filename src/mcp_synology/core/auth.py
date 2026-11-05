@@ -149,8 +149,8 @@ def _device_token_may_be_sent(config: AppConfig, service: str) -> bool:
         # The login's own error is DSM's and doesn't mention the token (maintainer, 2026-11-05),
         # so this is the only place that gives the way out.
         logger.warning(
-            "Not sending the device token in keyring entry %r: it isn't recorded for this host. "
-            "%s.",
+            "Not sending the device token in keyring entry %r: it isn't recorded for this host "
+            "and port. %s.",
             config.instance_id or "default",
             how_to_record(config),
         )
@@ -215,9 +215,9 @@ def own_instance_id_clause(config: AppConfig, nas: str = "this NAS") -> str:
 def check_route(config: AppConfig) -> str | None:
     """How `check` would record this config's keyring entry, as a clause, or None if it can't: it
     records only an entry with no record, using its password, from a config named by its full path
-    with neither host variable (QA round 1 and pre-QA on #559). It sends the stored password, once
-    someone at the terminal says yes, so whoever offers it says whose credentials it's for (QA
-    round 2 on #559)."""
+    with none of the variables `_host_variables` names (QA round 1 and pre-QA on #559). It sends
+    the stored password, once someone at the terminal says yes, so whoever offers it says whose
+    credentials it's for (QA round 2 on #559)."""
     import os
 
     service = f"mcp-synology/{config.instance_id or 'default'}"
@@ -244,7 +244,7 @@ def check_route(config: AppConfig) -> str | None:
         os.environ.get("SYNOLOGY_PASSWORD")
     )
     remove = "remove auth.password from the config and " if in_the_file else ""
-    # Without them it can't connect, or sends the password over plain HTTP where the server would
+    # Without it, it sends the password over plain HTTP where the server would
     # use HTTPS (pre-QA on #559).
     connection = _connection_variables()
     # A username only in a variable has to be at the terminal too (pre-QA on #559).
@@ -259,11 +259,14 @@ def check_route(config: AppConfig) -> str | None:
     same = f" with the same {' and '.join(connection)} and" if connection else " with"
     # This is often read at a terminal, which can't see a client's `env` block, so it goes by what
     # the terminal does know (QA round 3 on #559).
+    https = config.connection is not None and config.connection.https
+    # It also chooses the default port, so a mismatch records a port the server is then refused on.
     plain = (
-        ""
-        if config.connection is not None and config.connection.https
+        ". If a client's env block sets SYNOLOGY_HTTPS, set it the same here, as it can change "
+        "the port recorded"
+        if https
         else ". With this config it goes over plain HTTP: if a client's env block sets "
-        "SYNOLOGY_HTTPS, set it here too"
+        "SYNOLOGY_HTTPS, set it the same here, as it can change the port recorded too"
     )
     return (
         f"{remove}run {_RECORD_HOST} at a terminal,{same} no SYNOLOGY_PASSWORD set. It asks before "
@@ -279,7 +282,8 @@ def how_to_record(config: AppConfig) -> str:
     are, and `setup` on this entry would replace the other NAS's. It doesn't name a recorded host,
     as it's also in a log; `check` prints that just before. A tool's reply gets
     `_advice_for_the_model` instead."""
-    host = config.connection.host if config.connection else None
+    connection = config.connection
+    host = f"{connection.host}:{connection.port}" if connection else None
     route = check_route(config)
     if route:
         return (

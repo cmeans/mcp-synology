@@ -157,7 +157,8 @@ def _asked_to_send(config: AppConfig, instance: str) -> bool:
         return False
     connection = config.connection
     plain = "" if connection is not None and connection.https else " over plain HTTP"
-    host = connection.host if connection is not None else None
+    # With the port: two NAS behind one name are what this question is about (#562).
+    host = f"{connection.host}:{connection.port}" if connection is not None else None
     previous = signal.signal(signal.SIGINT, signal.default_int_handler)
     try:
         return click.confirm(
@@ -244,11 +245,13 @@ async def _check_login(config: object) -> None:
                 click.echo(click.style("Authentication successful!", fg="green"))
                 # The upgrade advice sends people here to record it, so say whether it did.
                 if auth.recorded_host:
-                    click.echo(f"Keyring entry {instance!r} is now recorded for this host.")
+                    click.echo(
+                        f"Keyring entry {instance!r} is now recorded for {auth.recorded_host}."
+                    )
                 elif entry_left_unrecorded(config):
                     click.echo(
-                        f"Keyring entry {instance!r} still has no recorded host: this login "
-                        f"didn't use its password, or the host couldn't be recorded. "
+                        f"Keyring entry {instance!r} still has no recorded host and port: this "
+                        f"login didn't use its password, or the host couldn't be recorded. "
                         f"{how_to_record(config)}."
                     )
                 await auth.logout()

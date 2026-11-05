@@ -388,7 +388,7 @@ def _setup_credential_flow(app_config: Any, verbose: bool) -> None:
     if app_config.connection is None:
         raise RuntimeError("Config missing connection settings")
     click.echo(f"Setting up credentials for {app_config.display_name}")
-    click.echo(f"  Host: {app_config.connection.host}")
+    click.echo(f"  Host: {app_config.connection.host}:{app_config.connection.port}")
     click.echo(f"  Instance: {app_config.instance_id}")
     click.echo()
 
@@ -530,10 +530,9 @@ def _store_keyring(service: str, username: str, password: str, host: str, port: 
     """Store credentials and the host they're for in the OS keyring. True on success.
 
     When the host or port changes, the old secrets go first and the new record before the new
-    password, so
-    a stop partway leaves nothing to send to the wrong host. The old device token would otherwise
-    be sent to this one. A delete that didn't take stops here, with the old record still there: the
-    backends raise the same error for "no such password" and for a real failure, and a chain of
+    password, so a stop partway leaves nothing to send to the wrong host. The old device token
+    would otherwise be sent to this one. A delete that didn't take stops here, with the old record
+    still there: the backends raise the same error for "no such password" and for a real failure, and a chain of
     backends deletes from only the first. Any exception counts: backends raise their own types.
     """
     from mcp_synology.core.auth import no_keyring_here
