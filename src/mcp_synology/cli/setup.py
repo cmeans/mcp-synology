@@ -18,6 +18,7 @@ import yaml
 from mcp_synology.cli.check import exit_on_connection_failure
 from mcp_synology.cli.logging_ import _configure_logging, _init_early_logging
 from mcp_synology.cli.startup import escape_what_stdout_cant_encode, load_or_exit
+from mcp_synology.core.config import WorkingFolderConfigNotLoadedError
 
 logger = logging.getLogger(__name__)
 
@@ -51,8 +52,11 @@ def setup(config: str | None, list_configs: bool, verbose: bool) -> None:
         if os.environ.get("MCP_SYNOLOGY_CONFIG") is not None:
             click.echo(click.style(f"Error: {e}", fg="red"), err=True)
             sys.exit(1)
-        # No config file found — enter interactive creation mode
-        _setup_interactive(verbose)
+        # No config file found — enter interactive creation mode. One that's there and isn't
+        # loaded is named, since "no file found" would be false (#552).
+        _setup_interactive(
+            verbose, str(e) if isinstance(e, WorkingFolderConfigNotLoadedError) else None
+        )
         return
 
     # Config file exists — do credential setup against it
@@ -135,9 +139,13 @@ def _list_configurations() -> None:
             click.echo(f"  {shown}  (could not parse)")
 
 
-def _setup_interactive(verbose: bool) -> None:
-    """Interactive setup when no config file exists."""
-    click.echo("No configuration file found. Let's create one.\n")
+def _setup_interactive(verbose: bool, not_loaded: str | None = None) -> None:
+    """Interactive setup when no config file is loaded. ``not_loaded`` says why one that's there
+    isn't."""
+    if not_loaded:
+        click.echo(f"{not_loaded}\n\nTo make a new config at the home location instead:\n")
+    else:
+        click.echo("No configuration file found. Let's create one.\n")
 
     from mcp_synology.core.config import (
         alias_problem,

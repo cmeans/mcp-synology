@@ -23,7 +23,6 @@ from click.testing import CliRunner
 import mcp_synology.cli
 from mcp_synology.cli import logging_
 from mcp_synology.cli.main import main
-from mcp_synology.cli.startup import load_or_exit
 from mcp_synology.core import config as config_module
 from mcp_synology.core import local_paths
 from mcp_synology.core.config import (
@@ -905,7 +904,8 @@ class TestRound2OnPr541:
         [
             # Its relative name works from inside, so the file is there to name.
             ("under a locked folder", "isn't loaded automatically"),
-            ("a link into one", "No config file found"),
+            # Someone's config, behind a link: env-only mode would be the same downgrade.
+            ("a link into one", "isn't loaded automatically"),
             ("locked", "No config file found"),
         ],
     )
@@ -998,7 +998,23 @@ class TestAWorkingFolderConfigIsntLoaded:
         text = str(excinfo.value)
         assert text.startswith(f"{str(path)!r} isn't loaded automatically")
         # Literal, so it works pasted into a shell from any folder's name.
-        assert "pass --config ./mcp-synology.yaml." in text
+        assert "pass --config ./mcp-synology.yaml," in text
+        # Naming it is consent: a model repairing a failed server would paste a bare flag in.
+        assert "If you trust this file" in text
+        # A relative path in a client's args would load whatever folder it starts in next.
+        assert "full path in an MCP client's config" in text
+
+    def test_a_link_to_a_file_counts_as_a_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Someone relying on a linked config mustn't drop to env-only mode over plain HTTP."""
+        path = self._in_this_folder(tmp_path, monkeypatch)
+        target = tmp_path / "real.yaml"
+        path.rename(target)
+        path.symlink_to(target)
+        monkeypatch.setenv("SYNOLOGY_HOST", "nas.example")
+        with pytest.raises(FileNotFoundError, match="isn't loaded automatically"):
+            load_config()
 
     def test_with_synology_host_it_still_stops(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1047,14 +1063,16 @@ class TestAWorkingFolderConfigIsntLoaded:
         with pytest.raises(FileNotFoundError, match="No config file found"):
             discover_config_path()
 
-    def test_setup_can_still_make_a_config_from_here(
+    def test_setup_names_the_file_and_goes_on_to_make_a_config(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A FileNotFoundError, which `setup` answers by asking; `check` and `serve` stop."""
-        self._in_this_folder(tmp_path, monkeypatch)
+        """Pre-QA on #552: it said "No configuration file found", beside a file it had found."""
+        path = self._in_this_folder(tmp_path, monkeypatch)
         monkeypatch.delenv("SYNOLOGY_HOST", raising=False)
-        with pytest.raises(FileNotFoundError):
-            load_or_exit(None, configure_logging=False, missing_raises=True)
+        result = CliRunner().invoke(main, ["setup"], input="")
+        assert f"{str(path)!r} isn't loaded automatically" in result.output
+        assert "No configuration file found" not in result.output
+        assert "To make a new config at the home location instead" in result.output
 
     def test_named_with_config_it_loads(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
