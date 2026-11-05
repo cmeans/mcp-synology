@@ -13,7 +13,7 @@ import pytest
 
 from mcp_synology.cli.logging_ import _configure_logging
 from mcp_synology.core.config import AppConfig, _config_has_a_folder, load_config
-from mcp_synology.server import _read_instructions_file, validate_config
+from mcp_synology.server import _MODULE_REGISTRY, _read_instructions_file, validate_config
 
 
 def _file(folder: Path, extra: str) -> Path:
@@ -120,6 +120,39 @@ def test_a_download_folder_is_from_the_config_files_folder(
     assert validate_config(path) is not None
 
 
+def test_a_download_folder_written_as_binary_is_resolved_too(
+    tmp_path: Path, working_folder: Path
+) -> None:
+    """Pre-QA on #561: YAML's `!!binary ZGw=` is `dl` in bytes, which skipped this, and the settings
+    schema then decoded it into an allowed folder under the working folder."""
+    home = tmp_path / "home-config"
+    path = _file(home, "")
+    path.write_text(
+        "schema_version: 1\nconnection: {host: nas}\n"
+        "modules: {filestation: {settings: {default_download_dir: !!binary ZGw=}}}\n",
+        encoding="utf-8",
+    )
+    settings = load_config(path).modules["filestation"].settings
+    assert settings["default_download_dir"] == os.path.join(os.path.realpath(home), "dl")
+
+
+def test_every_module_setting_named_as_a_local_path_is_accounted_for() -> None:
+    """Pre-QA on #561: core resolves one module's setting by name, so a new local-path setting in
+    another module would depend on the working folder with no test failing. Add it to
+    `_resolve_paths_against_the_file`, or here if it's a path on the NAS."""
+    resolved_or_on_the_nas = {
+        ("filestation", "default_download_dir"),
+        ("filestation", "default_upload_dir"),  # on the NAS
+    }
+    found = set()
+    for name, module in _MODULE_REGISTRY.items():
+        schema = module.MODULE_INFO.settings_schema
+        for field in schema.model_fields if schema else ():
+            if field.endswith(("_dir", "_file", "_folder", "_path")):
+                found.add((name, field))
+    assert found == resolved_or_on_the_nas
+
+
 def _load_from_a_pipe(tmp_path: Path, text: str, *, then_remove: bool = False) -> AppConfig:
     pipe = tmp_path / "pipe"
     os.mkfifo(pipe)
@@ -181,6 +214,18 @@ def test_a_setting_that_isnt_read_isnt_refused_on_a_pipe(
 ) -> None:
     """Pre-QA on #561: every module's was read, so a pipe config failed on one never loaded."""
     assert _load_from_a_pipe(tmp_path, f"{_HEAD}modules: {modules}\n") is not None
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="no named pipes here")
+@pytest.mark.parametrize("value", ["~/sub/x.log", "/abs/x.log"], ids=["home", "absolute"])
+def test_a_path_that_isnt_relative_still_works_on_a_pipe(
+    tmp_path: Path, value: str, _pipe_timeout: None
+) -> None:
+    """The refusal's own advice, which nothing pinned (pre-QA on #561)."""
+    config = _load_from_a_pipe(
+        tmp_path, f"{_HEAD}modules: {{filestation: }}\nlogging: {{file: {value}}}\n"
+    )
+    assert config.logging.file == value
 
 
 @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="no named pipes here")

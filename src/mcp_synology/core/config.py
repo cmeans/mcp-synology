@@ -1,14 +1,16 @@
 """YAML config loading + Pydantic validation.
 
-Four-step loading:
+Five-step loading:
 1. Discover config file path
 2. Parse YAML
 3. Merge environment variable overrides
 4. Apply defaults and validate with Pydantic
+5. Resolve relative local paths against the config file's folder
 """
 
 from __future__ import annotations
 
+import contextlib
 import difflib
 import errno
 import ipaddress
@@ -1767,6 +1769,9 @@ def _resolve_paths_against_the_file(
     filestation = config.modules.get("filestation")
     if filestation is not None and filestation.enabled:
         value = filestation.settings.get("default_download_dir")
+        if isinstance(value, bytes):  # YAML's !!binary, which the settings schema would decode
+            with contextlib.suppress(UnicodeDecodeError):  # left for the schema to refuse
+                value = value.decode()
         if isinstance(value, str) and value.strip():
             filestation.settings["default_download_dir"] = resolved("default_download_dir", value)
     if problems:
