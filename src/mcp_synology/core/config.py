@@ -339,7 +339,7 @@ class ModuleConfig(BaseModel, extra="forbid"):
     extra="forbid": only these three keys exist, so any other is a typo (`permision:
     write` used to be dropped, leaving the module read-only). Unknown keys in
     `settings` and unknown module names are warnings instead (`server.config_notices`),
-    so a config written for a newer version still loads.
+    so a config written for a newer version still loads, unless no known module is enabled.
     """
 
     enabled: bool = True
