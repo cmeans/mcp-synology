@@ -1,0 +1,39 @@
+name: PR Label Recheck
+
+# A green PR can strand on Awaiting CI when GitHub's listings lag behind the last CI event, since no
+# later event checks again (#549, #339). This checks on a schedule, with the same script as
+# pr-labels-ci.yml. See .github/scripts/pr-labels-recheck.sh.
+#
+# LIMITATION: schedule runs from the default branch (main), so changes to this file take effect only
+# after merge. GitHub can delay a scheduled run.
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+# No token permissions by default; the job asks only for what it uses (#203).
+permissions: {}
+
+jobs:
+  recheck:
+    if: github.repository == 'cmeans/mcp-synology'
+    runs-on: ubuntu-latest
+    # A hung call mustn't hold the concurrency group below for hours.
+    timeout-minutes: 15
+    # A run that outlasts the interval shouldn't overlap the next.
+    concurrency:
+      group: pr-labels-recheck
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      pull-requests: write
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Recheck labels
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: bash .github/scripts/pr-labels-recheck.sh
