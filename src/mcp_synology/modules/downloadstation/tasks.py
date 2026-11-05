@@ -56,7 +56,7 @@ _VALID_SORTS: set[str] = {"queue", *_SORT_KEYS}
 # second of the pause.
 _PAUSE_HOLD_CHECKS = 6
 _PAUSE_HOLD_INTERVAL = 0.5
-_PAUSE_CHECKS_AFTER_A_SECOND = 2
+_CHECKS_AFTER_SECOND_PAUSE = 2
 # Seconds. The checks are 3 s of waiting when reads are quick; slow reads add to that.
 _PAUSE_HOLD_BUDGET = 6.0
 # Seconds, to connect and to read, for the calls a pause adds. The client's default of 30 s would
@@ -66,10 +66,6 @@ _IDS_SHOWN_IN_A_LOG_LINE = 20
 _LOGGABLE_ID = re.compile(r"[\w.-]{1,64}")
 _UNDONE = "not paused: it didn't stay paused; pause it again"
 _UNCONFIRMED = "not confirmed paused: couldn't check it; see list_downloads"
-# Anything: by then the pause has been sent, so the rows must still come back, or a model retries
-# and gets 101. The client's own reply handling alone raises TypeError, AttributeError and
-# RecursionError on odd replies. As File Station and Photos do for a task's status (pre-QA on #545).
-_READ_FAILED = Exception
 
 
 def _format_epoch(epoch: int | None) -> str:
@@ -135,8 +131,8 @@ def _why_it_failed(e: Exception) -> str:
         if not isinstance(e, httpx.HTTPError):
             logger.debug("Unexpected error in a task read or second pause", exc_info=e)
         return type(e).__name__
-    shown = redact_urls(repr(e))
-    return f"DSM error {e.code}: {shown}" if e.code is not None else shown
+    text = redact_urls(repr(e))
+    return f"DSM error {e.code}: {text}" if e.code is not None else text
 
 
 async def _read_tasks(
@@ -198,7 +194,11 @@ async def _read_tasks(
                 if e.code not in _TASK_NOT_FOUND_CODES:
                     raise
         return found
-    except _READ_FAILED as e:
+    except Exception as e:
+        # Anything: when pausing, the pause has been sent by then, so the rows must still come
+        # back, or a model retries and gets 101. The client's own reply handling alone raises
+        # TypeError, AttributeError and RecursionError on odd replies. As File Station and Photos
+        # do for a task's status (pre-QA on #545).
         logger.warning("Couldn't read tasks %s: %s", _ids_for_log(task_ids), _why_it_failed(e))
         return None
 
@@ -954,7 +954,7 @@ async def _pause_again(client: DsmClient, task_ids: list[str]) -> None:
                     _ids_for_log([str(result.get("id"))]),
                     error if isinstance(error, int) else type(error).__name__,
                 )
-    except _READ_FAILED as e:
+    except Exception as e:  # The rows still come back, as in `_read_tasks`.
         logger.warning(
             "Couldn't pause %s a second time: %s", _ids_for_log(task_ids), _why_it_failed(e)
         )
@@ -967,10 +967,10 @@ async def _hold_pause(client: DsmClient, task_ids: list[str]) -> bool:
     there, usually after reading `paused` for a moment (#243; the spec has the numbers per
     version). That's a task still starting, or one that's left `waiting` with others starting
     nearby, so every task is watched. A task that goes to `downloading` gets one more pause, and
-    any other status gets none. The watch stops
-    at the first failed read, and past _PAUSE_HOLD_BUDGET: on a stalled or slow NAS, each further
-    read adds to the wait, and the reply would miss the client's time limit. By the budget the
-    3 s have gone by, so the read before the reply still says what's known.
+    any other status gets none. The watch stops at the first failed read, and past
+    _PAUSE_HOLD_BUDGET: on a stalled or slow NAS, each further read adds to the wait, and the reply
+    would miss the client's time limit. By the budget the 3 s have gone by, so the read before the
+    reply still says what's known.
     """
     start = time.monotonic()
     deadline = start + _PAUSE_HOLD_BUDGET
@@ -978,6 +978,7 @@ async def _hold_pause(client: DsmClient, task_ids: list[str]) -> bool:
     paused_again: set[str] = set()
     check = 0
     last_check = _PAUSE_HOLD_CHECKS
+    owed_until = 0
     while check < last_check:
         check += 1
         await asyncio.sleep(_PAUSE_HOLD_INTERVAL)
@@ -1002,8 +1003,10 @@ async def _hold_pause(client: DsmClient, task_ids: list[str]) -> bool:
             )
             paused_again.update(again)
             await _pause_again(client, again)
-            # A second pause gets its own time to be undone in, however late it was sent.
-            last_check = max(last_check, check + _PAUSE_CHECKS_AFTER_A_SECOND)
+            # A second pause gets its own time to be undone in: these checks, or past the budget,
+            # at least the same wait before the read before the reply.
+            owed_until = check + _CHECKS_AFTER_SECOND_PAUSE
+            last_check = max(last_check, owed_until)
         if not remaining:
             return True
         elapsed = time.monotonic() - start
@@ -1014,9 +1017,8 @@ async def _hold_pause(client: DsmClient, task_ids: list[str]) -> bool:
                 elapsed,
                 check,
             )
-            if again:
-                # Its checks won't run, but the read before the reply can still see it undone.
-                await asyncio.sleep(_PAUSE_HOLD_INTERVAL * _PAUSE_CHECKS_AFTER_A_SECOND)
+            if owed_until > check:
+                await asyncio.sleep(_PAUSE_HOLD_INTERVAL * (owed_until - check))
             return True
     return True
 
@@ -1040,6 +1042,41 @@ def _not_paused_row(status: object) -> str | None:
         "waiting": "not paused: it still reads waiting; pause it again",
         "downloading": _UNDONE,
     }.get(str(status), f"not confirmed paused: it reads {status}; see list_downloads")
+
+
+async def _check_pause_rows(client: DsmClient, rows: list[list[str]], done: list[str]) -> None:
+    """Watch the tasks DSM said ok to pause, and set each one's row from the last read."""
+    # Each ID once, since getinfo gives a repeated ID a second entry.
+    unique = list(dict.fromkeys(done))
+    watched = await _hold_pause(client, unique)
+    tasks = (
+        await _read_tasks(
+            client,
+            unique,
+            read_timeout=_PAUSE_READ_TIMEOUT,
+            deadline=time.monotonic() + _PAUSE_HOLD_BUDGET,
+        )
+        if watched
+        else None
+    )
+    for row in rows:
+        if row[0] not in done:
+            continue
+        status = (tasks or {}).get(row[0], {}).get("status")
+        if status is not None:
+            row[1] = _not_paused_row(status) or row[1]
+            if row[1] == _UNDONE:
+                # The signal that a NAS undoes a pause later than the watch looks.
+                logger.warning("Pause of %s didn't hold, after the watch", _ids_for_log([row[0]]))
+        else:
+            # It may have been undone or gone, with nothing left to say so: not DSM's plain ok.
+            row[1] = _UNCONFIRMED
+            if tasks is not None:
+                logger.info(
+                    "Task %s %s after the pause",
+                    _ids_for_log([row[0]]),
+                    "reads no status" if row[0] in tasks else "was left out of the read",
+                )
 
 
 async def _task_state_change(
@@ -1093,39 +1130,7 @@ async def _task_state_change(
     rows, errors = _per_task_rows(results)
     done = [row[0] for row in rows if row[1] == "ok"]
     if method == "pause" and done:
-        # Each ID once, since getinfo gives a repeated ID a second entry.
-        unique = list(dict.fromkeys(done))
-        watched = await _hold_pause(client, unique)
-        tasks = (
-            await _read_tasks(
-                client,
-                unique,
-                read_timeout=_PAUSE_READ_TIMEOUT,
-                deadline=time.monotonic() + _PAUSE_HOLD_BUDGET,
-            )
-            if watched
-            else None
-        )
-        for row in rows:
-            if row[0] not in done:
-                continue
-            status = (tasks or {}).get(row[0], {}).get("status")
-            if status is not None:
-                row[1] = _not_paused_row(status) or row[1]
-                if row[1] == _UNDONE:
-                    # The signal that a NAS undoes a pause later than the watch looks.
-                    logger.warning(
-                        "Pause of %s didn't hold, after the watch", _ids_for_log([row[0]])
-                    )
-            else:
-                # It may have been undone or gone, with nothing left to say so: not DSM's plain ok.
-                row[1] = _UNCONFIRMED
-                if tasks is not None:
-                    logger.info(
-                        "Task %s %s after the pause",
-                        _ids_for_log([row[0]]),
-                        "reads no status" if row[0] in tasks else "was left out of the read",
-                    )
+        await _check_pause_rows(client, rows, done)
     return format_table(
         headers=["Task ID", "Result"],
         rows=rows,
