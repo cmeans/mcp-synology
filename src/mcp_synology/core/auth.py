@@ -48,11 +48,61 @@ def _present_or_none(value: str | None) -> str | None:
     return value if (value and value.strip()) else None
 
 
+def _refuse_another_hosts_credentials(config: AppConfig, service: str) -> None:
+    """Stop before login unless this keyring entry is for ``connection.host`` (#536).
+
+    It's found by instance ID alone, and a derived ID is only the host's first label, so
+    `nas.home` and `nas.office` share an entry. A warning would come too late: the password would
+    already be on its way. An entry from before the host was recorded gets it here only when the
+    config says which host is meant (``host_may_be_recorded``); there's no variable to skip this,
+    since the same `env` block could set it. A keyring that can't answer refuses too.
+    """
+    if config.connection is None:  # the config's own validation requires it
+        raise RuntimeError("Config missing connection settings")
+    from mcp_synology.core.config import comparable_host
+
+    host = comparable_host(config.connection.host)
+    instance = config.instance_id or "default"
+    advice = (
+        f"If {config.connection.host!r} is the right NAS, run {_SETUP} to store credentials for "
+        "it. If it isn't, check connection.host, SYNOLOGY_HOST and the instance ID. A NAS reached "
+        "by two addresses needs a second config with its own instance_id."
+    )
+    try:
+        recorded = _present_or_none(kr.get_password(service, "host"))
+        if recorded is None and config.host_may_be_recorded:
+            kr.set_password(service, "host", host)
+            logger.info("Keyring entry %r is now recorded for this config's host", instance)
+            return
+    except (KeyringError, OSError) as e:
+        logger.debug("Keyring error reading or recording the host: %s", e, exc_info=True)
+        raise AuthenticationError(
+            f"Couldn't check which host the credentials in keyring entry {instance!r} are for, "
+            f"so they aren't being sent to {config.connection.host!r}.",
+            suggestion=advice,
+        ) from None
+    if recorded == host:
+        return
+    # Not naming the recorded host: an `env` block's author would learn the real NAS's name.
+    reason = (
+        "are for another host"
+        if recorded
+        else "don't say which host they're for, and this one didn't come from the default config "
+        "file or --config with no SYNOLOGY_HOST or SYNOLOGY_INSTANCE_ID"
+    )
+    raise AuthenticationError(
+        f"The credentials in keyring entry {instance!r} {reason}, so they aren't being sent to "
+        f"{config.connection.host!r}.",
+        suggestion=advice,
+    )
+
+
 def resolve_credentials(config: AppConfig) -> tuple[str, str, str | None]:
     """Resolve credentials from the storage hierarchy.
 
     Order: env vars -> config file -> keyring.
-    Explicit sources (env, config) override the implicit default (keyring).
+    Explicit sources (env, config) override the implicit default (keyring). Any value from the
+    keyring must be for this config's host, or this raises (#536).
     Returns: (username, password, device_id or None)
     """
     import os
@@ -119,6 +169,12 @@ def resolve_credentials(config: AppConfig) -> tuple[str, str, str | None]:
             kr_user = _present_or_none(kr.get_password(service, "username"))
             kr_pass = _present_or_none(kr.get_password(service, "password"))
             kr_device = _present_or_none(kr.get_password(service, "device_id"))
+            if (
+                (kr_user and not username)
+                or (kr_pass and not password)
+                or (kr_device and not device_id)
+            ):
+                _refuse_another_hosts_credentials(config, service)
             if kr_user and not username:
                 username = kr_user
                 logger.debug("Username from keyring: %s", username)

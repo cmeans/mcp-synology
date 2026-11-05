@@ -62,12 +62,13 @@ def _keyring_with(
     password: str | None = None,
     device_id: str | None = None,
 ) -> MagicMock:
-    """Return a mock keyring module that returns specific values."""
+    """Return a mock keyring module that returns specific values, for `_make_config`'s host."""
     mock = MagicMock()
     mock.get_password.side_effect = lambda _svc, key: {
         "username": username,
         "password": password,
         "device_id": device_id,
+        "host": "nas",
     }.get(key)
     return mock
 

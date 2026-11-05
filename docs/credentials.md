@@ -20,13 +20,23 @@ The `instance_id` is the key that separates everything — keyring entries, sess
 
 ## Stored Keys
 
-Each service stores up to three keys:
+Each service stores up to four keys:
 
 | Key | Description |
 |-----|-------------|
 | `username` | DSM login username |
 | `password` | DSM login password |
 | `device_id` | 2FA device token (only present after 2FA bootstrap) |
+| `host` | The host these are for (not a secret) |
+
+## Credentials Are Tied to a Host
+
+The entry is looked up by `instance_id`, and a derived one is only the host's first part, so `nas.home` and `nas.office` would share an entry. So `setup` records the host beside the password, and any login using a value from the keyring compares it with `connection.host`. On a mismatch, nothing is sent, and the error says to run `setup` again. There's no setting to skip this.
+
+- **Entries from an older version** have no recorded host. It's recorded the first time the config comes from the default location or `--config`, with neither `SYNOLOGY_HOST` nor `SYNOLOGY_INSTANCE_ID` set. Otherwise the login is refused until you run `setup`.
+- **`setup` asks first** before replacing an entry recorded for another host or with no host recorded. Declining changes nothing. Replacing it means any other config using that entry is refused until it's set up again, and a 2FA device token from another host is removed.
+- **A NAS reached by two addresses** (LAN and DDNS) uses a second config with its own `instance_id`.
+- **Credentials from environment variables or the config file** don't use the keyring, so none of this applies to them.
 
 ## 2FA Device Tokens
 
@@ -104,7 +114,7 @@ connection:
 ```
 
 Their credentials are stored independently:
-- `mcp-synology/nas-primary` — username, password, device_id
-- `mcp-synology/nas-backup` — username, password, device_id
+- `mcp-synology/nas-primary` — username, password, device_id, host
+- `mcp-synology/nas-backup` — username, password, device_id, host
 
 Run `mcp-synology setup --list` to see all configured instances.

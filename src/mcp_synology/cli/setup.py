@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import fnmatch
 import json
 import logging
@@ -264,14 +265,24 @@ def _setup_interactive(verbose: bool, not_loaded: str | None = None) -> None:
         click.echo(click.style(f"Error: {format_validation_error(e)}", fg="red"), err=True)
         sys.exit(1)
 
+    # Nothing is written until these are answered (#536).
+    service = f"mcp-synology/{instance_id}"
+    if not _may_replace_entry(service, host, instance_id):
+        return
+    config_path = _CONFIG_DIR / f"{instance_id}.yaml"
+    if config_path.exists() and not click.confirm(
+        f"\n{config_path} already exists. Overwrite?", default=False
+    ):
+        click.echo("Aborted.")
+        return
+
     # Prompt for credentials
     click.echo()
     username = click.prompt("DSM username").strip()
     password = click.prompt("DSM password", hide_input=True)
 
     # Store in keyring
-    service = f"mcp-synology/{instance_id}"
-    keyring_ok = _store_keyring(service, username, password)
+    keyring_ok = _store_keyring(service, username, password, host)
     if not keyring_ok:
         return
 
@@ -297,14 +308,6 @@ def _setup_interactive(verbose: bool, not_loaded: str | None = None) -> None:
             config_dict["alias"] = alias
             # Re-validate
             app_config = AppConfig(**config_dict)
-
-    # Check for existing file before writing
-    config_path = _CONFIG_DIR / f"{instance_id}.yaml"
-    if config_path.exists() and not click.confirm(
-        f"\n{config_path} already exists. Overwrite?", default=False
-    ):
-        click.echo("Aborted.")
-        return
 
     # Write config file atomically (closes #70)
     from mcp_synology.core.fs import atomic_write_text
@@ -347,11 +350,15 @@ def _setup_credential_flow(app_config: Any, verbose: bool) -> None:
     click.echo(f"  Instance: {app_config.instance_id}")
     click.echo()
 
+    service = f"mcp-synology/{app_config.instance_id}"
+    instance = str(app_config.instance_id)
+    if not _may_replace_entry(service, app_config.connection.host, instance):
+        return
+
     username = click.prompt("DSM username").strip()
     password = click.prompt("DSM password", hide_input=True)
 
-    service = f"mcp-synology/{app_config.instance_id}"
-    keyring_ok = _store_keyring(service, username, password)
+    keyring_ok = _store_keyring(service, username, password, app_config.connection.host)
     if not keyring_ok:
         return
 
@@ -359,14 +366,56 @@ def _setup_credential_flow(app_config: Any, verbose: bool) -> None:
     asyncio.run(_setup_login(app_config, username, password, service))
 
 
-def _store_keyring(service: str, username: str, password: str) -> bool:
-    """Store credentials in the OS keyring. Returns True on success."""
+def _may_replace_entry(service: str, host: str, instance: str) -> bool:
+    """Ask before replacing a keyring entry that isn't this host's (#536): two NAS with the same
+    first label derive the same instance ID, and the other's config would then send this one's
+    password there. A keyring that can't be read says so itself when it's written to."""
+    from mcp_synology.core.config import comparable_host
+
     try:
         import keyring
         from keyring.errors import KeyringError
 
+        recorded = keyring.get_password(service, "host")
+        stored = recorded or keyring.get_password(service, "password")
+    except (ImportError, KeyringError, OSError):
+        return True
+    if not stored or recorded == comparable_host(host):
+        return True
+    whose = "for another host" if recorded else "with no host recorded"
+    if click.confirm(
+        f"\nKeyring entry {instance!r} already holds credentials {whose}. Replacing it stops any "
+        f"config using that entry from logging in until it's set up again. Replace it for {host}?",
+        default=False,
+    ):
+        return True
+    click.echo(
+        "Aborted, nothing changed. To keep both, give this NAS its own instance_id in a config "
+        "file, then run 'mcp-synology setup --config <that file>'."
+    )
+    return False
+
+
+def _store_keyring(service: str, username: str, password: str, host: str) -> bool:
+    """Store credentials and the host they're for in the OS keyring. True on success.
+
+    The host goes last: stopped partway, the old host's record over a new password refuses the
+    next login, instead of sending the password anywhere. A device token from another host goes
+    first: it would otherwise be sent to this one.
+    """
+    from mcp_synology.core.config import comparable_host
+
+    try:
+        import keyring
+        from keyring.errors import KeyringError, PasswordDeleteError
+
+        recorded = comparable_host(host)
+        if keyring.get_password(service, "host") != recorded:
+            with contextlib.suppress(PasswordDeleteError):  # there may be none
+                keyring.delete_password(service, "device_id")
         keyring.set_password(service, "username", username)
         keyring.set_password(service, "password", password)
+        keyring.set_password(service, "host", recorded)
         click.echo("\nCredentials stored in OS keyring.")
         return True
     except (ImportError, KeyringError, OSError):

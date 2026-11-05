@@ -518,6 +518,8 @@ Credentials are stored in the OS keyring and accessed transparently:
 
 Credential resolution order: **env vars > config file > keyring**. Explicit sources override the implicit default.
 
+A keyring entry is tied to the host it was set up for. If a config points at another host, the server refuses before sending anything and tells you to run `mcp-synology setup` again. Two NAS whose names start the same (`nas.home`, `nas.office`) need their own `instance_id`.
+
 For environments without a keyring (Docker, CI), use environment variables or inline credentials in the config file.
 
 See [docs/credentials.md](docs/credentials.md) for keyring service names, multi-NAS setup, and how to inspect/remove stored credentials.

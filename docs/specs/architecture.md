@@ -265,8 +265,14 @@ All three secrets (including device_id) are stored in the keyring when available
 
 ```
 Service: mcp-synology/{instance_id}
-Accounts: username, password, device_id
+Accounts: username, password, device_id, host
 ```
+
+**An entry is tied to its host (#536; maintainer, 2026-11-04).** It's found by instance ID alone, and a derived ID is only the host's first label, so `nas.home` and `nas.office` share one. So `setup` saves `host` (in the form `core.config.comparable_host` gives, so `NAS.home` or an IDN's `xn--` form isn't another host) beside the password: not in the state file, which is found through `HOME`, which the same `env` block can change. Whenever `resolve_credentials` would use any value from the keyring, it compares the recorded host with `connection.host`, and on a mismatch raises before any login, with advice to run `setup`. A warning would come too late, and there's no variable to skip this, since the same `env` block could set it. The error doesn't name the recorded host: an `env` block's author would learn the real NAS's name from the reply. A keyring that can't answer about the host refuses too.
+
+An entry from before this has no record. It takes the config's host on first use only when the config came from the default location or `--config`, with neither `SYNOLOGY_HOST` nor `SYNOLOGY_INSTANCE_ID` set (even to the same value); `MCP_SYNOLOGY_CONFIG` doesn't count, since the same `env` block can set it. Otherwise it refuses and points to `setup`. Entries moved by `scripts/migrate-from-synology-mcp.py` are in this case. Credentials from the environment or a config file don't touch the keyring, so they need no record. One host per entry: a NAS reached by two addresses uses a second config with its own `instance_id`.
+
+`setup` asks before replacing an entry recorded for another host or with no record, and before overwriting a config file, ahead of the credential prompts, so declining writes nothing. It writes `host` last: stopped partway, the old record over a new password refuses the next login. A device token from another host goes first, since it would otherwise be sent to this one.
 
 ### Separate State File
 
