@@ -139,19 +139,23 @@ def _host_variables() -> list[str]:
     return [v for v in ("SYNOLOGY_HOST", "SYNOLOGY_INSTANCE_ID") if os.environ.get(v, "").strip()]
 
 
+def _connection_variables() -> list[str]:
+    """The variables that change how a terminal's command reaches the NAS, set for this server."""
+    import os
+
+    return [v for v in ("SYNOLOGY_PORT", "SYNOLOGY_HTTPS") if os.environ.get(v, "").strip()]
+
+
 def _setup_command(config: AppConfig, *, new_instance: bool = False) -> str:
     """`setup` as this server needs it run. The variables aren't in a terminal's environment when
     a client's `env` block set them: it then stores for the file's host or instance (QA round 1
     on #559), or can't connect with the host but not the port or HTTPS (QA round 2). With no
     config file, plain `setup` takes the host from SYNOLOGY_HOST. ``new_instance``: the instance
     ID is about to change, so that variable isn't to be kept."""
-    import os
-
     command = _SETUP if config._source_path else "'mcp-synology setup'"
-    connection = [v for v in ("SYNOLOGY_PORT", "SYNOLOGY_HTTPS") if os.environ.get(v, "").strip()]
     variables = [
         v
-        for v in _host_variables() + connection
+        for v in _host_variables() + _connection_variables()
         if not (new_instance and v == "SYNOLOGY_INSTANCE_ID")
     ]
     if variables:
@@ -198,8 +202,12 @@ def check_route(config: AppConfig) -> str | None:
         os.environ.get("SYNOLOGY_PASSWORD")
     )
     remove = "remove auth.password from the config and " if in_the_file else ""
+    # Without them it can't connect, or sends the password over plain HTTP where the server would
+    # use HTTPS (pre-QA on #559).
+    connection = _connection_variables()
+    same = f" with the same {' and '.join(connection)} and" if connection else " with"
     return (
-        f"{remove}run {_RECORD_HOST} at a terminal, with no SYNOLOGY_PASSWORD set. It sends the "
+        f"{remove}run {_RECORD_HOST} at a terminal,{same} no SYNOLOGY_PASSWORD set. It sends the "
         "stored password there without asking, and keeps any 2FA token"
     )
 

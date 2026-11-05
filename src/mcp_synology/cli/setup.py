@@ -378,7 +378,7 @@ def _may_replace_entry(
     that fails now may work when written to, and another host's credentials would go unasked, so
     that stops here (QA round 1 on #559). Any exception counts: backends raise their own types.
     ``config`` is the file being set up; interactive setup hasn't written one yet."""
-    from mcp_synology.core.auth import check_route
+    from mcp_synology.core.auth import check_route, own_instance_id_clause
     from mcp_synology.core.config import comparable_host
 
     try:
@@ -411,7 +411,9 @@ def _may_replace_entry(
     ):
         return True
     own_id = (
-        "give this NAS its own instance_id in a config file, then run "
+        f"{own_instance_id_clause(config)}."
+        if config is not None
+        else "give this NAS its own instance_id in a config file, then run "
         "'mcp-synology setup --config <that file>'."
     )
     # An entry with no record may well be this NAS's own, from before hosts were recorded.

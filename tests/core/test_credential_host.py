@@ -21,7 +21,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 from mcp_synology.cli.main import main
 from mcp_synology.cli.setup import _attempt_login, _may_replace_entry, _store_keyring
-from mcp_synology.core.auth import AuthManager, how_to_record, resolve_credentials
+from mcp_synology.core.auth import AuthManager, check_route, how_to_record, resolve_credentials
 from mcp_synology.core.client import DsmClient
 from mcp_synology.core.config import AppConfig, comparable_host, load_config
 from mcp_synology.core.errors import AuthenticationError, CredentialHostError, SynologyError
@@ -690,6 +690,30 @@ class TestAnEntryWithNoRecordedHost:
         assert "nas.home" not in advice  # `check` prints it before this, and logs share the text
         assert "mcp-synology check" not in advice
 
+    @pytest.mark.parametrize(
+        ("variables", "named"),
+        [
+            ({"SYNOLOGY_HTTPS": "true"}, "the same SYNOLOGY_HTTPS and no SYNOLOGY_PASSWORD"),
+            ({"SYNOLOGY_PORT": "5001"}, "the same SYNOLOGY_PORT and no SYNOLOGY_PASSWORD"),
+            ({}, "at a terminal, with no SYNOLOGY_PASSWORD"),
+        ],
+    )
+    def test_the_check_route_keeps_the_connection(
+        self,
+        store: MemoryKeyring,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        variables: dict[str, str],
+        named: str,
+    ) -> None:
+        """Pre-QA on #559: with SYNOLOGY_HTTPS left out at the terminal, the stored password went
+        over plain HTTP."""
+        _entry(store, "nas")
+        for variable, value in variables.items():
+            monkeypatch.setenv(variable, value)
+        config = load_config(_file(tmp_path, "nas.home"))
+        assert named in (check_route(config) or "")
+
     def test_changing_the_instance_id_doesnt_keep_the_variable(
         self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -702,6 +726,22 @@ class TestAnEntryWithNoRecordedHost:
         assert "Give this NAS its own instance_id with SYNOLOGY_INSTANCE_ID" in (
             exc.value.terminal_suggestion or ""
         )
+
+    def test_declining_says_how_with_the_instance_variable_set(
+        self,
+        store: MemoryKeyring,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Pre-QA on #559: "in a config file" is overridden by the variable, so following it asked
+        about the same entry again."""
+        _entry(store, "nas", "nas.home")
+        monkeypatch.setenv("SYNOLOGY_INSTANCE_ID", "nas")
+        config = load_config(_file(tmp_path, "nas.office"))
+        with patch("click.confirm", return_value=False):
+            _may_replace_entry("mcp-synology/nas", "nas.office", "nas", config)
+        assert "its own instance_id with SYNOLOGY_INSTANCE_ID" in capsys.readouterr().out
 
     def test_declining_with_no_route_doesnt_say_keep_both(
         self,
@@ -881,6 +921,13 @@ class TestADeviceTokenAlone:
         self._creds_from_env(monkeypatch)
         assert resolve_credentials(load_config(_file(tmp_path, "nas.home"))) == ("u", "p", None)
         assert ("mcp-synology/nas", "host") not in store.values
+
+    def test_another_spelling_of_the_host_still_gets_the_token(
+        self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._token(store, "nas.home")
+        self._creds_from_env(monkeypatch)
+        assert resolve_credentials(load_config(_file(tmp_path, "NAS.Home")))[2] == "token"
 
     def test_the_warning_says_how_to_get_it_sent(
         self,
