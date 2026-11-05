@@ -77,7 +77,7 @@ def test_setup_records_the_host_and_another_host_is_refused(
     )
     assert code == 0, output
     assert "Login successful" in output
-    assert store.values[(f"mcp-synology/{_INSTANCE}", "host")] == "localhost"
+    assert store.values[(f"mcp-synology/{_INSTANCE}", "host")] == f"localhost:{port}"
 
     code, output = run("check", "--config", home_nas)
     assert "Authentication successful!" in output, output
@@ -85,7 +85,7 @@ def test_setup_records_the_host_and_another_host_is_refused(
     code, output = run("check", "--config", other)
     assert code == 1, output
     assert "are for another host" in output
-    assert "They were set up for 'localhost'" in output
+    assert "They were set up for 'localhost:" in output
 
     # Run again for another host: asked first, and declining changes nothing.
     before = dict(store.values)
@@ -98,6 +98,6 @@ def test_setup_records_the_host_and_another_host_is_refused(
         "setup", "--config", other, stdin=f"y\n{meta['test_user']}\n{meta['test_password']}\n"
     )
     assert "Login successful" in output, output
-    assert store.values[(f"mcp-synology/{_INSTANCE}", "host")] == "127.0.0.1"
+    assert store.values[(f"mcp-synology/{_INSTANCE}", "host")] == f"127.0.0.1:{port}"
     assert "Authentication successful!" in run("check", "--config", other)[1]
     assert "are for another host" in run("check", "--config", home_nas)[1]

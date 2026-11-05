@@ -627,7 +627,7 @@ class TestStoreKeyring:
         mock_kr.get_password.return_value = None
         # keyring is imported inside the function, so mock at the import target
         with patch.dict("sys.modules", {"keyring": mock_kr}):
-            result = _store_keyring("mcp-synology/test", "admin", "secret", "nas")
+            result = _store_keyring("mcp-synology/test", "admin", "secret", "nas", 5000)
 
         assert result is True
         assert mock_kr.set_password.call_count == 3
@@ -640,7 +640,7 @@ class TestStoreKeyring:
         mock_errors = MagicMock()
         mock_errors.KeyringError = type("KeyringError", (Exception,), {})
         with patch.dict("sys.modules", {"keyring": mock_kr, "keyring.errors": mock_errors}):
-            result = _store_keyring("mcp-synology/test", "admin", "secret", "nas")
+            result = _store_keyring("mcp-synology/test", "admin", "secret", "nas", 5000)
 
         assert result is False
 
