@@ -28,6 +28,7 @@
 
 ### Changed
 
+- **Bump python group: click 8.3.1→8.5.0, pytest 9.0.3→9.2.0, pytest-asyncio 1.3.0→1.4.1.post1, pytest-cov 7.0.0→7.1.0, ruff 0.15.6→0.17.3, mypy 1.19.1→2.4.1, types-pyyaml 6.0.12.20250915→6.0.12.20261030, types-regex 2026.9.29.20261005→2026.9.29.20261030, respx 0.22.0→0.23.1, testcontainers 4.14.2→4.15.0, playwright 1.58.0→1.64.1, anyio 4.14.2→4.16.0, and ast-serialize 0.13.1 (new, for mypy 2)** (#551)
 - **The code type-checks before and after the mypy and types-PyYAML bumps** (#556) — for #551, whose bumps to mypy 2.4.1 and types-PyYAML 6.0.12.20261030 failed `typecheck` on `type: ignore` comments they no longer need. All three now pass on either version, and nothing changes at runtime for a tool's arguments.
 - **CI refuses a stale `uv.lock`** (#544) — part of #115. Every `uv sync` in the workflows, the publish ones included, now uses `--locked`, and `UV_LOCKED` holds `uv run` to the same. A PR that changed a dependency and forgot `uv lock` used to pass, tested on a lock nobody committed. Change a dependency, run `uv lock`. Dependabot's weekly Python updates move from its `pip` ecosystem, which didn't update the lock, to `uv`, which does.
 - **Bump github-actions group: astral-sh/setup-uv 10.3.2→10.3.3** (#523)
