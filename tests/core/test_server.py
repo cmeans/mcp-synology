@@ -1849,11 +1849,9 @@ class TestInstructionComments:
 # +175 by #510 (pre-QA): ... invisible padding and #recycle at a shared or home folder's top.
 # +135 by #515 (QA round 1): ... an invisible character anywhere Unicode doesn't use one, not
 # only padding at the ends.
-# +98 by #243: pause_download says a task still starting takes about 3 s more.
-# +150 by #545 (QA round 1): ... and what its rows ask the model to do next.
-# +73 by #545 (QA round 2): ... and that an id that's missing or another user's costs the same.
-# +167 by #545 (QA round 3): ... a failed first read too, a slow NAS, and when to stop retrying.
-PAYLOAD_BUDGET_CHARS = 57_621
+# +352 by #545: pause_download says a pause takes about 3 s, and why, and what its rows ask the
+# model to do next.
+PAYLOAD_BUDGET_CHARS = 57_485
 
 
 class TestPayloadBudget:
