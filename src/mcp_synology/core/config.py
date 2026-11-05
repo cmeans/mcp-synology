@@ -9,6 +9,7 @@ Four-step loading:
 
 from __future__ import annotations
 
+import contextlib
 import difflib
 import errno
 import ipaddress
@@ -985,9 +986,16 @@ def _as_compared(dotted_path: str, value: Any) -> Any:
 
 
 def comparable_host(host: str) -> str:
-    """A host as a keyring entry records it and is compared with it (#536): `NAS.home` and an
-    IDN's `xn--` form aren't different hosts. Always a string: `connection.host` is one."""
-    return str(_as_compared("connection.host", host))
+    """A host as a keyring entry records it and is compared with it (#536): `NAS.home`, an IDN's
+    `xn--` form, `nas.home.` and `[fd00:0::1]` aren't different hosts, and treating them as
+    different would cost a 2FA token (QA round 3 on #559). Always a string: `connection.host` is
+    one."""
+    compared = str(_as_compared("connection.host", host))
+    if compared.startswith("[") and compared.endswith("]"):
+        with contextlib.suppress(ValueError):
+            return f"[{ipaddress.IPv6Address(compared[1:-1]).compressed}]"
+        return compared
+    return compared[:-1] if compared.endswith(".") else compared
 
 
 def _merge_env_overrides(raw: dict[str, Any], *, from_file: bool = False) -> dict[str, Any]:

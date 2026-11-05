@@ -196,6 +196,12 @@ def check_route(config: AppConfig) -> str | None:
             or _host_variables()
             or _recorded_host(service) is not None
             or _present_or_none(kr.get_password(service, "password")) is None
+            # A password alone can't log in, and following this would say "No credentials found".
+            or not (
+                _present_or_none(os.environ.get("SYNOLOGY_USERNAME"))
+                or _present_or_none(config.auth.username)
+                or _present_or_none(kr.get_password(service, "username"))
+            )
         ):
             return None
     except Exception as e:  # backends raise their own types
@@ -211,9 +217,17 @@ def check_route(config: AppConfig) -> str | None:
     # use HTTPS (pre-QA on #559).
     connection = _connection_variables()
     same = f" with the same {' and '.join(connection)} and" if connection else " with"
+    # This is often read at a terminal, which can't see a client's `env` block, so it goes by what
+    # the terminal does know (QA round 3 on #559).
+    plain = (
+        ""
+        if config.connection is not None and config.connection.https
+        else ". With this config it goes over plain HTTP: if a client's env block sets "
+        "SYNOLOGY_HTTPS, set it here too"
+    )
     return (
         f"{remove}run {_RECORD_HOST} at a terminal,{same} no SYNOLOGY_PASSWORD set. It sends the "
-        "stored password there without asking, and keeps any 2FA token"
+        f"stored password there without asking, and keeps any 2FA token{plain}"
     )
 
 
@@ -254,6 +268,14 @@ _WRONG_NAS = (
 )
 
 
+# A URL: a relative path isn't in the wheel, and a model would read it from its working folder,
+# which a planted file could fill (QA round 3 on #559).
+_CREDENTIALS_DOC = (
+    "https://github.com/cmeans/mcp-synology/blob/main/docs/credentials.md"
+    "#credentials-are-tied-to-a-host"
+)
+
+
 def _advice_for_the_model(config: AppConfig, host: str) -> str:
     """This refusal's reply names no command that records the host: that needs no person, and a
     model can't know whose credentials these are, least of all from a config in a folder it was
@@ -262,8 +284,7 @@ def _advice_for_the_model(config: AppConfig, host: str) -> str:
     return (
         f"If {host!r} is the right NAS, ask the user to {own_instance_id_clause(config, 'it')}. If "
         "they know these are its own credentials, or it's a new address for the same NAS, see "
-        f"'Credentials Are Tied to a Host' in docs/credentials.md. If it's the wrong NAS, "
-        f"{_WRONG_NAS}"
+        f"{_CREDENTIALS_DOC}. If it's the wrong NAS, {_WRONG_NAS}"
     )
 
 

@@ -663,7 +663,7 @@ class TestAnEntryWithNoRecordedHost:
         assert "mcp-synology check" not in reply
         assert "full path" not in reply
         assert "ask the user to give it its own instance_id in the config, then run" in reply
-        assert "docs/credentials.md" in reply
+        assert "https://github.com/cmeans/mcp-synology/blob/main/docs/credentials.md#" in reply
 
     def test_check_gives_the_terminal_advice(
         self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1534,3 +1534,121 @@ class TestTheMigrationScript:
         assert _migrate_script().migrate_keyring({"nas"}, dry_run=False) == 1
         assert store.values[("mcp-synology/nas", "password")] == "home-pw"
         assert ("mcp-synology/nas", "host") not in store.values
+
+    def test_a_failed_read_of_the_new_entry_copies_nothing(
+        self, store: MemoryKeyring, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """QA round 3 on #559: it failed open, and overwrote an entry recorded for a host."""
+        self._old(store)
+        real = store.get_password
+
+        def fails(service: str, key: str) -> str | None:
+            if service == "mcp-synology/nas" and key == "host":
+                raise RuntimeError("a backend's own type")
+            return real(service, key)
+
+        monkeypatch.setattr(store, "get_password", fails)
+        assert _migrate_script().migrate_keyring({"nas"}, dry_run=False) == 0
+        assert ("mcp-synology/nas", "password") not in store.values
+
+    def test_a_blank_record_is_no_record(self, store: MemoryKeyring) -> None:
+        self._old(store)
+        store.values[("mcp-synology/nas", "host")] = "   "
+        assert _migrate_script().migrate_keyring({"nas"}, dry_run=False) == 1
+
+    def test_cleanup_keeps_what_was_skipped(self, store: MemoryKeyring) -> None:
+        """QA round 3 on #559: the old NAS's credentials then existed nowhere."""
+        self._old(store)
+        store.values[("mcp-synology/nas", "host")] = "nas.office"
+        store.values[("mcp-synology/nas", "password")] = "office-pw"
+        _migrate_script().cleanup_keyring({"nas"}, dry_run=False)
+        assert store.values[("synology-mcp/nas", "password")] == "home-pw"
+
+    def test_cleanup_removes_what_was_migrated_and_recorded_since(
+        self, store: MemoryKeyring
+    ) -> None:
+        self._old(store)
+        script = _migrate_script()
+        script.migrate_keyring({"nas"}, dry_run=False)
+        store.values[("mcp-synology/nas", "host")] = "nas.home"
+        script.cleanup_keyring({"nas"}, dry_run=False)
+        assert ("synology-mcp/nas", "password") not in store.values
+
+    def test_cleanup_keeps_it_when_the_new_entry_cant_be_read(
+        self, store: MemoryKeyring, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._old(store)
+        real = store.get_password
+
+        def fails(service: str, key: str) -> str | None:
+            if service == "mcp-synology/nas":
+                raise RuntimeError("a backend's own type")
+            return real(service, key)
+
+        monkeypatch.setattr(store, "get_password", fails)
+        _migrate_script().cleanup_keyring({"nas"}, dry_run=False)
+        assert store.values[("synology-mcp/nas", "password")] == "home-pw"
+
+    def test_it_doesnt_say_all_migrated_after_skipping_one(self, store: MemoryKeyring) -> None:
+        self._old(store)
+        store.values[("mcp-synology/nas", "host")] = "nas.office"
+        store.values[("mcp-synology/nas", "password")] = "office-pw"
+        assert _migrate_script()._any_skipped({"nas"})
+
+
+class TestQaRoundThree:
+    @pytest.mark.parametrize(
+        ("spelling", "recorded"),
+        [
+            ("nas.home.", "nas.home"),
+            ("[fd00:0::1]", "[fd00::1]"),
+            ("[FD00::1]", "[fd00::1]"),
+            ("[fd00::1]", "[fd00::1]"),
+        ],
+    )
+    def test_spellings_of_one_host_compare_equal(self, spelling: str, recorded: str) -> None:
+        assert comparable_host(spelling) == recorded
+
+    def test_the_route_warns_about_plain_http(self, store: MemoryKeyring, tmp_path: Path) -> None:
+        """A terminal can't see a client's env block, so this goes by the config it can read."""
+        _entry(store, "nas")
+        assert "goes over plain HTTP" in (
+            check_route(load_config(_file(tmp_path, "nas.home"))) or ""
+        )
+
+    def test_the_route_is_quiet_on_https(self, store: MemoryKeyring, tmp_path: Path) -> None:
+        _entry(store, "nas")
+        path = tmp_path / "c.yaml"
+        path.write_text(
+            "schema_version: 1\nconnection: {host: nas.home, https: true}\n"
+            "modules: {filestation: {}}\n",
+            encoding="utf-8",
+        )
+        assert "plain HTTP" not in (check_route(load_config(path)) or "")
+
+    def test_no_route_for_a_password_with_no_username(
+        self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        store.values[("mcp-synology/nas", "password")] = "hunter2"
+        assert check_route(load_config(_file(tmp_path, "nas.home"))) is None
+        monkeypatch.setenv("SYNOLOGY_USERNAME", "u")
+        assert check_route(load_config(_file(tmp_path, "nas.home"))) is not None
+
+    def test_a_refused_login_on_an_unrecorded_entry_offers_its_own_id(
+        self, store: MemoryKeyring, tmp_path: Path
+    ) -> None:
+        _entry(store, "nas")
+        with (
+            patch(
+                "mcp_synology.core.client.DsmClient.query_api_info", AsyncMock(return_value=None)
+            ),
+            patch(
+                "mcp_synology.core.client.DsmClient.request",
+                AsyncMock(side_effect=AuthenticationError("wrong password", code=400)),
+            ),
+        ):
+            result = CliRunner().invoke(
+                main, ["check", "--config", str(_file(tmp_path, "nas.office"))]
+            )
+        assert result.exit_code == 1
+        assert "If these are another NAS's credentials, give this NAS its own" in result.output

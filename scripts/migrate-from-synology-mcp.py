@@ -15,6 +15,7 @@ import argparse
 import json
 import shutil
 from pathlib import Path
+from typing import Any
 
 OLD_NAME = "synology-mcp"
 NEW_NAME = "mcp-synology"
@@ -76,9 +77,10 @@ def migrate_keyring(instances: set[str], *, dry_run: bool) -> int:
         # An entry recorded for a host is that host's, so the old NAS's secrets don't go in it
         # (#536): the host check would then send them there.
         try:
-            recorded = kr.get_password(new_service, "host")
-        except Exception:
-            recorded = None
+            recorded = (kr.get_password(new_service, "host") or "").strip()
+        except Exception as e:
+            print(f"  ERROR keyring {new_service}: can't read it, so nothing was copied: {e}")
+            continue
         if recorded:
             print(f"  SKIP  keyring {new_service}: already set up for a host")
             continue
@@ -118,6 +120,31 @@ def migrate_keyring(instances: set[str], *, dry_run: bool) -> int:
     return count
 
 
+def _holds_what_migration_skipped(kr: Any, instance_id: str) -> bool:
+    """Whether the old entry's secrets exist only there: the new entry can't be read, or it records
+    a host and holds something else. Deleting them then couldn't be undone. An entry migrated
+    earlier and recorded since holds the same values, so its old copy can go."""
+    old_service = f"{OLD_NAME}/{instance_id}"
+    new_service = f"{NEW_NAME}/{instance_id}"
+    try:
+        if not (kr.get_password(new_service, "host") or "").strip():
+            return False
+        return any(
+            (old := kr.get_password(old_service, key)) and old != kr.get_password(new_service, key)
+            for key in KEYRING_KEYS
+        )
+    except Exception:
+        return True
+
+
+def _any_skipped(instances: set[str]) -> bool:
+    try:
+        import keyring as kr
+    except ImportError:
+        return False
+    return any(_holds_what_migration_skipped(kr, instance_id) for instance_id in instances)
+
+
 def cleanup_keyring(instances: set[str], *, dry_run: bool) -> None:
     """Delete old keyring entries after successful migration."""
     try:
@@ -127,6 +154,9 @@ def cleanup_keyring(instances: set[str], *, dry_run: bool) -> None:
 
     for instance_id in sorted(instances):
         old_service = f"{OLD_NAME}/{instance_id}"
+        if _holds_what_migration_skipped(kr, instance_id):
+            print(f"  KEEP  keyring {old_service}: not migrated, as its new entry is for a host")
+            continue
         for key in KEYRING_KEYS:
             try:
                 value = kr.get_password(old_service, key)
@@ -309,7 +339,7 @@ def main() -> None:
     else:
         print(f"  Found instances: {', '.join(sorted(instances))}")
         count = migrate_keyring(instances, dry_run=dry_run)
-        if count == 0:
+        if count == 0 and not _any_skipped(instances):
             print("  OK    all keyring entries already migrated (or not present)")
 
         if args.cleanup:

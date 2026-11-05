@@ -133,10 +133,12 @@ def exit_on_connection_failure(base_url: str, host: str) -> Iterator[None]:
 async def _check_login(config: object) -> None:
     """Validate credentials by attempting a login."""
     from mcp_synology.core.auth import (
+        KEYRING,
         AuthManager,
         credential_sources,
         entry_left_unrecorded,
         how_to_record,
+        own_instance_id_clause,
         refusal_advice,
     )
     from mcp_synology.core.client import DsmClient
@@ -209,6 +211,14 @@ async def _check_login(config: object) -> None:
                         credential_sources(config, cli=True),
                         cli=True,
                     )
+                    # A refusal is the strongest sign an unrecorded entry is another NAS's, and
+                    # `setup` on it would replace them (QA round 3 on #559).
+                    sources = credential_sources(config, cli=True)
+                    if sources["password"] == KEYRING and entry_left_unrecorded(config):
+                        hint = (
+                            f"{hint.rstrip('.')}. If these are another NAS's credentials, "
+                            f"{own_instance_id_clause(config)} instead"
+                        )
                     e = dsm
                 text = str(e).rstrip()
                 if text and text[-1] not in ".!?":
