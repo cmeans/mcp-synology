@@ -4,7 +4,8 @@
 # "success" even when a job failed (#241). tool-quality is report-only and is ignored; every other
 # job must succeed or be skipped. Everything else goes to stderr, for the run's log.
 #
-# Env: REPO, HEAD_SHA, GH_TOKEN. PENDING_DETAILS, if set, is a file that gets, for a pending state:
+# Env: REPO, HEAD_SHA, GH_TOKEN. RECHECK_SECONDS is the wait between job reads, 20 by default (a
+# test shortens it). PENDING_DETAILS, if set, is a file that gets, for a pending state:
 #   running              a run hasn't finished
 #   updated <time>       when a finished run last changed
 #   missing <text>       what has no result (a finished run's job, or a run not listed)
@@ -27,6 +28,13 @@ for WF in ci.yml vdsm.yml; do
   read -r RUN_ID RUN_STATUS RUN_CONCLUSION RUN_UPDATED <<< "$RUN"
   if [ "$RUN_STATUS" != completed ]; then
     log "$WF: run $RUN_ID is $RUN_STATUS"
+    detail "running"
+    STATE=pending; continue
+  fi
+  # A fork's run waiting for the maintainer's approval reads completed, with no jobs. That's not a
+  # failure: it hasn't run (pre-QA on #549).
+  if [ "$RUN_CONCLUSION" = action_required ]; then
+    log "$WF: run $RUN_ID is waiting for approval"
     detail "running"
     STATE=pending; continue
   fi

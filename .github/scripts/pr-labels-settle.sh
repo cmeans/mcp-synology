@@ -5,7 +5,7 @@
 #
 # Usage: pr-labels-settle.sh <pr> <head sha>. Env: REPO, GH_TOKEN, PENDING_DETAILS (see
 # pr-checks-state.sh). ADOPT=1 is for a PR with no workflow label at all: it's labeled as if it
-# had Awaiting CI. Prints the state.
+# had Awaiting CI. Prints only the state on stdout, as a caller captures it.
 set -e
 
 PR=$1
@@ -33,6 +33,13 @@ if has "Dev Active"; then
   exit 0
 fi
 
+# The list ADOPT came from can be minutes old, and someone may have labeled the PR since. These
+# writes trigger nothing that would clean up after them (pre-QA on #549).
+for LABEL in "Awaiting CI" "Ready for QA" "QA Active" "Ready for QA Signoff" "QA Approved" \
+  "QA Failed" "CI Failed"; do
+  if has "$LABEL"; then ADOPT=""; fi
+done
+
 case "$STATE" in
   pass)
     # Awaiting CI (normal flow) or CI Failed (a failed job re-run green).
@@ -40,7 +47,7 @@ case "$STATE" in
     has "Awaiting CI" && REMOVE="Awaiting CI"
     has "CI Failed" && REMOVE="${REMOVE:+$REMOVE,}CI Failed"
     if [ -n "$REMOVE" ]; then
-      gh pr edit "$PR" --repo "$REPO" --remove-label "$REMOVE"
+      gh pr edit "$PR" --repo "$REPO" --remove-label "$REMOVE" >&2
     fi
     if [ -n "$REMOVE" ] || [ "${ADOPT:-}" = 1 ]; then
       # Not while the branch has a merge conflict: resolving it changes the diff
@@ -49,7 +56,7 @@ case "$STATE" in
       if has "Merge conflict"; then
         echo "Merge conflict present: checks passed, Ready for QA withheld" >&2
       else
-        gh pr edit "$PR" --repo "$REPO" --add-label "Ready for QA"
+        gh pr edit "$PR" --repo "$REPO" --add-label "Ready for QA" >&2
       fi
     fi
     ;;
@@ -59,16 +66,16 @@ case "$STATE" in
     has "Awaiting CI" && REMOVE="Awaiting CI"
     has "Ready for QA" && REMOVE="${REMOVE:+$REMOVE,}Ready for QA"
     if [ -n "$REMOVE" ]; then
-      gh pr edit "$PR" --repo "$REPO" --remove-label "$REMOVE"
+      gh pr edit "$PR" --repo "$REPO" --remove-label "$REMOVE" >&2
     fi
     if [ -n "$REMOVE" ] || [ "${ADOPT:-}" = 1 ]; then
-      gh pr edit "$PR" --repo "$REPO" --add-label "CI Failed"
+      gh pr edit "$PR" --repo "$REPO" --add-label "CI Failed" >&2
     fi
     ;;
   pending)
     echo "Not every run has a result yet; leaving the labels" >&2
     if [ "${ADOPT:-}" = 1 ]; then
-      gh pr edit "$PR" --repo "$REPO" --add-label "Awaiting CI"
+      gh pr edit "$PR" --repo "$REPO" --add-label "Awaiting CI" >&2
     fi
     ;;
 esac

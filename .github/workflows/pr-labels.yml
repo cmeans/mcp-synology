@@ -23,10 +23,14 @@ jobs:
       - name: Reset labels on new push
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
         run: |
           PR=${{ github.event.pull_request.number }}
           REPO=${{ github.repository }}
+
+          # Read now, not from the event: adding Dev Active just before a push removes Awaiting
+          # CI in on-label while this runs, and the event's stale list then left the PR with no
+          # label at all (#565).
+          PR_LABELS=$(gh pr view "$PR" --repo "$REPO" --json labels --jq '[.labels[].name]')
 
           HAD_QA_ACTIVE=false
           if echo "$PR_LABELS" | grep -q '"QA Active"'; then
@@ -85,7 +89,7 @@ jobs:
         run: |
           STATE=$(bash .github/scripts/pr-checks-state.sh)
 
-          # The state took up to 80 s to read (rechecks above): if a newer commit was
+          # The state took up to 80 s to read: if a newer commit was
           # pushed meanwhile, its own runs decide the labels.
           CUR=$(gh pr view "$PR" --repo "$REPO" --json headRefOid --jq .headRefOid)
           if [ "$CUR" != "$HEAD_SHA" ]; then
@@ -110,7 +114,7 @@ jobs:
               if [ -n "$REMOVE" ]; then
                 gh pr edit "$PR" --repo "$REPO" --remove-label "$REMOVE"
               fi
-              # Not while the branch has a merge conflict (as pr-labels-ci.yml).
+              # Not while the branch has a merge conflict (as pr-labels-settle.sh).
               if has "Merge conflict"; then
                 echo "Merge conflict present: checks passed, Ready for QA withheld"
               else

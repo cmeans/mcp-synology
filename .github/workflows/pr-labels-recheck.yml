@@ -4,8 +4,8 @@ name: PR Label Recheck
 # later event checks again (#549, #339). This checks on a schedule, with the same script as
 # pr-labels-ci.yml. See .github/scripts/pr-labels-recheck.sh.
 #
-# LIMITATION: schedule and workflow_dispatch run from the default branch (main), so changes to this
-# file take effect only after merge. GitHub can delay a scheduled run.
+# LIMITATION: schedule runs from the default branch (main), so changes to this file take effect only
+# after merge. GitHub can delay a scheduled run.
 on:
   schedule:
     - cron: "*/15 * * * *"
