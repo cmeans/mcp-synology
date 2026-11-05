@@ -392,7 +392,7 @@ def _may_replace_entry(service: str, host: str, instance: str) -> bool:
             "OS keyring is unlocked and try again, or set SYNOLOGY_USERNAME and SYNOLOGY_PASSWORD "
             "instead."
         )
-        return False
+        sys.exit(1)
     if not stored or recorded == comparable_host(host):
         return True
     whose = "for another host" if recorded else "with no host recorded"

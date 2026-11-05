@@ -21,7 +21,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 from mcp_synology.cli.main import main
 from mcp_synology.cli.setup import _may_replace_entry, _store_keyring
-from mcp_synology.core.auth import AuthManager, resolve_credentials
+from mcp_synology.core.auth import AuthManager, how_to_record, resolve_credentials
 from mcp_synology.core.client import DsmClient
 from mcp_synology.core.config import AppConfig, comparable_host, load_config
 from mcp_synology.core.errors import AuthenticationError
@@ -356,17 +356,56 @@ class TestAnEntryWithNoRecordedHost:
         assert refused.await_count == 1
         assert ("mcp-synology/nas", "host") not in store.values
 
-    def test_dsm_asking_for_a_second_factor_records_it(
-        self, store: MemoryKeyring, tmp_path: Path
+    @pytest.mark.parametrize("code", [403, 404, 406])
+    def test_dsm_asking_for_a_second_factor_leaves_no_record(
+        self, store: MemoryKeyring, tmp_path: Path, code: int
     ) -> None:
-        """It asks only once the password is right, so this is the entry's NAS."""
+        """Pre-QA on #559: that it asks only once the password is right has no capture behind it,
+        and a false record pins the wrong host. `setup` is what these accounts run next, and it
+        records."""
         _entry(store, "nas")
         with pytest.raises(AuthenticationError):
             _log_in(
                 load_config(_file(tmp_path, "nas.home")),
-                AuthenticationError("2FA", code=403),
+                AuthenticationError("2FA", code=code),
             )
-        assert store.values[("mcp-synology/nas", "host")] == "nas.home"
+        assert ("mcp-synology/nas", "host") not in store.values
+
+    def test_a_config_password_gets_advice_that_works(
+        self, store: MemoryKeyring, tmp_path: Path
+    ) -> None:
+        """Pre-QA on #559: a refusal from `check` said to run `check`, forever, as a login using
+        the file's password can't record."""
+        _entry(store, "nas")
+        path = tmp_path / "c.yaml"
+        path.write_text(
+            "schema_version: 1\nconnection: {host: nas.home}\nauth: {password: p}\n"
+            "modules: {filestation: {}}\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(AuthenticationError) as exc:
+            resolve_credentials(load_config(path))
+        assert "remove auth.password from the config and run" in (exc.value.suggestion or "")
+
+    def test_a_username_with_no_stored_password_gets_only_setup(
+        self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`check` at a terminal would find no password to record with."""
+        store.values[("mcp-synology/nas", "username")] = "admin"
+        monkeypatch.setenv("SYNOLOGY_PASSWORD", "p")
+        with pytest.raises(AuthenticationError) as exc:
+            resolve_credentials(load_config(_file(tmp_path, "nas.home")))
+        assert "mcp-synology check" not in (exc.value.suggestion or "")
+        assert "mcp-synology setup" in (exc.value.suggestion or "")
+
+    def test_a_config_password_doesnt_read_as_the_variables(
+        self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The variable's value lands in `auth.password`, but there's nothing in the file to
+        remove."""
+        _entry(store, "nas")
+        monkeypatch.setenv("SYNOLOGY_PASSWORD", "p")
+        assert "remove auth.password" not in how_to_record(load_config(_file(tmp_path, "nas.home")))
 
     def test_a_host_recorded_meanwhile_stays(self, store: MemoryKeyring, tmp_path: Path) -> None:
         """A second process got there during this login's round trip."""
@@ -693,8 +732,47 @@ class TestADeviceTokenAlone:
         with caplog.at_level("WARNING"):
             resolve_credentials(load_config(_file(tmp_path, "nas.home")))
         warning = next(m for m in caplog.messages if "Not sending the device token" in m)
-        assert "with no SYNOLOGY_USERNAME or SYNOLOGY_PASSWORD set" in warning
+        # `check` can't record it with the variable set, or with no password stored.
+        assert "mcp-synology check" not in warning
         assert "with the same SYNOLOGY_HOST as this server" in warning
+
+    @pytest.mark.parametrize(
+        ("host", "routes_to_check"),
+        [(None, True), ("nas.other", False)],
+        ids=["no record", "another host's"],
+    )
+    def test_the_warning_names_only_a_route_that_works(
+        self,
+        store: MemoryKeyring,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+        host: str | None,
+        routes_to_check: bool,
+    ) -> None:
+        """Pre-QA on #559: `check` can't re-record an entry for another host, and refuses."""
+        _entry(store, "nas", host)
+        self._token(store, host)
+        self._creds_from_env(monkeypatch)
+        with caplog.at_level("WARNING"):
+            resolve_credentials(load_config(_file(tmp_path, "nas.home")))
+        warning = next(m for m in caplog.messages if "Not sending the device token" in m)
+        assert ("mcp-synology check" in warning) is routes_to_check
+        assert "mcp-synology setup" in warning
+
+    def test_a_backends_own_error_on_the_first_read_isnt_a_traceback(
+        self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Pre-QA on #559: the class QA round 1 fixed in the new helpers."""
+        self._creds_from_env(monkeypatch)
+        monkeypatch.delenv("SYNOLOGY_PASSWORD")
+
+        def fails(_service: str, _key: str) -> None:
+            raise RuntimeError("a backend's own type")
+
+        monkeypatch.setattr(store, "get_password", fails)
+        with pytest.raises(AuthenticationError, match="No credentials found"):
+            resolve_credentials(load_config(_file(tmp_path, "nas.home")))
 
     def test_it_warns_once_per_config(
         self,
@@ -937,8 +1015,9 @@ class TestSetup:
             return real(service, key)
 
         monkeypatch.setattr(store, "get_password", fails_once)
-        with patch("click.confirm") as confirm:
-            assert not _may_replace_entry("mcp-synology/nas", "nas.office", "nas")
+        with patch("click.confirm") as confirm, pytest.raises(SystemExit) as stopped:
+            _may_replace_entry("mcp-synology/nas", "nas.office", "nas")
+        assert stopped.value.code == 1  # pre-QA on #559: a script saw success
         confirm.assert_not_called()
         assert "nothing was changed" in capsys.readouterr().out
         assert store.values[("mcp-synology/nas", "password")] == "hunter2"

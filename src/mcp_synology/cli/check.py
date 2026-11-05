@@ -136,6 +136,7 @@ async def _check_login(config: object) -> None:
         AuthManager,
         credential_sources,
         entry_left_unrecorded,
+        how_to_record,
         refusal_advice,
     )
     from mcp_synology.core.client import DsmClient
@@ -182,9 +183,8 @@ async def _check_login(config: object) -> None:
                 elif entry_left_unrecorded(config):
                     click.echo(
                         f"Keyring entry {instance!r} still has no recorded host: this login "
-                        "didn't use its password, or the host couldn't be recorded. To record it, "
-                        "run this with the config's full path, and with no SYNOLOGY_USERNAME, "
-                        "SYNOLOGY_PASSWORD, SYNOLOGY_HOST or SYNOLOGY_INSTANCE_ID set."
+                        "didn't use its password, or the host couldn't be recorded. To record "
+                        f"it, {how_to_record(config)}."
                     )
                 await auth.logout()
             except DsmReplyError:

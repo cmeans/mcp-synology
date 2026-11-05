@@ -99,7 +99,8 @@ def _device_token_may_be_sent(config: AppConfig, service: str) -> bool:
     Only reads: a login that uses none of the entry's password shouldn't settle whose it is. An
     entry with no record isn't known to be this host's, so its token stays out (QA round 1 on
     #559: recording here pinned another NAS's password to this host, and refused its real config).
-    The server resolves credentials on every call, so this warns once per config.
+    This warns once per config: credentials are resolved again for each call while a refused login
+    is remembered.
     """
     if config.connection is None:  # the config's own validation requires it
         raise RuntimeError("Config missing connection settings")
@@ -116,11 +117,9 @@ def _device_token_may_be_sent(config: AppConfig, service: str) -> bool:
         # so this is the only place that gives the way out.
         logger.warning(
             "Not sending the device token in keyring entry %r: it isn't recorded for this host. "
-            "To record it, run %s at a terminal, with no SYNOLOGY_USERNAME or SYNOLOGY_PASSWORD "
-            "set, or run %s, which replaces the token.",
+            "If this is the right NAS, %s.",
             config.instance_id or "default",
-            _RECORD_HOST,
-            _setup_command(config),
+            how_to_record(config),
         )
     return matches
 
@@ -142,21 +141,45 @@ def _setup_command(config: AppConfig) -> str:
     return command
 
 
-def _refusal_advice(config: AppConfig, host: str, recorded: str | None) -> str:
-    """What to do about a refused entry: recording with `check` keeps a 2FA device token, which
-    `setup` removes (QA round 1 on #559)."""
-    run_setup = _setup_command(config)
-    if recorded is None and config._source_path and not _host_variables():
-        fix = (
-            f"run {_RECORD_HOST} to record it, which keeps any 2FA device token, or {run_setup} "
-            "to store new credentials"
+def how_to_record(config: AppConfig) -> str:
+    """How to tie this config's keyring entry to its host, as a clause. Every message that advises
+    it comes through here, so none names a route that can't work (QA round 1 and pre-QA on #559):
+    `check` records only an entry with no record, using its password, from a config named by its
+    full path with neither host variable. It keeps a 2FA device token, which `setup` removes."""
+    import os
+
+    setup = f"run {_setup_command(config)}, which replaces any 2FA device token"
+    service = f"mcp-synology/{config.instance_id or 'default'}"
+    try:
+        check_can_record = (
+            config._source_path is not None
+            and not _host_variables()
+            and _recorded_host(service) is None
+            and _present_or_none(kr.get_password(service, "password")) is not None
         )
-    else:
-        fix = f"run {run_setup} to store credentials for it"
+    except Exception as e:  # backends raise their own types
+        logger.debug("Keyring error reading the entry: %s", e, exc_info=True)
+        check_can_record = False
+    if not check_can_record:
+        return setup
+    # The config's value is the variable's when that's set (_merge_env_overrides), and a terminal
+    # has its own environment.
+    in_the_file = _present_or_none(config.auth.password) and not _present_or_none(
+        os.environ.get("SYNOLOGY_PASSWORD")
+    )
+    remove = "remove auth.password from the config and " if in_the_file else ""
     return (
-        f"If {host!r} is the right NAS, {fix}. If it isn't, check connection.host, SYNOLOGY_HOST "
-        "and the instance ID. A NAS reached by two addresses needs a second config with its own "
-        "instance_id."
+        f"{remove}run {_RECORD_HOST} at a terminal, with no SYNOLOGY_USERNAME or SYNOLOGY_PASSWORD "
+        f"set, which keeps any 2FA device token, or {setup}"
+    )
+
+
+def _refusal_advice(config: AppConfig, host: str) -> str:
+    """What to do about a refused entry."""
+    return (
+        f"If {host!r} is the right NAS, {how_to_record(config)}. If it isn't, check "
+        "connection.host, SYNOLOGY_HOST and the instance ID. A NAS reached by two addresses needs "
+        "a second config with its own instance_id."
     )
 
 
@@ -192,7 +215,7 @@ def _refuse_another_hosts_credentials(config: AppConfig, service: str, *, may_re
     error = CredentialHostError(
         f"The credentials in keyring entry {instance!r} {reason}, so they aren't being sent to "
         f"{config.connection.host!r}.",
-        suggestion=_refusal_advice(config, config.connection.host, recorded),
+        suggestion=_refusal_advice(config, config.connection.host),
     )
     error.recorded_host = recorded
     raise error
@@ -293,6 +316,8 @@ def resolve_credentials(config: AppConfig) -> tuple[str, str, str | None]:
             if kr_device and not device_id:
                 device_id = kr_device
                 logger.debug("Device ID from keyring")
+        except AuthenticationError:
+            raise  # the refusal above
         except KeyringError as e:
             # Typed keyring failure (NoKeyringError, InitError,
             # KeyringLocked, PasswordSetError, etc.). Log at DEBUG with
@@ -312,6 +337,9 @@ def resolve_credentials(config: AppConfig) -> tuple[str, str, str | None]:
             # socket was missing entirely; this branch covers the
             # reach-but-fail variant.
             logger.debug("Keyring OS-level error: %s", e, exc_info=True)
+        except Exception as e:
+            # Backends raise their own types (pre-QA on #559: a traceback from `check`).
+            logger.debug("Keyring error: %s", e, exc_info=True)
 
     if not username or not password:
         raise AuthenticationError(
@@ -606,8 +634,6 @@ class AuthManager:
         try:
             data = await self._send_login(params, device_id)
         except AuthenticationError as e:
-            if e.code in _TWO_FA:  # DSM asks for a second factor once the password is right
-                self._record_host()
             if e.code is None:
                 raise
             raise self._refusals.refuse(fingerprint, e, credential_sources(self._config)) from e

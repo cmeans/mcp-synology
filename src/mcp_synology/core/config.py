@@ -419,7 +419,7 @@ class AppConfig(BaseModel, extra="forbid"):
     # Whether a keyring entry with no recorded host may record this config's host (#536): only
     # from --config, with no variable changing the host or the entry.
     _host_may_be_recorded: bool = PrivateAttr(default=False)
-    # Credentials are resolved on every tool call, and this warning says the same each time.
+    # Credentials are resolved for each call while a refused login is remembered.
     _device_token_warned: bool = PrivateAttr(default=False)
     # The host a keyring entry with no record takes once DSM accepts its password (#536).
     _host_to_record: str | None = PrivateAttr(default=None)
