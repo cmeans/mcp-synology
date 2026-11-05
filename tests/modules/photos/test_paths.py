@@ -103,7 +103,6 @@ def _tools() -> dict[str, Any]:
             server=server,
             manager=manager,
             allowed_tools={t.name for t in photos_pkg.MODULE_INFO.tools},
-            settings_dict={},
             display_name="test-nas",
         )
     )

@@ -34,7 +34,7 @@ import yaml
 from mcp_synology.modules import PermissionTier
 from mcp_synology.server import _MODULE_REGISTRY
 
-README = (Path(__file__).resolve().parent.parent / "README.md").read_text()
+README = (Path(__file__).resolve().parent.parent / "README.md").read_text(encoding="utf-8")
 
 SECTIONS = {
     "system": "System",

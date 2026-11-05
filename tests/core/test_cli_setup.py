@@ -34,6 +34,7 @@ from click.testing import CliRunner
 
 from mcp_synology.cli import setup as setup_mod
 from mcp_synology.cli.main import main
+from tests.conftest import skip_unless_the_locale_can_encode
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -803,6 +804,7 @@ def test_list_gives_the_reason_a_file_cant_be_read(tmp_path: Path) -> None:
 def test_list_survives_a_stdout_that_cant_encode_the_reason(tmp_path: Path, encoding: str) -> None:
     """QA round 3 on #532: the reason holds `…`, stdout is strict about encoding, and the
     crash left the later files unlisted."""
+    skip_unless_the_locale_can_encode("b-ब.yaml")
     config_dir = tmp_path / ".config" / "mcp-synology"
     config_dir.mkdir(parents=True)
     (config_dir / "a.yaml").write_text("schema_version: 1\nauth: {username: me, secret}\n")
@@ -829,6 +831,124 @@ def test_list_survives_a_stdout_that_cant_encode_the_reason(tmp_path: Path, enco
     assert "a.yaml  (could not parse)" in output
     assert "z.yaml" in output
     assert "with no value inside" in output
+    if encoding != "utf-8":
+        # Escaped, as the code's comment promises, not `?` (#543).
+        assert "{\\u2026}" in output
+        assert "b-\\u092c.yaml" in output
+
+
+def test_list_with_stdout_closed_doesnt_crash(tmp_path: Path) -> None:
+    """Python's `sys.stdout` is None then, with no `reconfigure` to call (#543)."""
+    config_dir = tmp_path / ".config" / "mcp-synology"
+    config_dir.mkdir(parents=True)
+    (config_dir / "z.yaml").write_text("schema_version: 1\nconnection: {host: nas}\n")
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; sys.stdout = None; "
+            "from mcp_synology.cli.main import main; main(['setup', '--list'])",
+        ],
+        stderr=subprocess.PIPE,
+        env={
+            **os.environ,
+            "HOME": str(tmp_path),
+            "PYTHON_KEYRING_BACKEND": "keyring.backends.null.Keyring",
+        },
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def _run_cli(
+    tmp_path: Path, *args: str, encoding: str = "utf-8"
+) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            f"from mcp_synology.cli.main import main; main({list(args)!r})",
+        ],
+        capture_output=True,
+        stdin=subprocess.DEVNULL,
+        env={
+            **os.environ,
+            "HOME": str(tmp_path),
+            "PYTHONIOENCODING": encoding,
+            "PYTHON_KEYRING_BACKEND": "keyring.backends.null.Keyring",
+        },
+        timeout=60,
+    )
+
+
+@pytest.mark.parametrize(
+    "args", [("check", "--config"), ("setup", "--config")], ids=["check", "setup"]
+)
+def test_an_alias_stdout_cant_encode_doesnt_crash(tmp_path: Path, args: tuple[str, ...]) -> None:
+    """Pre-QA on #541: `setup --list` had this fixed, and `check`, which the CHANGELOG's
+    Upgrading block sends everyone to, still ended in a traceback."""
+    config = tmp_path / "nas.yaml"
+    config.write_text(
+        'schema_version: 1\nalias: "\\u092c"\ncheck_for_updates: false\n'
+        "connection: {host: 127.0.0.1, port: 9, https: false}\nmodules: {filestation: }\n",
+        encoding="utf-8",
+    )
+    result = _run_cli(tmp_path, *args, str(config), encoding="iso-8859-1")
+    assert b"UnicodeEncodeError" not in result.stderr
+    assert "\\u092c" in result.stdout.decode("iso-8859-1")
+
+
+@pytest.mark.parametrize(
+    ("name", "shown"),
+    [
+        ("a\n    Host: evil.example\n.yaml", "'a\\n    Host: evil.example\\n.yaml'"),
+        ("b\x1b[31mred.yaml", "'b\\x1b[31mred.yaml'"),
+    ],
+    ids=["line_break", "terminal_escape"],
+)
+def test_list_doesnt_print_a_file_name_raw(tmp_path: Path, name: str, shown: str) -> None:
+    """Pre-QA on #541: `alias` couldn't forge a line in the list, but a file's name could."""
+    config_dir = tmp_path / ".config" / "mcp-synology"
+    config_dir.mkdir(parents=True)
+    (config_dir / name).write_text("schema_version: 1\nconnection: {host: nas}\n")
+    output = _run_cli(tmp_path, "setup", "--list").stdout.decode("utf-8")
+    assert shown in output
+    assert "\n    Host: evil.example\n" not in output
+    assert "\x1b" not in output
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="no named pipes here")
+def test_list_doesnt_wait_on_a_named_pipe(tmp_path: Path) -> None:
+    """Pre-QA on #541: it waited for a writer, and the later files went unlisted."""
+    config_dir = tmp_path / ".config" / "mcp-synology"
+    config_dir.mkdir(parents=True)
+    os.mkfifo(config_dir / "a.yaml")
+    (config_dir / "z.yaml").write_text("schema_version: 1\nconnection: {host: nas}\n")
+    result = _run_cli(tmp_path, "setup", "--list")
+    output = result.stdout.decode("utf-8")
+    assert result.returncode == 0, result.stderr
+    assert "a.yaml  (could not parse)" in output
+    assert "z.yaml" in output
+
+
+def test_list_survives_a_config_folder_without_search_permission(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """QA round 1 on #541: `is_file` raises there on 3.11, and the rest went unlisted."""
+    from pathlib import Path
+
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "a.yaml").write_text("schema_version: 1\nconnection: {host: nas}\n")
+
+    def refused(self: Path) -> bool:
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(Path, "is_file", refused)
+    with patch("mcp_synology.cli.setup._CONFIG_DIR", config_dir):
+        result = CliRunner().invoke(main, ["setup", "--list"])
+    assert result.exit_code == 0, result.output
+    assert "a.yaml  (could not parse)" in result.output
 
 
 def test_list_shows_only_bare_hosts_and_text_names(tmp_path: Path) -> None:
@@ -870,6 +990,6 @@ def test_setup_reports_a_config_it_cant_read(tmp_path: Path) -> None:
     missing = tmp_path / "nope.yaml"
     result = CliRunner().invoke(main, ["setup", "--config", str(missing)])
     assert result.exit_code == 1 and "Error: " in result.output
-    with patch("mcp_synology.core.config.load_config", side_effect=ValueError("not UTF-8")):
+    with patch("mcp_synology.server.load_config", side_effect=ValueError("not UTF-8")):
         result = CliRunner().invoke(main, ["setup"])
     assert result.exit_code == 1 and "Error: not UTF-8" in result.output

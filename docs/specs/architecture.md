@@ -368,7 +368,7 @@ $ mcp-synology setup --config ~/.config/mcp-synology/primary.yaml
 
 - `mcp-synology serve` — normal MCP server mode (launched by Claude Desktop)
 - `mcp-synology setup` — interactive credential setup and 2FA bootstrap
-- `mcp-synology check` — validate stored credentials can authenticate (for debugging, does not start the server). A NAS it can't reach (connection refused, DNS, timeout) or whose TLS certificate fails verification is reported as one red error line and exit 1, never a traceback; `setup` uses the same handling (#191)
+- `mcp-synology check` — validate the config, as `serve` does, then check the stored credentials can log in (does not start the server). A NAS it can't reach (connection refused, DNS, timeout) or whose TLS certificate fails verification is reported as one red error line and exit 1, never a traceback; `setup` uses the same handling (#191)
 
 **Documentation flow:** install → create config with host/port → run `mcp-synology setup` → add server entry to Claude Desktop config → restart Claude Desktop.
 
@@ -405,7 +405,7 @@ Log level is set via:
 1. Config file: `logging.level: debug` (default: `info`)
 2. Environment variable: `SYNOLOGY_LOG_LEVEL=debug` (overrides config)
 
-Logs go to stderr by default. Optionally `logging.file` can redirect to a file (useful when launched by Claude Desktop where stderr may not be visible).
+Logs go to stderr by default. Optionally `logging.file` adds a file (useful when launched by Claude Desktop where stderr may not be visible). What's logged while the config loads is replayed into it once it's open, so the security warnings reach it at any log level (#511 PR 3).
 
 ---
 

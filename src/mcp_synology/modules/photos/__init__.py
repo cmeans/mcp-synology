@@ -12,7 +12,7 @@ switched on once every tool in ``docs/specs/photos-module-spec.md`` is in.
 from typing import TYPE_CHECKING, Annotated, Any
 
 from mcp.types import ToolAnnotations
-from pydantic import BaseModel, Field, field_validator
+from pydantic import Field, field_validator
 
 from mcp_synology.core.local_paths import (
     allowed_local_roots,
@@ -22,6 +22,7 @@ from mcp_synology.core.local_paths import (
 from mcp_synology.modules import (
     ApiRequirement,
     ModuleInfo,
+    ModuleSettings,
     PermissionTier,
     ToolInfo,
     default_annotations,
@@ -45,7 +46,7 @@ _ANNO_DESTRUCTIVE_IDEMPOTENT = ToolAnnotations(
 )
 
 
-class PhotosSettings(BaseModel):
+class PhotosSettings(ModuleSettings):
     """Photos module settings."""
 
     # Local folders download_photos may write to and upload_photos read from, added to
@@ -349,7 +350,7 @@ def register(ctx: "RegisterContext") -> None:
     from mcp_synology.modules.photos.browse import get_photo, list_photo_collections, list_photos
     from mcp_synology.modules.photos.transfer import download_photos
 
-    settings = PhotosSettings(**ctx.settings_dict)
+    settings = ctx.settings_as(PhotosSettings)
     local_roots = allowed_local_roots(
         settings.allowed_local_paths,
         shared_paths=ctx.allowed_local_paths,
