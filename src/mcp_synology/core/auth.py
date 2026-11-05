@@ -110,11 +110,14 @@ def _device_token_may_be_sent(config: AppConfig, service: str) -> bool:
         matches = _recorded_host(service) == comparable_host(config.connection.host)
     except Exception as e:  # backends raise their own types
         logger.debug("Keyring error reading the host: %s", e, exc_info=True)
-        # Not "isn't recorded", and the one warning below stays for a real mismatch (QA round 2).
-        logger.warning(
-            "Not sending the device token in keyring entry %r: couldn't read which host it's for.",
-            config.instance_id or "default",
-        )
+        # Not "isn't recorded", and the warning below stays for a real mismatch (QA round 2).
+        if not config._device_token_read_warned:
+            config._device_token_read_warned = True
+            logger.warning(
+                "Not sending the device token in keyring entry %r: couldn't read which host it's "
+                "for.",
+                config.instance_id or "default",
+            )
         return False
     if not matches and not config._device_token_warned:
         config._device_token_warned = True

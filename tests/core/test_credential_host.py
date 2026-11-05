@@ -20,11 +20,11 @@ from keyring.errors import KeyringError, KeyringLocked, NoKeyringError, Password
 from mcp.server.mcpserver.exceptions import ToolError
 
 from mcp_synology.cli.main import main
-from mcp_synology.cli.setup import _may_replace_entry, _store_keyring
+from mcp_synology.cli.setup import _attempt_login, _may_replace_entry, _store_keyring
 from mcp_synology.core.auth import AuthManager, how_to_record, resolve_credentials
 from mcp_synology.core.client import DsmClient
 from mcp_synology.core.config import AppConfig, comparable_host, load_config
-from mcp_synology.core.errors import AuthenticationError, CredentialHostError
+from mcp_synology.core.errors import AuthenticationError, CredentialHostError, SynologyError
 from mcp_synology.core.formatting import synology_error_response
 from tests.memory_keyring import MemoryKeyring
 
@@ -408,6 +408,57 @@ class TestAnEntryWithNoRecordedHost:
         _entry(store, "nas")
         monkeypatch.setenv("SYNOLOGY_PASSWORD", "p")
         assert "remove auth.password" not in how_to_record(load_config(_file(tmp_path, "nas.home")))
+
+    def test_a_reply_with_no_session_leaves_no_record(
+        self, store: MemoryKeyring, tmp_path: Path
+    ) -> None:
+        """Pre-QA on #559: only a session shows DSM accepted the password."""
+        _entry(store, "nas")
+        client = DsmClient(base_url="http://nas:5000")
+        auth = AuthManager(load_config(_file(tmp_path, "nas.home")), client)
+        with (
+            patch.object(client, "request", AsyncMock(return_value={})),
+            pytest.raises(AuthenticationError),
+        ):
+            asyncio.run(auth.login())
+        assert ("mcp-synology/nas", "host") not in store.values
+
+    def test_check_mentions_an_entry_holding_only_a_token(
+        self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        store.values[("mcp-synology/nas", "device_id")] = "token"
+        monkeypatch.setenv("SYNOLOGY_USERNAME", "u")
+        monkeypatch.setenv("SYNOLOGY_PASSWORD", "p")
+        assert "still has no recorded host" in _check(_file(tmp_path, "nas.home")).output
+
+    def test_a_token_with_no_credentials_gets_no_token_warning(
+        self, store: MemoryKeyring, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        store.values[("mcp-synology/nas", "device_id")] = "token"
+        with caplog.at_level("WARNING"), pytest.raises(AuthenticationError, match="No credentials"):
+            resolve_credentials(load_config(_file(tmp_path, "nas.home")))
+        assert not any("Not sending the device token" in m for m in caplog.messages)
+
+    def test_a_token_that_cant_be_stored_says_so(
+        self,
+        store: MemoryKeyring,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Pre-QA on #559: a traceback, and the session was never logged out."""
+
+        def fails(_service: str, key: str, _value: str) -> None:
+            raise RuntimeError("a backend's own type")
+
+        monkeypatch.setattr(store, "set_password", fails)
+        client = AsyncMock()
+        client.request = AsyncMock(
+            side_effect=[SynologyError("2FA", code=403), {"sid": "s", "did": "token"}, {}]
+        )
+        with patch("click.prompt", return_value="123456"):
+            result = asyncio.run(_attempt_login(client, "admin", "pw", "mcp-synology/nas"))
+        assert result["success"]
+        assert "couldn't be stored" in capsys.readouterr().out
 
     def test_a_host_recorded_meanwhile_stays(self, store: MemoryKeyring, tmp_path: Path) -> None:
         """A second process got there during this login's round trip."""
@@ -1234,8 +1285,9 @@ class TestSetup:
 
         with caplog.at_level("WARNING"), monkeypatch.context() as patched:
             patched.setattr(store, "get_password", fails)
-            assert resolve_credentials(config)[2] is None
-        assert any("couldn't read which host" in m for m in caplog.messages)
+            for _ in range(3):
+                assert resolve_credentials(config)[2] is None
+        assert sum("couldn't read which host" in m for m in caplog.messages) == 1
         assert not any("isn't recorded for this host" in m for m in caplog.messages)
         with caplog.at_level("WARNING"):
             assert resolve_credentials(config)[2] is None

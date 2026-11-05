@@ -515,9 +515,21 @@ async def _attempt_login(
                 if device_id:
                     import keyring
 
-                    keyring.set_password(service, "device_id", device_id)
-                    click.echo(click.style("2FA bootstrap complete!", fg="green"))
-                    click.echo("Device token stored in keyring.")
+                    try:
+                        keyring.set_password(service, "device_id", device_id)
+                    except Exception as e3:  # backends raise their own types
+                        logger.debug("Keyring error storing the token: %s", e3, exc_info=True)
+                        click.echo(
+                            click.style(
+                                "Login successful, but the 2FA device token couldn't be stored in "
+                                "the keyring, so the server can't log in without a code. Check "
+                                "that the keyring can be written to, and run this again.",
+                                fg="yellow",
+                            )
+                        )
+                    else:
+                        click.echo(click.style("2FA bootstrap complete!", fg="green"))
+                        click.echo("Device token stored in keyring.")
                 else:
                     click.echo(click.style("Login successful!", fg="green"))
             except SynologyError as e2:
