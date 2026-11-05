@@ -270,7 +270,7 @@ Accounts: username, password, device_id
 
 ### Runtime State
 
-Nothing is kept per instance: the `SYNO.API.Info` cache and the negotiated versions are in memory, refreshed when the server starts. The update check's `~/.local/state/mcp-synology/global.yaml` is the one state file (#538). The config stays read-only from the server's perspective.
+There's no per-instance state file: `DsmClient` keeps the `SYNO.API.Info` cache in memory, read when the first call builds the client, and versions are computed from it per call. The update check's `~/.local/state/mcp-synology/global.yaml` is the one state file (#538). The config stays read-only from the server's perspective.
 
 ### Session Lifecycle
 

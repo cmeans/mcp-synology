@@ -54,7 +54,6 @@ schema_version: 1
 # Unique identifier for this server instance. Used for:
 #   - Keyring namespacing (mcp-synology/{instance_id})
 #   - DSM session naming (MCPSynology_{instance_id}_{uuid})
-#   - State file location (~/.local/state/mcp-synology/{instance_id}/)
 #   - Claude Desktop server name differentiation (multi-NAS setups)
 #
 # Default: derived from connection.host (sanitized to alphanumeric + hyphens)
@@ -325,6 +324,7 @@ At startup, the config is validated with Pydantic. Validation failures produce c
 - `connection.port` is not a valid port number (1–65535)
 - `connection.port`, `connection.timeout` or `schema_version` is true or false: pydantic reads a boolean as 1 or 0, so `port: yes` loaded as port 1 and `timeout: on` as one second (#511 PR 2)
 - `modules` is missing or empty, or no listed module is enabled (every module `enabled: false`). Either way the server would have no tools. The error names the listed modules and shows the fix (`filestation: {enabled: true}`); `check` and `setup` report it like any other config error (#168)
+- No known module is enabled: every listed module that's enabled has a name this version doesn't know (`modules: {filestaton: {}}`), so the server would have no tools. It's checked in `server.validate_config`, which has the module registry. The error names the listed modules and this version's (#538)
 - `instance_id` is empty or blank (#485: an empty one, set as `""` or derived from a host like `.nas`, which the host rule now refuses first, gave every such instance one keyring entry, `mcp-synology/default`, and session name prefix), is longer than 63 characters, the limit for a part of a host (a config file and a keyring entry are named after it), contains characters other than `a-z`, `0-9`, `-` (after lowercasing), or is something YAML read as a number, date or true/false (the error says to put it in quotes). The key left with no value is "not set". The error doesn't quote it. A derived one that fails (an IPv6 host, an underscore, a letter outside a-z) gets "set instance_id, or the SYNOLOGY_INSTANCE_ID environment variable"
 - `logging.file` or `instructions_file` is an empty or blank string (`""`): it names no file, so it's an error, not "none" (the same class as `--config ""`); leave the key out instead. The key left blank (`file:` with nothing after it), which YAML reads as null, is "not set", as an empty section is (Soft Defaults)
 - Unknown top-level keys, and unknown keys in `connection`, `auth`, `logging` or directly under `modules.<name>` (catch typos early — strict schema, #386)
@@ -344,7 +344,7 @@ At startup, the config is validated with Pydantic. Validation failures produce c
 - The password, cleartext, SSL-verification and proxy warnings above are shown at any log level (#533): logged as WARNING through the handlers in place while the config loads (stderr, and replayed into `logging.file` once it's open, #511 PR 3) even when `SYNOLOGY_LOG_LEVEL=error` would filter them (`core/config.py` `_warn_always`). At `error`, `SYNOLOGY_HTTPS=off` used to turn HTTPS off with no output at all
 - A `SYNOLOGY_*` variable changes a value the config file sets for `connection.host`, `connection.port`, `connection.https` or `instance_id` (including the `instance_id` the file's host derives when the file sets none) → a WARNING at any log level, naming the variable and the setting, never the value: `SYNOLOGY_HOST overrides connection.host from the config file. Unset SYNOLOGY_HOST if that isn't intended.` (#533), or, for a derived ID, `SYNOLOGY_INSTANCE_ID overrides the instance_id the config file's host gives. …`. These say which NAS the credentials go to, how, and which keyring entry holds them; it used to be DEBUG only, so `SYNOLOGY_HOST` sent the file's keyring credentials to another host without a word. A variable equal to the file's value in a spelling the config treats as the same (a boolean or port as pydantic reads it, `https: 'on'`, `port: "5001"`; an instance ID in any case; a host name as httpx sends it, in any case, and an international name as its `xn--` form; a bracketed IPv6 address in any case, unless it has a zone, which names an interface and is compared as written), a setting the file doesn't set, and env-only mode get no warning. A variable must itself be a bare host (Hard Errors, above, never a comparison), so anything else in a host is on the file's side, and differs: `nas` over `admin@nas` or `nas:5001`, and `[::1]` over `::1` or `[::1]/dsm`, all warn, and the variable's host replaces the one the file's rule would refuse. Two spellings of one address the comparison doesn't recognize warn too, `[::1]` over `[0:0:0:0:0:0:0:1]`: a false alarm is the safe side
 - A module is listed but `enabled: false` → info-level note (helps users remember they disabled something)
-- Unknown keys within `modules.*.settings`, and unknown module names → warn but don't fail (forward-compatible for module updates). The warning names the key and the valid ones; `serve` logs it and `check` prints it (`server.config_notices`, #368). Before #368 nothing warned: an `allowed_local_paths` typo silently left the Downloads default in force
+- Unknown keys within `modules.*.settings`, and unknown module names beside an enabled known module → warn but don't fail (forward-compatible for module updates). The warning names the key and the valid ones; `serve` logs it and `check` prints it (`server.config_notices`, #368). Before #368 nothing warned: an `allowed_local_paths` typo silently left the Downloads default in force
 - Unknown keys directly under `modules.<name>` (anything but `enabled`, `permission`, `settings`) → **error** (#368): there's no forward-compatibility case, and a dropped `permision: write` silently left the module read-only
 
 ### Soft Defaults
@@ -418,7 +418,7 @@ For multi-NAS setups, users must use the `--config` flag to specify which config
 
 ## State File
 
-Nothing is kept per instance: `DsmClient` holds the `SYNO.API.Info` cache and the negotiated versions in memory, refreshed each time the server starts. The one state file is the update check's, shared by every install's configs: `~/.local/state/mcp-synology/global.yaml`. An earlier design had a per-instance `state.yaml`; nothing ever used it, and its code is gone (#538).
+There's no per-instance state file: `DsmClient` keeps the `SYNO.API.Info` cache in memory, read when the first call builds the client, and versions are computed from it per call. The one state file is the update check's, shared by every install's configs: `~/.local/state/mcp-synology/global.yaml`. An earlier design had a per-instance `state.yaml`; nothing ever used it, and its code is gone (#538).
 
 ---
 

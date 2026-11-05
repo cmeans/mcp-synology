@@ -29,7 +29,6 @@ from mcp_synology.core.auth import (
 )
 from mcp_synology.core.client import DsmClient, dsm_call_of
 from mcp_synology.core.config import (
-    _printable,
     _shown_path,
     config_file_note,
     format_config_errors,
@@ -892,7 +891,8 @@ def config_notices(config: AppConfig) -> list[str]:
     An unknown module name, or an unknown key in a module's `settings`, would otherwise
     be ignored without a word (an `allowed_local_paths` typo left the Downloads default in
     force). They're warnings, not errors, so a config written for a newer version still
-    starts; `serve` logs them and `check` prints them. Unknown keys directly under a
+    starts, unless no known module is enabled (`_no_known_module_problem`); `serve` logs them
+    and `check` prints them. Unknown keys directly under a
     module are errors (`ModuleConfig`, extra="forbid").
     """
     _, instructions_problem = _read_instructions_file(config)
@@ -960,13 +960,14 @@ def _no_known_module_problem(config: AppConfig) -> list[Any]:
     config written for a newer version still starts."""
     if any(name in _MODULE_REGISTRY and mod.enabled for name, mod in config.modules.items()):
         return []
-    listed = ", ".join(_printable(name) for name in sorted(config.modules))
+    listed = ", ".join(repr(name) for name in sorted(config.modules))
     return [
         {
             "loc": ("modules",),
             "msg": (
-                f"No known module is enabled (listed: {listed}). "
-                f"The modules are {', '.join(sorted(_MODULE_REGISTRY))}."
+                f"No known module is enabled (listed: {listed}). This version's modules are "
+                f"{', '.join(sorted(_MODULE_REGISTRY))}. Fix the name, or enable one "
+                "(filestation: {enabled: true})."
             ),
             "type": "value_error",
         }

@@ -1953,18 +1953,24 @@ class TestAKnownModule:
     """#538: `modules: {filestaton: }` counted as a module, so the server started with no tools."""
 
     @pytest.mark.parametrize(
-        "modules",
-        ["{filestaton: }", "{nosuch: , other: }", "{filestation: {enabled: false}, filestaton: }"],
-        ids=["misspelled", "two unknown", "known one disabled"],
+        ("modules", "listed"),
+        [
+            ("{filestaton: {}}", "'filestaton'"),
+            ("{nosuch: {}, other: {}}", "'nosuch', 'other'"),
+            ("{filestation: {enabled: false}, filestaton: {}}", "'filestation', 'filestaton'"),
+            ('{"x\\nHost: evil": {}}', "'x\\nHost: evil'"),
+        ],
+        ids=["misspelled", "two unknown", "known one disabled", "a line break in a name"],
     )
     def test_with_none_enabled_it_is_an_error_naming_them(
-        self, tmp_path: Path, modules: str
+        self, tmp_path: Path, modules: str, listed: str
     ) -> None:
         path = tmp_path / "c.yaml"
         path.write_text(f"{GOOD_HEAD}modules: {modules}\n", encoding="utf-8")
         with pytest.raises(ValueError, match="No known module is enabled") as exc:
             validate_config(path)
-        assert "The modules are downloadstation, filestation, photos, storage, system." in str(
+        assert f"(listed: {listed})" in str(exc.value)
+        assert f"This version's modules are {', '.join(sorted(_MODULE_REGISTRY))}." in str(
             exc.value
         )
         assert any(note.startswith("Config file:") for note in exc.value.__notes__)
@@ -1973,4 +1979,5 @@ class TestAKnownModule:
         """A config written for a newer version."""
         path = tmp_path / "c.yaml"
         path.write_text(f"{GOOD_HEAD}modules: {{filestation: , nosuch: }}\n", encoding="utf-8")
-        assert validate_config(path) is not None
+        config = validate_config(path)
+        assert any("nosuch" in notice for notice in config_notices(config))
