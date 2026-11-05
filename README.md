@@ -489,7 +489,7 @@ custom_instructions: |
 
 ```yaml
 # ~/.config/mcp-synology/config.yaml
-instructions_file: ~/.config/mcp-synology/my-instructions.md
+instructions_file: ~/.config/mcp-synology/my-instructions.md  # a relative path is from this file's folder
 ```
 
 Both support template variables: `{display_name}`, `{instance_id}`, `{host}`, `{port}`, `{home_dir}` (the local home folder) and `{platform}` (`Linux`, `macOS` or `Windows`). Any other brace is left as written, so JSON examples are fine (`{{` and `}}` are not escapes).
@@ -570,7 +570,7 @@ Or set it persistently in your config file:
 # ~/.config/mcp-synology/config.yaml
 logging:
   level: debug
-  file: ~/.local/state/mcp-synology/nas/server.log  # optional, logs to stderr by default
+  file: ~/.local/state/mcp-synology/nas/server.log  # optional, logs to stderr by default; a relative path is from this file's folder
 ```
 
 Debug output includes every DSM API request/response (passwords masked), credential resolution steps, config discovery, version negotiation, and module registration decisions.

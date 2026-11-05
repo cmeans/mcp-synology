@@ -669,7 +669,7 @@ class TestEdgeCases:
     def test_a_relative_log_file_is_shown_absolute(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """It depends on the folder an MCP client starts the server in (pre-QA r2)."""
+        """From the config's folder since #553, and shown absolute (pre-QA r2)."""
         (tmp_path / "a-file").write_text("x", encoding="utf-8")
         monkeypatch.chdir(tmp_path)
         path = tmp_path / "bad.yaml"
@@ -1436,11 +1436,10 @@ class TestPreQa5OnPr541:
     def test_a_pipe_in_a_folder_named_tilde_is_refused(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _pipe_timeout: None
     ) -> None:
-        """QA round 5: `Path("./~/x")` drops the `./`, so the check read it as a home path, while
-        the handler opened `<working folder>/~/x`: the same bypass as `link/../`."""
+        """QA round 5: `Path("./~/x")` drops the `./`, so the check read it as a home path. Since
+        #553 the value is absolute, from the config's folder, before either reads it."""
         (tmp_path / "~").mkdir()
         os.mkfifo(tmp_path / "~" / "x")
-        monkeypatch.chdir(tmp_path)
         path = _in_a_config(tmp_path, "logging: {file: ./~/x}")
         with pytest.raises(ValueError, match="it's a named pipe"):
             validate_config(path)

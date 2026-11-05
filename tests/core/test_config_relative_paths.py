@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import logging
 import os
+import threading
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from mcp_synology.cli.logging_ import _configure_logging
 from mcp_synology.core.config import load_config
-from mcp_synology.server import _read_instructions_file
+from mcp_synology.server import _read_instructions_file, validate_config
 
 
 def _file(folder: Path, extra: str) -> Path:
@@ -98,3 +101,87 @@ def test_a_config_named_in_a_folder_keeps_that_folders_files(working_folder: Pat
     (working_folder / "notes.md").write_text("mine", encoding="utf-8")
     config = load_config(_file(working_folder, "instructions_file: notes.md"))
     assert _read_instructions_file(config)[0] == "mine"
+
+
+def test_a_download_folder_is_from_the_config_files_folder(
+    tmp_path: Path, working_folder: Path
+) -> None:
+    """Pre-QA on #553: it also becomes an allowed local folder, wherever the server started."""
+    home = tmp_path / "home-config"
+    path = _file(home, "")
+    path.write_text(
+        "schema_version: 1\nconnection: {host: nas}\n"
+        "modules: {filestation: {settings: {default_download_dir: dl}}}\n",
+        encoding="utf-8",
+    )
+    settings = load_config(path).modules["filestation"].settings
+    assert settings["default_download_dir"] == os.path.join(os.path.realpath(home), "dl")
+    assert validate_config(path) is not None
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="no named pipes here")
+@pytest.mark.parametrize(
+    ("line", "setting"),
+    [
+        ("instructions_file: notes.md", "instructions_file"),
+        ("logging: {file: x.log}", "logging.file"),
+    ],
+)
+def test_a_pipe_has_no_folder_to_find_a_relative_path_from(
+    tmp_path: Path, line: str, setting: str
+) -> None:
+    """Pre-QA on #553: `--config <(generate)` looked under /dev/fd, and the log's error said to
+    fix a path nobody wrote."""
+    pipe = tmp_path / "pipe"
+    os.mkfifo(pipe)
+
+    def feed() -> None:
+        pipe.write_text(
+            f"schema_version: 1\nconnection: {{host: nas}}\nmodules: {{filestation: }}\n{line}\n",
+            encoding="utf-8",
+        )
+
+    writer = threading.Thread(target=feed)
+    writer.start()
+    try:
+        with pytest.raises(ValueError, match=f"{setting} .* has no folder"):
+            load_config(pipe)
+    finally:
+        writer.join(timeout=5)
+
+
+def test_a_folder_reached_through_a_link_is_where_the_kernel_finds_it(
+    tmp_path: Path, working_folder: Path
+) -> None:
+    """Pre-QA on #553: `link/../c.yaml` read the instructions from the real parent, and the log
+    handler collapsed `..` as text, into the working folder."""
+    real = tmp_path / "real" / "sub"
+    real.mkdir(parents=True)
+    (working_folder / "link").symlink_to(real)
+    _file(tmp_path / "real", "logging: {file: syn.log}")
+    assert load_config("link/../c.yaml").logging.file == os.path.join(
+        os.path.realpath(tmp_path / "real"), "syn.log"
+    )
+
+
+def test_a_link_to_the_config_file_is_that_links_folder(
+    tmp_path: Path, working_folder: Path
+) -> None:
+    path = _file(tmp_path / "dotfiles", "instructions_file: notes.md")
+    (working_folder / "c.yaml").symlink_to(path)
+    assert load_config("c.yaml").instructions_file == os.path.join(
+        os.path.realpath(working_folder), "notes.md"
+    )
+
+
+def test_the_log_says_where_it_went(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """Pre-QA on #553: an upgrade moves it, and nothing named the file."""
+    root = logging.getLogger()
+    before = list(root.handlers)
+    target = tmp_path / "syn.log"
+    with caplog.at_level("INFO"):
+        _configure_logging("info", str(target))
+    for handler in [h for h in root.handlers if h not in before]:
+        root.removeHandler(handler)
+        handler.close()
+    assert f"Logging to {str(target)!r}" in caplog.messages

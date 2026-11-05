@@ -1639,22 +1639,42 @@ def load_config(path: str | Path | None = None) -> AppConfig:
 
 
 def _resolve_paths_against_the_file(config: AppConfig, config_path: Path) -> None:
-    """A relative `instructions_file` or `logging.file` is from the config file's folder (#553;
-    maintainer, 2026-11-05). From the working folder, a folder someone merely opened could supply
-    text that reaches the model, and the result depended on how an MCP client started the server.
-    `~` isn't relative, and a `~user` that doesn't exist keeps its own error. No environment
-    variable sets these, so env-only mode has none.
-    """
+    """A relative local path in the config is from the config file's folder (#553; maintainer,
+    2026-11-05), not the working folder: `instructions_file`, `logging.file` and a module's
+    `default_download_dir`, which also becomes an allowed local folder. From the working folder,
+    a folder someone merely opened could supply text that reaches the model, or become where the
+    file tools may write, and the result depended on how an MCP client started the server.
 
-    def resolved(value: str) -> str:
+    `~` isn't relative, and a `~user` that doesn't exist keeps its own error. No environment
+    variable sets these, so env-only mode has none. The folder has its links followed, as the
+    kernel did to open `link/../c.yaml`; a link to the config file itself is that link's folder.
+    A pipe has no folder, so a relative path with one is an error, not a path under `/dev/fd`.
+    """
+    try:
+        folder = os.path.realpath(os.path.dirname(_shown_path(config_path)))
+        has_a_folder = stat.S_ISREG(config_path.stat().st_mode)
+    except OSError:  # a working folder with no name
+        folder = os.path.dirname(_shown_path(config_path))
+        has_a_folder = True
+
+    def resolved(setting: str, value: str) -> str:
         if value.startswith("~") or os.path.isabs(value):
             return value
-        return os.path.join(os.path.dirname(_shown_path(config_path)), value)
+        if not has_a_folder:
+            raise ValueError(
+                f"{setting} {value!r} is relative, and a config read from a pipe has no folder to "
+                "find it from. Use an absolute path or ~/..."
+            )
+        return os.path.join(folder, value)
 
     if config.instructions_file:
-        config.instructions_file = resolved(config.instructions_file)
+        config.instructions_file = resolved("instructions_file", config.instructions_file)
     if config.logging.file:
-        config.logging.file = resolved(config.logging.file)
+        config.logging.file = resolved("logging.file", config.logging.file)
+    for module in config.modules.values():
+        value = module.settings.get("default_download_dir")
+        if isinstance(value, str) and value.strip():
+            module.settings["default_download_dir"] = resolved("default_download_dir", value)
 
 
 def config_file_note(path: Path) -> str:
