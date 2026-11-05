@@ -1,0 +1,75 @@
+name: Newest allowed dependencies
+
+# CI follows uv.lock, while a user's resolver takes the newest versions pyproject.toml allows. That
+# gap is how v0.5.2 passed CI and then broke when mcp 2.0.0 came out (#115). So this runs the unit
+# tests on those newest versions. It isn't a required check: an upstream release shouldn't block
+# an unrelated PR. A failure on main opens or updates one issue, since nobody's watching then.
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - pyproject.toml
+      - uv.lock
+      - .github/workflows/deps-newest.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# No UV_LOCKED here, unlike the other workflows: `uv sync --upgrade` is what it refuses.
+# tests/test_ci_workflows.py names this as the one exception. The lock is never committed.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  newest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          python-version: "3.15" # the newest in ci.yml's matrix; a test keeps them equal
+      - run: uv sync --upgrade --extra dev
+      - name: Show what was installed
+        run: uv pip list
+      # `timeout`, not timeout-minutes: a hang in a new release must fail, and so report, not
+      # cancel.
+      - run: timeout 900 uv run pytest -n auto --no-cov
+
+  # No checkout, and never on a PR: this is the one job with write access.
+  report:
+    needs: newest
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && needs.newest.result != 'cancelled' }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RESULT: ${{ needs.newest.result }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      TITLE: "CI: the run on the newest allowed dependencies failed"
+    steps:
+      - name: Open, update or note the issue
+        run: |
+          # A plain list, not --search: that reads an index, which could open a duplicate.
+          number=$(gh issue list --state open --limit 1000 --json number,title \
+            --jq 'map(select(.title == env.TITLE))[0].number // empty')
+          if [ "$RESULT" = "success" ]; then
+            if [ -n "$number" ]; then
+              gh issue close "$number" --comment "The newest allowed dependencies pass again: $RUN_URL"
+            fi
+          elif [ -n "$number" ]; then
+            gh issue comment "$number" --body "Still failing: $RUN_URL"
+          else
+            gh issue create --title "$TITLE" --label bug --label dependencies --body \
+              "A run on the newest versions \`pyproject.toml\` allows failed: $RUN_URL. It may be an upstream release that breaks us, which a user installing today would get, or the run itself: see its log (#115)."
+          fi
