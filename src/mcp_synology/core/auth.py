@@ -77,6 +77,17 @@ def _entry_is_for_this_host(
     return recorded == host, recorded
 
 
+def host_this_login_would_record(config: AppConfig) -> str | None:
+    """The host a login would record on a keyring entry with no record, if any: for `check`, which
+    asks first (maintainer, 2026-11-05). `serve` has no one to ask. A login that would be refused
+    records nothing, and says so itself."""
+    try:
+        resolve_credentials(config)
+    except SynologyError:
+        return None
+    return config._host_to_record
+
+
 def entry_left_unrecorded(config: AppConfig) -> bool:
     """Whether this config's keyring entry holds credentials and no host. For `check`, whose
     login may not have used it (credentials from elsewhere), so nothing recorded it."""
@@ -185,8 +196,9 @@ def own_instance_id_clause(config: AppConfig, nas: str = "this NAS") -> str:
 def check_route(config: AppConfig) -> str | None:
     """How `check` would record this config's keyring entry, as a clause, or None if it can't: it
     records only an entry with no record, using its password, from a config named by its full path
-    with neither host variable (QA round 1 and pre-QA on #559). It asks for nothing, so whoever
-    offers it must first ask whose credentials these are (QA round 2 on #559)."""
+    with neither host variable (QA round 1 and pre-QA on #559). It sends the stored password, once
+    someone at the terminal says yes, so whoever offers it says whose credentials it's for (QA
+    round 2 on #559)."""
     import os
 
     service = f"mcp-synology/{config.instance_id or 'default'}"
@@ -226,8 +238,8 @@ def check_route(config: AppConfig) -> str | None:
         "SYNOLOGY_HTTPS, set it here too"
     )
     return (
-        f"{remove}run {_RECORD_HOST} at a terminal,{same} no SYNOLOGY_PASSWORD set. It sends the "
-        f"stored password there without asking, and keeps any 2FA token{plain}"
+        f"{remove}run {_RECORD_HOST} at a terminal,{same} no SYNOLOGY_PASSWORD set. It asks before "
+        f"sending the stored password there, and keeps any 2FA token{plain}"
     )
 
 
@@ -235,9 +247,9 @@ def how_to_record(config: AppConfig) -> str:
     """What someone at a terminal can do about this entry (the maintainer's wording, 2026-11-05,
     after QA round 2 and pre-QA on #559). Whether this is the right NAS isn't the question:
     `nas.office` is right for its own config while the entry holds `nas.home`'s password. `check`
-    would send it there unasked, so it's only for someone who knows whose credentials these are,
-    and `setup` on this entry would replace the other NAS's. It doesn't name a recorded host, as
-    it's also in a log; `check` prints that just before. A tool's reply gets
+    would send it there once told yes, so it's only for someone who knows whose credentials these
+    are, and `setup` on this entry would replace the other NAS's. It doesn't name a recorded host,
+    as it's also in a log; `check` prints that just before. A tool's reply gets
     `_advice_for_the_model` instead."""
     host = config.connection.host if config.connection else None
     route = check_route(config)
@@ -277,10 +289,10 @@ _CREDENTIALS_DOC = (
 
 
 def _advice_for_the_model(config: AppConfig, host: str) -> str:
-    """This refusal's reply names no command that records the host: that needs no person, and a
-    model can't know whose credentials these are, least of all from a config in a folder it was
-    pointed at (QA round 2 on #559). `setup` asks someone for the password. The older unreachable,
-    busy and refused-login replies still name `check` (the maintainer, 2026-11-05)."""
+    """This refusal's reply names no command that records the host: only a person can answer it,
+    and a model can't know whose credentials these are, least of all from a config in a folder it
+    was pointed at (QA round 2 on #559). `setup` asks someone for the password. The older
+    unreachable, busy and refused-login replies still name `check` (the maintainer, 2026-11-05)."""
     return (
         f"If {host!r} is the right NAS, ask the user to {own_instance_id_clause(config, 'it')}. If "
         "they know these are its own credentials, or it's a new address for the same NAS, see "

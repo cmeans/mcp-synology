@@ -285,13 +285,13 @@ class TestWhatStillWorks:
         assert ("mcp-synology/nas", "host") not in store.values
 
 
-def _check(path: Path) -> Result:
+def _check(path: Path, answer: str = "y\n") -> Result:
     """`mcp-synology check` against a stub DSM that accepts the login."""
     with (
         patch("mcp_synology.core.client.DsmClient.query_api_info", AsyncMock(return_value=None)),
         patch("mcp_synology.core.client.DsmClient.request", AsyncMock(return_value={"sid": "s"})),
     ):
-        result = CliRunner().invoke(main, ["check", "--config", str(path)])
+        result = CliRunner().invoke(main, ["check", "--config", str(path)], input=answer)
     assert result.exit_code == 0, result.output
     return result
 
@@ -525,6 +525,43 @@ class TestAnEntryWithNoRecordedHost:
         result = _check(_file(tmp_path, "nas.home"))
         assert "is now recorded for this host" in result.output
 
+    @pytest.mark.parametrize("answer", ["n\n", "\n", ""], ids=["no", "the default", "no person"])
+    def test_check_sends_nothing_unless_told_yes(
+        self, store: MemoryKeyring, tmp_path: Path, answer: str
+    ) -> None:
+        """QA round 3 on #559: on a full path it sent the stored password and token and pinned
+        the entry, with none of the advice's question shown (maintainer, 2026-11-05: ask first)."""
+        _entry(store, "nas")
+        request = AsyncMock(return_value={"sid": "s"})
+        with (
+            patch(
+                "mcp_synology.core.client.DsmClient.query_api_info", AsyncMock(return_value=None)
+            ),
+            patch("mcp_synology.core.client.DsmClient.request", request),
+        ):
+            result = CliRunner().invoke(
+                main, ["check", "--config", str(_file(tmp_path, "nas.office"))], input=answer
+            )
+        assert result.exit_code == 1
+        assert "Send its stored password to 'nas.office' over plain HTTP" in result.output
+        assert "Nothing was sent" in result.output
+        request.assert_not_awaited()
+        assert ("mcp-synology/nas", "host") not in store.values
+
+    def test_check_doesnt_ask_about_a_recorded_entry(
+        self, store: MemoryKeyring, tmp_path: Path
+    ) -> None:
+        _entry(store, "nas", "nas.home")
+        assert "Send its stored password" not in _check(_file(tmp_path, "nas.home"), "").output
+
+    def test_check_doesnt_ask_when_the_login_wont_use_the_entry(
+        self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _entry(store, "nas")
+        monkeypatch.setenv("SYNOLOGY_PASSWORD", "p")
+        monkeypatch.setenv("SYNOLOGY_USERNAME", "u")
+        assert "Send its stored password" not in _check(_file(tmp_path, "nas.home"), "").output
+
     def test_check_says_when_it_didnt_use_the_entry(
         self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -642,7 +679,7 @@ class TestAnEntryWithNoRecordedHost:
         advice = exc.value.terminal_suggestion or ""
         route = advice.index("mcp-synology check")
         assert advice.index("If you know these are the credentials for 'nas.office'") < route
-        assert "It sends the stored password there without asking" in advice
+        assert "It asks before sending the stored password there" in advice
         assert "Otherwise, give this NAS its own instance_id in the config, then run" in advice
         assert "leaves this entry alone" in advice
         assert "If it's the wrong NAS, check connection.host" in advice
@@ -1648,7 +1685,8 @@ class TestQaRoundThree:
             ),
         ):
             result = CliRunner().invoke(
-                main, ["check", "--config", str(_file(tmp_path, "nas.office"))]
+                main, ["check", "--config", str(_file(tmp_path, "nas.office"))], input="y\n"
             )
         assert result.exit_code == 1
+        assert "Authentication failed" in result.output
         assert "If these are another NAS's credentials, give this NAS its own" in result.output

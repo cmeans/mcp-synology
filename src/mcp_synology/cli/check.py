@@ -137,6 +137,7 @@ async def _check_login(config: object) -> None:
         AuthManager,
         credential_sources,
         entry_left_unrecorded,
+        host_this_login_would_record,
         how_to_record,
         own_instance_id_clause,
         refusal_advice,
@@ -174,12 +175,38 @@ async def _check_login(config: object) -> None:
                 click.echo(click.style(f"Error: DSM API query failed: {e}", fg="red"), err=True)
                 sys.exit(1)
 
+            # On a full path nothing else stops this first send, so whose password it is has to be
+            # asked here (QA round 3 on #559; maintainer, 2026-11-05). With no person to answer,
+            # nothing is sent.
+            instance = config.instance_id or "default"
+            first_use = host_this_login_would_record(config)
+            if first_use:
+                plain = "" if config.connection.https else " over plain HTTP"
+                try:
+                    send = click.confirm(
+                        f"Keyring entry {instance!r} doesn't say which NAS it's for. Send its "
+                        f"stored password to {config.connection.host!r}{plain} and tie it to "
+                        "that NAS?",
+                        default=False,
+                    )
+                except click.Abort:
+                    send = False
+                if not send:
+                    click.echo(
+                        click.style(
+                            f"Nothing was sent, and entry {instance!r} is unchanged. If these are "
+                            f"another NAS's credentials, {own_instance_id_clause(config)}.",
+                            fg="red",
+                        ),
+                        err=True,
+                    )
+                    sys.exit(1)
+
             auth = AuthManager(config, client)
             try:
                 await auth.login()
                 click.echo(click.style("Authentication successful!", fg="green"))
                 # The upgrade advice sends people here to record it, so say whether it did.
-                instance = config.instance_id or "default"
                 if auth.recorded_host:
                     click.echo(f"Keyring entry {instance!r} is now recorded for this host.")
                 elif entry_left_unrecorded(config):
