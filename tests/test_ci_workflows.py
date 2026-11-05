@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
 import tomllib
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -24,6 +26,10 @@ _OPT_OUT = re.compile(
         + _OPT_OUTS
     )
 )
+
+
+# The one workflow that must not follow the lock (#115): `uv sync --upgrade` is its job.
+_LOCK_EXEMPT = "deps-newest.yml"
 
 
 def _workflows() -> dict[str, Any]:
@@ -87,8 +93,100 @@ def _lock_problem(workflow: dict[str, Any]) -> str | None:
 def test_every_workflow_that_runs_uv_refuses_a_stale_lock() -> None:
     """#115: without it, a PR that changes a dependency and forgets `uv lock` passes, tested on
     a lock nobody committed, and uv rewrites `uv.lock` on the runner."""
-    problems = {name: _lock_problem(flow) for name, flow in _workflows().items()}
+    problems = {
+        name: _lock_problem(flow) for name, flow in _workflows().items() if name != _LOCK_EXEMPT
+    }
     assert {name: problem for name, problem in problems.items() if problem} == {}
+
+
+def _newest() -> dict[str, Any]:
+    return _workflows()[_LOCK_EXEMPT]
+
+
+def test_the_exempt_workflow_upgrades_runs_the_tests_and_keeps_nothing() -> None:
+    """Being exempt is only safe while it tests the newest versions and throws them away."""
+    workflow = _newest()
+    steps = workflow["jobs"]["newest"]["steps"]
+    assert _scripts(steps) == [
+        "uv sync --upgrade --extra dev",
+        "uv pip list",
+        "timeout 900 uv run pytest -n auto --no-cov",
+    ]
+    # By name: an upload or a PR-making action would keep what this throws away.
+    used = [step["uses"].split("@")[0] for step in steps if "uses" in step]
+    assert used == ["actions/checkout", "astral-sh/setup-uv"]
+    assert workflow["permissions"] == {"contents": "read"}
+    assert steps[0]["with"]["persist-credentials"] is False
+
+
+def test_the_exempt_workflow_runs_on_the_newest_python_ci_tests() -> None:
+    matrix = _workflows()["ci.yml"]["jobs"]["test"]["strategy"]["matrix"]["python-version"]
+    steps = _newest()["jobs"]["newest"]["steps"]
+    versions = [s["with"]["python-version"] for s in steps if "python-version" in s.get("with", {})]
+    newest = max(matrix, key=lambda v: tuple(int(part) for part in str(v).split(".")))
+    assert versions == [str(newest)]
+
+
+def test_only_the_report_job_can_write_and_it_runs_only_on_main() -> None:
+    workflow = _newest()
+    # YAML reads a bare `on` as True.
+    assert set(workflow[True]) == {"schedule", "workflow_dispatch", "pull_request"}
+    assert {name: job.get("permissions") for name, job in workflow["jobs"].items()} == {
+        "newest": None,
+        "report": {"issues": "write"},
+    }
+    report = workflow["jobs"]["report"]
+    # `!cancelled()`: without it, a job that `needs` a failed one doesn't run at all.
+    assert report["if"] == (
+        "${{ !cancelled() && github.ref == 'refs/heads/main' && "
+        "github.event_name != 'pull_request' && needs.newest.result != 'cancelled' }}"
+    )
+    assert not [step for step in report["steps"] if "uses" in step]
+
+
+@pytest.mark.parametrize(
+    ("result", "open_issue", "expected"),
+    [
+        ("failure", "", "issue create"),
+        ("failure", "7", "issue comment 7 --body Still failing: url"),
+        ("success", "7", "issue close 7 --comment The newest allowed dependencies pass again: url"),
+        ("success", "", None),
+    ],
+    ids=["failure, none open", "failure, one open", "success, one open", "success, none open"],
+)
+def test_the_report_script(
+    tmp_path: Path, result: str, open_issue: str, expected: str | None
+) -> None:
+    """It can't run on a PR, and a real run writes a real issue, so a stand-in `gh` takes it."""
+    log = tmp_path / "gh.log"
+    stub = tmp_path / "gh"
+    stub.write_text(
+        f"""#!/bin/bash
+if [ "$1 $2" = "issue list" ]; then echo "{open_issue}"; exit 0; fi
+echo "$*" >> "{log}"
+""",
+        encoding="utf-8",
+    )
+    stub.chmod(0o755)
+    script = _newest()["jobs"]["report"]["steps"][0]["run"]
+    done = subprocess.run(
+        ["bash", "-e", "-c", script],
+        env={
+            **os.environ,
+            "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}",
+            "RESULT": result,
+            "RUN_URL": "url",
+            "TITLE": "title",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert done.returncode == 0, done.stderr
+    calls = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+    assert len(calls) == (0 if expected is None else 1), calls
+    if expected:
+        assert calls[0].startswith(expected)
 
 
 def test_the_guard_sees_every_workflow_that_runs_uv() -> None:
