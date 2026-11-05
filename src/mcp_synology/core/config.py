@@ -17,7 +17,6 @@ import os
 import re
 import shlex
 import stat
-import subprocess
 import unicodedata
 from datetime import date
 from pathlib import Path
@@ -613,17 +612,20 @@ class WorkingFolderConfigNotLoadedError(FileNotFoundError):
 
 def pasteable_path(path: Path) -> str:
     """An absolute path as a shell takes it, for a message that says to use it: `repr` switches to
-    double quotes around a `'`, where `$(...)` in a folder's name runs when pasted (QA on #555). A
-    character that could forge a line is escaped, so that form only fails to name the file."""
+    double quotes around a `'`, where `$(...)` in a folder's name runs when pasted (QA on #555).
+    Each character that could forge a line is escaped, and only those, so the path stays readable;
+    a path with one isn't one to use as shown."""
     text = _shown_path(path)
     return _quoted_for_a_shell(
-        text if text.isprintable() else text.encode("unicode_escape").decode()
+        "".join(c if c.isprintable() else c.encode("unicode_escape").decode() for c in text)
     )
 
 
 def _quoted_for_a_shell(text: str, *, windows: bool = os.name == "nt") -> str:
-    """Single quotes aren't quotes in cmd.exe (pre-QA on #555)."""
-    return subprocess.list2cmdline([text]) if windows else shlex.quote(text)
+    """Quoted for a POSIX shell. On Windows, only double quotes, for reading: no one form is safe
+    in both cmd.exe and PowerShell (`%VAR%` and `$(...)` still act inside them), and none of it
+    could be run here. A hostile folder's safe route there is the relative --config (QA on #555)."""
+    return f'"{text}"' if windows else shlex.quote(text)
 
 
 def _refuse_a_working_folder_config() -> None:

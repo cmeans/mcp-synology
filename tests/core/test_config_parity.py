@@ -1036,12 +1036,24 @@ class TestAWorkingFolderConfigIsntLoaded:
         assert "a\\nERROR forged" in str(excinfo.value)
         assert len(shlex.split(str(excinfo.value).split(" isn't loaded")[0])) == 1
 
-    def test_on_windows_the_path_gets_double_quotes(self) -> None:
-        """Pre-QA on #555: single quotes aren't quotes in cmd.exe."""
-        quoted = config_module._quoted_for_a_shell(
-            r"C:\Users\My Name\mcp-synology.yaml", windows=True
-        )
-        assert quoted == r'"C:\Users\My Name\mcp-synology.yaml"'
+    def test_one_character_that_draws_nothing_doesnt_escape_the_whole_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """QA round 2 on #555: the reader couldn't recognize a path with a U+3000 in it."""
+        self._in_this_folder(tmp_path / "\u65b0\u3057\u3044\u3000\u30d5\u30a9", monkeypatch)
+        monkeypatch.delenv("SYNOLOGY_HOST", raising=False)
+        with pytest.raises(FileNotFoundError) as excinfo:
+            load_config()
+        assert "\u65b0\u3057\u3044\\u3000\u30d5\u30a9" in str(excinfo.value)
+
+    @pytest.mark.parametrize(
+        "path",
+        [r"C:\My Name\x.yaml", r"C:\R&D\x.yaml", r"C:\plain\x.yaml"],
+    )
+    def test_on_windows_the_path_is_in_double_quotes_for_reading(self, path: str) -> None:
+        """QA round 2 on #555: list2cmdline quotes for argv, not a shell, and left `R&D` bare. No
+        form is safe in both cmd.exe and PowerShell, so the spec doesn't claim one."""
+        assert config_module._quoted_for_a_shell(path, windows=True) == f'"{path}"'
 
     def test_a_blank_synology_host_isnt_mentioned(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
