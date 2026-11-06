@@ -281,12 +281,13 @@ def _setup_interactive(verbose: bool, not_loaded: str | None = None) -> None:
         sys.exit(1)
 
     # This path doesn't go through load_config. Before the password is typed (#558).
-    if app_config.connection is not None:
-        warn_if_proxied(app_config.connection)
+    if app_config.connection is None:  # built from `conn` just above
+        raise RuntimeError("Config missing connection settings")
+    warn_if_proxied(app_config.connection)
 
     # Nothing is written until these are answered (#536).
     service = f"mcp-synology/{instance_id}"
-    if not _may_replace_entry(service, host, instance_id):
+    if not _may_replace_entry(service, host, app_config.connection.port, instance_id):
         return
     config_path = _CONFIG_DIR / f"{instance_id}.yaml"
     if config_path.exists() and not click.confirm(
@@ -301,7 +302,7 @@ def _setup_interactive(verbose: bool, not_loaded: str | None = None) -> None:
     password = click.prompt("DSM password", hide_input=True)
 
     # Store in keyring
-    keyring_ok = _store_keyring(service, username, password, host)
+    keyring_ok = _store_keyring(service, username, password, host, app_config.connection.port)
 
     # Connect, validate login, fetch hostname. Without a keyring the file is still what's
     # needed: stopping here left the user with variables and no config (#481).
@@ -387,19 +388,20 @@ def _setup_credential_flow(app_config: Any, verbose: bool) -> None:
     if app_config.connection is None:
         raise RuntimeError("Config missing connection settings")
     click.echo(f"Setting up credentials for {app_config.display_name}")
-    click.echo(f"  Host: {app_config.connection.host}")
+    click.echo(f"  Host: {app_config.connection.host}:{app_config.connection.port}")
     click.echo(f"  Instance: {app_config.instance_id}")
     click.echo()
 
     service = f"mcp-synology/{app_config.instance_id}"
     instance = str(app_config.instance_id)
-    if not _may_replace_entry(service, app_config.connection.host, instance, app_config):
+    connection = app_config.connection
+    if not _may_replace_entry(service, connection.host, connection.port, instance, app_config):
         return
 
     username = click.prompt("DSM username").strip()
     password = click.prompt("DSM password", hide_input=True)
 
-    keyring_ok = _store_keyring(service, username, password, app_config.connection.host)
+    keyring_ok = _store_keyring(service, username, password, connection.host, connection.port)
     if not keyring_ok:
         from mcp_synology.core.config import quoted_path
         from mcp_synology.core.errors import CHECK_NO_FILE
@@ -424,7 +426,7 @@ def _setup_credential_flow(app_config: Any, verbose: bool) -> None:
 
 
 def _may_replace_entry(
-    service: str, host: str, instance: str, config: AppConfig | None = None
+    service: str, host: str, port: int | None, instance: str, config: AppConfig | None = None
 ) -> bool:
     """Ask before replacing a keyring entry that isn't this host's (#536): two NAS with the same
     first label derive the same instance ID, and the other's config would then send this one's
@@ -433,7 +435,7 @@ def _may_replace_entry(
     that stops here (QA round 1 on #559). Any exception counts: backends raise their own types.
     ``config`` is the file being set up; interactive setup hasn't written one yet."""
     from mcp_synology.core.auth import check_route, own_instance_id_clause
-    from mcp_synology.core.config import comparable_host
+    from mcp_synology.core.config import comparable_host, comparable_target
 
     try:
         import keyring
@@ -462,13 +464,23 @@ def _may_replace_entry(
             )
         )
         sys.exit(1)
-    if not stored or recorded == comparable_host(host):
+    if not stored or recorded == comparable_target(host, port):
         return True
-    whose = "for another host" if recorded else "with no host recorded"
+    same_host = comparable_host(host)
+    # A record of this host with no port is from before ports were recorded (#562).
+    unknown = recorded is None or recorded == same_host
+    if recorded is None:
+        whose = "with no host recorded"
+    elif recorded == same_host:
+        whose = "with no port recorded"
+    elif recorded.startswith(f"{same_host}:"):
+        whose = "for another port on this host"
+    else:
+        whose = "for another host"
     if click.confirm(
         f"\nKeyring entry {instance!r} already holds credentials {whose}. Replacing it removes any "
         "2FA device token, and stops any other config using that entry from logging in until "
-        f"it's set up again. Replace it for {host}?",
+        f"it's set up again. Replace it for {host}:{port}?",
         default=False,
     ):
         return True
@@ -479,8 +491,8 @@ def _may_replace_entry(
         "'mcp-synology setup --config <that file>'."
     )
     # An entry with no record may well be this NAS's own, from before hosts were recorded.
-    route = None if recorded or config is None else check_route(config)
-    if recorded:
+    route = None if not unknown or config is None else check_route(config)
+    if not unknown:
         click.echo(f"Aborted, nothing changed. To keep both, {own_id}")
     else:
         own = route or "run this again and answer yes"
@@ -514,24 +526,25 @@ def _variable_lines(username: str, *, windows: bool = os.name == "nt") -> str:
     )
 
 
-def _store_keyring(service: str, username: str, password: str, host: str) -> bool:
+def _store_keyring(service: str, username: str, password: str, host: str, port: int | None) -> bool:
     """Store credentials and the host they're for in the OS keyring. True on success.
 
-    When the host changes, the old secrets go first and the new host before the new password, so
-    a stop partway leaves nothing to send to the wrong host. The old device token would otherwise
-    be sent to this one. A delete that didn't take stops here, with the old record still there: the
-    backends raise the same error for "no such password" and for a real failure, and a chain of
-    backends deletes from only the first. Any exception counts: backends raise their own types.
+    When the host or port changes, the old secrets go first and the new record before the new
+    password, so a stop partway leaves nothing to send to the wrong host. The old device token
+    would otherwise be sent to this one. A delete that didn't take stops here, with the old record
+    still there: the backends raise the same error for "no such password" and for a real failure,
+    and a chain of backends deletes from only the first. Any exception counts: backends raise their
+    own types.
     """
     from mcp_synology.core.auth import no_keyring_here
-    from mcp_synology.core.config import comparable_host
+    from mcp_synology.core.config import comparable_target
 
     removed: list[str] = []
     try:
         import keyring
         from keyring.errors import PasswordDeleteError
 
-        recorded = comparable_host(host)
+        recorded = comparable_target(host, port)
         if (keyring.get_password(service, "host") or "").strip() != recorded:
             for key in ("device_id", "password", "username"):
                 held = keyring.get_password(service, key)

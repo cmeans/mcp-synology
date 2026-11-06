@@ -68,7 +68,7 @@ def _keyring_with(
         "username": username,
         "password": password,
         "device_id": device_id,
-        "host": "nas",
+        "host": "nas:5000",
     }.get(key)
     return mock
 

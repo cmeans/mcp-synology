@@ -421,12 +421,13 @@ class AppConfig(BaseModel, extra="forbid"):
     # The file this came from, for errors found after loading; None in env-var-only mode.
     _source_path: Path | None = PrivateAttr(default=None)
     # Whether a keyring entry with no recorded host may record this config's host (#536): only
-    # from --config by a full path, with no variable changing the host or the entry.
+    # from --config by a full path, with no variable changing the host, port or entry.
     _host_may_be_recorded: bool = PrivateAttr(default=False)
     # Credentials are resolved for each call while a refused login is remembered.
     _device_token_warned: bool = PrivateAttr(default=False)
     _device_token_read_warned: bool = PrivateAttr(default=False)
-    # The host a keyring entry with no record takes once DSM accepts its password (#536).
+    # The host and port a keyring entry with no record takes once DSM accepts its password
+    # (#536, #562).
     _host_to_record: str | None = PrivateAttr(default=None)
 
     @property
@@ -1003,6 +1004,13 @@ def comparable_host(host: str) -> str:
             return f"[{ipaddress.IPv6Address(compared[1:-1]).compressed}]"
         return compared
     return compared[:-1] if compared.endswith(".") else compared
+
+
+def comparable_target(host: str, port: int | None) -> str:
+    """What a keyring entry records: the host and port it's for (#562). Two NAS behind one name on
+    different ports share a derived instance ID. The port is always written out, so a config that
+    leaves it to the default compares equal with one that names the same port."""
+    return f"{comparable_host(host)}:{port}"
 
 
 def _merge_env_overrides(raw: dict[str, Any], *, from_file: bool = False) -> dict[str, Any]:
@@ -1741,7 +1749,8 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         path is not None
         and Path(path).is_absolute()
         and not any(
-            os.environ.get(v, "").strip() for v in ("SYNOLOGY_HOST", "SYNOLOGY_INSTANCE_ID")
+            os.environ.get(v, "").strip()
+            for v in ("SYNOLOGY_HOST", "SYNOLOGY_PORT", "SYNOLOGY_INSTANCE_ID")
         )
     )
 
