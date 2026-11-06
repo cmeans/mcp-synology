@@ -830,7 +830,8 @@ async def _attempt_login(
                     post_form=True,
                 )
                 # Only this login asked for one.
-                # DSM's guide says `did`; third parties report `device_id` on some versions.
+                # `did` on a real DSM 7.1.1 and in DSM's guide; third parties report `device_id` on
+                # some versions.
                 if isinstance(data, dict):
                     device_id = _usable_token(data.get("did")) or _usable_token(
                         data.get("device_id")
