@@ -1495,7 +1495,7 @@ class TestSetup:
         with pytest.raises(SystemExit) as stopped:
             _store_keyring("mcp-synology/nas", "admin", "pw", "nas.office", 5000)
         assert stopped.value.code == 1
-        out = capsys.readouterr().out
+        out = capsys.readouterr().err
         assert "Already removed from this entry: device_id, password, username." in out
 
     def test_a_failed_write_with_nothing_removed_doesnt_claim_any(
@@ -2529,7 +2529,8 @@ class TestTheKeyringIsWrittenOnlyAfterTheLogin:
         assert result.exit_code == 1
         assert isinstance(result.exception, SystemExit)
         assert "may be partly written" in result.output
-        assert store.values[(self.SERVICE, "device_id")] == "old-token"
+        # A rerun would see this username stored, and keep the other account's token.
+        assert (self.SERVICE, "device_id") not in store.values
 
     @respx.mock
     def test_a_refused_username_write_keeps_the_token(
@@ -2570,6 +2571,7 @@ class TestTheKeyringIsWrittenOnlyAfterTheLogin:
             {"success": True, "data": {"sid": "the-sid", "did": ""}},
             {"success": True, "data": {"sid": "the-sid", "did": "  "}},
             {"success": True, "data": {"sid": "the-sid", "did": 12345}},
+            {"success": True, "data": {"sid": "the-sid", "did": "  ", "device_id": ""}},
             {"success": True, "data": []},
         ],
     )
@@ -2585,6 +2587,29 @@ class TestTheKeyringIsWrittenOnlyAfterTheLogin:
         assert store.values == before
         if reply.get("data"):
             assert respx.calls.last.request.url.params.get("method") == "logout"
+
+    @respx.mock
+    def test_a_blank_token_beside_a_good_one_and_padding(
+        self, store: MemoryKeyring, tmp_path: Path
+    ) -> None:
+        _dsm(
+            _NEEDS_A_CODE,
+            {"success": True, "data": {"sid": "the-sid", "did": "  ", "device_id": " tok "}},
+        )
+        result = self._with_config(tmp_path, "me\npw\n123456\n")
+        assert result.exit_code == 0, result.output
+        assert store.values[(self.SERVICE, "device_id")] == "tok"
+
+    @respx.mock
+    def test_a_code_login_with_no_token_logs_out_in_a_bare_setup(
+        self, store: MemoryKeyring, tmp_path: Path
+    ) -> None:
+        _dsm(_NEEDS_A_CODE, _LOGGED_IN)
+        result = self._interactive(tmp_path, "me\npw\n123456\n")
+        assert result.exit_code == 1
+        assert respx.calls.last.request.url.params.get("method") == "logout"
+        assert "SYNOLOGY_DEVICE_ID" in result.output
+        assert "https://github.com/cmeans/mcp-synology/issues" in result.output
 
     @respx.mock
     def test_a_token_under_the_other_field_name_is_stored(
@@ -2809,6 +2834,72 @@ class TestTheKeyringIsWrittenOnlyAfterTheLogin:
             pytest.raises(AuthenticationError, match="no session ID"),
         ):
             asyncio.run(auth.login())
+
+    @pytest.mark.parametrize(
+        "old_host", ["nas.home", "nas.office"], ids=["same host", "other host"]
+    )
+    @pytest.mark.parametrize("new_user", ["admin", "someone-else"], ids=["same user", "new user"])
+    @pytest.mark.parametrize("token", [None, "new-token"], ids=["no new token", "new token"])
+    @pytest.mark.parametrize("after", [False, True], ids=["raises first", "applies, then raises"])
+    @pytest.mark.parametrize("stays", [False, True], ids=["one fault", "stays broken"])
+    def test_what_a_failed_store_says_is_true_at_every_fault(
+        self,
+        old_host: str,
+        new_user: str,
+        token: str | None,
+        after: bool,
+        stays: bool,
+        store: MemoryKeyring,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """QA round 2 on #583: "as it was" printed with a token gone. A fault at each keyring call
+        in turn: exit 0 with no stored credentials means the entry really is unchanged."""
+        names = ("get_password", "set_password", "delete_password")
+        real = {name: getattr(store, name) for name in names}
+        count = {"n": 0}
+
+        def attempt(fault_at: int) -> None:
+            store.values.clear()
+            before = self._old(store, old_host)
+            count["n"] = 0
+
+            def faulty(name: str, *args: str) -> str | None:
+                count["n"] += 1
+                hit = count["n"] == fault_at + 1 or (stays and count["n"] > fault_at)
+                if hit and not after:
+                    raise KeyringError("locked")
+                result = real[name](*args)
+                if hit:
+                    raise KeyringError("locked")
+                return result
+
+            for name in names:
+                monkeypatch.setattr(store, name, lambda *a, _n=name: faulty(_n, *a))
+            try:
+                ok: bool | None = _store_keyring(
+                    self.SERVICE, new_user, "new-pw", "nas.home", 5000, token
+                )
+                code: int | str | None = 0
+            except SystemExit as stopped:
+                ok, code = None, stopped.code
+            finally:
+                for name in names:
+                    monkeypatch.setattr(store, name, real[name])
+            out = capsys.readouterr()
+            text = out.out + out.err
+            if ok is True:
+                assert store.values[(self.SERVICE, "password")] == "new-pw"
+                return
+            if code == 0:
+                assert store.values == before, f"fault {fault_at}: {text}"
+            if "This entry is as it was." in text:
+                assert store.values == before, f"fault {fault_at}: {text}"
+                assert code == (0 if token is None else 1), f"fault {fault_at}: {text}"
+
+        for fault_at in range(30):
+            attempt(fault_at)
+        assert count["n"] < 30  # the last rounds had no fault to hit
 
     def test_no_keyring_at_all_skips_the_login(self, store: MemoryKeyring, tmp_path: Path) -> None:
         """There's nowhere to keep what it would prove (#481), and no NAS is contacted here."""
