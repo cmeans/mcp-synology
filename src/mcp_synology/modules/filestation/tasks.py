@@ -202,10 +202,13 @@ class PollResult:
     ``stalled``: a status request got no answer (a transport error), an HTTP error
     status (a proxy's 502/504), or an answer that couldn't be read; the task was left
     running, like ``handoff`` (#245, maintainer decision 2026-10-17; #282).
+
+    ``lost``: DSM kept answering that it has no such task (599), so it can't say how the task
+    ended. Not stopped, as there's nothing to stop: a finished Delete's stop answers 401 (#521).
     """
 
     status: dict[str, Any]
-    outcome: Literal["finished", "handoff", "poll_error", "stalled"]
+    outcome: Literal["finished", "handoff", "poll_error", "stalled", "lost"]
     error: Exception | None = None
     stopped: bool = False
 
@@ -296,6 +299,10 @@ def progress_text(status: dict[str, Any]) -> str:
     return text
 
 
+# How many 599s in all before a task counts as lost (#521): about a second at the usual interval.
+_LOST_TASK_READS = 3
+
+
 async def poll_task(
     client: DsmClient,
     *,
@@ -315,8 +322,10 @@ async def poll_task(
     (``stalled``: a transport error, since a DSM stalled by a huge delete is still
     working; an HTTP error status, which is how a reverse proxy reports that same stall
     (504) or a restart (502), #282; or an answer that can't be read; maintainer
-    decision 2026-10-17). Only a DSM error code on a status request stops the task; so
-    does cancellation, which then propagates. The deadline is wall-clock (#237).
+    decision 2026-10-17). A DSM error code on a status request stops the task; so does
+    cancellation, which then propagates. The exception is 599, "no such task", which isn't a
+    verdict on a task this call just started: it's read again a few times, then reported as
+    ``lost`` (#521). The deadline is wall-clock (#237).
     """
     quoted = dsm_str(taskid)
     deadline = time.monotonic() + wait
@@ -324,6 +333,7 @@ async def poll_task(
     last_progress: float | None = None
     last_numbers: tuple[int, int] | None = None
     report = MonotonicProgress.wrap(on_progress)
+    missing_reads = 0
 
     async def stop() -> bool:
         return await _stop_background_task(client, api, quoted, version, logger)
@@ -347,7 +357,23 @@ async def poll_task(
                 )
                 return PollResult(status, "stalled", e)
             except SynologyError as e:
-                return PollResult(status, "poll_error", e, await stop())
+                if e.code != 599:
+                    return PollResult(status, "poll_error", e, await stop())
+                missing_reads += 1
+                # At WARNING so CI's logs keep what's needed to find the cause (#521).
+                logger.warning(
+                    "%s status (%s) answered 599 for %s, read %d of %d, %s",
+                    api,
+                    label,
+                    taskid,
+                    missing_reads,
+                    _LOST_TASK_READS,
+                    "after a status" if status else "with no status yet",
+                )
+                if missing_reads >= _LOST_TASK_READS:
+                    return PollResult(status, "lost", e)
+                await asyncio.sleep(interval)
+                continue
             except httpx.TransportError as e:
                 # No answer: DSM is probably busy with this very task. Leave it running
                 # and hand it off; never stop it (#245, maintainer decision 2026-10-17).

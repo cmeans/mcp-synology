@@ -380,7 +380,7 @@ class TestPollTask:
         def side_effect(request: httpx.Request) -> httpx.Response:
             calls.append(_method(request))
             if _method(request) == "status":
-                return httpx.Response(200, json={"success": False, "error": {"code": 599}})
+                return httpx.Response(200, json={"success": False, "error": {"code": 400}})
             if isinstance(stop_reply, Exception):
                 raise stop_reply
             return stop_reply
@@ -400,7 +400,7 @@ class TestPollTask:
             timeouts[_method(request)] = _read_timeout(request)
             connects[_method(request)] = request.extensions["timeout"]["connect"]
             if _method(request) == "status":
-                return httpx.Response(200, json={"success": False, "error": {"code": 599}})
+                return httpx.Response(200, json={"success": False, "error": {"code": 400}})
             return _ok({})
 
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
@@ -411,6 +411,49 @@ class TestPollTask:
         # DSM 7.1 can take ~60 s to answer a Delete stop that worked at once (#245).
         assert timeouts == {"status": 30, "stop": 90}
         assert connects == {"status": 30, "stop": 30}
+
+    @respx.mock
+    async def test_a_599_that_clears_keeps_polling(
+        self, mock_client: DsmClient, clock: list[float]
+    ) -> None:
+        """#521: DSM answered 599 to a new task's first status read."""
+        replies = iter(
+            [
+                httpx.Response(200, json={"success": False, "error": {"code": 599}}),
+                _ok({"finished": True}),
+            ]
+        )
+        calls: list[str] = []
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            calls.append(_method(request))
+            return next(replies)
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        result = await poll_task(mock_client, api=API, version=2, taskid="t1", wait=30, label="x")
+        assert result.outcome == "finished"
+        assert calls == ["status", "status"]
+
+    @respx.mock
+    async def test_a_599_that_stays_is_lost_and_nothing_is_stopped(
+        self, mock_client: DsmClient, clock: list[float], caplog: pytest.LogCaptureFixture
+    ) -> None:
+        calls: list[str] = []
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            calls.append(_method(request))
+            return httpx.Response(200, json={"success": False, "error": {"code": 599}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        with caplog.at_level("WARNING"):
+            result = await poll_task(
+                mock_client, api=API, version=2, taskid="t1", wait=30, label="x"
+            )
+        assert result.outcome == "lost"
+        assert result.stopped is False
+        assert calls == ["status"] * 3
+        assert "with no status yet" in caplog.text
+        assert "t1" in caplog.text
 
     @respx.mock
     async def test_poll_progress_counting_then_numbers(

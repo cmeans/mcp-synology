@@ -2234,7 +2234,7 @@ class TestStallHandoff:
             if params.get("method") == "start":
                 return httpx.Response(200, json={"success": True, "data": {"taskid": "T1"}})
             if params.get("method") == "status":
-                return httpx.Response(200, json={"success": False, "error": {"code": 599}})
+                return httpx.Response(200, json={"success": False, "error": {"code": 400}})
             return httpx.Response(200, json={"success": True, "data": {}})
 
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
@@ -3444,7 +3444,7 @@ class TestDeleteFailurePartway:
         self, mock_client: DsmClient, fail_on: int
     ) -> None:
         """A DSM error on a status request names no path either (QA round 5 on #480)."""
-        self._route(fail_on, status_code=599)
+        self._route(fail_on, status_code=400)
         paths = ["/video/a", "/video/b", "/video/c"]
         with pytest.raises(ToolError) as exc:
             await delete_files(mock_client, paths=paths, timeout=5)
@@ -3590,3 +3590,83 @@ class TestDeleteFailurePartway:
         error = ToolError("plain text")
         assert _with_progress_so_far(error, "/video/x", ["/video/a"], ["/video/b"]) is error
         assert _with_progress_so_far(error, "/video/x", [], []) is error
+
+
+def _lost_task_dsm(calls: list[dict[str, str]], info: Any) -> Any:
+    """A DSM whose status keeps answering 599, with this getinfo answer once a task has started."""
+
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        params = dict(request.url.params)
+        calls.append(params)
+        method = params.get("method")
+        if method == "start":
+            return httpx.Response(200, json={"success": True, "data": {"taskid": "T1"}})
+        if method == "status":
+            return httpx.Response(200, json={"success": False, "error": {"code": 599}})
+        if method == "getinfo" and any(call.get("method") == "start" for call in calls):
+            if isinstance(info, Exception):
+                raise info
+            return httpx.Response(200, json={"success": True, "data": info})
+        return httpx.Response(
+            200, json={"success": True, "data": {"files": [{"path": "/s/a", "isdir": False}]}}
+        )
+
+    return side_effect
+
+
+@respx.mock
+async def test_a_lost_delete_whose_path_is_gone_is_done(mock_client: DsmClient) -> None:
+    """#521: DSM had finished it while the reply said it failed."""
+    calls: list[dict[str, str]] = []
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        side_effect=_lost_task_dsm(calls, {"files": [{"path": "/s/a", "code": 408}]})
+    )
+    result = await delete_files(mock_client, paths=["/s/a"], recycle_bin_status={"s": True})
+    assert "failed" not in result.lower()
+    assert "/s/a" in result
+    assert not [call for call in calls if call.get("method") == "stop"]
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    "info",
+    [{"files": [{"path": "/s/a", "isdir": False}]}, httpx.ReadTimeout(""), {"files": []}],
+    ids=["still there", "no answer", "neither"],
+)
+async def test_a_lost_delete_not_known_gone_says_it_isnt_known(
+    mock_client: DsmClient, info: Any
+) -> None:
+    calls: list[dict[str, str]] = []
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_lost_task_dsm(calls, info))
+    with pytest.raises(ToolError) as exc:
+        await delete_files(mock_client, paths=["/s/a"], recycle_bin_status={"s": True})
+    error = json.loads(str(exc.value))["error"]
+    assert "how it ended isn't known" in error["message"]
+    assert "Nothing was stopped" in error["message"]
+    assert error["retryable"] is False
+    assert "before trying again" in error["suggestion"]
+    assert not [call for call in calls if call.get("method") == "stop"]
+
+
+@respx.mock
+async def test_a_lost_delete_partway_names_what_was_done(mock_client: DsmClient) -> None:
+    calls: list[dict[str, str]] = []
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        side_effect=_lost_task_dsm(calls, {"files": [{"path": "/s/a", "code": 408}]})
+    )
+    result = await delete_files(mock_client, paths=["/s/a", "/s/b"], recycle_bin_status={"s": True})
+    assert "/s/a" in result
+    assert "/s/b" in result
+
+
+@respx.mock
+async def test_a_lost_copy_says_it_isnt_known_and_stops_nothing(mock_client: DsmClient) -> None:
+    calls: list[dict[str, str]] = []
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        side_effect=_lost_task_dsm(calls, {"files": [{"path": "/s/a", "isdir": False}]})
+    )
+    with pytest.raises(ToolError) as exc:
+        await copy_files(mock_client, paths=["/s/a"], dest_folder="/s/dst")
+    message = json.loads(str(exc.value))["error"]["message"]
+    assert "Copy files: DSM no longer has the task" in message
+    assert not [call for call in calls if call.get("method") == "stop"]
