@@ -68,7 +68,7 @@ uv run ruff format --check src/ tests/ scripts/          # format check
 uv run mypy src/ scripts/                                # typecheck (strict mode)
 ```
 
-If you change a dependency in `pyproject.toml`, run `uv lock` and commit `uv.lock`: CI refuses a stale lock.
+If you change a dependency in `pyproject.toml`, run `uv lock` and commit `uv.lock`: CI refuses a stale lock. CI also runs the unit tests with each runtime dependency at its lowest allowed version, so code that needs something newer has to raise that floor.
 
 Tests are mocked at the HTTP boundary (`respx`), so they don't reach
 a real Synology NAS or require credentials to run.
