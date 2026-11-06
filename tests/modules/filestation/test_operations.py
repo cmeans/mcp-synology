@@ -2783,6 +2783,25 @@ class TestCopyMoveHandoff:
         assert record.earlier == []
 
     @respx.mock
+    async def test_a_skipped_source_isnt_named_in_the_hand_off_warning(
+        self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from mcp_synology.modules.filestation import operations
+
+        calls: list[dict[str, str]] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm(calls, finish={"a"}))
+        real = operations._copy_move_one_path
+
+        async def skips_a(client: DsmClient, path: str, **kwargs: Any) -> Any:
+            return (0, True) if path == "/s/a" else await real(client, path, **kwargs)
+
+        monkeypatch.setattr(operations, "_copy_move_one_path", skips_a)
+        result = await copy_files(
+            mock_client, paths=["/s/a", "/s/b", "/s/x/a"], dest_folder="/s/dst", timeout=1
+        )
+        assert "Named like" not in result
+
+    @respx.mock
     async def test_a_hand_off_with_no_same_name_doesnt_warn(self, mock_client: DsmClient) -> None:
         calls: list[dict[str, str]] = []
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm(calls, finish={"a"}))

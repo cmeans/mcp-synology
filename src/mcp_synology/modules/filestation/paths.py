@@ -224,8 +224,10 @@ _SAME_NAME_ADVICE = (
     "Send them to different folders, or rename one first. To merge two folders without replacing "
     "anything, use overwrite=false: items already there are skipped and listed. Separate calls "
     "with overwrite=true don't avoid this: a later call replaces what an earlier one put there, "
-    "possibly with no copy in the recycle bin, so do that only if the user asked for it. "
-    "Same-named sources may not be the same file: show both to the user and let them choose."
+    "possibly with no copy in the recycle bin, so do that only if the user asked for it."
+)
+_DIFFERENT_FILES = (
+    " Same-named sources may not be the same file: show both to the user and let them choose."
 )
 
 
@@ -263,8 +265,7 @@ def refuse_same_names(
     lost: a refusal costs less, and ``overwrite=false`` still does that call. In one call,
     ``overwrite=false`` replaces nothing (DSM skips the second, and says so; `_skip_report` warns
     against a retry). A repeated path isn't a collision, and nor is a source inside another source
-    where `_collapse_overlaps` drops it (a move, or a restore with one destination; with several,
-    a landing and a name identify one item)."""
+    where `_collapse_overlaps` drops it (a move, or a restore with one destination)."""
     if not overwrite:
         return
     sources = [normalize_path(path) for path in resolved]
@@ -274,7 +275,12 @@ def refuse_same_names(
     clashes: list[str] = []
     first_clash = ""
     for raw, source, dest in zip(given, sources, dests, strict=True):
-        if tool != "copy_files" and any(source.startswith(f"{other}/") for other in sources):
+        # Dropped by `_collapse_overlaps` only with one destination: with several, each runs alone.
+        if (
+            tool != "copy_files"
+            and len(set(dests)) == 1
+            and any(source.startswith(f"{other}/") for other in sources)
+        ):
             continue
         name = source.rsplit("/", 1)[-1]
         landing = normalize_path(dest)
@@ -309,7 +315,7 @@ def refuse_same_names(
             "was changed.",
             param,
             first_clash,
-            _same_name_advice(tool, dest_given=dest_given),
+            _same_name_advice(tool, dest_given=dest_given) + _DIFFERENT_FILES,
         )
     for raw, source in kept:
         folder = source.rpartition("/")[0]

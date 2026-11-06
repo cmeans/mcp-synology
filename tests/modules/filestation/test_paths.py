@@ -1664,6 +1664,42 @@ def test_a_planted_bins_destination_is_escaped() -> None:
     assert "\\u3164" in _error(exc)["message"]
 
 
+async def test_the_restore_tool_says_when_a_destination_was_given() -> None:
+    client = _FakeClient({"/video/c"} | _SAME_NAME_ITEMS)
+    fn = await _tool("restore_from_recycle_bin", client)
+    with pytest.raises(ToolError) as exc:
+        await fn(ctx=_fake_mcp_ctx(), overwrite=True, **_SAME_NAME["restore_from_recycle_bin"])
+    assert "leave out dest_folder" in _error(exc)["suggestion"]
+
+
+@pytest.mark.parametrize("tool", ["copy_files", "move_files"])
+def test_only_a_restore_is_told_about_leaving_out_the_destination(tool: str) -> None:
+    sources = ["/v/a/x", "/v/b/x"]
+    with pytest.raises(ToolError) as exc:
+        refuse_same_names(tool, sources, sources, ["/v/d"] * 2, overwrite=True)
+    assert "leave out dest_folder" not in _error(exc)["suggestion"]
+
+
+def test_the_inside_refusal_doesnt_call_its_sources_same_named() -> None:
+    sources = ["/v/n", "/v/d/n/q"]
+    with pytest.raises(ToolError) as exc:
+        refuse_same_names("move_files", sources, sources, ["/v/d"] * 2, overwrite=True)
+    assert "Same-named sources" not in _error(exc)["suggestion"]
+
+
+def test_a_nested_item_in_a_multi_destination_restore_still_counts() -> None:
+    """Each runs alone there, so nothing is dropped, and a case-only pair still clashes."""
+    with pytest.raises(ToolError, match="match ignoring case"):
+        refuse_same_names(
+            "restore_from_recycle_bin",
+            ["a", "a/b", "a/B"],
+            ["/v/#recycle/a", "/v/#recycle/a/b", "/v/#recycle/a/B"],
+            ["/v", "/v/a", "/v/a"],
+            overwrite=True,
+            dest_given=False,
+        )
+
+
 def test_the_advice_says_same_names_may_be_different_files() -> None:
     with pytest.raises(ToolError) as exc:
         refuse_same_names(

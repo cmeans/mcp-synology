@@ -829,7 +829,8 @@ async def _copy_move(
                 other = task_dest if task_dest != dest else None
                 reply = _already_running(operation, p, other) + "\n" + reply
             # A task already running to another folder lands nothing here.
-            ran = {name_key(path) for path in normalized[: i + 1 if task_dest == dest else i]}
+            placed = [*landed_here, p] if task_dest == dest else landed_here
+            ran = {name_key(path) for path in placed}
             alike = [q for q in normalized[i + 1 :] if name_key(q) in ran]
             if alike:
                 # #580: "Run them again" with overwrite=true would replace what this call placed.
