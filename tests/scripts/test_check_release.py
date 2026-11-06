@@ -623,6 +623,29 @@ def test_a_branch_missing_an_earlier_patch_is_refused(repo: Path) -> None:
     _git(repo, "checkout", "-q", "-b", "cut", cut)
     _git(repo, "commit", "-q", "--allow-empty", "-m", "the patch")
     _git(repo, "update-ref", "refs/remotes/origin/release/1.2.x", "HEAD")
+    # A name that isn't a final release, left out of the branch, is no missing release.
+    _git(repo, "tag", "v1.2.1\u00a0x", "refs/remotes/origin/main")
     problem = script.branch_problem(repo, "1.2.3") or ""
     assert "doesn't contain v1.2.1, v1.2.2" in problem
+    assert "\u00a0" not in problem
     assert "doesn't contain" not in (script.branch_problem(repo, "1.2.1") or "")
+
+
+def test_an_unreadable_tag_list_is_refused_not_assumed(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The gate's rule: unsure counts as a problem."""
+    _git(repo, "tag", "v1.2.2")
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "the patch")
+    _git(repo, "update-ref", "refs/remotes/origin/release/1.2.x", "HEAD")
+    real = script._git
+
+    def fails_on_no_merged(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
+        if "--no-merged" in args:
+            return subprocess.CompletedProcess(args, 1, "", "broken")
+        return real(root, *args)
+
+    monkeypatch.setattr(script, "_git", fails_on_no_merged)
+    assert "couldn't check what release/1.2.x contains" in (
+        script.branch_problem(repo, "1.2.3") or ""
+    )

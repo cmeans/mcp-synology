@@ -12,7 +12,8 @@ commit or with the wrong version is costly to undo. It checks that:
   added no entry still passes;
 - the tagged commit (HEAD) is on `origin/main` or, for a patch on a released line, this version's
   backport branch, `release/<major>.<minor>.x` (as v0.5.3 was, shipping a fix without main's
-  unreleased work), cut at an earlier final tag of that line and not from `main`. Not for a `.0`,
+  unreleased work), cut at an earlier final tag of that line and not from `main`, and containing
+  that line's earlier releases. Not for a `.0`,
   which has no released line to patch: `release/0.11.x` or `release/0.11.0` (how this repo names a
   release PR's branch) would be an unmerged commit.
 
@@ -165,7 +166,8 @@ def branch_problem(root: Path, version: str, *, tag_matches: bool = True) -> str
     as a problem. A backport branch counts only for a patch: a `.0` has no released line to patch.
     And it must have been cut from that line, not from `main`, which would ship all of `main`'s
     unreleased work, or from an older line, which would miss this one's releases: where it leaves
-    `main` must be at an earlier final tag of the line.
+    `main` must be at an earlier final tag of the line, and it must contain the line's earlier
+    releases, or a patch would ship without their fixes.
 
     Exact ref names: a tag named `origin/main` can't stand in for the branch, and git's patterns
     also match below a name, which `release/0.11.x/feature` mustn't.
