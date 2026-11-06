@@ -7,9 +7,10 @@ commit or with the wrong version is costly to undo. It checks that:
 - the tag is `v` plus `pyproject.toml`'s version;
 - `CHANGELOG.md` has a section for that version, which becomes the release notes and carries a
   security release's `**Security release:**` line, the one running servers announce;
-- the tagged commit (HEAD) is on `origin/main`, so it went through a PR, CI and QA.
+- the tagged commit (HEAD) is on `origin/main` or a `release/*` branch (a backport, as v0.5.3
+  was, that ships a fix without main's unreleased work), not some other branch.
 
-Standard library only. It needs a checkout with `origin/main` fetched.
+Standard library only. It needs a checkout with those branches fetched.
 
 Usage:
     python scripts/check_release.py v0.11.0
@@ -45,28 +46,43 @@ def changelog_problem(changelog: str, version: str) -> str | None:
         )
     following = changelog[heading.end() :]
     next_heading = re.search(r"^## ", following, re.MULTILINE)
-    if not following[: next_heading.start() if next_heading else None].strip():
+    section = following[: next_heading.start() if next_heading else None]
+    # Subheadings alone (`### Added`) aren't notes.
+    if not any(line.strip() and not line.startswith("#") for line in section.splitlines()):
         return f"CHANGELOG.md's section for {version} is empty"
     return None
 
 
-def main_branch_problem(root: Path) -> str | None:
-    """Say why HEAD isn't known to be on origin/main, or None. Unsure counts as a problem."""
+def branch_problem(root: Path) -> str | None:
+    """Say why HEAD isn't known to be on a release branch, or None. Unsure counts as a problem.
+
+    Full ref names, so a tag named `origin/main` can't stand in for the branch.
+    """
     try:
         result = subprocess.run(
-            ["git", "merge-base", "--is-ancestor", "HEAD", "origin/main"],
+            [
+                "git",
+                "for-each-ref",
+                "--contains=HEAD",
+                "--format=%(refname)",
+                "refs/remotes/origin/main",
+                "refs/remotes/origin/release/",
+            ],
             cwd=root,
             capture_output=True,
             text=True,
             check=False,
         )
     except OSError as error:
-        return f"couldn't run git to check the tagged commit is on main: {error}"
-    if result.returncode == 0:
+        return f"couldn't run git to check the tagged commit's branch: {error}"
+    if result.returncode != 0:
+        return f"couldn't check the tagged commit's branch: {result.stderr.strip()}"
+    if result.stdout.strip():
         return None
-    if result.returncode == 1:
-        return "the tagged commit isn't on origin/main: tag a commit that merged to main"
-    return f"couldn't check the tagged commit is on main: {result.stderr.strip()}"
+    return (
+        "the tagged commit isn't on origin/main or a release/* branch: tag a commit that "
+        "merged to one"
+    )
 
 
 def problems(tag: str, root: Path) -> list[str]:
@@ -77,7 +93,7 @@ def problems(tag: str, root: Path) -> list[str]:
     found = (
         tag_problem(tag, version),
         changelog_problem(changelog, version),
-        main_branch_problem(root),
+        branch_problem(root),
     )
     return [problem for problem in found if problem]
 

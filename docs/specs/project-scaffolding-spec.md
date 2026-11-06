@@ -503,9 +503,9 @@ Once stable enough for versioned releases: `uvx mcp-synology serve`
 
 ### Automated release pipeline
 
-Tagging `v*` triggers `.github/workflows/publish.yml`. Its `gate` job runs first and nothing else starts unless it passes (`scripts/check_release.py`, #457): the tag must be `v` plus `pyproject.toml`'s version, `CHANGELOG.md` must have a section for that version, and the tagged commit must be on `main`. Then four jobs publish:
+Tagging `v*` triggers `.github/workflows/publish.yml`. Its `gate` job runs first and nothing else starts unless it passes (`scripts/check_release.py`, #457): the tag must be `v` plus `pyproject.toml`'s version, `CHANGELOG.md` must have a section for that version with notes in it, and the tagged commit must be on `main` or a `release/*` branch (a backport, as v0.5.3 was). It covers commits that contain the job: a tag on an older commit runs that commit's workflow. Then:
 
-1. `build` — runs the unit test suite and builds sdist + wheel.
+1. `build` — runs the unit test suite and builds sdist + wheel. `validate-server-json` runs beside it, and `publish-pypi` needs both.
 2. `publish-pypi` — uploads the built distributions to PyPI via Trusted Publishing (OIDC, no long-lived token).
 3. `publish-registry` — installs [`mcp-publisher`](https://github.com/modelcontextprotocol/registry), authenticates via GitHub OIDC (`id-token: write`), and publishes `server.json` to `registry.modelcontextprotocol.io`. Idempotent on re-run: the registry's "version already exists" error is caught and downgraded to a workflow warning.
 4. `github-release` — extracts the release notes for the tag from `CHANGELOG.md` (via `awk` on the `## <version>` heading) and either creates a new GitHub Release or updates the existing one (`gh release create` / `gh release edit`).

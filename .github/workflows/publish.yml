@@ -19,12 +19,13 @@ env:
 jobs:
   gate:
     # Before anything else (#457). Any `v*` tag starts this workflow, and a PyPI version can't be
-    # reused: the tag must match pyproject.toml, have CHANGELOG notes, and be on main.
+    # reused: the tag must match pyproject.toml, have CHANGELOG notes, and be on main or a
+    # release/* branch. It covers commits that contain this job: an older one wouldn't run it.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0 # for origin/main
+          fetch-depth: 0 # for the branches
           persist-credentials: false
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:

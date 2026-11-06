@@ -140,6 +140,16 @@ def test_nothing_publishes_before_the_release_gate() -> None:
         return "gate" in needs or any(waits_for_gate(need) for need in needs)
 
     assert {name for name in jobs if name != "gate" and not waits_for_gate(name)} == set()
+    # `if: always()` would run a job even when the gate failed.
+    assert {name for name, job in jobs.items() if "if" in job} == set()
+
+
+def test_the_gate_and_the_release_notes_read_the_same_heading() -> None:
+    """check_release.py requires the section the github-release job's awk extracts."""
+    text = (GITHUB / "workflows" / "publish.yml").read_text(encoding="utf-8")
+    assert '$0 ~ "^## "version"( |\\\\()" {flag=1; next}' in text
+    script = (GITHUB.parent / "scripts" / "check_release.py").read_text(encoding="utf-8")
+    assert 'rf"^## {re.escape(version)}(?: |\\().*$"' in script
 
 
 def test_the_release_gate_checks_the_tag_on_a_full_checkout_and_cant_be_softened() -> None:
