@@ -493,14 +493,14 @@ def test_a_backport_branch_cut_from_main_is_refused(repo: Path) -> None:
     _git(repo, "commit", "-q", "--allow-empty", "-m", "the patch")
     _git(repo, "update-ref", "refs/remotes/origin/release/1.2.x", "HEAD")
     problem = script.branch_problem(repo, "1.2.3") or ""
-    assert "wasn't cut from a v1.2.* tag" in problem
+    assert "wasn't cut at a final v1.2.* tag earlier than this version" in problem
 
 
 def test_the_versions_own_tag_doesnt_vouch_for_its_branch(repo: Path) -> None:
     _git(repo, "commit", "-q", "--allow-empty", "-m", "the patch")
     _git(repo, "update-ref", "refs/remotes/origin/release/1.2.x", "HEAD")
     _git(repo, "tag", "v1.2.3")
-    assert "wasn't cut from" in (script.branch_problem(repo, "1.2.3") or "")
+    assert "wasn't cut at a final v1.2.* tag" in (script.branch_problem(repo, "1.2.3") or "")
 
 
 def test_no_origin_main_says_so(repo: Path) -> None:
@@ -533,7 +533,7 @@ def test_only_an_earlier_release_of_the_line_vouches_for_a_backport(repo: Path, 
     _git(repo, "tag", tag)
     _git(repo, "commit", "-q", "--allow-empty", "-m", "the patch")
     _git(repo, "update-ref", "refs/remotes/origin/release/1.2.x", "HEAD")
-    assert "wasn't cut from" in (script.branch_problem(repo, "1.2.3") or "")
+    assert "wasn't cut at a final v1.2.* tag" in (script.branch_problem(repo, "1.2.3") or "")
 
 
 def test_a_wrong_tag_off_main_names_no_backport_branch(
@@ -560,7 +560,7 @@ def test_a_ref_name_that_isnt_utf8_is_not_a_traceback(repo: Path) -> None:
     subprocess.run([b"git", b"update-ref", b"refs/tags/v1.2.\xff", b"HEAD"], cwd=repo, check=True)
     _git(repo, "commit", "-q", "--allow-empty", "-m", "the patch")
     _git(repo, "update-ref", "refs/remotes/origin/release/1.2.x", "HEAD")
-    assert "wasn't cut from" in (script.branch_problem(repo, "1.2.3") or "")
+    assert "wasn't cut at a final v1.2.* tag" in (script.branch_problem(repo, "1.2.3") or "")
 
 
 def test_a_branch_cut_before_the_line_began_is_refused(repo: Path) -> None:
@@ -575,7 +575,7 @@ def test_a_branch_cut_before_the_line_began_is_refused(repo: Path) -> None:
     _git(repo, "checkout", "-q", "-b", "cut", old)
     _git(repo, "commit", "-q", "--allow-empty", "-m", "the patch")
     _git(repo, "update-ref", "refs/remotes/origin/release/1.2.x", "HEAD")
-    assert "wasn't cut from" in (script.branch_problem(repo, "1.2.3") or "")
+    assert "wasn't cut at a final v1.2.* tag" in (script.branch_problem(repo, "1.2.3") or "")
 
 
 @pytest.mark.parametrize("heading", ["## 1.2.3 ", "## 1.2.3"])

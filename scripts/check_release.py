@@ -164,7 +164,8 @@ def branch_problem(root: Path, version: str, *, tag_matches: bool = True) -> str
     """Say why HEAD isn't known to be on a branch `version` can ship from, or None. Unsure counts
     as a problem. A backport branch counts only for a patch: a `.0` has no released line to patch.
     And it must have been cut from that line, not from `main`, which would ship all of `main`'s
-    unreleased work: where it leaves `main` must be in an earlier tag of the line.
+    unreleased work, or from an older line, which would miss this one's releases: where it leaves
+    `main` must be at an earlier final tag of the line.
 
     Exact ref names: a tag named `origin/main` can't stand in for the branch, and git's patterns
     also match below a name, which `release/0.11.x/feature` mustn't.
@@ -210,10 +211,11 @@ def branch_problem(root: Path, version: str, *, tag_matches: bool = True) -> str
             )
             if any(patch < int(version.split(".")[2]) for patch in earlier):
                 return None
+            cut_point = base.stdout.strip()[:7]
             return (
-                f"release/{backport} wasn't cut from a v{line}.* tag: it leaves origin/main at a "
-                f"commit no earlier v{line}.* tag contains, so it would ship main's unreleased "
-                f"work. Cut it from the last v{line}.* tag."
+                f"release/{backport} wasn't cut at a final v{line}.* tag earlier than this "
+                f"version: it leaves origin/main at {cut_point}. Cut it from the last "
+                f"v{line}.* tag."
             )
     except OSError as error:
         return f"couldn't run git to check the tagged commit's branch: {error}"
