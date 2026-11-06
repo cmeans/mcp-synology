@@ -28,6 +28,7 @@ from mcp_synology.core.formatting import error_response
 from mcp_synology.modules.filestation import helpers
 from mcp_synology.modules.filestation.helpers import (
     NAME_BYTES,
+    _escaped_repr,
     _is_dot,
     draws_nothing,
     invisible_problem,
@@ -208,12 +209,21 @@ def refuse_planted_bin(
     for raw, path, dest in zip(given, resolved, dests, strict=True):
         if normalize_path(path).rsplit("/", 1)[-1] == "#recycle" and makes_a_bin(dest):
             _refuse(
-                f"{_OP_WORDS.get(tool, tool)} refused: {raw!r} would land in {shown(dest)} "
-                "as '#recycle', the name of its recycle bin. Nothing was changed.",
+                f"{_OP_WORDS.get(tool, tool)} refused: {_escaped_repr(raw)} would land in "
+                f"{_escaped_repr(dest)} as '#recycle', the name of its recycle bin. Nothing "
+                "was changed.",
                 param,
                 raw,
                 _PLANTED_ADVICE.get(tool, "Copy or move the folder's contents instead."),
             )
+
+
+_SAME_NAME_ADVICE = (
+    "Send them to different folders, or rename one first. To merge two folders without replacing "
+    "anything, use overwrite=false: items already there are skipped and listed. Separate calls "
+    "with overwrite=true don't avoid this: a later call replaces what an earlier one put there, "
+    "possibly with no copy in the recycle bin, so do that only if the user asked for it."
+)
 
 
 def refuse_same_names(
@@ -225,36 +235,66 @@ def refuse_same_names(
     overwrite: bool,
     param: str = "paths",
 ) -> None:
-    """Refuse a copy, move or restore with ``overwrite=true`` where two sources would land at
-    the same destination under one name (#495). Each runs as its own DSM task, so the second
-    replaces the first, and for a move or restore the first's original is already gone. The
-    replaced file isn't in the recycle bin (vdsm's `/home`, DSM 7.1 to 7.4.1). Two folders merge
-    instead, which can replace same-named items inside them, so they're refused too: this
-    can't tell files from folders, and nothing here reads their types.
+    """Refuse a copy, move or restore with ``overwrite=true`` where two sources would replace each
+    other (#495). Each runs as its own DSM task, so when two land at one destination under one
+    name, the second replaces the first, and for a move or restore the first's original is already
+    gone. A source inside the folder another source lands in is replaced the same way, before its
+    own task runs. The replaced file wasn't in the recycle bin on vdsm's `/home` (DSM 7.1 to 7.4.1;
+    other file systems and real bins aren't tested). Two folders merge instead, which can replace
+    same-named items inside them, so they're refused too: this can't tell files from folders, and
+    nothing here reads their types.
 
-    Names compare exactly: DSM keeps `X.TXT` and `x.txt` as two files. ``overwrite=false`` loses
-    nothing (DSM skips the second, and says so). A repeated path isn't a collision, and nor is
-    anything `_collapse_overlaps` drops: a source inside another source (all but a copy)."""
+    Names compare ignoring case. vdsm's `/home` (Btrfs) keeps `X.TXT` and `x.txt` as two files,
+    but a USB or network share may treat them as one (not tested), and there the first would be
+    lost: a refusal costs less, and ``overwrite=false`` still does that call. In one call,
+    ``overwrite=false`` replaces nothing (DSM skips the second, and says so; `_skip_report` warns
+    against a retry). A repeated path isn't a collision, and nor is a source inside another source
+    where `_collapse_overlaps` drops it (a move, or a restore with one destination; with several,
+    a landing and a name identify one item)."""
     if not overwrite:
         return
     sources = [normalize_path(path) for path in resolved]
-    seen: dict[tuple[str, str], tuple[str, str]] = {}
+    landings: dict[tuple[str, str], tuple[str, str]] = {}
+    kept: list[tuple[str, str]] = []
     for raw, source, dest in zip(given, sources, dests, strict=True):
         if tool != "copy_files" and any(source.startswith(f"{other}/") for other in sources):
             continue
         name = source.rsplit("/", 1)[-1]
-        first_raw, first = seen.setdefault((normalize_path(dest), name), (raw, source))
+        landing = normalize_path(dest)
+        kept.append((raw, source))
+        first_raw, first = landings.setdefault((landing, name.lower()), (raw, source))
         if first == source:
             continue
+        names = (
+            "the same name"
+            if first.rsplit("/", 1)[-1] == name
+            else "names that differ only in case, which some file systems treat as one"
+        )
         _refuse(
-            f"{_OP_WORDS.get(tool, tool)} refused: {first_raw!r} and {raw!r} would both land in "
-            f"{shown(dest)} with the same name, so with overwrite=true one could replace the "
-            "other (for folders, items of the same name inside them). Nothing was changed.",
+            f"{_OP_WORDS.get(tool, tool)} refused: {_escaped_repr(first_raw)} and "
+            f"{_escaped_repr(raw)} would both land in {_escaped_repr(dest)} with {names}, so with "
+            "overwrite=true one could replace the other (for folders, items of the same name "
+            "inside them). Nothing was changed.",
             param,
             raw,
-            "Send them to different folders, or rename one first. To merge two folders on "
-            "purpose, make a separate call for each.",
+            _SAME_NAME_ADVICE,
         )
+    for raw, source in kept:
+        folder = source.rpartition("/")[0]
+        while folder:
+            parent, _, name = folder.rpartition("/")
+            landed = landings.get((parent, name.lower()))
+            # One already at its destination doesn't land on anything: it's where it was.
+            if landed and landed[1] != source and landed[1].rpartition("/")[0] != parent:
+                _refuse(
+                    f"{_OP_WORDS.get(tool, tool)} refused: {_escaped_repr(landed[0])} would land "
+                    f"in {_escaped_repr(folder)}, which holds {_escaped_repr(raw)}, so with "
+                    "overwrite=true it could be replaced before its turn. Nothing was changed.",
+                    param,
+                    raw,
+                    _SAME_NAME_ADVICE,
+                )
+            folder = parent
 
 
 class BinWords(NamedTuple):

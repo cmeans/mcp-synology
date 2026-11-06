@@ -271,10 +271,12 @@ Common causes:
 - A File Station path, a `restore_from_recycle_bin` item, or a Download Station
   destination has a `.` or `..` part (`/video/../photo`, `video/./x`).
 - `copy_files`, `move_files` or `restore_from_recycle_bin` with `overwrite=true` where two
-  sources would land at one destination with the same name: one could replace the other (for
-  folders, items of the same name inside them), and a replaced file isn't in the recycle bin.
-  Use different destinations or rename one first. To merge two folders on purpose, make a
-  separate call for each.
+  sources would land at one destination with the same name, or names that differ only in case, or
+  one would land in a folder holding another: one could replace the other (for folders, items of
+  the same name inside them), and a replaced file may not be in the recycle bin. Use different
+  destinations or rename one first. To merge two folders without replacing anything, use
+  `overwrite=false`: items already there are skipped and listed. Separate calls with
+  `overwrite=true` don't avoid this.
 - `delete_files` on a whole shared folder (`/video`): a shared folder isn't deleted or
   emptied this way (#451; emptying one with the user's confirmation is #484). Delete a
   shared folder's items by path, or the shared folder itself in DSM's Control Panel.

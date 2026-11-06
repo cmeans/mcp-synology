@@ -632,6 +632,17 @@ async def _skip_report(
     unknown = [p for p in skipped_paths if p not in kinds]
     done = verb.lower()
 
+    # What this call itself put at the destination, which `overwrite=true` would replace (#580).
+    # Compared as `refuse_same_names` does; a skipped folder's other items landed too.
+    landed: dict[str, str] = {}
+    own: dict[str, str] = {}
+    for p in normalized:
+        name = p.rsplit("/", 1)[-1].lower()
+        if p in skipped_paths and name in landed:
+            own[p] = landed[name]
+        if p not in skipped_paths or kinds.get(p) is not False:
+            landed.setdefault(name, p)
+
     parts = []
     if files:
         parts.append(f"{len(files):,} skipped")
@@ -673,7 +684,17 @@ async def _skip_report(
         lines.append(
             f"For a skipped folder, the parts not already at the destination were still {done}."
         )
-    lines.append("Pass overwrite=true to replace them.")
+    if own:
+        lines.append(
+            "Don't retry these with overwrite=true unless the user asked for it: what's there may "
+            "be what this call just put there, and it would be replaced, possibly with no copy in "
+            "the recycle bin:"
+        )
+        lines.extend(f"  {p} (this call's {first} went first)" for p, first in own.items())
+    if not own:
+        lines.append("Pass overwrite=true to replace them.")
+    elif len(own) < len(skipped_paths):
+        lines.append("For the others, pass overwrite=true to replace what was already there.")
     return lines
 
 

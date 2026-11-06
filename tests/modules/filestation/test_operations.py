@@ -3590,3 +3590,82 @@ class TestDeleteFailurePartway:
         error = ToolError("plain text")
         assert _with_progress_so_far(error, "/video/x", ["/video/a"], ["/video/b"]) is error
         assert _with_progress_so_far(error, "/video/x", [], []) is error
+
+
+async def _report_for(
+    monkeypatch: pytest.MonkeyPatch,
+    normalized: list[str],
+    skipped: list[str],
+    kinds: dict[str, bool],
+) -> str:
+    from mcp_synology.modules.filestation import operations
+
+    async def isdir(_client: object, _paths: list[str]) -> dict[str, bool]:
+        return kinds
+
+    monkeypatch.setattr(operations, "paths_isdir", isdir)
+    ok = [p for p in normalized if p not in skipped]
+    lines = await operations._skip_report(
+        None,  # type: ignore[arg-type]
+        "Moved",
+        "/v/d",
+        normalized,
+        ok,
+        skipped,
+        True,
+    )
+    return "\n".join(lines)
+
+
+async def test_skip_report_warns_when_this_call_put_the_blocker_there(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#580: following `Pass overwrite=true` replaced the file this call had just moved."""
+    out = await _report_for(
+        monkeypatch, ["/v/a/x.txt", "/v/b/x.txt"], ["/v/b/x.txt"], {"/v/b/x.txt": False}
+    )
+    assert "Don't retry these with overwrite=true" in out
+    assert "/v/b/x.txt (this call's /v/a/x.txt went first)" in out
+    assert "Pass overwrite=true" not in out
+    assert "For the others" not in out
+    assert "/v/b/x.txt" in out.split("Skipped:")[1]
+
+
+async def test_skip_report_warns_for_a_skipped_folders_own_children(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two folders of one name: the second's skipped child is what the first brought."""
+    out = await _report_for(monkeypatch, ["/v/a/n", "/v/b/n"], ["/v/b/n"], {"/v/b/n": True})
+    assert "Don't retry these with overwrite=true" in out
+
+
+async def test_skip_report_still_offers_overwrite_for_what_was_already_there(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    out = await _report_for(monkeypatch, ["/v/a/x", "/v/b/y"], ["/v/b/y"], {"/v/b/y": False})
+    assert "Pass overwrite=true to replace them." in out
+    assert "Don't retry" not in out
+
+
+async def test_skip_report_a_skipped_first_file_isnt_the_blocker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both skipped: something already there blocks both, and this call put nothing there."""
+    both = ["/v/a/x", "/v/b/x"]
+    out = await _report_for(monkeypatch, both, both, {p: False for p in both})
+    assert "Pass overwrite=true to replace them." in out
+    assert "Don't retry" not in out
+
+
+async def test_skip_report_separates_its_own_from_the_others(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    out = await _report_for(
+        monkeypatch,
+        ["/v/a/x", "/v/b/x", "/v/c/y"],
+        ["/v/b/x", "/v/c/y"],
+        {"/v/b/x": False, "/v/c/y": False},
+    )
+    assert "Don't retry these with overwrite=true" in out
+    assert "/v/c/y (this call's" not in out
+    assert "For the others, pass overwrite=true" in out
