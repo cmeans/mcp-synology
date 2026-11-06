@@ -603,6 +603,16 @@ def _store_keyring(
             keyring.set_password(service, "host", recorded)
         keyring.set_password(service, "username", username)
         keyring.set_password(service, "password", password)
+        # A backend whose writes do nothing raises nothing (#589). Only a mismatch counts: a read
+        # that fails after good writes says nothing about them. This comes before the old
+        # account's token goes, so a keyring that kept nothing doesn't lose it.
+        held = _read_entry_or_none(service)
+        if held is not None and (
+            held["username"] != username
+            or held["password"] != password
+            or (held["host"] or "").strip() != recorded
+        ):
+            raise KeyringError("the keyring didn't keep what was written")
         if same_host and before["device_id"] and before["username"] != username:
             with contextlib.suppress(PasswordDeleteError):  # a backend's "no such password"
                 keyring.delete_password(service, "device_id")
@@ -611,25 +621,15 @@ def _store_keyring(
         stored = True
         if device_id:
             keyring.set_password(service, "device_id", device_id)
-        # A backend whose writes do nothing raises nothing (#589). Only a mismatch counts: a read
-        # that fails after good writes says nothing about them.
-        held = _read_entry_or_none(service)
-        if held is not None:
-            if (
-                held["username"] != username
-                or held["password"] != password
-                or (held["host"] or "").strip() != recorded
-            ):
-                stored = False
-                raise KeyringError("the keyring didn't keep what was written")
-            if device_id and held["device_id"] != device_id:
-                raise KeyringError("the keyring didn't keep the device token")
+        held = _read_entry_or_none(service) if device_id else None
+        if held is not None and held["device_id"] != device_id:
+            raise KeyringError("the keyring didn't keep the device token")
     except Exception as e:
         logger.debug("Keyring error storing credentials: %s", e, exc_info=True)
         lead = (
             "Keyring not available."
             if no_keyring_here()
-            else "Couldn't store these in the keyring."
+            else f"Couldn't store these in the keyring ({type(e).__name__})."
         )
         fix = (
             "Check that the keyring is unlocked and writable, and run this again; each run with "

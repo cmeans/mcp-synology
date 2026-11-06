@@ -7,6 +7,7 @@ the config was found.
 
 from __future__ import annotations
 
+import contextlib
 import asyncio
 import importlib.util
 import io
@@ -2487,7 +2488,7 @@ class TestTheKeyringIsWrittenOnlyAfterTheLogin:
         monkeypatch.setattr(store, "delete_password", lambda *_args: None)
         _dsm(_LOGGED_IN)
         result = self._with_config(tmp_path, "someone-else\npw\n")
-        assert "Couldn't store these in the keyring." in result.output
+        assert "Couldn't store these in the keyring (" in result.output
         assert store.values == before
 
     @respx.mock
@@ -2671,6 +2672,39 @@ class TestTheKeyringIsWrittenOnlyAfterTheLogin:
             _store_keyring(self.SERVICE, "me", "pw", "nas.home", 5000)
         out = capsys.readouterr()
         assert "Credentials stored" not in out.out + out.err
+
+    def test_a_keyring_that_keeps_nothing_leaves_the_old_accounts_token(
+        self,
+        store: MemoryKeyring,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Pre-QA on #583: the token was deleted before the read-back found nothing written."""
+        recorded = comparable_target("nas.home", 5000)
+        before = {"host": recorded, "username": "old", "password": "old-pw", "device_id": "tok"}
+        for key, value in before.items():
+            store.values[(self.SERVICE, key)] = value
+        monkeypatch.setattr(store, "set_password", lambda *_: None)
+        assert _store_keyring(self.SERVICE, "new", "pw", "nas.home", 5000) is False
+        assert "This entry is as it was." in capsys.readouterr().out
+        assert store.values[(self.SERVICE, "device_id")] == "tok"
+
+    def test_putting_back_skips_what_was_never_there(self, store: MemoryKeyring) -> None:
+        """Deleting a username that isn't there raises, which would stop the password's restore."""
+        recorded = comparable_target("nas.home", 5000)
+        store.values[(self.SERVICE, "host")] = recorded
+        store.values[(self.SERVICE, "password")] = "old-pw"
+        real_set = store.set_password
+
+        def drops_username(service: str, name: str, value: str) -> None:
+            if name != "username":
+                real_set(service, name, value)
+
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(store, "set_password", drops_username)
+            with contextlib.suppress(SystemExit):
+                _store_keyring(self.SERVICE, "me", "pw", "nas.home", 5000)
+        assert store.values[(self.SERVICE, "password")] == "old-pw"
 
     def test_a_keyring_that_drops_the_host_is_caught(
         self, store: MemoryKeyring, monkeypatch: pytest.MonkeyPatch
@@ -3064,7 +3098,7 @@ class TestTheKeyringIsWrittenOnlyAfterTheLogin:
         result = self._interactive(tmp_path, "me\npw\n")
         assert result.exit_code == 0, result.output
         assert "Login successful!" in result.output
-        assert "Couldn't store these in the keyring." in result.output
+        assert "Couldn't store these in the keyring (" in result.output
         assert "With those variables set, test it" in result.output
         assert result.output.count("SYNOLOGY_PASSWORD") == 2  # the lines, then the client's snippet
         assert (tmp_path / "config" / "nas.yaml").exists()

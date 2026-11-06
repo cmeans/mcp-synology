@@ -280,7 +280,7 @@ class TestSetupWithAKeyringThatFails:
         self, request: pytest.FixtureRequest, no_keyring: None, tmp_path: Path
     ) -> None:
         output = self._run(request, ["setup"], tmp_path)
-        assert "Couldn't store these in the keyring." in output
+        assert "Couldn't store these in the keyring (" in output
         assert "Keyring not available" not in output
         assert "If this account uses 2FA" not in output
         assert (tmp_path / "config" / "192-168-1-50.yaml").exists()
@@ -298,7 +298,7 @@ class TestSetupWithAKeyringThatFails:
         request.addfinalizer(lambda: keyring.set_keyring(previous))
         with patch("mcp_synology.cli.setup._setup_login", _logs_in):
             result = CliRunner().invoke(main, ["setup", "--config", str(config)], input="me\nx\n")
-        assert "Couldn't store these in the keyring." in result.output
+        assert "Couldn't store these in the keyring (" in result.output
         assert "If this account uses 2FA" not in result.output
 
 

@@ -844,7 +844,11 @@ class AuthManager:
 
         sid = data.get("sid") if isinstance(data, dict) else None
         if not isinstance(sid, str) or not sid.strip():
-            raise AuthenticationError("Login succeeded but no session ID returned.")
+            raise AuthenticationError(
+                "The login reply has no session ID.",
+                suggestion="Is this a Synology DSM address? Check the host, port and https "
+                "settings.",
+            )
 
         self._record_host()
         self._refusals.clear()
