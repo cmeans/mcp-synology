@@ -29,8 +29,8 @@ PRS=$(gh pr list --repo "$REPO" --state open --base main --limit 100 \
       else empty end
     | @tsv')
 
-# Post one comment per marker. Only this job's own comments count, so nobody can post the marker to
-# silence it. A read that fails isn't "no comment yet": that would post one on every run.
+# Post one comment per marker, which is a comment's whole first line, so a job name quoted in another
+# comment can't pass for it. Only this job's own comments count. A read that fails isn't "no comment yet": that would post one on every run.
 comment_once() {
   local pr=$1 marker=$2 body=$3 comments
   if ! comments=$(gh pr view "$pr" --repo "$REPO" --json comments \
@@ -39,7 +39,7 @@ comment_once() {
     FAILED=1
     return
   fi
-  if printf '%s\n' "$comments" | grep -qF "$marker"; then
+  if printf '%s\n' "$comments" | grep -qxF "$marker"; then
     echo "PR #$pr: already commented: $marker" >&2
     return
   fi
@@ -62,13 +62,23 @@ while IFS=$'\t' read -r PR SHA ADOPT <&3; do
       echo "PR #$PR: couldn't read its checks" >&2
       FAILED=1
     elif [ "$STATE" = fail ]; then
-      comment_once "$PR" "<!-- pr-labels-recheck-failed $SHA -->" "A check failed on \`$SHA\` after this PR reached \`Ready for QA\`. The label stays, in case it was applied on purpose:
+      # The state read takes up to a minute, and a push or QA may have moved the PR on since the list.
+      if ! NOW=$(gh pr view "$PR" --repo "$REPO" --json headRefOid --jq .headRefOid) \
+        || ! LABELS=$(gh pr view "$PR" --repo "$REPO" --json labels --jq '.labels[].name'); then
+        echo "PR #$PR: couldn't read it again" >&2
+        FAILED=1
+      elif [ "$NOW" != "$SHA" ] || ! printf '%s\n' "$LABELS" | grep -qx "Ready for QA"; then
+        echo "PR #$PR: moved on while reading its checks" >&2
+      else
+        # Workflow or check names only: a fork chooses its job names, and this is the bot's comment.
+        comment_once "$PR" "<!-- pr-labels-recheck-failed $SHA -->" "A check has failed on \`$SHA\`, and this PR is at \`Ready for QA\`. The label stays, in case it was applied on purpose:
 
 \`\`\`
-$(sed -n 's/^failed //p' "$DETAILS")
+$(sed -nE 's/^failed ([^:]+):.*/\1/p' "$DETAILS" | sort -u)
 \`\`\`
 
-The PR's Checks tab has the detail. A fix needs a push."
+The PR's Checks tab has the detail. A failed job can be re-run; a failed CodeQL check needs a push."
+      fi
     fi
     continue
   fi

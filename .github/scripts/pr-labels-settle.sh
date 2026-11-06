@@ -67,7 +67,8 @@ case "$STATE" in
     fi
     ;;
   fail)
-    # Never leave Ready for QA on a commit with a failed job.
+    # On a CI or vdsm event, or Dev Active coming off: take Ready for QA back. The recheck only
+    # comments (pr-labels-recheck.sh).
     REMOVE=""
     has "Awaiting CI" && REMOVE="Awaiting CI"
     has "Ready for QA" && REMOVE="${REMOVE:+$REMOVE,}Ready for QA"

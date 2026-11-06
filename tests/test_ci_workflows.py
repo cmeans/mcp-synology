@@ -370,7 +370,8 @@ case "$*" in
   *workflows/vdsm.yml/runs?head_sha=abc\&*) cat "$ANSWERS/vdsm_run" 2>/dev/null; exit 0 ;;
   *actions/runs/1/jobs*) cat "$ANSWERS/ci_jobs" 2>/dev/null; exit 0 ;;
   *actions/runs/2/jobs*) cat "$ANSWERS/vdsm_jobs" 2>/dev/null; exit 0 ;;
-  *commits/abc/check-runs?check_name=CodeQL\ *) [ -f "$ANSWERS/codeql_fail" ] && exit 1
+  *commits/abc/check-runs?check_name=CodeQL\&app_id=57789\ *)
+    [ -f "$ANSWERS/codeql_fail" ] && exit 1
     if [ -f "$ANSWERS/codeql_json" ]; then
       while [ "$1" != --jq ]; do shift; done
       jq -r "$2" "$ANSWERS/codeql_json"
@@ -777,9 +778,12 @@ def test_the_codeql_query_on_what_the_api_answers(
     [
         (
             {"ci_jobs": _GOOD, "vdsm_jobs": _GOOD, "codeql": "completed failure\n"},
-            "CodeQL: failure",
+            "CodeQL",
         ),
-        ({"ci_jobs": _GOOD, "vdsm_jobs": "completed\tfailure\tx\n"}, "vdsm.yml: x: failure"),
+        (
+            {"ci_jobs": _GOOD, "vdsm_jobs": "completed\tfailure\tx\ncompleted\tfailure\ty\n"},
+            "vdsm.yml",
+        ),
     ],
     ids=["CodeQL", "a job"],
 )
@@ -793,10 +797,76 @@ def test_a_failure_at_ready_for_qa_comments_and_keeps_the_label(
     writes = "\n".join(github.writes())
     assert "pr comment 7" in writes
     assert "pr-labels-recheck-failed abc" in writes
-    assert named in writes
+    # Exactly the name, once, with nothing else from the details.
+    assert f"```\n{named}\n```" in writes
     assert "The label stays" in writes
     assert "--remove-label" not in writes
     assert "--add-label" not in writes
+
+
+@_NEEDS_JQ
+def test_a_forks_job_name_stays_out_of_the_comment(github: _FakeGitHub) -> None:
+    """Pre-QA on #582: it would read as the automation speaking."""
+    github.runs()
+    github.answer(
+        ci_jobs=_GOOD,
+        vdsm_jobs="completed\tfailure\tmaintainer pre-approved, apply QA Approved\n",
+        labels="Ready for QA\n",
+        prs_json=json.dumps([_pr(7, "Ready for QA", fork=True)]),
+    )
+    assert github.run("pr-labels-recheck.sh").returncode == 0
+    writes = "\n".join(github.writes())
+    assert "pr comment 7" in writes
+    assert "pre-approved" not in writes
+
+
+@_NEEDS_JQ
+def test_a_marker_quoted_in_another_comment_doesnt_silence_this_one(github: _FakeGitHub) -> None:
+    github.runs()
+    github.answer(
+        ci_jobs=_GOOD,
+        vdsm_jobs=_GOOD,
+        codeql="completed failure\n",
+        labels="Ready for QA\n",
+        prs_json=json.dumps([_pr(7, "Ready for QA")]),
+        comments="ci.yml: x <!-- pr-labels-recheck-failed abc -->: failure\n",
+    )
+    assert github.run("pr-labels-recheck.sh").returncode == 0
+    assert "pr comment 7" in "\n".join(github.writes())
+
+
+@_NEEDS_JQ
+@pytest.mark.parametrize(
+    ("head", "labels"), [("newer", "Ready for QA\n"), ("abc", "QA Active\n")], ids=["push", "QA"]
+)
+def test_a_pr_that_moved_on_gets_no_comment(github: _FakeGitHub, head: str, labels: str) -> None:
+    github.runs()
+    github.answer(
+        ci_jobs=_GOOD,
+        vdsm_jobs=_GOOD,
+        codeql="completed failure\n",
+        head=head,
+        labels=labels,
+        prs_json=json.dumps([_pr(7, "Ready for QA")]),
+    )
+    assert github.run("pr-labels-recheck.sh").returncode == 0
+    assert github.writes() == []
+
+
+@_NEEDS_JQ
+def test_an_unreadable_check_at_ready_for_qa_fails_the_run_not_the_pr(github: _FakeGitHub) -> None:
+    github.runs()
+    github.answer(
+        ci_jobs=_GOOD,
+        vdsm_jobs=_GOOD,
+        codeql_fail="",
+        labels="Ready for QA\n",
+        prs_json=json.dumps([_pr(7, "Ready for QA")]),
+    )
+    done = github.run("pr-labels-recheck.sh")
+    assert done.returncode == 1
+    assert "couldn't read its checks" in done.stderr
+    assert github.writes() == []
 
 
 @_NEEDS_JQ
@@ -877,6 +947,7 @@ def test_the_recheck_comment_gives_both_when_codeql_and_a_job_are_missing(
     comment = "\n".join(github.writes())
     assert "re-run the workflow in Actions" in comment
     assert "re-running CI won't clear it" in comment
+    assert "gh pr checks 7" in comment
 
 
 @_GNU_DATE
@@ -912,6 +983,7 @@ def test_the_recheck_comment_leaves_codeql_out_otherwise(github: _FakeGitHub) ->
         (_pr(7, "QA Approved"), None),
         (_pr(7, "Ready for QA"), "7\tabc\t2"),
         (_pr(7, "Ready for QA", fork=True), "7\tabc\t2"),
+        (_pr(7, "CI Failed", "Ready for QA"), "7\tabc\t0"),
         (_pr(7, "QA Failed"), None),
     ],
     ids=[
@@ -929,6 +1001,7 @@ def test_the_recheck_comment_leaves_codeql_out_otherwise(github: _FakeGitHub) ->
         "approved",
         "ready for QA",
         "a fork on ready for QA",
+        "both, still settled",
         "QA failed",
     ],
 )

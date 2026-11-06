@@ -83,8 +83,9 @@ for WF in ci.yml vdsm.yml; do
 done
 
 if [ "$STATE" != fail ]; then
-  # By app as well as name, so a job someone names CodeQL can't stand in for it.
-  CODEQL=$(gh api "repos/$REPO/commits/$HEAD_SHA/check-runs?check_name=CodeQL" \
+  # By app as well as name, so a job someone names CodeQL can't stand in for it, or push the real
+  # one off the first page. 57789 is github-advanced-security.
+  CODEQL=$(gh api "repos/$REPO/commits/$HEAD_SHA/check-runs?check_name=CodeQL&app_id=57789" \
     --jq '[.check_runs[] | select(.app.slug == "github-advanced-security")][0] // empty | "\(.status) \(.conclusion)"')
   case "$CODEQL" in
     "") log "CodeQL: no check run for $HEAD_SHA" ;;
