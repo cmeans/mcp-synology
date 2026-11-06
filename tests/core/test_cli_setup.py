@@ -227,21 +227,20 @@ class TestConnectAndLogin:
         assert result["success"] is False
 
     async def test_connect_and_login_logs_out_when_dsm_info_fails(self) -> None:
-        # #404: a transport error from fetch_dsm_info used to skip the logout. Setup
-        # still exits with its connection message (exit_on_connection_failure).
+        # #404: a transport error from fetch_dsm_info used to skip the logout. #454: it costs
+        # only the alias suggestion, since the login worked.
         import httpx
 
         config = _make_test_app_config()
         request = AsyncMock(side_effect=[{"sid": "test-sid"}, {}])
         client = self._make_client_cm(request, {})
         client.fetch_dsm_info = AsyncMock(side_effect=httpx.ReadTimeout("slow"))
-        with (
-            patch("mcp_synology.core.client.DsmClient", return_value=client),
-            pytest.raises(SystemExit),
-        ):
-            await setup_mod._connect_and_login(
+        with patch("mcp_synology.core.client.DsmClient", return_value=client):
+            result = await setup_mod._connect_and_login(
                 config, "admin", "pw", lambda _device_id: True, verbose=False
             )
+        assert result["success"] is True
+        assert "hostname" not in result
         assert [c.args[:2] for c in request.await_args_list] == [
             ("SYNO.API.Auth", "login"),
             ("SYNO.API.Auth", "logout"),
@@ -283,10 +282,9 @@ class TestConnectAndLogin:
         with patch("mcp_synology.core.client.DsmClient", return_value=client):
             if where == "dsm_info_fails":
                 client.fetch_dsm_info = AsyncMock(side_effect=httpx.ReadTimeout("slow"))
-                with pytest.raises(SystemExit):
-                    await setup_mod._connect_and_login(
-                        config, "a", "pw", lambda _device_id: True, verbose=False
-                    )
+                await setup_mod._connect_and_login(
+                    config, "a", "pw", lambda _device_id: True, verbose=False
+                )
             else:
                 client.sid = "test-sid"
                 await setup_mod._setup_login(config, "a", "pw", lambda _device_id: True)

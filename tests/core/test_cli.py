@@ -565,7 +565,8 @@ class TestSetupInteractive:
                 input="192.168.1.50\nn\n\nread\n\nadmin\npassword\n",
             )
 
-        assert result.exit_code == 0
+        assert result.exit_code == 1
+        assert "Nothing was changed." in result.output
         assert not (config_dir / "192-168-1-50.yaml").exists()
 
 

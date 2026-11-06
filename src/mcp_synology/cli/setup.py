@@ -12,7 +12,7 @@ import re
 import shutil
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NoReturn
 
 import click
 import yaml
@@ -320,7 +320,7 @@ def _setup_interactive(verbose: bool, not_loaded: str | None = None) -> None:
         click.echo("\nConnecting to NAS...")
         result = asyncio.run(_connect_and_login(app_config, username, password, store, verbose))
         if not result["success"]:
-            return
+            _exit_nothing_changed()
         keyring_ok = result["keyring_ok"]
 
         # Suggest hostname as alias if we fetched one and user didn't set an alias
@@ -425,7 +425,7 @@ def _setup_credential_flow(app_config: Any, verbose: bool) -> None:
         click.echo("\nAttempting login...")
         result = asyncio.run(_setup_login(app_config, username, password, store))
         if not result["success"]:
-            return
+            _exit_nothing_changed()
         keyring_ok = result["keyring_ok"]
     if not keyring_ok:
         from mcp_synology.core.config import quoted_path
@@ -566,13 +566,16 @@ def _store_keyring(
     and a chain of backends deletes from only the first. Any exception counts: backends raise their
     own types.
 
-    ``device_id`` is a token this login just got. Without one, a stored token stays for the same
-    username and goes for another: it's that account's trust, not this one's (#454).
+    ``device_id`` is a token this login just got, and it replaces a stored one. Without one, a
+    stored token stays for the same username. For another it goes either way: it's that account's
+    trust, not this one's (#454). A new token that can't be stored ends setup: the server can't log
+    in to that account without it, whatever else is set.
     """
     from mcp_synology.core.auth import no_keyring_here
     from mcp_synology.core.config import comparable_target
 
     removed: list[str] = []
+    stored = False
     try:
         import keyring
         from keyring.errors import PasswordDeleteError
@@ -588,13 +591,14 @@ def _store_keyring(
                 if held:
                     removed.append(key)
             keyring.set_password(service, "host", recorded)
-        if not device_id and keyring.get_password(service, "username") != username:
+        if keyring.get_password(service, "username") != username:
             with contextlib.suppress(PasswordDeleteError):  # there may be none
                 keyring.delete_password(service, "device_id")
             if keyring.get_password(service, "device_id"):
                 raise PasswordDeleteError("device_id is still stored")
         keyring.set_password(service, "username", username)
         keyring.set_password(service, "password", password)
+        stored = True
         if device_id:
             keyring.set_password(service, "device_id", device_id)
         click.echo("\nCredentials stored in OS keyring.")
@@ -610,14 +614,23 @@ def _store_keyring(
             if no_keyring_here()
             else "Couldn't store these in the keyring."
         )
-        token = (
-            " The 2FA device token couldn't be stored either, so the server can't log in without "
-            "a code until this is run again with a working keyring."
-            if device_id
-            else ""
-        )
+        if device_id:
+            start = (
+                "The username and password are stored, but the new"
+                if stored
+                else f"{lead}{gone} The new"
+            )
+            click.echo(
+                click.style(
+                    f"\n{start} 2FA device token couldn't be stored, so the server can't log in "
+                    "without a code. Fix the keyring and run this again.",
+                    fg="red",
+                ),
+                err=True,
+            )
+            sys.exit(1)
         click.echo(
-            f"\n{lead}{gone}{token} Set these environment variables where the server runs instead: "
+            f"\n{lead}{gone} Set these environment variables where the server runs instead: "
             "in the `env` block of your MCP client's config, or in your shell, with your "
             "password in place of the placeholder:\n" + _variable_lines(username)
         )
@@ -666,9 +679,6 @@ async def _attempt_login(
                     },
                     post_form=True,
                 )
-                device_id = data.get("did", "")
-                if device_id:
-                    result["device_id"] = device_id
             except SynologyError as e2:
                 click.echo(click.style(f"Login failed: {e2}", fg="red"), err=True)
                 return result
@@ -679,13 +689,27 @@ async def _attempt_login(
         click.echo(click.style(f"Login failed: {e}", fg="red"), err=True)
         return result
 
-    sid = data.get("sid")
-    if sid:
-        client.sid = sid
-        click.echo(click.style("Login successful!", fg="green"))
+    # Without a session it isn't a login, whatever the reply says, so nothing gets stored (#454).
+    sid = data.get("sid") if isinstance(data, dict) else None
+    if not sid:
+        click.echo(
+            click.style("Login failed: the server's reply had no session ID.", fg="red"), err=True
+        )
+        return result
+    client.sid = sid
+    click.echo(click.style("Login successful!", fg="green"))
+    device_id = data.get("did")
+    if device_id:
+        result["device_id"] = device_id
     result["success"] = True
     result["sid"] = sid
     return result
+
+
+def _exit_nothing_changed() -> NoReturn:
+    """After a failed login, which has said why: nothing was written, and a script can tell."""
+    click.echo("Nothing was changed.", err=True)
+    sys.exit(1)
 
 
 async def _connect_and_login(
@@ -697,7 +721,10 @@ async def _connect_and_login(
 ) -> dict[str, Any]:
     """Connect to NAS, validate login, store the credentials, fetch hostname. Returns result dict.
 
-    ``store`` runs right after the login succeeds, so a failed hostname read can't lose it."""
+    ``store`` runs right after the login succeeds. The hostname only suggests an alias, so a failed
+    read costs that and nothing else: the login worked, and its code is spent."""
+    import httpx
+
     from mcp_synology.core.client import DsmClient
     from mcp_synology.core.config import AppConfig
 
@@ -722,12 +749,16 @@ async def _connect_and_login(
             login_result = await _attempt_login(client, username, password)
             if not login_result["success"]:
                 return result
-            result["keyring_ok"] = store(login_result.get("device_id"))
 
-            # Fetch NAS hostname. The logout runs whatever happens here, so a
-            # timeout or dropped connection doesn't leave the session open (#404).
+            # The logout runs whatever happens here, so a timeout, a dropped connection or an
+            # interrupt doesn't leave the session open (#404).
             try:
-                dsm_info = await client.fetch_dsm_info()
+                result["keyring_ok"] = store(login_result.get("device_id"))
+                try:
+                    dsm_info = await client.fetch_dsm_info()
+                except httpx.TransportError as e:
+                    click.echo(f"Couldn't read the NAS's hostname ({type(e).__name__}).")
+                    dsm_info = {}
             finally:
                 await _logout(client)
             nas_hostname = dsm_info.get("hostname") or ""
@@ -768,10 +799,11 @@ async def _setup_login(
             login_result = await _attempt_login(client, username, password)
             if not login_result["success"]:
                 return {"success": False}
-            keyring_ok = store(login_result.get("device_id"))
 
             # Logout, best effort as in _connect_and_login: the login worked (#404).
-            if client.sid:
+            try:
+                keyring_ok = store(login_result.get("device_id"))
+            finally:
                 await _logout(client)
             return {"success": True, "keyring_ok": keyring_ok}
 
