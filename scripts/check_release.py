@@ -7,12 +7,12 @@ commit or with the wrong version is costly to undo. It checks that:
 - the tag is `v` plus `pyproject.toml`'s version, and `server.json` says the same;
 - `CHANGELOG.md` has a section for that version with notes, which become the release notes and
   carry a security release's `**Security release:**` line, the one running servers announce;
-- `## Unreleased` has no entries: a commit after the release commit would ship those changes with
-  no notes and no live test. A later commit that added no entry still passes;
-- the tagged commit (HEAD) is on `origin/main` or this version's backport branch,
-  `release/<major>.<minor>.x` (as v0.5.3 was, shipping a fix without main's unreleased work). Not
-  `release/0.11.0`: that's how this repo names a release PR's branch, and a tag there would be on
-  an unmerged commit.
+- no section above that one has entries: a commit after the release commit would ship those
+  changes with no notes and no live test. A later commit that added no entry still passes;
+- the tagged commit (HEAD) is on `origin/main` or, for a patch on a released line, this version's
+  backport branch, `release/<major>.<minor>.x` (as v0.5.3 was, shipping a fix without main's
+  unreleased work). Not for a `.0`, which has no released line to patch: `release/0.11.x` or
+  `release/0.11.0` (how this repo names a release PR's branch) would be an unmerged commit.
 
 Standard library only. It needs a checkout with those branches fetched. Each problem prints as a
 GitHub Actions error, so it reaches the run's summary.
@@ -46,8 +46,9 @@ def tag_problem(tag: str, version: str) -> str | None:
     if tag == f"v{version}":
         return None
     return (
-        f"tag {tag!r} doesn't match this commit: pyproject.toml here says {version!r}. If the "
-        f"release PR hasn't merged, merge it and {_TAG_THE_MERGE}."
+        f"tag {tag!r} doesn't match this commit: a release tag is v plus the version in its "
+        f"release commit's pyproject.toml, and this one says {version!r}. If the release PR hasn't "
+        f"merged, merge it and {_TAG_THE_MERGE}."
     )
 
 
@@ -85,25 +86,34 @@ def changelog_problem(changelog: str, version: str) -> str | None:
 
 
 def unreleased_problem(changelog: str, version: str, *, tag_matches: bool = True) -> str | None:
-    """Say why this commit looks later than the release commit, or None: a release leaves
-    `## Unreleased` empty (and a backport branch may have none), so entries there are changes
-    that aren't in this version's notes. The likeliest route is retagging after a refusal, when
-    `origin/main` has moved on. The heading may be in any case, with or without a bracket.
+    """Say why this commit looks later than the release commit, or None: a release leaves nothing
+    above its own section (an empty `## Unreleased` or none, as on a backport branch), so entries
+    there are changes that aren't in this version's notes. The likeliest route is retagging after
+    a refusal, when `origin/main` has moved on. Any `## ` section above it counts, whatever it's
+    called. With no section for this version (`changelog_problem` says so), only the first does.
 
     When the tag isn't this version, `version` has already shipped, so its notes aren't the place
     for those entries, and the advice to move them stays out."""
-    section = _section(changelog, r"(?i:\[?Unreleased\b)")
-    if section is None or not _has_notes(section):
-        return None
-    move = (
-        ". If this is the release commit, move those entries into the version's notes in a PR first"
-        if tag_matches
-        else ""
-    )
-    return (
-        f"CHANGELOG.md's '## Unreleased' has entries, so this commit holds changes that aren't in "
-        f"{version}'s notes: find the release PR and {_TAG_THE_MERGE}{move}"
-    )
+    headings = list(re.finditer(r"^## .*$", changelog, re.MULTILINE))
+    own = re.compile(rf"## {re.escape(version)}(?: |\(|\s*$)")
+    stop = next((i for i, h in enumerate(headings) if own.match(h.group())), 1)
+    for index, heading in enumerate(headings[:stop]):
+        end = headings[index + 1].start() if index + 1 < len(headings) else None
+        if not _has_notes(changelog[heading.end() : end]):
+            continue
+        name = heading.group().strip()
+        later = f"find the release PR and {_TAG_THE_MERGE}"
+        return (
+            f"CHANGELOG.md's {name!r} has entries, so this commit holds changes that aren't in "
+            f"{version}'s notes. "
+            + (
+                "If this is the release commit, move those entries into the version's notes in a "
+                f"PR first. If it's a later commit, {later}"
+                if tag_matches
+                else f"{later[0].upper()}{later[1:]}"
+            )
+        )
+    return None
 
 
 def server_json_problem(root: Path, version: str) -> str | None:
@@ -112,6 +122,8 @@ def server_json_problem(root: Path, version: str) -> str | None:
     try:
         server = json.loads((root / "server.json").read_text(encoding="utf-8"))
         found = [server["version"], *(package["version"] for package in server["packages"])]
+        if len(found) < 2:
+            return "server.json lists no packages, so it has no package version to check"
     except (OSError, ValueError, KeyError, TypeError) as error:
         return f"couldn't read server.json's versions: {type(error).__name__}: {error}"
     if all(value == version for value in found):
@@ -124,13 +136,16 @@ def server_json_problem(root: Path, version: str) -> str | None:
 
 def branch_problem(root: Path, version: str) -> str | None:
     """Say why HEAD isn't known to be on a branch `version` can ship from, or None. Unsure counts
-    as a problem.
+    as a problem. A backport branch counts only for a patch: a `.0` has no released line to patch.
 
     Exact ref names: a tag named `origin/main` can't stand in for the branch, and git's patterns
     also match below a name, which `release/0.11.x/feature` mustn't.
     """
-    backport = ".".join(version.split(".")[:2]) + ".x"
-    allowed = {"refs/remotes/origin/main", f"refs/remotes/origin/release/{backport}"}
+    parts = version.split(".")
+    backport = ".".join(parts[:2]) + ".x" if len(parts) > 2 and parts[2] != "0" else None
+    allowed = {"refs/remotes/origin/main"}
+    if backport:
+        allowed.add(f"refs/remotes/origin/release/{backport}")
     try:
         result = subprocess.run(
             [
@@ -151,9 +166,16 @@ def branch_problem(root: Path, version: str) -> str | None:
         return f"couldn't check the tagged commit's branch: {result.stderr.strip()}"
     if allowed & set(result.stdout.split()):
         return None
+    where = f"origin/main or release/{backport}" if backport else "origin/main"
+    other = (
+        f" For a backport, push this commit to origin/release/{backport}."
+        if backport
+        else f" A {version} can't ship from a backport branch: those patch a released line."
+    )
     return (
-        f"the tagged commit isn't known to be on origin/main or release/{backport}. PRs are "
-        f"squash-merged, so a PR branch's own commit never lands there: {_TAG_THE_MERGE}"
+        f"the tagged commit isn't known to be on {where}. PRs are squash-merged, so a PR branch's "
+        "own commit never lands there: if the PR hasn't merged, merge it first, then tag its "
+        f"squash commit on origin/main.{other}"
     )
 
 

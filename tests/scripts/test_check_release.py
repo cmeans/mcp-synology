@@ -90,7 +90,8 @@ def test_a_tag_that_isnt_the_version_is_refused(
 ) -> None:
     assert script.main([tag], repo) == 1
     out = capsys.readouterr().out
-    assert f"tag {tag!r} doesn't match this commit: pyproject.toml here says '1.2.3'" in out
+    assert f"tag {tag!r} doesn't match this commit" in out
+    assert "this one says '1.2.3'" in out
     assert "This run published nothing" in out
 
 
@@ -181,10 +182,35 @@ def test_entries_on_a_wrong_tag_dont_advise_moving_them_into_a_shipped_version(
     assert "move those entries" not in out
 
 
-@pytest.mark.parametrize("heading", ["## [Unreleased]", "## unreleased", "## UNRELEASED"])
-def test_unreleased_counts_in_any_case_with_or_without_a_bracket(heading: str) -> None:
-    changelog = f"{heading}\n\n- Later.\n\n## 1.2.3 (2026-11-06)\n\n- A note.\n"
+@pytest.mark.parametrize(
+    "above",
+    [
+        "## [Unreleased]\n\n- Later.\n",
+        "## unreleased\n\n- Later.\n",
+        "##  Unreleased\n\n- Later.\n",
+        "## Unrelased\n\n- Later.\n",
+        "## Next\n\n- Later.\n",
+        "## Unreleased\n\n## Unreleased\n\n- Later.\n",
+    ],
+)
+def test_any_section_above_the_versions_counts(above: str) -> None:
+    changelog = f"{above}\n## 1.2.3 (2026-11-06)\n\n- A note.\n"
     assert "has entries" in (script.unreleased_problem(changelog, "1.2.3") or "")
+
+
+def test_the_advice_for_the_release_commit_comes_first() -> None:
+    changelog = "## Unreleased\n\n- Later.\n\n## 1.2.3 (2026-11-06)\n\n- A note.\n"
+    problem = script.unreleased_problem(changelog, "1.2.3") or ""
+    assert problem.index("If this is the release commit") < problem.index("squash commit")
+
+
+def test_older_sections_dont_count_as_above() -> None:
+    changelog = "## 1.2.3 (2026-11-06)\n\n- A note.\n\n## 1.2.2\n\n- Old.\n"
+    assert script.unreleased_problem(changelog, "1.2.3") is None
+
+
+def test_with_no_section_for_the_version_only_the_first_counts() -> None:
+    assert script.unreleased_problem("## 1.2.2\n\n## 1.2.1\n\n- Old.\n", "1.2.3") is None
 
 
 @pytest.mark.parametrize(
@@ -253,6 +279,33 @@ def test_an_older_commit_on_main_passes(repo: Path) -> None:
     _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
     _git(repo, "checkout", "-q", "HEAD~1")
     assert script.branch_problem(repo, "1.2.3") is None
+
+
+@pytest.mark.parametrize("version", ["1.2.0", "1.0.0", "1.2"])
+def test_a_dot_zero_cant_ship_from_a_backport_branch(repo: Path, version: str) -> None:
+    """QA round 2 on #574: an unmerged release PR on `release/1.2.x` passed."""
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "release")
+    _git(repo, "update-ref", "refs/remotes/origin/release/1.2.x", "HEAD")
+    _git(repo, "update-ref", "refs/remotes/origin/release/1.0.x", "HEAD")
+    problem = script.branch_problem(repo, version) or ""
+    assert "isn't known to be on origin/main." in problem
+    assert "can't ship from a backport branch" in problem
+
+
+def test_the_branch_refusal_says_to_merge_first_and_names_the_backport_branch(repo: Path) -> None:
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "off main")
+    problem = script.branch_problem(repo, "1.2.3") or ""
+    assert "if the PR hasn't merged, merge it first" in problem
+    assert "push this commit to origin/release/1.2.x" in problem
+
+
+def test_the_tag_refusal_states_the_rule() -> None:
+    assert "a release tag is v plus the version" in (script.tag_problem("v1.2", "1.2.3") or "")
+
+
+def test_server_json_with_no_packages_is_refused(repo: Path) -> None:
+    (repo / "server.json").write_text('{"version": "1.2.3", "packages": []}', encoding="utf-8")
+    assert "lists no packages" in (script.server_json_problem(repo, "1.2.3") or "")
 
 
 def test_this_versions_backport_branch_passes(repo: Path) -> None:

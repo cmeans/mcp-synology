@@ -108,6 +108,9 @@ def main() -> int:
     drifted = {field: v for field, v in current.items() if v != pyproject_version}
 
     if args.check:
+        if not server.get("packages"):
+            print("server.json lists no packages.", file=sys.stderr)
+            return 1
         if drifted:
             print(
                 f"server.json version drift detected. pyproject.toml = {pyproject_version}",

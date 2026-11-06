@@ -175,7 +175,7 @@ A class of bug is fixed once, in one place, with a guard test that keeps it fixe
 3. Always include: code, human-readable message, actionable suggestion
 
 ### Adding a CHANGELOG entry on every PR
-Every PR — features, fixes, infra, tests, docs — adds an entry to `CHANGELOG.md` under the `## Unreleased` section at the top of the file. Do not defer CHANGELOG updates until release prep.
+Every PR — features, fixes, infra, tests, docs — adds an entry to `CHANGELOG.md` under the `## Unreleased` section at the top of the file. Do not defer CHANGELOG updates until release prep. The one exception: a release PR, and any fix made for it before the tag, puts its entries in the version's notes, since `publish.yml`'s gate refuses a release with entries under `## Unreleased`.
 
 `CHANGELOG.md` follows **strict [Keep a Changelog](https://keepachangelog.com/) categories** — only three section headings are valid:
 - `### Added` — anything new: features, capabilities, tests, docs, dev tooling
@@ -196,11 +196,19 @@ This convention was retired-and-restored on 2026-04-11 after PRs #13, #15, and #
 4. Rename `## Unreleased` in `CHANGELOG.md` to `## <version> (<date>)`, then add a fresh empty `## Unreleased` section above it for the next cycle
    - **A security release** starts that section with a `**Security release:** …` line (what's fixed and who's affected). `publish.yml` copies the section into the GitHub release, and the running servers' update check reads that line to announce the release in every session until users upgrade, instead of once a week (#314)
 5. **Minor or major bump only:** update the supported-versions line and table in `SECURITY.md` (e.g. "the 0.6.x line", `0.6.x ✅` / `< 0.6 ❌`) and the **Current status** line at the top of this file
-6. Commit these files together
-7. Merge the release PR, then tag its squash commit on `main` (not `origin/main`'s head later on, nor the PR branch)
+6. Commit these files together on a `release/<version>` branch and open the release PR. Anything fixed for the release goes in the version's notes, not under `## Unreleased`
+7. Merge the release PR, then tag its squash commit on `main` (not `origin/main`'s head later on, nor the PR branch). `git fetch origin`, find the commit with `git log origin/main`, and check it's that PR's squash commit. `git tag v0.11.0 <sha>`. To try the gate first, check that commit out and run `python scripts/check_release.py v0.11.0`. `git push origin v0.11.0`. The tag must be `v` plus the version: a name that doesn't match `v*` starts nothing and gives no error. Only repo admins can create or delete a `v*` tag (the `release-tags` ruleset)
+8. Watch the run, and approve the `pypi` environment when it waits. If the gate refuses a new tag, delete it both places (`git push origin :refs/tags/v0.11.0`, `git tag -d v0.11.0`), fix what it says, and tag again. Never delete a tag already released
+
+**Backporting a fix to a released line** (a patch such as `0.10.1`; a `.0` ships only from `main`):
+1. Cut `release/0.10.x` from the last `v0.10.y` tag. Cut from `main`, it would ship all of `main`'s unreleased work
+2. If that tag's `publish.yml` has no `gate` job (anything before this PR's release), cherry-pick the gate first: otherwise nothing checks the tag
+3. Apply the fix, and run the tests locally: no CI runs on that branch
+4. Follow steps 1 to 4, then tag the branch's commit as in step 7
+5. Carry the new section back to `main`'s `CHANGELOG.md` in a PR
 
 CI runs `python scripts/sync-server-json.py --check` (no project install needed — stdlib only) and fails any PR where `server.json` has drifted from `pyproject.toml`. Never edit `server.json`'s version fields by hand.
 
-`publish.yml`'s `gate` job (`scripts/check_release.py`, #457) runs first and fails the release unless the tag is `v` plus this version, `server.json` matches, the CHANGELOG has notes for it and none under `## Unreleased`, and the tagged commit is on `main` or the version's backport branch, `release/<major>.<minor>.x` (as v0.5.3 was). It refuses the release PR's branch (`release/0.11.0`). It can't tell a later commit that added no CHANGELOG entry from the release commit, so checking that is still step 7's job. It covers commits that contain the job: a tag on an older commit runs that commit's workflow.
+`publish.yml`'s `gate` job (`scripts/check_release.py`, #457) runs first and fails the release unless the tag is `v` plus this version, `server.json` matches, the CHANGELOG has notes for it and no entries in any section above them, and the tagged commit is on `main` or, for a patch, the version's backport branch, `release/<major>.<minor>.x` (as v0.5.3 was). It refuses a release PR's branch (`release/0.11.0`), and a `.0` on any backport branch. It can't tell a later commit that added no CHANGELOG entry from the release commit, so checking that is still step 7's job. It covers commits that contain the job: a tag on an older commit runs that commit's workflow.
 
 The `publish.yml` `github-release` job's awk extractor matches `## <version>( |\()` — i.e., it requires a space or `(` after the version. An `## Unreleased` section without trailing `(` is therefore harmless to the extractor during a tag-push release: the awk pattern walks past it and lands on the version section below. (The gate separately refuses entries there.)
