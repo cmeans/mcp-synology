@@ -2688,11 +2688,13 @@ class TestTheKeyringIsWrittenOnlyAfterTheLogin:
             _store_keyring(self.SERVICE, "admin", "new-pw", "nas.home", 5000)
         assert (self.SERVICE, "password") not in store.values
 
+    @pytest.mark.parametrize("token", [None, "new-token"])
     def test_a_read_failing_after_good_writes_isnt_a_failure(
         self,
         store: MemoryKeyring,
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
+        token: str | None,
     ) -> None:
         """#589: a flaky read mustn't turn a correct entry into an exit 1."""
         real_get = store.get_password
@@ -2710,8 +2712,11 @@ class TestTheKeyringIsWrittenOnlyAfterTheLogin:
 
         monkeypatch.setattr(store, "set_password", counted)
         monkeypatch.setattr(store, "get_password", flaky)
-        assert _store_keyring(self.SERVICE, "me", "pw", "nas.home", 5000) is True
-        assert "new 2FA device token" not in capsys.readouterr().err
+        assert _store_keyring(self.SERVICE, "me", "pw", "nas.home", 5000, token) is True
+        out = capsys.readouterr()
+        assert "new 2FA device token" not in out.err
+        assert ("2FA bootstrap complete!" in out.out) is bool(token)
+        assert store.values.get((self.SERVICE, "device_id")) == token
 
     def test_a_token_written_over_nothing_isnt_called_a_success(
         self,

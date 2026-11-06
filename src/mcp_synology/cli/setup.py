@@ -640,7 +640,7 @@ def _store_keyring(
         if now is not None and (now["username"] != username or now["password"] != password):
             stored = False
         if stored:
-            if not device_id or (now is not None and now["device_id"] == device_id):
+            if now is not None and now["device_id"] == device_id:
                 # The write applied, then the backend raised: the token is there.
                 _say_stored(device_id)
                 return True
