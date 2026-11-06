@@ -28,7 +28,12 @@ from mcp_synology.core.formatting import (
     format_timestamp,
     synology_error_response,
 )
-from mcp_synology.modules.filestation.helpers import describe_transport_error, dsm_str, shown
+from mcp_synology.modules.filestation.helpers import (
+    describe_transport_error,
+    dsm_str,
+    name_key,
+    shown,
+)
 
 if TYPE_CHECKING:
     from mcp_synology.core.client import DsmClient
@@ -561,6 +566,32 @@ async def running_task(
         if params and any(task.params.get(k) != v for k, v in params.items()):
             continue
         return task.task
+    return None
+
+
+async def running_landing(
+    client: DsmClient, *, sources: list[str], dest: str, overwrite: bool
+) -> tuple[str, RunningTask] | None:
+    """A source of this call and this user's running copy, move or restore that would land in
+    ``dest`` under one name, where either one replaces (#587): the later task would replace what
+    the earlier landed, and for a move the original is already gone. Names compare as
+    ``refuse_same_names`` does. The same source is left out: that's a second run of one operation,
+    which ``running_task`` handles. None if there is none, or if ``list`` fails: it's a guard, as
+    in ``running_task``. What a finished call put there can't be known here."""
+    try:
+        tasks = await _list_running(client)
+    except (SynologyError, httpx.TransportError) as e:
+        logger.debug("BackgroundTask list failed, skipping the same-landing check: %s", e)
+        return None
+    for task in tasks:
+        if task.handle.api != "SYNO.FileStation.CopyMove" or task.dest != dest:
+            continue
+        if not overwrite and task.params.get("overwrite") is not True:
+            continue
+        for source in sources:
+            key = name_key(source)
+            if any(path != source and name_key(path) == key for path in task.paths):
+                return source, task
     return None
 
 

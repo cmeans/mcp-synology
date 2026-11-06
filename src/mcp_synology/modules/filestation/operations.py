@@ -54,6 +54,7 @@ from mcp_synology.modules.filestation.tasks import (
     TaskRecords,
     handoff_reply,
     poll_task,
+    running_landing,
     running_task,
 )
 
@@ -394,6 +395,45 @@ async def _refuse_missing_sources(
             value=original,
             suggestion=missing_paths_suggestion(missing),
         )
+
+
+async def _refuse_landing_on_a_running_task(
+    client: DsmClient,
+    operation: str,
+    normalized: list[str],
+    dest: str,
+    overwrite: bool,
+    already_done: list[str] | None,
+    later: list[str] | None,
+) -> None:
+    """Refuse before anything starts if a running task would land in ``dest`` under a source's
+    name, and either replaces (#587). A restore to several places gets here after earlier items
+    finished, so it says what was done and what wasn't started, not that nothing changed."""
+    found = await running_landing(client, sources=normalized, dest=dest, overwrite=overwrite)
+    if found is None:
+        return
+    source, task = found
+    rest = [p for p in normalized if p != source] + list(later or [])
+    outcome = " Nothing was changed."
+    if already_done:
+        outcome = _already_done(operation, already_done).removeprefix(".") + "."
+        if rest:
+            outcome += f" Not started: {', '.join(map(shown, rest))}."
+    same = any(p.rsplit("/", 1)[-1] == source.rsplit("/", 1)[-1] for p in task.paths)
+    names = "the same name" if same else "a name that matches ignoring case"
+    running = ", ".join(map(shown, task.paths))
+    error_response(
+        ErrorCode.INVALID_PARAMETER,
+        f"{operation} files refused: a running {task.handle.kind} of {running} is landing in "
+        f"{shown(dest)} with {names} as {shown(source)}, so one could replace the other (for "
+        f"folders, items of the same name inside them).{outcome}",
+        retryable=False,
+        param="paths",
+        value=source,
+        suggestion=f"Check on it with file_task and the handle `{task.handle}`, and when it's "
+        "done, check what's there before running this again, or use another destination. To "
+        "keep what's there, use overwrite=false once it's done.",
+    )
 
 
 async def _refuse_missing_destination(client: DsmClient, operation: str, dest: str) -> None:
@@ -769,6 +809,9 @@ async def _copy_move(
     if check_sources:
         await _refuse_missing_sources(client, operation, normalized, paths)
     await _refuse_missing_destination(client, operation, dest)
+    await _refuse_landing_on_a_running_task(
+        client, operation, normalized, dest, overwrite, already_done, later
+    )
 
     total_processed = 0
     done = list(already_done or [])

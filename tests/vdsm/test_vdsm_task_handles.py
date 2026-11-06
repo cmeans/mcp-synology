@@ -564,6 +564,29 @@ async def test_stop_of_a_finished_or_unknown_copy_stops_nothing(
         assert reply.startswith(_NO_RUNNING), (handle, reply)
 
 
+async def test_overwrite_is_refused_while_a_task_lands_the_same_name(
+    admin_client: Any, nas: Nas
+) -> None:
+    """#587: DSM's task list shows the running copy's destination and source, on every version."""
+    client = _admin(admin_client)
+    src = nas.tree("/writable/cp587/a/x")
+    other = nas.folder("/writable/cp587/b/x")
+    dest = nas.folder("/writable/cp587_dst")
+    records = TaskRecords()
+
+    async with _stopped_at_exit(client, records) as handles:
+        reply = await copy_files(
+            client, paths=[src], dest_folder=dest, overwrite=True, timeout=WAIT, records=records
+        )
+        handle = _handle(reply)
+        handles.append(handle)
+        with pytest.raises(ToolError) as refused:
+            await copy_files(client, paths=[other], dest_folder=dest, overwrite=True)
+        body = json.loads(str(refused.value))["error"]
+        assert f"a running copy of {src} is landing in {dest}" in body["message"]
+        assert f"`{handle}`" in body["suggestion"]
+
+
 # --- Move and restore -----------------------------------------------------
 
 

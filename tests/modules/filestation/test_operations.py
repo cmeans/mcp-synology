@@ -3851,3 +3851,141 @@ async def test_skip_report_escapes_the_paths_in_its_warning(
     warning = out.split("Don't retry")[1]
     assert "\u3164" not in warning
     assert warning.count("\\u3164") == 2
+
+
+def _a_task_landing(path: str, dest: str = "/d", *, overwrite: bool = True) -> dict[str, Any]:
+    return {
+        "api": "SYNO.FileStation.CopyMove",
+        "taskid": "FileStation_RUN",
+        "finished": False,
+        "processed_num": 1,
+        "total": 2,
+        "params": {
+            "path": [path],
+            "dest_folder_path": dest,
+            "overwrite": overwrite,
+            "remove_src": True,
+        },
+    }
+
+
+def _dsm_with_running(task: dict[str, Any], calls: list[dict[str, str]]) -> Any:
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        params = dict(request.url.params)
+        calls.append(params)
+        method = params.get("method")
+        if method == "list" and "BackgroundTask" in params.get("api", ""):
+            return httpx.Response(200, json={"success": True, "data": {"tasks": [task]}})
+        if method == "start":
+            taskid = f"T_{params['path'].rsplit('/', 1)[-1]}"
+            return httpx.Response(200, json={"success": True, "data": {"taskid": taskid}})
+        if method == "status":
+            status = {"finished": True, "path": "/s/x", "processed_size": 1}
+            return httpx.Response(200, json={"success": True, "data": status})
+        data = {"files": [{"path": params.get("path", "/s/a"), "isdir": False}]}
+        return httpx.Response(200, json={"success": True, "data": data})
+
+    return side_effect
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("ours", "theirs", "names"),
+    [
+        ("/b/x", "/a/x", "the same name"),
+        ("/b/X.TXT", "/a/x.txt", "a name that matches ignoring case"),
+    ],
+    ids=["same name", "case"],
+)
+async def test_overwrite_is_refused_while_a_task_lands_the_same_name(
+    mock_client: DsmClient, ours: str, theirs: str, names: str
+) -> None:
+    """#587: the second call replaced what the first landed, with a move's original gone."""
+    calls: list[dict[str, str]] = []
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        side_effect=_dsm_with_running(_a_task_landing(theirs), calls)
+    )
+    with pytest.raises(ToolError) as refused:
+        await move_files(mock_client, paths=[ours], dest_folder="/d", overwrite=True)
+    body = json.loads(str(refused.value))["error"]
+    assert body["message"] == (
+        f"Move files refused: a running move of {theirs} is landing in /d with {names} as {ours}, "
+        "so one could replace the other (for folders, items of the same name inside them). "
+        "Nothing was changed."
+    )
+    assert body["param"] == "paths"
+    assert body["value"] == ours
+    assert "`move:FileStation_RUN`" in body["suggestion"]
+    assert not [call for call in calls if call.get("method") == "start"]
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("task", "overwrite", "paths", "refused"),
+    [
+        (_a_task_landing("/a/x", overwrite=False), True, ["/b/x"], True),
+        (_a_task_landing("/a/x", overwrite=True), False, ["/b/x"], True),
+        (_a_task_landing("/a/x", overwrite=False), False, ["/b/x"], False),
+        (_a_task_landing("/a/x", dest="/other"), True, ["/b/x"], False),
+        (_a_task_landing("/a/y"), True, ["/b/x"], False),
+    ],
+    ids=["theirs doesn't replace", "ours doesn't", "neither", "other destination", "other name"],
+)
+async def test_what_counts_as_landing_on_a_running_task(
+    mock_client: DsmClient,
+    task: dict[str, Any],
+    overwrite: bool,
+    paths: list[str],
+    refused: bool,
+) -> None:
+    calls: list[dict[str, str]] = []
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_dsm_with_running(task, calls))
+    if refused:
+        with pytest.raises(ToolError, match="is landing in"):
+            await copy_files(mock_client, paths=paths, dest_folder="/d", overwrite=overwrite)
+    else:
+        await copy_files(mock_client, paths=paths, dest_folder="/d", overwrite=overwrite)
+        assert [call for call in calls if call.get("method") == "start"]
+
+
+@respx.mock
+async def test_the_same_source_running_still_hands_back_its_task(mock_client: DsmClient) -> None:
+    """A second run of one move isn't a clash: `running_task` hands back the running one."""
+    calls: list[dict[str, str]] = []
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        side_effect=_dsm_with_running(_a_task_landing("/a/x"), calls)
+    )
+    result = await move_files(mock_client, paths=["/a/x"], dest_folder="/d", overwrite=True)
+    assert "`move:FileStation_RUN`" in result
+    assert not [call for call in calls if call.get("method") == "start"]
+
+
+@respx.mock
+async def test_a_failed_task_list_doesnt_refuse(mock_client: DsmClient) -> None:
+    calls: list[dict[str, str]] = []
+    base = _dsm_with_running(_a_task_landing("/a/x"), calls)
+
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        if "BackgroundTask" in dict(request.url.params).get("api", ""):
+            raise httpx.ReadTimeout("")
+        return base(request)
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+    await copy_files(mock_client, paths=["/b/x"], dest_folder="/d", overwrite=True)
+    assert [call for call in calls if call.get("method") == "start"]
+
+
+@respx.mock
+async def test_a_restore_refused_partway_says_what_was_done(mock_client: DsmClient) -> None:
+    """A restore to several places reaches the check after earlier items finished."""
+    calls: list[dict[str, str]] = []
+    task = _a_task_landing("/a/b", dest="/s/y")
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_dsm_with_running(task, calls))
+    with pytest.raises(ToolError) as refused:
+        await restore_from_recycle_bin(
+            mock_client, share="/s", paths=["x/a", "y/b", "z/c"], overwrite=True
+        )
+    message = json.loads(str(refused.value))["error"]["message"]
+    assert "Nothing was changed" not in message
+    assert "Already restored before this failure: /s/#recycle/x/a." in message
+    assert message.endswith("Not started: /s/#recycle/z/c.")

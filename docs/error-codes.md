@@ -276,7 +276,9 @@ Common causes:
   the same name inside them), and a replaced file may not be in the recycle bin. Use different
   destinations or rename one first. To merge two folders without replacing anything, use
   `overwrite=false`: items already there are skipped and listed. Separate calls with
-  `overwrite=true` don't avoid this.
+  `overwrite=true` don't avoid this: a call is refused too while another call's task is
+  landing the same name there (naming its handle), but what a finished call put there can't
+  be known.
 - `delete_files` on a whole shared folder (`/video`): a shared folder isn't deleted or
   emptied this way (#451; emptying one with the user's confirmation is #484). Delete a
   shared folder's items by path, or the shared folder itself in DSM's Control Panel.
