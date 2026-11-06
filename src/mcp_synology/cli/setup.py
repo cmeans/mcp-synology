@@ -787,7 +787,12 @@ async def _attempt_login(
     Returns dict with 'success' bool, and optionally 'sid' and, on 2FA success, 'device_id' for
     the caller to store with the rest (#454).
     """
-    from mcp_synology.core.errors import DsmHttpError, DsmReplyError, SynologyError
+    from mcp_synology.core.errors import (
+        NOT_DSM_HINT,
+        DsmHttpError,
+        DsmReplyError,
+        SynologyError,
+    )
 
     result: dict[str, Any] = {"success": False}
     device_id: Any = None
@@ -847,8 +852,7 @@ async def _attempt_login(
     if not isinstance(sid, str) or not sid.strip():
         click.echo(
             click.style(
-                "Login failed: the server's reply had no session ID. Is this a Synology DSM "
-                "address? Check the host, port and https settings.",
+                f"Login failed: the server's reply had no session ID. {NOT_DSM_HINT}",
                 fg="red",
             ),
             err=True,

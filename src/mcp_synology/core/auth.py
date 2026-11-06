@@ -20,6 +20,7 @@ from keyring.errors import KeyringError
 from mcp_synology.core.errors import (
     CHECK_COMMAND,
     NO_FILE_NOTE,
+    NOT_DSM_HINT,
     SETUP_COMMAND,
     SETUP_NEW_CONFIG,
     AuthenticationError,
@@ -846,8 +847,7 @@ class AuthManager:
         if not isinstance(sid, str) or not sid.strip():
             raise AuthenticationError(
                 "The login reply has no session ID.",
-                suggestion="Is this a Synology DSM address? Check the host, port and https "
-                "settings.",
+                suggestion=NOT_DSM_HINT,
             )
 
         self._record_host()

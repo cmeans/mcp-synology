@@ -15,7 +15,7 @@ import respx
 from mcp_synology.core.auth import AuthManager, LoginRefusals
 from mcp_synology.core.client import DsmClient
 from mcp_synology.core.config import AppConfig
-from mcp_synology.core.errors import AuthenticationError, SynologyError
+from mcp_synology.core.errors import NOT_DSM_HINT, AuthenticationError, SynologyError
 from mcp_synology.core.state import ApiInfoEntry
 
 BASE_URL = "http://nas:5000"
@@ -902,9 +902,10 @@ class TestLoginErrorPaths:
             with (
                 patch.dict(os.environ, _clean_env(), clear=True),
                 patch("mcp_synology.core.auth.kr", _no_keyring()),
-                pytest.raises(AuthenticationError, match="no session ID"),
+                pytest.raises(AuthenticationError, match="no session ID") as refused,
             ):
                 await auth.login()
+        assert refused.value.suggestion == NOT_DSM_HINT
 
 
 class TestLogout:
