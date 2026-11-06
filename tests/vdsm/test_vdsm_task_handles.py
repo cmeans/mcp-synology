@@ -326,7 +326,7 @@ async def test_delete_handoff_then_stop(admin_client: Any, admin_session: Any, n
 
             await _gone(other, records, handle)
             again = await file_task(other, records=records, handle=handle, action="stop")
-            # The record still names the path, so not the bare "no running task".
+            # The record still names the path, so not the reply with no record.
             assert again.startswith(f"DSM has no task for the delete of {path}: {_NOT_RUNNING}"), (
                 again
             )
@@ -516,8 +516,8 @@ async def test_a_stop_after_599s_touches_no_one_elses_task(
         assert mine.startswith("Still deleting on the NAS"), mine
 
 
-async def test_a_stop_of_the_wrong_kind_doesnt_touch_a_task(admin_client: Any, nas: Nas) -> None:
-    """A handle naming another kind: CopyMove's stop answers success, and the Delete runs on."""
+async def test_a_handle_of_the_wrong_kind_stops_the_task(admin_client: Any, nas: Nas) -> None:
+    """A task ID isn't tied to its API: CopyMove's status and stop act on a Delete (#593)."""
     client = _admin(admin_client)
     path = nas.tree("/writable/del521k")
     records = TaskRecords()
@@ -530,14 +530,11 @@ async def test_a_stop_of_the_wrong_kind_doesnt_touch_a_task(admin_client: Any, n
         handles.append(handle)
         wrong = "copy:" + handle.partition(":")[2]
         stop = await file_task(client, records=TaskRecords(), handle=wrong, action="stop")
-        assert not stop.startswith("Stopped"), stop
-        mine = await file_task(client, records=records, handle=handle)
-        assert mine.startswith("Still deleting on the NAS"), mine
+        assert stop.startswith("Stopped copy of"), stop
+        await _gone(client, records, handle)
 
 
-async def test_stop_of_a_finished_or_unknown_copy_stops_nothing(
-    admin_client: Any, nas: Nas
-) -> None:
+async def test_stop_of_a_finished_or_unknown_copy_says_so(admin_client: Any, nas: Nas) -> None:
     """file_task never says "Stopped" for a copy that had finished or that DSM doesn't know;
     for one DSM doesn't know, a stop goes anyway and the reply says it can't be confirmed.
 
@@ -601,10 +598,11 @@ async def test_stop_of_a_finished_or_unknown_copy_stops_nothing(
     # Forgotten by DSM now; the record still has the result.
     again = await file_task(client, records=records, handle=f"copy:{taskid}", action="stop")
     assert again == stop
-    # Forgotten, with no record (a new server process), and made up: no running task.
+    # Forgotten, with no record (a new server process), and made up: a stop goes, unconfirmed.
     for handle in (f"copy:{taskid}", f"copy:{made_up}", f"delete:{made_up}"):
         reply = await file_task(client, records=TaskRecords(), handle=handle, action="stop")
         assert reply.startswith(_NO_RUNNING), (handle, reply)
+        assert "A stop was sent" in reply, (handle, reply)
 
 
 # --- Move and restore -----------------------------------------------------

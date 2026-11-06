@@ -463,8 +463,9 @@ Check on it with `file_task` rather than starting it again.
 
 `file_task` answers a handle DSM no longer knows with a normal reply, not an
 error: the final result if this server remembers it, otherwise "DSM has no
-task with this handle: it may have finished, failed, been stopped or still be running, or was started by a
-different DSM user. List the path to see what's left." DSM forgets a finished
+task with this handle: it may have finished, failed, been stopped or still be
+running, or have been started by a different DSM user. Call file_task with no
+handle to see what's running. List the path to see what's left." DSM forgets a finished
 task after its final status has been read once, and never shows one user's
 tasks to another.
 

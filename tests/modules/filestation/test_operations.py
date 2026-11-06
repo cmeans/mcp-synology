@@ -3691,6 +3691,7 @@ async def test_a_lost_delete_partway_says_whats_done_and_not_started(
     )
     assert "Already deleted: /s/a." in result
     assert "Not started: /s/c. Check this one first by listing its path, then run them." in result
+    assert "Call file_task with no handle to see what's running." in result
 
 
 @respx.mock

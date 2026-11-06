@@ -717,12 +717,12 @@ async def _list_reply(client: DsmClient) -> str:
     for task in tasks:
         start = taskid_started(task.handle.taskid)
         started = format_timestamp(start) if start is not None else "unknown"
-        to = f" -> {task.dest}/" if task.dest and task.handle.kind != "delete" else ""
+        to = f" -> {shown(f'{task.dest}/')}" if task.dest and task.handle.kind != "delete" else ""
         rows.append(
             [
                 f"`{task.handle}`",
                 task.handle.kind,
-                ", ".join(task.paths) + to,
+                ", ".join(map(shown, task.paths)) + to,
                 started,
                 progress_text(task.task),
             ]
@@ -904,6 +904,9 @@ async def file_task(
                 data: dict[str, Any] = await client.request(
                     parsed.api, "status", version=version, params={"taskid": taskid}
                 )
+                if not isinstance(data, dict):
+                    # Not "no such task", which sends a stop: it's a reply that can't be read.
+                    raise DsmReplyError(f"{parsed.api} status: the reply's data isn't an object.")
             except (DsmHttpError, DsmReplyError, RequestTooLongError) as e:
                 stopping = action == "stop"
                 _unreadable(
@@ -948,7 +951,7 @@ async def file_task(
             )
         return (
             "DSM has no task with this handle: it may have finished, failed, been stopped or still "
-            f"be running, or was started by a different DSM user.{sent} {_RUNNING_HINT} "
+            f"be running, or have been started by a different DSM user.{sent} {_RUNNING_HINT} "
             f"{_LIST_HINT}"
         )
 
@@ -1012,8 +1015,8 @@ async def file_task(
                 final = await _final_text(client, parsed, record.final_status, record)
                 return f"{_NOT_STOPPED}\n{final}"
             # The reads may be wrong, and a task ID is unique: a stop that's lost costs nothing
-            # (another user's task and a wrong kind's aren't touched, on vdsm), and one that's not
-            # sent leaves a delete running (QA round 2 on #590).
+            # (another user's task isn't touched, on vdsm), and one that's not sent leaves a delete
+            # running (QA round 2 on #590).
             refused = await send_stop()
             return gone(stop_sent=True) if refused is None else await after_refusal(refused)
         logger.debug("%s status before stop (%s): %s", parsed.api, parsed, status)

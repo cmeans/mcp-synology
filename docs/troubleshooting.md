@@ -106,7 +106,7 @@ each item took about 15 minutes for a while, and then 179 items cleared in 16 mi
 **What to do:** wait, and check with `file_task`. Don't stop and restart it because progress
 looks slow.
 
-### `file_task` says "DSM has no task for …" or "DSM has no task with this handle"
+### "DSM answered that it has no task …", or `file_task` says "DSM has no task for …" or "… with this handle"
 
 **Why:** DSM can forget a finished delete before any status check sees it finish (on a real NAS,
 after a 36-hour delete, it was gone within 16 minutes of the last check). It forgets a finished
