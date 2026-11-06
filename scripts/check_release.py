@@ -144,7 +144,7 @@ def server_json_problem(root: Path, version: str) -> str | None:
     )
 
 
-_LINE_TAG = re.compile(r"v\d+\.\d+\.(\d+)")
+_LINE_TAG = re.compile(r"v[0-9]+\.[0-9]+\.(0|[1-9][0-9]*)")
 
 
 def _git(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -209,11 +209,27 @@ def branch_problem(root: Path, version: str, *, tag_matches: bool = True) -> str
                 )
             earlier = (
                 int(found_tag.group(1))
-                for found_tag in map(_LINE_TAG.fullmatch, tags.stdout.split())
+                for found_tag in map(_LINE_TAG.fullmatch, tags.stdout.split("\n"))
                 if found_tag
             )
-            if any(patch < int(version.split(".")[2]) for patch in earlier):
-                return None
+            this_patch = int(version.split(".")[2])
+            if any(patch < this_patch for patch in earlier):
+                # And on top of the line's earlier releases, or it would ship without their fixes.
+                missed = _git(root, "tag", "--list", f"v{line}.*", "--no-merged", "HEAD")
+                if missed.returncode != 0:
+                    return f"couldn't check what release/{backport} contains."
+                unmerged = map(_LINE_TAG.fullmatch, missed.stdout.split("\n"))
+                skipped = [
+                    found.group(0)
+                    for found in unmerged
+                    if found and int(found.group(1)) < this_patch
+                ]
+                if not skipped:
+                    return None
+                return (
+                    f"release/{backport} doesn't contain {', '.join(skipped)}, so this patch would "
+                    f"ship without them. Cut it from the last v{line}.* tag."
+                )
             if not tag_matches:
                 return None  # the tag's own refusal comes first: this version isn't the tag's
             cut_point = base.stdout.strip()[:7]

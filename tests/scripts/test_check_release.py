@@ -543,6 +543,10 @@ def test_a_wrong_tag_leaves_out_the_dot_zero_advice(repo: Path) -> None:
         "v1.2.1rc1",
         "v1.1.0",
         "v0.2.1",
+        "v1.2.1\u00a0x",
+        "v1.2.\u0660",
+        "v1.2.00",
+        "v1.2.x.1",
     ],
 )
 def test_only_an_earlier_release_of_the_line_vouches_for_a_backport(repo: Path, tag: str) -> None:
@@ -574,7 +578,11 @@ def test_an_orphan_backport_branch_is_refused(repo: Path) -> None:
 
 
 def test_a_ref_name_that_isnt_utf8_is_not_a_traceback(repo: Path) -> None:
-    subprocess.run([b"git", b"update-ref", b"refs/tags/v1.2.\xff", b"HEAD"], cwd=repo, check=True)
+    made = subprocess.run(
+        [b"git", b"update-ref", b"refs/tags/v1.2.\xff", b"HEAD"], cwd=repo, check=False
+    )
+    if made.returncode != 0:
+        pytest.skip("this file system doesn't take such a name")
     _git(repo, "commit", "-q", "--allow-empty", "-m", "the patch")
     _git(repo, "update-ref", "refs/remotes/origin/release/1.2.x", "HEAD")
     assert "wasn't cut at a final v1.2.* tag" in (script.branch_problem(repo, "1.2.3") or "")
@@ -599,3 +607,22 @@ def test_a_branch_cut_before_the_line_began_is_refused(repo: Path) -> None:
 def test_a_heading_with_only_a_trailing_space_has_no_date(heading: str) -> None:
     problem = script.changelog_problem(f"{heading}\n\n- A note.\n", "1.2.3") or ""
     assert "heading has no date" in problem
+
+
+def test_a_branch_missing_an_earlier_patch_is_refused(repo: Path) -> None:
+    """Pre-QA on #574: cut at v1.2.0 with v1.2.2 released, it would ship without both patches."""
+    _git(repo, "tag", "v1.2.0")
+    cut = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "a patch")
+    _git(repo, "tag", "v1.2.1")
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "a patch")
+    _git(repo, "tag", "v1.2.2")
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    _git(repo, "checkout", "-q", "-b", "cut", cut)
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "the patch")
+    _git(repo, "update-ref", "refs/remotes/origin/release/1.2.x", "HEAD")
+    problem = script.branch_problem(repo, "1.2.3") or ""
+    assert "doesn't contain v1.2.1, v1.2.2" in problem
+    assert "doesn't contain" not in (script.branch_problem(repo, "1.2.1") or "")
