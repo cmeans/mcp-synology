@@ -3590,3 +3590,150 @@ class TestDeleteFailurePartway:
         error = ToolError("plain text")
         assert _with_progress_so_far(error, "/video/x", ["/video/a"], ["/video/b"]) is error
         assert _with_progress_so_far(error, "/video/x", [], []) is error
+
+
+@pytest.fixture
+def no_poll_wait(monkeypatch: pytest.MonkeyPatch) -> None:
+    import mcp_synology.modules.filestation.tasks as tasks
+
+    monkeypatch.setattr(tasks.asyncio, "sleep", AsyncMock())
+
+
+def _skipping_dsm(lookup: Any) -> Any:
+    """Each copy finishes, /s/b's with a skip, and the lookup behind its report answers this."""
+    started: list[str] = []
+
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        params = dict(request.url.params)
+        method = params.get("method")
+        if method == "start":
+            started.append(params["path"])
+            taskid = f"T_{params['path'].rsplit('/', 1)[-1]}"
+            return httpx.Response(200, json={"success": True, "data": {"taskid": taskid}})
+        if method == "status":
+            status: dict[str, Any] = {"finished": True, "path": "/s/x", "processed_size": 1}
+            if "T_b" in params["taskid"]:
+                status["skipstatus"] = 1
+            return httpx.Response(200, json={"success": True, "data": status})
+        if method == "getinfo" and started:
+            if isinstance(lookup, Exception):
+                raise lookup
+            return lookup
+        if method == "list":
+            return httpx.Response(200, json={"success": True, "data": {"tasks": []}})
+        data = {"files": [{"path": params.get("path", "/s/a"), "isdir": False}]}
+        return httpx.Response(200, json={"success": True, "data": data})
+
+    return side_effect
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    "lookup",
+    [
+        httpx.ReadTimeout(""),
+        httpx.ConnectError(""),
+        httpx.Response(502, text="bad gateway"),
+        httpx.Response(200, text="<html>"),
+        httpx.Response(200, json={"success": False, "error": {"code": 408}}),
+    ],
+    ids=["timeout", "connection", "proxy", "not DSM", "DSM error"],
+)
+async def test_a_failed_lookup_keeps_a_finished_copys_result(
+    mock_client: DsmClient, no_poll_wait: None, lookup: Any
+) -> None:
+    """#588: finished work was reported as a failed call."""
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_skipping_dsm(lookup))
+    result = await copy_files(mock_client, paths=["/s/a", "/s/b"], dest_folder="/d")
+    assert "skipped in whole or in part" in result
+
+
+@respx.mock
+async def test_file_task_keeps_a_finished_copys_result_when_the_lookup_fails(
+    mock_client: DsmClient,
+) -> None:
+    """#588: the same lookup, from a follow-up."""
+    from mcp_synology.modules.filestation.tasks import TaskRecord, file_task
+
+    records = TaskRecords()
+    handle = Handle("copy", "T_b")
+    records.add(TaskRecord(handle=handle, paths=["/s/b"], dest="/d"))
+    finished = {"finished": True, "path": "/s/b", "skipstatus": 1}
+
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        if dict(request.url.params).get("method") == "status":
+            return httpx.Response(200, json={"success": True, "data": finished})
+        raise httpx.ReadTimeout("")
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+    text = await file_task(mock_client, records=records, handle=str(handle))
+    assert "skipped in whole or in part" in text
+
+
+def _unanswered_start(calls: list[dict[str, str]], at: str, error: Exception | None = None) -> Any:
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        params = dict(request.url.params)
+        calls.append(params)
+        method = params.get("method")
+        if method == "start":
+            if params["path"] == at:
+                raise error or httpx.ReadTimeout("")
+            taskid = f"T_{params['path'].rsplit('/', 1)[-1]}"
+            return httpx.Response(200, json={"success": True, "data": {"taskid": taskid}})
+        if method == "status":
+            status = {"finished": True, "path": "/s/x", "processed_size": 1}
+            return httpx.Response(200, json={"success": True, "data": status})
+        if method == "list":
+            return httpx.Response(200, json={"success": True, "data": {"tasks": []}})
+        data = {"files": [{"path": params.get("path", "/s/a"), "isdir": False}]}
+        return httpx.Response(200, json={"success": True, "data": data})
+
+    return side_effect
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("error", "code"),
+    [(httpx.ReadTimeout(""), "timeout"), (httpx.ConnectError(""), "unavailable")],
+    ids=["timeout", "connection"],
+)
+async def test_an_unanswered_start_partway_says_what_happened(
+    mock_client: DsmClient, no_poll_wait: None, error: Exception, code: str
+) -> None:
+    """#588: a raw timeout left out what moved, what may have started and what didn't."""
+    calls: list[dict[str, str]] = []
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        side_effect=_unanswered_start(calls, "/s/b", error)
+    )
+    with pytest.raises(ToolError) as refused:
+        await move_files(mock_client, paths=["/s/a", "/s/b", "/s/c"], dest_folder="/d")
+    body = json.loads(str(refused.value))["error"]
+    assert body["code"] == code
+    assert body["retryable"] is False
+    assert body["value"] == "/s/b"
+    assert body["message"].startswith("Move files failed: DSM didn't answer for /s/b (")
+    assert body["message"].endswith(
+        "its move may have started. Already moved before this failure: /s/a. Not started: /s/c."
+    )
+    assert [c["path"] for c in calls if c.get("method") == "start"] == ["/s/a", "/s/b"]
+
+
+@respx.mock
+async def test_an_unanswered_start_on_the_last_path_names_what_was_done(
+    mock_client: DsmClient, no_poll_wait: None
+) -> None:
+    calls: list[dict[str, str]] = []
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_unanswered_start(calls, "/s/b"))
+    with pytest.raises(ToolError, match=r"Already copied before this failure: /s/a\.") as refused:
+        await copy_files(mock_client, paths=["/s/a", "/s/b"], dest_folder="/d")
+    assert "Not started" not in str(refused.value)
+
+
+@respx.mock
+async def test_an_unanswered_only_start_stays_the_servers_timeout(
+    mock_client: DsmClient, no_poll_wait: None
+) -> None:
+    calls: list[dict[str, str]] = []
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_unanswered_start(calls, "/s/a"))
+    with pytest.raises(httpx.ReadTimeout):
+        await copy_files(mock_client, paths=["/s/a"], dest_folder="/d")

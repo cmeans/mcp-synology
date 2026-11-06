@@ -623,9 +623,10 @@ async def _skip_report(
     """
     try:
         kinds = await paths_isdir(client, skipped_paths)
-    except SynologyError as e:
-        # The copy already happened; report it with the hedged wording, never as an error.
-        logger.warning("Couldn't read the type of skipped sources (DSM %s): %s", e.code, e)
+    except Exception as e:
+        # The copy already happened; report it with the hedged wording, never as an error,
+        # whatever the lookup met: right after a large task, DSM may not answer at all (#588).
+        logger.warning("Couldn't read the type of skipped sources: %s", type(e).__name__)
         kinds = {}
     files = [p for p in skipped_paths if kinds.get(p) is False]
     folders = [p for p in skipped_paths if kinds.get(p) is True]
@@ -755,18 +756,40 @@ async def _copy_move(
             # Never start a second task on a path that already has one (#245).
             outcome = Handoff(Handle(_KIND[operation], str(running["taskid"])), running)
         else:
-            outcome = await _copy_move_one_path(
-                client,
-                p,
-                dest=dest,
-                overwrite=overwrite,
-                remove_src=remove_src,
-                operation=operation,
-                copymove_version=copymove_version,
-                timeout=timeout,
-                done=done,
-                on_progress=on_progress,
-            )
+            try:
+                outcome = await _copy_move_one_path(
+                    client,
+                    p,
+                    dest=dest,
+                    overwrite=overwrite,
+                    remove_src=remove_src,
+                    operation=operation,
+                    copymove_version=copymove_version,
+                    timeout=timeout,
+                    done=done,
+                    on_progress=on_progress,
+                )
+            except httpx.TransportError as e:
+                rest = normalized[i + 1 :] + list(later or [])
+                if not done and not rest:
+                    raise  # nothing to add: the server's usual timeout or connection error
+                # The start got no answer (a status with none hands the item off in
+                # poll_task): it may have started. Say so, with what was done and what
+                # wasn't started, as delete_files does (#588).
+                not_started = f". Not started: {', '.join(map(shown, rest))}" if rest else ""
+                error_response(
+                    ErrorCode.TIMEOUT
+                    if isinstance(e, httpx.TimeoutException)
+                    else ErrorCode.UNAVAILABLE,
+                    f"{operation} files failed: DSM didn't answer for {shown(p)} "
+                    f"({describe_transport_error(e)}); its {operation.lower()} may have started"
+                    f"{_already_done(operation, done)}{not_started}.",
+                    retryable=False,
+                    param="paths",
+                    value=p,
+                    suggestion="Check with list_files, or file_task with no handle, before "
+                    "running it again, and leave out what's already done.",
+                )
         if isinstance(outcome, Handoff):
             if records is not None:
                 records.add(
