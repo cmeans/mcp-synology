@@ -138,8 +138,9 @@ def _floor_steps() -> list[dict[str, Any]]:
 def test_the_floor_job_tests_the_floors_not_the_lock() -> None:
     """`uv run` would sync back to the lock, so the job would pass without testing a floor."""
     assert _scripts(_floor_steps()) == [
-        "uv sync --locked --extra dev",
-        ".venv/bin/python scripts/runtime_floors.py > floors.txt\nuv pip install -r floors.txt\n",
+        "timeout 900 uv sync --locked --extra dev",
+        ".venv/bin/python scripts/runtime_floors.py > floors.txt\n"
+        "timeout 900 uv pip install -r floors.txt\n",
         "uv pip check",
         "uv pip list",
         "timeout 900 .venv/bin/python -m pytest -n auto --no-cov --timeout=120",
