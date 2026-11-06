@@ -5,8 +5,9 @@
 # job must succeed or be skipped. Everything else goes to stderr, for the run's log.
 #
 # CodeQL counts too (#578): it isn't one of those workflows, but it posts a check run that fails on
-# a new alert. Not every commit gets one (a fork PR's don't: #477), so none means no verdict from
-# it, not pending, which would hold such a PR forever.
+# a new alert. Not every commit gets one (a sample found none on a fork PR, #477), so none means no
+# verdict from it, not pending, which would hold such a PR forever. So one that hasn't posted yet
+# reads the same; the recheck looks again while the PR is at Ready for QA.
 #
 # Env: REPO, HEAD_SHA, GH_TOKEN. RECHECK_SECONDS is the wait between job reads, 20 by default (a
 # test shortens it). PENDING_DETAILS, if set, is a file that gets, for a pending state:
@@ -14,7 +15,8 @@
 #   updated <time>       when a finished run last changed
 #   missing <text>       what has no result (a finished run's job, a run not listed, or CodeQL)
 #
-# NOTE: names the workflows by file (ci.yml, vdsm.yml). If one is renamed, update it here.
+# NOTE: names the workflows by file (ci.yml, vdsm.yml), and CodeQL's check and app. If one is
+# renamed, update it here: a renamed workflow reads as pending, but a renamed check reads as none.
 set -e
 
 log() { echo "$*" >&2; }
@@ -87,6 +89,7 @@ if [ "$STATE" != fail ]; then
     # With no conclusion yet, as a job can read (#298): pending, not failed.
     "completed null") log "CodeQL: completed with no result yet"; detail "missing CodeQL: $CODEQL"; STATE=pending ;;
     completed\ *)
+      # action_required too: unlike a workflow run's, it isn't a fork's run awaiting approval.
       log "CodeQL: ${CODEQL#completed }. See the PR's Checks tab."
       STATE=fail ;;
     # Missing, not running, so a stuck check gets the recheck's comment instead of a silent hold.

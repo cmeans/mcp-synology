@@ -1,7 +1,8 @@
 name: PR Label Recheck
 
 # A green PR can strand on Awaiting CI when GitHub's listings lag behind the last CI event, since no
-# later event checks again (#549, #339). This checks on a schedule, with the same script as
+# later event checks again (#549, #339), and CodeQL can fail after a PR is promoted, with no event
+# at all (#578). This checks on a schedule, with the same script as
 # pr-labels-ci.yml. See .github/scripts/pr-labels-recheck.sh.
 #
 # LIMITATION: schedule runs from the default branch (main), so changes to this file take effect only

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Settles a PR's labels from its head commit's checks: Ready for QA once CI and vdsm have passed,
-# with CodeQL's check if the commit has one, CI Failed as soon as either has a failed job or CodeQL
-# has failed, nothing while a result is missing. Used by pr-labels-ci.yml on each CI or vdsm
+# with CodeQL's check if the commit has one, CI Failed once either has a failed job or CodeQL has
+# failed, when this next reads them, nothing while a result is missing. Used by pr-labels-ci.yml on each CI or vdsm
 # completion, pr-labels.yml when Dev Active comes off, and pr-labels-recheck.yml on a schedule.
 #
 # Usage: pr-labels-settle.sh <pr> <head sha>. Env: REPO, GH_TOKEN, PENDING_DETAILS (see

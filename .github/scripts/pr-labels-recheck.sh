@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # The recheck that doesn't depend on an event (#549, #339). A green PR can strand on Awaiting CI
 # when GitHub's run or job listings lag behind the last CI event, as nothing checks again after
-# that. So: settle each open PR on Awaiting CI or CI Failed, and each same-repository PR with no
-# workflow label at all. If a result is still missing long after its runs finished, comment once on the PR.
+# that. So: settle each open PR on Awaiting CI, CI Failed or Ready for QA (CodeQL can fail after it's
+# promoted, and nothing fires on that: #578; a pass writes nothing there), and each same-repository
+# PR with no workflow label at all. If a result is still missing long after its runs finished, comment once on the PR.
 #
 # Env: REPO, GH_TOKEN. STRANDED_AFTER_MINUTES defaults to 30. Fork PRs with neither of those labels are left
 # alone: their runs wait for the maintainer's approval, and the label is the maintainer's call.
@@ -20,7 +21,7 @@ PRS=$(gh pr list --repo "$REPO" --state open --base main --limit 100 \
   --jq '.[]
     | ([.labels[].name]) as $names
     | (["Awaiting CI","Ready for QA","QA Active","Ready for QA Signoff","QA Approved","QA Failed","CI Failed","Dev Active"]) as $workflow
-    | if (($names | index("Awaiting CI")) or ($names | index("CI Failed"))) then [.number, .headRefOid, 0]
+    | if (($names | index("Awaiting CI")) or ($names | index("CI Failed")) or ($names | index("Ready for QA"))) then [.number, .headRefOid, 0]
       elif (.isDraft | not) and (.isCrossRepository | not) and ([$names[] | select(. as $n | $workflow | index($n))] | length) == 0 then [.number, .headRefOid, 1]
       else empty end
     | @tsv')
@@ -73,6 +74,12 @@ while IFS=$'\t' read -r PR SHA ADOPT <&3; do
     echo "PR #$PR: already commented on $SHA" >&2
     continue
   fi
+  STUCK=""
+  if printf '%s\n' "$MISSING" | grep -q '^CodeQL'; then
+    STUCK="
+
+\`CodeQL\` is GitHub's default setup, not a workflow in this repository, so re-running CI won't clear it. A new commit gets a new check."
+  fi
   if ! gh pr comment "$PR" --repo "$REPO" --body "$MARKER
 The label automation has no result for these on \`$SHA\`, $AGE minutes after its runs finished:
 
@@ -80,7 +87,7 @@ The label automation has no result for these on \`$SHA\`, $AGE minutes after its
 $MISSING
 \`\`\`
 
-A lagging listing usually clears on a later recheck, every 15 minutes. If it doesn't, re-run the workflow in Actions, or, if the PR has no QA or \`Merge conflict\` label, apply \`Ready for QA\` by hand once \`gh pr checks $PR\` shows every check passed except \`QA Gate\`." >&2; then
+A lagging listing usually clears on a later recheck, every 15 minutes. If it doesn't, re-run the workflow in Actions, or, if the PR has no QA or \`Merge conflict\` label, apply \`Ready for QA\` by hand once \`gh pr checks $PR\` shows every check passed except \`QA Gate\`.$STUCK" >&2; then
     echo "PR #$PR: couldn't comment" >&2
     FAILED=1
   fi
