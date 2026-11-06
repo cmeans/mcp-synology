@@ -611,13 +611,19 @@ def _store_keyring(
         stored = True
         if device_id:
             keyring.set_password(service, "device_id", device_id)
-        # A backend whose writes do nothing raises nothing (#589).
-        held = _read_entry(service)
-        if held["username"] != username or held["password"] != password:
-            stored = False
-            raise KeyringError("the keyring didn't keep the username and password")
-        if device_id and held["device_id"] != device_id:
-            raise KeyringError("the keyring didn't keep the device token")
+        # A backend whose writes do nothing raises nothing (#589). Only a mismatch counts: a read
+        # that fails after good writes says nothing about them.
+        held = _read_entry_or_none(service)
+        if held is not None:
+            if (
+                held["username"] != username
+                or held["password"] != password
+                or (held["host"] or "").strip() != recorded
+            ):
+                stored = False
+                raise KeyringError("the keyring didn't keep what was written")
+            if device_id and held["device_id"] != device_id:
+                raise KeyringError("the keyring didn't keep the device token")
     except Exception as e:
         logger.debug("Keyring error storing credentials: %s", e, exc_info=True)
         lead = (
@@ -630,8 +636,11 @@ def _store_keyring(
             f"2FA needs a new code. With no keyring, see {_NO_KEYRING_DOC}."
         )
         now = _read_entry_or_none(service)
+        # The token's write raised: what's said about the rest comes from a read too.
+        if now is not None and (now["username"] != username or now["password"] != password):
+            stored = False
         if stored:
-            if device_id and now is not None and now["device_id"] == device_id:
+            if not device_id or (now is not None and now["device_id"] == device_id):
                 # The write applied, then the backend raised: the token is there.
                 _say_stored(device_id)
                 return True

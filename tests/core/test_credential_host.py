@@ -2652,6 +2652,100 @@ class TestTheKeyringIsWrittenOnlyAfterTheLogin:
         assert "Credentials stored" not in text
         assert "2FA bootstrap" not in text
 
+    @pytest.mark.parametrize("key", ["username", "password"])
+    def test_a_keyring_that_drops_one_value_is_caught(
+        self,
+        key: str,
+        store: MemoryKeyring,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        real_set = store.set_password
+
+        def drops(service: str, name: str, value: str) -> None:
+            if name != key:
+                real_set(service, name, value)
+
+        monkeypatch.setattr(store, "set_password", drops)
+        with pytest.raises(SystemExit):
+            _store_keyring(self.SERVICE, "me", "pw", "nas.home", 5000)
+        out = capsys.readouterr()
+        assert "Credentials stored" not in out.out + out.err
+
+    def test_a_keyring_that_drops_the_host_is_caught(
+        self, store: MemoryKeyring, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """This NAS's password mustn't stay under another NAS's record (#536)."""
+        self._old(store, "nas.office")
+        real_set = store.set_password
+
+        def drops_the_host(service: str, name: str, value: str) -> None:
+            if name != "host":
+                real_set(service, name, value)
+
+        monkeypatch.setattr(store, "set_password", drops_the_host)
+        with pytest.raises(SystemExit):
+            _store_keyring(self.SERVICE, "admin", "new-pw", "nas.home", 5000)
+        assert (self.SERVICE, "password") not in store.values
+
+    def test_a_read_failing_after_good_writes_isnt_a_failure(
+        self,
+        store: MemoryKeyring,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """#589: a flaky read mustn't turn a correct entry into an exit 1."""
+        real_get = store.get_password
+        writes: list[str] = []
+        real_set = store.set_password
+
+        def counted(service: str, key: str, value: str) -> None:
+            writes.append(key)
+            real_set(service, key, value)
+
+        def flaky(service: str, key: str) -> str | None:
+            if "password" in writes:
+                raise KeyringError("locked")
+            return real_get(service, key)
+
+        monkeypatch.setattr(store, "set_password", counted)
+        monkeypatch.setattr(store, "get_password", flaky)
+        assert _store_keyring(self.SERVICE, "me", "pw", "nas.home", 5000) is True
+        assert "new 2FA device token" not in capsys.readouterr().err
+
+    def test_a_token_written_over_nothing_isnt_called_a_success(
+        self,
+        store: MemoryKeyring,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Pre-QA on #583: dropped writes, then a token applied and a raise, read as stored."""
+        self._old(store)
+        real_set = store.set_password
+
+        def token_only(service: str, key: str, value: str) -> None:
+            if key == "device_id":
+                real_set(service, key, value)
+                raise KeyringError("locked")
+
+        monkeypatch.setattr(store, "set_password", token_only)
+        with pytest.raises(SystemExit):
+            _store_keyring(self.SERVICE, "new-admin", "new-pw", "nas.home", 5000, "tok")
+        assert "Credentials stored" not in capsys.readouterr().out
+
+    def test_a_first_read_that_fails_claims_nothing_about_the_entry(
+        self,
+        store: MemoryKeyring,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        def locked(*_args: str) -> None:
+            raise KeyringError("locked")
+
+        monkeypatch.setattr(store, "get_password", locked)
+        assert _store_keyring(self.SERVICE, "me", "pw", "nas.home", 5000) is False
+        assert "as it was" not in capsys.readouterr().out
+
     def test_a_token_the_keyring_didnt_keep_is_reported(
         self,
         store: MemoryKeyring,
@@ -2772,6 +2866,16 @@ class TestTheKeyringIsWrittenOnlyAfterTheLogin:
         result = self._with_config(tmp_path, "me\npw\n123456\n")
         assert result.exit_code == 0, result.output
         assert store.values[(self.SERVICE, "device_id")] == "tok"
+
+    @respx.mock
+    @pytest.mark.parametrize("code", [106, 107, 119])
+    def test_a_session_code_on_login_promises_no_re_login(
+        self, code: int, store: MemoryKeyring, tmp_path: Path
+    ) -> None:
+        _dsm({"success": False, "error": {"code": code}})
+        result = self._with_config(tmp_path, "me\npw\n")
+        assert result.exit_code == 1
+        assert "will be attempted" not in result.output.lower()
 
     @respx.mock
     def test_a_second_403_asks_for_nothing_it_cant_do(
@@ -3056,6 +3160,8 @@ class TestTheKeyringIsWrittenOnlyAfterTheLogin:
             listed = re.search(r"Already removed from this entry: ([^.]+)\.", text)
             for key in listed.group(1).split(", ") if listed else ():
                 assert (self.SERVICE, key) not in store.values, f"fault {fault_at}: {text}"
+            if token is None:
+                assert "new 2FA device token" not in text, f"fault {fault_at}: {text}"
             if "device token couldn't be stored" in text and token:
                 held = store.values.get((self.SERVICE, "device_id"))
                 assert held != token, f"fault {fault_at}: {text}"
