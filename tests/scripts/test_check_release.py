@@ -211,10 +211,10 @@ def test_entries_under_an_unreleased_section_below_the_versions_count() -> None:
 
 
 def test_a_no_date_heading_for_the_version_counts_with_entries_above() -> None:
-    changelog = "## Next\n\n- Later.\n\n## 1.2.3\n\n- Note.\n"
-    assert "'## Next' has entries" in (script.unreleased_problem(changelog, "1.2.3") or "")
-    changelog = "## Next\n\n## 1.2.3\n\n- Note.\n\n## 1.2.2\n\n- Old.\n"
-    assert script.unreleased_problem(changelog, "1.2.3") is None
+    changelog = "## Next\n\n## Also\n\n- Later.\n\n## 1.2.3\n\n- Note.\n"
+    assert "'## Also' has entries" in (script.unreleased_problem(changelog, "1.2.3") or "")
+    changelog = "## 1.2.2 (x)\n\n- Old.\n\n## 1.2.3\n\n- Note.\n"
+    assert "'## 1.2.2 (x)' has entries" in (script.unreleased_problem(changelog, "1.2.3") or "")
 
 
 def test_older_sections_dont_count_as_above() -> None:
@@ -508,3 +508,56 @@ def test_no_origin_main_says_so(repo: Path) -> None:
 def test_a_wrong_tag_leaves_out_the_dot_zero_advice(repo: Path) -> None:
     _git(repo, "commit", "-q", "--allow-empty", "-m", "off main")
     assert "backport" not in (script.branch_problem(repo, "1.2.0", tag_matches=False) or "")
+
+
+@pytest.mark.parametrize("tag", ["v1.2.9-abandoned", "v1.2.9", "v1.2.3rc1", "v1.2.x"])
+def test_only_an_earlier_release_of_the_line_vouches_for_a_backport(repo: Path, tag: str) -> None:
+    """Pre-QA on #574: a mistyped tag left on main's tip let a branch cut from main pass."""
+    _git(repo, "tag", tag)
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "the patch")
+    _git(repo, "update-ref", "refs/remotes/origin/release/1.2.x", "HEAD")
+    assert "wasn't cut from" in (script.branch_problem(repo, "1.2.3") or "")
+
+
+def test_a_wrong_tag_off_main_names_no_backport_branch(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Through main, for a version here that's a patch or a `.0`: it says nothing about the tag."""
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "off main")
+    assert script.main(["v9.9.9"], repo) == 1
+    out = capsys.readouterr().out
+    assert "isn't known to be on origin/main." in out
+    assert "backport" not in out.split("isn't known")[1].split("This run")[0]
+
+
+def test_an_orphan_backport_branch_is_refused(repo: Path) -> None:
+    _git(repo, "checkout", "-q", "--orphan", "other")
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "unrelated")
+    _git(repo, "update-ref", "refs/remotes/origin/release/1.2.x", "HEAD")
+    assert "couldn't check where release/1.2.x was cut from" in (
+        script.branch_problem(repo, "1.2.3") or ""
+    )
+
+
+def test_a_ref_name_that_isnt_utf8_is_not_a_traceback(repo: Path) -> None:
+    (
+        repo
+        / ".git"
+        / "refs"
+        / "tags"
+        / "v1.2.\udcff".encode("utf-8", "surrogateescape").decode("utf-8", "surrogateescape")
+    ).write_text(
+        subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
+        ).stdout,
+        encoding="ascii",
+    )
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "the patch")
+    _git(repo, "update-ref", "refs/remotes/origin/release/1.2.x", "HEAD")
+    assert "wasn't cut from" in (script.branch_problem(repo, "1.2.3") or "")
+
+
+@pytest.mark.parametrize("heading", ["## 1.2.3 ", "## 1.2.3"])
+def test_a_heading_with_only_a_trailing_space_has_no_date(heading: str) -> None:
+    problem = script.changelog_problem(f"{heading}\n\n- A note.\n", "1.2.3") or ""
+    assert "heading has no date" in problem

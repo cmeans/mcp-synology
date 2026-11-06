@@ -7,8 +7,9 @@ commit or with the wrong version is costly to undo. It checks that:
 - the tag is `v` plus `pyproject.toml`'s version, and `server.json` says the same;
 - `CHANGELOG.md` has a section for that version with notes, which become the release notes and
   carry a security release's `**Security release:**` line, the one running servers announce;
-- no section above that one has entries: a commit after the release commit would ship those
-  changes with no notes and no live test. A later commit that added no entry still passes;
+- no section above that one has entries, and no Unreleased section anywhere does: a commit after
+  the release commit would ship those changes with no notes and no live test. A later commit that
+  added no entry still passes;
 - the tagged commit (HEAD) is on `origin/main` or, for a patch on a released line, this version's
   backport branch, `release/<major>.<minor>.x` (as v0.5.3 was, shipping a fix without main's
   unreleased work), cut from a tag of that line and not from `main`. Not for a `.0`, which has no
@@ -78,10 +79,11 @@ def changelog_problem(changelog: str, version: str) -> str | None:
     space or `(`.
     """
     escaped = re.escape(version)
+    # Before the section's own pattern, which a trailing space would satisfy.
+    if re.search(rf"^## {escaped}\s*$", changelog, re.MULTILINE):
+        return f"CHANGELOG.md's '## {version}' heading has no date: '## {version} (<date>)'."
     section = _section(changelog, rf"{escaped}(?: |\()")
     if section is None:
-        if re.search(rf"^## {escaped}\s*$", changelog, re.MULTILINE):
-            return f"CHANGELOG.md's '## {version}' heading has no date: '## {version} (<date>)'."
         return f"CHANGELOG.md has no '## {version} (<date>)' section: see {_RELEASE_STEPS}."
     return None if _has_notes(section) else f"CHANGELOG.md's section for {version} has no notes."
 
@@ -142,8 +144,20 @@ def server_json_problem(root: Path, version: str) -> str | None:
     )
 
 
+_LINE_TAG = re.compile(r"v\d+\.\d+\.(\d+)")
+
+
 def _git(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(["git", *args], cwd=root, capture_output=True, text=True, check=False)
+    # A ref name needn't be valid UTF-8, and a decoding error would be a traceback, not a refusal.
+    return subprocess.run(
+        ["git", *args],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
 
 
 def branch_problem(root: Path, version: str, *, tag_matches: bool = True) -> str | None:
@@ -156,7 +170,7 @@ def branch_problem(root: Path, version: str, *, tag_matches: bool = True) -> str
     also match below a name, which `release/0.11.x/feature` mustn't.
 
     When the tag isn't this version, the version here says nothing about the branch it should be
-    on, so the advice about a `.0` stays out.
+    on, so the advice about a backport branch stays out.
     """
     main = "refs/remotes/origin/main"
     # A final patch only: a pre-release, like a `.0`, ships from main.
@@ -184,10 +198,16 @@ def branch_problem(root: Path, version: str, *, tag_matches: bool = True) -> str
             return None
         if found:
             base = _git(root, "merge-base", "HEAD", main)
+            # A final release of this line, earlier than this one: not a mistyped or abandoned tag.
             tags = _git(root, "tag", "--list", f"v{line}.*", "--contains", base.stdout.strip())
             if base.returncode != 0 or tags.returncode != 0:
                 return f"couldn't check where release/{backport} was cut from."
-            if set(tags.stdout.split()) - {f"v{version}"}:
+            earlier = (
+                int(found_tag.group(1))
+                for found_tag in map(_LINE_TAG.fullmatch, tags.stdout.split())
+                if found_tag
+            )
+            if any(patch < int(version.split(".")[2]) for patch in earlier):
                 return None
             return (
                 f"release/{backport} wasn't cut from a v{line}.* tag: it leaves origin/main at a "
@@ -196,13 +216,13 @@ def branch_problem(root: Path, version: str, *, tag_matches: bool = True) -> str
             )
     except OSError as error:
         return f"couldn't run git to check the tagged commit's branch: {error}"
-    where = f"origin/main or release/{backport}" if backport else "origin/main"
-    if backport:
-        other = f" For a backport, push this commit to origin/release/{backport}."
-    elif tag_matches:
-        other = f" {version} can't ship from a backport branch: those patch a released line."
-    else:
+    where = f"origin/main or release/{backport}" if backport and tag_matches else "origin/main"
+    if not tag_matches:
         other = ""
+    elif backport:
+        other = f" For a backport, push this commit to origin/release/{backport}."
+    else:
+        other = f" {version} can't ship from a backport branch: those patch a released line."
     return (
         f"the tagged commit isn't known to be on {where}. PRs are squash-merged, so a PR branch's "
         "own commit never lands there: if the PR hasn't merged, merge it first, then tag its "

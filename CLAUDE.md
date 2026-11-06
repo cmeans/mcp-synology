@@ -200,7 +200,7 @@ This convention was retired-and-restored on 2026-04-11 after PRs #13, #15, and #
 7. Merge the release PR, then tag its squash commit on `main` (not `origin/main`'s head later on, nor the PR branch). `git fetch origin`, find the commit with `git log origin/main`, and check it's that PR's squash commit. `git tag v0.11.0 <sha>`. To try the gate first, check that commit out and run `python scripts/check_release.py v0.11.0`. `git push origin v0.11.0`. The tag must be `v` plus the version: a name that doesn't match `v*` starts nothing and gives no error. Only repo admins can create or delete a `v*` tag (the `release-tags` ruleset)
 8. Watch the run, and approve the `pypi` environment when it waits. If the gate or anything else before `publish-pypi` fails on a new tag, delete it both places (`git push origin :refs/tags/v0.11.0`, `git tag -d v0.11.0`), fix what it says, and tag again. Cancel or reject any run still waiting on `pypi`: approving it publishes that run's commit, even after its tag is deleted. Never delete a tag already released
 
-**Backporting a fix to a released line** (a patch such as `0.10.1`; a `.0` ships only from `main`):
+**Backporting a fix to a released line** (a final patch such as `0.10.1`; a `.0` or a pre-release ships only from `main`):
 1. Cut `release/0.10.x` from the last `v0.10.y` tag. Cut from `main`, it would ship all of `main`'s unreleased work
 2. If that tag's `publish.yml` has no `gate` job (any tag before the first release after #574), cherry-pick the gate first: otherwise nothing checks the tag. Expect conflicts on `CHANGELOG.md` (keep only the gate's entry, none of `main`'s) and on `tests/test_ci_workflows.py` (drop it if that tag lacks it)
 3. Apply the fix, and run the tests locally: no CI runs on that branch
