@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import TYPE_CHECKING, Any
@@ -3668,7 +3669,7 @@ async def test_a_lost_delete_not_known_gone_hands_off(
     result = await delete_files(
         mock_client, paths=["/s/a"], recycle_bin_status={"s": True}, records=records
     )
-    assert "DSM no longer has the task deleting /s/a (DSM error 599)" in result
+    assert "DSM answered that it has no task deleting /s/a (error 599)" in result
     assert "how it ended isn't known" in result
     assert "It wasn't stopped" in result
     assert "Handle: `delete:T_a`" in result
@@ -3706,7 +3707,7 @@ async def test_a_lost_copy_partway_hands_off_and_stops_nothing(
         dest_folder="/s/dst",
         records=records,
     )
-    assert "DSM no longer has the task copying /s/b (DSM error 599)" in result
+    assert "DSM answered that it has no task copying /s/b (error 599)" in result
     assert "Already copied: /s/a." in result
     assert "Not started: /s/c." in result
     assert records.get(Handle("copy", "T_b")) is not None
@@ -3731,3 +3732,42 @@ async def test_a_lost_task_reply_keeps_the_last_progress(
     respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
     result = await delete_files(mock_client, paths=["/s/a"], recycle_bin_status={"s": True})
     assert "Last progress: 50 of 100 items, 50%." in result
+
+
+@respx.mock
+async def test_a_stalled_path_check_is_bounded(
+    mock_client: DsmClient, no_sleep: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """QA round 1 on #590: a stalled DSM mustn't hold the reply and its handle."""
+    from mcp_synology.modules.filestation import operations
+
+    real_wait = operations.asyncio.wait_for
+
+    async def times_out(awaitable: Any, _timeout: float) -> Any:
+        awaitable.close()
+        raise TimeoutError
+
+    monkeypatch.setattr(operations.asyncio, "wait_for", times_out)
+    calls: list[dict[str, str]] = []
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_lost_task_dsm(calls, {"files": []}))
+    result = await delete_files(mock_client, paths=["/s/a"], recycle_bin_status={"s": True})
+    assert "how it ended isn't known" in result
+    monkeypatch.setattr(operations.asyncio, "wait_for", real_wait)
+
+
+@respx.mock
+async def test_a_cancel_during_the_path_check_stops_the_task(
+    mock_client: DsmClient, no_sleep: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from mcp_synology.modules.filestation import operations
+
+    async def canceled(awaitable: Any, _timeout: float) -> Any:
+        awaitable.close()
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(operations.asyncio, "wait_for", canceled)
+    calls: list[dict[str, str]] = []
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_lost_task_dsm(calls, {"files": []}))
+    with pytest.raises(asyncio.CancelledError):
+        await delete_files(mock_client, paths=["/s/a"], recycle_bin_status={"s": True})
+    assert [call for call in calls if call.get("method") == "stop"]

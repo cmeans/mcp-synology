@@ -1169,8 +1169,8 @@ class TestFileTask:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_router({"status": _err(599)}))
         text = await file_task(mock_client, records=TaskRecords(), handle="copy:FileStation_X")
         assert text == (
-            "No running task with this handle. It finished, was stopped, or was started by a "
-            "different DSM user. List the path to see what's left."
+            "No running task with this handle. It may have finished, failed or been stopped, or "
+            "was started by a different DSM user. List the path to see what's left."
         )
 
     @respx.mock
@@ -1187,8 +1187,8 @@ class TestFileTask:
         records.add(TaskRecord(handle=h, paths=["/Backups/X"]))
         text = await file_task(mock_client, records=records, handle=str(h))
         assert text == (
-            "The delete of /Backups/X is no longer running on the NAS: it finished or was "
-            "stopped, and DSM no longer has its result. List the path to see what's left."
+            "DSM has no task for the delete of /Backups/X: it may have finished, failed or been "
+            "stopped, and DSM has no result for it. List the path to see what's left."
         )
 
     @respx.mock
@@ -1367,10 +1367,11 @@ class TestFileTask:
         text = await file_task(
             mock_client, records=TaskRecords(), handle=f"{kind}:FileStation_X", action="stop"
         )
-        assert [m for _, m in calls] == ["status"]
+        assert [m for _, m in calls] == ["status"] * 3
         assert text == (
-            "No running task with this handle. It finished, was stopped, or was started by a "
-            "different DSM user. Nothing was stopped. List the path to see what's left."
+            "No running task with this handle. It may have finished, failed or been stopped, or "
+            "was started by a different DSM user. Nothing was stopped. List the path to see "
+            "what's left."
         )
 
     @respx.mock
@@ -1388,11 +1389,11 @@ class TestFileTask:
         records = TaskRecords()
         records.add(TaskRecord(handle=h, paths=["/qa/vanish-y"]))
         text = await file_task(mock_client, records=records, handle=str(h), action="stop")
-        assert [m for _, m in calls] == ["status"]
+        assert [m for _, m in calls] == ["status"] * 3
         assert text == (
-            "The delete of /qa/vanish-y is no longer running on the NAS: it finished or was "
-            "stopped, and DSM no longer has its result. Nothing was stopped. List the path to "
-            "see what's left."
+            "DSM has no task for the delete of /qa/vanish-y: it may have finished, failed or been "
+            "stopped, and DSM has no result for it. Nothing was stopped. List the path to see "
+            "what's left."
         )
 
     @respx.mock
@@ -1604,3 +1605,63 @@ class TestFileTask:
         rec = records.get(h)
         assert rec is not None
         assert rec.final_status == finished
+
+
+@pytest.fixture
+def no_read_wait(monkeypatch: pytest.MonkeyPatch) -> None:
+    import mcp_synology.modules.filestation.tasks as tasks
+
+    monkeypatch.setattr(tasks, "_LOST_TASK_WAIT", 0)
+
+
+@respx.mock
+async def test_a_stop_reaches_a_task_after_a_passing_599(
+    mock_client: DsmClient, no_read_wait: None
+) -> None:
+    """QA round 1 on #590: one 599 dropped the stop, and the delete kept going."""
+    from mcp_synology.modules.filestation.tasks import file_task
+
+    methods: list[str] = []
+    replies = iter([httpx.Response(200, json={"success": False, "error": {"code": 599}})])
+
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        method = _method(request)
+        methods.append(method)
+        if method == "status":
+            return next(replies, _ok({"finished": False, "progress": 0.5}))
+        return _ok({})
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+    await file_task(
+        mock_client, records=TaskRecords(), handle="delete:FileStation_X", action="stop"
+    )
+    assert methods[:3] == ["status", "status", "stop"]
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("later", "outcome"),
+    [
+        (httpx.ReadTimeout(""), "stalled"),
+        (httpx.Response(502, text="bad gateway"), "stalled"),
+        (httpx.Response(200, json={"success": True, "data": ["x"]}), "stalled"),
+        (httpx.Response(200, json={"success": False, "error": {"code": 400}}), "poll_error"),
+    ],
+    ids=["no answer", "proxy", "unreadable", "another DSM code"],
+)
+async def test_what_follows_a_599_decides_as_usual(
+    mock_client: DsmClient, clock: list[float], later: Any, outcome: str
+) -> None:
+    replies = iter([httpx.Response(200, json={"success": False, "error": {"code": 599}}), later])
+
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        if _method(request) != "status":
+            return _ok({})
+        reply = next(replies)
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+    result = await poll_task(mock_client, api=API, version=2, taskid="t1", wait=30, label="x")
+    assert result.outcome == outcome

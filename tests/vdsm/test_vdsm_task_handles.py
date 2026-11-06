@@ -66,7 +66,7 @@ WAIT = 2  # seconds before a handoff; every tree here takes far longer
 FINISH_WITHIN = 300  # seconds a handed-off task gets to finish
 _HANDLE = re.compile(r"Handle: `((?:delete|copy|move|restore):FileStation_\w+)`")
 _NO_RUNNING = "No running task with this handle."
-_NOT_RUNNING = "is no longer running on the NAS: it finished or was stopped"
+_NOT_RUNNING = "it may have finished, failed or been stopped"
 _ALREADY_FINISHED = "That task had already finished or isn't running."
 _NOT_STOPPED = "That task had already finished, so nothing was stopped."
 

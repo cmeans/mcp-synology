@@ -71,6 +71,6 @@ async def test_a_delete_that_didnt_hands_off_with_the_handle(top: tuple[DsmClien
         out = await delete_files(
             client, paths=[folder], recursive=False, recycle_bin_status={}, records=records
         )
-    assert "(DSM error 599)" in out
+    assert "(error 599)" in out
     assert "how it ended isn't known" in out
     assert "Handle: `delete:" in out

@@ -106,13 +106,13 @@ each item took about 15 minutes for a while, and then 179 items cleared in 16 mi
 **What to do:** wait, and check with `file_task`. Don't stop and restart it because progress
 looks slow.
 
-### `file_task` says it's "no longer running on the NAS … DSM no longer has its result"
+### `file_task` says "DSM has no task for … and DSM has no result for it"
 
 **Why:** DSM can forget a finished delete before any status check sees it finish (on a real NAS,
 after a 36-hour delete, it was gone within 16 minutes of the last check). It forgets a finished
 copy or move after one status read, but `file_task` keeps the result of a read it makes itself,
 so a copy or move ends this way only when something else read it first (another session for the
-same DSM user). Then `file_task` has no result left to give: the task finished or was stopped,
+same DSM user). Then `file_task` has no result left to give: the task finished, failed or was stopped,
 and the reply can't say which. #302 tracks checking the path automatically.
 
 **What to do:** list the path. For a delete, DSM removes a folder's contents before the folder,

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
+import anyio
 import httpx
 from mcp.server.mcpserver.exceptions import ToolError
 
@@ -50,6 +52,7 @@ from mcp_synology.modules.filestation.tasks import (
     ProgressCallback,
     TaskRecord,
     TaskRecords,
+    _stop_background_task,
     handoff_reply,
     poll_task,
     running_task,
@@ -61,6 +64,9 @@ if TYPE_CHECKING:
     from mcp_synology.core.client import DsmClient
 
 logger = logging.getLogger(__name__)
+
+# How long a lost delete waits on its path check (#521), so a stalled DSM can't hold the reply.
+_LOST_DELETE_CHECK = 5.0
 
 
 async def create_folder(
@@ -888,8 +894,16 @@ async def _delete_one_path(
         synology_error_response("Delete files", result.error)
     if result.outcome == "lost":
         # DSM can't say how it ended, but the path can: gone is what was asked for (#521).
+        # Bounded: a stalled DSM mustn't hold the reply and its handle (#245).
         try:
-            exists = await path_exists(client, path)
+            exists = await asyncio.wait_for(path_exists(client, path), _LOST_DELETE_CHECK)
+        except asyncio.CancelledError:
+            # A canceled call stops its task, as `poll_task` does: this one may be running.
+            with anyio.CancelScope(shield=True):
+                await _stop_background_task(
+                    client, "SYNO.FileStation.Delete", dsm_str(taskid), delete_version, logger
+                )
+            raise
         except Exception as e:
             # Any answer that doesn't say it's gone leaves the outcome unknown.
             logger.warning("Couldn't check %s after a lost delete: %s", path, type(e).__name__)
