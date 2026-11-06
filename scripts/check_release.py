@@ -198,8 +198,9 @@ def branch_problem(root: Path, version: str, *, tag_matches: bool = True) -> str
             return None
         if found:
             base = _git(root, "merge-base", "HEAD", main)
-            # A final release of this line, earlier than this one: not a mistyped or abandoned tag.
-            tags = _git(root, "tag", "--list", f"v{line}.*", "--contains", base.stdout.strip())
+            # At the cut point, not merely after it: a branch cut before the line began would ship
+            # without its first release. Named like a final release of this line, and earlier.
+            tags = _git(root, "tag", "--list", f"v{line}.*", "--points-at", base.stdout.strip())
             if base.returncode != 0 or tags.returncode != 0:
                 return f"couldn't check where release/{backport} was cut from."
             earlier = (

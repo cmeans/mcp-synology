@@ -204,7 +204,7 @@ This convention was retired-and-restored on 2026-04-11 after PRs #13, #15, and #
 1. Cut `release/0.10.x` from the last `v0.10.y` tag. Cut from `main`, it would ship all of `main`'s unreleased work
 2. If that tag's `publish.yml` has no `gate` job (any tag before the first release after #574), cherry-pick the gate first: otherwise nothing checks the tag. Expect conflicts on `CHANGELOG.md` (keep only the gate's entry, none of `main`'s) and on `tests/test_ci_workflows.py` (drop it if that tag lacks it)
 3. Apply the fix, and run the tests locally: no CI runs on that branch
-4. Follow steps 1 to 4 and commit. `git push origin release/0.10.x`, `git fetch origin`, then `git tag v0.10.1 <sha>` on that commit (`git log origin/release/0.10.x` finds it). To try the gate first, run `python scripts/check_release.py v0.10.1` with that commit checked out. `git push origin v0.10.1`, then step 8. `build` is the first real test here, since no CI ran
+4. Follow steps 0 to 4 of the release list above and commit. `git push origin release/0.10.x`, `git fetch origin`, then `git tag v0.10.1 <sha>` on that commit (`git log origin/release/0.10.x` finds it). To try the gate first, run `python scripts/check_release.py v0.10.1` with that commit checked out. `git push origin v0.10.1`, then that list's step 8. `build` is the first real test here, since no CI ran
 5. Carry the new section back to `main`'s `CHANGELOG.md` in a PR
 
 CI runs `python scripts/sync-server-json.py --check` (no project install needed — stdlib only) and fails any PR where `server.json` has drifted from `pyproject.toml`. Never edit `server.json`'s version fields by hand.

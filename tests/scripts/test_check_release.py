@@ -52,6 +52,8 @@ def _git(root: Path, *args: str) -> None:
             "user.email=t@example.invalid",
             "-c",
             "commit.gpgsign=false",
+            "-c",
+            "tag.gpgsign=false",
             *args,
         ],
         cwd=root,
@@ -204,9 +206,12 @@ def test_the_advice_for_the_release_commit_comes_first() -> None:
     assert problem.index("If this is the release commit") < problem.index("squash commit")
 
 
-def test_entries_under_an_unreleased_section_below_the_versions_count() -> None:
+@pytest.mark.parametrize(
+    "heading", ["## Unreleased", "## [Unreleased]", "##  Unreleased", "## unreleased"]
+)
+def test_entries_under_an_unreleased_section_below_the_versions_count(heading: str) -> None:
     """Adding the version above `## Unreleased` instead of renaming it: those ship with no notes."""
-    changelog = "## 1.2.3 (d)\n\n- Note.\n\n## Unreleased\n\n- Later, unnoted.\n"
+    changelog = f"## 1.2.3 (d)\n\n- Note.\n\n{heading}\n\n- Later, unnoted.\n"
     assert "has entries" in (script.unreleased_problem(changelog, "1.2.3") or "")
 
 
@@ -512,7 +517,16 @@ def test_a_wrong_tag_leaves_out_the_dot_zero_advice(repo: Path) -> None:
 
 @pytest.mark.parametrize(
     "tag",
-    ["v1.2.9-abandoned", "v1.2.9", "v1.2.3rc1", "v1.2.x", "v1.2.1-abandoned", "v1.2.1rc1"],
+    [
+        "v1.2.9-abandoned",
+        "v1.2.9",
+        "v1.2.3rc1",
+        "v1.2.x",
+        "v1.2.1-abandoned",
+        "v1.2.1rc1",
+        "v1.1.0",
+        "v0.2.1",
+    ],
 )
 def test_only_an_earlier_release_of_the_line_vouches_for_a_backport(repo: Path, tag: str) -> None:
     """Pre-QA on #574: a mistyped tag left on main's tip let a branch cut from main pass."""
@@ -543,18 +557,22 @@ def test_an_orphan_backport_branch_is_refused(repo: Path) -> None:
 
 
 def test_a_ref_name_that_isnt_utf8_is_not_a_traceback(repo: Path) -> None:
-    (
-        repo
-        / ".git"
-        / "refs"
-        / "tags"
-        / "v1.2.\udcff".encode("utf-8", "surrogateescape").decode("utf-8", "surrogateescape")
-    ).write_text(
-        subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
-        ).stdout,
-        encoding="ascii",
-    )
+    subprocess.run([b"git", b"update-ref", b"refs/tags/v1.2.\xff", b"HEAD"], cwd=repo, check=True)
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "the patch")
+    _git(repo, "update-ref", "refs/remotes/origin/release/1.2.x", "HEAD")
+    assert "wasn't cut from" in (script.branch_problem(repo, "1.2.3") or "")
+
+
+def test_a_branch_cut_before_the_line_began_is_refused(repo: Path) -> None:
+    """Pre-QA on #574: cut from v1.1.0, it passed and shipped without v1.2.0's contents."""
+    _git(repo, "tag", "v1.1.0")
+    old = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "the line's first release")
+    _git(repo, "tag", "v1.2.0")
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    _git(repo, "checkout", "-q", "-b", "cut", old)
     _git(repo, "commit", "-q", "--allow-empty", "-m", "the patch")
     _git(repo, "update-ref", "refs/remotes/origin/release/1.2.x", "HEAD")
     assert "wasn't cut from" in (script.branch_problem(repo, "1.2.3") or "")
