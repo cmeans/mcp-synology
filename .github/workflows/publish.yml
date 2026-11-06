@@ -19,9 +19,9 @@ env:
 jobs:
   gate:
     # Before anything else (#457). Any `v*` tag starts this workflow, and a PyPI version can't be
-    # reused: the tag must match pyproject.toml, have CHANGELOG notes, and be on main or a
-    # backport branch (release/<major>.<minor>.x). A backport branch gets no CI, hence the
-    # server.json check. This covers commits that contain this job: an older one wouldn't run it.
+    # reused: scripts/check_release.py says what it checks. It can't tell a later commit that
+    # added no CHANGELOG entry from the release commit. This covers commits that contain this
+    # job: an older one wouldn't run it.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -35,8 +35,6 @@ jobs:
         env:
           TAG: ${{ github.ref_name }}
         run: python scripts/check_release.py "$TAG"
-      - name: Check server.json matches pyproject.toml
-        run: python scripts/sync-server-json.py --check
 
   build:
     needs: gate
@@ -69,7 +67,7 @@ jobs:
     # changes) — without this gate, PyPI ships and the registry leg fails,
     # leaving a discoverable PyPI release that isn't in the MCP registry.
     # Re-running the failed job can't fix PyPI, so the cleanup is manual
-    # (yank, fix, re-tag). Validating up-front with the SAME pinned
+    # (yank, fix, bump, re-tag). Validating up-front with the SAME pinned
     # mcp-publisher version that actually publishes (`./.github/actions/
     # install-mcp-publisher`) means schema drift surfaces before any
     # external side-effect lands. ci.yml runs the same check on every PR;

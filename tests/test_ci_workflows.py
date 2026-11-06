@@ -149,18 +149,14 @@ def test_the_gate_and_the_release_notes_read_the_same_heading() -> None:
     text = (GITHUB / "workflows" / "publish.yml").read_text(encoding="utf-8")
     assert '$0 ~ "^## "version"( |\\\\()" {flag=1; next}' in text
     script = (GITHUB.parent / "scripts" / "check_release.py").read_text(encoding="utf-8")
-    assert 'rf"^## {re.escape(version)}(?: |\\().*$"' in script
+    assert 'rf"{escaped}(?: |\\()"' in script
 
 
 def test_the_release_gate_checks_the_tag_on_a_full_checkout_and_cant_be_softened() -> None:
     job = _workflows()["publish.yml"]["jobs"]["gate"]
-    # server.json too: a backport branch gets no CI, so nothing else would check it.
-    assert _scripts(job["steps"]) == [
-        'python scripts/check_release.py "$TAG"',
-        "python scripts/sync-server-json.py --check",
-    ]
+    assert _scripts(job["steps"]) == ['python scripts/check_release.py "$TAG"']
     # The tag goes through env, never into the script: a tag name is free text.
-    assert job["steps"][-2]["env"]["TAG"] == "${{ github.ref_name }}"
+    assert job["steps"][-1]["env"]["TAG"] == "${{ github.ref_name }}"
     checkout = job["steps"][0]
     assert checkout["with"]["fetch-depth"] == 0  # A shallow clone has no origin/main history.
     assert checkout["with"]["persist-credentials"] is False

@@ -4,14 +4,18 @@
 `publish.yml`'s `gate` job runs this first. A PyPI version can't be reused, so a tag on the wrong
 commit or with the wrong version is costly to undo. It checks that:
 
-- the tag is `v` plus `pyproject.toml`'s version;
-- `CHANGELOG.md` has a section for that version, which becomes the release notes and carries a
-  security release's `**Security release:**` line, the one running servers announce;
-- the tagged commit (HEAD) is on `origin/main` or a backport branch, `release/<major>.<minor>.x`
-  (as v0.5.3 was, shipping a fix without main's unreleased work). Not `release/0.11.0`: that's
-  how this repo names a release PR's branch, and a tag there would be on an unmerged commit.
+- the tag is `v` plus `pyproject.toml`'s version, and `server.json` says the same;
+- `CHANGELOG.md` has a section for that version with notes, which become the release notes and
+  carry a security release's `**Security release:**` line, the one running servers announce;
+- `## Unreleased` has no entries: a commit after the release commit would ship those changes with
+  no notes and no live test. A later commit that added no entry still passes;
+- the tagged commit (HEAD) is on `origin/main` or this version's backport branch,
+  `release/<major>.<minor>.x` (as v0.5.3 was, shipping a fix without main's unreleased work). Not
+  `release/0.11.0`: that's how this repo names a release PR's branch, and a tag there would be on
+  an unmerged commit.
 
-Standard library only. It needs a checkout with those branches fetched.
+Standard library only. It needs a checkout with those branches fetched. Each problem prints as a
+GitHub Actions error, so it reaches the run's summary.
 
 Usage:
     python scripts/check_release.py v0.11.0
@@ -19,21 +23,44 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 import sys
 import tomllib
 from pathlib import Path
 
+_RELEASE_STEPS = "CLAUDE.md's 'Bumping the version for a release'"
+_TAG_THE_MERGE = "tag its squash commit on origin/main"
+# A line that isn't a note: a heading, an HTML comment, a rule, or a bare list marker.
+_NOT_A_NOTE = re.compile(r"#{1,6}(\s.*)?|<!--.*-->|[-*_ ]{3,}|[-*+]")
+
 
 def tag_problem(tag: str, version: str) -> str | None:
-    """Say why `tag` doesn't name `version`, or None."""
+    """Say why `tag` doesn't name `version`, or None. It never offers `version` as the tag: when
+    the release PR hasn't merged, that's the version already released."""
     if tag == f"v{version}":
         return None
     return (
-        f"tag {tag!r} doesn't match pyproject.toml's version {version!r}: tag 'v{version}', or "
-        "bump the version first"
+        f"tag {tag!r} doesn't match this commit: pyproject.toml here says {version!r}. If the "
+        f"release PR hasn't merged, merge it and {_TAG_THE_MERGE}."
     )
+
+
+def _has_notes(section: str) -> bool:
+    return any(
+        (line := raw.strip()) and not _NOT_A_NOTE.fullmatch(line) for raw in section.splitlines()
+    )
+
+
+def _section(changelog: str, heading_pattern: str) -> str | None:
+    """The text under the first `## ` heading matching ``heading_pattern``, or None."""
+    heading = re.search(rf"^## {heading_pattern}.*$", changelog, re.MULTILINE)
+    if heading is None:
+        return None
+    following = changelog[heading.end() :]
+    next_heading = re.search(r"^## ", following, re.MULTILINE)
+    return following[: next_heading.start() if next_heading else None]
 
 
 def changelog_problem(changelog: str, version: str) -> str | None:
@@ -42,26 +69,52 @@ def changelog_problem(changelog: str, version: str) -> str | None:
     The heading matches what `publish.yml`'s `github-release` job extracts: `## <version>`, then a
     space or `(`.
     """
-    heading = re.search(rf"^## {re.escape(version)}(?: |\().*$", changelog, re.MULTILINE)
-    if heading is None:
-        return (
-            f"CHANGELOG.md has no '## {version} (<date>)' section: rename '## Unreleased' as the "
-            "release steps say"
-        )
-    following = changelog[heading.end() :]
-    next_heading = re.search(r"^## ", following, re.MULTILINE)
-    section = following[: next_heading.start() if next_heading else None]
-    # Subheadings alone (`### Added`) aren't notes.
-    if not any(line.strip() and not re.match(r"#{1,6} ", line) for line in section.splitlines()):
-        return f"CHANGELOG.md's section for {version} is empty"
-    return None
+    escaped = re.escape(version)
+    section = _section(changelog, rf"{escaped}(?: |\()")
+    if section is None:
+        if re.search(rf"^## {escaped}\s*$", changelog, re.MULTILINE):
+            return f"CHANGELOG.md's '## {version}' heading has no date: '## {version} (<date>)'"
+        return f"CHANGELOG.md has no '## {version} (<date>)' section: see {_RELEASE_STEPS}"
+    return None if _has_notes(section) else f"CHANGELOG.md's section for {version} has no notes"
 
 
-def branch_problem(root: Path) -> str | None:
-    """Say why HEAD isn't known to be on a release branch, or None. Unsure counts as a problem.
+def unreleased_problem(changelog: str, version: str) -> str | None:
+    """Say why this commit looks later than the release commit, or None: a release leaves
+    `## Unreleased` empty (and a backport branch may have none), so entries there are changes
+    that aren't in this version's notes. The likeliest route is retagging after a refusal, when
+    `origin/main` has moved on."""
+    section = _section(changelog, r"Unreleased\b")
+    if section is None or not _has_notes(section):
+        return None
+    return (
+        f"CHANGELOG.md's '## Unreleased' has entries, so this commit holds changes that aren't in "
+        f"{version}'s notes: find the release PR and {_TAG_THE_MERGE}"
+    )
+
+
+def server_json_problem(root: Path, version: str) -> str | None:
+    """Say why `server.json` doesn't advertise `version`, or None. A backport branch gets no CI,
+    so nothing else would check it there."""
+    try:
+        server = json.loads((root / "server.json").read_text(encoding="utf-8"))
+        found = [server["version"], *(package["version"] for package in server["packages"])]
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        return f"couldn't read server.json's versions: {type(error).__name__}: {error}"
+    if all(value == version for value in found):
+        return None
+    return (
+        f"server.json says {found}, not {version!r}: run scripts/sync-server-json.py in a PR, "
+        f"and {_TAG_THE_MERGE} once it merges"
+    )
+
+
+def branch_problem(root: Path, version: str) -> str | None:
+    """Say why HEAD isn't known to be on a branch `version` can ship from, or None. Unsure counts
+    as a problem.
 
     Full ref names, so a tag named `origin/main` can't stand in for the branch.
     """
+    backport = ".".join(version.split(".")[:2]) + ".x"
     try:
         result = subprocess.run(
             [
@@ -70,7 +123,7 @@ def branch_problem(root: Path) -> str | None:
                 "--contains=HEAD",
                 "--format=%(refname)",
                 "refs/remotes/origin/main",
-                "refs/remotes/origin/release/*.*.x",
+                f"refs/remotes/origin/release/{backport}",
             ],
             cwd=root,
             capture_output=True,
@@ -84,8 +137,8 @@ def branch_problem(root: Path) -> str | None:
     if result.stdout.strip():
         return None
     return (
-        "the tagged commit isn't known to be on origin/main or a release/<major>.<minor>.x "
-        "branch: tag a commit that merged to one"
+        f"the tagged commit isn't known to be on origin/main or release/{backport}. PRs are "
+        f"squash-merged, so a PR branch's own commit never lands there: {_TAG_THE_MERGE}"
     )
 
 
@@ -94,15 +147,25 @@ def problems(tag: str, root: Path) -> list[str]:
     try:
         pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
         version = pyproject["project"]["version"]
+        if not isinstance(version, str):
+            raise TypeError(f"[project].version is {version!r}, not a string")
         changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, KeyError) as error:
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, KeyError, TypeError) as error:
         return [f"couldn't read the version and CHANGELOG: {type(error).__name__}: {error}"]
     found = (
         tag_problem(tag, version),
+        server_json_problem(root, version),
         changelog_problem(changelog, version),
-        branch_problem(root),
+        unreleased_problem(changelog, version),
+        branch_problem(root, version),
     )
     return [problem for problem in found if problem]
+
+
+def _annotation(message: str) -> str:
+    """`message` as a GitHub Actions error, with the escaping its command format needs."""
+    escaped = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    return f"::error::{escaped}"
 
 
 def main(argv: list[str], root: Path = Path()) -> int:
@@ -111,14 +174,14 @@ def main(argv: list[str], root: Path = Path()) -> int:
         return 2
     found = problems(argv[0], root)
     for problem in found:
-        print(f"error: {problem}", file=sys.stderr)
+        print(_annotation(problem))
     if found:
         print(
-            "This run published nothing. If the tag is new: fix this, delete it, and tag again.",
-            file=sys.stderr,
+            "This run published nothing. If the tag is new: fix this, delete it, and tag the right "
+            "commit. If it was already released, don't delete it."
         )
         return 1
-    print(f"{argv[0]} can be released.")
+    print(f"{argv[0]} passes the release checks.")
     return 0
 
 

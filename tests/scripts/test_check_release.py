@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -26,6 +27,7 @@ _GIT_DROPPED = (
 _CHANGELOG = (
     "# Changelog\n\n## Unreleased\n\n## 1.2.3 (2026-11-06)\n\n- A note.\n\n## 1.2.2\n\n- Old.\n"
 )
+_SERVER = {"version": "1.2.3", "packages": [{"version": "1.2.3"}]}
 
 
 def _load_script() -> ModuleType:
@@ -68,6 +70,7 @@ def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     _git(root, "init", "-q", "-b", "main")
     (root / "pyproject.toml").write_text('[project]\nversion = "1.2.3"\n', encoding="utf-8")
     (root / "CHANGELOG.md").write_text(_CHANGELOG, encoding="utf-8")
+    (root / "server.json").write_text(json.dumps(_SERVER), encoding="utf-8")
     _git(root, "add", ".")
     _git(root, "commit", "-q", "-m", "release")
     _git(root, "update-ref", "refs/remotes/origin/main", "HEAD")
@@ -76,7 +79,7 @@ def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 def test_a_good_tag_passes(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert script.main(["v1.2.3"], repo) == 0
-    assert capsys.readouterr().out == "v1.2.3 can be released.\n"
+    assert capsys.readouterr().out == "v1.2.3 passes the release checks.\n"
 
 
 @pytest.mark.parametrize(
@@ -86,9 +89,17 @@ def test_a_tag_that_isnt_the_version_is_refused(
     repo: Path, tag: str, capsys: pytest.CaptureFixture[str]
 ) -> None:
     assert script.main([tag], repo) == 1
-    err = capsys.readouterr().err
-    assert f"tag {tag!r} doesn't match pyproject.toml's version '1.2.3'" in err
-    assert "This run published nothing" in err
+    out = capsys.readouterr().out
+    assert f"tag {tag!r} doesn't match this commit: pyproject.toml here says '1.2.3'" in out
+    assert "This run published nothing" in out
+
+
+def test_the_tag_refusal_never_offers_the_version_already_released() -> None:
+    """Tagging before the release PR merges is the likeliest slip, and `v0.10.0` is shipped."""
+    problem = script.tag_problem("v0.11.0", "0.10.0")
+    assert "'v0.10.0'" not in problem
+    assert "If the release PR hasn't merged, merge it" in problem
+    assert "squash commit on origin/main" in problem
 
 
 @pytest.mark.parametrize(
@@ -97,10 +108,10 @@ def test_a_tag_that_isnt_the_version_is_refused(
         ("# Changelog\n\n## Unreleased\n\n- A note.\n", "has no '## 1.2.3 (<date>)' section"),
         ("## 1.2.31 (2026-11-06)\n\n- Other.\n", "has no '## 1.2.3 (<date>)' section"),
         ("## 1x2x3 (2026-11-06)\n\n- Other.\n", "has no '## 1.2.3 (<date>)' section"),
-        ("## 1.2.3\n\n- No date, so no space.\n", "has no '## 1.2.3 (<date>)' section"),
         ("### 1.2.3 (2026-11-06)\n\n- Not a section.\n", "has no '## 1.2.3 (<date>)' section"),
-        ("## 1.2.3 (2026-11-06)\n\n## 1.2.2\n\n- Old.\n", "section for 1.2.3 is empty"),
-        ("## 1.2.3 (2026-11-06)\n  \n", "section for 1.2.3 is empty"),
+        ("## 1.2.3\n\n- No date.\n", "'## 1.2.3' heading has no date"),
+        ("## 1.2.3 (2026-11-06)\n\n## 1.2.2\n\n- Old.\n", "section for 1.2.3 has no notes"),
+        ("## 1.2.3 (2026-11-06)\n  \n", "section for 1.2.3 has no notes"),
     ],
 )
 def test_a_changelog_with_no_notes_is_refused(changelog: str, expected: str) -> None:
@@ -110,10 +121,31 @@ def test_a_changelog_with_no_notes_is_refused(changelog: str, expected: str) -> 
 
 
 @pytest.mark.parametrize(
+    "body",
+    [
+        "### Added\n\n### Fixed\n",
+        "  ### Added\n",
+        "###\n",
+        "<!-- TODO notes -->\n",
+        "---\n",
+        "* * *\n",
+        "- \n",
+        "*\n",
+    ],
+)
+def test_leftovers_arent_notes(body: str) -> None:
+    changelog = f"## 1.2.3 (2026-11-06)\n\n{body}\n## 1.2.2\n\n- Old.\n"
+    assert "has no notes" in (script.changelog_problem(changelog, "1.2.3") or "")
+
+
+@pytest.mark.parametrize(
     "changelog",
     [
         "## 1.2.3 (2026-11-06)\n\n- A note.\n",
         "## 1.2.3(2026-11-06)\n\n- A note.\n",
+        "## 1.2.3 (2026-11-06)\n\n#457 fixed it\n",
+        "## 1.2.3 (2026-11-06)\n\n### Added\n\n- A note.\n",
+        "## 1.2.3 (2026-11-06)\n\n**Security release:** a note.\n",
         _CHANGELOG,
     ],
 )
@@ -121,13 +153,66 @@ def test_a_section_with_notes_is_accepted(changelog: str) -> None:
     assert script.changelog_problem(changelog, "1.2.3") is None
 
 
-def test_a_section_of_only_subheadings_is_empty() -> None:
-    changelog = "## 1.2.3 (2026-11-06)\n\n### Added\n\n### Fixed\n\n## 1.2.2\n\n- Old.\n"
-    assert "is empty" in (script.changelog_problem(changelog, "1.2.3") or "")
+def test_a_commit_later_than_the_release_commit_is_refused(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Retagging origin/main after a refusal would ship what merged since, with no notes."""
+    text = _CHANGELOG.replace("## Unreleased\n", "## Unreleased\n\n- Merged later.\n")
+    (repo / "CHANGELOG.md").write_text(text, encoding="utf-8")
+    assert script.main(["v1.2.3"], repo) == 1
+    out = capsys.readouterr().out
+    assert "'## Unreleased' has entries" in out
+    assert "squash commit on origin/main" in out
 
 
-def test_a_note_starting_with_a_hash_is_a_note() -> None:
-    assert script.changelog_problem("## 1.2.3 (2026-11-06)\n\n#457 fixed it\n", "1.2.3") is None
+@pytest.mark.parametrize(
+    "changelog",
+    [
+        _CHANGELOG,
+        # Empty but for leftovers, and a backport branch may have no such section.
+        "## Unreleased\n\n### Added\n\n## 1.2.3 (2026-11-06)\n\n- A note.\n",
+        "## 1.2.3 (2026-11-06)\n\n- A note.\n",
+        # Only the section's own text counts.
+        "## 1.2.3 (2026-11-06)\n\n- A note about ## Unreleased.\n",
+    ],
+)
+def test_an_empty_or_missing_unreleased_passes(changelog: str) -> None:
+    assert script.unreleased_problem(changelog, "1.2.3") is None
+
+
+@pytest.mark.parametrize(
+    "server",
+    [
+        {"version": "1.2.2", "packages": [{"version": "1.2.3"}]},
+        {"version": "1.2.3", "packages": [{"version": "1.2.2"}]},
+    ],
+)
+def test_a_stale_server_json_is_refused_with_the_rest(
+    repo: Path, server: dict[str, object], capsys: pytest.CaptureFixture[str]
+) -> None:
+    (repo / "server.json").write_text(json.dumps(server), encoding="utf-8")
+    assert script.main(["v1.2.3"], repo) == 1
+    out = capsys.readouterr().out
+    assert "server.json says" in out
+    assert "sync-server-json.py" in out
+    assert "passes the release checks" not in out
+    assert "This run published nothing" in out
+
+
+@pytest.mark.parametrize(
+    "server",
+    [None, "not json", "[]", '{"version": "1.2.3"}', '{"version": "1.2.3", "packages": ["x"]}'],
+)
+def test_an_unreadable_server_json_is_refused_not_a_traceback(
+    repo: Path, server: str | None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = repo / "server.json"
+    if server is None:
+        path.unlink()
+    else:
+        path.write_text(server, encoding="utf-8")
+    assert script.main(["v1.2.3"], repo) == 1
+    assert "couldn't read server.json's versions" in capsys.readouterr().out
 
 
 def test_a_commit_on_another_branch_is_refused(
@@ -135,52 +220,60 @@ def test_a_commit_on_another_branch_is_refused(
 ) -> None:
     _git(repo, "commit", "-q", "--allow-empty", "-m", "on a branch, not merged")
     assert script.main(["v1.2.3"], repo) == 1
-    assert "isn't known to be on origin/main" in capsys.readouterr().err
+    out = capsys.readouterr().out
+    assert "isn't known to be on origin/main or release/1.2.x" in out
+    assert "squash-merged" in out
 
 
 def test_an_older_commit_on_main_passes(repo: Path) -> None:
     _git(repo, "commit", "-q", "--allow-empty", "-m", "later")
     _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
     _git(repo, "checkout", "-q", "HEAD~1")
-    assert script.branch_problem(repo) is None
+    assert script.branch_problem(repo, "1.2.3") is None
 
 
-def test_a_backport_branch_passes(repo: Path) -> None:
+def test_this_versions_backport_branch_passes(repo: Path) -> None:
     """v0.5.3 shipped from release/0.5.x, off main, so it carried only its fix."""
     _git(repo, "commit", "-q", "--allow-empty", "-m", "backport")
-    _git(repo, "update-ref", "refs/remotes/origin/release/0.5.x", "HEAD")
-    assert script.branch_problem(repo) is None
+    _git(repo, "update-ref", "refs/remotes/origin/release/1.2.x", "HEAD")
+    assert script.branch_problem(repo, "1.2.3") is None
 
 
 @pytest.mark.parametrize(
     "ref",
     [
         # An open release PR's branch, as this repo names them: right version, unmerged commit.
-        "refs/remotes/origin/release/0.11.0",
-        "refs/remotes/origin/release/v0.5.2",
+        "refs/remotes/origin/release/1.2.3",
+        "refs/remotes/origin/release/v1.2.3",
+        "refs/remotes/origin/release/1.2.3.x",
+        "refs/remotes/origin/release/v1.2.x",
+        # Another version's backport branch.
+        "refs/remotes/origin/release/0.5.x",
+        "refs/remotes/origin/release/1.3.x",
         "refs/remotes/origin/release/1.x",
+        "refs/remotes/origin/release/hotfix.for.x",
         "refs/remotes/origin/release/feature",
         "refs/remotes/origin/release",
         "refs/remotes/origin/feature/x",
-        "refs/remotes/origin/releases/0.5.x",
+        "refs/remotes/origin/releases/1.2.x",
         "refs/remotes/other/main",
-        "refs/heads/release/0.5.x",
+        "refs/heads/release/1.2.x",
         "refs/tags/origin/main",
         "refs/tags/refs/remotes/origin/main",
     ],
 )
-def test_only_the_remotes_main_and_backport_branches_count(repo: Path, ref: str) -> None:
+def test_only_the_remotes_main_and_this_versions_backport_count(repo: Path, ref: str) -> None:
     """In particular, a tag named `origin/main` can't stand in for the branch."""
     _git(repo, "commit", "-q", "--allow-empty", "-m", "off main")
     _git(repo, "update-ref", ref, "HEAD")
-    assert "isn't known to be on origin/main" in (script.branch_problem(repo) or "")
+    assert "isn't known to be on origin/main" in (script.branch_problem(repo, "1.2.3") or "")
 
 
 def test_no_branches_is_refused_not_assumed(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """A shallow or partial checkout can't show where the commit is, so it doesn't pass."""
     _git(repo, "update-ref", "-d", "refs/remotes/origin/main")
     assert script.main(["v1.2.3"], repo) == 1
-    assert "isn't known to be on origin/main" in capsys.readouterr().err
+    assert "isn't known to be on origin/main" in capsys.readouterr().out
 
 
 def test_outside_a_repository_is_refused_not_assumed(
@@ -189,7 +282,16 @@ def test_outside_a_repository_is_refused_not_assumed(
     monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
     outside = tmp_path / "not-a-repo"
     outside.mkdir()
-    assert "couldn't check the tagged commit's branch" in (script.branch_problem(outside) or "")
+    problem = script.branch_problem(outside, "1.2.3")
+    assert "couldn't check the tagged commit's branch" in (problem or "")
+
+
+def test_no_git_is_refused_not_assumed(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("PATH", "")
+    assert script.main(["v1.2.3"], repo) == 1
+    assert "couldn't run git" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize(
@@ -198,6 +300,8 @@ def test_outside_a_repository_is_refused_not_assumed(
         (None, "FileNotFoundError"),
         ("[project\n", "TOMLDecodeError"),
         ('[project]\ndynamic = ["version"]\n', "KeyError"),
+        ("[project]\nversion = 1\n", "TypeError"),
+        ('project = "x"\n', "TypeError"),
     ],
 )
 def test_an_unreadable_project_is_a_refusal_not_a_traceback(
@@ -209,9 +313,9 @@ def test_an_unreadable_project_is_a_refusal_not_a_traceback(
     else:
         path.write_text(pyproject, encoding="utf-8")
     assert script.main(["v1.2.3"], repo) == 1
-    err = capsys.readouterr().err
-    assert f"couldn't read the version and CHANGELOG: {exception}" in err
-    assert "This run published nothing" in err
+    out = capsys.readouterr().out
+    assert f"couldn't read the version and CHANGELOG: {exception}" in out
+    assert "This run published nothing" in out
 
 
 def test_a_refusal_reaches_the_process_exit_code(repo: Path) -> None:
@@ -226,20 +330,21 @@ def test_a_refusal_reaches_the_process_exit_code(repo: Path) -> None:
     assert passed.returncode == 0
 
 
-def test_no_git_is_refused_not_assumed(
-    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+def test_every_problem_is_reported_at_once_as_an_annotation(
+    repo: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    monkeypatch.setenv("PATH", "")
-    assert script.main(["v1.2.3"], repo) == 1
-    assert "couldn't run git" in capsys.readouterr().err
-
-
-def test_every_problem_is_reported_at_once(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _git(repo, "commit", "-q", "--allow-empty", "-m", "not on main")
-    (repo / "CHANGELOG.md").write_text("## Unreleased\n", encoding="utf-8")
+    (repo / "CHANGELOG.md").write_text("## Unreleased\n\n- Later.\n", encoding="utf-8")
+    (repo / "server.json").write_text("{}", encoding="utf-8")
     assert script.main(["v9.9.9"], repo) == 1
-    err = capsys.readouterr().err
-    assert err.count("error: ") == 3
+    lines = capsys.readouterr().out.splitlines()
+    assert sum(line.startswith("::error::") for line in lines) == 5
+    assert lines[-1].startswith("This run published nothing.")
+    assert "If it was already released, don't delete it." in lines[-1]
+
+
+def test_an_annotation_cant_be_split_or_decoded_by_its_text() -> None:
+    assert script._annotation("a%0Ab\r\nc") == "::error::a%250Ab%0D%0Ac"
 
 
 @pytest.mark.parametrize("argv", [[], ["v1.2.3", "extra"]])
