@@ -331,6 +331,7 @@ def register(ctx: "RegisterContext") -> None:
         bin_item_origin,
         refuse_planted_bin,
         refuse_restore_into_a_bin,
+        refuse_same_names,
         resolve_bin_items,
         resolve_paths,
     )
@@ -923,6 +924,9 @@ def register(ctx: "RegisterContext") -> None:
                 client, known_shares, "copy_files", "dest_folder", [dest_folder]
             )
             refuse_planted_bin("copy_files", paths, sources, [dest] * len(sources))
+            refuse_same_names(
+                "copy_files", paths, sources, [dest] * len(sources), overwrite=overwrite
+            )
             return _reply(
                 await copy_files(
                     client,
@@ -967,6 +971,9 @@ def register(ctx: "RegisterContext") -> None:
                 client, known_shares, "move_files", "dest_folder", [dest_folder]
             )
             refuse_planted_bin("move_files", paths, sources, [dest] * len(sources))
+            refuse_same_names(
+                "move_files", paths, sources, [dest] * len(sources), overwrite=overwrite
+            )
             return _reply(
                 await move_files(
                     client,
@@ -1191,11 +1198,10 @@ def register(ctx: "RegisterContext") -> None:
             )
             refuse_restore_into_a_bin(paths, items, bin_share.strip("/"), dest, dest_folder or None)
             # Each item goes to dest, or back to the folder it was deleted from.
-            refuse_planted_bin(
-                "restore_from_recycle_bin",
-                paths,
-                items,
-                [dest or bin_item_origin(bin_share.strip("/"), item) for item in items],
+            landings = [dest or bin_item_origin(bin_share.strip("/"), item) for item in items]
+            refuse_planted_bin("restore_from_recycle_bin", paths, items, landings)
+            refuse_same_names(
+                "restore_from_recycle_bin", paths, items, landings, overwrite=overwrite
             )
             return _reply(
                 await restore_from_recycle_bin(

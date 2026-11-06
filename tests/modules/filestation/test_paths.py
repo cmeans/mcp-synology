@@ -31,6 +31,7 @@ from mcp_synology.modules.filestation.paths import (
     bin_index,
     check_parts,
     refuse_bad_name,
+    refuse_same_names,
     refuse_write_target,
     resolve_bin_items,
     resolve_paths,
@@ -1429,6 +1430,128 @@ async def test_planted_bin_wiring(tool: str) -> None:
     with pytest.raises(ToolError) as exc:
         await fn(ctx=_fake_mcp_ctx(), **_PLANTING[tool])
     assert "the name of its recycle bin" in _error(exc)["message"]
+
+
+_SAME_NAME_ITEMS = {"/video/a/x.mkv", "/video/b/x.mkv", "/video/c"} | {
+    "/video/#recycle/a/x.mkv",
+    "/video/#recycle/b/x.mkv",
+}
+# A task that finishes at once, so a call that goes ahead doesn't wait out its hand-off.
+_FINISHES: dict[str, Any] = {"start": {"taskid": "t"}, "status": {"finished": True}}
+_SAME_NAME = {
+    "copy_files": {"paths": ["/video/a/x.mkv", "/video/b/x.mkv"], "dest_folder": "/video/c"},
+    "move_files": {"paths": ["/video/a/x.mkv", "/video/b/x.mkv"], "dest_folder": "/video/c"},
+    "restore_from_recycle_bin": {
+        "share": "video",
+        "paths": ["a/x.mkv", "b/x.mkv"],
+        "dest_folder": "/video/c",
+    },
+}
+
+
+@pytest.mark.parametrize("tool", sorted(PLANTED_BIN_TOOLS))
+async def test_same_name_sources_with_overwrite_are_refused_before_any_write(tool: str) -> None:
+    """#495: the second task would replace the first, whose original a move already removed."""
+    client = _FakeClient(_SAME_NAME_ITEMS)
+    fn = await _tool(tool, client)
+    with pytest.raises(ToolError) as exc:
+        await fn(ctx=_fake_mcp_ctx(), overwrite=True, **_SAME_NAME[tool])
+    error = _error(exc)
+    assert error["code"] == "invalid_parameter"
+    assert "would both land in /video/c with the same name" in error["message"]
+    assert "Nothing was changed" in error["message"]
+    assert error["param"] == "paths"
+    assert not [method for method, _ in client.calls if method == "start"]
+
+
+@pytest.mark.parametrize("tool", sorted(PLANTED_BIN_TOOLS))
+async def test_same_name_sources_without_overwrite_arent_refused(tool: str) -> None:
+    """DSM skips the second and says so; nothing is lost, so the call goes ahead."""
+    client = _FakeClient(_SAME_NAME_ITEMS, methods=_FINISHES)
+    fn = await _tool(tool, client)
+    try:
+        await fn(ctx=_fake_mcp_ctx(), overwrite=False, **_SAME_NAME[tool])
+    except ToolError as err:
+        assert "same name" not in str(err)
+    assert [method for method, _ in client.calls if method == "start"]
+
+
+async def test_a_restore_to_each_items_own_folder_isnt_refused() -> None:
+    """Without dest_folder, same-named items go back to different folders."""
+    client = _FakeClient({"/video/a", "/video/b"} | _SAME_NAME_ITEMS, methods=_FINISHES)
+    fn = await _tool("restore_from_recycle_bin", client)
+    try:
+        await fn(ctx=_fake_mcp_ctx(), share="video", paths=["a/x.mkv", "b/x.mkv"], overwrite=True)
+    except ToolError as err:
+        assert "same name" not in str(err)
+    assert [method for method, _ in client.calls if method == "start"]
+
+
+@pytest.mark.parametrize(
+    ("tool", "sources", "refused"),
+    [
+        ("move_files", ["/v/a/x", "/v/b/x"], True),
+        ("move_files", ["/v/a/X.MKV", "/v/b/x.mkv"], True),
+        ("move_files", ["/v/a/x", "/v/b/y", "/v/c/x"], True),
+        ("copy_files", ["/v/a/x", "/v/b/x"], True),
+        # A repeated path is one source, however it's spelled.
+        ("move_files", ["/v/a/x", "/v/a/x"], False),
+        ("move_files", ["/v/a/x", "v/a/x"], False),
+        ("move_files", ["/v/a/x", "/v/b/y"], False),
+        # A prefix of the name isn't the name.
+        ("move_files", ["/v/a/x", "/v/b/xy"], False),
+        # A folder and its own child: a move drops the child, so only the folder lands...
+        ("move_files", ["/v/a/x", "/v/a/x/x"], False),
+        ("move_files", ["/v/a/x/x", "/v/a/x"], False),
+        ("restore_from_recycle_bin", ["/v/#recycle/x", "/v/#recycle/x/x"], False),
+        # ...but a copy keeps both, and the child replaces the folder's copy.
+        ("copy_files", ["/v/a/x", "/v/a/x/x"], True),
+        # A sibling that only starts with the other's path isn't its child.
+        ("move_files", ["/v/a/x", "/v/a/x2/x"], True),
+    ],
+)
+def test_which_sources_collide(tool: str, sources: list[str], refused: bool) -> None:
+    dests = ["/v/dest"] * len(sources)
+    if refused:
+        with pytest.raises(ToolError, match="same name"):
+            refuse_same_names(tool, sources, sources, dests, overwrite=True)
+    else:
+        refuse_same_names(tool, sources, sources, dests, overwrite=True)
+
+
+def test_same_names_in_different_destinations_dont_collide() -> None:
+    refuse_same_names(
+        "restore_from_recycle_bin",
+        ["a/x", "b/x"],
+        ["/v/#recycle/a/x", "/v/#recycle/b/x"],
+        ["/v/a", "/v/b"],
+        overwrite=True,
+    )
+
+
+def test_a_destination_differing_only_in_case_counts_as_one() -> None:
+    with pytest.raises(ToolError, match="same name"):
+        refuse_same_names(
+            "move_files",
+            ["/v/a/x", "/v/b/x"],
+            ["/v/a/x", "/v/b/x"],
+            ["/v/D", "/v/d"],
+            overwrite=True,
+        )
+
+
+def test_the_refusal_quotes_the_callers_own_text_and_shows_hidden_characters() -> None:
+    with pytest.raises(ToolError) as exc:
+        refuse_same_names(
+            "move_files",
+            ["a/x", "b/x"],
+            ["/v/a/x", "/v/b/x"],
+            ["/v/rep\u200bort"] * 2,
+            overwrite=True,
+        )
+    message = _error(exc)["message"]
+    assert "'a/x' and 'b/x'" in message
+    assert "\\u200b" in message
 
 
 @pytest.mark.parametrize(

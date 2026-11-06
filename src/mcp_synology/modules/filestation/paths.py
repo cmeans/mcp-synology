@@ -88,8 +88,9 @@ PATH_PARAMS: dict[str, dict[str, PathRole]] = {
 NAME_PARAMS: dict[str, str] = {"rename": "new_name", "upload_file": "filename"}
 BIN_ITEM_PARAMS: dict[str, str] = {"restore_from_recycle_bin": "paths"}
 # Tools that put sources into a destination; each calls `refuse_planted_bin` (a source named
-# `#recycle` landing where it would be a bin). test_paths.py runs each through it, and fails
-# if a tool with sources and a DEST isn't listed here.
+# `#recycle` landing where it would be a bin) and `refuse_same_names` (two sources replacing
+# each other). test_paths.py runs each through both, and fails if a tool with sources and a
+# DEST isn't listed here.
 PLANTED_BIN_TOOLS: frozenset[str] = frozenset(
     {"copy_files", "move_files", "restore_from_recycle_bin"}
 )
@@ -213,6 +214,47 @@ def refuse_planted_bin(
                 raw,
                 _PLANTED_ADVICE.get(tool, "Copy or move the folder's contents instead."),
             )
+
+
+def refuse_same_names(
+    tool: str,
+    given: Sequence[str],
+    resolved: Sequence[str],
+    dests: Sequence[str],
+    *,
+    overwrite: bool,
+    param: str = "paths",
+) -> None:
+    """Refuse a copy, move or restore with ``overwrite=true`` where two sources would land at
+    the same destination under one name (#495): each runs as its own DSM task, so the second
+    replaces the first, and for a move or restore the first's original is already gone.
+
+    Names compare ignoring case, since a client may see them as one. ``overwrite=false`` loses
+    nothing (DSM skips the second, and says so). A repeated path isn't a collision, and nor is
+    a folder and its own child where `_collapse_overlaps` drops the child (all but a copy)."""
+    if not overwrite:
+        return
+    seen: dict[tuple[str, str], tuple[str, str]] = {}
+    for raw, path, dest in zip(given, resolved, dests, strict=True):
+        source = normalize_path(path)
+        name = source.rsplit("/", 1)[-1]
+        first_raw, first = seen.setdefault(
+            (normalize_path(dest).casefold(), name.casefold()), (raw, source)
+        )
+        if first == source:
+            continue
+        if tool != "copy_files" and (
+            source.startswith(f"{first}/") or first.startswith(f"{source}/")
+        ):
+            continue
+        _refuse(
+            f"{_OP_WORDS.get(tool, tool)} refused: {first_raw!r} and {raw!r} would both land in "
+            f"{shown(dest)} with the same name, so with overwrite=true one would replace the "
+            "other. Nothing was changed.",
+            param,
+            raw,
+            "Send them to different folders, or rename one first.",
+        )
 
 
 class BinWords(NamedTuple):
