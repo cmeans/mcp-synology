@@ -130,6 +130,48 @@ def test_the_exempt_workflow_runs_on_the_newest_python_ci_tests() -> None:
     assert versions == [str(newest)]
 
 
+def _floor_steps() -> list[dict[str, Any]]:
+    steps: list[dict[str, Any]] = _workflows()["ci.yml"]["jobs"]["floor"]["steps"]
+    return steps
+
+
+def test_the_floor_job_tests_the_floors_not_the_lock() -> None:
+    """`uv run` would sync back to the lock, so the job would pass without testing a floor."""
+    assert _scripts(_floor_steps()) == [
+        "timeout 900 uv sync --locked --extra dev",
+        ".venv/bin/python scripts/runtime_floors.py > floors.txt\n"
+        "timeout 900 uv pip install -r floors.txt\n",
+        "uv pip check",
+        "uv pip list",
+        "timeout 900 .venv/bin/python -m pytest -n auto --no-cov --timeout=120",
+    ]
+    used = [step["uses"].split("@")[0] for step in _floor_steps() if "uses" in step]
+    assert used == ["actions/checkout", "astral-sh/setup-uv"]
+    assert _floor_steps()[0]["with"]["persist-credentials"] is False
+
+
+def test_the_floor_job_runs_on_every_pr_and_isnt_soft() -> None:
+    """A floor breaks when our code changes, so a path filter or continue-on-error misses it."""
+    workflow = _workflows()["ci.yml"]
+    triggers = workflow.get("on", workflow[True])  # YAML 1.1 reads a bare `on` as True.
+    assert triggers["pull_request"] == {"branches": ["main"]}
+    assert "if" not in workflow["jobs"]["floor"]
+    assert "continue-on-error" not in workflow["jobs"]["floor"]
+    assert not [step for step in _floor_steps() if {"continue-on-error", "if"} & step.keys()]
+
+
+def test_the_floor_job_runs_on_the_oldest_and_newest_python_ci_tests() -> None:
+    jobs = _workflows()["ci.yml"]["jobs"]
+    matrix = jobs["test"]["strategy"]["matrix"]["python-version"]
+    by_version = sorted(matrix, key=lambda v: tuple(int(part) for part in str(v).split(".")))
+    assert jobs["floor"]["strategy"]["matrix"]["python-version"] == [by_version[0], by_version[-1]]
+    assert jobs["floor"]["strategy"]["fail-fast"] is False
+    versions = [
+        s["with"]["python-version"] for s in _floor_steps() if "python-version" in s.get("with", {})
+    ]
+    assert versions == ["${{ matrix.python-version }}"]
+
+
 def test_only_the_report_job_can_write_and_it_runs_only_on_main() -> None:
     workflow = _newest()
     # YAML reads a bare `on` as True.

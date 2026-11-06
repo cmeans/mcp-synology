@@ -68,7 +68,17 @@ uv run ruff format --check src/ tests/ scripts/          # format check
 uv run mypy src/ scripts/                                # typecheck (strict mode)
 ```
 
-If you change a dependency in `pyproject.toml`, run `uv lock` and commit `uv.lock`: CI refuses a stale lock.
+If you change a dependency in `pyproject.toml`, run `uv lock` and commit `uv.lock`: CI refuses a stale lock. CI also runs the unit tests with each runtime dependency at its lowest allowed version, so code that needs something newer has to raise that floor. To reproduce a failed `floor` job:
+
+```bash
+uv sync --python 3.15 --extra dev   # the Python in the failed job's name
+.venv/bin/python scripts/runtime_floors.py > floors.txt
+uv pip install -r floors.txt
+.venv/bin/python -m pytest -n auto --no-cov --timeout=120
+uv sync --python 3.12 --extra dev   # back to the lock, on the Python you normally use
+```
+
+Use `.venv/bin/python` there, not `uv run pytest`: `uv run` syncs back to the lock first, so it tests the lock and can pass when the floor fails. A floor can also fail on one Python and pass on another, so match the job's.
 
 Tests are mocked at the HTTP boundary (`respx`), so they don't reach
 a real Synology NAS or require credentials to run.

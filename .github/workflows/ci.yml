@@ -83,6 +83,40 @@ jobs:
         with:
           files: coverage.xml
 
+  floor:
+    # The lowest versions pyproject.toml allows (#115). What usually breaks a floor is our own code
+    # outgrowing it, so unlike deps-newest.yml this runs on every PR. Dev tools stay at the lock:
+    # users don't install them. One thing can break it with no change here: a floor with no wheel
+    # for a Python builds from source with the newest build tools (pyyaml 6.0.1 on 3.15; #571).
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The oldest and newest in `test`'s matrix (a test keeps them equal): a floor can install
+        # on one and not the other, as pyyaml 6.0 did.
+        python-version: ["3.11", "3.15"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          python-version: ${{ matrix.python-version }}
+      # `timeout` on whatever can stall (these two can build from source, and the tests can hang),
+      # so a stall fails at once with a line in the log, not at GitHub's 6-hour job limit.
+      - run: timeout 900 uv sync --locked --extra dev
+      - name: Install the runtime floors
+        run: |
+          .venv/bin/python scripts/runtime_floors.py > floors.txt
+          timeout 900 uv pip install -r floors.txt
+      - run: uv pip check
+      - name: Show what was installed
+        run: uv pip list
+      # .venv's Python, not `uv run`, which would sync back to the lock and test that instead.
+      # `--timeout` names the tests that hang, unless enough hang (about 30) that `timeout` stops
+      # pytest before its summary; the job still fails then.
+      - run: timeout 900 .venv/bin/python -m pytest -n auto --no-cov --timeout=120
+
   tool-quality:
     # Report only (#163): payload size, mcpscore and tdqs lint for an offline
     # all-modules config. Promote to a gate separately once its output is stable.

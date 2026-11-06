@@ -123,11 +123,11 @@ classifiers = [
 ]
 dependencies = [
     "mcp>=2.3,<3",            # Official MCP Python SDK 2.x (MCPServer)
-    "httpx>=0.27",             # Async HTTP client for DSM API calls
-    "pyyaml>=6.0",             # YAML config parsing (a SafeLoader only)
+    "httpx>=0.28",             # Async HTTP client for DSM API calls
+    "pyyaml>=6.0.1",           # YAML config parsing (a SafeLoader only)
     "keyring>=25.0",           # OS-native credential storage
-    "pydantic>=2.0",           # Config and settings validation
-    "click>=8.0",              # CLI framework (serve, setup, check)
+    "pydantic>=2.14.2",        # Config and settings validation
+    "click>=8.2.1",            # CLI framework (serve, setup, check)
     "regex>=2026.9.29",        # Current Unicode properties for File Station's new-name rules
 ]
 
@@ -136,6 +136,7 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "pytest-cov>=5.0",
+    "pytest-timeout>=2.3",
     "pytest-xdist>=3.6",
     "ruff>=0.5",               # Linting + formatting
     "mypy>=1.10",              # Type checking
@@ -186,11 +187,11 @@ addopts = "-m 'not integration'"
 ### Dependency Notes
 
 - **`mcp>=2.3,<3`**: The official Python MCP SDK. Floor is 2.3.0, the release the 2.x migration (#114) was tested against; 1.x (`mcp.server.fastmcp`) is no longer supported. Provides `mcp.server.mcpserver.MCPServer`, `Context`, type definitions, and stdio transport. 2.x brings its own HTTP client (`httpx2`) and `opentelemetry-api` (a no-op unless an OpenTelemetry SDK is configured); the DSM client keeps using `httpx`. We do NOT use the standalone `fastmcp` package by PrefectHQ.
-- **`httpx>=0.27`**: Async HTTP client. Used by the DSM API client for all NAS communication. Cleaner API than `aiohttp`, better testing story via `respx`.
+- **`httpx>=0.28`**: Async HTTP client. Used by the DSM API client for all NAS communication. Cleaner API than `aiohttp`, better testing story via `respx`. Floor: below 0.28, a space in a query is `%20` rather than `+`, which `test_entry_cgi_keeps_httpx_encoding` pins.
 - **`keyring>=25.0`**: OS-native credential storage. Auto-detects macOS Keychain, Windows Credential Manager, or Linux Secret Service.
-- **`pydantic>=2.0`**: Config validation, module settings schemas, type coercion.
-- **`pyyaml>=6.0`**: Config file parsing. Always a SafeLoader: `yaml.safe_load()`, or `core/config.py` `parse_config_text` for config files (a SafeLoader subclass that refuses repeated keys, #464) — never `yaml.load()` with any other loader.
-- **`click>=8.0`**: CLI framework. Three subcommands: `serve` (MCP server mode), `setup` (interactive credential bootstrap), `check` (validate credentials). Click handles prompts, password masking, and colored output for the interactive `setup` flow — things that would be tedious with argparse.
+- **`pydantic>=2.14.2`**: Config validation, module settings schemas, type coercion. Floor: `mcp` needs 2.12.0 or later, and 2.14.2 has the fixes for pydantic's advisories of 2026-10-29 that reach those versions (GHSA-3r8g-cqwr-jr29, GHSA-qpmf-fgh3-ff25, GHSA-955g-x97g-8mcp, GHSA-gj4f-r7mf-jjxh).
+- **`pyyaml>=6.0.1`**: Config file parsing. Floor: 6.0 has no wheels past Python 3.11 and its source fails to build on 3.12 and later. Always a SafeLoader: `yaml.safe_load()`, or `core/config.py` `parse_config_text` for config files (a SafeLoader subclass that refuses repeated keys, #464) — never `yaml.load()` with any other loader.
+- **`click>=8.2.1`**: CLI framework. Three subcommands: `serve` (MCP server mode), `setup` (interactive credential bootstrap), `check` (validate credentials). Click handles prompts, password masking, and colored output for the interactive `setup` flow — things that would be tedious with argparse. Floor: the tests read `CliRunner`'s separate stderr, new in 8.2, and interactive `setup` tests hang at 8.2.0.
 - **`regex>=2026.9.29`**: Unicode properties the standard library lacks or has only in an old version: `Default_Ignorable_Code_Point`, joining type, combining class, Indic syllabic category, emoji properties and scripts, for File Station's rules on the names a tool creates (#515). Python 3.11's `unicodedata` is Unicode 14. Which names are refused follows the Unicode data of the installed `regex` (from 2024.11.6 to 2026.9.29, `Extended_Pictographic` lost 707 characters such as ★), so the floor is the version the tests run against, and `test_helpers.py` pins a case that changed. The repeated-mark check's NFD takes combining classes from `regex` too, and decompositions from `unicodedata` up to Python 3.11's Unicode (14.0; they never change once a character is assigned) and from the generated `filestation/decompositions.py` for every character assigned since, so its verdict is the same on every Python. Raise the floor and the data together: regenerate `filestation/standardized_variants.py` (`scripts/gen_standardized_variants.py`, from StandardizedVariants.txt and emoji-variation-sequences.txt) and `filestation/decompositions.py` (`scripts/gen_decompositions.py`, from UnicodeData.txt and DerivedAge.txt) from the Unicode version of the new floor's data. `regex` doesn't report that version: its release notes name it, and the header of `standardized_variants.py` records the one in use (18.0.0). It ships wheels for every platform. Its stubs, `types-regex`, are a dev dependency.
 - **`respx>=0.22`** (dev): httpx-native mock library. Much cleaner than `unittest.mock.patch` for HTTP testing.
 
@@ -295,11 +296,12 @@ jobs:
 ```
 
 **CI Notes:**
-- Three parallel jobs: lint, typecheck, test. Fast feedback — failures are independent.
+- Parallel jobs, among them lint, typecheck, test and floor. Fast feedback — failures are independent.
 - Test matrix: Python 3.11 to 3.15.
 - `uv` for CI via `astral-sh/setup-uv` — faster than pip.
 - `UV_LOCKED: "1"` at the top of every workflow that runs uv, so `uv sync` and `uv run` refuse a `uv.lock` that doesn't match `pyproject.toml`. `tests/test_ci_workflows.py` checks it. Dependabot's Python updates use its `uv` ecosystem, which updates the lock.
 - `deps-newest.yml` is the one exception (#115): weekly, by hand, and on PRs touching `pyproject.toml`, `uv.lock` or the workflow, it runs the unit tests on the newest versions those allow, on the newest Python CI tests, since a user's resolver takes them and the lock doesn't. Not required. A failure on main opens or updates one issue, and a pass closes it, from a job with no checkout that never runs on a PR. Known limit: the lock resolves all extras together, so a cap in the `dev` or `vdsm` extra can hold a runtime dependency back from what a user gets.
+- The `floor` job in `ci.yml` (#115), on every PR and push: on the oldest and newest Python CI tests, it installs each runtime dependency at exactly its `pyproject.toml` floor (`scripts/runtime_floors.py`; dev tools stay at the lock) and runs the unit tests. What usually breaks a floor is our own code outgrowing it, so unlike `deps-newest.yml` it has no path filter. It also fails when a floor can't install on either Python, as `pyyaml>=6.0` couldn't on the newest. Not required. Known limit: a floor with no wheel for a Python builds from source with the newest build tools (pyyaml 6.0.1 on 3.15), so a build-tool release can fail the job with no change in this repo (#571). Not covered: vdsm at the floors, the Pythons in between, other operating systems (#184), transitive dependencies (they stay at the lock unless a floor forces them), and dev tools' own floors.
 - Coverage collected on 3.12, uploaded to Codecov. Not a hard gate initially — just visibility.
 - Integration tests excluded by default (`addopts = "-m 'not integration'"` in pyproject.toml).
 
