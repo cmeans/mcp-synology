@@ -568,9 +568,9 @@ def test_an_orphan_backport_branch_is_refused(repo: Path) -> None:
     _git(repo, "checkout", "-q", "--orphan", "other")
     _git(repo, "commit", "-q", "--allow-empty", "-m", "unrelated")
     _git(repo, "update-ref", "refs/remotes/origin/release/1.2.x", "HEAD")
-    assert "couldn't check where release/1.2.x was cut from" in (
-        script.branch_problem(repo, "1.2.3") or ""
-    )
+    problem = script.branch_problem(repo, "1.2.3") or ""
+    assert "couldn't check where release/1.2.x was cut from" in problem
+    assert "it may share no history with origin/main. Cut it from the last v1.2.* tag." in problem
 
 
 def test_a_ref_name_that_isnt_utf8_is_not_a_traceback(repo: Path) -> None:
