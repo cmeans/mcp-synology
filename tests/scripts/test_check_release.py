@@ -209,8 +209,25 @@ def test_older_sections_dont_count_as_above() -> None:
     assert script.unreleased_problem(changelog, "1.2.3") is None
 
 
-def test_with_no_section_for_the_version_only_the_first_counts() -> None:
-    assert script.unreleased_problem("## 1.2.2\n\n## 1.2.1\n\n- Old.\n", "1.2.3") is None
+@pytest.mark.parametrize(
+    "changelog",
+    [
+        "## 1.2.2\n\n## 1.2.1\n\n- Old.\n",
+        # A shipped version's notes aren't unreleased, and moving them would be wrong.
+        "## 1.2.2 (2026-01-01)\n\n- Old.\n",
+        "## [1.2.2]\n\n- Old.\n",
+    ],
+)
+def test_with_no_section_for_the_version_older_ones_dont_count(changelog: str) -> None:
+    assert script.unreleased_problem(changelog, "1.2.3") is None
+
+
+@pytest.mark.parametrize(
+    "changelog",
+    ["## 1.2.3\n\n- A note.\n", "## 1.2.3(d)\n\n- A note.\n", "## 1.2.3 (d)\n\n- A note.\n"],
+)
+def test_the_versions_own_section_isnt_above_itself(changelog: str) -> None:
+    assert script.unreleased_problem(changelog, "1.2.3") is None
 
 
 @pytest.mark.parametrize(
@@ -281,7 +298,7 @@ def test_an_older_commit_on_main_passes(repo: Path) -> None:
     assert script.branch_problem(repo, "1.2.3") is None
 
 
-@pytest.mark.parametrize("version", ["1.2.0", "1.0.0", "1.2"])
+@pytest.mark.parametrize("version", ["1.2.0", "1.0.0", "1.2", "1.2.0rc1", "1.2.00", "1.2.1rc1"])
 def test_a_dot_zero_cant_ship_from_a_backport_branch(repo: Path, version: str) -> None:
     """QA round 2 on #574: an unmerged release PR on `release/1.2.x` passed."""
     _git(repo, "commit", "-q", "--allow-empty", "-m", "release")

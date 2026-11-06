@@ -80,9 +80,9 @@ def changelog_problem(changelog: str, version: str) -> str | None:
     section = _section(changelog, rf"{escaped}(?: |\()")
     if section is None:
         if re.search(rf"^## {escaped}\s*$", changelog, re.MULTILINE):
-            return f"CHANGELOG.md's '## {version}' heading has no date: '## {version} (<date>)'"
-        return f"CHANGELOG.md has no '## {version} (<date>)' section: see {_RELEASE_STEPS}"
-    return None if _has_notes(section) else f"CHANGELOG.md's section for {version} has no notes"
+            return f"CHANGELOG.md's '## {version}' heading has no date: '## {version} (<date>)'."
+        return f"CHANGELOG.md has no '## {version} (<date>)' section: see {_RELEASE_STEPS}."
+    return None if _has_notes(section) else f"CHANGELOG.md's section for {version} has no notes."
 
 
 def unreleased_problem(changelog: str, version: str, *, tag_matches: bool = True) -> str | None:
@@ -90,13 +90,16 @@ def unreleased_problem(changelog: str, version: str, *, tag_matches: bool = True
     above its own section (an empty `## Unreleased` or none, as on a backport branch), so entries
     there are changes that aren't in this version's notes. The likeliest route is retagging after
     a refusal, when `origin/main` has moved on. Any `## ` section above it counts, whatever it's
-    called. With no section for this version (`changelog_problem` says so), only the first does.
+    called. With no section for this version (`changelog_problem` says so), only the first does,
+    unless it's a shipped version's: nothing there is unreleased.
 
     When the tag isn't this version, `version` has already shipped, so its notes aren't the place
     for those entries, and the advice to move them stays out."""
     headings = list(re.finditer(r"^## .*$", changelog, re.MULTILINE))
     own = re.compile(rf"## {re.escape(version)}(?: |\(|\s*$)")
-    stop = next((i for i, h in enumerate(headings) if own.match(h.group())), 1)
+    first_is_a_version = bool(headings) and re.match(r"## \[?\d", headings[0].group()) is not None
+    default = 0 if first_is_a_version else 1
+    stop = next((i for i, h in enumerate(headings) if own.match(h.group())), default)
     for index, heading in enumerate(headings[:stop]):
         end = headings[index + 1].start() if index + 1 < len(headings) else None
         if not _has_notes(changelog[heading.end() : end]):
@@ -108,9 +111,9 @@ def unreleased_problem(changelog: str, version: str, *, tag_matches: bool = True
             f"{version}'s notes. "
             + (
                 "If this is the release commit, move those entries into the version's notes in a "
-                f"PR first. If it's a later commit, {later}"
+                f"PR first. If it's a later commit, {later}."
                 if tag_matches
-                else f"{later[0].upper()}{later[1:]}"
+                else f"{later[0].upper()}{later[1:]}."
             )
         )
     return None
@@ -123,14 +126,14 @@ def server_json_problem(root: Path, version: str) -> str | None:
         server = json.loads((root / "server.json").read_text(encoding="utf-8"))
         found = [server["version"], *(package["version"] for package in server["packages"])]
         if len(found) < 2:
-            return "server.json lists no packages, so it has no package version to check"
+            return "server.json lists no packages, so it has no package version to check."
     except (OSError, ValueError, KeyError, TypeError) as error:
         return f"couldn't read server.json's versions: {type(error).__name__}: {error}"
     if all(value == version for value in found):
         return None
     return (
         f"server.json says {found}, not {version!r}: run scripts/sync-server-json.py in a PR, "
-        f"and {_TAG_THE_MERGE} once it merges"
+        f"and {_TAG_THE_MERGE} once it merges."
     )
 
 
@@ -141,8 +144,9 @@ def branch_problem(root: Path, version: str) -> str | None:
     Exact ref names: a tag named `origin/main` can't stand in for the branch, and git's patterns
     also match below a name, which `release/0.11.x/feature` mustn't.
     """
-    parts = version.split(".")
-    backport = ".".join(parts[:2]) + ".x" if len(parts) > 2 and parts[2] != "0" else None
+    # A final patch only: a pre-release, like a `.0`, ships from main.
+    is_patch = re.fullmatch(r"\d+\.\d+\.0*[1-9]\d*", version) is not None
+    backport = ".".join(version.split(".")[:2]) + ".x" if is_patch else None
     allowed = {"refs/remotes/origin/main"}
     if backport:
         allowed.add(f"refs/remotes/origin/release/{backport}")
@@ -170,7 +174,7 @@ def branch_problem(root: Path, version: str) -> str | None:
     other = (
         f" For a backport, push this commit to origin/release/{backport}."
         if backport
-        else f" A {version} can't ship from a backport branch: those patch a released line."
+        else f" {version} can't ship from a backport branch: those patch a released line."
     )
     return (
         f"the tagged commit isn't known to be on {where}. PRs are squash-merged, so a PR branch's "

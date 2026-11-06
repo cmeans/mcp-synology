@@ -202,7 +202,7 @@ This convention was retired-and-restored on 2026-04-11 after PRs #13, #15, and #
 
 **Backporting a fix to a released line** (a patch such as `0.10.1`; a `.0` ships only from `main`):
 1. Cut `release/0.10.x` from the last `v0.10.y` tag. Cut from `main`, it would ship all of `main`'s unreleased work
-2. If that tag's `publish.yml` has no `gate` job (anything before this PR's release), cherry-pick the gate first: otherwise nothing checks the tag
+2. If that tag's `publish.yml` has no `gate` job (any tag before the first release after #574), cherry-pick the gate first: otherwise nothing checks the tag. Expect conflicts on `CHANGELOG.md` (keep only the gate's entry, none of `main`'s) and on `tests/test_ci_workflows.py` (drop it if that tag lacks it)
 3. Apply the fix, and run the tests locally: no CI runs on that branch
 4. Follow steps 1 to 4, then tag the branch's commit as in step 7
 5. Carry the new section back to `main`'s `CHANGELOG.md` in a PR

@@ -108,8 +108,13 @@ def main() -> int:
     drifted = {field: v for field, v in current.items() if v != pyproject_version}
 
     if args.check:
-        if not server.get("packages"):
-            print("server.json lists no packages.", file=sys.stderr)
+        packages = server.get("packages")
+        if (
+            not isinstance(packages, list)
+            or not packages
+            or not all(isinstance(package, dict) for package in packages)
+        ):
+            print("server.json's packages must be a non-empty list of objects.", file=sys.stderr)
             return 1
         if drifted:
             print(
