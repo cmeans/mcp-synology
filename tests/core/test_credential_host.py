@@ -7,8 +7,8 @@ the config was found.
 
 from __future__ import annotations
 
-import contextlib
 import asyncio
+import contextlib
 import importlib.util
 import io
 import os
