@@ -12,9 +12,9 @@ commit or with the wrong version is costly to undo. It checks that:
   added no entry still passes;
 - the tagged commit (HEAD) is on `origin/main` or, for a patch on a released line, this version's
   backport branch, `release/<major>.<minor>.x` (as v0.5.3 was, shipping a fix without main's
-  unreleased work), cut from a tag of that line and not from `main`. Not for a `.0`, which has no
-  released line to patch: `release/0.11.x` or `release/0.11.0` (how this repo names a release PR's
-  branch) would be an unmerged commit.
+  unreleased work), cut at an earlier final tag of that line and not from `main`. Not for a `.0`,
+  which has no released line to patch: `release/0.11.x` or `release/0.11.0` (how this repo names a
+  release PR's branch) would be an unmerged commit.
 
 Standard library only. It needs a checkout with those branches fetched. Each problem prints as a
 GitHub Actions error, so it reaches the run's summary.
@@ -203,7 +203,10 @@ def branch_problem(root: Path, version: str, *, tag_matches: bool = True) -> str
             # without its first release. Named like a final release of this line, and earlier.
             tags = _git(root, "tag", "--list", f"v{line}.*", "--points-at", base.stdout.strip())
             if base.returncode != 0 or tags.returncode != 0:
-                return f"couldn't check where release/{backport} was cut from."
+                return (
+                    f"couldn't check where release/{backport} was cut from: it may share no "
+                    f"history with origin/main. Cut it from the last v{line}.* tag."
+                )
             earlier = (
                 int(found_tag.group(1))
                 for found_tag in map(_LINE_TAG.fullmatch, tags.stdout.split())
@@ -211,6 +214,8 @@ def branch_problem(root: Path, version: str, *, tag_matches: bool = True) -> str
             )
             if any(patch < int(version.split(".")[2]) for patch in earlier):
                 return None
+            if not tag_matches:
+                return None  # the tag's own refusal comes first: this version isn't the tag's
             cut_point = base.stdout.strip()[:7]
             return (
                 f"release/{backport} wasn't cut at a final v{line}.* tag earlier than this "

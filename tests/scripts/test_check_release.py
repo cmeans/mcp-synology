@@ -494,13 +494,30 @@ def test_a_backport_branch_cut_from_main_is_refused(repo: Path) -> None:
     _git(repo, "update-ref", "refs/remotes/origin/release/1.2.x", "HEAD")
     problem = script.branch_problem(repo, "1.2.3") or ""
     assert "wasn't cut at a final v1.2.* tag earlier than this version" in problem
+    cut_point = subprocess.run(
+        ["git", "rev-parse", "--short=7", "refs/remotes/origin/main"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    assert f"it leaves origin/main at {cut_point}." in problem
 
 
 def test_the_versions_own_tag_doesnt_vouch_for_its_branch(repo: Path) -> None:
+    """At the cut point, where a tag would otherwise count."""
+    _git(repo, "tag", "v1.2.3")
     _git(repo, "commit", "-q", "--allow-empty", "-m", "the patch")
     _git(repo, "update-ref", "refs/remotes/origin/release/1.2.x", "HEAD")
-    _git(repo, "tag", "v1.2.3")
     assert "wasn't cut at a final v1.2.* tag" in (script.branch_problem(repo, "1.2.3") or "")
+
+
+def test_a_forgotten_bump_gets_only_the_tag_refusal(repo: Path) -> None:
+    """Cut at the last tag, with the version not bumped: re-cutting wouldn't help."""
+    _git(repo, "tag", "v1.2.3")
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "the patch")
+    _git(repo, "update-ref", "refs/remotes/origin/release/1.2.x", "HEAD")
+    assert script.branch_problem(repo, "1.2.3", tag_matches=False) is None
 
 
 def test_no_origin_main_says_so(repo: Path) -> None:

@@ -107,15 +107,16 @@ def main() -> int:
     current = collect_versions(server)
     drifted = {field: v for field, v in current.items() if v != pyproject_version}
 
+    packages = server.get("packages")
+    if (
+        not isinstance(packages, list)
+        or not packages
+        or not all(isinstance(package, dict) for package in packages)
+    ):
+        print("server.json's packages must be a non-empty list of objects.", file=sys.stderr)
+        return 1
+
     if args.check:
-        packages = server.get("packages")
-        if (
-            not isinstance(packages, list)
-            or not packages
-            or not all(isinstance(package, dict) for package in packages)
-        ):
-            print("server.json's packages must be a non-empty list of objects.", file=sys.stderr)
-            return 1
         if drifted:
             print(
                 f"server.json version drift detected. pyproject.toml = {pyproject_version}",
