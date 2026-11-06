@@ -613,13 +613,15 @@ async def _skip_report(
     ok: list[str],
     skipped_paths: list[str],
     remove_src: bool,
+    earlier: Sequence[str] = (),
 ) -> list[str]:
     """Lines for a copy/move/restore result where DSM skipped something (#171, #189).
 
     DSM's ``skipstatus`` says only that something was skipped for a source: all of a file,
     or some of a folder's children (the rest still went through). So each skipped source's
     type is looked up: a file was skipped, a folder had items skipped. A source whose type
-    can't be read keeps the hedged "in whole or in part" wording.
+    can't be read keeps the hedged "in whole or in part" wording. ``earlier``: the sources that ran
+    before these in the same call, when a hand-off split it up: only for what this call put there.
     """
     try:
         kinds = await paths_isdir(client, skipped_paths)
@@ -636,6 +638,8 @@ async def _skip_report(
     # Compared as `refuse_same_names` does; a skipped folder's other items landed too.
     landed: dict[str, str] = {}
     own: dict[str, str] = {}
+    for p in earlier:
+        landed.setdefault(p.rsplit("/", 1)[-1].lower(), p)
     for p in normalized:
         name = p.rsplit("/", 1)[-1].lower()
         if p in skipped_paths and name in landed:
@@ -688,7 +692,7 @@ async def _skip_report(
         lines.append(
             "Don't retry these with overwrite=true unless the user asked for it: what's there may "
             "be what this call just put there, and it would be replaced, possibly with no copy in "
-            "the recycle bin:"
+            "the recycle bin. Send them to another folder, or rename them first:"
         )
         lines.extend(f"  {p} (this call's {first} went first)" for p, first in own.items())
     if not own:
@@ -792,7 +796,11 @@ async def _copy_move(
             if records is not None:
                 records.add(
                     TaskRecord(
-                        handle=outcome.handle, paths=[p], dest=task_dest, overwrite=task_overwrite
+                        handle=outcome.handle,
+                        paths=[p],
+                        dest=task_dest,
+                        overwrite=task_overwrite,
+                        earlier=normalized[:i],
                     )
                 )
             reply = handoff_reply(
@@ -807,6 +815,15 @@ async def _copy_move(
             if running is not None:
                 other = task_dest if task_dest != dest else None
                 reply = _already_running(operation, p, other) + "\n" + reply
+            ran = {path.rsplit("/", 1)[-1].lower() for path in normalized[: i + 1]}
+            alike = [q for q in normalized[i + 1 :] if q.rsplit("/", 1)[-1].lower() in ran]
+            if alike:
+                # #580: "Run them again" with overwrite=true would replace what this call placed.
+                reply += (
+                    f"\nNamed like one this call already ran: {', '.join(map(shown, alike))}. "
+                    "Run them with overwrite=false or send them to another folder: with "
+                    "overwrite=true they could replace it."
+                )
             return reply, True
         size, skipped = outcome
         total_processed += size
@@ -827,6 +844,8 @@ async def _copy_move_summary(
     remove_src: bool,
     total_processed: int,
     skipped_paths: list[str],
+    *,
+    earlier: Sequence[str] = (),
 ) -> str:
     """The result text of a finished copy or move (a restore rewords it, ``_as_restore``)."""
     verb = "Copied" if not remove_src else "Moved"
@@ -839,7 +858,9 @@ async def _copy_move_summary(
         lines = [format_status(f"{verb} {len(normalized):,} item(s) to {dest}/:")]
         lines.extend(f"  {name(p)}" for p in normalized)
     else:
-        lines = await _skip_report(client, verb, dest, normalized, ok, skipped_paths, remove_src)
+        lines = await _skip_report(
+            client, verb, dest, normalized, ok, skipped_paths, remove_src, earlier
+        )
 
     if total_processed > 0:
         lines.append(f"\nTotal size: {format_size(total_processed)}")

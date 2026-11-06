@@ -135,6 +135,42 @@ async def test_two_folders_merge_and_overwrite_false_replaces_nothing(tree: Tree
     assert await tree.text("b/n/same.txt") == "from b"
 
 
+async def test_a_copy_replaces_the_first_too(tree: Tree) -> None:
+    first = await tree.file("a/x.txt", "first")
+    second = await tree.file("b/x.txt", "second")
+    out = await copy_files(
+        tree.client, paths=[first, second], dest_folder=tree.at("d"), overwrite=True
+    )
+    assert "Copied 2 item(s)" in out
+    assert await tree.text("d/x.txt") == "second"
+
+
+async def test_names_differing_only_in_case_both_land_without_overwrite(tree: Tree) -> None:
+    upper = await tree.file("a/X.TXT", "upper")
+    lower = await tree.file("b/x.txt", "lower")
+    await move_files(tree.client, paths=[upper, lower], dest_folder=tree.at("d"), overwrite=False)
+    assert await tree.text("d/X.TXT") == "upper"
+    assert await tree.text("d/x.txt") == "lower"
+
+
+async def test_two_folders_with_overwrite_replace_same_named_items(tree: Tree) -> None:
+    """Why two folders of one name are refused: the merge loses the first's copy, not in the bin."""
+    await tree.file("a/n/same.txt", "from a")
+    await tree.file("a/n/only-a.txt", "a")
+    await tree.file("b/n/same.txt", "from b")
+    await tree.file("b/n/only-b.txt", "b")
+    await move_files(
+        tree.client,
+        paths=[tree.at("a/n"), tree.at("b/n")],
+        dest_folder=tree.at("d"),
+        overwrite=True,
+    )
+    assert await tree.text("d/n/same.txt") == "from b"
+    assert await tree.text("d/n/only-a.txt") == "a"
+    assert await tree.text("d/n/only-b.txt") == "b"
+    assert "(0 found in" in await list_recycle_bin(tree.client, share="home", pattern="same.txt")
+
+
 @pytest.mark.parametrize(
     ("operation", "folder_first", "overwrite", "code"),
     [

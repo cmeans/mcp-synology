@@ -31,6 +31,7 @@ from mcp_synology.modules.filestation.paths import (
     bin_index,
     check_parts,
     refuse_bad_name,
+    refuse_planted_bin,
     refuse_same_names,
     refuse_write_target,
     resolve_bin_items,
@@ -1555,10 +1556,13 @@ def test_a_destination_differing_only_in_case_is_another_folder() -> None:
         ("move_files", ["/v/d/n/q", "/v/n"], True),
         ("copy_files", ["/v/n", "/v/d/n/q"], True),
         ("move_files", ["/v/N", "/v/d/n/q"], True),
+        ("move_files", ["/v/n", "/v/d/N/q"], True),
         ("move_files", ["/v/n", "/v/d/n/deep/er/q"], True),
         # A sibling that only starts with the name isn't inside it.
         ("move_files", ["/v/n", "/v/d/n2/q"], False),
         ("move_files", ["/v/m", "/v/d/n/q"], False),
+        # One source can't land on itself.
+        ("move_files", ["/v/d/n/n"], False),
         # A source already at the destination stays where it is.
         ("copy_files", ["/v/d/n", "/v/d/n/q"], False),
     ],
@@ -1571,6 +1575,56 @@ def test_a_source_inside_where_another_lands(tool: str, sources: list[str], refu
             refuse_same_names(tool, sources, sources, dests, overwrite=True)
     else:
         refuse_same_names(tool, sources, sources, dests, overwrite=True)
+
+
+def test_a_source_inside_where_another_lands_in_a_shares_top() -> None:
+    with pytest.raises(ToolError, match="which holds"):
+        refuse_same_names(
+            "move_files", ["/x/n", "/v/n/q"], ["/x/n", "/v/n/q"], ["/v"] * 2, overwrite=True
+        )
+
+
+def test_the_inside_refusal_escapes_what_it_quotes() -> None:
+    with pytest.raises(ToolError) as exc:
+        refuse_same_names(
+            "move_files",
+            ["/v/n\u3164", "/v/d/n\u3164/q\u3164"],
+            ["/v/n\u3164", "/v/d/n\u3164/q\u3164"],
+            ["/v/d"] * 2,
+            overwrite=True,
+        )
+    message = _error(exc)["message"]
+    assert "\u3164" not in message
+    assert "\\u3164" in message
+
+
+def test_every_pair_is_named_in_one_refusal() -> None:
+    """Pre-QA on #575: a flat restore of covers and folder images took 6 refusals."""
+    sources = [f"/v/{d}/{n}" for n in ("cover", "folder") for d in ("a", "b", "c")]
+    with pytest.raises(ToolError) as exc:
+        refuse_same_names("move_files", sources, sources, ["/v/d"] * 6, overwrite=True)
+    message = _error(exc)["message"]
+    for pair in ("'/v/a/cover' and '/v/c/cover'", "'/v/a/folder' and '/v/b/folder'"):
+        assert pair in message
+
+
+def test_a_long_list_of_pairs_is_capped() -> None:
+    sources = [f"/v/{i}/x" for i in range(50)]
+    with pytest.raises(ToolError) as exc:
+        refuse_same_names("move_files", sources, sources, ["/v/d"] * 50, overwrite=True)
+    assert "And 39 more." in _error(exc)["message"]
+
+
+def test_a_restore_is_told_about_leaving_out_the_destination() -> None:
+    with pytest.raises(ToolError) as exc:
+        refuse_same_names(
+            "restore_from_recycle_bin",
+            ["a/x", "b/x"],
+            ["/v/#recycle/a/x", "/v/#recycle/b/x"],
+            ["/v/d"] * 2,
+            overwrite=True,
+        )
+    assert "leave out dest_folder" in _error(exc)["suggestion"]
 
 
 def test_names_differing_only_in_case_say_so() -> None:
@@ -1628,6 +1682,26 @@ def test_a_planted_destination_cant_read_as_the_servers_sentence() -> None:
     message = _error(exc)["message"]
     assert f"land in {dest!r} with" in message
     assert "\\u3164" in message
+
+
+def test_the_second_source_is_escaped_too() -> None:
+    with pytest.raises(ToolError) as exc:
+        refuse_same_names(
+            "move_files",
+            ["/v/a/x", "/v/b\u3164/x"],
+            ["/v/a/x", "/v/b\u3164/x"],
+            ["/v/d"] * 2,
+            overwrite=True,
+        )
+    assert "\\u3164" in _error(exc)["message"]
+
+
+def test_a_planted_bins_refusal_escapes_what_it_quotes() -> None:
+    with pytest.raises(ToolError) as exc:
+        refuse_planted_bin("move_files", ["/v/a\u3164/#recycle"], ["/v/a\u3164/#recycle"], ["/v"])
+    message = _error(exc)["message"]
+    assert "\u3164" not in message
+    assert "land in '/v' as" in message
 
 
 @pytest.mark.parametrize(

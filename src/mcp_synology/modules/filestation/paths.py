@@ -218,12 +218,22 @@ def refuse_planted_bin(
             )
 
 
+_SAME_NAME_PAIRS_SHOWN = 10
 _SAME_NAME_ADVICE = (
     "Send them to different folders, or rename one first. To merge two folders without replacing "
     "anything, use overwrite=false: items already there are skipped and listed. Separate calls "
     "with overwrite=true don't avoid this: a later call replaces what an earlier one put there, "
     "possibly with no copy in the recycle bin, so do that only if the user asked for it."
 )
+
+
+def _same_name_advice(tool: str) -> str:
+    if tool == "restore_from_recycle_bin":
+        return (
+            "To put each back where it came from, leave out dest_folder. "
+            f"Otherwise: {_SAME_NAME_ADVICE[0].lower()}{_SAME_NAME_ADVICE[1:]}"
+        )
+    return _SAME_NAME_ADVICE
 
 
 def refuse_same_names(
@@ -256,6 +266,8 @@ def refuse_same_names(
     sources = [normalize_path(path) for path in resolved]
     landings: dict[tuple[str, str], tuple[str, str]] = {}
     kept: list[tuple[str, str]] = []
+    clashes: list[str] = []
+    first_clash = ""
     for raw, source, dest in zip(given, sources, dests, strict=True):
         if tool != "copy_files" and any(source.startswith(f"{other}/") for other in sources):
             continue
@@ -265,19 +277,31 @@ def refuse_same_names(
         first_raw, first = landings.setdefault((landing, name.lower()), (raw, source))
         if first == source:
             continue
-        names = (
-            "the same name"
-            if first.rsplit("/", 1)[-1] == name
-            else "names that differ only in case, which some file systems treat as one"
-        )
+        pair = f"{_escaped_repr(first_raw)} and {_escaped_repr(raw)}"
+        if not clashes:
+            names = (
+                "the same name"
+                if first.rsplit("/", 1)[-1] == name
+                else "names that differ only in case, which some file systems treat as one"
+            )
+            first_clash = raw
+            lead = f"{pair} would both land in {_escaped_repr(dest)} with {names}"
+            clashes.append(lead)
+        else:
+            clashes.append(pair)
+    if clashes:
+        shown_also = clashes[1:_SAME_NAME_PAIRS_SHOWN]
+        more = len(clashes) - 1 - len(shown_also)
+        also = f" Also: {'; '.join(shown_also)}." if shown_also else ""
+        if more:
+            also += f" And {more:,} more."
         _refuse(
-            f"{_OP_WORDS.get(tool, tool)} refused: {_escaped_repr(first_raw)} and "
-            f"{_escaped_repr(raw)} would both land in {_escaped_repr(dest)} with {names}, so with "
-            "overwrite=true one could replace the other (for folders, items of the same name "
-            "inside them). Nothing was changed.",
+            f"{_OP_WORDS.get(tool, tool)} refused: {clashes[0]}, so with overwrite=true one could "
+            f"replace the other (for folders, items of the same name inside them).{also} Nothing "
+            "was changed.",
             param,
-            raw,
-            _SAME_NAME_ADVICE,
+            first_clash,
+            _same_name_advice(tool),
         )
     for raw, source in kept:
         folder = source.rpartition("/")[0]
@@ -292,7 +316,7 @@ def refuse_same_names(
                     "overwrite=true it could be replaced before its turn. Nothing was changed.",
                     param,
                     raw,
-                    _SAME_NAME_ADVICE,
+                    _same_name_advice(tool),
                 )
             folder = parent
 
