@@ -24,12 +24,14 @@ from mcp_synology.core.formatting import (
     synology_error_response,
 )
 from mcp_synology.modules.filestation.helpers import (
+    _escaped_repr,
     _is_dot,
     describe_transport_error,
     dsm_str,
     ensure_recycle_status,
     find_missing_paths,
     missing_paths_suggestion,
+    name_key,
     normalize_path,
     path_exists,
     paths_isdir,
@@ -613,13 +615,15 @@ async def _skip_report(
     ok: list[str],
     skipped_paths: list[str],
     remove_src: bool,
+    earlier: Sequence[str] = (),
 ) -> list[str]:
     """Lines for a copy/move/restore result where DSM skipped something (#171, #189).
 
     DSM's ``skipstatus`` says only that something was skipped for a source: all of a file,
     or some of a folder's children (the rest still went through). So each skipped source's
     type is looked up: a file was skipped, a folder had items skipped. A source whose type
-    can't be read keeps the hedged "in whole or in part" wording.
+    can't be read keeps the hedged "in whole or in part" wording. ``earlier``: the sources that
+    landed before these in the same call, when a hand-off split it up.
     """
     try:
         kinds = await paths_isdir(client, skipped_paths)
@@ -632,6 +636,19 @@ async def _skip_report(
     folders = [p for p in skipped_paths if kinds.get(p) is True]
     unknown = [p for p in skipped_paths if p not in kinds]
     done = verb.lower()
+
+    # What this call itself put at the destination, which `overwrite=true` would replace (#580).
+    # Compared as `refuse_same_names` does; a skipped folder's other items landed too.
+    landed: dict[str, str] = {}
+    own: dict[str, str] = {}
+    for p in earlier:
+        landed.setdefault(name_key(p), p)
+    for p in normalized:
+        name = name_key(p)
+        if p in skipped_paths and name in landed:
+            own[p] = landed[name]
+        if p not in skipped_paths or kinds.get(p) is not False:
+            landed.setdefault(name, p)
 
     parts = []
     if files:
@@ -674,7 +691,26 @@ async def _skip_report(
         lines.append(
             f"For a skipped folder, the parts not already at the destination were still {done}."
         )
-    lines.append("Pass overwrite=true to replace them.")
+    if own:
+        lines.append(
+            "Don't retry these with overwrite=true unless the user asked to replace that item: "
+            "what's there may "
+            "be what this call just put there, and it would be replaced, possibly with no copy in "
+            "the recycle bin. Send them to another folder, or rename them first:"
+        )
+        lines.extend(
+            f"  {_escaped_repr(p)} (this call's {_escaped_repr(first)} went first)"
+            for p, first in own.items()
+        )
+    # This doesn't know what a finished call put there (#580), so this is never said flat.
+    caution = (
+        "unless what's there came from this or an earlier call of yours: that would replace it, "
+        "possibly with no copy in the recycle bin."
+    )
+    if not own:
+        lines.append(f"Pass overwrite=true to replace them, {caution}")
+    elif len(own) < len(skipped_paths):
+        lines.append(f"For the others, pass overwrite=true to replace them, {caution}")
     return lines
 
 
@@ -738,6 +774,7 @@ async def _copy_move(
     total_processed = 0
     done = list(already_done or [])
     skipped_paths: list[str] = []
+    landed_here: list[str] = []
     for i, p in enumerate(normalized):
         # A copy of the same source to another destination is a different operation; a
         # move (or restore) of a source that is already moving anywhere is not.
@@ -794,7 +831,12 @@ async def _copy_move(
             if records is not None:
                 records.add(
                     TaskRecord(
-                        handle=outcome.handle, paths=[p], dest=task_dest, overwrite=task_overwrite
+                        handle=outcome.handle,
+                        paths=[p],
+                        dest=task_dest,
+                        overwrite=task_overwrite,
+                        # Only what landed, and only for the destination this call asked for.
+                        earlier=landed_here if task_dest == dest else [],
                     )
                 )
             reply = handoff_reply(
@@ -809,11 +851,25 @@ async def _copy_move(
             if running is not None:
                 other = task_dest if task_dest != dest else None
                 reply = _already_running(operation, p, other) + "\n" + reply
+            # A task already running to another folder lands nothing here.
+            placed = [*landed_here, p] if task_dest == dest else landed_here
+            ran = {name_key(path) for path in placed}
+            alike = [q for q in normalized[i + 1 :] if name_key(q) in ran]
+            if alike:
+                # #580: "Run them again" with overwrite=true would replace what this call placed.
+                named = ", ".join(map(_escaped_repr, alike))
+                reply += (
+                    f"\nNamed like one this call already ran: {named}. "
+                    "Run them with overwrite=false or send them to another folder: with "
+                    "overwrite=true they could replace it."
+                )
             return reply, True
         size, skipped = outcome
         total_processed += size
         if skipped:
             skipped_paths.append(p)
+        else:
+            landed_here.append(p)
         done.append(p)
 
     text = await _copy_move_summary(
@@ -829,6 +885,8 @@ async def _copy_move_summary(
     remove_src: bool,
     total_processed: int,
     skipped_paths: list[str],
+    *,
+    earlier: Sequence[str] = (),
 ) -> str:
     """The result text of a finished copy or move (a restore rewords it, ``_as_restore``)."""
     verb = "Copied" if not remove_src else "Moved"
@@ -841,7 +899,9 @@ async def _copy_move_summary(
         lines = [format_status(f"{verb} {len(normalized):,} item(s) to {dest}/:")]
         lines.extend(f"  {name(p)}" for p in normalized)
     else:
-        lines = await _skip_report(client, verb, dest, normalized, ok, skipped_paths, remove_src)
+        lines = await _skip_report(
+            client, verb, dest, normalized, ok, skipped_paths, remove_src, earlier
+        )
 
     if total_processed > 0:
         lines.append(f"\nTotal size: {format_size(total_processed)}")
