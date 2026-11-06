@@ -1851,7 +1851,7 @@ class TestInstructionComments:
 # only padding at the ends.
 # +382 by #545: pause_download says a pause takes about 3 s, and why, and what its rows ask the
 # model to do next.
-PAYLOAD_BUDGET_CHARS = 57_515
+PAYLOAD_BUDGET_CHARS = 57_566
 
 
 class TestPayloadBudget:

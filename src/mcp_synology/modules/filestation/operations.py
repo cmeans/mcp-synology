@@ -462,7 +462,8 @@ async def _copy_move_one_path(
     Returns the `processed_size` byte count from the completed task (and whether DSM
     skipped items that already existed at the destination, #171) so the
     caller can sum sizes across all per-path tasks, or a Handoff when the task outlived
-    ``timeout`` or DSM stopped answering its status requests (#245). Raises ToolError on
+    ``timeout``, DSM stopped answering its status requests (#245), or DSM kept answering that it
+    has no such task (#521). Raises ToolError on
     failure (via error_response/synology_error_response). A task that DSM reports an
     error for (other than a 599 on a status read, #521), or whose call is canceled, is stopped,
     so orphaned tasks can't accumulate on the NAS.
@@ -857,8 +858,10 @@ async def _delete_one_path(
     """Delete a single path via DSM async-task pattern.
 
     Raises ToolError (via error_response/synology_error_response) on failure;
-    returns None when the delete finished, or a Handoff when the task outlived
-    ``timeout`` or DSM stopped answering its status requests (#245). A task that DSM
+    returns None when the delete finished, or DSM kept answering that it has no such task and
+    the path is gone (#521); or a Handoff when the task outlived ``timeout``, DSM stopped
+    answering its status requests (#245), or it has no such task and the path isn't known to be
+    gone. A task that DSM
     reports an error for, or whose call is canceled, is stopped; a 599 on a status read isn't
     such an error (#521).
     """

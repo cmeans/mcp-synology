@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 from unittest.mock import AsyncMock
 
 import httpx
@@ -1607,21 +1607,21 @@ class TestFileTask:
         assert rec.final_status == finished
 
 
-@pytest.fixture
-def no_read_wait(monkeypatch: pytest.MonkeyPatch) -> None:
-    import mcp_synology.modules.filestation.tasks as tasks
-
-    monkeypatch.setattr(tasks, "_LOST_TASK_WAIT", 0)
-
-
 @respx.mock
-async def test_a_stop_reaches_a_task_after_a_passing_599(
-    mock_client: DsmClient, no_read_wait: None
+@pytest.mark.parametrize(
+    ("action", "after"), [("stop", ["status", "status", "stop"]), ("status", ["status", "status"])]
+)
+async def test_file_task_reads_through_a_passing_599(
+    mock_client: DsmClient,
+    monkeypatch: pytest.MonkeyPatch,
+    action: Literal["status", "stop"],
+    after: list[str],
 ) -> None:
     """QA round 1 on #590: one 599 dropped the stop, and the delete kept going."""
     from mcp_synology.modules.filestation.tasks import file_task
 
     methods: list[str] = []
+    waits: list[float] = []
     replies = iter([httpx.Response(200, json={"success": False, "error": {"code": 599}})])
 
     def side_effect(request: httpx.Request) -> httpx.Response:
@@ -1631,11 +1631,71 @@ async def test_a_stop_reaches_a_task_after_a_passing_599(
             return next(replies, _ok({"finished": False, "progress": 0.5}))
         return _ok({})
 
+    async def sleep(seconds: float) -> None:
+        waits.append(seconds)
+
+    monkeypatch.setattr(asyncio, "sleep", sleep)
     respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
     await file_task(
-        mock_client, records=TaskRecords(), handle="delete:FileStation_X", action="stop"
+        mock_client, records=TaskRecords(), handle="delete:FileStation_X", action=action
     )
-    assert methods[:3] == ["status", "status", "stop"]
+    assert methods == after
+    assert waits == [0.5]
+
+
+@respx.mock
+async def test_a_remembered_result_takes_one_read(mock_client: DsmClient) -> None:
+    from mcp_synology.modules.filestation.tasks import file_task
+
+    records = TaskRecords()
+    handle = Handle("delete", "FileStation_X")
+    records.add(TaskRecord(handle, paths=["/s/a"]))
+    records.set_final(handle, {"finished": True, "path": "/s/a", "processed_num": 1, "total": 1})
+    methods: list[str] = []
+
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        methods.append(_method(request))
+        return httpx.Response(200, json={"success": False, "error": {"code": 599}})
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+    await file_task(mock_client, records=records, handle="delete:FileStation_X")
+    assert methods.count("status") == 1
+
+
+@respx.mock
+async def test_a_cancel_between_599_reads_still_stops(
+    mock_client: DsmClient, clock: list[float], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import anyio
+
+    import mcp_synology.modules.filestation.tasks as tasks
+
+    calls: list[str] = []
+    blocked = asyncio.Event()
+
+    async def side_effect(request: httpx.Request) -> httpx.Response:
+        calls.append(_method(request))
+        if _method(request) == "stop":
+            await anyio.sleep(0)
+            calls.append("stop-done")
+            return _ok({})
+        return httpx.Response(200, json={"success": False, "error": {"code": 599}})
+
+    async def blocked_sleep(seconds: float) -> None:
+        blocked.set()
+        await anyio.sleep_forever()
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+    monkeypatch.setattr(tasks.asyncio, "sleep", blocked_sleep)
+    async with anyio.create_task_group() as tg:
+
+        async def run() -> None:
+            await poll_task(mock_client, api=API, version=2, taskid="t1", wait=30, label="x")
+
+        tg.start_soon(run)
+        await blocked.wait()
+        tg.cancel_scope.cancel()
+    assert calls == ["status", "stop", "stop-done"]
 
 
 @respx.mock

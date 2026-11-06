@@ -328,7 +328,9 @@ async def test_delete_handoff_then_stop(admin_client: Any, admin_session: Any, n
             await _gone(other, records, handle)
             again = await file_task(other, records=records, handle=handle, action="stop")
             # The record still names the path, so not the bare "no running task".
-            assert again.startswith(f"The delete of {path} {_NOT_RUNNING}"), again
+            assert again.startswith(f"DSM has no task for the delete of {path}: {_NOT_RUNNING}"), (
+                again
+            )
 
 
 async def test_file_task_list_shows_running_delete(admin_client: Any, nas: Nas) -> None:

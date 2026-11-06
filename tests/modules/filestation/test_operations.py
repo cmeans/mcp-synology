@@ -8,6 +8,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock
 
+import anyio
 import httpx
 import pytest
 import respx
@@ -3741,33 +3742,47 @@ async def test_a_stalled_path_check_is_bounded(
     """QA round 1 on #590: a stalled DSM mustn't hold the reply and its handle."""
     from mcp_synology.modules.filestation import operations
 
-    real_wait = operations.asyncio.wait_for
-
-    async def times_out(awaitable: Any, _timeout: float) -> Any:
-        awaitable.close()
-        raise TimeoutError
-
-    monkeypatch.setattr(operations.asyncio, "wait_for", times_out)
+    assert operations._LOST_DELETE_CHECK == 5.0
+    monkeypatch.setattr(operations, "_LOST_DELETE_CHECK", 0.05)
     calls: list[dict[str, str]] = []
-    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_lost_task_dsm(calls, {"files": []}))
-    result = await delete_files(mock_client, paths=["/s/a"], recycle_bin_status={"s": True})
+    base = _lost_task_dsm(calls, {"files": []})
+
+    async def side_effect(request: httpx.Request) -> httpx.Response:
+        if _stalls(request, calls):
+            await asyncio.Event().wait()
+        return base(request)
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+    with anyio.fail_after(5):
+        result = await delete_files(mock_client, paths=["/s/a"], recycle_bin_status={"s": True})
     assert "how it ended isn't known" in result
-    monkeypatch.setattr(operations.asyncio, "wait_for", real_wait)
+    assert "Handle: `delete:T_a`" in result
 
 
 @respx.mock
 async def test_a_cancel_during_the_path_check_stops_the_task(
-    mock_client: DsmClient, no_sleep: None, monkeypatch: pytest.MonkeyPatch
+    mock_client: DsmClient, no_sleep: None
 ) -> None:
-    from mcp_synology.modules.filestation import operations
-
-    async def canceled(awaitable: Any, _timeout: float) -> Any:
-        awaitable.close()
-        raise asyncio.CancelledError
-
-    monkeypatch.setattr(operations.asyncio, "wait_for", canceled)
+    """Level-triggered, as the MCP SDK cancels: the stop is canceled too unless it's shielded."""
     calls: list[dict[str, str]] = []
-    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_lost_task_dsm(calls, {"files": []}))
-    with pytest.raises(asyncio.CancelledError):
+    stops: list[str] = []
+    base = _lost_task_dsm(calls, {"files": []})
+
+    async def side_effect(request: httpx.Request) -> httpx.Response:
+        if _stalls(request, calls):
+            await asyncio.Event().wait()
+        if dict(request.url.params).get("method") == "stop":
+            await anyio.sleep(0)
+            stops.append(dict(request.url.params)["taskid"])
+        return base(request)
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+    with anyio.move_on_after(0.2):
         await delete_files(mock_client, paths=["/s/a"], recycle_bin_status={"s": True})
-    assert [call for call in calls if call.get("method") == "stop"]
+    assert stops == ['"T_a"']
+
+
+def _stalls(request: httpx.Request, calls: list[dict[str, str]]) -> bool:
+    """The path check's getinfo: one after the task started."""
+    method = dict(request.url.params).get("method")
+    return method == "getinfo" and any(call.get("method") == "start" for call in calls)

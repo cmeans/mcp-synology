@@ -204,9 +204,9 @@ class PollResult:
     running, like ``handoff`` (#245, maintainer decision 2026-10-17; #282).
 
     ``lost``: DSM kept answering that it has no such task (599), so it can't say how the task
-    ended. Not stopped, as DSM has nothing to stop by that ID: a Delete's stop answers 401 for any
-    task it doesn't have (#521). Handed off like ``stalled``, so the call keeps its handle and what
-    it did and didn't do.
+    ended. Not stopped: a stop can't be confirmed on an ID DSM says it doesn't have (a Delete's
+    answers 401 for it, a CopyMove's success), so none is sent unless the call is canceled (#521).
+    Handed off like ``stalled``, so the call keeps its handle and what it did and didn't do.
     """
 
     status: dict[str, Any]
@@ -456,7 +456,8 @@ def handoff_reply(
     """
     gerund = verb.split()[-1].lower()
     past = _PAST.get(gerund, "done")
-    if isinstance(stall, SynologyError) and stall.code == 599:
+    lost = isinstance(stall, SynologyError) and stall.code == 599
+    if lost:
         last = f" Last progress: {progress_text(status)}." if status else ""
         first = (
             f"DSM answered that it has no task {gerund} {shown(path)} (error 599), so how it ended "
@@ -493,10 +494,13 @@ def handoff_reply(
     if done:
         lines.append(f"Already {past}: {', '.join(map(shown, done))}.")
     if not_started:
-        lines.append(
-            f"Not started: {', '.join(map(shown, not_started))}. Run them again once this one "
-            "finishes."
+        # A lost task never reports finishing, so "once this one finishes" couldn't be met.
+        then = (
+            "Check this one first by listing its path, then run them."
+            if lost
+            else "Run them again once this one finishes."
         )
+        lines.append(f"Not started: {', '.join(map(shown, not_started))}. {then}")
     return "\n".join(lines)
 
 
@@ -623,7 +627,7 @@ _UNAVAILABLE_CODES = (102, 103, 104)
 
 def _describe(kind: HandleKind, paths: list[str], dest: str | None) -> str:
     """``deleting /s/a`` or ``moving /s/b to /s/d/``."""
-    where = ", ".join(paths) or "(path unknown)"
+    where = ", ".join(map(shown, paths)) or "(path unknown)"
     to = f" to {dest}/" if dest and kind != "delete" else ""
     return f"{_GERUND[kind]} {where}{to}"
 
@@ -865,8 +869,11 @@ async def file_task(
 
     async def status_or_none() -> dict[str, Any] | None:
         """The task's status, or None when DSM keeps saying it doesn't have it (599). One 599 isn't
-        a verdict (#521): a stop dropped on it would leave a running delete going."""
-        for read in range(_LOST_TASK_READS):
+        a verdict (#521): a stop dropped on it would leave a running delete going. Once a final
+        result is remembered it is: DSM forgets a task after one read, and the result can't change.
+        """
+        reads = 1 if record is not None and record.final_status is not None else _LOST_TASK_READS
+        for read in range(reads):
             try:
                 data: dict[str, Any] = await client.request(
                     parsed.api, "status", version=version, params={"taskid": taskid}
@@ -882,7 +889,7 @@ async def file_task(
             except SynologyError as e:
                 if e.code != 599:
                     synology_error_response("Stop task" if action == "stop" else "Check task", e)
-                if read + 1 < _LOST_TASK_READS:
+                if read + 1 < reads:
                     await asyncio.sleep(_LOST_TASK_WAIT)
                 continue
             except httpx.TransportError as e:
@@ -905,9 +912,9 @@ async def file_task(
             # Ours, but DSM has let it go: a finished Delete is forgotten unless a status
             # read caught it finishing, so there's no result left to give.
             return (
-                f"DSM has no task for the {parsed.kind} of {', '.join(paths)}: it may have "
-                f"finished, failed or been stopped, and DSM has no result for it.{nothing} "
-                f"{_LIST_HINT}"
+                f"DSM has no task for the {parsed.kind} of {', '.join(map(shown, paths))}: it "
+                "may have finished, failed or been stopped, and DSM has no result for it."
+                f"{nothing} {_LIST_HINT}"
             )
         return (
             "No running task with this handle. It may have finished, failed or been stopped, or "
@@ -960,7 +967,7 @@ async def file_task(
                 request="stop",
                 note=" The stop may or may not have taken effect.",
             )
-        what = ", ".join(paths) if paths else f"`{parsed}`"
+        what = ", ".join(map(shown, paths)) if paths else f"`{parsed}`"
         return f"Stopped {parsed.kind} of {what}; it may be partly done. {_LIST_HINT}"
 
     if status is None:
