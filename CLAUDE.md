@@ -200,4 +200,6 @@ This convention was retired-and-restored on 2026-04-11 after PRs #13, #15, and #
 
 CI runs `python scripts/sync-server-json.py --check` (no project install needed — stdlib only) and fails any PR where `server.json` has drifted from `pyproject.toml`. Never edit `server.json`'s version fields by hand.
 
+`publish.yml`'s `gate` job (`scripts/check_release.py`, #457) runs first and fails the release unless the tag is `v` plus this version, the CHANGELOG has that section, and the tagged commit is on `main`. So tag the merged release commit on `main`, not a branch.
+
 The `publish.yml` `github-release` job's awk extractor matches `## <version>( |\()` — i.e., it requires a space or `(` after the version. An `## Unreleased` section without trailing `(` is therefore harmless during a tag-push release: the awk pattern walks past it and lands on the version section below.

@@ -503,7 +503,7 @@ Once stable enough for versioned releases: `uvx mcp-synology serve`
 
 ### Automated release pipeline
 
-Tagging `v*` triggers `.github/workflows/publish.yml`, which runs four jobs:
+Tagging `v*` triggers `.github/workflows/publish.yml`. Its `gate` job runs first and nothing else starts unless it passes (`scripts/check_release.py`, #457): the tag must be `v` plus `pyproject.toml`'s version, `CHANGELOG.md` must have a section for that version, and the tagged commit must be on `main`. Then four jobs publish:
 
 1. `build` — runs the unit test suite and builds sdist + wheel.
 2. `publish-pypi` — uploads the built distributions to PyPI via Trusted Publishing (OIDC, no long-lived token).
