@@ -655,7 +655,7 @@ def _store_keyring(
             _put_back(service, before if same_host else dict.fromkeys(_ENTRY_KEYS))
             now = _read_entry_or_none(service)
         unchanged = before is not None and now == before
-        if not unchanged and before is not None and now is not None and same_host:
+        if not unchanged and before is not None and now is not None:
             _drop_a_token_left_for_another_account(service, before, now, username)
             now = _read_entry_or_none(service)
         if unchanged:
@@ -766,7 +766,8 @@ def _login_failed(error: Exception) -> None:
     click.echo(click.style(f"Login failed: {error}", fg="red"), err=True)
     code = getattr(error, "code", None)
     suggestion = getattr(error, "suggestion", None)
-    # Those say to run setup, or that a re-login will follow: neither fits here.
+    # Those say to run setup, that a re-login will follow or that another session displaced this
+    # one: none fits a login.
     if suggestion and code not in (403, 106, 107, 119):
         click.echo(suggestion, err=True)
     if code in (400, 403, 404):

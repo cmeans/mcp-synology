@@ -2395,6 +2395,7 @@ class TestTheKeyringIsWrittenOnlyAfterTheLogin:
         assert result.exit_code == 1
         assert isinstance(result.exception, SystemExit)
         assert "no session ID" in result.output
+        assert "Is this a Synology DSM address?" in result.output
         assert "Login successful" not in result.output
         assert store.values == before
 
@@ -2852,6 +2853,71 @@ class TestTheKeyringIsWrittenOnlyAfterTheLogin:
             _store_keyring(self.SERVICE, "admin", "new-pw", "nas.home", 5000)
         assert store.values[(self.SERVICE, "device_id")] == "old-token"
 
+    @pytest.mark.parametrize("lost", ["username", "password"])
+    def test_a_token_write_that_loses_a_value_isnt_called_stored(
+        self,
+        lost: str,
+        store: MemoryKeyring,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Pre-QA on #583: what's said after the token's write raised comes from a read."""
+        before = self._old(store)
+        real_set = store.set_password
+
+        def loses(service: str, key: str, value: str) -> None:
+            if key == "device_id" and value == "new-token":
+                del store.values[(service, lost)]
+                raise KeyringError("locked")
+            real_set(service, key, value)
+
+        monkeypatch.setattr(store, "set_password", loses)
+        with pytest.raises(SystemExit):
+            _store_keyring(self.SERVICE, "admin", "new-pw", "nas.home", 5000, "new-token")
+        said = capsys.readouterr()
+        assert "This entry is as it was." in said.out + said.err
+        assert "are stored" not in said.out + said.err
+        assert store.values == before
+
+    def test_a_token_delete_that_applies_and_raises_is_put_back(
+        self,
+        store: MemoryKeyring,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        before = self._old(store)
+        real_delete = store.delete_password
+
+        def raises(service: str, key: str) -> None:
+            real_delete(service, key)
+            raise KeyringError("locked")
+
+        monkeypatch.setattr(store, "delete_password", raises)
+        assert _store_keyring(self.SERVICE, "someone-else", "new-pw", "nas.home", 5000) is False
+        assert "This entry is as it was." in capsys.readouterr().out
+        assert store.values == before
+
+    def test_a_username_that_cant_be_put_back_says_the_token_went(
+        self,
+        store: MemoryKeyring,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        self._old(store)
+        real_set = store.set_password
+
+        def stuck(service: str, key: str, value: str) -> None:
+            if key != "username" or value != "someone-else":
+                raise KeyringError("locked")
+            real_set(service, key, value)
+
+        monkeypatch.setattr(store, "set_password", stuck)
+        with pytest.raises(SystemExit):
+            _store_keyring(self.SERVICE, "someone-else", "new-pw", "nas.home", 5000)
+        said = capsys.readouterr()
+        assert "Already removed from this entry: device_id." in said.out + said.err
+        assert (self.SERVICE, "device_id") not in store.values
+
     def test_a_restored_username_keeps_its_token(
         self, store: MemoryKeyring, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -2915,6 +2981,7 @@ class TestTheKeyringIsWrittenOnlyAfterTheLogin:
         result = self._with_config(tmp_path, "me\npw\n")
         assert result.exit_code == 1
         assert "will be attempted" not in result.output.lower()
+        assert "Another session displaced" not in result.output
 
     @respx.mock
     def test_a_second_403_asks_for_nothing_it_cant_do(

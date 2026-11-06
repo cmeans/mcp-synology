@@ -949,7 +949,7 @@ class TestSetupConnectionFailures:
 
         port = _closed_port()
         with pytest.raises(SystemExit) as exc:
-            asyncio.run(_setup_login(self._config(port), "x", "y", "svc"))
+            asyncio.run(_setup_login(self._config(port), "x", "y", lambda _token: True))
         assert exc.value.code == 1
         assert f"Can't connect to http://127.0.0.1:{port}" in capsys.readouterr().err
 
@@ -976,7 +976,7 @@ class TestSetupConnectionFailures:
         args = (
             ("x", "y", lambda _device_id: True, False)
             if which == "_connect_and_login"
-            else ("x", "y", "svc")
+            else ("x", "y", lambda _token: True)
         )
         with pytest.raises(SystemExit) as exc:
             asyncio.run(getattr(setup, which)(self._config(5000), *args))
