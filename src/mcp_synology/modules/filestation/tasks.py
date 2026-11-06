@@ -216,10 +216,10 @@ class PollResult:
 
 @dataclass
 class Handoff:
-    """A task left running on the NAS: its handle, last status, and the stall if any.
+    """A task left to run on the NAS: its handle, last status, and the stall if any.
 
-    ``stall`` is the status request's error: a ``TransportError`` (no answer) or any
-    other exception (an answer that couldn't be read).
+    ``stall`` is the status request's error: a ``TransportError`` (no answer), a 599 (DSM has no
+    such task, #521) or any other exception (an answer that couldn't be read).
     """
 
     handle: Handle
@@ -335,6 +335,7 @@ async def poll_task(
     last_numbers: tuple[int, int] | None = None
     report = MonotonicProgress.wrap(on_progress)
     missing_reads = 0
+    last_missing: SynologyError | None = None
 
     async def stop() -> bool:
         return await _stop_background_task(client, api, quoted, version, logger)
@@ -362,6 +363,7 @@ async def poll_task(
                 if e.code != 599:
                     return PollResult(status, "poll_error", e, await stop())
                 missing_reads += 1
+                last_missing = e
                 # At WARNING so CI's logs keep what's needed to find the cause (#521).
                 logger.warning(
                     "%s status (%s) answered 599 for %s, read %d of %d, %s",
@@ -416,6 +418,9 @@ async def poll_task(
         with anyio.CancelScope(shield=True):
             await stop()
         raise
+    # The wait ended during the re-reads: not "still running", which nothing has shown.
+    if missing_reads:
+        return PollResult(status, "lost", last_missing)
     return PollResult(status, "handoff")
 
 
@@ -441,7 +446,8 @@ def handoff_reply(
 
     ``verb`` is "Still deleting", "Still copying", "Still moving" or "Still restoring".
     ``stall``: the status request's error, for a task handed off because the NAS stopped
-    answering, or its answer couldn't be read (#245, maintainer decision 2026-10-17).
+    answering, or its answer couldn't be read (#245, maintainer decision 2026-10-17), or it
+    kept answering 599 (#521).
     The error's text is never shown, since it may quote the body: a transport error or
     any other exception shows its type, an HTTP error its status, and a non-DSM reply
     a fixed phrase.
@@ -449,10 +455,11 @@ def handoff_reply(
     gerund = verb.split()[-1].lower()
     past = _PAST.get(gerund, "done")
     if isinstance(stall, SynologyError) and stall.code == 599:
+        last = f" Last progress: {progress_text(status)}." if status else ""
         first = (
             f"DSM no longer has the task {gerund} {shown(path)} (DSM error 599), so how it ended "
-            "isn't known: it may have finished, failed or still be running. It wasn't stopped, so "
-            "check before starting it again."
+            f"isn't known: it may have finished, failed or still be running.{last} It wasn't "
+            "stopped, so check before starting it again."
         )
     elif stall is None:
         first = (

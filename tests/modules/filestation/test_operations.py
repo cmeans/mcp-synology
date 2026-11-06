@@ -3633,7 +3633,7 @@ def _lost_task_dsm(calls: list[dict[str, str]], info: Any, *, lost: str = "") ->
 async def test_a_lost_delete_whose_path_is_gone_is_done(
     mock_client: DsmClient, no_sleep: None
 ) -> None:
-    """#521: the reply said it failed, though it had most likely gone through."""
+    """#521: the reply said it failed, though it may have gone through."""
     calls: list[dict[str, str]] = []
     respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
         side_effect=_lost_task_dsm(calls, {"files": [{"path": "/s/a", "code": 408}]})
@@ -3711,3 +3711,23 @@ async def test_a_lost_copy_partway_hands_off_and_stops_nothing(
     assert "Not started: /s/c." in result
     assert records.get(Handle("copy", "T_b")) is not None
     assert not [call for call in calls if call.get("method") == "stop"]
+
+
+@respx.mock
+async def test_a_lost_task_reply_keeps_the_last_progress(
+    mock_client: DsmClient, no_sleep: None
+) -> None:
+    running = {"finished": False, "progress": 0.5, "total": 100, "processed_num": 50}
+    replies = iter([running])
+    base = _lost_task_dsm([], {"files": [{"path": "/s/a", "isdir": False}]})
+
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        if dict(request.url.params).get("method") == "status":
+            reply = next(replies, None)
+            if reply is not None:
+                return httpx.Response(200, json={"success": True, "data": reply})
+        return base(request)
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+    result = await delete_files(mock_client, paths=["/s/a"], recycle_bin_status={"s": True})
+    assert "Last progress: 50 of 100 items, 50%." in result

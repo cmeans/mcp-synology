@@ -337,7 +337,7 @@ def _with_progress_so_far(
         # Added to the cause's own advice (free space, permissions, check before deleting
         # again), never in place of it (QA round 3 on #480).
         # A note that reads after any advice, or alone (QA round 4): no "Then", no second
-        # "retry", and a check first, since the failed path may be gone already (a 599),
+        # "retry", and a check first, since the failed path may be gone already,
         # unless the advice already says to check with list_files (QA round 5).
         original = str(body["error"].get("suggestion") or "").strip()
         if _CHECKS_WITH_LIST_FILES.search(original):

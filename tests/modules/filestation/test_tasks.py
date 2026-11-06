@@ -457,6 +457,17 @@ class TestPollTask:
         assert clock[0] == 1.0  # waited between the reads: a re-read at once proves nothing
 
     @respx.mock
+    async def test_a_wait_that_ends_during_the_re_reads_is_lost(
+        self, mock_client: DsmClient, clock: list[float]
+    ) -> None:
+        """Pre-QA on #521: it read as still running, and a delete skipped its path check."""
+        missing = httpx.Response(200, json={"success": False, "error": {"code": 599}})
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(return_value=missing)
+        result = await poll_task(mock_client, api=API, version=2, taskid="t1", wait=0.7, label="x")
+        assert result.outcome == "lost"
+        assert getattr(result.error, "code", None) == 599
+
+    @respx.mock
     async def test_scattered_599s_dont_lose_a_healthy_task(
         self, mock_client: DsmClient, clock: list[float], caplog: pytest.LogCaptureFixture
     ) -> None:
