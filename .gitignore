@@ -1,5 +1,7 @@
 # mcp-synology
 tests/integration_config.yaml
+# Written by CI's floor job, and by anyone running its steps.
+/floors.txt
 
 # Virtual DSM test infrastructure (golden images ~2GB each). `/.vdsm`, without a trailing
 # slash, also matches a worktree's `.vdsm` symlink to the main checkout's images.

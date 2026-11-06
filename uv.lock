@@ -960,7 +960,7 @@ vdsm = [
 
 [package.metadata]
 requires-dist = [
-    { name = "click", specifier = ">=8.2.2" },
+    { name = "click", specifier = ">=8.2.1" },
     { name = "httpx", specifier = ">=0.28" },
     { name = "keyring", specifier = ">=25.0" },
     { name = "mcp", specifier = ">=2.3,<3" },
@@ -972,7 +972,7 @@ requires-dist = [
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0" },
     { name = "pytest-timeout", marker = "extra == 'dev'", specifier = ">=2.3" },
     { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3.6" },
-    { name = "pyyaml", specifier = ">=6.0" },
+    { name = "pyyaml", specifier = ">=6.0.1" },
     { name = "regex", specifier = ">=2026.9.29" },
     { name = "respx", marker = "extra == 'dev'", specifier = ">=0.22" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5" },

@@ -88,13 +88,19 @@ jobs:
     # code can outgrow one, so unlike deps-newest.yml this runs on every PR. Dev tools stay at the
     # lock: users don't install them.
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The oldest and newest in `test`'s matrix (a test keeps them equal): a floor can install
+        # on one and not the other, as pyyaml 6.0 did.
+        python-version: ["3.11", "3.15"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          python-version: "3.11" # the oldest in the matrix; a test keeps them equal
+          python-version: ${{ matrix.python-version }}
       - run: uv sync --locked --extra dev
       - name: Install the runtime floors
         run: |

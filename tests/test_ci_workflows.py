@@ -156,15 +156,19 @@ def test_the_floor_job_runs_on_every_pr_and_isnt_soft() -> None:
     assert triggers["pull_request"] == {"branches": ["main"]}
     assert "if" not in workflow["jobs"]["floor"]
     assert "continue-on-error" not in workflow["jobs"]["floor"]
+    assert not [step for step in _floor_steps() if {"continue-on-error", "if"} & step.keys()]
 
 
-def test_the_floor_job_runs_on_the_oldest_python_ci_tests() -> None:
-    matrix = _workflows()["ci.yml"]["jobs"]["test"]["strategy"]["matrix"]["python-version"]
+def test_the_floor_job_runs_on_the_oldest_and_newest_python_ci_tests() -> None:
+    jobs = _workflows()["ci.yml"]["jobs"]
+    matrix = jobs["test"]["strategy"]["matrix"]["python-version"]
+    by_version = sorted(matrix, key=lambda v: tuple(int(part) for part in str(v).split(".")))
+    assert jobs["floor"]["strategy"]["matrix"]["python-version"] == [by_version[0], by_version[-1]]
+    assert jobs["floor"]["strategy"]["fail-fast"] is False
     versions = [
         s["with"]["python-version"] for s in _floor_steps() if "python-version" in s.get("with", {})
     ]
-    oldest = min(matrix, key=lambda v: tuple(int(part) for part in str(v).split(".")))
-    assert versions == [str(oldest)]
+    assert versions == ["${{ matrix.python-version }}"]
 
 
 def test_only_the_report_job_can_write_and_it_runs_only_on_main() -> None:
