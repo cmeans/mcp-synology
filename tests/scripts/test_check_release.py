@@ -147,6 +147,8 @@ def test_leftovers_arent_notes(body: str) -> None:
         "## 1.2.3 (2026-11-06)\n\n#457 fixed it\n",
         "## 1.2.3 (2026-11-06)\n\n### Added\n\n- A note.\n",
         "## 1.2.3 (2026-11-06)\n\n**Security release:** a note.\n",
+        # A note between two comments survives removing them.
+        "## 1.2.3 (2026-11-06)\n\n<!-- a -->\n- A note.\n<!-- b -->\n",
         _CHANGELOG,
     ],
 )
@@ -167,8 +169,20 @@ def test_a_commit_later_than_the_release_commit_is_refused(
     assert "If this is the release commit, move those entries" in out
 
 
+def test_entries_on_a_wrong_tag_dont_advise_moving_them_into_a_shipped_version(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Tagging v0.11.0 on main before the release PR merges: the version here has shipped."""
+    text = _CHANGELOG.replace("## Unreleased\n", "## Unreleased\n\n- Merged later.\n")
+    (repo / "CHANGELOG.md").write_text(text, encoding="utf-8")
+    assert script.main(["v9.9.9"], repo) == 1
+    out = capsys.readouterr().out
+    assert "'## Unreleased' has entries" in out
+    assert "move those entries" not in out
+
+
 @pytest.mark.parametrize("heading", ["## [Unreleased]", "## unreleased", "## UNRELEASED"])
-def test_any_spelling_of_unreleased_counts(heading: str) -> None:
+def test_unreleased_counts_in_any_case_with_or_without_a_bracket(heading: str) -> None:
     changelog = f"{heading}\n\n- Later.\n\n## 1.2.3 (2026-11-06)\n\n- A note.\n"
     assert "has entries" in (script.unreleased_problem(changelog, "1.2.3") or "")
 

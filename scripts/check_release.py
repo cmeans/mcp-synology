@@ -35,8 +35,8 @@ _TAG_THE_MERGE = (
     "tag its squash commit on origin/main (for a backport, its commit on the "
     "release/<major>.<minor>.x branch)"
 )
-# A line that isn't a note: a heading, a rule, or a bare list marker. `_has_notes` has already
-# removed comments.
+# A line that isn't a note: a heading, a rule, or a bare bullet. `_has_notes` has already removed
+# comments.
 _NOT_A_NOTE = re.compile(r"#{1,6}(\s.*)?|[-*_ ]{3,}|[-*+]")
 
 
@@ -84,18 +84,25 @@ def changelog_problem(changelog: str, version: str) -> str | None:
     return None if _has_notes(section) else f"CHANGELOG.md's section for {version} has no notes"
 
 
-def unreleased_problem(changelog: str, version: str) -> str | None:
+def unreleased_problem(changelog: str, version: str, *, tag_matches: bool = True) -> str | None:
     """Say why this commit looks later than the release commit, or None: a release leaves
     `## Unreleased` empty (and a backport branch may have none), so entries there are changes
     that aren't in this version's notes. The likeliest route is retagging after a refusal, when
-    `origin/main` has moved on. Any spelling of the heading counts: unsure is a problem."""
+    `origin/main` has moved on. The heading may be in any case, with or without a bracket.
+
+    When the tag isn't this version, `version` has already shipped, so its notes aren't the place
+    for those entries, and the advice to move them stays out."""
     section = _section(changelog, r"(?i:\[?Unreleased\b)")
     if section is None or not _has_notes(section):
         return None
+    move = (
+        ". If this is the release commit, move those entries into the version's notes in a PR first"
+        if tag_matches
+        else ""
+    )
     return (
         f"CHANGELOG.md's '## Unreleased' has entries, so this commit holds changes that aren't in "
-        f"{version}'s notes: find the release PR and {_TAG_THE_MERGE}. If this is the release "
-        "commit, move those entries into the version's notes in a PR first"
+        f"{version}'s notes: find the release PR and {_TAG_THE_MERGE}{move}"
     )
 
 
@@ -164,7 +171,7 @@ def problems(tag: str, root: Path) -> list[str]:
         tag_problem(tag, version),
         server_json_problem(root, version),
         changelog_problem(changelog, version),
-        unreleased_problem(changelog, version),
+        unreleased_problem(changelog, version, tag_matches=tag == f"v{version}"),
         branch_problem(root, version),
     )
     return [problem for problem in found if problem]
