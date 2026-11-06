@@ -179,7 +179,9 @@ def branch_problem(root: Path, version: str, *, tag_matches: bool = True) -> str
     # A final patch only: a pre-release, like a `.0`, ships from main.
     is_patch = re.fullmatch(r"\d+\.\d+\.0*[1-9]\d*", version) is not None
     line = ".".join(version.split(".")[:2])
-    backport = f"{line}.x" if is_patch else None
+    # A tag that isn't this version may be a backport with its bump forgotten: the tag's refusal
+    # says that, and this has nothing to add.
+    backport = f"{line}.x" if is_patch or not tag_matches else None
     allowed = {main}
     if backport:
         allowed.add(f"refs/remotes/origin/release/{backport}")
@@ -197,13 +199,21 @@ def branch_problem(root: Path, version: str, *, tag_matches: bool = True) -> str
         if result.returncode != 0:
             return f"couldn't check the tagged commit's branch: {result.stderr.strip()}"
         found = allowed & set(result.stdout.split())
-        if main in found:
+        if main in found or (found and not tag_matches):
             return None
         if found:
             base = _git(root, "merge-base", "HEAD", main)
             # At the cut point, not merely after it: a branch cut before the line began would ship
             # without its first release. Named like a final release of this line, and earlier.
-            tags = _git(root, "tag", "--list", f"v{line}.*", "--points-at", base.stdout.strip())
+            tags = _git(
+                root,
+                "tag",
+                "--no-column",
+                "--list",
+                f"v{line}.*",
+                "--points-at",
+                base.stdout.strip(),
+            )
             if base.returncode != 0 or tags.returncode != 0:
                 return (
                     f"couldn't check where release/{backport} was cut from: it may share no "
@@ -217,7 +227,9 @@ def branch_problem(root: Path, version: str, *, tag_matches: bool = True) -> str
             this_patch = int(version.split(".")[2])
             if any(patch < this_patch for patch in earlier):
                 # And on top of the line's earlier releases, or it would ship without their fixes.
-                missed = _git(root, "tag", "--list", f"v{line}.*", "--no-merged", "HEAD")
+                missed = _git(
+                    root, "tag", "--no-column", "--list", f"v{line}.*", "--no-merged", "HEAD"
+                )
                 if missed.returncode != 0:
                     return f"couldn't check what release/{backport} contains."
                 unmerged = map(_LINE_TAG.fullmatch, missed.stdout.split("\n"))
@@ -232,8 +244,6 @@ def branch_problem(root: Path, version: str, *, tag_matches: bool = True) -> str
                     f"release/{backport} doesn't contain {', '.join(skipped)}, so this patch would "
                     f"ship without them. Cut it from the last v{line}.* tag."
                 )
-            if not tag_matches:
-                return None  # the tag's own refusal comes first: this version isn't the tag's
             cut_point = base.stdout.strip()[:7]
             return (
                 f"release/{backport} wasn't cut at a final v{line}.* tag earlier than this "

@@ -201,7 +201,7 @@ This convention was retired-and-restored on 2026-04-11 after PRs #13, #15, and #
 8. Watch the run, and approve the `pypi` environment when it waits. If the gate or anything else before `publish-pypi` fails on a new tag, delete it both places (`git push origin :refs/tags/v0.11.0`, `git tag -d v0.11.0`), fix what it says, and tag again. Cancel or reject any run still waiting on `pypi`: approving it publishes that run's commit, even after its tag is deleted. Never delete a tag already released
 
 **Backporting a fix to a released line** (a final patch such as `0.10.1`; a `.0` or a pre-release ships only from `main`):
-1. Cut `release/0.10.x` from the last `v0.10.y` tag. Cut from `main`, it would ship all of `main`'s unreleased work
+1. Cut `release/0.10.x` from the last `v0.10.y` tag, or continue on that branch if it already holds that tag. Cut from `main`, it would ship all of `main`'s unreleased work
 2. If that tag's `publish.yml` has no `gate` job (any tag before the first release after #574), cherry-pick the gate first: otherwise nothing checks the tag. Expect conflicts on `CHANGELOG.md` (keep only the gate's entry, none of `main`'s) and on `tests/test_ci_workflows.py` (drop it if that tag lacks it)
 3. Apply the fix, and run the tests locally: no CI runs on that branch
 4. Follow steps 0 to 4 of the release list above and commit. `git push origin release/0.10.x`, `git fetch origin`, then `git tag -a v0.10.1 -m v0.10.1 <sha>` on that commit (`git log origin/release/0.10.x` finds it). To try the gate first, run `python scripts/check_release.py v0.10.1` with that commit checked out. `git push origin v0.10.1`, then that list's step 8. `build` is the first real test here, since no CI ran

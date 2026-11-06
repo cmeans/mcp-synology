@@ -222,6 +222,17 @@ def test_a_no_date_heading_for_the_version_counts_with_entries_above() -> None:
     assert "'## 1.2.2 (x)' has entries" in (script.unreleased_problem(changelog, "1.2.3") or "")
 
 
+def test_with_no_section_for_the_version_a_first_section_that_isnt_a_version_counts() -> None:
+    assert "'## Next' has entries" in (
+        script.unreleased_problem("## Next\n\n- Later.\n", "1.2.3") or ""
+    )
+
+
+def test_a_heading_that_only_looks_like_the_version_isnt_its_section() -> None:
+    changelog = "## 1x2x3 (d)\n\n- Other.\n\n## 1.2.3 (d)\n\n- Note.\n"
+    assert "'## 1x2x3 (d)' has entries" in (script.unreleased_problem(changelog, "1.2.3") or "")
+
+
 def test_older_sections_dont_count_as_above() -> None:
     changelog = "## 1.2.3 (2026-11-06)\n\n- A note.\n\n## 1.2.2\n\n- Old.\n"
     assert script.unreleased_problem(changelog, "1.2.3") is None
@@ -512,6 +523,30 @@ def test_the_versions_own_tag_doesnt_vouch_for_its_branch(repo: Path) -> None:
     assert "wasn't cut at a final v1.2.* tag" in (script.branch_problem(repo, "1.2.3") or "")
 
 
+def test_a_forgotten_bump_on_a_lines_first_patch_gets_only_the_tag_refusal(repo: Path) -> None:
+    """Pre-QA on #574: the version here is still a `.0`, and the advice pointed at main."""
+    _git(repo, "tag", "v1.2.0")
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "the patch")
+    _git(repo, "update-ref", "refs/remotes/origin/release/1.2.x", "HEAD")
+    assert script.branch_problem(repo, "1.2.0", tag_matches=False) is None
+
+
+def test_a_git_column_setting_cant_hide_a_missing_release(repo: Path) -> None:
+    """Pre-QA on #574: `column.ui=always` joined the tags onto a line, and none matched."""
+    _git(repo, "config", "column.ui", "always")
+    _git(repo, "tag", "v1.2.0")
+    cut = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "a patch")
+    _git(repo, "tag", "v1.2.1")
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    _git(repo, "checkout", "-q", "-b", "cut", cut)
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "the patch")
+    _git(repo, "update-ref", "refs/remotes/origin/release/1.2.x", "HEAD")
+    assert "doesn't contain v1.2.1" in (script.branch_problem(repo, "1.2.2") or "")
+
+
 def test_a_forgotten_bump_gets_only_the_tag_refusal(repo: Path) -> None:
     """Cut at the last tag, with the version not bumped: re-cutting wouldn't help."""
     _git(repo, "tag", "v1.2.3")
@@ -545,6 +580,7 @@ def test_a_wrong_tag_leaves_out_the_dot_zero_advice(repo: Path) -> None:
         "v0.2.1",
         "v1.2.1\u00a0x",
         "v1.2.\u0660",
+        "v1.2.1\u0660",
         "v1.2.00",
         "v1.2.x.1",
     ],
