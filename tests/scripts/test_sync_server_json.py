@@ -335,3 +335,31 @@ def test_main_propagates_server_json_errors(
     with pytest.raises(SystemExit) as exc:
         sync.main()
     assert "not valid JSON" in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    "packages", [[], ["x"], {"a": 1}, "x", 5, [{"version": "0.5.0"}, "x"], None]
+)
+def test_main_check_bad_packages_returns_one(
+    fake_repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    packages: Any,
+) -> None:
+    """QA round 2 on #574: nothing to compare isn't in sync, and the release gate agrees."""
+    _write_server_json(fake_repo / "server.json", {"version": "0.5.0", "packages": packages})
+    monkeypatch.setattr(sys, "argv", ["sync-server-json.py", "--check"])
+    assert sync.main() == 1
+    assert "non-empty list of objects" in capsys.readouterr().err
+
+
+def test_main_write_refuses_bad_packages_too(
+    fake_repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Otherwise the script the gate's refusal names would report success."""
+    _write_server_json(fake_repo / "server.json", {"version": "0.5.0", "packages": []})
+    monkeypatch.setattr(sys, "argv", ["sync-server-json.py"])
+    assert sync.main() == 1
+    assert "non-empty list of objects" in capsys.readouterr().err
