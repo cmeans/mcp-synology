@@ -148,7 +148,8 @@ Two required sections:
     ## CHANGELOG
 
     - [ ] Added a `## Unreleased` entry to `CHANGELOG.md` under the
-      appropriate Keep-a-Changelog category (Added / Changed / Fixed)
+      appropriate Keep-a-Changelog category (Added / Changed / Fixed), or
+      for a release PR, in the version's notes
 
     Closes #N
 

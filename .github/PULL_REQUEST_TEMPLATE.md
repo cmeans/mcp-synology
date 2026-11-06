@@ -29,6 +29,6 @@
   Categories: Added / Changed / Fixed.
 -->
 
-- [ ] Added a `## Unreleased` entry to `CHANGELOG.md` under the appropriate Keep-a-Changelog category (Added / Changed / Fixed)
+- [ ] Added a `## Unreleased` entry to `CHANGELOG.md` under the appropriate Keep-a-Changelog category (Added / Changed / Fixed), or for a release PR, in the version's notes
 
 Closes #

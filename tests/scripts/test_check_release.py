@@ -204,6 +204,19 @@ def test_the_advice_for_the_release_commit_comes_first() -> None:
     assert problem.index("If this is the release commit") < problem.index("squash commit")
 
 
+def test_entries_under_an_unreleased_section_below_the_versions_count() -> None:
+    """Adding the version above `## Unreleased` instead of renaming it: those ship with no notes."""
+    changelog = "## 1.2.3 (d)\n\n- Note.\n\n## Unreleased\n\n- Later, unnoted.\n"
+    assert "has entries" in (script.unreleased_problem(changelog, "1.2.3") or "")
+
+
+def test_a_no_date_heading_for_the_version_counts_with_entries_above() -> None:
+    changelog = "## Next\n\n- Later.\n\n## 1.2.3\n\n- Note.\n"
+    assert "'## Next' has entries" in (script.unreleased_problem(changelog, "1.2.3") or "")
+    changelog = "## Next\n\n## 1.2.3\n\n- Note.\n\n## 1.2.2\n\n- Old.\n"
+    assert script.unreleased_problem(changelog, "1.2.3") is None
+
+
 def test_older_sections_dont_count_as_above() -> None:
     changelog = "## 1.2.3 (2026-11-06)\n\n- A note.\n\n## 1.2.2\n\n- Old.\n"
     assert script.unreleased_problem(changelog, "1.2.3") is None
@@ -327,6 +340,7 @@ def test_server_json_with_no_packages_is_refused(repo: Path) -> None:
 
 def test_this_versions_backport_branch_passes(repo: Path) -> None:
     """v0.5.3 shipped from release/0.5.x, off main, so it carried only its fix."""
+    _git(repo, "tag", "v1.2.2")
     _git(repo, "commit", "-q", "--allow-empty", "-m", "backport")
     _git(repo, "update-ref", "refs/remotes/origin/release/1.2.x", "HEAD")
     assert script.branch_problem(repo, "1.2.3") is None
@@ -368,7 +382,7 @@ def test_no_branches_is_refused_not_assumed(repo: Path, capsys: pytest.CaptureFi
     """A shallow or partial checkout can't show where the commit is, so it doesn't pass."""
     _git(repo, "update-ref", "-d", "refs/remotes/origin/main")
     assert script.main(["v1.2.3"], repo) == 1
-    assert "isn't known to be on origin/main" in capsys.readouterr().out
+    assert "this checkout has no origin/main" in capsys.readouterr().out
 
 
 def test_outside_a_repository_is_refused_not_assumed(
@@ -464,3 +478,33 @@ def test_a_real_release_section_passes() -> None:
     root = _SCRIPT_PATH.parents[1]
     text = (root / "CHANGELOG.md").read_text(encoding="utf-8")
     assert script.changelog_problem(text, "0.10.0") is None
+
+
+def test_a_backport_branch_cut_from_main_is_refused(repo: Path) -> None:
+    """QA round 3 on #574: all of main's unreleased work would ship in a patch."""
+    _git(repo, "tag", "v1.2.2")
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "unreleased work on main")
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "the patch")
+    _git(repo, "update-ref", "refs/remotes/origin/release/1.2.x", "HEAD")
+    problem = script.branch_problem(repo, "1.2.3") or ""
+    assert "wasn't cut from a v1.2.* tag" in problem
+
+
+def test_the_versions_own_tag_doesnt_vouch_for_its_branch(repo: Path) -> None:
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "the patch")
+    _git(repo, "update-ref", "refs/remotes/origin/release/1.2.x", "HEAD")
+    _git(repo, "tag", "v1.2.3")
+    assert "wasn't cut from" in (script.branch_problem(repo, "1.2.3") or "")
+
+
+def test_no_origin_main_says_so(repo: Path) -> None:
+    _git(repo, "update-ref", "-d", "refs/remotes/origin/main")
+    problem = script.branch_problem(repo, "1.2.3") or ""
+    assert "this checkout has no origin/main" in problem
+    assert "merge it first" not in problem
+
+
+def test_a_wrong_tag_leaves_out_the_dot_zero_advice(repo: Path) -> None:
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "off main")
+    assert "backport" not in (script.branch_problem(repo, "1.2.0", tag_matches=False) or "")
