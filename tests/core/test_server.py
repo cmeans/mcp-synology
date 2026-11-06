@@ -1851,7 +1851,9 @@ class TestInstructionComments:
 # only padding at the ends.
 # +382 by #545: pause_download says a pause takes about 3 s, and why, and what its rows ask the
 # model to do next.
-PAYLOAD_BUDGET_CHARS = 57_515
+# +494 by #575 (QA round 1): copy, move and restore say two sources that would replace each other
+# are refused, and that a replaced file may not be in the recycle bin.
+PAYLOAD_BUDGET_CHARS = 58_009
 
 
 class TestPayloadBudget:

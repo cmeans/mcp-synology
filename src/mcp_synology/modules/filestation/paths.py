@@ -28,11 +28,13 @@ from mcp_synology.core.formatting import error_response
 from mcp_synology.modules.filestation import helpers
 from mcp_synology.modules.filestation.helpers import (
     NAME_BYTES,
+    _escaped_repr,
     _is_dot,
     draws_nothing,
     invisible_problem,
     is_invisible_problem,
     is_selector_problem,
+    name_key,
     normalize_path,
     path_exists,
     shown,
@@ -88,8 +90,9 @@ PATH_PARAMS: dict[str, dict[str, PathRole]] = {
 NAME_PARAMS: dict[str, str] = {"rename": "new_name", "upload_file": "filename"}
 BIN_ITEM_PARAMS: dict[str, str] = {"restore_from_recycle_bin": "paths"}
 # Tools that put sources into a destination; each calls `refuse_planted_bin` (a source named
-# `#recycle` landing where it would be a bin). test_paths.py runs each through it, and fails
-# if a tool with sources and a DEST isn't listed here.
+# `#recycle` landing where it would be a bin) and `refuse_same_names` (two sources replacing
+# each other). test_paths.py runs each through both, and fails if a tool with sources and a
+# DEST isn't listed here.
 PLANTED_BIN_TOOLS: frozenset[str] = frozenset(
     {"copy_files", "move_files", "restore_from_recycle_bin"}
 )
@@ -207,12 +210,130 @@ def refuse_planted_bin(
     for raw, path, dest in zip(given, resolved, dests, strict=True):
         if normalize_path(path).rsplit("/", 1)[-1] == "#recycle" and makes_a_bin(dest):
             _refuse(
-                f"{_OP_WORDS.get(tool, tool)} refused: {raw!r} would land in {shown(dest)} "
-                "as '#recycle', the name of its recycle bin. Nothing was changed.",
+                f"{_OP_WORDS.get(tool, tool)} refused: {_escaped_repr(raw)} would land in "
+                f"{_escaped_repr(dest)} as '#recycle', the name of its recycle bin. Nothing "
+                "was changed.",
                 param,
                 raw,
                 _PLANTED_ADVICE.get(tool, "Copy or move the folder's contents instead."),
             )
+
+
+_SAME_NAME_PAIRS_SHOWN = 10
+_SAME_NAME_ADVICE = (
+    "Send them to different folders, or rename one first. To merge two folders without replacing "
+    "anything, use overwrite=false: items already there are skipped and listed. Separate calls "
+    "with overwrite=true don't avoid this: a later call replaces what an earlier one put there, "
+    "possibly with no copy in the recycle bin, so do that only if the user asked for it."
+)
+_DIFFERENT_FILES = (
+    " Same-named sources may not be the same file: show both to the user and let them choose."
+)
+
+
+def _same_name_advice(tool: str, *, dest_given: bool) -> str:
+    if tool == "restore_from_recycle_bin" and dest_given:
+        return (
+            "To put each back where it came from, leave out dest_folder (items from one folder "
+            "whose names match ignoring case would clash again). "
+            f"Otherwise: {_SAME_NAME_ADVICE[0].lower()}{_SAME_NAME_ADVICE[1:]}"
+        )
+    return _SAME_NAME_ADVICE
+
+
+def refuse_same_names(
+    tool: str,
+    given: Sequence[str],
+    resolved: Sequence[str],
+    dests: Sequence[str],
+    *,
+    overwrite: bool,
+    param: str = "paths",
+    dest_given: bool = True,
+) -> None:
+    """Refuse a copy, move or restore with ``overwrite=true`` where two sources would replace each
+    other (#495). Each runs as its own DSM task, so when two land at one destination under one
+    name, the second replaces the first, and for a move or restore the first's original is already
+    gone. A source inside the folder another source lands in is replaced the same way, before its
+    own task runs. The replaced file wasn't in the recycle bin on vdsm's `/home` (DSM 7.1 to 7.4.1;
+    other file systems and real bins aren't tested). Two folders merge instead, which can replace
+    same-named items inside them, so they're refused too: this can't tell files from folders, and
+    nothing here reads their types.
+
+    Names compare ignoring case. vdsm's `/home` (Btrfs) keeps `X.TXT` and `x.txt` as two files,
+    but a USB or network share may treat them as one (not tested), and there the first would be
+    lost: a refusal costs less, and ``overwrite=false`` still does that call. In one call,
+    ``overwrite=false`` replaces nothing (DSM skips the second, and says so; `_skip_report` warns
+    against a retry). A repeated path isn't a collision, and nor is a source inside another source
+    where `_collapse_overlaps` drops it (a move, or a restore with one destination)."""
+    if not overwrite:
+        return
+    sources = [normalize_path(path) for path in resolved]
+    landings: dict[tuple[str, str], tuple[str, str]] = {}
+    kept: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    clashes: list[str] = []
+    first_clash = ""
+    for raw, source, dest in zip(given, sources, dests, strict=True):
+        # Dropped by `_collapse_overlaps` only with one destination: with several, each runs alone.
+        if (
+            tool != "copy_files"
+            and len(set(dests)) == 1
+            and any(source.startswith(f"{other}/") for other in sources)
+        ):
+            continue
+        name = source.rsplit("/", 1)[-1]
+        landing = normalize_path(dest)
+        if (source, landing) in seen:
+            continue  # a repeated path is one source
+        seen.add((source, landing))
+        kept.append((raw, source))
+        first_raw, first = landings.setdefault((landing, name_key(name)), (raw, source))
+        if first == source:
+            continue
+        pair = f"{_escaped_repr(first_raw)} and {_escaped_repr(raw)}"
+        if not clashes:
+            names = (
+                "the same name"
+                if first.rsplit("/", 1)[-1] == name
+                else "names that match ignoring case, which some file systems treat as one"
+            )
+            first_clash = raw
+            lead = f"{pair} would both land in {_escaped_repr(dest)} with {names}"
+            clashes.append(lead)
+        else:
+            clashes.append(pair)
+    if clashes:
+        shown_also = clashes[1:_SAME_NAME_PAIRS_SHOWN]
+        more = len(clashes) - 1 - len(shown_also)
+        also = f" Also: {'; '.join(shown_also)}." if shown_also else ""
+        if more:
+            also += f" And {more:,} more."
+        _refuse(
+            f"{_OP_WORDS.get(tool, tool)} refused: {clashes[0]}, so with overwrite=true one could "
+            f"replace the other (for folders, items of the same name inside them).{also} Nothing "
+            "was changed.",
+            param,
+            first_clash,
+            _same_name_advice(tool, dest_given=dest_given) + _DIFFERENT_FILES,
+        )
+    for raw, source in kept:
+        folder = source.rpartition("/")[0]
+        while folder:
+            parent, _, name = folder.rpartition("/")
+            landed = landings.get((parent, name_key(name)))
+            # One already at its destination doesn't land on anything: it's where it was.
+            if landed and landed[1] != source and landed[1].rpartition("/")[0] != parent:
+                _refuse(
+                    f"{_OP_WORDS.get(tool, tool)} refused: {_escaped_repr(landed[0])} would land "
+                    f"in {_escaped_repr(folder)}, which holds {_escaped_repr(raw)}, so with "
+                    "overwrite=true it could be replaced, depending on the order. Nothing was "
+                    "changed.",
+                    param,
+                    raw,
+                    _same_name_advice(tool, dest_given=dest_given),
+                )
+            folder = parent
 
 
 class BinWords(NamedTuple):

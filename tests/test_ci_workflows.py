@@ -130,6 +130,43 @@ def test_the_exempt_workflow_runs_on_the_newest_python_ci_tests() -> None:
     assert versions == [str(newest)]
 
 
+def test_nothing_publishes_before_the_release_gate() -> None:
+    """Every other job in publish.yml waits on `gate`, directly or through another job."""
+    jobs = _workflows()["publish.yml"]["jobs"]
+
+    def waits_for_gate(name: str) -> bool:
+        needs = jobs[name].get("needs", [])
+        needs = [needs] if isinstance(needs, str) else needs
+        return "gate" in needs or any(waits_for_gate(need) for need in needs)
+
+    assert {name for name in jobs if name != "gate" and not waits_for_gate(name)} == set()
+    # `if: always()` would run a job even when the gate failed.
+    assert {name for name, job in jobs.items() if "if" in job} == set()
+
+
+def test_the_gate_and_the_release_notes_read_the_same_heading() -> None:
+    """check_release.py requires the section the github-release job's awk extracts."""
+    text = (GITHUB / "workflows" / "publish.yml").read_text(encoding="utf-8")
+    assert '$0 ~ "^## "version"( |\\\\()" {flag=1; next}' in text
+    script = (GITHUB.parent / "scripts" / "check_release.py").read_text(encoding="utf-8")
+    assert 'rf"{escaped}(?: |\\()"' in script
+
+
+def test_the_release_gate_checks_the_tag_on_a_full_checkout_and_cant_be_softened() -> None:
+    job = _workflows()["publish.yml"]["jobs"]["gate"]
+    assert _scripts(job["steps"]) == ['python scripts/check_release.py "$TAG"']
+    # The tag goes through env, never into the script: a tag name is free text.
+    assert job["steps"][-1]["env"]["TAG"] == "${{ github.ref_name }}"
+    checkout = job["steps"][0]
+    assert checkout["with"]["fetch-depth"] == 0  # A shallow clone has no origin/main history.
+    assert checkout["with"]["persist-credentials"] is False
+    assert "ref" not in checkout["with"]  # It must check the tag, not some branch.
+    assert "permissions" not in job  # The workflow's contents: read.
+    assert "continue-on-error" not in job
+    assert "if" not in job
+    assert not [step for step in job["steps"] if {"continue-on-error", "if"} & step.keys()]
+
+
 def _floor_steps() -> list[dict[str, Any]]:
     steps: list[dict[str, Any]] = _workflows()["ci.yml"]["jobs"]["floor"]["steps"]
     return steps
