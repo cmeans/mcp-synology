@@ -5,7 +5,7 @@
 # promoted, and nothing fires on that: #578; a pass writes nothing there), and each same-repository
 # PR with no workflow label at all. If a result is still missing long after its runs finished, comment once on the PR.
 #
-# Env: REPO, GH_TOKEN. STRANDED_AFTER_MINUTES defaults to 30. Fork PRs with neither of those labels are left
+# Env: REPO, GH_TOKEN. STRANDED_AFTER_MINUTES defaults to 30. Fork PRs with none of those labels are left
 # alone: their runs wait for the maintainer's approval, and the label is the maintainer's call.
 set -e
 
@@ -74,11 +74,14 @@ while IFS=$'\t' read -r PR SHA ADOPT <&3; do
     echo "PR #$PR: already commented on $SHA" >&2
     continue
   fi
-  STUCK=""
-  if printf '%s\n' "$MISSING" | grep -q '^CodeQL'; then
-    STUCK="
+  CLEAR="A lagging listing usually clears on a later recheck. If it doesn't, re-run the workflow in Actions, or, if the PR has no QA or \`Merge conflict\` label, apply \`Ready for QA\` by hand once \`gh pr checks $PR\` shows every check passed except \`QA Gate\`."
+  STUCK="\`CodeQL\` is GitHub's default setup, not a workflow in this repository, so re-running CI won't clear it. A new commit gets a new check."
+  if ! printf '%s\n' "$MISSING" | grep -qv '^CodeQL'; then
+    CLEAR=$STUCK
+  elif printf '%s\n' "$MISSING" | grep -q '^CodeQL'; then
+    CLEAR="$CLEAR
 
-\`CodeQL\` is GitHub's default setup, not a workflow in this repository, so re-running CI won't clear it. A new commit gets a new check."
+$STUCK"
   fi
   if ! gh pr comment "$PR" --repo "$REPO" --body "$MARKER
 The label automation has no result for these on \`$SHA\`, $AGE minutes after its runs finished:
@@ -87,7 +90,7 @@ The label automation has no result for these on \`$SHA\`, $AGE minutes after its
 $MISSING
 \`\`\`
 
-A lagging listing usually clears on a later recheck, every 15 minutes. If it doesn't, re-run the workflow in Actions, or, if the PR has no QA or \`Merge conflict\` label, apply \`Ready for QA\` by hand once \`gh pr checks $PR\` shows every check passed except \`QA Gate\`.$STUCK" >&2; then
+$CLEAR" >&2; then
     echo "PR #$PR: couldn't comment" >&2
     FAILED=1
   fi

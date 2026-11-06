@@ -9,8 +9,10 @@ on:
 
 permissions:
   pull-requests: write
-  actions: read  # on-unlabel reads CI and vdsm job results
-  contents: read  # on-unlabel checks out the script that reads them
+  # on-unlabel has its own block. These two remain for on-push and on-label, unnarrowed since that
+  # can only be tried on a real run.
+  actions: read
+  contents: read
 
 jobs:
   # When a PR is opened or new commits are pushed, reset to Awaiting CI.

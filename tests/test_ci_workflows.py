@@ -370,7 +370,7 @@ case "$*" in
   *workflows/vdsm.yml/runs?head_sha=abc\&*) cat "$ANSWERS/vdsm_run" 2>/dev/null; exit 0 ;;
   *actions/runs/1/jobs*) cat "$ANSWERS/ci_jobs" 2>/dev/null; exit 0 ;;
   *actions/runs/2/jobs*) cat "$ANSWERS/vdsm_jobs" 2>/dev/null; exit 0 ;;
-  *commits/abc/check-runs*) [ -f "$ANSWERS/codeql_fail" ] && exit 1
+  *commits/abc/check-runs?check_name=CodeQL\ *) [ -f "$ANSWERS/codeql_fail" ] && exit 1
     if [ -f "$ANSWERS/codeql_json" ]; then
       while [ "$1" != --jq ]; do shift; done
       jq -r "$2" "$ANSWERS/codeql_json"
@@ -538,7 +538,7 @@ def test_an_unreadable_codeql_check_fails_the_run_not_the_pr(github: _FakeGitHub
 
 @pytest.mark.parametrize("name", ["pr-labels.yml", "pr-labels-ci.yml", "pr-labels-recheck.yml"])
 def test_every_workflow_that_reads_the_state_can_read_check_runs(name: str) -> None:
-    """Without it the API answers 403, which `set -e` turns into a failed labeling job."""
+    """The state script reads CodeQL's check run; a denied read would fail the labeling job."""
     workflow = _workflows()[name]
     readers = [
         job
@@ -734,6 +734,7 @@ def _check_run(conclusion: str | None, status: str = "completed", slug: str = _C
         ([_check_run(None, status="in_progress")], "pending"),
         ([_check_run("failure", slug="github-actions"), _check_run("failure")], "fail"),
         ([_check_run("success"), _check_run("failure", slug="github-actions")], "pass"),
+        ([_check_run("failure"), _check_run("success")], "fail"),
     ],
     ids=[
         "no check run",
@@ -743,6 +744,7 @@ def _check_run(conclusion: str | None, status: str = "completed", slug: str = _C
         "running",
         "the real one after another app's",
         "the real one before another app's",
+        "two of its own: the first",
     ],
 )
 def test_the_codeql_query_on_what_the_api_answers(
@@ -752,12 +754,6 @@ def test_the_codeql_query_on_what_the_api_answers(
     github.runs()
     github.answer(ci_jobs=_GOOD, vdsm_jobs=_GOOD, codeql_json=json.dumps({"check_runs": runs}))
     assert github.run("pr-checks-state.sh").stdout.strip() == expected
-
-
-def test_the_codeql_query_names_the_check() -> None:
-    """The fake matches any check-runs URL, so the name in the URL is checked here."""
-    script = (_SCRIPTS / "pr-checks-state.sh").read_text(encoding="utf-8")
-    assert "check-runs?check_name=CodeQL" in script
 
 
 @_NEEDS_JQ
@@ -804,6 +800,24 @@ def test_the_recheck_comment_says_what_clears_a_stuck_codeql(github: _FakeGitHub
     comment = "\n".join(github.writes())
     assert "CodeQL: in_progress null" in comment
     assert "re-running CI won't clear it" in comment
+    assert "re-run the workflow in Actions" not in comment
+
+
+def test_the_recheck_comment_gives_both_when_codeql_and_a_job_are_missing(
+    github: _FakeGitHub,
+) -> None:
+    github.runs(updated="2026-01-01T00:00:00Z")
+    github.answer(
+        ci_jobs=_GOOD,
+        vdsm_jobs="completed\tnone\tvdsm (7.1)\n",
+        codeql="in_progress null\n",
+        labels="Awaiting CI\n",
+        prs="7\tabc\t0\n",
+    )
+    assert github.run("pr-labels-recheck.sh").returncode == 0
+    comment = "\n".join(github.writes())
+    assert "re-run the workflow in Actions" in comment
+    assert "re-running CI won't clear it" in comment
 
 
 def test_the_recheck_comment_leaves_codeql_out_otherwise(github: _FakeGitHub) -> None:
@@ -837,6 +851,7 @@ def test_the_recheck_comment_leaves_codeql_out_otherwise(github: _FakeGitHub) ->
         (_pr(7, "Ready for QA Signoff"), None),
         (_pr(7, "QA Approved"), None),
         (_pr(7, "Ready for QA"), "7\tabc\t0"),
+        (_pr(7, "Ready for QA", fork=True), "7\tabc\t0"),
         (_pr(7, "QA Failed"), None),
     ],
     ids=[
@@ -853,6 +868,7 @@ def test_the_recheck_comment_leaves_codeql_out_otherwise(github: _FakeGitHub) ->
         "signoff",
         "approved",
         "ready for QA",
+        "a fork on ready for QA",
         "QA failed",
     ],
 )
