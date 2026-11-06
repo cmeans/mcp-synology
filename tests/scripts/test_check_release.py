@@ -510,7 +510,10 @@ def test_a_wrong_tag_leaves_out_the_dot_zero_advice(repo: Path) -> None:
     assert "backport" not in (script.branch_problem(repo, "1.2.0", tag_matches=False) or "")
 
 
-@pytest.mark.parametrize("tag", ["v1.2.9-abandoned", "v1.2.9", "v1.2.3rc1", "v1.2.x"])
+@pytest.mark.parametrize(
+    "tag",
+    ["v1.2.9-abandoned", "v1.2.9", "v1.2.3rc1", "v1.2.x", "v1.2.1-abandoned", "v1.2.1rc1"],
+)
 def test_only_an_earlier_release_of_the_line_vouches_for_a_backport(repo: Path, tag: str) -> None:
     """Pre-QA on #574: a mistyped tag left on main's tip let a branch cut from main pass."""
     _git(repo, "tag", tag)
