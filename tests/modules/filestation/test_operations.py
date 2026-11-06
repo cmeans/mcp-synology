@@ -3690,7 +3690,7 @@ async def test_a_lost_delete_partway_says_whats_done_and_not_started(
         mock_client, paths=["/s/a", "/s/b", "/s/c"], recycle_bin_status={"s": True}
     )
     assert "Already deleted: /s/a." in result
-    assert "Not started: /s/c." in result
+    assert "Not started: /s/c. Check this one first by listing its path, then run them." in result
 
 
 @respx.mock
@@ -3710,7 +3710,7 @@ async def test_a_lost_copy_partway_hands_off_and_stops_nothing(
     )
     assert "DSM answered that it has no task copying /s/b (error 599)" in result
     assert "Already copied: /s/a." in result
-    assert "Not started: /s/c." in result
+    assert "Not started: /s/c. Check this one first by listing /s/dst, then run them." in result
     assert records.get(Handle("copy", "T_b")) is not None
     assert not [call for call in calls if call.get("method") == "stop"]
 

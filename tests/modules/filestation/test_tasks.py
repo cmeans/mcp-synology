@@ -17,6 +17,7 @@ from mcp_synology.core.errors import DsmHttpError, DsmReplyError, RequestTooLong
 from mcp_synology.modules.filestation.tasks import (
     DiscoveryNote,
     Handle,
+    HandleKind,
     TaskRecord,
     TaskRecords,
     parse_handle,
@@ -1169,8 +1170,9 @@ class TestFileTask:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_router({"status": _err(599)}))
         text = await file_task(mock_client, records=TaskRecords(), handle="copy:FileStation_X")
         assert text == (
-            "No running task with this handle. It may have finished, failed or been stopped, or "
-            "was started by a different DSM user. List the path to see what's left."
+            "DSM has no task with this handle: it may have finished, failed, been stopped or "
+            "still be running, or was started by a different DSM user. List the path to see "
+            "what's left."
         )
 
     @respx.mock
@@ -1187,8 +1189,9 @@ class TestFileTask:
         records.add(TaskRecord(handle=h, paths=["/Backups/X"]))
         text = await file_task(mock_client, records=records, handle=str(h))
         assert text == (
-            "DSM has no task for the delete of /Backups/X: it may have finished, failed or been "
-            "stopped, and DSM has no result for it. List the path to see what's left."
+            "DSM has no task for the delete of /Backups/X: it may have finished, failed, been "
+            "stopped or still be running, and DSM can't say which. List the path to see what's "
+            "left."
         )
 
     @respx.mock
@@ -1313,7 +1316,68 @@ class TestFileTask:
         text = await file_task(
             mock_client, records=TaskRecords(), handle="delete:FileStation_D1", action="stop"
         )
-        assert text.startswith("That task had already finished or isn't running.")
+        assert text == (
+            f"DSM didn't accept the stop (error {code}), and the task is still running "
+            "(8 of 342 items, 2%). Try the stop again."
+        )
+
+    @respx.mock
+    @pytest.mark.parametrize("code", [401, 599])
+    @pytest.mark.parametrize(
+        ("after", "says"),
+        [
+            (_err(599), "That task had already finished or isn't running."),
+            (_ok(MOVE_FINISHED), "That task had already finished, so nothing was stopped."),
+        ],
+        ids=["gone", "finished"],
+    )
+    async def test_a_refused_stop_says_what_a_new_read_shows(
+        self,
+        mock_client: DsmClient,
+        monkeypatch: pytest.MonkeyPatch,
+        code: int,
+        after: httpx.Response,
+        says: str,
+    ) -> None:
+        """QA round 2 on #590: a refused stop said it was over, and the task ran on."""
+        import mcp_synology.modules.filestation.tasks as tasks
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        monkeypatch.setattr(tasks, "_LOST_TASK_WAIT", 0)
+        statuses = iter([_ok(RUNNING)])
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            if _method(request) == "stop":
+                return _err(code)
+            return next(statuses, after)
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        text = await file_task(
+            mock_client, records=TaskRecords(), handle="copy:FileStation_D1", action="stop"
+        )
+        assert text.startswith(says)
+
+    @respx.mock
+    async def test_a_refused_stop_then_no_answer_says_it_wasnt_accepted(
+        self, mock_client: DsmClient
+    ) -> None:
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        statuses = iter([_ok(RUNNING)])
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            if _method(request) == "stop":
+                return _err(401)
+            reply = next(statuses, None)
+            if reply is None:
+                raise httpx.ReadTimeout("")
+            return reply
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        with pytest.raises(ToolError, match="The stop wasn't accepted"):
+            await file_task(
+                mock_client, records=TaskRecords(), handle="delete:FileStation_D1", action="stop"
+            )
 
     @respx.mock
     async def test_file_task_stop_finished_unread_copy_is_not_stopped(
@@ -1354,10 +1418,10 @@ class TestFileTask:
 
     @respx.mock
     @pytest.mark.parametrize("kind", ["copy", "delete"])
-    async def test_file_task_stop_unknown_is_not_stopped(
+    async def test_file_task_stop_unknown_still_sends_it(
         self, mock_client: DsmClient, kind: str
     ) -> None:
-        """Unknown, forgotten or another user's task (599): no stop, the status reply."""
+        """QA round 2 on #590: 599s can pass, so a stop isn't dropped on them, or claimed."""
         from mcp_synology.modules.filestation.tasks import file_task
 
         calls: list[tuple[str, str]] = []
@@ -1367,15 +1431,15 @@ class TestFileTask:
         text = await file_task(
             mock_client, records=TaskRecords(), handle=f"{kind}:FileStation_X", action="stop"
         )
-        assert [m for _, m in calls] == ["status"] * 3
+        assert [m for _, m in calls] == ["status"] * 3 + ["stop"]
         assert text == (
-            "No running task with this handle. It may have finished, failed or been stopped, or "
-            "was started by a different DSM user. Nothing was stopped. List the path to see "
-            "what's left."
+            "DSM has no task with this handle: it may have finished, failed, been stopped or "
+            "still be running, or was started by a different DSM user. A stop was sent, but DSM "
+            "can't confirm it. List the path to see what's left."
         )
 
     @respx.mock
-    async def test_file_task_stop_forgotten_with_record_says_nothing_stopped(
+    async def test_file_task_stop_forgotten_with_record_says_it_cant_be_confirmed(
         self, mock_client: DsmClient
     ) -> None:
         """QA round 3: "or was stopped" alone reads as "your stop worked"."""
@@ -1389,11 +1453,11 @@ class TestFileTask:
         records = TaskRecords()
         records.add(TaskRecord(handle=h, paths=["/qa/vanish-y"]))
         text = await file_task(mock_client, records=records, handle=str(h), action="stop")
-        assert [m for _, m in calls] == ["status"] * 3
+        assert [m for _, m in calls] == ["status"] * 3 + ["stop"]
         assert text == (
-            "DSM has no task for the delete of /qa/vanish-y: it may have finished, failed or been "
-            "stopped, and DSM has no result for it. Nothing was stopped. List the path to see "
-            "what's left."
+            "DSM has no task for the delete of /qa/vanish-y: it may have finished, failed, been "
+            "stopped or still be running, and DSM can't say which. A stop was sent, but DSM "
+            "can't confirm it. List the path to see what's left."
         )
 
     @respx.mock
@@ -1725,3 +1789,89 @@ async def test_what_follows_a_599_decides_as_usual(
     respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
     result = await poll_task(mock_client, api=API, version=2, taskid="t1", wait=30, label="x")
     assert result.outcome == outcome
+
+
+@respx.mock
+async def test_slow_599s_stop_being_read(
+    mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """QA round 2 on #590: three slow 599s could outlast a client's reply limit, which cancels."""
+    import mcp_synology.modules.filestation.tasks as tasks
+    from mcp_synology.modules.filestation.tasks import file_task
+
+    now = [0.0]
+    monkeypatch.setattr(tasks.time, "monotonic", lambda: now[0])
+    methods: list[str] = []
+
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        methods.append(_method(request))
+        now[0] += 11
+        return httpx.Response(200, json={"success": False, "error": {"code": 599}})
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+    await file_task(mock_client, records=TaskRecords(), handle="delete:FileStation_X")
+    assert methods == ["status"]
+
+
+@respx.mock
+async def test_a_poll_stops_reading_slow_599s(
+    mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import mcp_synology.modules.filestation.tasks as tasks
+
+    now = [0.0]
+    monkeypatch.setattr(tasks.time, "monotonic", lambda: now[0])
+    methods: list[str] = []
+
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        methods.append(_method(request))
+        now[0] += 11
+        return httpx.Response(200, json={"success": False, "error": {"code": 599}})
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+    result = await poll_task(mock_client, api=API, version=2, taskid="t1", wait=300, label="x")
+    assert result.outcome == "lost"
+    assert methods == ["status"]
+
+
+ODD = "/s/rep\u200bort"
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("kind", "dest", "action", "reply", "shows"),
+    [
+        ("delete", None, "status", _err(599), repr(ODD)),
+        ("copy", "/s/d", "status", _err(599), "List /s/d to see what's there."),
+        ("copy", "/s/d\u200best", "status", _err(599), repr("/s/d\u200best")),
+        ("delete", None, "stop", _ok(RUNNING), repr(ODD)),
+        ("copy", "/s/d\u200best", "status", _ok(RUNNING), repr("/s/d\u200best/")),
+    ],
+    ids=["gone", "copy's destination", "odd destination", "stopped", "running"],
+)
+async def test_file_task_shows_paths_safely(
+    mock_client: DsmClient,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: HandleKind,
+    dest: str | None,
+    action: Literal["status", "stop"],
+    reply: httpx.Response,
+    shows: str,
+) -> None:
+    """Replies quote what would otherwise hide a character (CLAUDE.md, `shown`)."""
+    import mcp_synology.modules.filestation.tasks as tasks
+    from mcp_synology.modules.filestation.tasks import file_task
+
+    monkeypatch.setattr(tasks, "_LOST_TASK_WAIT", 0)
+    records = TaskRecords()
+    records.add(TaskRecord(Handle(kind, "FileStation_X"), paths=[ODD], dest=dest))
+
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        return _ok({}) if _method(request) == "stop" else reply
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+    text = await file_task(
+        mock_client, records=records, handle=f"{kind}:FileStation_X", action=action
+    )
+    assert shows in text
+    assert "\u200b" not in text

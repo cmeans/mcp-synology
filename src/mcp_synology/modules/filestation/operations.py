@@ -788,6 +788,7 @@ async def _copy_move(
                 handle=outcome.handle,
                 status=outcome.status,
                 stall=outcome.stall,
+                dest=task_dest,
                 done=done,
                 not_started=normalized[i + 1 :] + list(later or []),
             )
