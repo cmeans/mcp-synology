@@ -622,8 +622,8 @@ async def _skip_report(
     DSM's ``skipstatus`` says only that something was skipped for a source: all of a file,
     or some of a folder's children (the rest still went through). So each skipped source's
     type is looked up: a file was skipped, a folder had items skipped. A source whose type
-    can't be read keeps the hedged "in whole or in part" wording. ``earlier``: the sources that ran
-    before these in the same call, when a hand-off split it up: only for what this call put there.
+    can't be read keeps the hedged "in whole or in part" wording. ``earlier``: the sources that
+    landed before these in the same call, when a hand-off split it up.
     """
     try:
         kinds = await paths_isdir(client, skipped_paths)
@@ -828,7 +828,8 @@ async def _copy_move(
             if running is not None:
                 other = task_dest if task_dest != dest else None
                 reply = _already_running(operation, p, other) + "\n" + reply
-            ran = {name_key(path) for path in normalized[: i + 1]}
+            # A task already running to another folder lands nothing here.
+            ran = {name_key(path) for path in normalized[: i + 1 if task_dest == dest else i]}
             alike = [q for q in normalized[i + 1 :] if name_key(q) in ran]
             if alike:
                 # #580: "Run them again" with overwrite=true would replace what this call placed.

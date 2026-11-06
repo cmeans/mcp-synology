@@ -232,7 +232,8 @@ _SAME_NAME_ADVICE = (
 def _same_name_advice(tool: str, *, dest_given: bool) -> str:
     if tool == "restore_from_recycle_bin" and dest_given:
         return (
-            "To put each back where it came from, leave out dest_folder. "
+            "To put each back where it came from, leave out dest_folder (items from one folder "
+            "whose names differ only in case would clash again). "
             f"Otherwise: {_SAME_NAME_ADVICE[0].lower()}{_SAME_NAME_ADVICE[1:]}"
         )
     return _SAME_NAME_ADVICE

@@ -89,7 +89,7 @@ class TaskRecord:
     recursive: bool | None = None
     recycle: dict[str, bool] = field(default_factory=dict)
     final_status: dict[str, Any] | None = None
-    # The sources that ran before this one in its call, to the same destination (#580).
+    # The sources that landed whole before this one in its call, at the same destination (#580).
     earlier: list[str] = field(default_factory=list)
 
 

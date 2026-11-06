@@ -2741,6 +2741,48 @@ class TestCopyMoveHandoff:
         assert record.earlier == []
 
     @respx.mock
+    async def test_a_hand_off_warns_for_a_case_only_name_and_escapes_it(
+        self, mock_client: DsmClient
+    ) -> None:
+        calls: list[dict[str, str]] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm(calls, finish={"a"}))
+        result = await copy_files(
+            mock_client,
+            paths=["/s/a", "/s/b", "/s/x\u3164/B"],
+            dest_folder="/s/dst",
+            timeout=1,
+        )
+        assert "Named like one this call already ran: '/s/x\\u3164/B'." in result
+
+    @respx.mock
+    async def test_a_task_running_elsewhere_lands_nothing_here(
+        self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Pre-QA on #575: the warning spoke of a folder this task never reached."""
+        from mcp_synology.modules.filestation import operations
+
+        async def running(_client: DsmClient, *, path: str, **_kwargs: Any) -> Any:
+            if path != "/s/b":
+                return None
+            return {"taskid": "T", "params": {"dest_folder_path": "/s/OTHER", "overwrite": False}}
+
+        calls: list[dict[str, str]] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm(calls, finish={"a"}))
+        monkeypatch.setattr(operations, "running_task", running)
+        records = TaskRecords()
+        result = await copy_files(
+            mock_client,
+            paths=["/s/a", "/s/b", "/s/x/b"],
+            dest_folder="/s/dst",
+            timeout=1,
+            records=records,
+        )
+        assert "Named like" not in result
+        record = records.get(Handle("copy", "T"))
+        assert record is not None
+        assert record.earlier == []
+
+    @respx.mock
     async def test_a_hand_off_with_no_same_name_doesnt_warn(self, mock_client: DsmClient) -> None:
         calls: list[dict[str, str]] = []
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm(calls, finish={"a"}))
@@ -3775,3 +3817,18 @@ async def test_a_hand_off_keeps_the_warning_through_file_task(
     assert "Don't retry these with overwrite=true" in text
     assert "Pass overwrite=true" not in text
     assert "0 of 1" in text
+
+
+async def test_skip_report_escapes_the_paths_in_its_warning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A planted name mustn't read as server text beneath a conditional instruction."""
+    out = await _report_for(
+        monkeypatch,
+        ["/v/a\u3164/x", "/v/b\u3164/x"],
+        ["/v/b\u3164/x"],
+        {"/v/b\u3164/x": False},
+    )
+    warning = out.split("Don't retry")[1]
+    assert "\u3164" not in warning
+    assert warning.count("\\u3164") == 2

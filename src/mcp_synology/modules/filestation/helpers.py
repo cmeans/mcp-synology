@@ -637,7 +637,9 @@ def shown(path: str) -> str:
     paths are taken exactly (#488, #489, #515).
 
     The rule (#510): a refusal of an argument as given quotes it with ``!r`` (the caller's
-    own text, shown exactly); an error or list that names a path the server checked or got
+    own text, shown exactly), or ``_escaped_repr``, which also shows what ``!r`` leaves as is
+    (`refuse_same_names`, `refuse_planted_bin`; the older ``!r`` refusals are on #458); an
+    error or list that names a path the server checked or got
     from DSM uses ``shown`` (plain unless something would be invisible). Successful
     replies and listings show paths as DSM does."""
     for part in path.split("/"):

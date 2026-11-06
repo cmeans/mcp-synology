@@ -1630,6 +1630,40 @@ def test_a_restore_with_no_destination_isnt_told_to_leave_it_out() -> None:
     assert "leave out dest_folder" not in _error(exc)["suggestion"]
 
 
+async def test_the_restore_tool_says_when_no_destination_was_given() -> None:
+    client = _FakeClient({"/video/a"} | {"/video/#recycle/a/X", "/video/#recycle/a/x"})
+    fn = await _tool("restore_from_recycle_bin", client)
+    with pytest.raises(ToolError) as exc:
+        await fn(ctx=_fake_mcp_ctx(), share="video", paths=["a/X", "a/x"], overwrite=True)
+    assert "leave out dest_folder" not in _error(exc)["suggestion"]
+
+
+def test_the_refusal_names_the_source_that_clashes() -> None:
+    with pytest.raises(ToolError) as exc:
+        refuse_same_names(
+            "move_files", ["/v/a/x", "/v/b/x"], ["/v/a/x", "/v/b/x"], ["/v/d"] * 2, overwrite=True
+        )
+    assert _error(exc)["value"] == "/v/b/x"
+
+
+def test_the_inside_refusal_gives_a_restore_its_own_advice() -> None:
+    with pytest.raises(ToolError) as exc:
+        refuse_same_names(
+            "restore_from_recycle_bin",
+            ["n", "d/n/q"],
+            ["/v/#recycle/n", "/v/d/n/q"],
+            ["/v/d"] * 2,
+            overwrite=True,
+        )
+    assert "leave out dest_folder" in _error(exc)["suggestion"]
+
+
+def test_a_planted_bins_destination_is_escaped() -> None:
+    with pytest.raises(ToolError) as exc:
+        refuse_planted_bin("move_files", ["/v/a/#recycle"], ["/v/a/#recycle"], ["/v\u3164"])
+    assert "\\u3164" in _error(exc)["message"]
+
+
 def test_the_advice_says_same_names_may_be_different_files() -> None:
     with pytest.raises(ToolError) as exc:
         refuse_same_names(
