@@ -34,6 +34,7 @@ from mcp_synology.modules.filestation.helpers import (
     invisible_problem,
     is_invisible_problem,
     is_selector_problem,
+    name_key,
     normalize_path,
     path_exists,
     shown,
@@ -223,12 +224,13 @@ _SAME_NAME_ADVICE = (
     "Send them to different folders, or rename one first. To merge two folders without replacing "
     "anything, use overwrite=false: items already there are skipped and listed. Separate calls "
     "with overwrite=true don't avoid this: a later call replaces what an earlier one put there, "
-    "possibly with no copy in the recycle bin, so do that only if the user asked for it."
+    "possibly with no copy in the recycle bin, so do that only if the user asked for it. "
+    "Same-named sources may not be the same file: show both to the user and let them choose."
 )
 
 
-def _same_name_advice(tool: str) -> str:
-    if tool == "restore_from_recycle_bin":
+def _same_name_advice(tool: str, *, dest_given: bool) -> str:
+    if tool == "restore_from_recycle_bin" and dest_given:
         return (
             "To put each back where it came from, leave out dest_folder. "
             f"Otherwise: {_SAME_NAME_ADVICE[0].lower()}{_SAME_NAME_ADVICE[1:]}"
@@ -244,6 +246,7 @@ def refuse_same_names(
     *,
     overwrite: bool,
     param: str = "paths",
+    dest_given: bool = True,
 ) -> None:
     """Refuse a copy, move or restore with ``overwrite=true`` where two sources would replace each
     other (#495). Each runs as its own DSM task, so when two land at one destination under one
@@ -274,7 +277,7 @@ def refuse_same_names(
         name = source.rsplit("/", 1)[-1]
         landing = normalize_path(dest)
         kept.append((raw, source))
-        first_raw, first = landings.setdefault((landing, name.lower()), (raw, source))
+        first_raw, first = landings.setdefault((landing, name_key(name)), (raw, source))
         if first == source:
             continue
         pair = f"{_escaped_repr(first_raw)} and {_escaped_repr(raw)}"
@@ -301,22 +304,23 @@ def refuse_same_names(
             "was changed.",
             param,
             first_clash,
-            _same_name_advice(tool),
+            _same_name_advice(tool, dest_given=dest_given),
         )
     for raw, source in kept:
         folder = source.rpartition("/")[0]
         while folder:
             parent, _, name = folder.rpartition("/")
-            landed = landings.get((parent, name.lower()))
+            landed = landings.get((parent, name_key(name)))
             # One already at its destination doesn't land on anything: it's where it was.
             if landed and landed[1] != source and landed[1].rpartition("/")[0] != parent:
                 _refuse(
                     f"{_OP_WORDS.get(tool, tool)} refused: {_escaped_repr(landed[0])} would land "
                     f"in {_escaped_repr(folder)}, which holds {_escaped_repr(raw)}, so with "
-                    "overwrite=true it could be replaced before its turn. Nothing was changed.",
+                    "overwrite=true it could be replaced, depending on the order. Nothing was "
+                    "changed.",
                     param,
                     raw,
-                    _same_name_advice(tool),
+                    _same_name_advice(tool, dest_given=dest_given),
                 )
             folder = parent
 

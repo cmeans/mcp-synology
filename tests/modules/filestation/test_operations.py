@@ -2712,10 +2712,33 @@ class TestCopyMoveHandoff:
             timeout=1,
             records=records,
         )
-        assert "Named like one this call already ran: /s/x/b, /s/x/a." in result
+        assert "Named like one this call already ran: '/s/x/b', '/s/x/a'." in result
         record = records.get(Handle("copy", "FileStation_B"))
         assert record is not None
         assert record.earlier == ["/s/a"]
+
+    @respx.mock
+    async def test_a_skipped_source_isnt_counted_as_having_landed(
+        self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """QA round 2 on #575: the hand-off route blamed a source that had been skipped."""
+        from mcp_synology.modules.filestation import operations
+
+        records = TaskRecords()
+        calls: list[dict[str, str]] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm(calls, finish={"a"}))
+        real = operations._copy_move_one_path
+
+        async def skips_a(client: DsmClient, path: str, **kwargs: Any) -> Any:
+            return (0, True) if path == "/s/a" else await real(client, path, **kwargs)
+
+        monkeypatch.setattr(operations, "_copy_move_one_path", skips_a)
+        await copy_files(
+            mock_client, paths=["/s/a", "/s/b"], dest_folder="/s/dst", timeout=1, records=records
+        )
+        record = records.get(Handle("copy", "FileStation_B"))
+        assert record is not None
+        assert record.earlier == []
 
     @respx.mock
     async def test_a_hand_off_with_no_same_name_doesnt_warn(self, mock_client: DsmClient) -> None:
@@ -3654,9 +3677,10 @@ async def test_skip_report_warns_when_this_call_put_the_blocker_there(
         monkeypatch, ["/v/a/x.txt", "/v/b/x.txt"], ["/v/b/x.txt"], {"/v/b/x.txt": False}
     )
     assert "Don't retry these with overwrite=true" in out
-    assert "/v/b/x.txt (this call's /v/a/x.txt went first)" in out
+    assert "'/v/b/x.txt' (this call's '/v/a/x.txt' went first)" in out
     assert "Pass overwrite=true" not in out
     assert "For the others" not in out
+    assert "(this call's '/v/a/x.txt' went first)" in out
     assert "/v/b/x.txt" in out.split("Skipped:")[1]
 
 
@@ -3672,7 +3696,7 @@ async def test_skip_report_still_offers_overwrite_for_what_was_already_there(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     out = await _report_for(monkeypatch, ["/v/a/x", "/v/b/y"], ["/v/b/y"], {"/v/b/y": False})
-    assert "Pass overwrite=true to replace them." in out
+    assert "Pass overwrite=true to replace them, unless what's there came from an earlier" in out
     assert "Don't retry" not in out
 
 
@@ -3682,7 +3706,7 @@ async def test_skip_report_a_skipped_first_file_isnt_the_blocker(
     """Both skipped: something already there blocks both, and this call put nothing there."""
     both = ["/v/a/x", "/v/b/x"]
     out = await _report_for(monkeypatch, both, both, {p: False for p in both})
-    assert "Pass overwrite=true to replace them." in out
+    assert "Pass overwrite=true to replace them, unless what's there came from an earlier" in out
     assert "Don't retry" not in out
 
 
@@ -3696,15 +3720,16 @@ async def test_skip_report_separates_its_own_from_the_others(
         {"/v/b/x": False, "/v/c/y": False},
     )
     assert "Don't retry these with overwrite=true" in out
-    assert "/v/c/y (this call's" not in out
+    assert "'/v/c/y' (this call's" not in out
     assert "For the others, pass overwrite=true" in out
+    assert "came from an earlier call of yours" in out
 
 
 async def test_skip_report_compares_names_ignoring_case(monkeypatch: pytest.MonkeyPatch) -> None:
     out = await _report_for(
         monkeypatch, ["/v/a/X.TXT", "/v/b/x.txt"], ["/v/b/x.txt"], {"/v/b/x.txt": False}
     )
-    assert "/v/b/x.txt (this call's /v/a/X.TXT went first)" in out
+    assert "'/v/b/x.txt' (this call's '/v/a/X.TXT' went first)" in out
 
 
 @pytest.mark.parametrize("kinds", [{"/v/a/n": True, "/v/b/n": True}, {}])
@@ -3714,13 +3739,13 @@ async def test_skip_report_counts_a_skipped_folder_as_having_landed(
     """Its other items landed; with its type unknown, warning is the safe side."""
     both = ["/v/a/n", "/v/b/n"]
     out = await _report_for(monkeypatch, both, both, kinds)
-    assert "/v/b/n (this call's /v/a/n went first)" in out
+    assert "'/v/b/n' (this call's '/v/a/n' went first)" in out
 
 
 async def test_skip_report_names_the_first_with_that_name(monkeypatch: pytest.MonkeyPatch) -> None:
     sources = ["/v/a/x", "/v/b/x", "/v/c/x"]
     out = await _report_for(monkeypatch, sources, sources[1:], {p: False for p in sources})
-    assert "/v/c/x (this call's /v/a/x went first)" in out
+    assert "'/v/c/x' (this call's '/v/a/x' went first)" in out
 
 
 async def test_a_hand_off_keeps_the_warning_through_file_task(

@@ -611,6 +611,12 @@ def _hides(c: str) -> bool:
     return bool(_NOT_PRINTED.match(c)) or (c != " " and c.isspace())
 
 
+def name_key(path: str) -> str:
+    """A path's last part as a same-name check compares it: ignoring case, the widest way, as a
+    refusal costs less than a file lost on a file system that folds case (#495)."""
+    return path.rsplit("/", 1)[-1].casefold()
+
+
 def _escaped_repr(path: str) -> str:
     """``repr(path)``, with every character that draws nothing written as ``\\uXXXX`` too
     (``repr`` leaves U+3164 or VS16 as is), so the quoted path shows what's hiding."""

@@ -24,12 +24,14 @@ from mcp_synology.core.formatting import (
     synology_error_response,
 )
 from mcp_synology.modules.filestation.helpers import (
+    _escaped_repr,
     _is_dot,
     describe_transport_error,
     dsm_str,
     ensure_recycle_status,
     find_missing_paths,
     missing_paths_suggestion,
+    name_key,
     normalize_path,
     path_exists,
     paths_isdir,
@@ -639,9 +641,9 @@ async def _skip_report(
     landed: dict[str, str] = {}
     own: dict[str, str] = {}
     for p in earlier:
-        landed.setdefault(p.rsplit("/", 1)[-1].lower(), p)
+        landed.setdefault(name_key(p), p)
     for p in normalized:
-        name = p.rsplit("/", 1)[-1].lower()
+        name = name_key(p)
         if p in skipped_paths and name in landed:
             own[p] = landed[name]
         if p not in skipped_paths or kinds.get(p) is not False:
@@ -690,15 +692,24 @@ async def _skip_report(
         )
     if own:
         lines.append(
-            "Don't retry these with overwrite=true unless the user asked for it: what's there may "
+            "Don't retry these with overwrite=true unless the user asked to replace that item: "
+            "what's there may "
             "be what this call just put there, and it would be replaced, possibly with no copy in "
             "the recycle bin. Send them to another folder, or rename them first:"
         )
-        lines.extend(f"  {p} (this call's {first} went first)" for p, first in own.items())
+        lines.extend(
+            f"  {_escaped_repr(p)} (this call's {_escaped_repr(first)} went first)"
+            for p, first in own.items()
+        )
+    # No call can know what an earlier call put there (#580), so this is never said flat.
+    caution = (
+        "unless what's there came from an earlier call of yours: that would replace it, possibly "
+        "with no copy in the recycle bin."
+    )
     if not own:
-        lines.append("Pass overwrite=true to replace them.")
+        lines.append(f"Pass overwrite=true to replace them, {caution}")
     elif len(own) < len(skipped_paths):
-        lines.append("For the others, pass overwrite=true to replace what was already there.")
+        lines.append(f"For the others, pass overwrite=true to replace them, {caution}")
     return lines
 
 
@@ -762,6 +773,7 @@ async def _copy_move(
     total_processed = 0
     done = list(already_done or [])
     skipped_paths: list[str] = []
+    landed_here: list[str] = []
     for i, p in enumerate(normalized):
         # A copy of the same source to another destination is a different operation; a
         # move (or restore) of a source that is already moving anywhere is not.
@@ -800,7 +812,8 @@ async def _copy_move(
                         paths=[p],
                         dest=task_dest,
                         overwrite=task_overwrite,
-                        earlier=normalized[:i],
+                        # Only what landed, and only for the destination this call asked for.
+                        earlier=landed_here if task_dest == dest else [],
                     )
                 )
             reply = handoff_reply(
@@ -815,12 +828,13 @@ async def _copy_move(
             if running is not None:
                 other = task_dest if task_dest != dest else None
                 reply = _already_running(operation, p, other) + "\n" + reply
-            ran = {path.rsplit("/", 1)[-1].lower() for path in normalized[: i + 1]}
-            alike = [q for q in normalized[i + 1 :] if q.rsplit("/", 1)[-1].lower() in ran]
+            ran = {name_key(path) for path in normalized[: i + 1]}
+            alike = [q for q in normalized[i + 1 :] if name_key(q) in ran]
             if alike:
                 # #580: "Run them again" with overwrite=true would replace what this call placed.
+                named = ", ".join(map(_escaped_repr, alike))
                 reply += (
-                    f"\nNamed like one this call already ran: {', '.join(map(shown, alike))}. "
+                    f"\nNamed like one this call already ran: {named}. "
                     "Run them with overwrite=false or send them to another folder: with "
                     "overwrite=true they could replace it."
                 )
@@ -829,6 +843,8 @@ async def _copy_move(
         total_processed += size
         if skipped:
             skipped_paths.append(p)
+        else:
+            landed_here.append(p)
         done.append(p)
 
     text = await _copy_move_summary(

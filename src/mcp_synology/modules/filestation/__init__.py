@@ -1206,7 +1206,12 @@ def register(ctx: "RegisterContext") -> None:
             landings = [dest or bin_item_origin(bin_share.strip("/"), item) for item in items]
             refuse_planted_bin("restore_from_recycle_bin", paths, items, landings)
             refuse_same_names(
-                "restore_from_recycle_bin", paths, items, landings, overwrite=overwrite
+                "restore_from_recycle_bin",
+                paths,
+                items,
+                landings,
+                overwrite=overwrite,
+                dest_given=dest is not None,
             )
             return _reply(
                 await restore_from_recycle_bin(

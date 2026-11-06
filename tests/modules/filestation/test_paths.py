@@ -1495,8 +1495,10 @@ async def test_a_restore_to_each_items_own_folder_isnt_refused() -> None:
         ("move_files", ["/v/a/x", "/v/b/y", "/v/c/x"], True),
         # Some file systems treat names that differ only in case as one.
         ("move_files", ["/v/a/X.MKV", "/v/b/x.mkv"], True),
-        # Those fold case, not spelling.
-        ("move_files", ["/v/a/strasse", "/v/b/straße"], False),
+        ("move_files", ["/v/a/strasse", "/v/b/straße"], True),
+        # Pairs lower() leaves apart, some of which look identical.
+        ("move_files", ["/v/a/10\u00b5F", "/v/b/10\u03bcF"], True),
+        ("move_files", ["/v/a/\u03a3\u0391\u03a3", "/v/b/\u03c3\u03b1\u03c3"], True),
         ("copy_files", ["/v/a/x", "/v/b/x"], True),
         # A repeated path is one source, however it's spelled.
         ("move_files", ["/v/a/x", "/v/a/x"], False),
@@ -1613,6 +1615,27 @@ def test_a_long_list_of_pairs_is_capped() -> None:
     with pytest.raises(ToolError) as exc:
         refuse_same_names("move_files", sources, sources, ["/v/d"] * 50, overwrite=True)
     assert "And 39 more." in _error(exc)["message"]
+
+
+def test_a_restore_with_no_destination_isnt_told_to_leave_it_out() -> None:
+    with pytest.raises(ToolError) as exc:
+        refuse_same_names(
+            "restore_from_recycle_bin",
+            ["a/X", "a/x"],
+            ["/v/#recycle/a/X", "/v/#recycle/a/x"],
+            ["/v/a"] * 2,
+            overwrite=True,
+            dest_given=False,
+        )
+    assert "leave out dest_folder" not in _error(exc)["suggestion"]
+
+
+def test_the_advice_says_same_names_may_be_different_files() -> None:
+    with pytest.raises(ToolError) as exc:
+        refuse_same_names(
+            "move_files", ["/v/a/x", "/v/b/x"], ["/v/a/x", "/v/b/x"], ["/v/d"] * 2, overwrite=True
+        )
+    assert "show both to the user" in _error(exc)["suggestion"]
 
 
 def test_a_restore_is_told_about_leaving_out_the_destination() -> None:
