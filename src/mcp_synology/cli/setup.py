@@ -314,7 +314,7 @@ def _setup_interactive(verbose: bool, not_loaded: str | None = None) -> None:
         try:
             return _store_keyring(service, username, password, host, connection_port, device_id)
         except SystemExit:
-            click.echo("No config was written.", err=True)
+            click.echo("No config was written. Run this again to write it.", err=True)
             raise
 
     nas_hostname = None
@@ -584,7 +584,7 @@ def _store_keyring(
 
     removed: list[str] = []
     before: dict[str, str | None] = {}
-    username_written = stored = False
+    username_written = host_written = stored = False
     try:
         import keyring
         from keyring.errors import PasswordDeleteError
@@ -600,6 +600,7 @@ def _store_keyring(
                 if held:
                     removed.append(key)
             keyring.set_password(service, "host", recorded)
+            host_written = True
         before = {key: keyring.get_password(service, key) for key in ("username", "password")}
         token_held = keyring.get_password(service, "device_id")
         keyring.set_password(service, "username", username)
@@ -627,7 +628,7 @@ def _store_keyring(
             else "Couldn't store these in the keyring."
         )
         if stored:
-            token = ", and the old account's token was removed" if removed else ""
+            token = ", and the old 2FA device token was removed" if "device_id" in removed else ""
             _stop_on_keyring(
                 f"The username and password are stored{token}, but the new 2FA device token "
                 "couldn't be stored, so the server may not be able to log in without a code. Fix "
@@ -636,8 +637,8 @@ def _store_keyring(
         mixed = username_written and not _put_back(service, before)
         gone = f" Already removed from this entry: {', '.join(removed)}." if removed else ""
         if mixed:
-            gone += " The entry now holds the new username with the old password."
-        elif not removed:
+            gone += " The entry may be partly written: run this again."
+        elif not removed and not host_written and not no_keyring_here():
             gone += " This entry is as it was."
         if device_id:
             _stop_on_keyring(
@@ -680,10 +681,12 @@ def _put_back(service: str, before: dict[str, str | None]) -> bool:
 def _login_failed(error: Exception) -> None:
     """Say why, what to do, and that a retry isn't free: each counts toward Auto Block (#454)."""
     click.echo(click.style(f"Login failed: {error}", fg="red"), err=True)
+    code = getattr(error, "code", None)
     suggestion = getattr(error, "suggestion", None)
-    if suggestion:
+    # Those say to run setup, or that a re-login will follow: neither fits here.
+    if suggestion and code not in (403, 106, 107, 119):
         click.echo(suggestion, err=True)
-    if getattr(error, "code", None) in (400, 403, 404):
+    if code in (400, 403, 404):
         click.echo(
             "Each failed login counts toward DSM's Auto Block (on by default: 10 within 5 minutes "
             "blocks this computer's IP address), so check before retrying.",
@@ -701,7 +704,7 @@ async def _attempt_login(
     Returns dict with 'success' bool, and optionally 'sid' and, on 2FA success, 'device_id' for
     the caller to store with the rest (#454).
     """
-    from mcp_synology.core.errors import SynologyError
+    from mcp_synology.core.errors import DsmHttpError, DsmReplyError, SynologyError
 
     result: dict[str, Any] = {"success": False}
     device_id: Any = None
@@ -715,6 +718,8 @@ async def _attempt_login(
             params={"account": username, "passwd": password, "format": "sid"},
             post_form=True,  # keeps the password out of the URL (#235)
         )
+    except (DsmHttpError, DsmReplyError):
+        raise  # not DSM's answer: exit_on_connection_failure says so
     except SynologyError as e:
         if e.code == 403:
             # 2FA required
@@ -736,8 +741,12 @@ async def _attempt_login(
                     post_form=True,
                 )
                 # Only this login asked for one.
-                device_id = data.get("did") if isinstance(data, dict) else None
+                # DSM's guide says `did`; third parties report `device_id` on some versions.
+                if isinstance(data, dict):
+                    device_id = data.get("did") or data.get("device_id")
                 needs_token = True
+            except (DsmHttpError, DsmReplyError):
+                raise  # not DSM's answer: exit_on_connection_failure says so
             except SynologyError as e2:
                 _login_failed(e2)
                 return result
@@ -752,7 +761,12 @@ async def _attempt_login(
     sid = data.get("sid") if isinstance(data, dict) else None
     if not isinstance(sid, str) or not sid.strip():
         click.echo(
-            click.style("Login failed: the server's reply had no session ID.", fg="red"), err=True
+            click.style(
+                "Login failed: the server's reply had no session ID. Is this a Synology DSM "
+                "address? Check the host, port and https settings.",
+                fg="red",
+            ),
+            err=True,
         )
         return result
     client.sid = sid
@@ -762,7 +776,8 @@ async def _attempt_login(
         click.echo(
             click.style(
                 "DSM accepted the code but sent no usable 2FA device token, so the server couldn't "
-                "log in without a code.",
+                "log in without a code. Please report your DSM version as an mcp-synology issue. "
+                "A token you already have can go in SYNOLOGY_DEVICE_ID.",
                 fg="red",
             ),
             err=True,

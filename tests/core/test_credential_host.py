@@ -2528,7 +2528,7 @@ class TestTheKeyringIsWrittenOnlyAfterTheLogin:
         result = self._with_config(tmp_path, "someone-else\npw\n")
         assert result.exit_code == 1
         assert isinstance(result.exception, SystemExit)
-        assert "new username with the old password" in result.output
+        assert "may be partly written" in result.output
         assert store.values[(self.SERVICE, "device_id")] == "old-token"
 
     @respx.mock
@@ -2583,6 +2583,79 @@ class TestTheKeyringIsWrittenOnlyAfterTheLogin:
         assert "Nothing was changed." in result.output
         assert "2FA bootstrap" not in result.output
         assert store.values == before
+        if reply.get("data"):
+            assert respx.calls.last.request.url.params.get("method") == "logout"
+
+    @respx.mock
+    def test_a_token_under_the_other_field_name_is_stored(
+        self, store: MemoryKeyring, tmp_path: Path
+    ) -> None:
+        _dsm(_NEEDS_A_CODE, {"success": True, "data": {"sid": "the-sid", "device_id": "tok"}})
+        result = self._with_config(tmp_path, "me\npw\n123456\n")
+        assert result.exit_code == 0, result.output
+        assert store.values[(self.SERVICE, "device_id")] == "tok"
+
+    @respx.mock
+    def test_a_second_403_asks_for_nothing_it_cant_do(
+        self, store: MemoryKeyring, tmp_path: Path
+    ) -> None:
+        _dsm(_NEEDS_A_CODE, {"success": False, "error": {"code": 403}})
+        result = self._with_config(tmp_path, "me\npw\n123456\n")
+        assert result.exit_code == 1
+        assert "complete 2FA bootstrap" not in result.output
+        assert "counts toward DSM's Auto Block" in result.output
+
+    @respx.mock
+    def test_a_proxys_reply_to_the_login_says_its_not_dsm(
+        self, store: MemoryKeyring, tmp_path: Path
+    ) -> None:
+        before = self._old(store)
+        respx.get("http://nas.home:5000/webapi/query.cgi").mock(
+            return_value=httpx.Response(200, json=_INFO)
+        )
+        respx.post("http://nas.home:5000/webapi/entry.cgi").mock(
+            return_value=httpx.Response(502, text="bad gateway")
+        )
+        result = self._with_config(tmp_path, "me\npw\n")
+        assert result.exit_code == 1
+        assert "Login failed" not in result.output
+        assert "Nothing was changed." in result.output
+        assert store.values == before
+
+    @respx.mock
+    def test_a_code_login_with_a_refused_password_write_offers_no_variables(
+        self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._old(store)
+        real_set = store.set_password
+
+        def refuses_the_password(service: str, key: str, value: str) -> None:
+            if key == "password":
+                raise KeyringError("locked")
+            real_set(service, key, value)
+
+        monkeypatch.setattr(store, "set_password", refuses_the_password)
+        _dsm(_NEEDS_A_CODE, _LOGGED_IN_WITH_TOKEN)
+        result = self._with_config(tmp_path, "someone-else\npw\n123456\n")
+        assert result.exit_code == 1
+        assert "SYNOLOGY_PASSWORD" not in result.output
+
+    @respx.mock
+    def test_a_refused_password_on_a_fresh_entry_leaves_no_username(
+        self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        real_set = store.set_password
+
+        def refuses_the_password(service: str, key: str, value: str) -> None:
+            if key == "password":
+                raise KeyringError("locked")
+            real_set(service, key, value)
+
+        monkeypatch.setattr(store, "set_password", refuses_the_password)
+        _dsm(_LOGGED_IN)
+        result = self._with_config(tmp_path, "me\npw\n")
+        assert (self.SERVICE, "username") not in store.values
+        assert "This entry is as it was." not in result.output
 
     @respx.mock
     @pytest.mark.parametrize(
@@ -2604,13 +2677,14 @@ class TestTheKeyringIsWrittenOnlyAfterTheLogin:
         assert ("counts toward DSM's Auto Block" in result.output) is (code in (400, 404))
 
     @respx.mock
+    @pytest.mark.parametrize("flow", ["_with_config", "_interactive"])
     def test_an_unreachable_nas_says_nothing_changed(
-        self, store: MemoryKeyring, tmp_path: Path
+        self, flow: str, store: MemoryKeyring, tmp_path: Path
     ) -> None:
         respx.get("http://nas.home:5000/webapi/query.cgi").mock(
             side_effect=httpx.ConnectError("refused")
         )
-        result = self._with_config(tmp_path, "admin\npw\n")
+        result = getattr(self, flow)(tmp_path, "admin\npw\n")
         assert result.exit_code == 1
         assert "Nothing was changed." in result.output
 
@@ -2630,8 +2704,8 @@ class TestTheKeyringIsWrittenOnlyAfterTheLogin:
         _dsm(_NEEDS_A_CODE, _LOGGED_IN_WITH_TOKEN)
         result = self._interactive(tmp_path, "someone-else\npw\n123456\n")
         assert result.exit_code == 1
-        assert "the old account's token was removed" in result.output
-        assert "No config was written." in result.output
+        assert "the old 2FA device token was removed" in result.output
+        assert "No config was written. Run this again to write it." in result.output
 
     @respx.mock
     @pytest.mark.parametrize(
