@@ -14,9 +14,11 @@
 #   running              a workflow run hasn't finished
 #   updated <time>       when a finished run last changed
 #   missing <text>       what has no result (a finished run's job, a run not listed, or CodeQL)
+# And for a fail state:
+#   failed <text>        what failed
 #
 # NOTE: names the workflows by file (ci.yml, vdsm.yml), and CodeQL's check and app. If one is
-# renamed, update it here: a renamed workflow reads as pending, but a renamed check reads as none.
+# renamed, update it here: a renamed workflow's read fails, but a renamed check reads as none.
 set -e
 
 log() { echo "$*" >&2; }
@@ -74,6 +76,7 @@ for WF in ci.yml vdsm.yml; do
   if [ -z "$JOBS" ]; then BAD="(no jobs) run conclusion: $RUN_CONCLUSION"; fi
   if [ -n "$BAD" ]; then
     log "$WF: run $RUN_ID has failed jobs:"; log "$BAD"
+    while IFS= read -r LINE; do detail "failed $WF: $LINE"; done <<< "$BAD"
     STATE=fail; break
   fi
   log "$WF: run $RUN_ID passed"
@@ -91,6 +94,7 @@ if [ "$STATE" != fail ]; then
     completed\ *)
       # action_required too: unlike a workflow run's, it isn't a fork's run awaiting approval.
       log "CodeQL: ${CODEQL#completed }. See the PR's Checks tab."
+      detail "failed CodeQL: ${CODEQL#completed }"
       STATE=fail ;;
     # Missing, not running, so a stuck check gets the recheck's comment instead of a silent hold.
     *)
