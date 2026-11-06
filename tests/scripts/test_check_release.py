@@ -127,6 +127,7 @@ def test_a_changelog_with_no_notes_is_refused(changelog: str, expected: str) -> 
         "  ### Added\n",
         "###\n",
         "<!-- TODO notes -->\n",
+        "<!--\nTODO\nnotes\n-->\n",
         "---\n",
         "* * *\n",
         "- \n",
@@ -163,6 +164,13 @@ def test_a_commit_later_than_the_release_commit_is_refused(
     out = capsys.readouterr().out
     assert "'## Unreleased' has entries" in out
     assert "squash commit on origin/main" in out
+    assert "If this is the release commit, move those entries" in out
+
+
+@pytest.mark.parametrize("heading", ["## [Unreleased]", "## unreleased", "## UNRELEASED"])
+def test_any_spelling_of_unreleased_counts(heading: str) -> None:
+    changelog = f"{heading}\n\n- Later.\n\n## 1.2.3 (2026-11-06)\n\n- A note.\n"
+    assert "has entries" in (script.unreleased_problem(changelog, "1.2.3") or "")
 
 
 @pytest.mark.parametrize(
@@ -185,6 +193,7 @@ def test_an_empty_or_missing_unreleased_passes(changelog: str) -> None:
     [
         {"version": "1.2.2", "packages": [{"version": "1.2.3"}]},
         {"version": "1.2.3", "packages": [{"version": "1.2.2"}]},
+        {"version": "1.2.3", "packages": [{"version": "1.2.3"}, {"version": "1.2.2"}]},
     ],
 )
 def test_a_stale_server_json_is_refused_with_the_rest(
@@ -247,6 +256,8 @@ def test_this_versions_backport_branch_passes(repo: Path) -> None:
         "refs/remotes/origin/release/v1.2.3",
         "refs/remotes/origin/release/1.2.3.x",
         "refs/remotes/origin/release/v1.2.x",
+        # git's patterns match below a name too.
+        "refs/remotes/origin/release/1.2.x/feature",
         # Another version's backport branch.
         "refs/remotes/origin/release/0.5.x",
         "refs/remotes/origin/release/1.3.x",
@@ -316,6 +327,15 @@ def test_an_unreadable_project_is_a_refusal_not_a_traceback(
     out = capsys.readouterr().out
     assert f"couldn't read the version and CHANGELOG: {exception}" in out
     assert "This run published nothing" in out
+
+
+@pytest.mark.parametrize("name", ["pyproject.toml", "CHANGELOG.md"])
+def test_a_file_that_isnt_utf8_is_a_refusal_not_a_traceback(
+    repo: Path, name: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (repo / name).write_bytes(b"\xff\xfe")
+    assert script.main(["v1.2.3"], repo) == 1
+    assert "couldn't read the version and CHANGELOG: UnicodeDecodeError" in capsys.readouterr().out
 
 
 def test_a_refusal_reaches_the_process_exit_code(repo: Path) -> None:

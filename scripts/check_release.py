@@ -31,7 +31,10 @@ import tomllib
 from pathlib import Path
 
 _RELEASE_STEPS = "CLAUDE.md's 'Bumping the version for a release'"
-_TAG_THE_MERGE = "tag its squash commit on origin/main"
+_TAG_THE_MERGE = (
+    "tag its squash commit on origin/main (for a backport, its commit on the "
+    "release/<major>.<minor>.x branch)"
+)
 # A line that isn't a note: a heading, an HTML comment, a rule, or a bare list marker.
 _NOT_A_NOTE = re.compile(r"#{1,6}(\s.*)?|<!--.*-->|[-*_ ]{3,}|[-*+]")
 
@@ -48,8 +51,10 @@ def tag_problem(tag: str, version: str) -> str | None:
 
 
 def _has_notes(section: str) -> bool:
+    uncommented = re.sub(r"<!--.*?-->", "", section, flags=re.DOTALL)
     return any(
-        (line := raw.strip()) and not _NOT_A_NOTE.fullmatch(line) for raw in section.splitlines()
+        (line := raw.strip()) and not _NOT_A_NOTE.fullmatch(line)
+        for raw in uncommented.splitlines()
     )
 
 
@@ -82,13 +87,14 @@ def unreleased_problem(changelog: str, version: str) -> str | None:
     """Say why this commit looks later than the release commit, or None: a release leaves
     `## Unreleased` empty (and a backport branch may have none), so entries there are changes
     that aren't in this version's notes. The likeliest route is retagging after a refusal, when
-    `origin/main` has moved on."""
-    section = _section(changelog, r"Unreleased\b")
+    `origin/main` has moved on. Any spelling of the heading counts: unsure is a problem."""
+    section = _section(changelog, r"(?i:\[?Unreleased\b)")
     if section is None or not _has_notes(section):
         return None
     return (
         f"CHANGELOG.md's '## Unreleased' has entries, so this commit holds changes that aren't in "
-        f"{version}'s notes: find the release PR and {_TAG_THE_MERGE}"
+        f"{version}'s notes: find the release PR and {_TAG_THE_MERGE}. If this is the release "
+        "commit, move those entries into the version's notes in a PR first"
     )
 
 
@@ -112,9 +118,11 @@ def branch_problem(root: Path, version: str) -> str | None:
     """Say why HEAD isn't known to be on a branch `version` can ship from, or None. Unsure counts
     as a problem.
 
-    Full ref names, so a tag named `origin/main` can't stand in for the branch.
+    Exact ref names: a tag named `origin/main` can't stand in for the branch, and git's patterns
+    also match below a name, which `release/0.11.x/feature` mustn't.
     """
     backport = ".".join(version.split(".")[:2]) + ".x"
+    allowed = {"refs/remotes/origin/main", f"refs/remotes/origin/release/{backport}"}
     try:
         result = subprocess.run(
             [
@@ -122,8 +130,7 @@ def branch_problem(root: Path, version: str) -> str | None:
                 "for-each-ref",
                 "--contains=HEAD",
                 "--format=%(refname)",
-                "refs/remotes/origin/main",
-                f"refs/remotes/origin/release/{backport}",
+                *sorted(allowed),
             ],
             cwd=root,
             capture_output=True,
@@ -134,7 +141,7 @@ def branch_problem(root: Path, version: str) -> str | None:
         return f"couldn't run git to check the tagged commit's branch: {error}"
     if result.returncode != 0:
         return f"couldn't check the tagged commit's branch: {result.stderr.strip()}"
-    if result.stdout.strip():
+    if allowed & set(result.stdout.split()):
         return None
     return (
         f"the tagged commit isn't known to be on origin/main or release/{backport}. PRs are "
