@@ -441,10 +441,13 @@ partly done), and no handle lists the running operations. Only a canceled
 call (the user, or a client's own timeout) or a DSM error stops the task.
 
 DSM's `599` (no such task) on a status read isn't such an error (#521). The
-status is read up to three times in all. After that a delete whose path is gone
+status is read up to three times in all, fewer if a read returns after about
+10 s or the wait ends. After that a delete whose path is gone
 counts as done. Otherwise the reply says how it ended isn't known, and gives a
 handle: `file_task` reads it again, and listing the path, or for a copy, move or
-restore the destination, shows what's there.
+restore the destination, shows what's there, though a folder there may be only
+partly done. `file_task` with no handle lists what's running. A `401` from a
+stop is File Station's "no such task", not an account problem.
 
 The same goes for a NAS that stops answering status requests during the wait
 (a network timeout or dropped connection), that answers one with an HTTP error
@@ -494,7 +497,8 @@ Common causes:
   SYNO.FileStation.List/list_share in time" (an `unavailable` error, "The
   connection to DSM failed during …", if the connection dropped).
 - `file_task` didn't get an answer to its status or stop request for a
-  handle. For the status read, the message says nothing was stopped; for the
+  handle. For the status read, the message says nothing was stopped, or after a
+  stop DSM refused, that it wasn't accepted; for the
   stop, that it may or may not have taken effect. Stop requests wait up to
   90 s, longer than other requests: DSM 7.1 sometimes answers a Delete `stop`
   only after about 60 s, although the stop takes effect at once.

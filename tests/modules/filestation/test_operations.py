@@ -3710,7 +3710,10 @@ async def test_a_lost_copy_partway_hands_off_and_stops_nothing(
     )
     assert "DSM answered that it has no task copying /s/b (error 599)" in result
     assert "Already copied: /s/a." in result
-    assert "Not started: /s/c. Check this one first by listing /s/dst, then run them." in result
+    assert (
+        "Not started: /s/c. First: List /s/dst to see what's there; a folder there may be only "
+        "partly copied. Then run them." in result
+    )
     assert records.get(Handle("copy", "T_b")) is not None
     assert not [call for call in calls if call.get("method") == "stop"]
 
@@ -3786,3 +3789,17 @@ def _stalls(request: httpx.Request, calls: list[dict[str, str]]) -> bool:
     """The path check's getinfo: one after the task started."""
     method = dict(request.url.params).get("method")
     return method == "getinfo" and any(call.get("method") == "start" for call in calls)
+
+
+@respx.mock
+async def test_a_lost_copys_next_step_shows_its_destination_safely(
+    mock_client: DsmClient, no_sleep: None
+) -> None:
+    odd = "/s/d\u200bst"
+    calls: list[dict[str, str]] = []
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        side_effect=_lost_task_dsm(calls, {"files": []}, lost="T_b")
+    )
+    result = await copy_files(mock_client, paths=["/s/a", "/s/b", "/s/c"], dest_folder=odd)
+    assert f"First: List {odd!r} to see" in result
+    assert "\u200b" not in result

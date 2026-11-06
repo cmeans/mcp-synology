@@ -1171,8 +1171,8 @@ class TestFileTask:
         text = await file_task(mock_client, records=TaskRecords(), handle="copy:FileStation_X")
         assert text == (
             "DSM has no task with this handle: it may have finished, failed, been stopped or "
-            "still be running, or was started by a different DSM user. List the path to see "
-            "what's left."
+            "still be running, or was started by a different DSM user. Call file_task with no "
+            "handle to see what's running. List the path to see what's left."
         )
 
     @respx.mock
@@ -1190,8 +1190,8 @@ class TestFileTask:
         text = await file_task(mock_client, records=records, handle=str(h))
         assert text == (
             "DSM has no task for the delete of /Backups/X: it may have finished, failed, been "
-            "stopped or still be running, and DSM can't say which. List the path to see what's "
-            "left."
+            "stopped or still be running. Call file_task with no handle to see what's running. "
+            "List the path to see what's left."
         )
 
     @respx.mock
@@ -1318,7 +1318,8 @@ class TestFileTask:
         )
         assert text == (
             f"DSM didn't accept the stop (error {code}), and the task is still running "
-            "(8 of 342 items, 2%). Try the stop again."
+            "(8 of 342 items, 2%). Try the stop again; if DSM keeps refusing it, stop it in DSM's "
+            "File Station."
         )
 
     @respx.mock
@@ -1356,6 +1357,33 @@ class TestFileTask:
             mock_client, records=TaskRecords(), handle="copy:FileStation_D1", action="stop"
         )
         assert text.startswith(says)
+        assert ("A stop was sent" in text) is (says.startswith("DSM has no task"))
+
+    @respx.mock
+    @pytest.mark.parametrize("code", [401, 599])
+    async def test_a_stop_refused_after_599s_reads_again(
+        self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch, code: int
+    ) -> None:
+        """QA round 3 on #590: the refusal was thrown away, and the task ran on."""
+        import mcp_synology.modules.filestation.tasks as tasks
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        monkeypatch.setattr(tasks, "_LOST_TASK_WAIT", 0)
+        methods: list[str] = []
+        statuses = iter([_err(599), _err(599), _err(599)])
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            methods.append(_method(request))
+            if _method(request) == "stop":
+                return _err(code)
+            return next(statuses, _ok(RUNNING))
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        text = await file_task(
+            mock_client, records=TaskRecords(), handle="delete:FileStation_D1", action="stop"
+        )
+        assert methods == ["status"] * 3 + ["stop", "status"]
+        assert text.startswith(f"DSM didn't accept the stop (error {code})")
 
     @respx.mock
     async def test_a_refused_stop_keeps_a_finished_result(self, mock_client: DsmClient) -> None:
@@ -1460,7 +1488,8 @@ class TestFileTask:
         assert text == (
             "DSM has no task with this handle: it may have finished, failed, been stopped or "
             "still be running, or was started by a different DSM user. A stop was sent, but DSM "
-            "can't confirm it. List the path to see what's left."
+            "can't confirm it. Call file_task with no handle to see what's running. List the path "
+            "to see what's left."
         )
 
     @respx.mock
@@ -1481,8 +1510,8 @@ class TestFileTask:
         assert [m for _, m in calls] == ["status"] * 3 + ["stop"]
         assert text == (
             "DSM has no task for the delete of /qa/vanish-y: it may have finished, failed, been "
-            "stopped or still be running, and DSM can't say which. A stop was sent, but DSM "
-            "can't confirm it. List the path to see what's left."
+            "stopped or still be running. A stop was sent, but DSM can't confirm it. Call "
+            "file_task with no handle to see what's running. List the path to see what's left."
         )
 
     @respx.mock
@@ -1869,12 +1898,32 @@ ODD = "/s/rep\u200bort"
     ("kind", "dest", "action", "reply", "shows"),
     [
         ("delete", None, "status", _err(599), repr(ODD)),
-        ("copy", "/s/d", "status", _err(599), "List /s/d to see what's there."),
+        (
+            "copy",
+            "/s/d",
+            "status",
+            _err(599),
+            "List /s/d to see what's there; a folder there may be only partly copied.",
+        ),
+        (
+            "move",
+            "/s/d",
+            "status",
+            _err(599),
+            f"List {ODD!r} and /s/d to see what's there; a folder there may be only partly moved.",
+        ),
         ("copy", "/s/d\u200best", "status", _err(599), repr("/s/d\u200best")),
         ("delete", None, "stop", _ok(RUNNING), repr(ODD)),
         ("copy", "/s/d\u200best", "status", _ok(RUNNING), repr("/s/d\u200best/")),
     ],
-    ids=["gone", "copy's destination", "odd destination", "stopped", "running"],
+    ids=[
+        "gone",
+        "copy's destination",
+        "move's source too",
+        "odd destination",
+        "stopped",
+        "running",
+    ],
 )
 async def test_file_task_shows_paths_safely(
     mock_client: DsmClient,

@@ -304,7 +304,8 @@ def progress_text(status: dict[str, Any]) -> str:
 # How many 599s in a row before a task counts as lost (#521): about a second at the usual interval.
 _LOST_TASK_READS = 3
 _LOST_TASK_WAIT = 0.5
-# Past this, no more reads: slow 599s mustn't outlast a client's reply limit, which cancels.
+# Past this, no more reads, so slow 599s are less likely to outlast a client's reply limit, which
+# cancels. It's checked after each read, so a slow read can still run past it.
 _LOST_TASK_BOUND = 10.0
 
 
@@ -460,7 +461,7 @@ def handoff_reply(
     ``stall``: the status request's error, for a task handed off because the NAS stopped
     answering, or its answer couldn't be read (#245, maintainer decision 2026-10-17), or it
     kept answering 599 (#521).
-    ``dest``: where a copy, move or restore puts it, the place that shows how it went.
+    ``dest``: where a copy, move or restore puts it, for a lost task's next step.
     The error's text is never shown, since it may quote the body: a transport error or
     any other exception shows its type, an HTTP error its status, and a non-DSM reply
     a fixed phrase.
@@ -473,7 +474,7 @@ def handoff_reply(
         first = (
             f"DSM answered that it has no task {gerund} {shown(path)} (error 599), so how it ended "
             f"isn't known: it may have finished, failed or still be running.{last} It wasn't "
-            "stopped, so check before starting it again."
+            f"stopped, so check before starting it again. {_RUNNING_HINT}"
         )
     elif stall is None:
         first = (
@@ -506,11 +507,11 @@ def handoff_reply(
         lines.append(f"Already {past}: {', '.join(map(shown, done))}.")
     if not_started:
         # A lost task never reports finishing, so "once this one finishes" couldn't be met.
-        then = (
-            f"Check this one first by listing {shown(dest) if dest else 'its path'}, then run them."
-            if lost
-            else "Run them again once this one finishes."
-        )
+        then = "Run them again once this one finishes."
+        if lost and dest:
+            then = f"First: {_where_to_look(gerund, dest, [path])} Then run them."
+        elif lost:
+            then = "Check this one first by listing its path, then run them."
         lines.append(f"Not started: {', '.join(map(shown, not_started))}. {then}")
     return "\n".join(lines)
 
@@ -633,7 +634,19 @@ _GERUND: dict[HandleKind, str] = {
     "restore": "restoring",
 }
 _LIST_HINT = "List the path to see what's left."
+_RUNNING_HINT = "Call file_task with no handle to see what's running."
 _UNAVAILABLE_CODES = (102, 103, 104)
+
+
+def _where_to_look(gerund: str, dest: str, sources: list[str]) -> str:
+    """Where a lost copy, move or restore can be checked: a folder appears at the destination as
+    soon as it starts, so what's there may not be all of it (QA round 3 on #590)."""
+    moved = gerund in ("moving", "restoring")
+    source = f"{', '.join(map(shown, sources))} and " if moved else ""
+    return (
+        f"List {source}{shown(dest)} to see what's there; a folder there may be only partly "
+        f"{_PAST.get(gerund, 'done')}."
+    )
 
 
 def _describe(kind: HandleKind, paths: list[str], dest: str | None) -> str:
@@ -927,15 +940,16 @@ async def file_task(
             # read caught it finishing, and a 599 can pass (#521), so it may still be running.
             hint = _LIST_HINT
             if record is not None and record.dest and parsed.kind != "delete":
-                hint = f"List {shown(record.dest)} to see what's there."
+                hint = _where_to_look(_GERUND[parsed.kind], record.dest, paths)
             return (
                 f"DSM has no task for the {parsed.kind} of {', '.join(map(shown, paths))}: it "
-                "may have finished, failed, been stopped or still be running, and DSM can't say "
-                f"which.{sent} {hint}"
+                f"may have finished, failed, been stopped or still be running.{sent} "
+                f"{_RUNNING_HINT} {hint}"
             )
         return (
             "DSM has no task with this handle: it may have finished, failed, been stopped or still "
-            f"be running, or was started by a different DSM user.{sent} {_LIST_HINT}"
+            f"be running, or was started by a different DSM user.{sent} {_RUNNING_HINT} "
+            f"{_LIST_HINT}"
         )
 
     async def send_stop() -> int | None:
@@ -973,6 +987,21 @@ async def file_task(
             )
         return None
 
+    async def after_refusal(refused: int) -> str:
+        """DSM says it has no such task, which can pass too, so a read says what's known."""
+        now = await status_or_none(" The stop wasn't accepted.")
+        if now is None:
+            return gone(stop_sent=True)
+        if now.get("finished"):
+            records.set_final(parsed, now)
+            final = await _final_text(client, parsed, now, record)
+            return f"{_NOT_STOPPED}\n{final}"
+        return (
+            f"DSM didn't accept the stop (error {refused}), and the task is still running "
+            f"({progress_text(now)}). Try the stop again; if DSM keeps refusing it, stop it in "
+            "DSM's File Station."
+        )
+
     status = await status_or_none()
 
     if action == "stop":
@@ -982,10 +1011,11 @@ async def file_task(
             if record is not None and record.final_status is not None:
                 final = await _final_text(client, parsed, record.final_status, record)
                 return f"{_NOT_STOPPED}\n{final}"
-            # The reads may be wrong, and a task ID is unique: a stop that's lost costs nothing,
-            # and one that's not sent leaves a delete running (QA round 2 on #590).
-            await send_stop()
-            return gone(stop_sent=True)
+            # The reads may be wrong, and a task ID is unique: a stop that's lost costs nothing
+            # (another user's task and a wrong kind's aren't touched, on vdsm), and one that's not
+            # sent leaves a delete running (QA round 2 on #590).
+            refused = await send_stop()
+            return gone(stop_sent=True) if refused is None else await after_refusal(refused)
         logger.debug("%s status before stop (%s): %s", parsed.api, parsed, status)
         if status.get("finished"):
             records.set_final(parsed, status)
@@ -993,18 +1023,7 @@ async def file_task(
             return f"{_NOT_STOPPED}\n{final}"
         refused = await send_stop()
         if refused is not None:
-            # DSM says it has no such task, which can pass too, so a read says what's known.
-            now = await status_or_none(" The stop wasn't accepted.")
-            if now is None:
-                return gone(stop_sent=True)
-            if now.get("finished"):
-                records.set_final(parsed, now)
-                final = await _final_text(client, parsed, now, record)
-                return f"{_NOT_STOPPED}\n{final}"
-            return (
-                f"DSM didn't accept the stop (error {refused}), and the task is still running "
-                f"({progress_text(now)}). Try the stop again."
-            )
+            return await after_refusal(refused)
         what = ", ".join(map(shown, paths)) if paths else f"`{parsed}`"
         return f"Stopped {parsed.kind} of {what}; it may be partly done. {_LIST_HINT}"
 

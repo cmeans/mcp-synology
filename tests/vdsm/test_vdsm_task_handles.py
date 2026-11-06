@@ -494,10 +494,52 @@ async def test_copy_handoff_then_stop(admin_client: Any, admin_session: Any, nas
             await _gone(other, records, handle)
 
 
+async def test_a_stop_after_599s_touches_no_one_elses_task(
+    admin_client: Any, nas_client: Any, nas: Nas
+) -> None:
+    """The blind stop depends on this: an admin's stop of a regular user's task leaves it alone."""
+    client = _admin(admin_client)
+    user_client: DsmClient = nas_client[0]
+    path = nas.tree("/writable/del521o")
+    records = TaskRecords()
+
+    async with _stopped_at_exit(user_client, records) as handles:
+        reply = await delete_files(
+            user_client, paths=[path], recycle_bin_status={}, timeout=WAIT, records=records
+        )
+        handle = _handle(reply)
+        handles.append(handle)
+        stop = await file_task(client, records=TaskRecords(), handle=handle, action="stop")
+        assert stop.startswith(_NO_RUNNING), stop
+        assert "A stop was sent" in stop
+        mine = await file_task(user_client, records=records, handle=handle)
+        assert mine.startswith("Still deleting on the NAS"), mine
+
+
+async def test_a_stop_of_the_wrong_kind_doesnt_touch_a_task(admin_client: Any, nas: Nas) -> None:
+    """A handle naming another kind: CopyMove's stop answers success, and the Delete runs on."""
+    client = _admin(admin_client)
+    path = nas.tree("/writable/del521k")
+    records = TaskRecords()
+
+    async with _stopped_at_exit(client, records) as handles:
+        reply = await delete_files(
+            client, paths=[path], recycle_bin_status={}, timeout=WAIT, records=records
+        )
+        handle = _handle(reply)
+        handles.append(handle)
+        wrong = "copy:" + handle.partition(":")[2]
+        stop = await file_task(client, records=TaskRecords(), handle=wrong, action="stop")
+        assert not stop.startswith("Stopped"), stop
+        mine = await file_task(client, records=records, handle=handle)
+        assert mine.startswith("Still deleting on the NAS"), mine
+
+
 async def test_stop_of_a_finished_or_unknown_copy_stops_nothing(
     admin_client: Any, nas: Nas
 ) -> None:
-    """file_task never says "Stopped" for a copy that had finished or that DSM doesn't know.
+    """file_task never says "Stopped" for a copy that had finished or that DSM doesn't know;
+    for one DSM doesn't know, a stop goes anyway and the reply says it can't be confirmed.
 
     DSM behavior (7.1 and 7.2.2) this guards against, pinned at the raw API level:
     CopyMove ``stop`` answers success for any task ID (finished and unread, forgotten,
