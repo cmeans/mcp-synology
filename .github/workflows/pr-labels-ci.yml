@@ -9,7 +9,9 @@ name: PR Label Automation (CI)
 # have passed on its head commit, judged job by job (#241): vdsm's jobs (and
 # CI's tool-quality report) are continue-on-error, so a run's own conclusion
 # says "success" even when a job failed. tool-quality is report-only and is
-# ignored; every other job must succeed (or be skipped).
+# ignored; every other job must succeed (or be skipped). CodeQL's check run
+# counts too, when the commit has one (#578), though this doesn't fire on it:
+# a failure that lands after CI and vdsm finish isn't seen until the next event.
 #
 # NOTE: References the workflows by name ("CI", "vdsm") here, and by file in
 # .github/scripts/pr-checks-state.sh, which pr-labels.yml (on-unlabel) and
@@ -43,6 +45,7 @@ jobs:
       contents: read
       pull-requests: write
       actions: read
+      checks: read
     steps:
       # workflow_run always runs from main, so this is main's script, never a PR's.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

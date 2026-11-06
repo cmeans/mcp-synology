@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Settles a PR's labels from its head commit's checks: Ready for QA once CI and vdsm have passed,
-# CI Failed as soon as either has a failed job, nothing while a result is missing. Used by
+# CI Failed as soon as either has a failed job or CodeQL has failed, nothing while a result is
+# missing. Used by
 # pr-labels-ci.yml on each CI or vdsm completion, pr-labels.yml when Dev Active comes off, and
 # pr-labels-recheck.yml on a schedule.
 #

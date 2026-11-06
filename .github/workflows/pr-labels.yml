@@ -10,6 +10,7 @@ on:
 permissions:
   pull-requests: write
   actions: read  # on-unlabel reads CI and vdsm job results
+  checks: read  # on-unlabel reads CodeQL's check run
   contents: read  # on-unlabel checks out the script that reads them
 
 jobs:
