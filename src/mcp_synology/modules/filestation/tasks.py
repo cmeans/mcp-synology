@@ -205,6 +205,7 @@ class PollResult:
 
     ``lost``: DSM kept answering that it has no such task (599), so it can't say how the task
     ended. Not stopped, as there's nothing to stop: a finished Delete's stop answers 401 (#521).
+    Handed off like ``stalled``, so the call keeps its handle and what it did and didn't do.
     """
 
     status: dict[str, Any]
@@ -299,7 +300,7 @@ def progress_text(status: dict[str, Any]) -> str:
     return text
 
 
-# How many 599s in all before a task counts as lost (#521): about a second at the usual interval.
+# How many 599s in a row before a task counts as lost (#521): about a second at the usual interval.
 _LOST_TASK_READS = 3
 
 
@@ -347,6 +348,7 @@ async def poll_task(
                 if not isinstance(reply, dict):
                     raise TypeError("status data is not an object")
                 status = reply
+                missing_reads = 0
             except (DsmHttpError, DsmReplyError, RequestTooLongError) as e:
                 # Not DSM's verdict on the task: a proxy's 502/504 or login page, or a
                 # DSM too busy to answer properly. Hand it off like a stall, never stop
@@ -446,7 +448,13 @@ def handoff_reply(
     """
     gerund = verb.split()[-1].lower()
     past = _PAST.get(gerund, "done")
-    if stall is None:
+    if isinstance(stall, SynologyError) and stall.code == 599:
+        first = (
+            f"DSM no longer has the task {gerund} {shown(path)} (DSM error 599), so how it ended "
+            "isn't known: it may have finished, failed or still be running. It wasn't stopped, so "
+            "check before starting it again."
+        )
+    elif stall is None:
         first = (
             f"{verb} on the NAS: {shown(path)} ({progress_text(status)}). This operation keeps "
             "running after this reply, so nothing more needs to be done to finish it."

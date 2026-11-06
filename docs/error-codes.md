@@ -440,6 +440,11 @@ shows progress or the final result, `action="stop"` stops it (it may then be
 partly done), and no handle lists the running operations. Only a canceled
 call (the user, or a client's own timeout) or a DSM error stops the task.
 
+DSM's `599` (no such task) on a status read isn't such an error (#521). It's read
+again, up to three in a row. After that a delete whose path is gone counts as
+done. Otherwise the reply says how it ended isn't known, and gives a handle:
+`file_task`, or listing the path, shows what's left.
+
 The same goes for a NAS that stops answering status requests during the wait
 (a network timeout or dropped connection), that answers one with an HTTP error
 status (a reverse proxy's `502` or `504`, #282), or whose answer can't be read

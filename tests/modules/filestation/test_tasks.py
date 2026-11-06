@@ -454,6 +454,24 @@ class TestPollTask:
         assert calls == ["status"] * 3
         assert "with no status yet" in caplog.text
         assert "t1" in caplog.text
+        assert clock[0] == 1.0  # waited between the reads: a re-read at once proves nothing
+
+    @respx.mock
+    async def test_scattered_599s_dont_lose_a_healthy_task(
+        self, mock_client: DsmClient, clock: list[float], caplog: pytest.LogCaptureFixture
+    ) -> None:
+        missing = httpx.Response(200, json={"success": False, "error": {"code": 599}})
+        running = _ok({"finished": False, "progress": 0.5})
+        replies = iter(
+            [missing, running, missing, running, missing, running, _ok({"finished": True})]
+        )
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=lambda _r: next(replies))
+        with caplog.at_level("WARNING"):
+            result = await poll_task(
+                mock_client, api=API, version=2, taskid="t1", wait=30, label="x"
+            )
+        assert result.outcome == "finished"
+        assert "after a status" in caplog.text
 
     @respx.mock
     async def test_poll_progress_counting_then_numbers(

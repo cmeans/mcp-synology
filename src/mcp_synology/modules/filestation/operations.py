@@ -6,7 +6,7 @@ import json
 import logging
 import re
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any, NoReturn
+from typing import TYPE_CHECKING, Any
 
 import httpx
 from mcp.server.mcpserver.exceptions import ToolError
@@ -458,8 +458,8 @@ async def _copy_move_one_path(
     caller can sum sizes across all per-path tasks, or a Handoff when the task outlived
     ``timeout`` or DSM stopped answering its status requests (#245). Raises ToolError on
     failure (via error_response/synology_error_response). A task that DSM reports an
-    error for, or whose call is canceled, is stopped, so orphaned tasks can't
-    accumulate on the NAS.
+    error for (other than a 599 on a status read, #521), or whose call is canceled, is stopped,
+    so orphaned tasks can't accumulate on the NAS.
     """
     try:
         start_data = await client.request(
@@ -491,25 +491,12 @@ async def _copy_move_one_path(
     if result.outcome == "poll_error":
         assert isinstance(result.error, SynologyError)
         synology_error_response(f"{operation} files", result.error)
-    if result.outcome == "lost":
-        _task_lost(f"{operation} files", path, result.error)
-    if result.outcome in ("handoff", "stalled"):
-        # Left running on the NAS, not stopped (#245): the caller gets a handle.
-        stall = result.error if result.outcome == "stalled" else None
+    if result.outcome in ("handoff", "stalled", "lost"):
+        # Left running on the NAS, not stopped (#245): the caller gets a handle. Lost too: it
+        # may still be running, and the reply says what's known (#521).
+        stall = result.error if result.outcome != "handoff" else None
         return Handoff(Handle(_KIND[operation], taskid), result.status, stall)
     return _copy_move_result(result.status, path, operation, done, dest=dest)
-
-
-def _task_lost(operation: str, path: str, error: Exception | None) -> NoReturn:
-    """DSM no longer has the task (`PollResult.lost`), so this can't say it failed (#521)."""
-    code = error.error_code if isinstance(error, SynologyError) else ErrorCode.DSM_ERROR
-    error_response(
-        code,
-        f"{operation}: DSM no longer has the task for {shown(path)} (DSM error 599), so how it "
-        "ended isn't known: it may have finished, failed or still be running. Nothing was stopped.",
-        retryable=False,
-        suggestion="Check with list_files, or file_task with no handle, before trying again.",
-    )
 
 
 def _code_text(code: object) -> str:
@@ -866,7 +853,8 @@ async def _delete_one_path(
     Raises ToolError (via error_response/synology_error_response) on failure;
     returns None when the delete finished, or a Handoff when the task outlived
     ``timeout`` or DSM stopped answering its status requests (#245). A task that DSM
-    reports an error for, or whose call is canceled, is stopped.
+    reports an error for, or whose call is canceled, is stopped; a 599 on a status read isn't
+    such an error (#521).
     """
     try:
         start_data = await client.request(
@@ -902,15 +890,15 @@ async def _delete_one_path(
         # DSM can't say how it ended, but the path can: gone is what was asked for (#521).
         try:
             exists = await path_exists(client, path)
-        except (SynologyError, httpx.TransportError) as e:
+        except Exception as e:
+            # Any answer that doesn't say it's gone leaves the outcome unknown.
             logger.warning("Couldn't check %s after a lost delete: %s", path, type(e).__name__)
             exists = None
         if exists is False:
             return None
-        _task_lost("Delete files", path, result.error)
-    if result.outcome in ("handoff", "stalled"):
+    if result.outcome in ("handoff", "stalled", "lost"):
         # Left running on the NAS, not stopped (#245): the caller gets a handle.
-        stall = result.error if result.outcome == "stalled" else None
+        stall = result.error if result.outcome != "handoff" else None
         return Handoff(Handle("delete", taskid), status, stall)
 
     _delete_result(status, path, recursive=recursive)
