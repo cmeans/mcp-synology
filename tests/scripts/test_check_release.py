@@ -540,11 +540,26 @@ def test_a_git_column_setting_cant_hide_a_missing_release(repo: Path) -> None:
     ).stdout.strip()
     _git(repo, "commit", "-q", "--allow-empty", "-m", "a patch")
     _git(repo, "tag", "v1.2.1")
+    _git(repo, "tag", "v1.2.2")  # one tag has nothing to be joined to (QA round 8 on #574)
     _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
     _git(repo, "checkout", "-q", "-b", "cut", cut)
     _git(repo, "commit", "-q", "--allow-empty", "-m", "the patch")
     _git(repo, "update-ref", "refs/remotes/origin/release/1.2.x", "HEAD")
-    assert "doesn't contain v1.2.1" in (script.branch_problem(repo, "1.2.2") or "")
+    assert "doesn't contain v1.2.1, v1.2.2" in (script.branch_problem(repo, "1.2.3") or "")
+
+
+def test_a_git_column_setting_cant_hide_the_tag_at_the_cut(repo: Path) -> None:
+    """The other `git tag`: joined with a second tag, the cut's tag would stop vouching."""
+    _git(repo, "config", "column.ui", "always")
+    _git(repo, "tag", "v1.2.0")
+    _git(repo, "tag", "v1.2.0rc1")
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "on main")
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    _git(repo, "checkout", "-q", "-b", "cut", "v1.2.0")
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "the patch")
+    _git(repo, "update-ref", "refs/remotes/origin/release/1.2.x", "HEAD")
+    assert script.branch_problem(repo, "1.2.1") is None
 
 
 def test_a_forgotten_bump_gets_only_the_tag_refusal(repo: Path) -> None:
