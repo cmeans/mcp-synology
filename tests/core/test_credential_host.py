@@ -11,6 +11,7 @@ import asyncio
 import importlib.util
 import io
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -2612,6 +2613,90 @@ class TestTheKeyringIsWrittenOnlyAfterTheLogin:
         assert "https://github.com/cmeans/mcp-synology/issues" in result.output
 
     @respx.mock
+    def test_a_partial_write_with_a_config_says_to_run_it_again(
+        self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._old(store)
+        real_set = store.set_password
+        written: list[str] = []
+
+        def one_write_only(service: str, key: str, value: str) -> None:
+            if written:
+                raise KeyringError("locked")
+            written.append(key)
+            real_set(service, key, value)
+
+        monkeypatch.setattr(store, "set_password", one_write_only)
+        _dsm(_LOGGED_IN)
+        result = self._with_config(tmp_path, "someone-else\npw\n")
+        assert result.exit_code == 1
+        assert "run this again" in result.output
+
+    def test_the_same_user_keeps_its_token_when_a_write_fails(
+        self, store: MemoryKeyring, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The token is dropped only when another account's would stay beside a new username."""
+        self._old(store)
+        real_set = store.set_password
+
+        def password_stuck(service: str, key: str, value: str) -> None:
+            if key == "password":
+                if value == "new-pw":
+                    real_set(service, key, value)
+                raise KeyringError("locked")
+            real_set(service, key, value)
+
+        monkeypatch.setattr(store, "set_password", password_stuck)
+        with pytest.raises(SystemExit):
+            _store_keyring(self.SERVICE, "admin", "new-pw", "nas.home", 5000)
+        assert store.values[(self.SERVICE, "device_id")] == "old-token"
+
+    def test_a_restored_username_keeps_its_token(
+        self, store: MemoryKeyring, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._old(store)
+        real_set = store.set_password
+
+        def password_stuck(service: str, key: str, value: str) -> None:
+            if key == "password":
+                if value == "new-pw":
+                    real_set(service, key, value)
+                raise KeyringError("locked")
+            real_set(service, key, value)
+
+        monkeypatch.setattr(store, "set_password", password_stuck)
+        with pytest.raises(SystemExit):
+            _store_keyring(self.SERVICE, "someone-else", "new-pw", "nas.home", 5000)
+        assert store.values[(self.SERVICE, "username")] == "admin"
+        assert store.values[(self.SERVICE, "device_id")] == "old-token"
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        ("second", "said"),
+        [
+            (httpx.Response(502, text="bad gateway"), "Error:"),
+            (httpx.Response(200, text="<html>"), "Error:"),
+            (OSError("gone"), "Login failed"),
+        ],
+        ids=["502", "not JSON", "OSError"],
+    )
+    def test_a_code_login_that_gets_no_dsm_answer_changes_nothing(
+        self, second: Any, said: str, store: MemoryKeyring, tmp_path: Path
+    ) -> None:
+        before = self._old(store)
+        respx.get("http://nas.home:5000/webapi/query.cgi").mock(
+            return_value=httpx.Response(200, json=_INFO)
+        )
+        respx.post("http://nas.home:5000/webapi/entry.cgi").mock(
+            side_effect=[httpx.Response(200, json=_NEEDS_A_CODE), second]
+        )
+        result = self._with_config(tmp_path, "me\npw\n123456\n")
+        assert result.exit_code == 1
+        assert said in result.output
+        assert "Nothing was changed." in result.output
+        assert store.values == before
+
+    @respx.mock
     def test_a_token_under_the_other_field_name_is_stored(
         self, store: MemoryKeyring, tmp_path: Path
     ) -> None:
@@ -2730,7 +2815,8 @@ class TestTheKeyringIsWrittenOnlyAfterTheLogin:
         result = self._interactive(tmp_path, "someone-else\npw\n123456\n")
         assert result.exit_code == 1
         assert "the old 2FA device token was removed" in result.output
-        assert "No config was written. Run this again to write it." in result.output
+        assert "No config was written." in result.output
+        assert "run this again" in result.output
 
     @respx.mock
     @pytest.mark.parametrize(
@@ -2896,6 +2982,12 @@ class TestTheKeyringIsWrittenOnlyAfterTheLogin:
             if "This entry is as it was." in text:
                 assert store.values == before, f"fault {fault_at}: {text}"
                 assert code == (0 if token is None else 1), f"fault {fault_at}: {text}"
+            listed = re.search(r"Already removed from this entry: ([^.]+)\.", text)
+            for key in listed.group(1).split(", ") if listed else ():
+                assert (self.SERVICE, key) not in store.values, f"fault {fault_at}: {text}"
+            if "device token couldn't be stored" in text and token:
+                held = store.values.get((self.SERVICE, "device_id"))
+                assert held != token, f"fault {fault_at}: {text}"
 
         for fault_at in range(30):
             attempt(fault_at)

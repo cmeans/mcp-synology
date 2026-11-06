@@ -314,7 +314,7 @@ def _setup_interactive(verbose: bool, not_loaded: str | None = None) -> None:
         try:
             return _store_keyring(service, username, password, host, connection_port, device_id)
         except SystemExit:
-            click.echo("No config was written. Run this again to write it.", err=True)
+            click.echo("No config was written.", err=True)
             raise
 
     nas_hostname = None
@@ -624,15 +624,22 @@ def _store_keyring(
         )
         fix = (
             "Check that the keyring is unlocked and writable, and run this again; each run with "
-            f"2FA needs a new code. With no keyring, see {_CREDENTIALS_DOC}."
+            f"2FA needs a new code. With no keyring, see {_NO_KEYRING_DOC}."
         )
         now = _read_entry_or_none(service)
         if stored:
+            if device_id and now is not None and now["device_id"] == device_id:
+                # The write applied, then the backend raised: the token is there.
+                click.echo("\nCredentials stored in OS keyring.")
+                click.echo(click.style("2FA bootstrap complete!", fg="green"))
+                click.echo("Device token stored in keyring.")
+                return True
             went = before and before["device_id"] and now is not None and not now["device_id"]
             token = ", and the old 2FA device token was removed" if went else ""
+            outcome = "may not have been stored" if now is None else "couldn't be stored"
             _stop_on_keyring(
                 f"The username and password are stored{token}, but the new 2FA device token "
-                f"couldn't be stored, so the server may not be able to log in without a code. {fix}"
+                f"{outcome}, so the server may not be able to log in without a code. {fix}"
             )
         if before is not None and now != before:
             _put_back(service, before if same_host else dict.fromkeys(_ENTRY_KEYS))
@@ -640,15 +647,16 @@ def _store_keyring(
         unchanged = before is not None and now == before
         if not unchanged and before is not None and now is not None and same_host:
             _drop_a_token_left_for_another_account(service, before, now, username)
+            now = _read_entry_or_none(service)
         if unchanged:
-            state = " This entry is as it was." if not no_keyring_here() else ""
+            state = " This entry is as it was."
         elif before is None:
-            state = ""  # no read worked, so nothing was written
+            state = ""  # the first read failed, so nothing was written
+        elif now is None:
+            state = " The entry can't be read back, so it may be partly written."
         else:
             gone = [
-                key
-                for key in ("device_id", "password", "username")
-                if before[key] and (now is None or not now[key])
+                key for key in ("device_id", "password", "username") if before[key] and not now[key]
             ]
             state = f" Already removed from this entry: {', '.join(gone)}." if gone else ""
             state += " The entry may be partly written."
@@ -665,12 +673,17 @@ def _store_keyring(
             err=stop,
         )
         if stop:
+            click.echo(
+                "Or check that the keyring is unlocked and writable, and run this again.", err=True
+            )
             sys.exit(1)
         return False
 
 
 _ENTRY_KEYS = ("host", "username", "password", "device_id")
-_CREDENTIALS_DOC = "https://github.com/cmeans/mcp-synology/blob/main/docs/credentials.md"
+_NO_KEYRING_DOC = (
+    "https://github.com/cmeans/mcp-synology/blob/main/docs/credentials.md#2fa-with-no-keyring"
+)
 
 
 def _read_entry(service: str) -> dict[str, str | None]:
@@ -707,8 +720,9 @@ def _stop_on_keyring(message: str) -> NoReturn:
     sys.exit(1)
 
 
-def _put_back(service: str, before: dict[str, str | None]) -> bool:
-    """Restore what a failed store overwrote. False if the keyring won't have it."""
+def _put_back(service: str, before: dict[str, str | None]) -> None:
+    """Restore the credentials a failed store overwrote, where the keyring lets it: the host record
+    stays, and the caller reads the entry again to see what happened."""
     try:
         import keyring
 
@@ -722,8 +736,6 @@ def _put_back(service: str, before: dict[str, str | None]) -> bool:
                 keyring.set_password(service, key, value)
     except Exception as e:  # noqa: BLE001 - backends raise their own types
         logger.debug("Keyring error restoring the entry: %s", e, exc_info=True)
-        return False
-    return True
 
 
 def _usable_token(value: object) -> str | None:

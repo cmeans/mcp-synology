@@ -936,7 +936,9 @@ class TestSetupConnectionFailures:
 
         port = _closed_port()
         with pytest.raises(SystemExit) as exc:
-            asyncio.run(_connect_and_login(self._config(port), "x", "y", "svc", False))
+            asyncio.run(
+                _connect_and_login(self._config(port), "x", "y", lambda _device_id: True, False)
+            )
         assert exc.value.code == 1
         assert f"Can't connect to http://127.0.0.1:{port}" in capsys.readouterr().err
 
@@ -969,7 +971,11 @@ class TestSetupConnectionFailures:
         from mcp_synology.cli import setup
 
         respx.get("http://127.0.0.1:5000/webapi/query.cgi").mock(return_value=response)
-        args = ("x", "y", "svc", False) if which == "_connect_and_login" else ("x", "y", "svc")
+        args = (
+            ("x", "y", lambda _device_id: True, False)
+            if which == "_connect_and_login"
+            else ("x", "y", "svc")
+        )
         with pytest.raises(SystemExit) as exc:
             asyncio.run(getattr(setup, which)(self._config(5000), *args))
         assert exc.value.code == 1
