@@ -406,7 +406,9 @@ async def _refuse_missing_destination(client: DsmClient, operation: str, dest: s
     """
     try:
         found = await find_missing_paths(client, [dest])
-    except SynologyError as e:
+    except (SynologyError, httpx.TransportError) as e:
+        # A restore to several places runs this after earlier items finished: no answer here
+        # mustn't lose them (#588).
         logger.debug(
             "%s: destination check for %s failed (%s); starting anyway", operation, dest, e
         )
@@ -631,6 +633,7 @@ async def _skip_report(
         # The copy already happened; report it with the hedged wording, never as an error,
         # whatever the lookup met: right after a large task, DSM may not answer at all (#588).
         logger.warning("Couldn't read the type of skipped sources: %s", type(e).__name__)
+        logger.debug("The skip lookup's error", exc_info=True)
         kinds = {}
     files = [p for p in skipped_paths if kinds.get(p) is False]
     folders = [p for p in skipped_paths if kinds.get(p) is True]
@@ -825,7 +828,7 @@ async def _copy_move(
                     param="paths",
                     value=p,
                     suggestion="Check with list_files, or file_task with no handle, before "
-                    "running it again, and leave out what's already done.",
+                    "running it again" + (", and leave out what's already done." if done else "."),
                 )
         if isinstance(outcome, Handoff):
             if records is not None:

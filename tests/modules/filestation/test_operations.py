@@ -3749,8 +3749,9 @@ def _skipping_dsm(lookup: Any) -> Any:
         httpx.Response(502, text="bad gateway"),
         httpx.Response(200, text="<html>"),
         httpx.Response(200, json={"success": False, "error": {"code": 408}}),
+        httpx.Response(200, json={"success": True, "data": {"files": ["x"]}}),
     ],
-    ids=["timeout", "connection", "proxy", "not DSM", "DSM error"],
+    ids=["timeout", "connection", "proxy", "not DSM", "DSM error", "odd shape"],
 )
 async def test_a_failed_lookup_keeps_a_finished_copys_result(
     mock_client: DsmClient, no_poll_wait: None, lookup: Any
@@ -3823,7 +3824,12 @@ async def test_an_unanswered_start_partway_says_what_happened(
     body = json.loads(str(refused.value))["error"]
     assert body["code"] == code
     assert body["retryable"] is False
+    assert body["param"] == "paths"
     assert body["value"] == "/s/b"
+    assert body["suggestion"] == (
+        "Check with list_files, or file_task with no handle, before running it again, and leave "
+        "out what's already done."
+    )
     assert body["message"].startswith("Move files failed: DSM didn't answer for /s/b (")
     assert body["message"].endswith(
         "its move may have started. Already moved before this failure: /s/a. Not started: /s/c."
@@ -3998,3 +4004,66 @@ async def test_skip_report_escapes_the_paths_in_its_warning(
     warning = out.split("Don't retry")[1]
     assert "\u3164" not in warning
     assert warning.count("\\u3164") == 2
+
+
+@respx.mock
+async def test_an_unanswered_first_start_has_nothing_to_leave_out(
+    mock_client: DsmClient, no_poll_wait: None
+) -> None:
+    calls: list[dict[str, str]] = []
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_unanswered_start(calls, "/s/a"))
+    with pytest.raises(ToolError) as refused:
+        await copy_files(mock_client, paths=["/s/a", "/s/b "], dest_folder="/d")
+    body = json.loads(str(refused.value))["error"]
+    assert body["message"].endswith(f"Not started: {'/s/b '!r}.")
+    assert body["suggestion"].endswith("before running it again.")
+
+
+def _restoring_dsm(*, fail_start: str | None = None, fail_check: str | None = None) -> Any:
+    started: list[str] = []
+
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        params = dict(request.url.params)
+        method = params.get("method")
+        path = params.get("path", "")
+        if method == "start":
+            if path == fail_start:
+                raise httpx.ReadTimeout("")
+            started.append(path)
+            taskid = f"T_{path.rsplit('/', 1)[-1]}"
+            return httpx.Response(200, json={"success": True, "data": {"taskid": taskid}})
+        if method == "status":
+            status = {"finished": True, "path": "/s/x", "processed_size": 1}
+            return httpx.Response(200, json={"success": True, "data": status})
+        if method == "list":
+            return httpx.Response(200, json={"success": True, "data": {"tasks": []}})
+        if path == fail_check and started:
+            raise httpx.ReadTimeout("")
+        data = {"files": [{"path": path, "isdir": False}]}
+        return httpx.Response(200, json={"success": True, "data": data})
+
+    return side_effect
+
+
+@respx.mock
+async def test_a_restores_later_destination_check_with_no_answer_goes_on(
+    mock_client: DsmClient, no_poll_wait: None
+) -> None:
+    """#588: a restore to several places re-checks each destination after finishing items."""
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_restoring_dsm(fail_check="/s/y"))
+    result = await restore_from_recycle_bin(mock_client, share="/s", paths=["x/a", "y/b"])
+    assert "Restored" in result
+
+
+@respx.mock
+async def test_a_restores_unanswered_start_lists_a_later_item(
+    mock_client: DsmClient, no_poll_wait: None
+) -> None:
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        side_effect=_restoring_dsm(fail_start="/s/#recycle/y/b")
+    )
+    with pytest.raises(ToolError) as refused:
+        await restore_from_recycle_bin(mock_client, share="/s", paths=["x/a", "y/b", "z/c"])
+    message = json.loads(str(refused.value))["error"]["message"]
+    assert "Already restored before this failure: /s/#recycle/x/a." in message
+    assert message.endswith("Not started: /s/#recycle/z/c.")
