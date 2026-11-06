@@ -35,8 +35,9 @@ _TAG_THE_MERGE = (
     "tag its squash commit on origin/main (for a backport, its commit on the "
     "release/<major>.<minor>.x branch)"
 )
-# A line that isn't a note: a heading, an HTML comment, a rule, or a bare list marker.
-_NOT_A_NOTE = re.compile(r"#{1,6}(\s.*)?|<!--.*-->|[-*_ ]{3,}|[-*+]")
+# A line that isn't a note: a heading, a rule, or a bare list marker. `_has_notes` has already
+# removed comments.
+_NOT_A_NOTE = re.compile(r"#{1,6}(\s.*)?|[-*_ ]{3,}|[-*+]")
 
 
 def tag_problem(tag: str, version: str) -> str | None:
