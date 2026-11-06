@@ -855,8 +855,9 @@ async def file_task(
     progress or final result (``status``), or stop it (``stop``). The handle is
     validated before any DSM call; its prefix picks the API. ``stop`` without a handle
     is ``invalid_parameter`` (it never lists or stops anything). ``stop`` reads the status
-    first and stops only a task that is still running: CopyMove ``stop`` answers success
-    for any taskid, so its answer alone can't say whether anything was stopped.
+    first and stops only a task that is still running, or one DSM keeps answering 599 for,
+    which can't be confirmed: CopyMove ``stop`` answers success for any taskid, so its answer
+    alone can't say whether anything was stopped.
     """
     if action == "stop" and (handle is None or not handle.strip()):
         error_response(
@@ -992,10 +993,10 @@ async def file_task(
             return f"{_NOT_STOPPED}\n{final}"
         refused = await send_stop()
         if refused is not None:
-            # DSM says it has no such task, which can pass too: only another read says it's over.
+            # DSM says it has no such task, which can pass too, so a read says what's known.
             now = await status_or_none(" The stop wasn't accepted.")
             if now is None:
-                return f"That task had already finished or isn't running. {_LIST_HINT}"
+                return gone(stop_sent=True)
             if now.get("finished"):
                 records.set_final(parsed, now)
                 final = await _final_text(client, parsed, now, record)

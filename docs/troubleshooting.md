@@ -118,8 +118,8 @@ running, and the reply can't say which. #302 tracks checking the path automatica
 
 **What to do:** list the path. For a delete, DSM removes a folder's contents before the folder,
 so a missing top-level folder means the delete finished; a folder that's still there means it
-was stopped, only partly done or still going: list it again shortly to see if it's shrinking. For a copy or move, list the destination (and, for a move, the
-source).
+was stopped, only partly done or still going: list it again shortly to see if it's shrinking.
+For a copy or move, list the destination (and, for a move, the source).
 
 ### "DSM lost the search task … so this is not a 0-result answer"
 

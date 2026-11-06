@@ -1326,7 +1326,7 @@ class TestFileTask:
     @pytest.mark.parametrize(
         ("after", "says"),
         [
-            (_err(599), "That task had already finished or isn't running."),
+            (_err(599), "DSM has no task with this handle: it may have finished, failed, been"),
             (_ok(MOVE_FINISHED), "That task had already finished, so nothing was stopped."),
         ],
         ids=["gone", "finished"],
@@ -1358,8 +1358,31 @@ class TestFileTask:
         assert text.startswith(says)
 
     @respx.mock
+    async def test_a_refused_stop_keeps_a_finished_result(self, mock_client: DsmClient) -> None:
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        statuses = iter([_ok(RUNNING), _ok(MOVE_FINISHED)])
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            if _method(request) == "stop":
+                return _err(401)
+            return next(statuses, _err(599))
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        records = TaskRecords()
+        handle = "copy:FileStation_D1"
+        await file_task(mock_client, records=records, handle=handle, action="stop")
+        text = await file_task(mock_client, records=records, handle=handle)
+        assert not text.startswith("DSM has no task")
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        "later",
+        [httpx.ReadTimeout(""), httpx.Response(502, text="bad gateway")],
+        ids=["no answer", "proxy"],
+    )
     async def test_a_refused_stop_then_no_answer_says_it_wasnt_accepted(
-        self, mock_client: DsmClient
+        self, mock_client: DsmClient, later: Any
     ) -> None:
         from mcp_synology.modules.filestation.tasks import file_task
 
@@ -1370,7 +1393,9 @@ class TestFileTask:
                 return _err(401)
             reply = next(statuses, None)
             if reply is None:
-                raise httpx.ReadTimeout("")
+                if isinstance(later, Exception):
+                    raise later
+                return later
             return reply
 
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
@@ -1801,6 +1826,7 @@ async def test_slow_599s_stop_being_read(
 
     now = [0.0]
     monkeypatch.setattr(tasks.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(tasks.asyncio, "sleep", AsyncMock())
     methods: list[str] = []
 
     def side_effect(request: httpx.Request) -> httpx.Response:
@@ -1821,6 +1847,7 @@ async def test_a_poll_stops_reading_slow_599s(
 
     now = [0.0]
     monkeypatch.setattr(tasks.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(tasks.asyncio, "sleep", AsyncMock())
     methods: list[str] = []
 
     def side_effect(request: httpx.Request) -> httpx.Response:
@@ -1875,3 +1902,31 @@ async def test_file_task_shows_paths_safely(
     )
     assert shows in text
     assert "\u200b" not in text
+
+
+@respx.mock
+async def test_a_later_run_of_599s_gets_its_own_bound(
+    mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 599 that passed long ago doesn't use up the time of a new one."""
+    import mcp_synology.modules.filestation.tasks as tasks
+
+    now = [0.0]
+    monkeypatch.setattr(tasks.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(tasks.asyncio, "sleep", AsyncMock())
+    replies = iter(
+        [
+            httpx.Response(200, json={"success": False, "error": {"code": 599}}),
+            _ok(RUNNING),
+            httpx.Response(200, json={"success": False, "error": {"code": 599}}),
+            _ok({**RUNNING, "finished": True}),
+        ]
+    )
+
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        now[0] += 6
+        return next(replies)
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+    result = await poll_task(mock_client, api=API, version=2, taskid="t1", wait=300, label="x")
+    assert result.outcome == "finished"
