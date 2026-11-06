@@ -271,7 +271,7 @@ Common causes:
 - A File Station path, a `restore_from_recycle_bin` item, or a Download Station
   destination has a `.` or `..` part (`/video/../photo`, `video/./x`).
 - `copy_files`, `move_files` or `restore_from_recycle_bin` with `overwrite=true` where two
-  sources would land at one destination with the same name, or names that differ only in case, or
+  sources would land at one destination with the same name, or names that match ignoring case, or
   one would land in a folder holding another: one could replace the other (for folders, items of
   the same name inside them), and a replaced file may not be in the recycle bin. Use different
   destinations or rename one first. To merge two folders without replacing anything, use

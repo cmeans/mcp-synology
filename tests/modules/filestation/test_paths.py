@@ -1684,6 +1684,13 @@ def test_a_restore_is_told_about_leaving_out_the_destination() -> None:
     assert "leave out dest_folder" in _error(exc)["suggestion"]
 
 
+def test_a_repeated_path_isnt_listed_as_a_second_pair() -> None:
+    sources = ["/v/a/x", "/v/b/x", "/v/b/x"]
+    with pytest.raises(ToolError) as exc:
+        refuse_same_names("move_files", sources, sources, ["/v/d"] * 3, overwrite=True)
+    assert "Also:" not in _error(exc)["message"]
+
+
 def test_names_differing_only_in_case_say_so() -> None:
     with pytest.raises(ToolError) as exc:
         refuse_same_names(
@@ -1693,7 +1700,7 @@ def test_names_differing_only_in_case_say_so() -> None:
             ["/v/d", "/v/d"],
             overwrite=True,
         )
-    assert "names that differ only in case" in _error(exc)["message"]
+    assert "names that match ignoring case" in _error(exc)["message"]
 
 
 def test_the_refusal_doesnt_send_anyone_to_separate_overwrites() -> None:

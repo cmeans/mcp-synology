@@ -3738,7 +3738,7 @@ async def test_skip_report_still_offers_overwrite_for_what_was_already_there(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     out = await _report_for(monkeypatch, ["/v/a/x", "/v/b/y"], ["/v/b/y"], {"/v/b/y": False})
-    assert "Pass overwrite=true to replace them, unless what's there came from an earlier" in out
+    assert "Pass overwrite=true to replace them, unless what's there came from this" in out
     assert "Don't retry" not in out
 
 
@@ -3748,7 +3748,7 @@ async def test_skip_report_a_skipped_first_file_isnt_the_blocker(
     """Both skipped: something already there blocks both, and this call put nothing there."""
     both = ["/v/a/x", "/v/b/x"]
     out = await _report_for(monkeypatch, both, both, {p: False for p in both})
-    assert "Pass overwrite=true to replace them, unless what's there came from an earlier" in out
+    assert "Pass overwrite=true to replace them, unless what's there came from this" in out
     assert "Don't retry" not in out
 
 
@@ -3764,7 +3764,7 @@ async def test_skip_report_separates_its_own_from_the_others(
     assert "Don't retry these with overwrite=true" in out
     assert "'/v/c/y' (this call's" not in out
     assert "For the others, pass overwrite=true" in out
-    assert "came from an earlier call of yours" in out
+    assert "came from this or an earlier call of yours" in out
 
 
 async def test_skip_report_compares_names_ignoring_case(monkeypatch: pytest.MonkeyPatch) -> None:

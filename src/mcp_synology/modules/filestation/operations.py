@@ -701,10 +701,10 @@ async def _skip_report(
             f"  {_escaped_repr(p)} (this call's {_escaped_repr(first)} went first)"
             for p, first in own.items()
         )
-    # No call can know what an earlier call put there (#580), so this is never said flat.
+    # This doesn't know what a finished call put there (#580), so this is never said flat.
     caution = (
-        "unless what's there came from an earlier call of yours: that would replace it, possibly "
-        "with no copy in the recycle bin."
+        "unless what's there came from this or an earlier call of yours: that would replace it, "
+        "possibly with no copy in the recycle bin."
     )
     if not own:
         lines.append(f"Pass overwrite=true to replace them, {caution}")

@@ -233,7 +233,7 @@ def _same_name_advice(tool: str, *, dest_given: bool) -> str:
     if tool == "restore_from_recycle_bin" and dest_given:
         return (
             "To put each back where it came from, leave out dest_folder (items from one folder "
-            "whose names differ only in case would clash again). "
+            "whose names match ignoring case would clash again). "
             f"Otherwise: {_SAME_NAME_ADVICE[0].lower()}{_SAME_NAME_ADVICE[1:]}"
         )
     return _SAME_NAME_ADVICE
@@ -270,6 +270,7 @@ def refuse_same_names(
     sources = [normalize_path(path) for path in resolved]
     landings: dict[tuple[str, str], tuple[str, str]] = {}
     kept: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
     clashes: list[str] = []
     first_clash = ""
     for raw, source, dest in zip(given, sources, dests, strict=True):
@@ -277,6 +278,9 @@ def refuse_same_names(
             continue
         name = source.rsplit("/", 1)[-1]
         landing = normalize_path(dest)
+        if (source, landing) in seen:
+            continue  # a repeated path is one source
+        seen.add((source, landing))
         kept.append((raw, source))
         first_raw, first = landings.setdefault((landing, name_key(name)), (raw, source))
         if first == source:
@@ -286,7 +290,7 @@ def refuse_same_names(
             names = (
                 "the same name"
                 if first.rsplit("/", 1)[-1] == name
-                else "names that differ only in case, which some file systems treat as one"
+                else "names that match ignoring case, which some file systems treat as one"
             )
             first_clash = raw
             lead = f"{pair} would both land in {_escaped_repr(dest)} with {names}"
