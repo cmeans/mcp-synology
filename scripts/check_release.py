@@ -51,7 +51,8 @@ def tag_problem(tag: str, version: str) -> str | None:
     return (
         f"tag {tag!r} doesn't match this commit: a release tag is v plus the version in its "
         f"release commit's pyproject.toml, and this one says {version!r}. If the release PR hasn't "
-        f"merged, merge it and {_TAG_THE_MERGE}."
+        f"merged, merge it and {_TAG_THE_MERGE}. If this is the commit to release and its version "
+        "wasn't bumped, bump it first, in a PR (for a backport, on its branch)."
     )
 
 
@@ -250,7 +251,7 @@ def branch_problem(root: Path, version: str, *, tag_matches: bool = True) -> str
                 f"version: it leaves origin/main at {cut_point}. Cut it from the last "
                 f"v{line}.* tag."
             )
-    except OSError as error:
+    except (OSError, ValueError) as error:  # ValueError: a NUL in an argument
         return f"couldn't run git to check the tagged commit's branch: {error}"
     where = f"origin/main or release/{backport}" if backport and tag_matches else "origin/main"
     if not tag_matches:

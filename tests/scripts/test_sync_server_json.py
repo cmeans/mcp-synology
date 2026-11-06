@@ -337,7 +337,9 @@ def test_main_propagates_server_json_errors(
     assert "not valid JSON" in str(exc.value)
 
 
-@pytest.mark.parametrize("packages", [[], ["x"], {"a": 1}, "x", [{"version": "0.5.0"}, "x"], None])
+@pytest.mark.parametrize(
+    "packages", [[], ["x"], {"a": 1}, "x", 5, [{"version": "0.5.0"}, "x"], None]
+)
 def test_main_check_bad_packages_returns_one(
     fake_repo: Path,
     monkeypatch: pytest.MonkeyPatch,

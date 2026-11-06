@@ -296,7 +296,14 @@ def test_a_stale_server_json_is_refused_with_the_rest(
 
 @pytest.mark.parametrize(
     "server",
-    [None, "not json", "[]", '{"version": "1.2.3"}', '{"version": "1.2.3", "packages": ["x"]}'],
+    [
+        None,
+        "not json",
+        "[]",
+        '{"version": "1.2.3", "packages": 5}',
+        '{"version": "1.2.3"}',
+        '{"version": "1.2.3", "packages": ["x"]}',
+    ],
 )
 def test_an_unreadable_server_json_is_refused_not_a_traceback(
     repo: Path, server: str | None, capsys: pytest.CaptureFixture[str]
@@ -626,6 +633,26 @@ def test_an_orphan_backport_branch_is_refused(repo: Path) -> None:
     problem = script.branch_problem(repo, "1.2.3") or ""
     assert "couldn't check where release/1.2.x was cut from" in problem
     assert "it may share no history with origin/main. Cut it from the last v1.2.* tag." in problem
+
+
+def test_a_forgotten_bump_is_told_to_bump(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """Pre-QA on #574: following the refusal alone retagged the same commit."""
+    _git(repo, "tag", "v1.2.3")
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "the patch")
+    _git(repo, "update-ref", "refs/remotes/origin/release/1.2.x", "HEAD")
+    assert script.main(["v1.2.4"], repo) == 1
+    assert "its version wasn't bumped, bump it first" in capsys.readouterr().out
+
+
+def test_no_commit_on_head_is_a_refusal_naming_git(repo: Path) -> None:
+    _git(repo, "checkout", "-q", "--orphan", "unborn")
+    problem = script.branch_problem(repo, "1.2.3") or ""
+    assert problem.startswith("couldn't check the tagged commit's branch:")
+
+
+def test_a_nul_in_the_version_is_a_refusal(repo: Path) -> None:
+    problem = script.branch_problem(repo, "1.\x002.3", tag_matches=False) or ""
+    assert "couldn't run git" in problem
 
 
 def test_a_ref_name_that_isnt_utf8_is_not_a_traceback(repo: Path) -> None:
