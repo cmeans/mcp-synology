@@ -117,7 +117,7 @@ class TestAttemptLogin:
         assert request.await_args_list[1].kwargs["params"]["otp_code"] == "123456"
 
     async def test_login_2fa_required_then_success_without_device_token(self) -> None:
-        """2FA succeeds but DSM doesn't echo back a `did` — still succeeds."""
+        """2FA succeeds but DSM doesn't echo back a `did`: nothing would let the server log in."""
         from mcp_synology.core.errors import SynologyError
 
         request = AsyncMock(
@@ -132,8 +132,8 @@ class TestAttemptLogin:
         with runner.isolation(input="123456\n"):
             result = await setup_mod._attempt_login(client, "admin", "pw")
 
-        assert result["success"] is True
-        assert result["sid"] == "sid-after-2fa"
+        assert result["success"] is False
+        assert "device_id" not in result
 
     async def test_login_2fa_then_failure(self) -> None:
         from mcp_synology.core.errors import SynologyError

@@ -311,7 +311,11 @@ def _setup_interactive(verbose: bool, not_loaded: str | None = None) -> None:
     connection_port = app_config.connection.port
 
     def store(device_id: str | None) -> bool:
-        return _store_keyring(service, username, password, host, connection_port, device_id)
+        try:
+            return _store_keyring(service, username, password, host, connection_port, device_id)
+        except SystemExit:
+            click.echo("No config was written.", err=True)
+            raise
 
     nas_hostname = None
     if no_keyring_here():
@@ -568,13 +572,18 @@ def _store_keyring(
 
     ``device_id`` is a token this login just got, and it replaces a stored one. Without one, a
     stored token stays for the same username. For another it goes either way: it's that account's
-    trust, not this one's (#454). A new token that can't be stored ends setup: the server can't log
-    in to that account without it, whatever else is set.
+    trust, not this one's (#454). It goes last, so a keyring that refuses writes can't cost a
+    working login its token. A write that fails puts back what it changed, when the keyring lets it.
+
+    Exits 1 when the entry ended up different and not as asked, or a new token couldn't be stored,
+    since the server may not be able to log in without a code. A keyring that changed nothing
+    returns False, and the variables are the way forward.
     """
     from mcp_synology.core.auth import no_keyring_here
     from mcp_synology.core.config import comparable_target
 
     removed: list[str] = []
+    before: dict[str, str | None] = {}
     username_written = stored = False
     try:
         import keyring
@@ -591,17 +600,17 @@ def _store_keyring(
                 if held:
                     removed.append(key)
             keyring.set_password(service, "host", recorded)
-        if keyring.get_password(service, "username") != username:
-            held = keyring.get_password(service, "device_id")
-            with contextlib.suppress(PasswordDeleteError):  # there may be none
-                keyring.delete_password(service, "device_id")
-            if keyring.get_password(service, "device_id"):
-                raise PasswordDeleteError("device_id is still stored")
-            if held:
-                removed.append("device_id")
+        before = {key: keyring.get_password(service, key) for key in ("username", "password")}
+        token_held = keyring.get_password(service, "device_id")
         keyring.set_password(service, "username", username)
         username_written = True
         keyring.set_password(service, "password", password)
+        if token_held and before["username"] != username:
+            with contextlib.suppress(PasswordDeleteError):  # a backend's "no such password"
+                keyring.delete_password(service, "device_id")
+            if keyring.get_password(service, "device_id"):
+                raise PasswordDeleteError("device_id is still stored")
+            removed.append("device_id")
         stored = True
         if device_id:
             keyring.set_password(service, "device_id", device_id)
@@ -612,35 +621,74 @@ def _store_keyring(
         return True
     except Exception as e:
         logger.debug("Keyring error storing credentials: %s", e, exc_info=True)
-        gone = f" Already removed from this entry: {', '.join(removed)}." if removed else ""
-        if username_written and not stored:
-            gone += " The entry has the new username but not its password."
         lead = (
             "Keyring not available."
             if no_keyring_here()
             else "Couldn't store these in the keyring."
         )
+        if stored:
+            token = ", and the old account's token was removed" if removed else ""
+            _stop_on_keyring(
+                f"The username and password are stored{token}, but the new 2FA device token "
+                "couldn't be stored, so the server may not be able to log in without a code. Fix "
+                "the keyring and run this again."
+            )
+        mixed = username_written and not _put_back(service, before)
+        gone = f" Already removed from this entry: {', '.join(removed)}." if removed else ""
+        if mixed:
+            gone += " The entry now holds the new username with the old password."
+        elif not removed:
+            gone += " This entry is as it was."
         if device_id:
-            start = (
-                "The username and password are stored, but the new"
-                if stored
-                else f"{lead}{gone} The new"
+            _stop_on_keyring(
+                f"{lead}{gone} The new 2FA device token couldn't be stored either, so the server "
+                "may not be able to log in without a code. Fix the keyring and run this again."
             )
-            click.echo(
-                click.style(
-                    f"\n{start} 2FA device token couldn't be stored, so the server may not be able "
-                    "to log in without a code. Fix the keyring and run this again.",
-                    fg="red",
-                ),
-                err=True,
-            )
-            sys.exit(1)
         click.echo(
             f"\n{lead}{gone} Set these environment variables where the server runs instead: "
             "in the `env` block of your MCP client's config, or in your shell, with your "
             "password in place of the placeholder:\n" + _variable_lines(username)
         )
+        if mixed or removed:
+            sys.exit(1)
         return False
+
+
+def _stop_on_keyring(message: str) -> NoReturn:
+    click.echo(click.style(f"\n{message}", fg="red"), err=True)
+    sys.exit(1)
+
+
+def _put_back(service: str, before: dict[str, str | None]) -> bool:
+    """Restore what a failed store overwrote. False if the keyring won't have it."""
+    try:
+        import keyring
+
+        for key, value in before.items():
+            if keyring.get_password(service, key) == value:
+                continue
+            if value is None:
+                keyring.delete_password(service, key)
+            else:
+                keyring.set_password(service, key, value)
+    except Exception as e:  # noqa: BLE001 - backends raise their own types
+        logger.debug("Keyring error restoring the entry: %s", e, exc_info=True)
+        return False
+    return True
+
+
+def _login_failed(error: Exception) -> None:
+    """Say why, what to do, and that a retry isn't free: each counts toward Auto Block (#454)."""
+    click.echo(click.style(f"Login failed: {error}", fg="red"), err=True)
+    suggestion = getattr(error, "suggestion", None)
+    if suggestion:
+        click.echo(suggestion, err=True)
+    if getattr(error, "code", None) in (400, 403, 404):
+        click.echo(
+            "Each failed login counts toward DSM's Auto Block (on by default: 10 within 5 minutes "
+            "blocks this computer's IP address), so check before retrying.",
+            err=True,
+        )
 
 
 async def _attempt_login(
@@ -657,6 +705,7 @@ async def _attempt_login(
 
     result: dict[str, Any] = {"success": False}
     device_id: Any = None
+    needs_token = False
 
     try:
         data = await client.request(
@@ -687,26 +736,38 @@ async def _attempt_login(
                     post_form=True,
                 )
                 # Only this login asked for one.
-                if isinstance(data, dict):
-                    device_id = data.get("did")
+                device_id = data.get("did") if isinstance(data, dict) else None
+                needs_token = True
             except SynologyError as e2:
-                click.echo(click.style(f"Login failed: {e2}", fg="red"), err=True)
+                _login_failed(e2)
                 return result
         else:
-            click.echo(click.style(f"Login failed: {e}", fg="red"), err=True)
+            _login_failed(e)
             return result
     except OSError as e:
-        click.echo(click.style(f"Login failed: {e}", fg="red"), err=True)
+        _login_failed(e)
         return result
 
     # Without a session it isn't a login, whatever the reply says, so nothing gets stored (#454).
     sid = data.get("sid") if isinstance(data, dict) else None
-    if not sid:
+    if not isinstance(sid, str) or not sid.strip():
         click.echo(
             click.style("Login failed: the server's reply had no session ID.", fg="red"), err=True
         )
         return result
     client.sid = sid
+    if needs_token and not (isinstance(device_id, str) and device_id.strip()):
+        # An account known to need a code, with nothing that would let the server skip it. Client
+        # has the session, so the caller's logout still runs.
+        click.echo(
+            click.style(
+                "DSM accepted the code but sent no usable 2FA device token, so the server couldn't "
+                "log in without a code.",
+                fg="red",
+            ),
+            err=True,
+        )
+        return result
     click.echo(click.style("Login successful!", fg="green"))
     if device_id:
         result["device_id"] = device_id
@@ -745,7 +806,7 @@ async def _connect_and_login(
 
     result: dict[str, Any] = {"success": False}
 
-    with exit_on_connection_failure(base_url, config.connection.host):
+    with exit_on_connection_failure(base_url, config.connection.host, note="Nothing was changed."):
         async with DsmClient(
             base_url=base_url,
             verify_ssl=config.connection.verify_ssl,
@@ -755,6 +816,8 @@ async def _connect_and_login(
 
             login_result = await _attempt_login(client, username, password)
             if not login_result["success"]:
+                if client.sid:
+                    await _logout(client)
                 return result
 
             # The logout runs whatever happens here, so a timeout, a dropped connection or an
@@ -796,7 +859,7 @@ async def _setup_login(
     protocol = "https" if config.connection.https else "http"
     base_url = f"{protocol}://{config.connection.host}:{config.connection.port}"
 
-    with exit_on_connection_failure(base_url, config.connection.host):
+    with exit_on_connection_failure(base_url, config.connection.host, note="Nothing was changed."):
         async with DsmClient(
             base_url=base_url,
             verify_ssl=config.connection.verify_ssl,
@@ -806,6 +869,8 @@ async def _setup_login(
 
             login_result = await _attempt_login(client, username, password)
             if not login_result["success"]:
+                if client.sid:
+                    await _logout(client)
                 return {"success": False}
 
             # Logout, best effort as in _connect_and_login: the login worked (#404).

@@ -112,7 +112,7 @@ def not_dsm_message(base_url: str, status: int | None) -> str:
 
 
 @contextlib.contextmanager
-def exit_on_connection_failure(base_url: str, host: str) -> Iterator[None]:
+def exit_on_connection_failure(base_url: str, host: str, *, note: str = "") -> Iterator[None]:
     """Turn a NAS that can't be reached, or a server that isn't DSM, into a red error
     line and exit 1 instead of a traceback (check and setup, #191)."""
     import httpx
@@ -130,6 +130,8 @@ def exit_on_connection_failure(base_url: str, host: str) -> Iterator[None]:
     else:
         return
     click.echo(click.style(f"Error: {message}", fg="red"), err=True)
+    if note:
+        click.echo(note, err=True)
     sys.exit(1)
 
 

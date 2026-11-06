@@ -1337,7 +1337,9 @@ class TestSetup:
             real(service, key, value)
 
         monkeypatch.setattr(store, "set_password", fails)
-        assert not _store_keyring("mcp-synology/nas", "admin", "new-pw", "nas.office", 5000)
+        with pytest.raises(SystemExit) as stopped:
+            _store_keyring("mcp-synology/nas", "admin", "new-pw", "nas.office", 5000)
+        assert stopped.value.code == 1
         assert ("mcp-synology/nas", "password") not in store.values
         assert store.values[("mcp-synology/nas", "host")] == "nas.office:5000"
 
@@ -1471,7 +1473,9 @@ class TestSetup:
             real(service, key, value)
 
         monkeypatch.setattr(store, "set_password", fails)
-        assert not _store_keyring("mcp-synology/nas", "new-admin", "pw", "nas.office", 5000)
+        with pytest.raises(SystemExit) as stopped:
+            _store_keyring("mcp-synology/nas", "new-admin", "pw", "nas.office", 5000)
+        assert stopped.value.code == 1
         assert ("mcp-synology/nas", "username") not in store.values
 
     def test_a_failed_replace_says_what_is_gone(
@@ -1488,7 +1492,9 @@ class TestSetup:
             raise KeyringError("read-only")
 
         monkeypatch.setattr(store, "set_password", fails)
-        assert not _store_keyring("mcp-synology/nas", "admin", "pw", "nas.office", 5000)
+        with pytest.raises(SystemExit) as stopped:
+            _store_keyring("mcp-synology/nas", "admin", "pw", "nas.office", 5000)
+        assert stopped.value.code == 1
         out = capsys.readouterr().out
         assert "Already removed from this entry: device_id, password, username." in out
 
@@ -2370,6 +2376,10 @@ class TestTheKeyringIsWrittenOnlyAfterTheLogin:
             {"success": True, "data": {"sid": ""}},
             {"success": True, "data": None},
             {"success": True, "data": 5},
+            {"success": True, "data": {"sid": 123}},
+            {"success": True, "data": {"sid": ["x"]}},
+            {"success": True, "data": {"sid": True}},
+            {"success": True, "data": {"sid": "   "}},
         ],
     )
     def test_a_reply_with_no_session_isnt_a_login(
@@ -2494,8 +2504,134 @@ class TestTheKeyringIsWrittenOnlyAfterTheLogin:
         monkeypatch.setattr(store, "set_password", refuses_the_password)
         _dsm(_LOGGED_IN)
         result = self._with_config(tmp_path, "someone-else\npw\n")
-        assert "Already removed from this entry: device_id." in result.output
-        assert "The entry has the new username but not its password." in result.output
+        assert "This entry is as it was." in result.output
+        assert store.values[(self.SERVICE, "username")] == "admin"
+        assert store.values[(self.SERVICE, "device_id")] == "old-token"
+        assert result.exit_code == 0, result.output
+
+    @respx.mock
+    def test_a_write_that_fails_with_no_way_back_is_reported_and_exits_1(
+        self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._old(store)
+        real_set = store.set_password
+        written: list[str] = []
+
+        def one_write_only(service: str, key: str, value: str) -> None:
+            if written:
+                raise KeyringError("locked")
+            written.append(key)
+            real_set(service, key, value)
+
+        monkeypatch.setattr(store, "set_password", one_write_only)
+        _dsm(_LOGGED_IN)
+        result = self._with_config(tmp_path, "someone-else\npw\n")
+        assert result.exit_code == 1
+        assert isinstance(result.exception, SystemExit)
+        assert "new username with the old password" in result.output
+        assert store.values[(self.SERVICE, "device_id")] == "old-token"
+
+    @respx.mock
+    def test_a_refused_username_write_keeps_the_token(
+        self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """QA round 1 on #583: the token was deleted before the username was written."""
+        before = self._old(store)
+
+        def refuses(*_args: str) -> None:
+            raise KeyringError("locked")
+
+        monkeypatch.setattr(store, "set_password", refuses)
+        _dsm(_LOGGED_IN)
+        result = self._with_config(tmp_path, "someone-else\npw\n")
+        assert result.exit_code == 0, result.output
+        assert store.values == before
+
+    @respx.mock
+    def test_a_refused_host_write_after_removing_the_old_entry_exits_1(
+        self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._old(store, "nas.office")
+
+        def refuses(*_args: str) -> None:
+            raise KeyringError("locked")
+
+        monkeypatch.setattr(store, "set_password", refuses)
+        _dsm(_LOGGED_IN)
+        result = self._with_config(tmp_path, "y\nadmin\npw\n")
+        assert result.exit_code == 1
+        assert "Already removed from this entry:" in result.output
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        "reply",
+        [
+            {"success": True, "data": {"sid": "the-sid"}},
+            {"success": True, "data": {"sid": "the-sid", "did": ""}},
+            {"success": True, "data": {"sid": "the-sid", "did": "  "}},
+            {"success": True, "data": {"sid": "the-sid", "did": 12345}},
+            {"success": True, "data": []},
+        ],
+    )
+    def test_a_code_login_with_no_usable_token_changes_nothing(
+        self, reply: dict[str, Any], store: MemoryKeyring, tmp_path: Path
+    ) -> None:
+        before = self._old(store)
+        _dsm(_NEEDS_A_CODE, reply)
+        result = self._with_config(tmp_path, "someone-else\npw\n123456\n")
+        assert result.exit_code == 1
+        assert "Nothing was changed." in result.output
+        assert "2FA bootstrap" not in result.output
+        assert store.values == before
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        ("code", "advice"),
+        [
+            (400, "Check username and password."),
+            (404, "fresh code"),
+            (407, "Wait a few minutes"),
+            (408, "Auto Block"),
+        ],
+    )
+    def test_a_failed_login_gives_its_advice(
+        self, code: int, advice: str, store: MemoryKeyring, tmp_path: Path
+    ) -> None:
+        _dsm({"success": False, "error": {"code": code}})
+        result = self._with_config(tmp_path, "admin\ntypo\n")
+        assert result.exit_code == 1
+        assert advice in result.output
+        assert ("counts toward DSM's Auto Block" in result.output) is (code in (400, 404))
+
+    @respx.mock
+    def test_an_unreachable_nas_says_nothing_changed(
+        self, store: MemoryKeyring, tmp_path: Path
+    ) -> None:
+        respx.get("http://nas.home:5000/webapi/query.cgi").mock(
+            side_effect=httpx.ConnectError("refused")
+        )
+        result = self._with_config(tmp_path, "admin\npw\n")
+        assert result.exit_code == 1
+        assert "Nothing was changed." in result.output
+
+    @respx.mock
+    def test_no_config_is_mentioned_when_the_token_stops_a_bare_setup(
+        self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._old(store)
+        real_set = store.set_password
+
+        def refuses_the_token(service: str, key: str, value: str) -> None:
+            if key == "device_id":
+                raise KeyringError("locked")
+            real_set(service, key, value)
+
+        monkeypatch.setattr(store, "set_password", refuses_the_token)
+        _dsm(_NEEDS_A_CODE, _LOGGED_IN_WITH_TOKEN)
+        result = self._interactive(tmp_path, "someone-else\npw\n123456\n")
+        assert result.exit_code == 1
+        assert "the old account's token was removed" in result.output
+        assert "No config was written." in result.output
 
     @respx.mock
     @pytest.mark.parametrize(
@@ -2580,6 +2716,25 @@ class TestTheKeyringIsWrittenOnlyAfterTheLogin:
         result = self._with_config(tmp_path, "me\npw\n")
         assert result.exit_code == 0, result.output
         assert "With those variables set, test it" in result.output
+
+    @pytest.mark.parametrize("sid", [None, 123, ["x"], True, "   "])
+    def test_the_servers_login_refuses_the_same_replies(self, sid: Any, tmp_path: Path) -> None:
+        """QA round 1 on #583: `check` and `serve` crashed on one, and returned 123 on another."""
+        config = load_config(_file(tmp_path, "nas.home"))
+        client = DsmClient(base_url="http://nas.home:5000")
+        auth = AuthManager(config, client)
+        with (
+            patch.dict(os.environ, {"SYNOLOGY_USERNAME": "u", "SYNOLOGY_PASSWORD": "p"}),
+            patch.object(client, "request", AsyncMock(return_value=sid)),
+            pytest.raises(AuthenticationError, match="no session ID"),
+        ):
+            asyncio.run(auth.login())
+        with (
+            patch.dict(os.environ, {"SYNOLOGY_USERNAME": "u", "SYNOLOGY_PASSWORD": "p"}),
+            patch.object(client, "request", AsyncMock(return_value={"sid": sid})),
+            pytest.raises(AuthenticationError, match="no session ID"),
+        ):
+            asyncio.run(auth.login())
 
     def test_no_keyring_at_all_skips_the_login(self, store: MemoryKeyring, tmp_path: Path) -> None:
         """There's nowhere to keep what it would prove (#481), and no NAS is contacted here."""

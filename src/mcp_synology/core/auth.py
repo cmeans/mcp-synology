@@ -842,8 +842,8 @@ class AuthManager:
                 raise
             raise self._refusals.refuse(fingerprint, e, credential_sources(self._config)) from e
 
-        sid: str | None = data.get("sid")
-        if not sid:
+        sid = data.get("sid") if isinstance(data, dict) else None
+        if not isinstance(sid, str) or not sid.strip():
             raise AuthenticationError("Login succeeded but no session ID returned.")
 
         self._record_host()
