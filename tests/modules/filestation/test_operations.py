@@ -2700,6 +2700,119 @@ class TestCopyMoveHandoff:
         assert record.overwrite is True
 
     @respx.mock
+    async def test_a_hand_off_warns_about_a_source_of_the_same_name(
+        self, mock_client: DsmClient
+    ) -> None:
+        """Pre-QA on #575: "Run them again" with overwrite=true replaced what this call placed."""
+        calls: list[dict[str, str]] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm(calls, finish={"a"}))
+        records = TaskRecords()
+        result = await copy_files(
+            mock_client,
+            paths=["/s/a", "/s/b", "/s/x/b", "/s/x/a", "/s/c"],
+            dest_folder="/s/dst",
+            timeout=1,
+            records=records,
+        )
+        assert "Named like one this call already ran: '/s/x/b', '/s/x/a'." in result
+        record = records.get(Handle("copy", "FileStation_B"))
+        assert record is not None
+        assert record.earlier == ["/s/a"]
+
+    @respx.mock
+    async def test_a_skipped_source_isnt_counted_as_having_landed(
+        self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """QA round 2 on #575: the hand-off route blamed a source that had been skipped."""
+        from mcp_synology.modules.filestation import operations
+
+        records = TaskRecords()
+        calls: list[dict[str, str]] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm(calls, finish={"a"}))
+        real = operations._copy_move_one_path
+
+        async def skips_a(client: DsmClient, path: str, **kwargs: Any) -> Any:
+            return (0, True) if path == "/s/a" else await real(client, path, **kwargs)
+
+        monkeypatch.setattr(operations, "_copy_move_one_path", skips_a)
+        await copy_files(
+            mock_client, paths=["/s/a", "/s/b"], dest_folder="/s/dst", timeout=1, records=records
+        )
+        record = records.get(Handle("copy", "FileStation_B"))
+        assert record is not None
+        assert record.earlier == []
+
+    @respx.mock
+    async def test_a_hand_off_warns_for_a_case_only_name_and_escapes_it(
+        self, mock_client: DsmClient
+    ) -> None:
+        calls: list[dict[str, str]] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm(calls, finish={"a"}))
+        result = await copy_files(
+            mock_client,
+            paths=["/s/a", "/s/b", "/s/x\u3164/B"],
+            dest_folder="/s/dst",
+            timeout=1,
+        )
+        assert "Named like one this call already ran: '/s/x\\u3164/B'." in result
+
+    @respx.mock
+    async def test_a_task_running_elsewhere_lands_nothing_here(
+        self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Pre-QA on #575: the warning spoke of a folder this task never reached."""
+        from mcp_synology.modules.filestation import operations
+
+        async def running(_client: DsmClient, *, path: str, **_kwargs: Any) -> Any:
+            if path != "/s/b":
+                return None
+            return {"taskid": "T", "params": {"dest_folder_path": "/s/OTHER", "overwrite": False}}
+
+        calls: list[dict[str, str]] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm(calls, finish={"a"}))
+        monkeypatch.setattr(operations, "running_task", running)
+        records = TaskRecords()
+        result = await copy_files(
+            mock_client,
+            paths=["/s/a", "/s/b", "/s/x/b"],
+            dest_folder="/s/dst",
+            timeout=1,
+            records=records,
+        )
+        assert "Named like" not in result
+        record = records.get(Handle("copy", "T"))
+        assert record is not None
+        assert record.earlier == []
+
+    @respx.mock
+    async def test_a_skipped_source_isnt_named_in_the_hand_off_warning(
+        self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from mcp_synology.modules.filestation import operations
+
+        calls: list[dict[str, str]] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm(calls, finish={"a"}))
+        real = operations._copy_move_one_path
+
+        async def skips_a(client: DsmClient, path: str, **kwargs: Any) -> Any:
+            return (0, True) if path == "/s/a" else await real(client, path, **kwargs)
+
+        monkeypatch.setattr(operations, "_copy_move_one_path", skips_a)
+        result = await copy_files(
+            mock_client, paths=["/s/a", "/s/b", "/s/x/a"], dest_folder="/s/dst", timeout=1
+        )
+        assert "Named like" not in result
+
+    @respx.mock
+    async def test_a_hand_off_with_no_same_name_doesnt_warn(self, mock_client: DsmClient) -> None:
+        calls: list[dict[str, str]] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm(calls, finish={"a"}))
+        result = await copy_files(
+            mock_client, paths=["/s/a", "/s/b", "/s/c"], dest_folder="/s/dst", timeout=1
+        )
+        assert "Named like" not in result
+
+    @respx.mock
     async def test_copy_hands_off(self, mock_client: DsmClient) -> None:
         calls: list[dict[str, str]] = []
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm(calls, finish={"a"}))
@@ -3804,3 +3917,151 @@ async def test_a_lost_copys_next_step_shows_its_destination_safely(
     result = await copy_files(mock_client, paths=["/s/a", "/s/b", "/s/c"], dest_folder=odd)
     assert f"First: List {odd!r} to see" in result
     assert "\u200b" not in result
+
+
+async def _report_for(
+    monkeypatch: pytest.MonkeyPatch,
+    normalized: list[str],
+    skipped: list[str],
+    kinds: dict[str, bool],
+) -> str:
+    from mcp_synology.modules.filestation import operations
+
+    async def isdir(_client: object, _paths: list[str]) -> dict[str, bool]:
+        return kinds
+
+    monkeypatch.setattr(operations, "paths_isdir", isdir)
+    ok = [p for p in normalized if p not in skipped]
+    lines = await operations._skip_report(
+        None,  # type: ignore[arg-type]
+        "Moved",
+        "/v/d",
+        normalized,
+        ok,
+        skipped,
+        True,
+    )
+    return "\n".join(lines)
+
+
+async def test_skip_report_warns_when_this_call_put_the_blocker_there(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#580: following `Pass overwrite=true` replaced the file this call had just moved."""
+    out = await _report_for(
+        monkeypatch, ["/v/a/x.txt", "/v/b/x.txt"], ["/v/b/x.txt"], {"/v/b/x.txt": False}
+    )
+    assert "Don't retry these with overwrite=true" in out
+    assert "'/v/b/x.txt' (this call's '/v/a/x.txt' went first)" in out
+    assert "Pass overwrite=true" not in out
+    assert "For the others" not in out
+    assert "(this call's '/v/a/x.txt' went first)" in out
+    assert "/v/b/x.txt" in out.split("Skipped:")[1]
+
+
+async def test_skip_report_warns_for_a_skipped_folders_own_children(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two folders of one name: the second's skipped child is what the first brought."""
+    out = await _report_for(monkeypatch, ["/v/a/n", "/v/b/n"], ["/v/b/n"], {"/v/b/n": True})
+    assert "Don't retry these with overwrite=true" in out
+
+
+async def test_skip_report_still_offers_overwrite_for_what_was_already_there(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    out = await _report_for(monkeypatch, ["/v/a/x", "/v/b/y"], ["/v/b/y"], {"/v/b/y": False})
+    assert "Pass overwrite=true to replace them, unless what's there came from this" in out
+    assert "Don't retry" not in out
+
+
+async def test_skip_report_a_skipped_first_file_isnt_the_blocker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both skipped: something already there blocks both, and this call put nothing there."""
+    both = ["/v/a/x", "/v/b/x"]
+    out = await _report_for(monkeypatch, both, both, {p: False for p in both})
+    assert "Pass overwrite=true to replace them, unless what's there came from this" in out
+    assert "Don't retry" not in out
+
+
+async def test_skip_report_separates_its_own_from_the_others(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    out = await _report_for(
+        monkeypatch,
+        ["/v/a/x", "/v/b/x", "/v/c/y"],
+        ["/v/b/x", "/v/c/y"],
+        {"/v/b/x": False, "/v/c/y": False},
+    )
+    assert "Don't retry these with overwrite=true" in out
+    assert "'/v/c/y' (this call's" not in out
+    assert "For the others, pass overwrite=true" in out
+    assert "came from this or an earlier call of yours" in out
+
+
+async def test_skip_report_compares_names_ignoring_case(monkeypatch: pytest.MonkeyPatch) -> None:
+    out = await _report_for(
+        monkeypatch, ["/v/a/X.TXT", "/v/b/x.txt"], ["/v/b/x.txt"], {"/v/b/x.txt": False}
+    )
+    assert "'/v/b/x.txt' (this call's '/v/a/X.TXT' went first)" in out
+
+
+@pytest.mark.parametrize("kinds", [{"/v/a/n": True, "/v/b/n": True}, {}])
+async def test_skip_report_counts_a_skipped_folder_as_having_landed(
+    monkeypatch: pytest.MonkeyPatch, kinds: dict[str, bool]
+) -> None:
+    """Its other items landed; with its type unknown, warning is the safe side."""
+    both = ["/v/a/n", "/v/b/n"]
+    out = await _report_for(monkeypatch, both, both, kinds)
+    assert "'/v/b/n' (this call's '/v/a/n' went first)" in out
+
+
+async def test_skip_report_names_the_first_with_that_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    sources = ["/v/a/x", "/v/b/x", "/v/c/x"]
+    out = await _report_for(monkeypatch, sources, sources[1:], {p: False for p in sources})
+    assert "'/v/c/x' (this call's '/v/a/x' went first)" in out
+
+
+async def test_a_hand_off_keeps_the_warning_through_file_task(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pre-QA on #575: the record held one source, so the reply said Pass overwrite=true."""
+    from mcp_synology.modules.filestation import operations
+    from mcp_synology.modules.filestation.tasks import Handle, TaskRecord, _final_text
+
+    async def isdir(_client: object, _paths: list[str]) -> dict[str, bool]:
+        return {"/v/b/x.txt": False}
+
+    monkeypatch.setattr(operations, "paths_isdir", isdir)
+    record = TaskRecord(
+        handle=Handle("move", "t"),
+        paths=["/v/b/x.txt"],
+        dest="/v/d",
+        overwrite=False,
+        earlier=["/v/a/x.txt"],
+    )
+    text = await _final_text(
+        None,  # type: ignore[arg-type]
+        Handle("move", "t"),
+        {"finished": True, "skipstatus": {"status": "all"}},
+        record,
+    )
+    assert "Don't retry these with overwrite=true" in text
+    assert "Pass overwrite=true" not in text
+    assert "0 of 1" in text
+
+
+async def test_skip_report_escapes_the_paths_in_its_warning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A planted name mustn't read as server text beneath a conditional instruction."""
+    out = await _report_for(
+        monkeypatch,
+        ["/v/a\u3164/x", "/v/b\u3164/x"],
+        ["/v/b\u3164/x"],
+        {"/v/b\u3164/x": False},
+    )
+    warning = out.split("Don't retry")[1]
+    assert "\u3164" not in warning
+    assert warning.count("\\u3164") == 2

@@ -89,6 +89,8 @@ class TaskRecord:
     recursive: bool | None = None
     recycle: dict[str, bool] = field(default_factory=dict)
     final_status: dict[str, Any] | None = None
+    # The sources that landed whole before this one in its call, at the same destination (#580).
+    earlier: list[str] = field(default_factory=list)
 
 
 class TaskRecords:
@@ -762,6 +764,7 @@ async def _final_text(
                 handle.kind != "copy",
                 size,
                 [path] if skipped else [],
+                earlier=record.earlier,
             )
             if handle.kind == "restore":
                 text = _as_restore(text, path.split("/")[1])
