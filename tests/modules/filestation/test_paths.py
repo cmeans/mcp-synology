@@ -1491,8 +1491,10 @@ async def test_a_restore_to_each_items_own_folder_isnt_refused() -> None:
     ("tool", "sources", "refused"),
     [
         ("move_files", ["/v/a/x", "/v/b/x"], True),
-        ("move_files", ["/v/a/X.MKV", "/v/b/x.mkv"], True),
         ("move_files", ["/v/a/x", "/v/b/y", "/v/c/x"], True),
+        # DSM keeps names that differ only in case as two (vdsm, all four versions).
+        ("move_files", ["/v/a/X.MKV", "/v/b/x.mkv"], False),
+        ("move_files", ["/v/a/strasse", "/v/b/straße"], False),
         ("copy_files", ["/v/a/x", "/v/b/x"], True),
         # A repeated path is one source, however it's spelled.
         ("move_files", ["/v/a/x", "/v/a/x"], False),
@@ -1504,6 +1506,10 @@ async def test_a_restore_to_each_items_own_folder_isnt_refused() -> None:
         ("move_files", ["/v/a/x", "/v/a/x/x"], False),
         ("move_files", ["/v/a/x/x", "/v/a/x"], False),
         ("restore_from_recycle_bin", ["/v/#recycle/x", "/v/#recycle/x/x"], False),
+        # The first with the name can itself be the one dropped, whichever source holds it.
+        ("move_files", ["/v/a/p/x", "/v/a/p/y/x", "/v/a/p"], False),
+        ("move_files", ["/v/a/p/x", "/v/b/x", "/v/a/p"], False),
+        ("move_files", ["/v/a/x", "/v/a/x/x", "/v/b/x"], True),
         # ...but a copy keeps both, and the child replaces the folder's copy.
         ("copy_files", ["/v/a/x", "/v/a/x/x"], True),
         # A sibling that only starts with the other's path isn't its child.
@@ -1529,15 +1535,28 @@ def test_same_names_in_different_destinations_dont_collide() -> None:
     )
 
 
-def test_a_destination_differing_only_in_case_counts_as_one() -> None:
-    with pytest.raises(ToolError, match="same name"):
+def test_a_destination_differing_only_in_case_is_another_folder() -> None:
+    refuse_same_names(
+        "restore_from_recycle_bin",
+        ["Docs/x", "docs/x"],
+        ["/v/#recycle/Docs/x", "/v/#recycle/docs/x"],
+        ["/v/Docs", "/v/docs"],
+        overwrite=True,
+    )
+
+
+def test_the_refusal_says_how_to_merge_folders_on_purpose() -> None:
+    with pytest.raises(ToolError) as exc:
         refuse_same_names(
             "move_files",
             ["/v/a/x", "/v/b/x"],
             ["/v/a/x", "/v/b/x"],
-            ["/v/D", "/v/d"],
+            ["/v/d", "/v/d"],
             overwrite=True,
         )
+    error = _error(exc)
+    assert "for folders, items of the same name inside them" in error["message"]
+    assert "make a separate call for each" in error["suggestion"]
 
 
 def test_the_refusal_quotes_the_callers_own_text_and_shows_hidden_characters() -> None:

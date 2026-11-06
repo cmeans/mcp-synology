@@ -226,34 +226,34 @@ def refuse_same_names(
     param: str = "paths",
 ) -> None:
     """Refuse a copy, move or restore with ``overwrite=true`` where two sources would land at
-    the same destination under one name (#495): each runs as its own DSM task, so the second
-    replaces the first, and for a move or restore the first's original is already gone.
+    the same destination under one name (#495). Each runs as its own DSM task, so the second
+    replaces the first, and for a move or restore the first's original is already gone. The
+    replaced file isn't in the recycle bin (vdsm's `/home`, DSM 7.1 to 7.4.1). Two folders merge
+    instead, which can replace same-named items inside them, so they're refused too: this
+    can't tell files from folders, and nothing here reads their types.
 
-    Names compare ignoring case, since a client may see them as one. ``overwrite=false`` loses
+    Names compare exactly: DSM keeps `X.TXT` and `x.txt` as two files. ``overwrite=false`` loses
     nothing (DSM skips the second, and says so). A repeated path isn't a collision, and nor is
-    a folder and its own child where `_collapse_overlaps` drops the child (all but a copy)."""
+    anything `_collapse_overlaps` drops: a source inside another source (all but a copy)."""
     if not overwrite:
         return
+    sources = [normalize_path(path) for path in resolved]
     seen: dict[tuple[str, str], tuple[str, str]] = {}
-    for raw, path, dest in zip(given, resolved, dests, strict=True):
-        source = normalize_path(path)
-        name = source.rsplit("/", 1)[-1]
-        first_raw, first = seen.setdefault(
-            (normalize_path(dest).casefold(), name.casefold()), (raw, source)
-        )
-        if first == source:
+    for raw, source, dest in zip(given, sources, dests, strict=True):
+        if tool != "copy_files" and any(source.startswith(f"{other}/") for other in sources):
             continue
-        if tool != "copy_files" and (
-            source.startswith(f"{first}/") or first.startswith(f"{source}/")
-        ):
+        name = source.rsplit("/", 1)[-1]
+        first_raw, first = seen.setdefault((normalize_path(dest), name), (raw, source))
+        if first == source:
             continue
         _refuse(
             f"{_OP_WORDS.get(tool, tool)} refused: {first_raw!r} and {raw!r} would both land in "
-            f"{shown(dest)} with the same name, so with overwrite=true one would replace the "
-            "other. Nothing was changed.",
+            f"{shown(dest)} with the same name, so with overwrite=true one could replace the "
+            "other (for folders, items of the same name inside them). Nothing was changed.",
             param,
             raw,
-            "Send them to different folders, or rename one first.",
+            "Send them to different folders, or rename one first. To merge two folders on "
+            "purpose, make a separate call for each.",
         )
 
 
