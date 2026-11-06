@@ -2612,6 +2612,74 @@ class TestTheKeyringIsWrittenOnlyAfterTheLogin:
         assert "SYNOLOGY_DEVICE_ID" in result.output
         assert "https://github.com/cmeans/mcp-synology/issues" in result.output
 
+    def test_one_failed_write_on_another_host_leaves_no_old_secret(
+        self, store: MemoryKeyring, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """#559: nas.office's password mustn't stay under nas.home's record. One fault, so the
+        put-back can run."""
+        self._old(store, "nas.office")
+        real_set = store.set_password
+        failed: list[str] = []
+
+        def fails_once(service: str, key: str, value: str) -> None:
+            if key == "password" and not failed:
+                failed.append(key)
+                raise KeyringError("locked")
+            real_set(service, key, value)
+
+        monkeypatch.setattr(store, "set_password", fails_once)
+        with pytest.raises(SystemExit):
+            _store_keyring(self.SERVICE, "admin", "new-pw", "nas.home", 5000)
+        assert store.values == {(self.SERVICE, "host"): "nas.home:5000"}
+
+    @pytest.mark.parametrize("token", [None, "new-token"], ids=["no token", "new token"])
+    def test_a_keyring_that_keeps_nothing_isnt_reported_as_stored(
+        self,
+        token: str | None,
+        store: MemoryKeyring,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """#589: as `keyring.backends.null.Keyring` does: writes raise nothing and do nothing."""
+        monkeypatch.setattr(store, "set_password", lambda *_args: None)
+        try:
+            ok: bool | None = _store_keyring(self.SERVICE, "me", "pw", "nas.home", 5000, token)
+        except SystemExit:
+            ok = None
+        out = capsys.readouterr()
+        text = out.out + out.err
+        assert not ok
+        assert "Credentials stored" not in text
+        assert "2FA bootstrap" not in text
+
+    def test_a_token_the_keyring_didnt_keep_is_reported(
+        self,
+        store: MemoryKeyring,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        real_set = store.set_password
+
+        def drops_the_token(service: str, key: str, value: str) -> None:
+            if key != "device_id":
+                real_set(service, key, value)
+
+        monkeypatch.setattr(store, "set_password", drops_the_token)
+        with pytest.raises(SystemExit):
+            _store_keyring(self.SERVICE, "me", "pw", "nas.home", 5000, "new-token")
+        assert "device token couldn't be stored" in capsys.readouterr().err
+
+    def test_a_failing_echo_after_a_good_store_isnt_a_token_problem(
+        self, store: MemoryKeyring, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def closed(*_args: object, **_kwargs: object) -> None:
+            raise OSError("closed")
+
+        monkeypatch.setattr("mcp_synology.cli.setup.click.echo", closed)
+        with pytest.raises(OSError, match="closed"):
+            _store_keyring(self.SERVICE, "me", "pw", "nas.home", 5000)
+        assert store.values[(self.SERVICE, "password")] == "pw"
+
     @respx.mock
     def test_a_partial_write_with_a_config_says_to_run_it_again(
         self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -2785,6 +2853,9 @@ class TestTheKeyringIsWrittenOnlyAfterTheLogin:
         assert result.exit_code == 1
         assert advice in result.output
         assert ("counts toward DSM's Auto Block" in result.output) is (code in (400, 404))
+        assert ("verify the password or code before retrying" in result.output) is (
+            code in (400, 404)
+        )
 
     @respx.mock
     @pytest.mark.parametrize("flow", ["_with_config", "_interactive"])

@@ -629,7 +629,9 @@ class TestStoreKeyring:
         from mcp_synology.cli.setup import _store_keyring
 
         mock_kr = MagicMock()
-        mock_kr.get_password.return_value = None
+        held: dict[str, str] = {}
+        mock_kr.get_password.side_effect = lambda _service, key: held.get(key)
+        mock_kr.set_password.side_effect = lambda _service, key, value: held.update({key: value})
         # keyring is imported inside the function, so mock at the import target
         with patch.dict("sys.modules", {"keyring": mock_kr}):
             result = _store_keyring("mcp-synology/test", "admin", "secret", "nas", 5000)

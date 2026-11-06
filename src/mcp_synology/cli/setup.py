@@ -573,9 +573,10 @@ def _store_keyring(
     ``device_id`` is a token this login just got, and it replaces a stored one. Without one, a
     stored token stays for the same username. For another it goes either way: it's that account's
     trust, not this one's (#454). On the same host it goes last, so a keyring that refuses writes
-    can't cost a working login its token. A write that fails puts back what it changed, when the
-    keyring lets it: on the same host the old values, on another host nothing, so no secret stays
-    for the wrong host. What the failure message says comes from reading the entry again.
+    can't cost a working login its token, unless a new username was written and can't be put
+    back. A write that fails puts back what it changed, when the keyring lets it: on the same host
+    the old values, on another host nothing, so no secret stays for the wrong host. What the
+    failure message says comes from reading the entry again.
 
     Exits 1 when the entry isn't known to be as it was, or a new token couldn't be stored, since the
     server may not be able to log in without a code. A keyring that changed nothing returns False,
@@ -588,7 +589,7 @@ def _store_keyring(
     same_host = stored = False
     try:
         import keyring
-        from keyring.errors import PasswordDeleteError
+        from keyring.errors import KeyringError, PasswordDeleteError
 
         before = _read_entry(service)
         recorded = comparable_target(host, port)
@@ -610,11 +611,13 @@ def _store_keyring(
         stored = True
         if device_id:
             keyring.set_password(service, "device_id", device_id)
-        click.echo("\nCredentials stored in OS keyring.")
-        if device_id:
-            click.echo(click.style("2FA bootstrap complete!", fg="green"))
-            click.echo("Device token stored in keyring.")
-        return True
+        # A backend whose writes do nothing raises nothing (#589).
+        held = _read_entry(service)
+        if held["username"] != username or held["password"] != password:
+            stored = False
+            raise KeyringError("the keyring didn't keep the username and password")
+        if device_id and held["device_id"] != device_id:
+            raise KeyringError("the keyring didn't keep the device token")
     except Exception as e:
         logger.debug("Keyring error storing credentials: %s", e, exc_info=True)
         lead = (
@@ -630,9 +633,7 @@ def _store_keyring(
         if stored:
             if device_id and now is not None and now["device_id"] == device_id:
                 # The write applied, then the backend raised: the token is there.
-                click.echo("\nCredentials stored in OS keyring.")
-                click.echo(click.style("2FA bootstrap complete!", fg="green"))
-                click.echo("Device token stored in keyring.")
+                _say_stored(device_id)
                 return True
             went = before and before["device_id"] and now is not None and not now["device_id"]
             token = ", and the old 2FA device token was removed" if went else ""
@@ -678,6 +679,8 @@ def _store_keyring(
             )
             sys.exit(1)
         return False
+    _say_stored(device_id)
+    return True
 
 
 _ENTRY_KEYS = ("host", "username", "password", "device_id")
@@ -713,6 +716,13 @@ def _drop_a_token_left_for_another_account(
         keyring.delete_password(service, "device_id")
     except Exception as e:  # noqa: BLE001 - backends raise their own types
         logger.debug("Keyring error removing the token: %s", e, exc_info=True)
+
+
+def _say_stored(device_id: str | None) -> None:
+    click.echo("\nCredentials stored in OS keyring.")
+    if device_id:
+        click.echo(click.style("2FA bootstrap complete!", fg="green"))
+        click.echo("Device token stored in keyring.")
 
 
 def _stop_on_keyring(message: str) -> NoReturn:
