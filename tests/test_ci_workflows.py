@@ -485,16 +485,27 @@ def test_a_codeql_failure_is_a_failure_while_others_still_run(github: _FakeGitHu
     assert github.run("pr-checks-state.sh").stdout.strip() == "fail"
 
 
-def test_a_codeql_check_still_running_counts_as_running_for_the_recheck(
-    github: _FakeGitHub, tmp_path: Path
+@pytest.mark.parametrize("codeql", ["in_progress null", "queued null", "completed null"])
+def test_a_codeql_check_with_no_result_is_missing_for_the_recheck(
+    github: _FakeGitHub, tmp_path: Path, codeql: str
 ) -> None:
-    """The recheck comments when a result is missing long after runs finish; this isn't that."""
+    """Not `running`, which the recheck never comments on, so a stuck check can't hold a PR with
+    no word. A completed one with no conclusion is pending, as a job is (#298)."""
     github.runs()
-    github.answer(ci_jobs=_GOOD, vdsm_jobs=_GOOD, codeql="in_progress null\n")
+    github.answer(ci_jobs=_GOOD, vdsm_jobs=_GOOD, codeql=f"{codeql}\n")
     details = tmp_path / "details"
     done = github.run("pr-checks-state.sh", PENDING_DETAILS=str(details))
     assert done.stdout.strip() == "pending"
-    assert "running" in details.read_text(encoding="utf-8").splitlines()
+    lines = details.read_text(encoding="utf-8").splitlines()
+    assert f"missing CodeQL: {codeql}" in lines
+    assert "running" not in lines
+
+
+def test_the_codeql_query_names_the_check_and_its_app() -> None:
+    """The fake ignores --jq, and a wrong name or app would read as no check, which passes."""
+    script = (_SCRIPTS / "pr-checks-state.sh").read_text(encoding="utf-8")
+    assert "check-runs?check_name=CodeQL" in script
+    assert 'select(.app.slug == "github-advanced-security")' in script
 
 
 def test_codeqls_check_run_is_only_read_when_it_can_change_the_answer(

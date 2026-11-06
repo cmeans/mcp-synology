@@ -160,7 +160,8 @@ Two required sections:
 2. **Label automation takes over.** After CI and the vdsm integration
    tests pass, the PR auto-promotes from `Awaiting CI` → `Ready for QA`.
    If a job in either fails, it gets `CI Failed`. You don't need to do
-   anything.
+   anything. `CI Failed` with CI green means CodeQL failed: see the PR's
+   Checks tab.
 3. **Maintainer reviews.** If there are issues, the PR gets
    `QA Failed` and a review comment. Push your fix; labels reset
    automatically.
