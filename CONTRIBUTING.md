@@ -115,7 +115,8 @@ Every PR must:
   [`CHANGELOG.md`](CHANGELOG.md), categorized `### Added` (new
   feature, including tests and docs), `### Changed` (behavior change),
   or `### Fixed` (bug fix). Reference the PR number and any closed
-  issue: `- ... (#NN) — closes #MM`.
+  issue: `- ... (#NN) — closes #MM`. A release PR, and any fix made for
+  it before the tag, puts its entries in the version's notes instead.
 - **Link the issue** with `Closes #N` in the PR body so merging
   auto-closes it.
 - **Pass CI locally first** — run `uv run pytest -n auto`, `uv run ruff
@@ -147,7 +148,8 @@ Two required sections:
     ## CHANGELOG
 
     - [ ] Added a `## Unreleased` entry to `CHANGELOG.md` under the
-      appropriate Keep-a-Changelog category (Added / Changed / Fixed)
+      appropriate Keep-a-Changelog category (Added / Changed / Fixed), or
+      for a release PR, in the version's notes
 
     Closes #N
 
