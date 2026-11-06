@@ -21,6 +21,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import keyring
 import pytest
+import respx
 from click.testing import CliRunner, Result
 from keyring.errors import KeyringError, KeyringLocked, NoKeyringError, PasswordDeleteError
 from mcp.server.mcpserver.exceptions import ToolError
@@ -53,6 +54,12 @@ def store(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> Me
     for var in ("SYNOLOGY_USERNAME", "SYNOLOGY_PASSWORD", "SYNOLOGY_DEVICE_ID"):
         monkeypatch.delenv(var, raising=False)
     return backend
+
+
+async def _logs_in(*args: Any, **_kwargs: Any) -> dict[str, Any]:
+    """Stands in for `_setup_login` or `_connect_and_login` when DSM accepts the login."""
+    store = next(arg for arg in args if callable(arg))
+    return {"success": True, "keyring_ok": store(None)}
 
 
 def _record(host: str, port: int = 5000) -> str:
@@ -466,10 +473,14 @@ class TestAnEntryWithNoRecordedHost:
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """Pre-QA on #559: a traceback, and the session was never logged out."""
+        """Pre-QA on #559: a traceback, and the session was never logged out. #454: the login
+        writes nothing, so the store says so."""
+        real_set = store.set_password
 
-        def fails(_service: str, key: str, _value: str) -> None:
-            raise RuntimeError("a backend's own type")
+        def fails(service: str, key: str, value: str) -> None:
+            if key == "device_id":
+                raise RuntimeError("a backend's own type")
+            real_set(service, key, value)
 
         monkeypatch.setattr(store, "set_password", fails)
         client = AsyncMock()
@@ -477,11 +488,14 @@ class TestAnEntryWithNoRecordedHost:
             side_effect=[SynologyError("2FA", code=403), {"sid": "s", "did": "token"}, {}]
         )
         with patch("click.prompt", return_value="123456"):
-            result = asyncio.run(_attempt_login(client, "admin", "pw", "mcp-synology/nas"))
+            result = asyncio.run(_attempt_login(client, "admin", "pw"))
         assert result["success"]
+        assert result["device_id"] == "token"
+        assert ("mcp-synology/nas", "device_id") not in store.values
+        assert not _store_keyring("mcp-synology/nas", "admin", "pw", "nas", 5000, "token")
         out = capsys.readouterr().out
-        assert "couldn't be stored" in out
-        assert "Login successful!\n" not in out  # pre-QA on #559: it read as all's well
+        assert "2FA device token couldn't be stored" in out
+        assert "2FA bootstrap complete" not in out
 
     def test_a_host_recorded_meanwhile_stays(self, store: MemoryKeyring, tmp_path: Path) -> None:
         """A second process got there during this login's round trip."""
@@ -1589,7 +1603,7 @@ class TestSetup:
 
     def test_accepting_replaces_it(self, store: MemoryKeyring, tmp_path: Path) -> None:
         _entry(store, "nas", "nas.home")
-        with patch("mcp_synology.cli.setup._setup_login", AsyncMock(return_value=None)):
+        with patch("mcp_synology.cli.setup._setup_login", _logs_in):
             result = CliRunner().invoke(
                 main,
                 ["setup", "--config", str(_file(tmp_path, "nas.office"))],
@@ -2005,18 +2019,16 @@ class TestQaRoundThree:
     ) -> None:
         """Pre-QA on #559: the newcomer's main path, which nothing pinned."""
         monkeypatch.chdir(tmp_path)
-        answers = "NAS.Home\ny\n5001\nread\n\nn\nu\npw\n"
-        for _ in range(2):
+        first = "NAS.Home\ny\n5001\nread\n\nn\nu\npw\n"
+        # The second run finds the file the first wrote, so it asks about that alone.
+        for answers in (first, "NAS.Home\ny\n5001\nread\n\nn\ny\nu\npw\n"):
             with (
                 patch("mcp_synology.cli.setup._CONFIG_DIR", tmp_path / "config"),
                 patch(
                     "mcp_synology.core.config.discover_config_path",
                     side_effect=FileNotFoundError,
                 ),
-                patch(
-                    "mcp_synology.cli.setup._connect_and_login",
-                    AsyncMock(return_value={"success": False}),
-                ),
+                patch("mcp_synology.cli.setup._connect_and_login", _logs_in),
             ):
                 result = CliRunner().invoke(main, ["setup"], input=answers)
             assert store.values[("mcp-synology/nas", "host")] == "nas.home:5001", result.output
@@ -2145,7 +2157,7 @@ class TestSetupForAnotherPort:
 
     def test_setup_with_a_config_uses_its_port(self, store: MemoryKeyring, tmp_path: Path) -> None:
         _entry(store, "nas", "nas.home")
-        with patch("mcp_synology.cli.setup._setup_login", AsyncMock(return_value=None)):
+        with patch("mcp_synology.cli.setup._setup_login", _logs_in):
             declined = CliRunner().invoke(
                 main, ["setup", "--config", str(_port_file(tmp_path, 18103))], input="n\n"
             )
@@ -2270,3 +2282,175 @@ class TestTheWordingOfAPortRefusal:
         _entry(store, "nas")
         route = check_route(load_config(_port_file(tmp_path, None, https=https))) or ""
         assert "can change the port recorded" in route
+
+
+_INFO = {
+    "success": True,
+    "data": {
+        "SYNO.API.Auth": {"path": "entry.cgi", "minVersion": 1, "maxVersion": 7},
+        "SYNO.DSM.Info": {"path": "entry.cgi", "minVersion": 1, "maxVersion": 2},
+    },
+}
+_WRONG_PASSWORD = {"success": False, "error": {"code": 400}}
+_NEEDS_A_CODE = {"success": False, "error": {"code": 403}}
+_LOGGED_IN = {"success": True, "data": {"sid": "the-sid"}}
+_LOGGED_IN_WITH_TOKEN = {"success": True, "data": {"sid": "the-sid", "did": "new-token"}}
+
+
+def _dsm(*logins: dict[str, Any], hostname: Any = None) -> None:
+    """A DSM at nas.home:5000 giving these answers to login POSTs, in order."""
+    answers = iter(logins)
+    respx.get("http://nas.home:5000/webapi/query.cgi").mock(
+        return_value=httpx.Response(200, json=_INFO)
+    )
+    respx.post("http://nas.home:5000/webapi/entry.cgi").mock(
+        side_effect=lambda _request: httpx.Response(200, json=next(answers))
+    )
+
+    def reads(request: httpx.Request) -> httpx.Response:
+        if request.url.params.get("api") == "SYNO.DSM.Info":
+            if isinstance(hostname, Exception):
+                raise hostname
+            return httpx.Response(200, json={"success": True, "data": {"hostname": hostname or ""}})
+        return httpx.Response(200, json={"success": True, "data": {}})
+
+    respx.get("http://nas.home:5000/webapi/entry.cgi").mock(side_effect=reads)
+
+
+class TestTheKeyringIsWrittenOnlyAfterTheLogin:
+    """#454. Through the real login code, with DSM mocked at HTTP. Each flow: `setup --config`
+    and the interactive one, whose answers end in the username and password."""
+
+    SERVICE = "mcp-synology/nas"
+    ANSWERS = "nas.home\nn\n\nread\n\n"
+
+    def _old(self, store: MemoryKeyring, host: str = "nas.home") -> dict[tuple[str, str], str]:
+        _entry(store, "nas", host)
+        store.values[(self.SERVICE, "device_id")] = "old-token"
+        return dict(store.values)
+
+    def _with_config(self, tmp_path: Path, answers: str) -> Result:
+        path = _file(tmp_path, "nas.home")
+        return CliRunner().invoke(main, ["setup", "--config", str(path)], input=answers)
+
+    def _interactive(self, tmp_path: Path, answers: str) -> Result:
+        with (
+            patch("mcp_synology.cli.setup._CONFIG_DIR", tmp_path / "config"),
+            patch("mcp_synology.core.config.discover_config_path", side_effect=FileNotFoundError),
+        ):
+            return CliRunner().invoke(main, ["setup"], input=self.ANSWERS + answers)
+
+    @respx.mock
+    @pytest.mark.parametrize("flow", ["_with_config", "_interactive"])
+    def test_a_mistyped_password_leaves_the_entry_as_it_was(
+        self, flow: str, store: MemoryKeyring, tmp_path: Path
+    ) -> None:
+        before = self._old(store)
+        _dsm(_WRONG_PASSWORD)
+        result = getattr(self, flow)(tmp_path, "admin\ntypo\n")
+        assert "Login failed" in result.output
+        assert "Credentials stored" not in result.output
+        assert store.values == before
+
+    @respx.mock
+    def test_accepting_a_replacement_and_then_failing_loses_nothing(
+        self, store: MemoryKeyring, tmp_path: Path
+    ) -> None:
+        """Pre-QA on #536: the old password and 2FA token went, with the record."""
+        before = self._old(store, "nas.office")
+        _dsm(_WRONG_PASSWORD)
+        result = self._with_config(tmp_path, "y\nadmin\ntypo\n")
+        assert "Login failed" in result.output
+        assert store.values == before
+
+    @respx.mock
+    def test_a_wrong_code_leaves_the_entry_as_it_was(
+        self, store: MemoryKeyring, tmp_path: Path
+    ) -> None:
+        before = self._old(store)
+        _dsm(_NEEDS_A_CODE, {"success": False, "error": {"code": 404}})
+        result = self._with_config(tmp_path, "admin\nnew-pw\n000000\n")
+        assert "Login failed" in result.output
+        assert store.values == before
+
+    @respx.mock
+    def test_an_unreachable_nas_records_nothing(self, store: MemoryKeyring, tmp_path: Path) -> None:
+        """Pre-QA on #536: a mistyped host got recorded, so the retry asked about replacing."""
+        respx.get("http://nas.home:5000/webapi/query.cgi").mock(
+            side_effect=httpx.ConnectError("refused")
+        )
+        result = self._with_config(tmp_path, "admin\npw\n")
+        assert result.exit_code == 1
+        assert store.values == {}
+
+    @respx.mock
+    @pytest.mark.parametrize("flow", ["_with_config", "_interactive"])
+    def test_a_login_that_works_stores_everything_with_its_new_token(
+        self, flow: str, store: MemoryKeyring, tmp_path: Path
+    ) -> None:
+        self._old(store)
+        _dsm(_NEEDS_A_CODE, _LOGGED_IN_WITH_TOKEN)
+        result = getattr(self, flow)(tmp_path, "me\nnew-pw\n123456\n")
+        assert result.exit_code == 0, result.output
+        assert "2FA bootstrap complete!" in result.output
+        assert store.values[(self.SERVICE, "username")] == "me"
+        assert store.values[(self.SERVICE, "password")] == "new-pw"
+        assert store.values[(self.SERVICE, "device_id")] == "new-token"
+        assert store.values[(self.SERVICE, "host")] == "nas.home:5000"
+
+    @respx.mock
+    def test_another_username_with_no_new_token_clears_the_old_one(
+        self, store: MemoryKeyring, tmp_path: Path
+    ) -> None:
+        """The stored token is the other account's trust."""
+        self._old(store)
+        _dsm(_LOGGED_IN)
+        result = self._with_config(tmp_path, "someone-else\npw\n")
+        assert result.exit_code == 0, result.output
+        assert (self.SERVICE, "device_id") not in store.values
+        assert store.values[(self.SERVICE, "username")] == "someone-else"
+
+    @respx.mock
+    def test_the_same_username_with_no_new_token_keeps_it(
+        self, store: MemoryKeyring, tmp_path: Path
+    ) -> None:
+        self._old(store)
+        _dsm(_LOGGED_IN)
+        result = self._with_config(tmp_path, "admin\nnew-pw\n")
+        assert result.exit_code == 0, result.output
+        assert store.values[(self.SERVICE, "device_id")] == "old-token"
+        assert store.values[(self.SERVICE, "password")] == "new-pw"
+
+    @respx.mock
+    def test_a_failed_hostname_read_doesnt_lose_a_login_that_worked(
+        self, store: MemoryKeyring, tmp_path: Path
+    ) -> None:
+        """The code is spent and the login proved: the credentials are stored before the read."""
+        _dsm(_NEEDS_A_CODE, _LOGGED_IN_WITH_TOKEN, hostname=httpx.ReadTimeout("slow"))
+        result = self._interactive(tmp_path, "me\npw\n123456\n")
+        assert result.exit_code == 1
+        assert store.values[(self.SERVICE, "password")] == "pw"
+        assert store.values[(self.SERVICE, "device_id")] == "new-token"
+
+    @respx.mock
+    def test_a_keyring_that_refuses_writes_still_gets_a_login_and_a_file(
+        self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def refuses(*_args: str) -> None:
+            raise KeyringError("locked")
+
+        monkeypatch.setattr(store, "set_password", refuses)
+        _dsm(_LOGGED_IN)
+        result = self._interactive(tmp_path, "me\npw\n")
+        assert result.exit_code == 0, result.output
+        assert "Login successful!" in result.output
+        assert "Couldn't store these in the keyring." in result.output
+        assert (tmp_path / "config" / "nas.yaml").exists()
+
+    def test_no_keyring_at_all_skips_the_login(self, store: MemoryKeyring, tmp_path: Path) -> None:
+        """There's nowhere to keep what it would prove (#481), and no NAS is contacted here."""
+        with patch("mcp_synology.core.auth.no_keyring_here", return_value=True):
+            result = self._interactive(tmp_path, "me\npw\n")
+        assert result.exit_code == 0, result.output
+        assert "Connecting to NAS" not in result.output
+        assert (tmp_path / "config" / "nas.yaml").exists()

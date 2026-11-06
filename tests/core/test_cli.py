@@ -339,7 +339,7 @@ class TestSetupInteractive:
             k: v for k, v in os.environ.items() if not k.startswith("SYNOLOGY_")
         }
 
-        connect_result: dict[str, Any] = {"success": True, "hostname": "MyNAS"}
+        connect_result: dict[str, Any] = {"success": True, "keyring_ok": True, "hostname": "MyNAS"}
 
         # Input order: host, https(n), permission(read), alias(""),
         # username, password, hostname-confirm(y)
@@ -370,7 +370,7 @@ class TestSetupInteractive:
             patch("mcp_synology.cli.setup._store_keyring", return_value=True),
             patch(
                 "mcp_synology.cli.setup.asyncio.run",
-                return_value={"success": True, "hostname": None},
+                return_value={"success": True, "keyring_ok": True, "hostname": None},
             ),
             patch.dict(os.environ, clean_env, clear=True),
         ):
@@ -397,7 +397,7 @@ class TestSetupInteractive:
             patch("mcp_synology.cli.setup._store_keyring", return_value=True),
             patch(
                 "mcp_synology.cli.setup.asyncio.run",
-                return_value={"success": True, "hostname": hostname},
+                return_value={"success": True, "keyring_ok": True, "hostname": hostname},
             ),
             patch.dict(os.environ, clean_env, clear=True),
         ):
@@ -418,7 +418,7 @@ class TestSetupInteractive:
             k: v for k, v in os.environ.items() if not k.startswith("SYNOLOGY_")
         }
 
-        connect_result: dict[str, Any] = {"success": True}
+        connect_result: dict[str, Any] = {"success": True, "keyring_ok": True}
 
         with (
             patch("mcp_synology.cli.setup._CONFIG_DIR", config_dir),
@@ -444,7 +444,7 @@ class TestSetupInteractive:
             k: v for k, v in os.environ.items() if not k.startswith("SYNOLOGY_")
         }
 
-        connect_result: dict[str, Any] = {"success": True}
+        connect_result: dict[str, Any] = {"success": True, "keyring_ok": True}
 
         # Prompts: host, https(y), verify_ssl(n), permission(write), alias(""),
         # username, password
@@ -486,7 +486,10 @@ class TestSetupInteractive:
             patch("mcp_synology.cli.setup._CONFIG_DIR", config_dir),
             patch("mcp_synology.core.config.discover_config_path", side_effect=FileNotFoundError),
             patch("mcp_synology.cli.setup._store_keyring", return_value=True),
-            patch("mcp_synology.cli.setup.asyncio.run", return_value={"success": True}),
+            patch(
+                "mcp_synology.cli.setup.asyncio.run",
+                return_value={"success": True, "keyring_ok": True},
+            ),
             patch.dict(os.environ, clean_env, clear=True),
         ):
             # host, https(answer), permission, alias(""), [verify_ssl(default)], user, pass
@@ -511,7 +514,7 @@ class TestSetupInteractive:
             assert "self-signed" not in result.output
 
     def test_interactive_setup_keyring_failure(self, tmp_path: Path) -> None:
-        """When keyring fails, the config is still written: the variables need it (#481)."""
+        """With no keyring, the config is still written: the variables need it (#481)."""
         runner = CliRunner()
         config_dir = tmp_path / "config"
 
@@ -522,6 +525,7 @@ class TestSetupInteractive:
         with (
             patch("mcp_synology.cli.setup._CONFIG_DIR", config_dir),
             patch("mcp_synology.core.config.discover_config_path", side_effect=FileNotFoundError),
+            patch("mcp_synology.core.auth.no_keyring_here", return_value=True),
             patch("mcp_synology.cli.setup._store_keyring", return_value=False),
             patch.dict(os.environ, clean_env, clear=True),
         ):
@@ -656,7 +660,7 @@ class TestEmitClaudeDesktopSnippet:
         }
         clean_env["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=/run/user/1000/bus"
 
-        connect_result: dict[str, Any] = {"success": True}
+        connect_result: dict[str, Any] = {"success": True, "keyring_ok": True}
 
         with (
             patch("mcp_synology.cli.setup._CONFIG_DIR", config_dir),
@@ -684,7 +688,7 @@ class TestEmitClaudeDesktopSnippet:
             k: v for k, v in os.environ.items() if not k.startswith("SYNOLOGY_")
         }
 
-        connect_result: dict[str, Any] = {"success": True}
+        connect_result: dict[str, Any] = {"success": True, "keyring_ok": True}
 
         with (
             patch("mcp_synology.cli.setup._CONFIG_DIR", config_dir),

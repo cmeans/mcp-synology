@@ -74,7 +74,7 @@ class TestAttemptLogin:
     async def test_login_success_no_2fa(self) -> None:
         request = AsyncMock(return_value={"sid": "test-sid-123"})
         client = self._make_client(request)
-        result = await setup_mod._attempt_login(client, "admin", "pw", "service")
+        result = await setup_mod._attempt_login(client, "admin", "pw")
         assert result["success"] is True
         assert result["sid"] == "test-sid-123"
         assert client.sid == "test-sid-123"
@@ -84,7 +84,7 @@ class TestAttemptLogin:
 
         request = AsyncMock(side_effect=SynologyError("bad password", code=400))
         client = self._make_client(request)
-        result = await setup_mod._attempt_login(client, "admin", "pw", "service")
+        result = await setup_mod._attempt_login(client, "admin", "pw")
         assert result["success"] is False
 
     async def test_login_2fa_required_then_success_with_device_token(self) -> None:
@@ -103,12 +103,13 @@ class TestAttemptLogin:
             runner = CliRunner()
             # Drive the OTP prompt — _attempt_login uses click.prompt internally
             with runner.isolation(input="123456\n"):
-                result = await setup_mod._attempt_login(client, "admin", "pw", "service")
+                result = await setup_mod._attempt_login(client, "admin", "pw")
 
         assert result["success"] is True
         assert result["sid"] == "sid-after-2fa"
-        # Device token stored under the service
-        set_pw.assert_called_once_with("service", "device_id", "device-token-xyz")
+        # Handed back for the caller to store with the rest: a login writes nothing (#454).
+        assert result["device_id"] == "device-token-xyz"
+        set_pw.assert_not_called()
         # Both requests issued, each as a POST so the password and OTP code stay
         # out of the URL (#235)
         assert request.await_count == 2
@@ -129,7 +130,7 @@ class TestAttemptLogin:
 
         runner = CliRunner()
         with runner.isolation(input="123456\n"):
-            result = await setup_mod._attempt_login(client, "admin", "pw", "service")
+            result = await setup_mod._attempt_login(client, "admin", "pw")
 
         assert result["success"] is True
         assert result["sid"] == "sid-after-2fa"
@@ -147,13 +148,13 @@ class TestAttemptLogin:
 
         runner = CliRunner()
         with runner.isolation(input="000000\n"):
-            result = await setup_mod._attempt_login(client, "admin", "pw", "service")
+            result = await setup_mod._attempt_login(client, "admin", "pw")
         assert result["success"] is False
 
     async def test_login_oserror(self) -> None:
         request = AsyncMock(side_effect=OSError("connection refused"))
         client = self._make_client(request)
-        result = await setup_mod._attempt_login(client, "admin", "pw", "service")
+        result = await setup_mod._attempt_login(client, "admin", "pw")
         assert result["success"] is False
 
 
@@ -183,7 +184,9 @@ class TestConnectAndLogin:
         )
         client = self._make_client_cm(request, {"hostname": "MyNAS", "version_string": "DSM 7.1"})
         with patch("mcp_synology.core.client.DsmClient", return_value=client):
-            result = await setup_mod._connect_and_login(config, "admin", "pw", "svc", verbose=False)
+            result = await setup_mod._connect_and_login(
+                config, "admin", "pw", lambda _device_id: True, verbose=False
+            )
         assert result["success"] is True
         assert result["hostname"] == "MyNAS"
         assert result["dsm_version"] == "DSM 7.1"
@@ -193,7 +196,9 @@ class TestConnectAndLogin:
         request = AsyncMock(side_effect=[{"sid": "test-sid"}, {}])
         client = self._make_client_cm(request, {})  # empty dsm_info
         with patch("mcp_synology.core.client.DsmClient", return_value=client):
-            result = await setup_mod._connect_and_login(config, "admin", "pw", "svc", verbose=False)
+            result = await setup_mod._connect_and_login(
+                config, "admin", "pw", lambda _device_id: True, verbose=False
+            )
         assert result["success"] is True
         assert "hostname" not in result
 
@@ -202,7 +207,9 @@ class TestConnectAndLogin:
         request = AsyncMock(side_effect=[{"sid": "test-sid"}, {}])
         client = self._make_client_cm(request, {})
         with patch("mcp_synology.core.client.DsmClient", return_value=client) as dsm_client:
-            await setup_mod._connect_and_login(config, "admin", "pw", "svc", verbose=False)
+            await setup_mod._connect_and_login(
+                config, "admin", "pw", lambda _device_id: True, verbose=False
+            )
         # Confirm https URL was constructed
         kwargs = dsm_client.call_args.kwargs
         assert kwargs["base_url"].startswith("https://")
@@ -214,7 +221,9 @@ class TestConnectAndLogin:
         request = AsyncMock(side_effect=SynologyError("bad creds", code=400))
         client = self._make_client_cm(request, {})
         with patch("mcp_synology.core.client.DsmClient", return_value=client):
-            result = await setup_mod._connect_and_login(config, "admin", "pw", "svc", verbose=False)
+            result = await setup_mod._connect_and_login(
+                config, "admin", "pw", lambda _device_id: True, verbose=False
+            )
         assert result["success"] is False
 
     async def test_connect_and_login_logs_out_when_dsm_info_fails(self) -> None:
@@ -230,7 +239,9 @@ class TestConnectAndLogin:
             patch("mcp_synology.core.client.DsmClient", return_value=client),
             pytest.raises(SystemExit),
         ):
-            await setup_mod._connect_and_login(config, "admin", "pw", "svc", verbose=False)
+            await setup_mod._connect_and_login(
+                config, "admin", "pw", lambda _device_id: True, verbose=False
+            )
         assert [c.args[:2] for c in request.await_args_list] == [
             ("SYNO.API.Auth", "login"),
             ("SYNO.API.Auth", "logout"),
@@ -244,7 +255,9 @@ class TestConnectAndLogin:
         request = AsyncMock(side_effect=[{"sid": "test-sid"}, SynologyError("gone", code=119)])
         client = self._make_client_cm(request, {"hostname": "MyNAS"})
         with patch("mcp_synology.core.client.DsmClient", return_value=client):
-            result = await setup_mod._connect_and_login(config, "admin", "pw", "svc", verbose=False)
+            result = await setup_mod._connect_and_login(
+                config, "admin", "pw", lambda _device_id: True, verbose=False
+            )
         assert result["success"] is True
         assert result["hostname"] == "MyNAS"
 
@@ -271,10 +284,12 @@ class TestConnectAndLogin:
             if where == "dsm_info_fails":
                 client.fetch_dsm_info = AsyncMock(side_effect=httpx.ReadTimeout("slow"))
                 with pytest.raises(SystemExit):
-                    await setup_mod._connect_and_login(config, "a", "pw", "s", verbose=False)
+                    await setup_mod._connect_and_login(
+                        config, "a", "pw", lambda _device_id: True, verbose=False
+                    )
             else:
                 client.sid = "test-sid"
-                await setup_mod._setup_login(config, "a", "pw", "s")
+                await setup_mod._setup_login(config, "a", "pw", lambda _device_id: True)
         assert time.perf_counter() - start < 0.5
 
     async def test_connect_and_login_rejects_non_appconfig(self) -> None:
@@ -307,7 +322,7 @@ class TestSetupLogin:
         request = AsyncMock(side_effect=[{"sid": "test-sid"}, {}])
         client = self._make_client_cm(request)
         with patch("mcp_synology.core.client.DsmClient", return_value=client):
-            await setup_mod._setup_login(config, "admin", "pw", "svc")
+            await setup_mod._setup_login(config, "admin", "pw", lambda _device_id: True)
         # Login + logout: 2 requests
         assert request.await_count == 2
 
@@ -319,7 +334,7 @@ class TestSetupLogin:
         request = AsyncMock(side_effect=[{"sid": "test-sid"}, httpx.ReadTimeout("slow")])
         client = self._make_client_cm(request)
         with patch("mcp_synology.core.client.DsmClient", return_value=client):
-            await setup_mod._setup_login(config, "admin", "pw", "svc")
+            await setup_mod._setup_login(config, "admin", "pw", lambda _device_id: True)
         assert request.await_count == 2
 
     async def test_setup_login_failure_skips_logout(self) -> None:
@@ -329,7 +344,7 @@ class TestSetupLogin:
         request = AsyncMock(side_effect=SynologyError("nope", code=400))
         client = self._make_client_cm(request)
         with patch("mcp_synology.core.client.DsmClient", return_value=client):
-            await setup_mod._setup_login(config, "admin", "pw", "svc")
+            await setup_mod._setup_login(config, "admin", "pw", lambda _device_id: True)
         # Only the login attempt was made; logout skipped because login failed
         assert request.await_count == 1
 
@@ -359,7 +374,7 @@ class TestSetupCredentialFlow:
             setup_mod._setup_credential_flow(config, verbose=False)
 
     def test_keyring_failure_returns_early(self, tmp_path: Path) -> None:
-        """Keyring failure short-circuits before the asyncio.run(_setup_login) call."""
+        """No keyring short-circuits before the asyncio.run(_setup_login) call."""
         config_file = tmp_path / "config.yaml"
         config_file.write_text(
             "schema_version: 1\n"
@@ -372,6 +387,7 @@ class TestSetupCredentialFlow:
         )
         runner = CliRunner()
         with (
+            patch("mcp_synology.core.auth.no_keyring_here", return_value=True),
             patch("mcp_synology.cli.setup._store_keyring", return_value=False),
             patch("mcp_synology.cli.setup.asyncio.run") as run_mock,
         ):
@@ -381,7 +397,7 @@ class TestSetupCredentialFlow:
                 input="admin\nsecret\n",
             )
         assert result.exit_code == 0
-        # Login should NOT have been attempted because keyring failed
+        # Login should NOT have been attempted because there's no keyring to store it in
         run_mock.assert_not_called()
 
 
@@ -428,7 +444,10 @@ class TestSetupCommandErrorPaths:
         with (
             patch("mcp_synology.core.config.discover_config_path", return_value=good),
             patch("mcp_synology.cli.setup._store_keyring", return_value=True),
-            patch("mcp_synology.cli.setup.asyncio.run", return_value=None),
+            patch(
+                "mcp_synology.cli.setup.asyncio.run",
+                return_value={"success": True, "keyring_ok": True},
+            ),
             patch.dict(os.environ, clean_env, clear=True),
         ):
             result = runner.invoke(main, ["setup"], input="admin\nsecret\n")
@@ -547,6 +566,7 @@ class TestSetupInteractiveValidationFailure:
         with (
             patch("mcp_synology.cli.setup._CONFIG_DIR", config_dir),
             patch("mcp_synology.core.config.discover_config_path", side_effect=FileNotFoundError),
+            patch("mcp_synology.core.auth.no_keyring_here", return_value=True),
             patch(
                 "mcp_synology.cli.setup._store_keyring",
                 side_effect=lambda service, *_: stored.append(service) and False,
@@ -588,6 +608,7 @@ class TestSetupInteractiveValidationFailure:
         with (
             patch("mcp_synology.cli.setup._CONFIG_DIR", config_dir),
             patch("mcp_synology.core.config.discover_config_path", side_effect=FileNotFoundError),
+            patch("mcp_synology.core.auth.no_keyring_here", return_value=True),
             patch(
                 "mcp_synology.cli.setup._store_keyring",
                 side_effect=lambda service, *_: stored.append(service) and False,
@@ -617,7 +638,7 @@ class TestSetupInteractiveValidationFailure:
 
         async def fake_connect(app_config: Any, *_: Any) -> dict[str, Any]:
             captured.append(app_config)
-            return {"success": True}
+            return {"success": True, "keyring_ok": True}
 
         config_dir = tmp_path / "config"
         verify = "n\n" if https == "y" else ""
@@ -657,7 +678,7 @@ class TestEmitClaudeDesktopSnippetLinuxFallback:
             if not k.startswith("SYNOLOGY_") and k != "DBUS_SESSION_BUS_ADDRESS"
         }
 
-        connect_result: dict[str, Any] = {"success": True}
+        connect_result: dict[str, Any] = {"success": True, "keyring_ok": True}
 
         runner = CliRunner()
         with (
@@ -687,7 +708,7 @@ class TestEmitClaudeDesktopSnippetLinuxFallback:
         }
         clean_env["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=/custom/bus"
 
-        connect_result: dict[str, Any] = {"success": True}
+        connect_result: dict[str, Any] = {"success": True, "keyring_ok": True}
 
         runner = CliRunner()
         with (
@@ -727,7 +748,7 @@ class TestSetupAtomicConfigWrite:
             k: val for k, val in os.environ.items() if not k.startswith("SYNOLOGY_")
         }
 
-        connect_result: dict[str, Any] = {"success": True}
+        connect_result: dict[str, Any] = {"success": True, "keyring_ok": True}
 
         runner = CliRunner()
         with (
