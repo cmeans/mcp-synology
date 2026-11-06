@@ -352,18 +352,17 @@ $ mcp-synology setup --config ~/.config/mcp-synology/primary.yaml
 
 **Setup sequence:**
 1. Read config file for NAS connection details (host, port, HTTPS)
-2. Prompt for username and password interactively (or read from env vars if pre-set)
-3. Attempt login to the NAS
-4. If error 403 (2FA required): prompt for OTP code from the user's authenticator app
-5. Login with otp_code + `enable_device_token=yes` + `device_name=MCPSynology`
-6. Store username, password, the host (asking first if the entry isn't this host's; #536) and returned device_id in the keyring (or fallback storage)
-7. Perform a validation login using the stored credentials (mimicking server startup)
-8. Confirm success; log out the setup session
+2. Ask first if the keyring entry isn't this host's (#536)
+3. Prompt for username and password interactively
+4. Attempt login to the NAS
+5. If error 403 (2FA required): prompt for OTP code from the user's authenticator app, then login with otp_code + `enable_device_token=yes` + `device_name=MCPSynology`
+6. Only then store the username, password, host and any returned device_id in the keyring (#454)
+7. Log out the setup session
 
 **Design properties:**
 - **Idempotent:** running setup again updates stored credentials. Handles password rotation and device token refresh.
 - **Handles both 2FA and non-2FA:** skips OTP prompt if the NAS doesn't require it
-- **Validates before confirming:** catches misconfiguration before the user tries to start the server
+- **Validates before storing:** the login that's stored is the one DSM just accepted
 - **Degrades gracefully:** if keyring is unavailable, `setup` still writes the config and lists the variables to set
 
 **Additional CLI commands:**

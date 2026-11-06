@@ -2299,7 +2299,7 @@ _LOGGED_IN = {"success": True, "data": {"sid": "the-sid"}}
 _LOGGED_IN_WITH_TOKEN = {"success": True, "data": {"sid": "the-sid", "did": "new-token"}}
 
 
-def _dsm(*logins: dict[str, Any], hostname: Any = None) -> None:
+def _dsm(*logins: dict[str, Any], hostname: Any = None, info: Any = None) -> None:
     """A DSM at nas.home:5000 giving these answers to login POSTs, in order."""
     answers = iter(logins)
     respx.get("http://nas.home:5000/webapi/query.cgi").mock(
@@ -2313,6 +2313,8 @@ def _dsm(*logins: dict[str, Any], hostname: Any = None) -> None:
         if request.url.params.get("api") == "SYNO.DSM.Info":
             if isinstance(hostname, Exception):
                 raise hostname
+            if info is not None:
+                return httpx.Response(200, json=info)
             return httpx.Response(200, json={"success": True, "data": {"hostname": hostname or ""}})
         return httpx.Response(200, json={"success": True, "data": {}})
 
@@ -2351,6 +2353,7 @@ class TestTheKeyringIsWrittenOnlyAfterTheLogin:
         _dsm(_WRONG_PASSWORD)
         result = getattr(self, flow)(tmp_path, "admin\ntypo\n")
         assert result.exit_code == 1
+        assert isinstance(result.exception, SystemExit)
         assert "Login failed" in result.output
         assert "Nothing was changed." in result.output
         assert "Credentials stored" not in result.output
@@ -2365,6 +2368,8 @@ class TestTheKeyringIsWrittenOnlyAfterTheLogin:
             {"success": True},
             {"success": True, "data": []},
             {"success": True, "data": {"sid": ""}},
+            {"success": True, "data": None},
+            {"success": True, "data": 5},
         ],
     )
     def test_a_reply_with_no_session_isnt_a_login(
@@ -2376,6 +2381,7 @@ class TestTheKeyringIsWrittenOnlyAfterTheLogin:
         _dsm(reply)
         result = getattr(self, flow)(tmp_path, "admin\ntypo\n")
         assert result.exit_code == 1
+        assert isinstance(result.exception, SystemExit)
         assert "no session ID" in result.output
         assert "Login successful" not in result.output
         assert store.values == before
@@ -2450,14 +2456,69 @@ class TestTheKeyringIsWrittenOnlyAfterTheLogin:
         assert store.values[(self.SERVICE, "password")] == "new-pw"
 
     @respx.mock
-    def test_a_failed_hostname_read_doesnt_lose_a_login_that_worked(
+    def test_a_token_on_a_plain_login_isnt_stored(
         self, store: MemoryKeyring, tmp_path: Path
     ) -> None:
+        """Only a code login asks for one, so a plain reply can't replace the stored token."""
+        self._old(store)
+        _dsm(_LOGGED_IN_WITH_TOKEN)
+        result = self._with_config(tmp_path, "admin\nnew-pw\n")
+        assert result.exit_code == 0, result.output
+        assert "2FA bootstrap" not in result.output
+        assert store.values[(self.SERVICE, "device_id")] == "old-token"
+
+    @respx.mock
+    def test_a_delete_that_doesnt_take_stops_the_store(
+        self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Another account's token mustn't stay beside the new username."""
+        before = self._old(store)
+        monkeypatch.setattr(store, "delete_password", lambda *_args: None)
+        _dsm(_LOGGED_IN)
+        result = self._with_config(tmp_path, "someone-else\npw\n")
+        assert "Couldn't store these in the keyring." in result.output
+        assert store.values == before
+
+    @respx.mock
+    def test_a_failed_write_says_what_already_changed(
+        self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._old(store)
+        real_set = store.set_password
+
+        def refuses_the_password(service: str, key: str, value: str) -> None:
+            if key == "password":
+                raise KeyringError("locked")
+            real_set(service, key, value)
+
+        monkeypatch.setattr(store, "set_password", refuses_the_password)
+        _dsm(_LOGGED_IN)
+        result = self._with_config(tmp_path, "someone-else\npw\n")
+        assert "Already removed from this entry: device_id." in result.output
+        assert "The entry has the new username but not its password." in result.output
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        ("failure", "shown"),
+        [
+            ({"hostname": httpx.ReadTimeout("slow")}, "ReadTimeout"),
+            ({"hostname": httpx.ConnectError("gone")}, "ConnectError"),
+            ({"hostname": httpx.RemoteProtocolError("gone")}, "RemoteProtocolError"),
+            ({"hostname": httpx.TooManyRedirects("loop")}, "TooManyRedirects"),
+            ({"info": {"success": True, "data": []}}, "AttributeError"),
+            ({"info": {"success": True, "data": "text"}}, "AttributeError"),
+            ({"info": {"success": True, "data": None}}, "AttributeError"),
+            ({"info": {"success": True, "data": 5}}, "AttributeError"),
+        ],
+    )
+    def test_a_failed_hostname_read_doesnt_lose_a_login_that_worked(
+        self, failure: dict[str, Any], shown: str, store: MemoryKeyring, tmp_path: Path
+    ) -> None:
         """The code is spent and the login proved, and the hostname only suggests an alias."""
-        _dsm(_NEEDS_A_CODE, _LOGGED_IN_WITH_TOKEN, hostname=httpx.ReadTimeout("slow"))
+        _dsm(_NEEDS_A_CODE, _LOGGED_IN_WITH_TOKEN, **failure)
         result = self._interactive(tmp_path, "me\npw\n123456\n")
         assert result.exit_code == 0, result.output
-        assert "Couldn't read the NAS's hostname (ReadTimeout)." in result.output
+        assert f"Couldn't read the NAS's hostname ({shown})." in result.output
         assert store.values[(self.SERVICE, "password")] == "pw"
         assert store.values[(self.SERVICE, "device_id")] == "new-token"
         assert (tmp_path / "config" / "nas.yaml").exists()

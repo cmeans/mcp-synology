@@ -575,7 +575,7 @@ def _store_keyring(
     from mcp_synology.core.config import comparable_target
 
     removed: list[str] = []
-    stored = False
+    username_written = stored = False
     try:
         import keyring
         from keyring.errors import PasswordDeleteError
@@ -592,11 +592,15 @@ def _store_keyring(
                     removed.append(key)
             keyring.set_password(service, "host", recorded)
         if keyring.get_password(service, "username") != username:
+            held = keyring.get_password(service, "device_id")
             with contextlib.suppress(PasswordDeleteError):  # there may be none
                 keyring.delete_password(service, "device_id")
             if keyring.get_password(service, "device_id"):
                 raise PasswordDeleteError("device_id is still stored")
+            if held:
+                removed.append("device_id")
         keyring.set_password(service, "username", username)
+        username_written = True
         keyring.set_password(service, "password", password)
         stored = True
         if device_id:
@@ -609,6 +613,8 @@ def _store_keyring(
     except Exception as e:
         logger.debug("Keyring error storing credentials: %s", e, exc_info=True)
         gone = f" Already removed from this entry: {', '.join(removed)}." if removed else ""
+        if username_written and not stored:
+            gone += " The entry has the new username but not its password."
         lead = (
             "Keyring not available."
             if no_keyring_here()
@@ -622,8 +628,8 @@ def _store_keyring(
             )
             click.echo(
                 click.style(
-                    f"\n{start} 2FA device token couldn't be stored, so the server can't log in "
-                    "without a code. Fix the keyring and run this again.",
+                    f"\n{start} 2FA device token couldn't be stored, so the server may not be able "
+                    "to log in without a code. Fix the keyring and run this again.",
                     fg="red",
                 ),
                 err=True,
@@ -650,6 +656,7 @@ async def _attempt_login(
     from mcp_synology.core.errors import SynologyError
 
     result: dict[str, Any] = {"success": False}
+    device_id: Any = None
 
     try:
         data = await client.request(
@@ -679,6 +686,9 @@ async def _attempt_login(
                     },
                     post_form=True,
                 )
+                # Only this login asked for one.
+                if isinstance(data, dict):
+                    device_id = data.get("did")
             except SynologyError as e2:
                 click.echo(click.style(f"Login failed: {e2}", fg="red"), err=True)
                 return result
@@ -698,7 +708,6 @@ async def _attempt_login(
         return result
     client.sid = sid
     click.echo(click.style("Login successful!", fg="green"))
-    device_id = data.get("did")
     if device_id:
         result["device_id"] = device_id
     result["success"] = True
@@ -723,8 +732,6 @@ async def _connect_and_login(
 
     ``store`` runs right after the login succeeds. The hostname only suggests an alias, so a failed
     read costs that and nothing else: the login worked, and its code is spent."""
-    import httpx
-
     from mcp_synology.core.client import DsmClient
     from mcp_synology.core.config import AppConfig
 
@@ -756,7 +763,8 @@ async def _connect_and_login(
                 result["keyring_ok"] = store(login_result.get("device_id"))
                 try:
                     dsm_info = await client.fetch_dsm_info()
-                except httpx.TransportError as e:
+                except Exception as e:  # noqa: BLE001 - a bad reply too; only the type is shown
+                    logger.debug("Hostname read failed", exc_info=True)
                     click.echo(f"Couldn't read the NAS's hostname ({type(e).__name__}).")
                     dsm_info = {}
             finally:

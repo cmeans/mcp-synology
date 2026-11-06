@@ -690,9 +690,8 @@ class DsmClient:
                     "DSM response: %s/%s — success (keys: %s)", api, method, list(data.keys())
                 )
             else:
-                logger.debug(
-                    "DSM response: %s/%s — success (list, %d items)", api, method, len(data)
-                )
+                # Whatever it is: a reply with `data: null` or a number has no len().
+                logger.debug("DSM response: %s/%s — success (%s)", api, method, type(data).__name__)
             return data
 
         error = body.get("error", {})
