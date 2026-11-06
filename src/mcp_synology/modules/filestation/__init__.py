@@ -222,8 +222,10 @@ MODULE_INFO = ModuleInfo(
                 "everything in it, and the sources stay in place. To move instead, use "
                 "move_files. `dest_folder` must already exist; it isn't created. With "
                 "`overwrite=false` (default), items already at the destination are skipped and "
-                "listed, and the rest are copied. If any source is missing, nothing is copied. A "
-                "long copy keeps running on the NAS and returns a handle for file_task."
+                "listed, and the rest are copied. With `overwrite=true`, two sources that would "
+                "replace each other are refused, and a replaced file may not be in the recycle "
+                "bin. If any source is missing, nothing is copied. A long copy keeps running on "
+                "the NAS and returns a handle for file_task."
             ),
             permission_tier=PermissionTier.WRITE,
             annotations=_ANNO_DESTRUCTIVE,
@@ -235,7 +237,9 @@ MODULE_INFO = ModuleInfo(
                 "in it, and the sources are removed. To keep the sources, use copy_files. "
                 "`dest_folder` must already exist; it isn't created. With `overwrite=false` "
                 "(default), items already at the destination are skipped, listed and left at the "
-                "source. If any source is missing, nothing is moved. A whole shared folder "
+                "source. With `overwrite=true`, two sources that would replace each other are "
+                "refused, and a replaced file may not be in the recycle bin. If any source is "
+                "missing, nothing is moved. A whole shared folder "
                 "(`/video`), recycle bin or user's home folder (`/homes/<user>`) is refused as a "
                 "source: move its items by path. A long move keeps "
                 "running on the NAS and returns a handle for file_task."
@@ -280,8 +284,9 @@ MODULE_INFO = ModuleInfo(
                 "Without `dest_folder`, each item goes back to its "
                 "original folder, which is re-created if it's gone. An item already at the "
                 "destination is skipped and stays in the bin, unless `overwrite=true`, which "
-                "replaces the existing one. A long restore keeps running on the NAS and returns a"
-                " handle for file_task."
+                "replaces the existing one, which may then not be in the recycle bin; two items "
+                "that would replace each other are refused. A long restore keeps running on the "
+                "NAS and returns a handle for file_task."
             ),
             permission_tier=PermissionTier.WRITE,
             annotations=_ANNO_DESTRUCTIVE,
@@ -331,6 +336,7 @@ def register(ctx: "RegisterContext") -> None:
         bin_item_origin,
         refuse_planted_bin,
         refuse_restore_into_a_bin,
+        refuse_same_names,
         resolve_bin_items,
         resolve_paths,
     )
@@ -911,8 +917,8 @@ def register(ctx: "RegisterContext") -> None:
                 bool,
                 Field(
                     description=(
-                        "Replace items already at the destination (default false: they're skipped "
-                        "and listed)."
+                        "Replace items already at the destination; a replaced file may not be in "
+                        "the recycle bin (default false: they're skipped and listed)."
                     )
                 ),
             ] = False,
@@ -923,6 +929,9 @@ def register(ctx: "RegisterContext") -> None:
                 client, known_shares, "copy_files", "dest_folder", [dest_folder]
             )
             refuse_planted_bin("copy_files", paths, sources, [dest] * len(sources))
+            refuse_same_names(
+                "copy_files", paths, sources, [dest] * len(sources), overwrite=overwrite
+            )
             return _reply(
                 await copy_files(
                     client,
@@ -955,8 +964,8 @@ def register(ctx: "RegisterContext") -> None:
                 bool,
                 Field(
                     description=(
-                        "Replace items already at the destination (default false: they're skipped "
-                        "and listed)."
+                        "Replace items already at the destination; a replaced file may not be in "
+                        "the recycle bin (default false: they're skipped and listed)."
                     )
                 ),
             ] = False,
@@ -967,6 +976,9 @@ def register(ctx: "RegisterContext") -> None:
                 client, known_shares, "move_files", "dest_folder", [dest_folder]
             )
             refuse_planted_bin("move_files", paths, sources, [dest] * len(sources))
+            refuse_same_names(
+                "move_files", paths, sources, [dest] * len(sources), overwrite=overwrite
+            )
             return _reply(
                 await move_files(
                     client,
@@ -1162,8 +1174,8 @@ def register(ctx: "RegisterContext") -> None:
                 bool,
                 Field(
                     description=(
-                        "Replace an item already at the destination (default false: it's skipped "
-                        "and stays in the bin)."
+                        "Replace an item already at the destination; a replaced file may not be in "
+                        "the recycle bin (default false: it's skipped and stays in the bin)."
                     )
                 ),
             ] = False,
@@ -1191,11 +1203,15 @@ def register(ctx: "RegisterContext") -> None:
             )
             refuse_restore_into_a_bin(paths, items, bin_share.strip("/"), dest, dest_folder or None)
             # Each item goes to dest, or back to the folder it was deleted from.
-            refuse_planted_bin(
+            landings = [dest or bin_item_origin(bin_share.strip("/"), item) for item in items]
+            refuse_planted_bin("restore_from_recycle_bin", paths, items, landings)
+            refuse_same_names(
                 "restore_from_recycle_bin",
                 paths,
                 items,
-                [dest or bin_item_origin(bin_share.strip("/"), item) for item in items],
+                landings,
+                overwrite=overwrite,
+                dest_given=dest is not None,
             )
             return _reply(
                 await restore_from_recycle_bin(

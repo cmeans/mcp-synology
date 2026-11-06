@@ -611,6 +611,12 @@ def _hides(c: str) -> bool:
     return bool(_NOT_PRINTED.match(c)) or (c != " " and c.isspace())
 
 
+def name_key(path: str) -> str:
+    """A path's last part as a same-name check compares it: ignoring case, the widest way, as a
+    refusal costs less than a file lost on a file system that folds case (#495)."""
+    return path.rsplit("/", 1)[-1].casefold()
+
+
 def _escaped_repr(path: str) -> str:
     """``repr(path)``, with every character that draws nothing written as ``\\uXXXX`` too
     (``repr`` leaves U+3164 or VS16 as is), so the quoted path shows what's hiding."""
@@ -631,7 +637,9 @@ def shown(path: str) -> str:
     paths are taken exactly (#488, #489, #515).
 
     The rule (#510): a refusal of an argument as given quotes it with ``!r`` (the caller's
-    own text, shown exactly); an error or list that names a path the server checked or got
+    own text, shown exactly), or ``_escaped_repr``, which also shows what ``!r`` leaves as is
+    (`refuse_same_names`, `refuse_planted_bin`; the older ``!r`` refusals are on #458); an
+    error or list that names a path the server checked or got
     from DSM uses ``shown`` (plain unless something would be invisible). Successful
     replies and listings show paths as DSM does."""
     for part in path.split("/"):

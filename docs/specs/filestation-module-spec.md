@@ -65,7 +65,7 @@ Several File Station APIs are non-blocking (start → poll status → stop/clean
 - **Running-task discovery (#245):** where `file_task` is registered, the first successful client of a server process lists the user's running Delete/CopyMove tasks (`SYNO.FileStation.BackgroundTask` `list` v2), seeds the task records from each task's start params, and appends a one-time note to the first File Station reply (the server adds any update notice after it, for every module, #314) naming them and their handles. If that first reply is `file_task` about one handle, the note leaves that task out and is skipped when nothing else is running. A `file_task` list uses the note up without showing it, since the list shows the same tasks. Any failure is logged at DEBUG and ignored; nothing is shown when nothing is running.
 - **Progress reporting:** Via `ctx.report_progress(current, total, message)` using the MCP progress notification protocol. Delete and CopyMove send it while waiting (about one every 2 s, only when the numbers change), e.g. `Deleting /s/x: 124,219 of 200,400 items`; CopyMove counts bytes. While DSM is still counting (`progress: -1`) a heartbeat with no total is sent. The progress value increases with every notification, as MCP requires: a heartbeat, or a count that doesn't exceed the last value sent (including the next path of a multi-path call, which shares the progress token), is raised by 0.001 and sent without a total, so it's never shown against the wrong total. A failing notification is logged at DEBUG and never ends the wait. Whether the client renders this visually depends on the client implementation.
 - **Failures without an `error` key:** a finished task can still have failed. CopyMove lists a missing source under `errors` (`[{"code": 408, "path": ...}]`), and a Delete of a missing path finishes with `total: -1` (DSM 7.1 and 7.2.2). Both are reported as structured errors naming the path, never as success (#162).
-- **Missing sources are refused up front:** `copy_files`, `move_files` and `restore_from_recycle_bin` check every source with `getinfo` (restore checks the full `#recycle` paths) and refuse the whole call before anything moves, the same policy as `delete_files`. Conflicts with `overwrite=false` are not errors: DSM skips them (`"skipstatus": {"status": "all"}`, no `errors` key) and copies the rest. `skipstatus` is `{"status": "none"}` when nothing was skipped and absent with `overwrite=true`; `"all"` means at least one item was skipped (a whole file, or some of a folder's children), not which. A result with skips starts with `[!]` and a count, then separate `Copied:`/`Moved:` and skip lists. Since `skipstatus` doesn't say what was skipped, each skipped source's type is read with `getinfo` (only when something was skipped): a file goes under `Skipped:` (`[!] Copied 0 of 1 item(s) to <dest>/; 1 skipped …`), and a folder under `Folders with items skipped (anything not already at the destination was copied):` (`… 1 folder with items skipped …`), because DSM still copies or moves the children that weren't at the destination. It doesn't claim anything else was copied: DSM doesn't say whether any children were left to copy. With a folder, K counts the sources done `in full`. A source whose type can't be read (a failed or unexpected `getinfo`) keeps the hedged `Skipped in whole or in part:` list and a note that a skipped folder's other parts still went through (#189). For a move or restore it says skipped items are still at the source (for a skipped folder, inside that folder; otherwise in the source's parent), and names the sources it did remove. It suggests `overwrite=true`. A multi-destination restore with a skip leads with a neutral `[!]` summary line, `Restored K of N item(s) from /<share> recycle bin; M with skips (already at the destination, overwrite=false; details below):`, and the per-destination results below it say which files or folders were skipped (#171, #190). Because paths are processed one task at a time, a later failure names the items already done before it.
+- **Missing sources are refused up front:** `copy_files`, `move_files` and `restore_from_recycle_bin` check every source with `getinfo` (restore checks the full `#recycle` paths) and refuse the whole call before anything moves, the same policy as `delete_files`. **Two sources that would land at one destination under one name are refused with `overwrite=true`** (`refuse_same_names`, #495): each runs as its own DSM task, so the second replaces the first, and for a move or restore the first's original is already gone. A pre-QA probe on vdsm's `/home` as a non-admin, DSM 7.1, 7.2.2, 7.3.2 and 7.4.1 alike, found: the reply says `Moved 2 item(s)`, the replaced file isn't in the recycle bin, `X.TXT` and `x.txt` stay two files, two folders of one name merge (same-named items inside them could be replaced, and the check doesn't read types, so they're refused too; separate calls still merge), and a folder landing on a file fails under either `overwrite` value (401 from a move of the pair, 1004 from a copy; the exception to "Conflicts with `overwrite=false` are not errors" below), while a file landing on a folder is skipped, or fails with 1004 under `overwrite=true`. `tests/vdsm/test_vdsm_same_names.py` pins these. Names compare ignoring case anyway (`casefold`, in `helpers.name_key`): a USB or network share may treat `X.TXT` and `x.txt` as one, which vdsm can't test, and there the first would be lost, so a rare safe call is refused instead, and `overwrite=false` still does it. A source inside the folder another source lands in (`["/s/n", "/d/n/q"]` into `/d`) is refused too: its data is replaced before its own task runs, and the reply counts both. Not checked on a real NAS or a share with its own bin. **A skip reply warns against `overwrite=true` for an item the same call's own earlier source may be blocking** (#580): following it replaced that source, whose original a move had removed. It knows about that call only, through a hand-off for sources that landed whole (`file_task`'s final text, for the destination asked for, and a hand-off's `Not started` list). A multi-destination restore runs each item alone, so it has no such warning. It doesn't know what a finished call put there, or after a restart (a call still running is #587), so a skip reply's plain advice to pass `overwrite=true` always carries that caution. Names compare ignoring case; the folders they land in compare exactly, so a restore of `Docs/x` and `docs/x` with no `dest_folder` isn't refused. Conflicts with `overwrite=false` are not errors: DSM skips them (`"skipstatus": {"status": "all"}`, no `errors` key) and copies the rest. `skipstatus` is `{"status": "none"}` when nothing was skipped and absent with `overwrite=true`; `"all"` means at least one item was skipped (a whole file, or some of a folder's children), not which. A result with skips starts with `[!]` and a count, then separate `Copied:`/`Moved:` and skip lists. Since `skipstatus` doesn't say what was skipped, each skipped source's type is read with `getinfo` (only when something was skipped): a file goes under `Skipped:` (`[!] Copied 0 of 1 item(s) to <dest>/; 1 skipped …`), and a folder under `Folders with items skipped (anything not already at the destination was copied):` (`… 1 folder with items skipped …`), because DSM still copies or moves the children that weren't at the destination. It doesn't claim anything else was copied: DSM doesn't say whether any children were left to copy. With a folder, K counts the sources done `in full`. A source whose type can't be read (a failed or unexpected `getinfo`) keeps the hedged `Skipped in whole or in part:` list and a note that a skipped folder's other parts still went through (#189). For a move or restore it says skipped items are still at the source (for a skipped folder, inside that folder; otherwise in the source's parent), and names the sources it did remove. It suggests `overwrite=true`, with that caution. A multi-destination restore with a skip leads with a neutral `[!]` summary line, `Restored K of N item(s) from /<share> recycle bin; M with skips (already at the destination, overwrite=false; details below):`, and the per-destination results below it say which files or folders were skipped (#171, #190). Because paths are processed one task at a time, a later failure names the items already done before it.
 
 ### Human-Readable Size Parsing
 
@@ -519,8 +519,9 @@ Restore files from a shared folder's recycle bin.
 > with list_recycle_bin: every path must be in that share's bin, or nothing is restored; an empty
 > item, naming the whole bin, is refused. Without `dest_folder`, each item goes back to its original
 > folder, which is re-created if it's gone. An item already at the destination is skipped and stays
-> in the bin, unless `overwrite=true`, which replaces the existing one. A long restore keeps running
-> on the NAS and returns a handle for file_task.
+> in the bin, unless `overwrite=true`, which replaces the existing one, which may then not be in the
+> recycle bin; two items that would replace each other are refused. A long restore keeps running on
+> the NAS and returns a handle for file_task.
 
 **Parameters:**
 
@@ -529,7 +530,7 @@ Restore files from a shared folder's recycle bin.
 | `share` | `str` | **Yes** | — | Shared folder name (e.g., `video`) or path (`/video`). |
 | `paths` | `list[str]` | **Yes** | — | Paths within the recycle bin to restore: relative to `#recycle`, as `list_recycle_bin` shows them (`Shows/Ep1.mkv`), starting with `#recycle/`, or full (`/video/#recycle/Shows/Ep1.mkv`). Any path not in the bin refuses the whole call before anything moves. An item that names the bin itself is refused (below). |
 | `dest_folder` | `str` | No | `None` | Destination folder; it must exist, and every item goes there flat. If omitted, restores to original location (inferred from `#recycle` directory structure), re-creating it if it's gone. |
-| `overwrite` | `bool` | No | `false` | Overwrite if a file already exists at the restore destination. With `false`, it's skipped and stays in the bin. |
+| `overwrite` | `bool` | No | `false` | Overwrite if a file already exists at the restore destination; a replaced file may not be in the recycle bin. With `false`, it's skipped and stays in the bin. |
 
 **Response shape:**
 
@@ -632,8 +633,9 @@ Copy files or folders to a destination.
 > Copy files or folders into a destination folder; a folder is copied with everything in it, and the
 > sources stay in place. To move instead, use move_files. `dest_folder` must already exist; it isn't
 > created. With `overwrite=false` (default), items already at the destination are skipped and
-> listed, and the rest are copied. If any source is missing, nothing is copied. A long copy keeps
-> running on the NAS and returns a handle for file_task.
+> listed, and the rest are copied. With `overwrite=true`, two sources that would replace each other
+> are refused, and a replaced file may not be in the recycle bin. If any source is missing, nothing
+> is copied. A long copy keeps running on the NAS and returns a handle for file_task.
 
 **Parameters:**
 
@@ -641,7 +643,7 @@ Copy files or folders to a destination.
 |------|------|----------|---------|-------------|
 | `paths` | `list[str]` | **Yes** | — | Source file/folder paths to copy. |
 | `dest_folder` | `str` | **Yes** | — | Destination folder path (must exist). |
-| `overwrite` | `bool` | No | `false` | Overwrite existing files at destination. With `false`, items already there are skipped and listed (see Async Operations). |
+| `overwrite` | `bool` | No | `false` | Overwrite existing files at destination; a replaced file may not be in the recycle bin. With `false`, items already there are skipped and listed (see Async Operations). |
 
 **Response shape:**
 
@@ -671,7 +673,9 @@ Move files or folders to a new location. **Source files are removed after succes
 > Move files or folders into a destination folder; a folder moves with everything in it, and the
 > sources are removed. To keep the sources, use copy_files. `dest_folder` must already exist; it
 > isn't created. With `overwrite=false` (default), items already at the destination are skipped,
-> listed and left at the source. If any source is missing, nothing is moved. A whole shared folder
+> listed and left at the source. With `overwrite=true`, two sources that would replace each other
+> are refused, and a replaced file may not be in the recycle bin. If any source is missing, nothing
+> is moved. A whole shared folder
 > (`/video`), recycle bin or user's home folder (`/homes/<user>`) is refused as a source: move its
 > items by path. A long move keeps running on the NAS and returns a handle for file_task.
 
@@ -681,7 +685,7 @@ Move files or folders to a new location. **Source files are removed after succes
 |------|------|----------|---------|-------------|
 | `paths` | `list[str]` | **Yes** | — | Source file/folder paths to move. A whole shared folder or recycle bin is refused (below). |
 | `dest_folder` | `str` | **Yes** | — | Destination folder path (must exist). |
-| `overwrite` | `bool` | No | `false` | Overwrite existing files at destination. With `false`, items already there are skipped and listed (see Async Operations). |
+| `overwrite` | `bool` | No | `false` | Overwrite existing files at destination; a replaced file may not be in the recycle bin. With `false`, items already there are skipped and listed (see Async Operations). |
 
 **Response shape:**
 
