@@ -7,8 +7,9 @@ commit or with the wrong version is costly to undo. It checks that:
 - the tag is `v` plus `pyproject.toml`'s version;
 - `CHANGELOG.md` has a section for that version, which becomes the release notes and carries a
   security release's `**Security release:**` line, the one running servers announce;
-- the tagged commit (HEAD) is on `origin/main` or a `release/*` branch (a backport, as v0.5.3
-  was, that ships a fix without main's unreleased work), not some other branch.
+- the tagged commit (HEAD) is on `origin/main` or a backport branch, `release/<major>.<minor>.x`
+  (as v0.5.3 was, shipping a fix without main's unreleased work). Not `release/0.11.0`: that's
+  how this repo names a release PR's branch, and a tag there would be on an unmerged commit.
 
 Standard library only. It needs a checkout with those branches fetched.
 
@@ -29,7 +30,10 @@ def tag_problem(tag: str, version: str) -> str | None:
     """Say why `tag` doesn't name `version`, or None."""
     if tag == f"v{version}":
         return None
-    return f"tag {tag!r} doesn't match pyproject.toml's version {version!r}: expected 'v{version}'"
+    return (
+        f"tag {tag!r} doesn't match pyproject.toml's version {version!r}: tag 'v{version}', or "
+        "bump the version first"
+    )
 
 
 def changelog_problem(changelog: str, version: str) -> str | None:
@@ -48,7 +52,7 @@ def changelog_problem(changelog: str, version: str) -> str | None:
     next_heading = re.search(r"^## ", following, re.MULTILINE)
     section = following[: next_heading.start() if next_heading else None]
     # Subheadings alone (`### Added`) aren't notes.
-    if not any(line.strip() and not line.startswith("#") for line in section.splitlines()):
+    if not any(line.strip() and not re.match(r"#{1,6} ", line) for line in section.splitlines()):
         return f"CHANGELOG.md's section for {version} is empty"
     return None
 
@@ -66,7 +70,7 @@ def branch_problem(root: Path) -> str | None:
                 "--contains=HEAD",
                 "--format=%(refname)",
                 "refs/remotes/origin/main",
-                "refs/remotes/origin/release/",
+                "refs/remotes/origin/release/*.*.x",
             ],
             cwd=root,
             capture_output=True,
@@ -80,16 +84,19 @@ def branch_problem(root: Path) -> str | None:
     if result.stdout.strip():
         return None
     return (
-        "the tagged commit isn't on origin/main or a release/* branch: tag a commit that "
-        "merged to one"
+        "the tagged commit isn't known to be on origin/main or a release/<major>.<minor>.x "
+        "branch: tag a commit that merged to one"
     )
 
 
 def problems(tag: str, root: Path) -> list[str]:
     """Return every reason not to release `tag` from the checkout at `root`."""
-    pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
-    version = pyproject["project"]["version"]
-    changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8")
+    try:
+        pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+        version = pyproject["project"]["version"]
+        changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, KeyError) as error:
+        return [f"couldn't read the version and CHANGELOG: {type(error).__name__}: {error}"]
     found = (
         tag_problem(tag, version),
         changelog_problem(changelog, version),
@@ -106,7 +113,10 @@ def main(argv: list[str], root: Path = Path()) -> int:
     for problem in found:
         print(f"error: {problem}", file=sys.stderr)
     if found:
-        print("Nothing was published. Delete the tag, fix this, and tag again.", file=sys.stderr)
+        print(
+            "This run published nothing. If the tag is new: fix this, delete it, and tag again.",
+            file=sys.stderr,
+        )
         return 1
     print(f"{argv[0]} can be released.")
     return 0

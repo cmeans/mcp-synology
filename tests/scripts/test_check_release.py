@@ -88,7 +88,7 @@ def test_a_tag_that_isnt_the_version_is_refused(
     assert script.main([tag], repo) == 1
     err = capsys.readouterr().err
     assert f"tag {tag!r} doesn't match pyproject.toml's version '1.2.3'" in err
-    assert "Nothing was published" in err
+    assert "This run published nothing" in err
 
 
 @pytest.mark.parametrize(
@@ -126,12 +126,16 @@ def test_a_section_of_only_subheadings_is_empty() -> None:
     assert "is empty" in (script.changelog_problem(changelog, "1.2.3") or "")
 
 
+def test_a_note_starting_with_a_hash_is_a_note() -> None:
+    assert script.changelog_problem("## 1.2.3 (2026-11-06)\n\n#457 fixed it\n", "1.2.3") is None
+
+
 def test_a_commit_on_another_branch_is_refused(
     repo: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     _git(repo, "commit", "-q", "--allow-empty", "-m", "on a branch, not merged")
     assert script.main(["v1.2.3"], repo) == 1
-    assert "isn't on origin/main or a release/* branch" in capsys.readouterr().err
+    assert "isn't known to be on origin/main" in capsys.readouterr().err
 
 
 def test_an_older_commit_on_main_passes(repo: Path) -> None:
@@ -141,7 +145,7 @@ def test_an_older_commit_on_main_passes(repo: Path) -> None:
     assert script.branch_problem(repo) is None
 
 
-def test_a_backport_on_a_release_branch_passes(repo: Path) -> None:
+def test_a_backport_branch_passes(repo: Path) -> None:
     """v0.5.3 shipped from release/0.5.x, off main, so it carried only its fix."""
     _git(repo, "commit", "-q", "--allow-empty", "-m", "backport")
     _git(repo, "update-ref", "refs/remotes/origin/release/0.5.x", "HEAD")
@@ -151,33 +155,75 @@ def test_a_backport_on_a_release_branch_passes(repo: Path) -> None:
 @pytest.mark.parametrize(
     "ref",
     [
+        # An open release PR's branch, as this repo names them: right version, unmerged commit.
+        "refs/remotes/origin/release/0.11.0",
+        "refs/remotes/origin/release/v0.5.2",
+        "refs/remotes/origin/release/1.x",
+        "refs/remotes/origin/release/feature",
+        "refs/remotes/origin/release",
         "refs/remotes/origin/feature/x",
-        "refs/remotes/origin/releases/x",
-        "refs/remotes/origin/release-x",
+        "refs/remotes/origin/releases/0.5.x",
         "refs/remotes/other/main",
-        "refs/heads/release/x",
+        "refs/heads/release/0.5.x",
         "refs/tags/origin/main",
         "refs/tags/refs/remotes/origin/main",
     ],
 )
-def test_only_the_remotes_main_and_release_branches_count(repo: Path, ref: str) -> None:
+def test_only_the_remotes_main_and_backport_branches_count(repo: Path, ref: str) -> None:
     """In particular, a tag named `origin/main` can't stand in for the branch."""
     _git(repo, "commit", "-q", "--allow-empty", "-m", "off main")
     _git(repo, "update-ref", ref, "HEAD")
-    assert "isn't on origin/main" in (script.branch_problem(repo) or "")
+    assert "isn't known to be on origin/main" in (script.branch_problem(repo) or "")
 
 
 def test_no_branches_is_refused_not_assumed(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """A shallow or partial checkout can't show where the commit is, so it doesn't pass."""
     _git(repo, "update-ref", "-d", "refs/remotes/origin/main")
     assert script.main(["v1.2.3"], repo) == 1
-    assert "isn't on origin/main or a release/* branch" in capsys.readouterr().err
+    assert "isn't known to be on origin/main" in capsys.readouterr().err
 
 
-def test_outside_a_repository_is_refused_not_assumed(tmp_path: Path, repo: Path) -> None:
+def test_outside_a_repository_is_refused_not_assumed(
+    tmp_path: Path, repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
     outside = tmp_path / "not-a-repo"
     outside.mkdir()
     assert "couldn't check the tagged commit's branch" in (script.branch_problem(outside) or "")
+
+
+@pytest.mark.parametrize(
+    ("pyproject", "exception"),
+    [
+        (None, "FileNotFoundError"),
+        ("[project\n", "TOMLDecodeError"),
+        ('[project]\ndynamic = ["version"]\n', "KeyError"),
+    ],
+)
+def test_an_unreadable_project_is_a_refusal_not_a_traceback(
+    repo: Path, pyproject: str | None, exception: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = repo / "pyproject.toml"
+    if pyproject is None:
+        path.unlink()
+    else:
+        path.write_text(pyproject, encoding="utf-8")
+    assert script.main(["v1.2.3"], repo) == 1
+    err = capsys.readouterr().err
+    assert f"couldn't read the version and CHANGELOG: {exception}" in err
+    assert "This run published nothing" in err
+
+
+def test_a_refusal_reaches_the_process_exit_code(repo: Path) -> None:
+    """The job fails only through this: `main()`'s return value has to become the exit code."""
+    refused = subprocess.run(
+        [sys.executable, str(_SCRIPT_PATH), "v9.9.9"], cwd=repo, capture_output=True, check=False
+    )
+    assert refused.returncode == 1
+    passed = subprocess.run(
+        [sys.executable, str(_SCRIPT_PATH), "v1.2.3"], cwd=repo, capture_output=True, check=False
+    )
+    assert passed.returncode == 0
 
 
 def test_no_git_is_refused_not_assumed(

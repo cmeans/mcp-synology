@@ -20,7 +20,8 @@ jobs:
   gate:
     # Before anything else (#457). Any `v*` tag starts this workflow, and a PyPI version can't be
     # reused: the tag must match pyproject.toml, have CHANGELOG notes, and be on main or a
-    # release/* branch. It covers commits that contain this job: an older one wouldn't run it.
+    # backport branch (release/<major>.<minor>.x). A backport branch gets no CI, hence the
+    # server.json check. This covers commits that contain this job: an older one wouldn't run it.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -34,6 +35,8 @@ jobs:
         env:
           TAG: ${{ github.ref_name }}
         run: python scripts/check_release.py "$TAG"
+      - name: Check server.json matches pyproject.toml
+        run: python scripts/sync-server-json.py --check
 
   build:
     needs: gate
