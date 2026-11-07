@@ -41,7 +41,10 @@ Common causes:
   for example because the trusted device was removed in **Personal → Security →
   Sign-in Activity**.
 - The account is disabled in DSM.
-- The IP has been auto-blocked after too many failed attempts.
+- The IP has been auto-blocked after too many failed attempts (DSM's 407, for every
+  account from that address).
+- The password has expired (408, 409) or must be changed (410). DSM says so only to
+  the right password; a wrong one gets 400.
 
 Fix:
 
@@ -56,7 +59,11 @@ Fix:
    first (the error's suggestion says where it comes from).
 3. If the IP is auto-blocked, sign in to DSM directly and clear the entry at
    **Control Panel → Security → Account → Auto Block → Allow / Block List**.
-4. Verify the account has access to FileStation: **Control Panel → User & Group
+4. If the password has expired or must be changed, sign in to DSM in a browser to
+   change it, and store the new one with `mcp-synology setup`. With 408, DSM doesn't
+   let the account do that: an administrator sets a new one, or allows a reset after
+   expiry in **Control Panel → User & Group → Advanced → Password Settings**.
+5. Verify the account has access to FileStation: **Control Panel → User & Group
    → [account] → Edit → Applications**. The account must be allowed to use
    File Station.
 
@@ -69,7 +76,9 @@ value set in `SYNOLOGY_USERNAME`, `SYNOLOGY_PASSWORD` or `SYNOLOGY_DEVICE_ID`, o
 in the config file's `auth:` section, overrides the keyring and must be changed
 there (then restart the server). The error's suggestion names where the refused
 credential comes from: the password for a wrong one (400), the device token for a
-2FA refusal (403, 404, 406); a disabled account (401) needs an administrator.
+2FA refusal (403, 404, 406), an expired or must-change password (408, 409, 410); a
+disabled account (401) needs an administrator. A blocked IP address (407) isn't
+remembered, since the block can end on its own.
 
 `auth_failed` is **not** retryable. mcp-synology will not auto-retry on this
 code — fix the underlying credential or 2FA state before re-running.

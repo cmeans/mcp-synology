@@ -338,21 +338,25 @@ AUTH_ERROR_CODES: dict[int, tuple[str, str]] = {
         "OTP enforcement required",
         "Admin requires 2FA. Enable 2FA in DSM > Personal > Security.",
     ),
+    # 407-410 per DSM's Login Web API Guide, each seen on DSM 7.1, 7.2.2, 7.3.2 and 7.4.1 (#460).
+    # DSM answers 408-410 only to the right password: a wrong one gets 400.
     407: (
-        "Max login attempts exceeded",
-        "Account is temporarily locked. Wait a few minutes and try again.",
+        "This computer's IP address is blocked",
+        "DSM's Auto Block has blocked it, for every account. Clear it in DSM > Control Panel > "
+        "Security > Account > Auto Block > Allow/Block List, from another address if you need to.",
     ),
     408: (
-        "IP blocked",
-        "Too many failed attempts. Check DSM > Control Panel > Security > Auto Block.",
+        "The password has expired, and DSM doesn't let this account change it",
+        "An administrator can set a new password in DSM > Control Panel > User & Group, or allow "
+        "a reset after expiry in Password Settings. Then store the new password.",
     ),
     409: (
-        "SID required",
-        "Session ID is required for this operation.",
+        "The password has expired",
+        "Sign in to DSM in a browser to change it, then store the new password.",
     ),
     410: (
-        "Token expired",
-        "The login token has expired. Re-authenticate.",
+        "The password must be changed",
+        "Sign in to DSM in a browser to change it, then store the new password.",
     ),
 }
 
@@ -495,7 +499,7 @@ def error_from_code(code: int, api_name: str = "", errors: object = None) -> Syn
     # Auth API codes (400-series for SYNO.API.Auth)
     if "Auth" in api_name and code in AUTH_ERROR_CODES:
         message, suggestion = AUTH_ERROR_CODES[code]
-        if code in (400, 401, 403, 404, 406):
+        if code in (400, 401, 403, 404, 406, 408, 409, 410):
             return AuthenticationError(message, code=code, suggestion=suggestion)
         return SynologyError(message, code=code, suggestion=suggestion)
 

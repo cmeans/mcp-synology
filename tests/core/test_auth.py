@@ -977,7 +977,7 @@ class TestLoginRefusals:
     """#447: a login DSM refused isn't sent again, so DSM's Auto Block isn't tripped."""
 
     @respx.mock
-    @pytest.mark.parametrize("code", [400, 401, 403, 404, 406])
+    @pytest.mark.parametrize("code", [400, 401, 403, 404, 406, 408, 409, 410])
     async def test_refused_login_is_sent_once(self, code: int) -> None:
         logins: list[httpx.Request] = []
         _auth_routes([_refused(code)], logins)
@@ -1004,7 +1004,38 @@ class TestLoginRefusals:
         assert ".." not in (errors[0].suggestion or "")
 
     @respx.mock
-    @pytest.mark.parametrize("code", [402, 407, 408])
+    @pytest.mark.parametrize(
+        ("code", "says"),
+        [
+            (408, "An administrator can set a new password"),
+            (409, "Sign in to DSM in a browser to change it"),
+            (410, "Sign in to DSM in a browser to change it"),
+        ],
+    )
+    async def test_an_expired_password_is_remembered_and_says_what_to_do(
+        self, code: int, says: str
+    ) -> None:
+        """#460: these codes come only with the right password, and stay until it's changed."""
+        logins: list[httpx.Request] = []
+        _auth_routes([_refused(code)], logins)
+        config = _make_config(auth={"username": "admin", "password": "right"})
+        async with _make_client() as client:
+            auth = AuthManager(config, client)
+            with (
+                patch.dict(os.environ, _clean_env(), clear=True),
+                patch("mcp_synology.core.auth.kr", _no_keyring()),
+            ):
+                for _ in range(3):
+                    with pytest.raises(AuthenticationError) as exc:
+                        await auth.login()
+        assert len(logins) == 1
+        assert says in (exc.value.suggestion or "")
+        assert "mcp-synology tries again once the credentials change" in (
+            exc.value.suggestion or ""
+        )
+
+    @respx.mock
+    @pytest.mark.parametrize("code", [402, 407])
     async def test_other_login_errors_are_not_remembered(self, code: int) -> None:
         # Not a verdict on the credentials (no permission for the service, a temporary
         # lock or an IP block): the next call tries again.
