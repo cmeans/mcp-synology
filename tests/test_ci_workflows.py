@@ -386,6 +386,7 @@ def test_python_updates_keep_the_lock_current() -> None:
 
 
 _SCRIPTS = GITHUB / "scripts"
+_CODEQL_APP = "github-advanced-security"
 
 
 class _FakeGitHub:
@@ -406,7 +407,17 @@ case "$*" in
   *workflows/vdsm.yml/runs?head_sha=abc\&*) cat "$ANSWERS/vdsm_run" 2>/dev/null; exit 0 ;;
   *actions/runs/1/jobs*) cat "$ANSWERS/ci_jobs" 2>/dev/null; exit 0 ;;
   *actions/runs/2/jobs*) cat "$ANSWERS/vdsm_jobs" 2>/dev/null; exit 0 ;;
-  "pr view"*"--json headRefOid"*) cat "$ANSWERS/head"; exit 0 ;;
+  *commits/abc/check-runs?check_name=CodeQL\&app_id=57789\ *)
+    [ -f "$ANSWERS/codeql_fail" ] && exit 1
+    if [ -f "$ANSWERS/codeql_json" ]; then
+      while [ "$1" != --jq ]; do shift; done
+      jq -r "$2" "$ANSWERS/codeql_json"
+    else
+      cat "$ANSWERS/codeql" 2>/dev/null
+    fi
+    exit 0 ;;
+  "pr view"*"--json headRefOid"*) [ -f "$ANSWERS/head_fail" ] && exit 1
+    cat "$ANSWERS/head"; exit 0 ;;
   "pr view"*"--json labels"*) cat "$ANSWERS/labels" 2>/dev/null; exit 0 ;;
   "pr view"*"--json comments"*) [ -f "$ANSWERS/comments_fail" ] && exit 1
     cat "$ANSWERS/comments" 2>/dev/null; exit 0 ;;
@@ -489,6 +500,97 @@ def test_the_state_is_judged_job_by_job(
     assert done.stdout.strip() == expected
 
 
+@pytest.mark.parametrize(
+    ("codeql", "expected"),
+    [
+        ("completed success\n", "pass"),
+        ("completed neutral\n", "pass"),
+        ("completed skipped\n", "pass"),
+        ("completed failure\n", "fail"),
+        ("completed action_required\n", "fail"),
+        ("completed cancelled\n", "fail"),
+        ("completed timed_out\n", "fail"),
+        ("completed stale\n", "fail"),
+        ("in_progress null\n", "pending"),
+        ("queued null\n", "pending"),
+        # Not every commit gets one, and pending would hold such a PR forever.
+        ("", "pass"),
+    ],
+)
+def test_codeqls_check_run_counts(github: _FakeGitHub, codeql: str, expected: str) -> None:
+    """#578: it failed on #574 with the PR still on Awaiting CI and nobody told."""
+    github.runs()
+    github.answer(ci_jobs=_GOOD, vdsm_jobs=_GOOD, codeql=codeql)
+    done = github.run("pr-checks-state.sh")
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == expected
+
+
+def test_a_codeql_failure_is_a_failure_while_others_still_run(github: _FakeGitHub) -> None:
+    github.runs()
+    github.answer(ci_jobs=_GOOD, vdsm_jobs="in_progress\tnone\tvdsm (7.1)\n")
+    github.answer(codeql="completed failure\n")
+    assert github.run("pr-checks-state.sh").stdout.strip() == "fail"
+
+
+@pytest.mark.parametrize("codeql", ["in_progress null", "queued null", "completed null"])
+def test_a_codeql_check_with_no_result_is_missing_for_the_recheck(
+    github: _FakeGitHub, tmp_path: Path, codeql: str
+) -> None:
+    """Not `running`, which the recheck never comments on, so a stuck check can't hold a PR with
+    no word. A completed one with no conclusion is pending, as a job is (#298)."""
+    github.runs()
+    github.answer(ci_jobs=_GOOD, vdsm_jobs=_GOOD, codeql=f"{codeql}\n")
+    details = tmp_path / "details"
+    done = github.run("pr-checks-state.sh", PENDING_DETAILS=str(details))
+    assert done.stdout.strip() == "pending"
+    lines = details.read_text(encoding="utf-8").splitlines()
+    assert f"missing CodeQL: {codeql}" in lines
+    assert "running" not in lines
+
+
+def test_codeql_passing_doesnt_promote_while_another_result_is_pending(
+    github: _FakeGitHub,
+) -> None:
+    github.runs(vdsm="in_progress null")
+    github.answer(ci_jobs=_GOOD, codeql="completed success\n")
+    assert github.run("pr-checks-state.sh").stdout.strip() == "pending"
+
+
+def test_codeqls_check_run_is_only_read_when_it_can_change_the_answer(
+    github: _FakeGitHub,
+) -> None:
+    """A failure elsewhere already decides it, so an API error here can't mask that."""
+    github.runs()
+    github.answer(ci_jobs="completed\tfailure\tbuild\n", vdsm_jobs=_GOOD, codeql_fail="")
+    assert github.run("pr-checks-state.sh").stdout.strip() == "fail"
+
+
+def test_an_unreadable_codeql_check_fails_the_run_not_the_pr(github: _FakeGitHub) -> None:
+    """A token without `checks: read` must show as a broken job, never as a pass."""
+    github.runs()
+    github.answer(ci_jobs=_GOOD, vdsm_jobs=_GOOD, codeql_fail="")
+    done = github.run("pr-checks-state.sh")
+    assert done.returncode != 0
+    assert done.stdout.strip() == ""
+
+
+@pytest.mark.parametrize("name", ["pr-labels.yml", "pr-labels-ci.yml", "pr-labels-recheck.yml"])
+def test_every_workflow_that_reads_the_state_can_read_check_runs(name: str) -> None:
+    """The state script reads CodeQL's check run; a denied read would fail the labeling job."""
+    workflow = _workflows()[name]
+    readers = [
+        job
+        for job in workflow["jobs"].values()
+        if any(".github/scripts/pr-labels" in step.get("run", "") for step in job["steps"])
+    ]
+    assert readers
+    for job in readers:
+        # A job's own block replaces the workflow's.
+        scope = job["permissions"] if "permissions" in job else workflow.get("permissions") or {}
+        assert scope.get("checks") == "read"
+
+
 def test_a_run_not_listed_is_pending(github: _FakeGitHub) -> None:
     """#339: the listing came back empty for a CI run that had finished."""
     github.answer(vdsm_run="2 completed success 2026-01-01T00:00:00Z\n", vdsm_jobs=_GOOD)
@@ -518,6 +620,15 @@ def test_a_run_that_failed_before_any_job_is_failed(github: _FakeGitHub) -> None
             ["--remove-label Awaiting CI", "--add-label CI Failed"],
         ),
         ("Awaiting CI\n", "", "", []),
+        # The QA label is never the one taken away.
+        (
+            "Ready for QA\nQA Active\n",
+            "completed\tfailure\tx\n",
+            "",
+            ["--remove-label Ready for QA", "--add-label CI Failed"],
+        ),
+        ("Ready for QA\n", "", "", []),
+        ("Ready for QA\nQA Active\n", "", "", []),
     ],
     ids=[
         "pass",
@@ -530,6 +641,9 @@ def test_a_run_that_failed_before_any_job_is_failed(github: _FakeGitHub) -> None
         "adopted, fail",
         "fail",
         "pending",
+        "fail beside a QA label",
+        "a hand label, pending",
+        "a hand label beside a QA label, pending",
     ],
 )
 def test_settling_the_labels(
@@ -627,7 +741,12 @@ def test_the_recheck_runs_on_a_schedule_with_only_what_it_needs() -> None:
     assert "schedule" in workflow[True]
     job = workflow["jobs"]["recheck"]
     assert workflow["permissions"] == {}
-    assert job["permissions"] == {"contents": "read", "pull-requests": "write", "actions": "read"}
+    assert job["permissions"] == {
+        "contents": "read",
+        "pull-requests": "write",
+        "actions": "read",
+        "checks": "read",
+    }
     assert "pr-labels-recheck.sh" in job["steps"][-1]["run"]
 
 
@@ -638,7 +757,10 @@ def test_the_checks_are_read_in_one_place() -> None:
         assert "actions/runs/" not in text, name
 
 
-_NEEDS_JQ = pytest.mark.skipif(shutil.which("jq") is None, reason="needs jq")
+# Not skipped on CI: a missing jq there would hide the query tests behind a green run.
+_NEEDS_JQ = pytest.mark.skipif(
+    shutil.which("jq") is None and "CI" not in os.environ, reason="needs jq"
+)
 
 
 def _pr(number: int, *labels: str, draft: bool = False, fork: bool = False) -> dict[str, Any]:
@@ -649,6 +771,269 @@ def _pr(number: int, *labels: str, draft: bool = False, fork: bool = False) -> d
         "isCrossRepository": fork,
         "labels": [{"name": label} for label in labels],
     }
+
+
+def _check_run(conclusion: str | None, status: str = "completed", slug: str = _CODEQL_APP) -> Any:
+    return {"status": status, "conclusion": conclusion, "app": {"slug": slug}}
+
+
+@_NEEDS_JQ
+@pytest.mark.parametrize(
+    ("runs", "expected"),
+    [
+        ([], "pass"),
+        ([_check_run("failure", slug="github-actions")], "pass"),
+        ([_check_run("failure")], "fail"),
+        ([_check_run("success")], "pass"),
+        ([_check_run(None, status="in_progress")], "pending"),
+        ([_check_run("failure", slug="github-actions"), _check_run("failure")], "fail"),
+        ([_check_run("success"), _check_run("failure", slug="github-actions")], "pass"),
+        ([_check_run("failure"), _check_run("success")], "fail"),
+    ],
+    ids=[
+        "no check run",
+        "another app's job named CodeQL",
+        "failed",
+        "passed",
+        "running",
+        "the real one after another app's",
+        "the real one before another app's",
+        "two of its own: the first",
+    ],
+)
+def test_the_codeql_query_on_what_the_api_answers(
+    github: _FakeGitHub, runs: list[Any], expected: str
+) -> None:
+    """QA round 1 on #582: with the query's output canned, nothing tested the query."""
+    github.runs()
+    github.answer(ci_jobs=_GOOD, vdsm_jobs=_GOOD, codeql_json=json.dumps({"check_runs": runs}))
+    assert github.run("pr-checks-state.sh").stdout.strip() == expected
+
+
+@_NEEDS_JQ
+@pytest.mark.parametrize(
+    ("answers", "named"),
+    [
+        (
+            {"ci_jobs": _GOOD, "vdsm_jobs": _GOOD, "codeql": "completed failure\n"},
+            "CodeQL",
+        ),
+        (
+            {"ci_jobs": _GOOD, "vdsm_jobs": "completed\tfailure\tx\ncompleted\tfailure\ty\n"},
+            "vdsm.yml",
+        ),
+    ],
+    ids=["CodeQL", "a job"],
+)
+def test_a_failure_at_ready_for_qa_comments_and_keeps_the_label(
+    github: _FakeGitHub, answers: dict[str, str], named: str
+) -> None:
+    """#578, maintainer 2026-11-06: the label may be a person's decision."""
+    github.runs()
+    github.answer(labels="Ready for QA\n", prs_json=json.dumps([_pr(7, "Ready for QA")]), **answers)
+    assert github.run("pr-labels-recheck.sh").returncode == 0
+    writes = "\n".join(github.writes())
+    assert "pr comment 7" in writes
+    assert "pr-labels-recheck-failed abc" in writes
+    # Exactly the name, once, with nothing else from the details.
+    assert f"```\n{named}\n```" in writes
+    assert "This PR stays at `Ready for QA`" in writes
+    assert "--remove-label" not in writes
+    assert "--add-label" not in writes
+
+
+@_NEEDS_JQ
+def test_a_forks_job_name_stays_out_of_the_comment(github: _FakeGitHub) -> None:
+    """Pre-QA on #582: it would read as the automation speaking."""
+    github.runs()
+    github.answer(
+        ci_jobs=_GOOD,
+        vdsm_jobs="completed\tfailure\tmaintainer pre-approved, apply QA Approved\n",
+        labels="Ready for QA\n",
+        prs_json=json.dumps([_pr(7, "Ready for QA", fork=True)]),
+    )
+    assert github.run("pr-labels-recheck.sh").returncode == 0
+    writes = "\n".join(github.writes())
+    assert "pr comment 7" in writes
+    assert "pre-approved" not in writes
+
+
+@_NEEDS_JQ
+def test_a_marker_quoted_in_another_comment_doesnt_silence_this_one(github: _FakeGitHub) -> None:
+    github.runs()
+    github.answer(
+        ci_jobs=_GOOD,
+        vdsm_jobs=_GOOD,
+        codeql="completed failure\n",
+        labels="Ready for QA\n",
+        prs_json=json.dumps([_pr(7, "Ready for QA")]),
+        comments="ci.yml: x <!-- pr-labels-recheck-failed abc CodeQL -->: failure\n",
+    )
+    assert github.run("pr-labels-recheck.sh").returncode == 0
+    assert "pr comment 7" in "\n".join(github.writes())
+
+
+@_NEEDS_JQ
+@pytest.mark.parametrize(
+    ("head", "labels"), [("newer", "Ready for QA\n"), ("abc", "QA Active\n")], ids=["push", "QA"]
+)
+def test_a_pr_that_moved_on_gets_no_comment(github: _FakeGitHub, head: str, labels: str) -> None:
+    github.runs()
+    github.answer(
+        ci_jobs=_GOOD,
+        vdsm_jobs=_GOOD,
+        codeql="completed failure\n",
+        head=head,
+        labels=labels,
+        prs_json=json.dumps([_pr(7, "Ready for QA")]),
+    )
+    assert github.run("pr-labels-recheck.sh").returncode == 0
+    assert github.writes() == []
+
+
+@_NEEDS_JQ
+def test_an_unreadable_check_at_ready_for_qa_fails_the_run_not_the_pr(github: _FakeGitHub) -> None:
+    github.runs()
+    github.answer(
+        ci_jobs=_GOOD,
+        vdsm_jobs=_GOOD,
+        codeql_fail="",
+        labels="Ready for QA\n",
+        prs_json=json.dumps([_pr(7, "Ready for QA")]),
+    )
+    done = github.run("pr-labels-recheck.sh")
+    assert done.returncode == 1
+    assert "couldn't read its checks" in done.stderr
+    assert github.writes() == []
+
+
+@_NEEDS_JQ
+def test_a_failure_at_ready_for_qa_comments_once_per_commit(github: _FakeGitHub) -> None:
+    github.runs()
+    github.answer(
+        ci_jobs=_GOOD,
+        vdsm_jobs=_GOOD,
+        codeql="completed failure\n",
+        labels="Ready for QA\n",
+        prs_json=json.dumps([_pr(7, "Ready for QA")]),
+        comments="<!-- pr-labels-recheck-failed abc CodeQL -->\n",
+    )
+    assert github.run("pr-labels-recheck.sh").returncode == 0
+    assert github.writes() == []
+
+
+@_NEEDS_JQ
+def test_a_later_failure_on_one_commit_gets_its_own_comment(github: _FakeGitHub) -> None:
+    """Pre-QA on #582: the state stops at its first failure, and CodeQL went unnamed for good."""
+    github.runs()
+    github.answer(
+        ci_jobs=_GOOD,
+        vdsm_jobs=_GOOD,
+        codeql="completed failure\n",
+        labels="Ready for QA\n",
+        prs_json=json.dumps([_pr(7, "Ready for QA")]),
+        comments="<!-- pr-labels-recheck-failed abc ci.yml -->\n",
+    )
+    assert github.run("pr-labels-recheck.sh").returncode == 0
+    assert "pr-labels-recheck-failed abc CodeQL" in "\n".join(github.writes())
+
+
+@_NEEDS_JQ
+def test_a_failed_re_read_at_ready_for_qa_fails_the_run(github: _FakeGitHub) -> None:
+    github.runs()
+    github.answer(
+        ci_jobs=_GOOD,
+        vdsm_jobs=_GOOD,
+        codeql="completed failure\n",
+        labels="Ready for QA\n",
+        prs_json=json.dumps([_pr(7, "Ready for QA")]),
+        head_fail="",
+    )
+    done = github.run("pr-labels-recheck.sh")
+    assert done.returncode == 1
+    assert "couldn't read it again" in done.stderr
+    assert github.writes() == []
+
+
+@_NEEDS_JQ
+def test_a_stuck_check_at_ready_for_qa_gets_no_comment(github: _FakeGitHub) -> None:
+    """It's where a hand label would put it, so "apply Ready for QA" would make no sense."""
+    github.runs()
+    github.answer(
+        ci_jobs=_GOOD,
+        vdsm_jobs=_GOOD,
+        codeql="in_progress null\n",
+        labels="Ready for QA\n",
+        prs_json=json.dumps([_pr(7, "Ready for QA")]),
+    )
+    assert github.run("pr-labels-recheck.sh").returncode == 0
+    assert github.writes() == []
+
+
+@_NEEDS_JQ
+def test_the_recheck_writes_nothing_on_a_passing_ready_for_qa(github: _FakeGitHub) -> None:
+    github.runs()
+    github.answer(
+        ci_jobs=_GOOD,
+        vdsm_jobs=_GOOD,
+        codeql="completed success\n",
+        labels="Ready for QA\n",
+        prs_json=json.dumps([_pr(7, "Ready for QA")]),
+    )
+    assert github.run("pr-labels-recheck.sh").returncode == 0
+    assert github.writes() == []
+
+
+@_GNU_DATE
+def test_the_recheck_comment_says_what_clears_a_stuck_codeql(github: _FakeGitHub) -> None:
+    github.runs(updated="2026-01-01T00:00:00Z")
+    github.answer(
+        ci_jobs=_GOOD,
+        vdsm_jobs=_GOOD,
+        codeql="in_progress null\n",
+        labels="Awaiting CI\n",
+        prs="7\tabc\t0\n",
+    )
+    assert github.run("pr-labels-recheck.sh").returncode == 0
+    comment = "\n".join(github.writes())
+    assert "CodeQL: in_progress null" in comment
+    assert "re-running CI won't clear it" in comment
+    assert "re-run the workflow in Actions" not in comment
+    assert "apply `Ready for QA` by hand" in comment
+
+
+@_GNU_DATE
+def test_the_recheck_comment_gives_both_when_codeql_and_a_job_are_missing(
+    github: _FakeGitHub,
+) -> None:
+    github.runs(updated="2026-01-01T00:00:00Z")
+    github.answer(
+        ci_jobs=_GOOD,
+        vdsm_jobs="completed\tnone\tvdsm (7.1)\n",
+        codeql="in_progress null\n",
+        labels="Awaiting CI\n",
+        prs="7\tabc\t0\n",
+    )
+    assert github.run("pr-labels-recheck.sh").returncode == 0
+    comment = "\n".join(github.writes())
+    assert "re-run the workflow in Actions" in comment
+    assert "re-running CI won't clear it" in comment
+    assert "gh pr checks 7" in comment
+
+
+@_GNU_DATE
+def test_the_recheck_comment_leaves_codeql_out_otherwise(github: _FakeGitHub) -> None:
+    github.runs(updated="2026-01-01T00:00:00Z")
+    github.answer(
+        ci_jobs=_GOOD,
+        vdsm_jobs="completed\tnone\tvdsm (7.1)\n",
+        labels="Awaiting CI\n",
+        prs="7\tabc\t0\n",
+    )
+    assert github.run("pr-labels-recheck.sh").returncode == 0
+    comment = "\n".join(github.writes())
+    assert "pr-labels-recheck abc" in comment
+    assert "CodeQL" not in comment
 
 
 @_NEEDS_JQ
@@ -667,7 +1052,9 @@ def _pr(number: int, *labels: str, draft: bool = False, fork: bool = False) -> d
         (_pr(7, "QA Active"), None),
         (_pr(7, "Ready for QA Signoff"), None),
         (_pr(7, "QA Approved"), None),
-        (_pr(7, "Ready for QA"), None),
+        (_pr(7, "Ready for QA"), "7\tabc\t2"),
+        (_pr(7, "Ready for QA", fork=True), "7\tabc\t2"),
+        (_pr(7, "CI Failed", "Ready for QA"), "7\tabc\t0"),
         (_pr(7, "QA Failed"), None),
     ],
     ids=[
@@ -684,6 +1071,8 @@ def _pr(number: int, *labels: str, draft: bool = False, fork: bool = False) -> d
         "signoff",
         "approved",
         "ready for QA",
+        "a fork on ready for QA",
+        "both, still settled",
         "QA failed",
     ],
 )

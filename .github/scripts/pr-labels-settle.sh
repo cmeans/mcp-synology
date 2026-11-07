@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Settles a PR's labels from its head commit's checks: Ready for QA once CI and vdsm have passed,
-# CI Failed as soon as either has a failed job, nothing while a result is missing. Used by
-# pr-labels-ci.yml on each CI or vdsm completion, pr-labels.yml when Dev Active comes off, and
-# pr-labels-recheck.yml on a schedule.
+# with CodeQL's check if the commit has one, CI Failed once either has a failed job or CodeQL has
+# failed, when this next reads them, nothing while a result is missing. Used by pr-labels-ci.yml on each CI or vdsm
+# completion, pr-labels.yml when Dev Active comes off, and pr-labels-recheck.yml on a schedule.
 #
 # Usage: pr-labels-settle.sh <pr> <head sha>. Env: REPO, GH_TOKEN, PENDING_DETAILS (see
 # pr-checks-state.sh). ADOPT=1 is for a PR with no workflow label at all: it's labeled as if it
@@ -67,7 +67,8 @@ case "$STATE" in
     fi
     ;;
   fail)
-    # Never leave Ready for QA on a commit with a failed job.
+    # On a CI or vdsm event, or Dev Active coming off: take Ready for QA back. The recheck only
+    # comments (pr-labels-recheck.sh).
     REMOVE=""
     has "Awaiting CI" && REMOVE="Awaiting CI"
     has "Ready for QA" && REMOVE="${REMOVE:+$REMOVE,}Ready for QA"
@@ -79,7 +80,7 @@ case "$STATE" in
     fi
     ;;
   pending)
-    echo "Not every run has a result yet; leaving the labels" >&2
+    echo "Not every check has a result yet; leaving the labels" >&2
     if [ "${ADOPT:-}" = 1 ]; then
       gh pr edit "$PR" --repo "$REPO" --add-label "Awaiting CI" >&2
     fi
