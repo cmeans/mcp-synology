@@ -686,6 +686,11 @@ async def _list_running(client: DsmClient) -> list[RunningTask]:
         if not isinstance(paths, list) or not _TASKID_RE.match(taskid):
             continue
         paths = [p for p in paths if isinstance(p, str)]
+        dest = params.get("dest_folder_path")
+        if isinstance(dest, str):
+            # Another client may send /d/, which is the folder this server calls /d.
+            params = {**params, "dest_folder_path": dest.rstrip("/") or "/"}
+            task = {**task, "params": params}
         kind = _task_kind(task.get("api"), params, paths)
         if kind is None:
             continue

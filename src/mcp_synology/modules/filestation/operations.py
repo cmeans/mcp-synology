@@ -59,6 +59,7 @@ from mcp_synology.modules.filestation.tasks import (
     handoff_reply,
     poll_task,
     running_task,
+    skipped_line,
     where_it_went,
 )
 
@@ -381,10 +382,12 @@ def _already_done(
     *,
     dest_of: dict[str, str] | None = None,
     dest: str | None = None,
+    failing: str | None = None,
 ) -> str:
     """Name the items a multi-path operation finished before a later one failed, and the ones DSM
     skipped, which aren't done: a move's is still at its source (#585). One that went elsewhere
-    than ``dest`` says so (``dest_of``)."""
+    than ``dest`` says so (``dest_of``). ``failing``: the source that failed, part of which may
+    have landed."""
 
     def named(path: str) -> str:
         return where_it_went(path, dest_of, dest)
@@ -394,14 +397,10 @@ def _already_done(
         past = _PAST_TENSE.get(operation, "processed")
         text = f". Already {past} before this failure: " + ", ".join(map(named, done))
     if skipped:
-        text += (
-            ". Skipped in whole or in part, as an item of that name is already at the destination "
-            "(not compared): " + ", ".join(map(named, skipped))
-        )
-        if operation != "Copy":
-            text += (
-                ". A skipped file is still at the source; a skipped folder keeps the items skipped"
-            )
+        # A skip's advice warns here too: retrying one named like what landed replaces it (#580).
+        landed = [*(done or []), *([failing] if failing else [])]
+        line = skipped_line(operation != "Copy", skipped, landed, dest_of=dest_of, dest=dest)
+        text += ". " + line.removesuffix(".")
     return text
 
 
@@ -612,7 +611,9 @@ def _copy_move_result(
             mapped.error_code,
             f"{operation} files failed: {_code_text(err_code)} on path: {shown(str(err_path))}"
             + _partial_note(status, [(err_path, err_code)], operation, path, dest)
-            + _already_done(operation, done, skipped_so_far, dest_of=dest_of, dest=dest),
+            + _already_done(
+                operation, done, skipped_so_far, dest_of=dest_of, dest=dest, failing=path
+            ),
             retryable=mapped.retryable,
             suggestion=(
                 mapped.suggestion
@@ -635,7 +636,9 @@ def _copy_move_result(
             f"{operation} files failed: "
             + "; ".join(f"{shown(p)} ({_code_text(code)})" for p, code in failed)
             + _partial_note(status, failed, operation, path, dest)
-            + _already_done(operation, done, skipped_so_far, dest_of=dest_of, dest=dest),
+            + _already_done(
+                operation, done, skipped_so_far, dest_of=dest_of, dest=dest, failing=path
+            ),
             retryable=mapped.retryable,
             param="paths",
             value=path,
@@ -850,8 +853,7 @@ async def _copy_move(
         if running is not None:
             started = running.get("params") or {}
             if isinstance(started.get("dest_folder_path"), str):
-                # Another client may have sent /d/, so it compares with this call's own.
-                task_dest = started["dest_folder_path"].rstrip("/") or "/"
+                task_dest = started["dest_folder_path"]
             if isinstance(started.get("overwrite"), bool):
                 task_overwrite = started["overwrite"]
             # Never start a second task on a path that already has one (#245).
@@ -886,8 +888,10 @@ async def _copy_move(
                     else ErrorCode.UNAVAILABLE,
                     f"{operation} files failed: DSM didn't answer for {shown(p)} "
                     f"({describe_transport_error(e)}); its {operation.lower()} may have started"
-                    f"{_already_done(operation, done, skipped_so_far, dest_of=went, dest=dest)}"
-                    f"{not_started}.",
+                    + _already_done(
+                        operation, done, skipped_so_far, dest_of=went, dest=dest, failing=p
+                    )
+                    + f"{not_started}.",
                     retryable=False,
                     param="paths",
                     value=p,
@@ -1460,6 +1464,19 @@ async def restore_from_recycle_bin(
                 on_progress=on_progress,
             )
             if handed_off:
+                earlier_skips = sum(x.startswith("[!]") for x in results)
+                if earlier_skips:
+                    # The first line is what gets read, as it is for a finished restore.
+                    results.insert(
+                        0,
+                        format_status(
+                            f"Restored {len(results) - earlier_skips:,} of {len(full_paths):,} "
+                            f"item(s) from /{share_name} recycle bin so far; {earlier_skips:,} "
+                            "with skips (that name is already at the destination, "
+                            "overwrite=false; details below):",
+                            success=False,
+                        ),
+                    )
                 results.append(r)
                 return "\n".join(results) + note
             results.append(_as_restore(r, share_name))
