@@ -15,6 +15,7 @@ import pytest
 import respx
 from mcp.server.mcpserver.exceptions import ToolError
 
+from mcp_synology.core.formatting import ESCAPED_NAME_ADVICE
 from mcp_synology.modules.filestation.operations import (
     copy_files,
     create_folder,
@@ -1579,6 +1580,24 @@ class TestCopyMoveRestorePreCheck:
         assert "destination folder /w/no-dir doesn't exist" in error["message"]
         assert "Nothing was" in error["message"]
         assert error["param"] == "dest_folder" and "create_folder" in error["suggestion"]
+        assert "start" not in calls, calls
+
+    @respx.mock
+    @pytest.mark.parametrize("op", [copy_files, move_files])
+    async def test_missing_escaped_destination_isnt_told_to_create_it(
+        self, mock_client: DsmClient, op: Any
+    ) -> None:
+        """Pre-QA on #606: a destination copied from a listing that showed it escaped names
+        nothing, and create_folder would make a look-alike with a literal backslash, which
+        lists just like the real one; the copy or move would land there."""
+        dest = "/w/folder\\u202efdp"
+        side_effect, calls = self._dsm(missing={dest})
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        with pytest.raises(ToolError) as exc_info:
+            await op(mock_client, paths=["/w/a"], dest_folder=dest)
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "not_found", error
+        assert error["suggestion"] == ESCAPED_NAME_ADVICE, error
         assert "start" not in calls, calls
 
     @respx.mock
@@ -3542,9 +3561,9 @@ class TestDeleteFailurePartway:
             (
                 408,
                 "Use list_files or search_files to find the correct path. A name a reply shows "
-                "with an escape (`\\n`, `\\x..`, `\\u....`) holds a character these tools "
-                "can't take, so they can't act on it, and passing it as shown names nothing: "
-                f"rename it in DSM's File Station first. {_RETRY_NOTE}",
+                "with an escape (such as `\\n`, `\\x1b`, `\\u202e` or `\\U000e0041`) holds a "
+                "character these tools can't take, so they can't act on it, and passing it as "
+                f"shown names nothing: rename it in DSM's File Station first. {_RETRY_NOTE}",
             ),
         ],
     )

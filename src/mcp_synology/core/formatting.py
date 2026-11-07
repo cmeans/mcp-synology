@@ -95,16 +95,23 @@ _ANY_ESCAPE = re.compile(r"\\(?:n|r|x[0-9a-f]{2}|u[0-9a-f]{4}|U[0-9a-f]{8})")
 
 # Advice for a path that may have been copied from a reply showing a name escaped (#604).
 ESCAPED_NAME_ADVICE = (
-    "A name a reply shows with an escape (`\\n`, `\\x..`, `\\u....`) holds a character these "
-    "tools can't take, so they can't act on it, and passing it as shown names nothing: rename "
-    "it in DSM's File Station first."
+    "A name a reply shows with an escape (such as `\\n`, `\\x1b`, `\\u202e` or "
+    "`\\U000e0041`) holds a character these tools can't take, so they can't act on it, and "
+    "passing it as shown names nothing: rename it in DSM's File Station first."
 )
 
 
 def holds_escape(text: str) -> bool:
-    """Whether ``text`` holds an escape as ``escape_controls`` writes one: a name copied from a
-    reply that way names no item, as the item's own name holds the character itself."""
-    return _ANY_ESCAPE.search(text) is not None
+    """Whether ``text`` holds an escape exactly as ``escape_controls`` writes one: a name copied
+    from a reply that way names no item, as the item's own name holds the character itself. A
+    backslash that spells anything else (`\\x41`, upper-case hex, `\\u0041`) is a name's own;
+    `\\n` and `\\r` can't be told from a real backslash before an `n` or `r` (`C:\\new`)."""
+    for m in _ANY_ESCAPE.finditer(text):
+        escape = m.group()
+        char = "\n" if escape == "\\n" else "\r" if escape == "\\r" else chr(int(escape[2:], 16))
+        if forges(char) and escape_controls(char) == escape:
+            return True
+    return False
 
 
 def unescaped_length(text: str) -> int:

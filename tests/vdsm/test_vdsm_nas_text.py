@@ -8,11 +8,13 @@ name is refused as an argument.
 from __future__ import annotations
 
 import base64
+import json
 from typing import TYPE_CHECKING, Any
 
 import pytest
 from mcp.server.mcpserver.exceptions import ToolError
 
+from mcp_synology.core.formatting import ESCAPED_NAME_ADVICE
 from mcp_synology.modules.filestation.listing import list_files
 from mcp_synology.modules.filestation.operations import move_files
 from mcp_synology.modules.filestation.paths import resolve_paths
@@ -81,5 +83,7 @@ async def test_no_reply_lets_a_name_start_a_line(admin_client: Any, hostile_file
 async def test_the_name_as_shown_matches_nothing(admin_client: Any, hostile_files: None) -> None:
     """The cost, stated in the docs: an escaped name isn't the file's, so DSM doesn't find it."""
     client: DsmClient = admin_client[0]
-    with pytest.raises(ToolError, match="not_found"):
+    with pytest.raises(ToolError, match="not_found") as exc_info:
         await move_files(client, paths=[f"{BASE}/src/{SHOWN}"], dest_folder=f"{BASE}/dst")
+    # Listing again would show the same escape, so the advice says the name can't be used (#606).
+    assert ESCAPED_NAME_ADVICE in json.loads(str(exc_info.value))["error"]["suggestion"]

@@ -1407,6 +1407,12 @@ class TestPathsTakenExactly:
         ("/s/a\\x1", False),
         ("/s/a\\u202", False),
         ("/s/a\\u202E", False),  # replies write lower-case hex
+        # Escape-shaped, but not what a reply writes: these characters aren't escaped.
+        ("/s/a\\x41b", False),
+        ("/s/a\\u0041", False),
+        ("/s/a\\U0001f600", False),
+        # A real backslash before `n` can't be told from an escaped newline (accepted cost).
+        ("/s/C:\\new folder", True),
     ],
 )
 def test_missing_paths_suggestion_advises_on_an_escaped_name(path: str, advised: bool) -> None:

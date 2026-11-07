@@ -20,9 +20,11 @@ from mcp_synology.core.errors import (
     error_from_code,
 )
 from mcp_synology.core.formatting import (
+    ESCAPED_NAME_ADVICE,
     error_response,
     format_size,
     format_status,
+    holds_escape,
     synology_error_response,
 )
 from mcp_synology.modules.filestation.helpers import (
@@ -546,8 +548,13 @@ async def _refuse_missing_destination(
             retryable=False,
             param="dest_folder",
             value=dest,
+            # A destination copied from an escaped listing names nothing, and create_folder
+            # would make a look-alike with a literal backslash, so that advice isn't given.
             suggestion=(
-                "Create it first with create_folder, or check the path with list_files, then retry."
+                ESCAPED_NAME_ADVICE
+                if holds_escape(dest)
+                else "Create it first with create_folder, or check the path with list_files, "
+                "then retry."
             ),
         )
     if 407 in codes:
