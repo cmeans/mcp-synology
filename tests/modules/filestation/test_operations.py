@@ -2785,7 +2785,7 @@ class TestCopyMoveHandoff:
         assert record.earlier == []
 
     @respx.mock
-    async def test_a_skipped_source_isnt_named_in_the_hand_off_warning(
+    async def test_a_skipped_source_is_named_in_the_hand_off_warning(
         self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from mcp_synology.modules.filestation import operations
@@ -2801,7 +2801,7 @@ class TestCopyMoveHandoff:
         result = await copy_files(
             mock_client, paths=["/s/a", "/s/b", "/s/x/a"], dest_folder="/s/dst", timeout=1
         )
-        assert "Named like" not in result
+        assert "Named like one this call already ran: '/s/x/a'" in result
 
     @respx.mock
     async def test_a_hand_off_with_no_same_name_doesnt_warn(self, mock_client: DsmClient) -> None:
@@ -2873,7 +2873,7 @@ class TestCopyMoveHandoff:
         )
         assert result.startswith("[+] Restored from /video recycle bin")
         assert "Still restoring on the NAS: /video/#recycle/Movies/b" in result
-        assert "Already restored: /video/#recycle/Shows/a." in result
+        assert "Already restored: /video/#recycle/Shows/a (to /video/Shows)." in result
         assert "Not started: /video/#recycle/Docs/c." in result
 
     @respx.mock
@@ -4681,7 +4681,7 @@ async def test_a_restores_hand_off_says_still_at_the_source(
     reply = await restore_from_recycle_bin(
         mock_client, share="/s", paths=["x/a", "y/b"], timeout=1, records=TaskRecords()
     )
-    assert "(not compared): /s/#recycle/x/a." in reply
+    assert "(not compared): /s/#recycle/x/a (to /s/x)." in reply
     assert "A skipped file is still at the source" in reply
 
 
@@ -5050,3 +5050,95 @@ def test_merged_records_keep_what_each_call_did() -> None:
     record = records.get(handle)
     assert record is not None
     assert record.done_earlier == ["/s/a", "/s/b"]
+
+
+@respx.mock
+async def test_a_final_warns_about_a_folder_named_like_a_skip_from_the_same_call(
+    mock_client: DsmClient,
+) -> None:
+    """QA round 2 on #601: the same request warned with no hand-off, and offered overwrite=true
+    with one, which could replace what the partly skipped folder moved there."""
+    from mcp_synology.modules.filestation.tasks import TaskRecord, file_task
+
+    records = TaskRecords()
+    handle = Handle("move", "T_n")
+    records.add(TaskRecord(handle, ["/t/n"], dest="/d", skipped_earlier=["/s/n"]))
+    finished = {
+        "finished": True,
+        "path": "/t/n",
+        "processed_size": 1,
+        "skipstatus": {"status": "partial"},
+    }
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        return_value=httpx.Response(200, json={"success": True, "data": finished})
+    )
+    text = await file_task(mock_client, records=records, handle=str(handle))
+    assert "Don't retry these with overwrite=true" in text
+    assert "this call's '/s/n' went first" in text
+
+
+def test_a_skip_only_clashes_at_its_own_destination() -> None:
+    """QA round 2 on #601: `A/x` skipped into /v/A isn't what `B/x` landed in /v/B."""
+    from mcp_synology.modules.filestation.tasks import skipped_line
+
+    went = {"/v/#recycle/A/x": "/v/A", "/v/#recycle/B/x": "/v/B"}
+    line = skipped_line(True, ["/v/#recycle/A/x"], ["/v/#recycle/B/x"], dest_of=went, dest="/v/B")
+    assert "Don't retry" not in line
+    assert "'/v/#recycle/A/x' (to '/v/A')" in line or "/v/#recycle/A/x (to /v/A)" in line
+    assert "Pass overwrite=true" in line
+
+    went = {"/v/#recycle/A/x": "/v/A", "/v/#recycle/A/X": "/v/A"}
+    line = skipped_line(True, ["/v/#recycle/A/X"], ["/v/#recycle/A/x"], dest_of=went, dest="/v/A")
+    assert "Don't retry /v/#recycle/A/X" in line
+
+
+@respx.mock
+async def test_a_merged_records_skip_says_where_it_was(mock_client: DsmClient) -> None:
+    """QA round 2 on #601: a skip at /d2 read as one at the running task's /d1."""
+    from mcp_synology.modules.filestation.tasks import TaskRecord, file_task
+
+    records = TaskRecords()
+    handle = Handle("move", "T_big")
+    records.add(TaskRecord(handle, ["/s/big"], dest="/d1"))
+    records.add(
+        TaskRecord(
+            handle,
+            ["/s/big"],
+            dest="/d1",
+            skipped_earlier=["/s/c"],
+            done_earlier=["/s/e"],
+            dest_of={"/s/c": "/d2", "/s/e": "/d2", "/s/big": "/d1"},
+        )
+    )
+    record = records.get(handle)
+    assert record is not None
+    assert record.landed_earlier == []
+    finished = {"finished": True, "path": "/s/big", "processed_size": 1}
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        return_value=httpx.Response(200, json={"success": True, "data": finished})
+    )
+    text = await file_task(mock_client, records=records, handle=str(handle))
+    assert "/s/c (to /d2)" in text
+    assert "/s/e (to /d2)" in text
+
+
+def test_merged_records_keep_what_landed_for_each_call() -> None:
+    from mcp_synology.modules.filestation.tasks import TaskRecord
+
+    records = TaskRecords()
+    handle = Handle("move", "T")
+    records.add(TaskRecord(handle, ["/s/big"], landed_earlier=["/s/a"]))
+    records.add(TaskRecord(handle, ["/s/big"], landed_earlier=["/s/b"]))
+    record = records.get(handle)
+    assert record is not None
+    assert record.landed_earlier == ["/s/a", "/s/b"]
+
+
+def test_a_failure_shows_an_odd_path_safely() -> None:
+    from mcp_synology.modules.filestation.operations import _copy_move_result
+
+    status = {"error": {"code": 401}, "path": "/s/a\u200bb"}
+    with pytest.raises(ToolError) as failed:
+        _copy_move_result(status, "/s/a", "Move", dest="/d")
+    assert "\u200b" not in str(failed.value).encode().decode("unicode_escape", "ignore")
+    assert "\\u200b" in json.loads(str(failed.value))["error"]["message"]

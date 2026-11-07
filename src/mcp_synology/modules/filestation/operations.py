@@ -767,6 +767,7 @@ async def _copy_move(
     check_sources: bool = True,
     already_done: list[str] | None = None,
     already_skipped: list[str] | None = None,
+    dest_of: dict[str, str] | None = None,
     later: list[str] | None = None,
     records: TaskRecords | None = None,
     on_progress: ProgressCallback | None = None,
@@ -818,6 +819,7 @@ async def _copy_move(
     total_processed = 0
     done = list(already_done or [])
     skipped_so_far = already_skipped if already_skipped is not None else []
+    went = dest_of if dest_of is not None else {}
     skipped_paths: list[str] = []
     landed_here: list[str] = []
     for i, p in enumerate(normalized):
@@ -875,7 +877,8 @@ async def _copy_move(
                 )
         if isinstance(outcome, Handoff):
             # A task already running to another folder lands nothing here.
-            placed = [*landed_here, p] if task_dest == dest else list(landed_here)
+            went[p] = task_dest
+            placed = [*done, p] if task_dest == dest else list(done)
             if records is not None:
                 records.add(
                     TaskRecord(
@@ -888,6 +891,7 @@ async def _copy_move(
                         skipped_earlier=list(skipped_so_far),
                         done_earlier=list(done),
                         landed_earlier=placed,
+                        dest_of=dict(went),
                     )
                 )
             reply = handoff_reply(
@@ -900,12 +904,18 @@ async def _copy_move(
                 done=done,
                 skipped=skipped_so_far,
                 landed=placed,
+                dest_of=went,
                 not_started=normalized[i + 1 :] + list(later or []),
             )
             if running is not None:
                 other = task_dest if task_dest != dest else None
                 reply = _already_running(operation, p, other) + "\n" + reply
-            ran = {name_key(path) for path in placed}
+            # A skipped folder lands its other items, and a hand-off can't tell it from a file.
+            ran = {
+                name_key(path)
+                for path in [*placed, *skipped_so_far]
+                if went.get(path, dest) == dest
+            }
             alike = [q for q in normalized[i + 1 :] if name_key(q) in ran]
             if alike:
                 # #580: "Run them again" with overwrite=true would replace what this call placed.
@@ -918,6 +928,7 @@ async def _copy_move(
             return reply, True
         size, skipped = outcome
         total_processed += size
+        went[p] = dest
         if skipped:
             skipped_paths.append(p)
             skipped_so_far.append(p)
@@ -933,6 +944,10 @@ async def _copy_move(
         total_processed,
         skipped_paths,
         only_named_sources_removed=already_skipped is not None,
+        # A restore's earlier items at this destination; for any other call, none.
+        earlier=[
+            q for q in [*done, *skipped_so_far] if q not in normalized and went.get(q) == dest
+        ],
     )
     return text, False
 
@@ -966,8 +981,8 @@ async def _copy_move_summary(
     if total_processed > 0:
         lines.append(f"\nTotal size: {format_size(total_processed)}")
 
-    # A skip, or a caller that can't vouch for the rest of the folder (a restore to several places,
-    # file_task's final result), leaves it unsaid that the folder was emptied (#585).
+    # With a skip, or from a restore to several places or file_task's final result, whose other
+    # sources may still be in that folder, it names what went instead (#585).
     if remove_src and not skipped_paths and not only_named_sources_removed:
         src_dirs = sorted({"/".join(p.split("/")[:-1]) for p in normalized})
         lines.extend(f"\nSource files have been removed from {d}/." for d in src_dirs)
@@ -1412,6 +1427,7 @@ async def restore_from_recycle_bin(
         results: list[str] = []
         restored: list[str] = []
         restored_skipped: list[str] = []
+        restored_to: dict[str, str] = {}
         for i, (fp, dest) in enumerate(zip(full_paths, restore_destinations, strict=False)):
             r, handed_off = await _copy_move(
                 client,
@@ -1424,6 +1440,7 @@ async def restore_from_recycle_bin(
                 check_sources=False,
                 already_done=restored,
                 already_skipped=restored_skipped,
+                dest_of=restored_to,
                 later=full_paths[i + 1 :],
                 records=records,
                 on_progress=on_progress,

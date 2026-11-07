@@ -223,10 +223,9 @@ MODULE_INFO = ModuleInfo(
                 "move_files. `dest_folder` must already exist; it isn't created. With "
                 "`overwrite=false` (default), items whose name is already at the destination are "
                 "skipped and listed, and the rest are copied. With `overwrite=true`, two sources "
-                "that would "
-                "replace each other are refused, and a replaced file may not be in the recycle "
-                "bin. If any source is missing, nothing is copied. A long copy keeps running on "
-                "the NAS and returns a handle for file_task."
+                "that would replace each other are refused, and a replaced file may not be in the "
+                "recycle bin. If any source is missing, nothing is copied. A long copy keeps "
+                "running on the NAS and returns a handle for file_task."
             ),
             permission_tier=PermissionTier.WRITE,
             annotations=_ANNO_DESTRUCTIVE,
