@@ -383,11 +383,12 @@ def _already_done(
     dest_of: dict[str, str] | None = None,
     dest: str | None = None,
     failing: str | None = None,
+    landed: list[str] | None = None,
 ) -> str:
     """Name the items a multi-path operation finished before a later one failed, and the ones DSM
     skipped, which aren't done: a move's is still at its source (#585). One that went elsewhere
     than ``dest`` says so (``dest_of``). ``failing``: the source that failed, part of which may
-    have landed."""
+    have landed. ``landed``: what else landed, for a task whose record knows more."""
 
     def named(path: str) -> str:
         return where_it_went(path, dest_of, dest)
@@ -398,8 +399,8 @@ def _already_done(
         text = f". Already {past} before this failure: " + ", ".join(map(named, done))
     if skipped:
         # A skip's advice warns here too: retrying one named like what landed replaces it (#580).
-        landed = [*(done or []), *([failing] if failing else [])]
-        line = skipped_line(operation != "Copy", skipped, landed, dest_of=dest_of, dest=dest)
+        ran = [*(done or []), *(landed or []), *([failing] if failing else [])]
+        line = skipped_line(operation != "Copy", skipped, ran, dest_of=dest_of, dest=dest)
         text += ". " + line.removesuffix(".")
     return text
 
@@ -600,6 +601,7 @@ def _copy_move_result(
     dest: str | None = None,
     skipped_so_far: list[str] | None = None,
     dest_of: dict[str, str] | None = None,
+    landed: list[str] | None = None,
 ) -> tuple[int, bool]:
     """``(processed bytes, skipped)`` from a finished CopyMove status; ToolError on failure."""
     if "error" in status:
@@ -612,7 +614,13 @@ def _copy_move_result(
             f"{operation} files failed: {_code_text(err_code)} on path: {shown(str(err_path))}"
             + _partial_note(status, [(err_path, err_code)], operation, path, dest)
             + _already_done(
-                operation, done, skipped_so_far, dest_of=dest_of, dest=dest, failing=path
+                operation,
+                done,
+                skipped_so_far,
+                dest_of=dest_of,
+                dest=dest,
+                failing=path,
+                landed=landed,
             ),
             retryable=mapped.retryable,
             suggestion=(
@@ -637,7 +645,13 @@ def _copy_move_result(
             + "; ".join(f"{shown(p)} ({_code_text(code)})" for p, code in failed)
             + _partial_note(status, failed, operation, path, dest)
             + _already_done(
-                operation, done, skipped_so_far, dest_of=dest_of, dest=dest, failing=path
+                operation,
+                done,
+                skipped_so_far,
+                dest_of=dest_of,
+                dest=dest,
+                failing=path,
+                landed=landed,
             ),
             retryable=mapped.retryable,
             param="paths",

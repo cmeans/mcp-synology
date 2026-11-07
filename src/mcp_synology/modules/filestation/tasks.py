@@ -685,7 +685,8 @@ async def _list_running(client: DsmClient) -> list[RunningTask]:
             paths = [paths]
         if not isinstance(paths, list) or not _TASKID_RE.match(taskid):
             continue
-        paths = [p for p in paths if isinstance(p, str)]
+        # Another client may send /s/b/, which is the source this server calls /s/b.
+        paths = [p.rstrip("/") or "/" for p in paths if isinstance(p, str)]
         dest = params.get("dest_folder_path")
         if isinstance(dest, str):
             # Another client may send /d/, which is the folder this server calls /d.
@@ -866,6 +867,7 @@ async def _final_text(
                 dest=record.dest,
                 skipped_so_far=record.skipped_earlier,
                 dest_of=record.dest_of,
+                landed=record.landed_earlier,
             )
             text = await _copy_move_summary(
                 client,

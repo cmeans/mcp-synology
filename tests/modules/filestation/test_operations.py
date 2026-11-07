@@ -5154,6 +5154,8 @@ def _dsm_for_each(
     """Every source exists; each task finishes on its first status, skipped or still running if
     named. A source's task ID is ``T_`` plus its name."""
 
+    latest: dict[str, str] = {}
+
     def side_effect(request: httpx.Request) -> httpx.Response:
         params = dict(request.url.params)
         method = params.get("method")
@@ -5162,14 +5164,13 @@ def _dsm_for_each(
         data: dict[str, Any]
         if method == "start":
             data = {"taskid": f"T_{params['path'].rsplit('/', 1)[-1]}"}
+            latest[data["taskid"]] = params["path"]
         elif method == "status":
-            source = next(
-                (
-                    p
-                    for p in (*skipped, *running)
-                    if params["taskid"].strip('"') == "T_" + p.rsplit("/", 1)[-1]
-                ),
-                None,
+            # Task IDs go by name, and two sources may share one: this is the one started last.
+            taskid = params["taskid"].strip('"')
+            source = latest.get(
+                taskid,
+                next((p for p in (*skipped, *running) if p.rsplit("/", 1)[-1] == taskid[2:]), None),
             )
             if source in running:
                 data = {"finished": False, "progress": 0.5, "total": 2}
@@ -5605,4 +5606,56 @@ async def test_a_failure_warns_about_a_skip_named_like_what_landed(
     )
     with pytest.raises(ToolError) as failed:
         await move_files(mock_client, paths=["/t/a", "/s/a", "/x/b"], dest_folder="/d")
+    message = json.loads(str(failed.value))["error"]["message"]
+    assert "Already moved before this failure: /t/a." in message
+    assert "Don't retry /s/a" in message
+
+
+@respx.mock
+async def test_a_failed_final_warns_about_what_its_record_says_landed(
+    mock_client: DsmClient,
+) -> None:
+    """Pre-QA on #601: `file_task`'s status warned, and its failed final said Pass."""
+    from mcp_synology.modules.filestation.tasks import TaskRecord, file_task
+
+    records = TaskRecords()
+    handle = Handle("copy", "T_b")
+    records.add(
+        TaskRecord(handle, ["/s/b"], dest="/d", skipped_earlier=["/s/a"], landed_earlier=["/s/a"])
+    )
+    failed_status = {"finished": True, "error": {"code": 1000}, "path": "/s/b"}
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        return_value=httpx.Response(200, json={"success": True, "data": failed_status})
+    )
+    with pytest.raises(ToolError) as failed:
+        await file_task(mock_client, records=records, handle=str(handle))
     assert "Don't retry /s/a" in json.loads(str(failed.value))["error"]["message"]
+
+
+@respx.mock
+async def test_a_task_listed_with_a_slash_on_its_source_is_still_that_source(
+    mock_client: DsmClient,
+) -> None:
+    """Pre-QA on #601: with a task on `/s/b/`, a move of `/s/b` started a second one."""
+    calls: list[dict[str, str]] = []
+    running = {
+        "api": "SYNO.FileStation.CopyMove",
+        "taskid": "T_b",
+        "finished": False,
+        "params": {
+            "path": ["/s/b/"],
+            "dest_folder_path": "/d",
+            "overwrite": False,
+            "remove_src": True,
+        },
+    }
+    base = _dsm_for_each(calls=calls)
+
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        if dict(request.url.params).get("method") == "list":
+            return httpx.Response(200, json={"success": True, "data": {"tasks": [running]}})
+        return base(request)
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+    await move_files(mock_client, paths=["/s/b"], dest_folder="/d")
+    assert not [c for c in calls if c.get("method") == "start"]
