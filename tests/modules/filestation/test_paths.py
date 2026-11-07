@@ -1923,12 +1923,26 @@ def test_a_restore_item_that_could_forge_a_reply_line_is_refused() -> None:
 
 def test_a_forging_path_refusal_keeps_its_callers_advice() -> None:
     """QA round 5 on #605: the caller's own advice comes after the shared text."""
-    from mcp_synology.modules.downloadstation.helpers import normalize_destination
-    from mcp_synology.modules.filestation.paths import DEFAULT_SUGGESTION, check_parts
+    from mcp_synology.modules.downloadstation.helpers import (
+        _DESTINATION_ADVICE,
+        normalize_destination,
+    )
+    from mcp_synology.modules.filestation.paths import (
+        DEFAULT_SUGGESTION,
+        check_parts,
+        resolve_bin_items,
+    )
+    from mcp_synology.modules.photos.helpers import FOLDER_ADVICE, check_folder_path
 
     with pytest.raises(ToolError) as exc:
         check_parts("/video/a\nb", "path")
     assert _error(exc)["suggestion"].endswith(DEFAULT_SUGGESTION)
     with pytest.raises(ToolError) as exc:
         normalize_destination("video/a\nb", operation="Create download")
-    assert "Write the path out in full from the shared folder" in _error(exc)["suggestion"]
+    assert _error(exc)["suggestion"].endswith(_DESTINATION_ADVICE)
+    with pytest.raises(ToolError) as exc:
+        check_folder_path("/a\nb")
+    assert _error(exc)["suggestion"].endswith(FOLDER_ADVICE)
+    with pytest.raises(ToolError) as exc:
+        resolve_bin_items("video", ["Shows/a\nb"], "paths")
+    assert "as list_recycle_bin shows it" in _error(exc)["suggestion"]
