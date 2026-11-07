@@ -6,7 +6,9 @@ same input behaves the same way in every tool. The rules run once, on the raw in
 1. **Parts** (every role): only whitespace before a leading ``/`` is padding; the rest is
    taken exactly (#488: DSM keeps whitespace in a name). A NUL is refused (DSM cuts the
    path there, so ``<dir>/a<NUL>x`` acts on ``a``; probe on #472), and so are an empty part
-   (``//``: DSM answers 408) and a ``.`` or ``..`` part (#449; padded with whitespace too).
+   (``//``: DSM answers 408), a ``.`` or ``..`` part (#449; padded with whitespace too), and
+   a character a reply shows escaped (#604, `formatting.forges`: control characters but a
+   tab, line and paragraph separators, bidi controls, tag characters).
 2. **Share**: the first part is a known shared folder, sent with DSM's spelling (#160,
    #353; `ensure_known_shares`).
 3. **Role** (one table, `PATH_PARAMS`): what the argument may name.
@@ -24,7 +26,7 @@ from typing import TYPE_CHECKING, Literal, NamedTuple
 import regex
 
 from mcp_synology.core.errors import ErrorCode
-from mcp_synology.core.formatting import error_response
+from mcp_synology.core.formatting import error_response, forges
 from mcp_synology.modules.filestation import helpers
 from mcp_synology.modules.filestation.helpers import (
     NAME_BYTES,
@@ -127,7 +129,8 @@ _WRITE_OPS: dict[str, Literal["Delete", "Move", "Rename"]] = {
 
 
 def check_parts(raw: str, param: str, suggestion: str = DEFAULT_SUGGESTION) -> str:
-    """Refuse a NUL, an empty part, or a ``.``/``..`` part in ``raw``; return it normalized.
+    """Refuse a NUL, a character a reply shows escaped (#604), an empty part, or a
+    ``.``/``..`` part in ``raw``; return it normalized.
 
     Run on the path as given, before the share check rewrites it.
     """
@@ -140,6 +143,21 @@ def check_parts(raw: str, param: str, suggestion: str = DEFAULT_SUGGESTION) -> s
             param=param,
             value=raw,
             suggestion=suggestion,
+        )
+    if forges(raw):
+        # Replies show such a name escaped, so the name as shown is never the item's (#604).
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            f"Invalid path {raw!r}: a control character, line or paragraph separator, bidi "
+            "control or tag character isn't allowed. Replies show them escaped, so a name that "
+            "holds one can't be given here.",
+            retryable=False,
+            param=param,
+            value=raw,
+            suggestion="For an item on the NAS, rename it there (in DSM) and use its new name, "
+            "or pass its ID where the tool takes one (Photos; File Station's tools and Download "
+            "Station's destinations take paths only); for one this would create, give its name "
+            f"plainly. {suggestion}",
         )
     normalized = normalize_path(raw)
     parts = normalized.split("/")[1:]
@@ -796,7 +814,7 @@ def resolve_bin_items(share: str, items: list[str], param: str = "paths") -> lis
 
     resolved: list[ResolvedPath] = []
     for item in items:
-        if "\x00" in item or any(_is_dot(part) for part in item.split("/") if part):
+        if "\x00" in item or forges(item) or any(_is_dot(part) for part in item.split("/") if part):
             check_parts(item, param, suggestion)
         p = strip_padding(item)
         head, _, rest = p.lstrip("/").partition("/")

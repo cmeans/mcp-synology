@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import json
 from typing import TYPE_CHECKING, Any
 
-from mcp_synology.core.formatting import format_key_value, format_timestamp
+from mcp_synology.core.formatting import format_key_value, format_timestamp, nested_json
 from mcp_synology.modules.storage.helpers import (
     STORAGE_API,
     Sections,
@@ -201,9 +200,9 @@ def scheduled_local_times(scheduler: dict[str, Any] | None) -> dict[str, str]:
     """Next run of each enabled S.M.A.R.T. task style, as the NAS's local clock time."""
     times: dict[str, str] = {}
     for task in dicts(scheduler.get("items") if isinstance(scheduler, dict) else None):
-        try:
-            args = json.loads(task.get("app_args") or "{}")
-        except (TypeError, ValueError):
+        # JSON inside DSM's JSON, parsed and escaped as a reply is (#604).
+        args = nested_json(task.get("app_args"))
+        if not isinstance(args, dict):
             args = {}
         style = str(args.get("test_style") or "")
         when = str(task.get("next_trigger_time") or "")

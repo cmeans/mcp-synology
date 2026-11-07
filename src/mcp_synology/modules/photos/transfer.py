@@ -77,7 +77,12 @@ def _dest_name(item: dict[str, Any], size: str, used: set[str]) -> str:
     two that are one file on Windows or macOS count as the same name.
     """
     item_id = item.get("id")
-    name = _safe_name(str(item.get("filename") or ""), f"item-{item_id}")
+    filename = str(item.get("filename") or "")
+    # A name that can't be used as it is (one DSM's reply escaped, #604, holds a backslash)
+    # keeps its extension, so the file still opens as what it is.
+    suffix = PurePosixPath(filename).suffix
+    plain_suffix = suffix if suffix[1:].isalnum() and len(suffix) <= 10 else ""
+    name = _safe_name(filename, f"item-{item_id}{plain_suffix}")
     if size != "original":
         name = f"{PurePosixPath(name).stem or f'item-{item_id}'}_{size}.jpg"
     if _name_key(name) in used:

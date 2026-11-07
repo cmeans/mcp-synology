@@ -152,11 +152,12 @@ def check_folder_path(value: str, param: str = "folder", advice: str = FOLDER_AD
 
     Taken exactly, by File Station's part rules (#510): `check_parts` drops only whitespace
     before a leading ``/`` (and a trailing ``/``), and refuses a NUL (DSM cuts the path
-    there: ``/x/foo<NUL>y`` resolved to ``/x/foo``), an empty part (``//``) and a ``.`` or
-    ``..`` part (DSM answers 642 for those). Photos reaches a folder whose name starts with
-    whitespace exactly (`` foo`` beside ``foo``), so stripping looked up another folder (vdsm
-    DSM 7.1, 7.2.2, 7.3.2 and 7.4.1, personal space and Shared Space). ``advice`` is the
-    refusal's suggestion, for an argument that takes only a path (`photo_request`).
+    there: ``/x/foo<NUL>y`` resolved to ``/x/foo``), a character a reply shows escaped (#604),
+    an empty part (``//``) and a ``.`` or ``..`` part (DSM answers 642 for those). Photos
+    reaches a folder whose name starts with whitespace exactly (`` foo`` beside ``foo``), so
+    stripping looked up another folder (vdsm DSM 7.1, 7.2.2, 7.3.2 and 7.4.1, personal space
+    and Shared Space). ``advice`` is the refusal's suggestion, for an argument that takes only
+    a path (`photo_request`).
     """
     return check_parts(value, param, advice)
 
@@ -436,12 +437,28 @@ class Photos:
         change when Photos 1.9.1 re-indexes a file.
         """
         tags = await self.walk("Browse.GeneralTag")
-        exact = {str(t.get("name", "")): int(t["id"]) for t in tags}
+        exact: dict[str, int] = {}
+        by_name: dict[str, list[int]] = {}
+        for t in tags:
+            key = str(t.get("name", ""))
+            by_name.setdefault(key, []).append(int(t["id"]))
+            exact[key] = int(t["id"])
+        # Two names that read the same once escaped (#604).
+        doubled = {key: ids for key, ids in by_name.items() if len(ids) > 1}
         folded: dict[str, list[dict[str, Any]]] = {}
         for t in tags:
             folded.setdefault(str(t.get("name", "")).casefold(), []).append(t)
         out: dict[str, int | None] = {}
         for name in names:
+            if name in doubled:
+                invalid(
+                    self.operation,
+                    f"Tags {', '.join(map(str, doubled[name][:10]))} all read {name!r}: one holds "
+                    "a character replies show escaped, another a backslash.",
+                    param=param,
+                    value=name,
+                    suggestion="Rename one of them in Photos.",
+                )
             if name in exact:
                 out[name] = exact[name]
                 continue

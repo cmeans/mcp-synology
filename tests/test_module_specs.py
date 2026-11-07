@@ -177,3 +177,23 @@ def test_params_come_only_from_the_table_under_parameters() -> None:
 
 def test_params_none() -> None:
     assert _spec_params("### 1. `t`\n\n**Parameters:** None.\n\n| `x` | y |\n") == set()
+
+
+def test_only_tools_that_take_free_text_have_those_argument_names() -> None:
+    """#604: `server._FREE_TEXT_ARGUMENTS` (`description`, `uri`) are exempt from the argument
+    check in every tool, so a new tool taking one must be checked for echoing it raw before
+    it joins this list."""
+    from mcp_synology.server import _FREE_TEXT_ARGUMENTS
+
+    taking = {
+        (name, param)
+        for module in _MODULE_REGISTRY.values()
+        for name, tool in _registered(module).items()
+        for param in inspect.signature(tool.fn).parameters
+        if param in _FREE_TEXT_ARGUMENTS
+    }
+    assert taking == {
+        ("edit_photo", "description"),
+        ("photo_request", "description"),
+        ("create_download", "uri"),
+    }

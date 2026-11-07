@@ -152,7 +152,7 @@ class TestOriginals:
             await download_photos(
                 client, ids=[12], dest_folder=str(tmp_path), allowed_roots=[tmp_path]
             )
-        assert (tmp_path / "item-12").read_bytes() == b"x"
+        assert (tmp_path / "item-12.jpg").read_bytes() == b"x"  # its extension kept
         assert not (tmp_path.parent / "escape.jpg").exists()
 
     @respx.mock
@@ -1536,3 +1536,27 @@ def test_name_key_is_a_canonical_caseless_match() -> None:
     # U+0390 and U+0399 U+0308 U+0301 are one name under Unicode's canonical caseless
     # match; NFC-then-casefold alone keyed them apart.
     assert _name_key("ΐ.jpg") == _name_key("Ϊ́.jpg")
+
+
+def test_a_name_that_cant_be_used_keeps_its_extension() -> None:
+    """Pre-QA on #605: an escaped name (a Hebrew name with a right-to-left mark) holds a
+    backslash, so it fell back to `item-41`, with no extension."""
+    from mcp_synology.core.formatting import escape_controls
+
+    name = escape_controls("\u05d3\u05d5\u05d3\u200f.jpg")
+    assert _dest_name({"id": 41, "filename": name}, "original", set()) == "item-41.jpg"
+    assert _dest_name({"id": 41, "filename": "a/b.jpg"}, "original", set()) == "item-41.jpg"
+    assert _dest_name({"id": 41, "filename": "a\\b"}, "original", set()) == "item-41"
+    assert _dest_name({"id": 41, "filename": "IMG_1.jpg"}, "original", set()) == "IMG_1.jpg"
+
+
+def test_the_extension_kept_must_itself_be_plain() -> None:
+    """QA round 5 on #605: an escaped name's suffix (`.j\\npg`) holds a backslash, a path
+    separator on Windows, and an overlong one isn't an extension."""
+    from mcp_synology.core.formatting import escape_controls
+
+    assert _dest_name({"id": 5, "filename": escape_controls("a.j\npg")}, "original", set()) == (
+        "item-5"
+    )
+    long_name = escape_controls("a\n." + "x" * 31)
+    assert _dest_name({"id": 5, "filename": long_name}, "original", set()) == "item-5"
