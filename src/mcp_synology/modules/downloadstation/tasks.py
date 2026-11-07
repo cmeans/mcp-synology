@@ -629,8 +629,9 @@ async def _resolve_destination(
                 "escaped, so it can't be sent back as it is.",
                 retryable=False,
                 param="destination",
-                suggestion="Pass `destination`, or rename that folder in DSM (or set another "
-                "default with set_download_config).",
+                suggestion="Pass `destination`, written plainly, without the backslash escapes "
+                "shown here (they'd become part of the name); or rename that folder in DSM, or "
+                "set another default with set_download_config.",
             )
         return (destination if destination is not None else str(default)), ""
 

@@ -155,9 +155,9 @@ def check_parts(raw: str, param: str, suggestion: str = DEFAULT_SUGGESTION) -> s
             param=param,
             value=raw,
             suggestion="For an item on the NAS, rename it there (in DSM) and use its new name, "
-            "or pass its ID where the tool takes one (Photos, Download Station; File Station's "
-            "tools take paths only); for one this would create, give its name plainly. "
-            f"{suggestion}",
+            "or pass its ID where the tool takes one (Photos; File Station's tools and Download "
+            "Station's destinations take paths only); for one this would create, give its name "
+            f"plainly. {suggestion}",
         )
     normalized = normalize_path(raw)
     parts = normalized.split("/")[1:]

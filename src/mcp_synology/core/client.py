@@ -105,9 +105,9 @@ def _loads(content: bytes, label: str) -> Any:
     are, as names use them.
     """
     try:
-        # The encodings parsing the bytes read (UTF-8, -16 or -32, a BOM), so no reply that
-        # parsed before is refused now.
-        text = content.decode(json.detect_encoding(content))
+        # As parsing the bytes read it (UTF-8, -16 or -32, a BOM, surrogates passed through), so
+        # no reply that parsed before is refused or read differently now.
+        text = content.decode(json.detect_encoding(content), "surrogatepass")
         text = text.removeprefix("\ufeff")
         value = json.loads(text)
         return escape_nas_text(value) if needs_escaping(text) else value

@@ -109,7 +109,7 @@ Task titles get a narrower pass (`redact_title`): DSM titles an HTTP task with i
 
 ### Formatting
 
-Plain text through the shared formatters. Text from the NAS (a task title, URI, destination or error detail) comes escaped from the client wherever it holds a control character other than a tab, a line or paragraph separator, a bidi control or a tag character, so it can't make a line of its own in a reply (#604). Speeds use `format_speed` (`—` for 0), sizes are binary units, timestamps are **UTC and say so** (`YYYY-MM-DD HH:MM:SS UTC`, `—` for 0 / never; #137), consistent with `search_files` treating naive input dates as UTC.
+Plain text through the shared formatters. Text from the NAS (a task title, URI, destination or error detail) comes escaped from the client wherever it holds a control character other than a tab, a line or paragraph separator, a bidi control or a tag character, so it can't make a line of its own in a reply (#604). With no `destination`, `create_download` refuses when the user's default destination came escaped, since sending it back would name another folder; a default with a real backslash that looks like an escape is refused too, cautiously. Speeds use `format_speed` (`—` for 0), sizes are binary units, timestamps are **UTC and say so** (`YYYY-MM-DD HH:MM:SS UTC`, `—` for 0 / never; #137), consistent with `search_files` treating naive input dates as UTC.
 
 ### Errors
 
