@@ -356,7 +356,6 @@ class TestRefuseBadName:
             ("rep\u200bort", "Retype the name without the character"),
             ("\u8f9b\U000e0100\u845b\U000e0101", "Write fewer characters in their variant forms"),
             ("a" * 256, "Shorten the name to 255 bytes or fewer"),
-            ("a\x1bb", "Give the new folder's name plainly"),
         ],
     )
     async def test_a_new_folders_advice_fits_its_problem(
@@ -684,23 +683,9 @@ class TestResolvePaths:
         [
             ("create_folder", "paths", "/video/#recycle/sub", "is '#recycle'"),
             ("create_folder", "paths", "/homes/bob/#recycle/sub", "is '#recycle'"),
-            ("create_folder", "paths", "/video/new\x1bdir/sub", "contains a control character"),
             ("upload_file", "dest_folder", "/video/#recycle", "is '#recycle'"),
-            ("upload_file", "dest_folder", "/video/a\nb/c", "contains a control character"),
             # The invisible-character rules too (pre-QA r4: untested before).
-            (
-                "upload_file",
-                "dest_folder",
-                "/video/a\u202eb/x",
-                "contains a character that changes text direction",
-            ),
             ("create_folder", "paths", "/video/\u200b/sub", "has no visible character"),
-            (
-                "create_folder",
-                "paths",
-                "/video/a\u2028b/sub",
-                "contains a line or paragraph separator",
-            ),
         ],
     )
     async def test_a_created_parent_gets_the_new_name_rules(
@@ -722,7 +707,6 @@ class TestResolvePaths:
         ("path", "advice"),
         [
             ("/video/a\u200bb/sub", "Retype the folder's name without the character"),
-            ("/video/a\x1bb/sub", "Give the folder a plain name"),
             (
                 "/video/a\u0308\u0301\u0308\u0301/sub",
                 "Retype the folder's name without the character",
@@ -1910,3 +1894,59 @@ async def test_a_restore_back_into_a_bin_is_refused() -> None:
     assert (error["param"], error["value"]) == ("paths", "#recycle/#recycle/x")
     assert "inside the recycle bin" in error["message"]
     assert "dest_folder" in error["suggestion"]
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["/video/a\nb", "/video/a\x1bb/x", "/video/a\u2028b", "/video/a\u202eb", "/video/a\U000e0041"],
+)
+def test_a_path_that_could_forge_a_reply_line_is_refused(raw: str) -> None:
+    """#604: replies show such names escaped, so a name that holds one can't be acted on, and
+    a tool can't echo it back raw. A tab is still allowed (#488)."""
+    from mcp_synology.modules.filestation.paths import check_parts
+
+    with pytest.raises(ToolError) as exc:
+        check_parts(raw, "path")
+    assert "isn't allowed" in _error(exc)["message"]
+    assert (
+        "File Station's tools and Download Station's destinations take paths only"
+        in (_error(exc)["suggestion"])
+    )
+    assert check_parts("/video/a\tb", "path") == "/video/a\tb"
+
+
+def test_a_restore_item_that_could_forge_a_reply_line_is_refused() -> None:
+    """#604: a bin item goes through the same rule as a path."""
+    from mcp_synology.modules.filestation.paths import resolve_bin_items
+
+    with pytest.raises(ToolError) as exc:
+        resolve_bin_items("video", ["Shows/a\nb"], "paths")
+    assert "isn't allowed" in _error(exc)["message"]
+    assert "give its name plainly" in _error(exc)["suggestion"]
+
+
+def test_a_forging_path_refusal_keeps_its_callers_advice() -> None:
+    """QA round 5 on #605: the caller's own advice comes after the shared text."""
+    from mcp_synology.modules.downloadstation.helpers import (
+        _DESTINATION_ADVICE,
+        normalize_destination,
+    )
+    from mcp_synology.modules.filestation.paths import (
+        DEFAULT_SUGGESTION,
+        check_parts,
+        resolve_bin_items,
+    )
+    from mcp_synology.modules.photos.helpers import FOLDER_ADVICE, check_folder_path
+
+    with pytest.raises(ToolError) as exc:
+        check_parts("/video/a\nb", "path")
+    assert _error(exc)["suggestion"].endswith(DEFAULT_SUGGESTION)
+    with pytest.raises(ToolError) as exc:
+        normalize_destination("video/a\nb", operation="Create download")
+    assert _error(exc)["suggestion"].endswith(_DESTINATION_ADVICE)
+    with pytest.raises(ToolError) as exc:
+        check_folder_path("/a\nb")
+    assert _error(exc)["suggestion"].endswith(FOLDER_ADVICE)
+    with pytest.raises(ToolError) as exc:
+        resolve_bin_items("video", ["Shows/a\nb"], "paths")
+    assert "as list_recycle_bin shows it" in _error(exc)["suggestion"]

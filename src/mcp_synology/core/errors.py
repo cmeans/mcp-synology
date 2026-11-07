@@ -372,7 +372,12 @@ FILESTATION_ERROR_CODES: dict[int, tuple[str, str]] = {
         "read. Check the folder's permissions in DSM > Control Panel > Shared Folder, "
         "or use an account with access.",
     ),
-    408: ("No such file or directory", "Use list_files or search_files to find the correct path."),
+    408: (
+        "No such file or directory",
+        "Use list_files or search_files to find the correct path. A name listed with an escape "
+        "(`\\n`, `\\x..`, `\\u....`) holds a character the tools can't take (#604): rename "
+        "it in DSM.",
+    ),
     414: ("File already exists", "Use overwrite=true to replace existing files."),
     415: (
         "Disk quota exceeded",

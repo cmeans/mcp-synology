@@ -16,7 +16,7 @@ import regex
 
 from mcp_synology.core.client import DsmClient
 from mcp_synology.core.errors import AuthenticationError, ErrorCode, SynologyError
-from mcp_synology.core.formatting import error_response
+from mcp_synology.core.formatting import RGI_FLAG_TAGS, error_response
 from mcp_synology.core.redaction import redact_urls
 from mcp_synology.modules.filestation.decompositions import NEW_DECOMPOSITIONS
 from mcp_synology.modules.filestation.standardized_variants import (
@@ -304,14 +304,9 @@ def _tag_run_end(text: str, i: int) -> int:
     return end
 
 
-# A subdivision flag's tags: only the three RGI ones (UTS #51; emoji-sequences.txt), England,
-# Scotland and Wales, each followed by the cancel tag. Any other tag run, even a well-formed
-# subdivision id, can spell words a model reads ("ASCII smuggling"; maintainer, 2026-10-31,
-# QA round 2 on #515); platforms don't draw other subdivision flags as flags anyway.
-_RGI_FLAG_TAGS = frozenset(
-    "".join(chr(0xE0000 + ord(c)) for c in code) + "\U000e007f"
-    for code in ("gbeng", "gbsct", "gbwls")
-)
+# The three RGI subdivision flags' tags (UTS #51): `formatting.RGI_FLAG_TAGS`, shared with the
+# reply escaping (#604).
+_RGI_FLAG_TAGS = RGI_FLAG_TAGS
 
 
 def _is_flag_tags(text: str, start: int, end: int) -> bool:
@@ -641,7 +636,7 @@ def shown(path: str) -> str:
     (`refuse_same_names`, `refuse_planted_bin`; the older ``!r`` refusals are on #458); an
     error or list that names a path the server checked or got
     from DSM uses ``shown`` (plain unless something would be invisible). Successful
-    replies and listings show paths as DSM does."""
+    replies and listings show paths as DSM does, escaped by the client (#604)."""
     for part in path.split("/"):
         if not part:
             continue

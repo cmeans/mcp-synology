@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
+import json
 import logging
 import os
 import platform
@@ -35,7 +37,7 @@ from mcp_synology.core.config import (
     load_config,
 )
 from mcp_synology.core.errors import ErrorCode, SynologyError, detached_copy
-from mcp_synology.core.formatting import error_response, synology_error_response
+from mcp_synology.core.formatting import error_response, forges, synology_error_response
 from mcp_synology.core.local_paths import has_control_character
 from mcp_synology.core.redaction import redact_urls
 from mcp_synology.modules import PermissionTier, RegisterContext, filter_tools_by_permission
@@ -247,6 +249,52 @@ def _compact_schema(node: Any) -> Any:
     return out
 
 
+# Arguments a line break may be part of: a Photos description (escaped where it's shown), and
+# Download Station's URI list, which no reply echoes.
+_FREE_TEXT_ARGUMENTS = frozenset({"description", "uri"})
+
+
+def _refuse_forging_arguments(arguments: dict[str, Any]) -> None:
+    """Refuse an argument holding a character a reply may not carry as it is (#604): a tool
+    could echo it into a line of its own, which reads as the server's. Replies show such
+    characters escaped, so a name the server showed never holds one. One check for every
+    tool's arguments, names, paths and tags alike, checked as given: a tool may echo a value
+    before or without dropping its padding (a search pattern). The refusal names the argument
+    only: its value may be a password."""
+    stack: list[tuple[str, Any]] = [
+        (key, value) for key, value in arguments.items() if key not in _FREE_TEXT_ARGUMENTS
+    ]
+    for key, value in list(stack):
+        if isinstance(value, str) and value.lstrip()[:1] in ("[", "{"):
+            # The SDK parses a top-level list or dict sent as a JSON string
+            # (FuncMetadata.pre_parse_json, for Claude Desktop): check what the tool will get as
+            # well. A `str` parameter holding such text gets the same check, which is cautious.
+            with contextlib.suppress(ValueError, RecursionError):
+                stack.append((key, json.loads(value)))
+    while stack:
+        key, value = stack.pop()
+        if isinstance(value, str) and forges(value):
+            error_response(
+                ErrorCode.INVALID_PARAMETER,
+                f"`{key}` has a control character, line or paragraph separator, bidi control or "
+                "tag character, which isn't allowed: replies show them escaped, so a name that "
+                "holds one can't be used here.",
+                retryable=False,
+                param=key,
+                suggestion="Pass it without such characters. For an item on the NAS whose name "
+                "holds one, pass its ID where the tool takes one, or rename it there (in DSM) "
+                "and use its new name. For a local path, "
+                "retype it (a path copied from Windows may begin with an invisible mark), with "
+                "a Windows path's backslashes doubled in JSON (`C:\\\\new`, or `\\n` is a "
+                "line break).",
+            )
+        if isinstance(value, list):
+            stack.extend((key, v) for v in value)
+        elif isinstance(value, dict):
+            stack.extend((key, k) for k in value)  # a key could be echoed as a value is
+            stack.extend((key, v) for v in value.values())
+
+
 class _SynologyServer(MCPServer):
     """MCPServer with compacted tool schemas, text-only results and error details kept.
 
@@ -362,6 +410,13 @@ class _SynologyServer(MCPServer):
         model as "Error executing tool delete_files: " (#237).
         """
         prefix = f"Error executing tool {name}: "
+        if forges(name):
+            # The SDK echoes an unknown tool's name ("Unknown tool: ..."), raw.
+            raise ToolError("Unknown tool: its name has a character a reply can't show as is.")
+        try:
+            _refuse_forging_arguments(arguments)
+        except ToolError as refused:
+            raise ToolError(f"{prefix}{refused}") from None
         try:
             return await super().call_tool(name, arguments, context)
         except UnexpectedToolError as exc:

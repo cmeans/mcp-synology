@@ -9,7 +9,13 @@ import math
 from typing import TYPE_CHECKING, Any
 
 from mcp_synology.core.errors import SynologyError
-from mcp_synology.core.formatting import format_size, format_table, synology_error_response
+from mcp_synology.core.formatting import (
+    escape_controls,
+    format_size,
+    format_table,
+    synology_error_response,
+    unescaped_length,
+)
 from mcp_synology.modules.filestation.paths import refuse_bad_name
 from mcp_synology.modules.photos.helpers import (
     V7,
@@ -405,6 +411,17 @@ async def merge_people(
                 )
             merged[int(found["id"])] = found
         final = name if name is not None else str(keep.get("name") or "")
+        if name is None and unescaped_length(final) != len(final):
+            # The kept name came escaped (#604): sent back, it would rename the person.
+            invalid(
+                op,
+                f"person {keep_id}'s name may hold a character replies show escaped "
+                f"({final}), so keeping it can't be sent back as it is.",
+                param="name",
+                value=None,
+                suggestion="Pass `name`: the name to keep, written plainly, without the "
+                "backslash escapes shown here (they'd become part of the name).",
+            )
         await ph.call(
             "Browse.Person",
             "merge",
@@ -565,6 +582,8 @@ async def photo_request(
             invalid(op, "nothing to change.", param="action", value=action)
         await ph.call("PhotoRequest", "update", {"passphrase": request, **fields}, personal=True)
         now = {str(e.get("passphrase")): e for e in await ph.walk("PhotoRequest", personal=True)}
-        return _request_block(now.get(str(request), {**existing[str(request)], **fields}))
+        # The fallback shows this call's own text: escaped as DSM's would be (#604).
+        shown = {k: escape_controls(v) if isinstance(v, str) else v for k, v in fields.items()}
+        return _request_block(now.get(str(request), {**existing[str(request)], **shown}))
     except SynologyError as e:
         synology_error_response(op, e)

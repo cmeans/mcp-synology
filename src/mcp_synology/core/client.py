@@ -38,6 +38,7 @@ from mcp_synology.core.errors import (
     error_detail,
     error_from_code,
 )
+from mcp_synology.core.formatting import CollidingKeysError, escape_nas_text, needs_escaping
 from mcp_synology.core.redaction import redact_urls
 from mcp_synology.core.state import ApiInfoEntry
 
@@ -82,7 +83,7 @@ def _read_json(resp: httpx.Response, label: str, *, may_have_applied: bool = Fal
     model as "Expecting value: line 1 column 1 (char 0)". The error names ``label`` and
     the Content-Type, never the body.
     """
-    body = _loads(resp.content, label)
+    body = _loads_or_refuse(resp.content, label)
     if isinstance(body, dict):
         return body
     ctype = resp.headers.get("content-type", "").split(";")[0].strip().lower() or "none"
@@ -98,23 +99,52 @@ def _loads(content: bytes, label: str) -> Any:
 
     DSM copies binary EXIF fields into its JSON as raw bytes, which aren't UTF-8 (Photos
     get_exif, "Picture Info", DSM 7.1.1), so a strict decode would lose the whole reply.
-    Those bytes are read as U+FFFD (replacement characters) instead.
+    Those bytes are read as U+FFFD (replacement characters) instead. Every string is then
+    escaped where it could forge a line or reorder text in a reply (``escape_nas_text``, #604):
+    a control character, line or paragraph separator, bidi control or tag character. Characters
+    that draw nothing otherwise (a zero-width space, a variation selector) are left as they
+    are, as names use them.
     """
     try:
-        return json.loads(content)
+        # As parsing the bytes read it (UTF-8, -16 or -32, a BOM, surrogates passed through), so
+        # no reply that parsed before is refused or read differently now.
+        text = content.decode(json.detect_encoding(content), "surrogatepass")
+        text = text.removeprefix("\ufeff")
+        value = json.loads(text)
+        return escape_nas_text(value) if needs_escaping(text) else value
     except UnicodeDecodeError:
         logger.debug("%s: the reply has bytes that aren't UTF-8; reading them as U+FFFD", label)
         try:
-            return json.loads(content.decode("utf-8", errors="replace"))
-        except ValueError:
+            text = content.decode("utf-8-sig", errors="replace")
+            return escape_nas_text(json.loads(text))
+        except CollidingKeysError:
+            raise
+        except (ValueError, RecursionError):
             return None
-    except ValueError:
+    except CollidingKeysError:
+        raise
+    except (ValueError, RecursionError):  # nesting deeper than json.loads takes: not a reply
         return None
+
+
+def _loads_or_refuse(content: bytes, label: str) -> Any:
+    """``_loads``, with a reply whose keys collide once escaped refused as such (#604)."""
+    try:
+        return _loads(content, label)
+    except CollidingKeysError:
+        logger.warning("%s: two keys of the reply read the same once escaped", label)
+        raise DsmReplyError(
+            f"{label}: DSM's reply has two names that read the same once escaped: one holds a "
+            "control character, line or paragraph separator, bidi control or tag character, the "
+            "other a backslash where that is shown (#604).",
+            retryable=False,
+            suggestion="Rename one of the two items on the NAS (in DSM). Trying again won't help.",
+        ) from None
 
 
 def _error_envelope(body: bytes) -> dict[str, Any] | None:
     """The ``error`` object of a DSM error envelope in ``body``, or None if it has none."""
-    parsed = _loads(body, "download error envelope")
+    parsed = _loads_or_refuse(body, "download error envelope")
     if not isinstance(parsed, dict) or not isinstance(parsed.get("error"), dict):
         return None
     code = parsed["error"].get("code", 0)
