@@ -629,7 +629,7 @@ def refusal_advice(
                 f"The password comes from {password}: change it there too{restart} "
                 f"({SETUP_COMMAND} writes only the keyring)"
             )
-        clear = "" if cli else ". If an administrator clears the expiry instead, restart the server"
+        clear = "" if cli else ". If an administrator clears this instead, restart the server"
         return f"{first}. {advice}{clear}" if first else f"{advice}{clear}"
     if code in _TWO_FA:
         device = sources.get("device_id")
@@ -683,8 +683,9 @@ class LoginRefusals:
     computer's IP address, for the user's browser and every other client too. A refused
     login retried on every tool call, or on every session error, would trip it. The
     refusal holds until the credentials change (``mcp-synology setup`` writes new ones
-    to the keyring) or the server restarts. A transport error or any other failure is
-    never remembered: it says nothing about the credentials.
+    to the keyring) or the server restarts. An expired or must-change password (408-410) doesn't
+    count toward Auto Block; it's remembered because DSM's answer won't change on its own. A
+    transport error or any other failure is never remembered: it says nothing about the credentials.
     """
 
     def __init__(self) -> None:
@@ -719,8 +720,14 @@ class LoginRefusals:
             sources = {"username": KEYRING, "password": KEYRING, "device_id": None}
         where = refusal_advice(error.code, first, sources)
         if error.code in PASSWORD_STATE:
-            why = "because DSM gives the same answer until the password changes."
-            test = f"After the fix, {CHECK_COMMAND} tests the login once."
+            why = (
+                "because DSM gives the same answer until the password is changed or an "
+                "administrator clears this."
+            )
+            test = (
+                f"After the fix, {CHECK_COMMAND} tests the login once (a wrong password counts "
+                "toward Auto Block)."
+            )
         else:
             why = (
                 "because repeated failed logins can trip DSM's Auto Block, which blocks this "

@@ -1669,7 +1669,7 @@ def test_an_expired_passwords_advice_names_only_the_password(
     advice = refusal_advice(409, "Sign in to DSM in a browser to change it", resolved)
     assert says in advice
     assert doesnt not in advice
-    assert "If an administrator clears the expiry instead, restart the server" in advice
+    assert "If an administrator clears this instead, restart the server" in advice
     cli = refusal_advice(409, "Sign in to DSM in a browser to change it", resolved, cli=True)
     assert "restart" not in cli
 
@@ -1681,5 +1681,5 @@ def test_an_expired_passwords_refusal_doesnt_blame_auto_block() -> None:
 
     refused = LoginRefusals().refuse("x", AuthenticationError("The password has expired", code=409))
     assert "Auto Block" not in str(refused)
-    assert "Auto Block" not in (refused.suggestion or "")
-    assert "DSM gives the same answer until the password changes" in str(refused)
+    assert "(a wrong password counts toward Auto Block)" in (refused.suggestion or "")
+    assert "DSM gives the same answer until the password is changed" in str(refused)

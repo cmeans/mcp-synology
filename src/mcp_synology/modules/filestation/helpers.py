@@ -15,7 +15,7 @@ import httpx
 import regex
 
 from mcp_synology.core.client import DsmClient
-from mcp_synology.core.errors import ErrorCode, SynologyError
+from mcp_synology.core.errors import AuthenticationError, ErrorCode, SynologyError
 from mcp_synology.core.formatting import error_response
 from mcp_synology.core.redaction import redact_urls
 from mcp_synology.modules.filestation.decompositions import NEW_DECOMPOSITIONS
@@ -886,7 +886,7 @@ async def probe_recycle_status(client: DsmClient, share_name: str) -> tuple[bool
             params={"folder_path": f"/{share_name}/#recycle", "limit": 1},
         )
     except SynologyError as e:
-        if e.code == 408:
+        if e.code == 408 and not isinstance(e, AuthenticationError):
             setting = await _share_recycle_setting(client, share_name)
             if setting is not None:
                 logger.debug(

@@ -62,13 +62,17 @@ Fix:
 4. If the password has expired or must be changed, sign in to DSM in a browser to
    change it, and store the new one with `mcp-synology setup`. With 408, DSM doesn't
    let the account do that: an administrator sets a new one, or allows a reset after
-   expiry in **Control Panel → User & Group → Advanced → Password Settings**.
+   expiry in **Control Panel → User & Group → Advanced → Password Settings**, and the
+   account's user then signs in to change it. The policy covers administrators too: if none
+   can sign in, see Synology's guide to resetting the administrator's password.
 5. Verify the account has access to FileStation: **Control Panel → User & Group
    → [account] → Edit → Applications**. The account must be allowed to use
    File Station.
 
 When DSM refuses the credentials, the server doesn't send them again: every later
-tool call gets the same error, so a model's tool retries can't trip DSM's Auto Block. `setup` and
+tool call gets the same error, so a model's tool retries can't trip DSM's Auto Block.
+(An expired or must-change password doesn't count toward it, but DSM's answer won't change on
+its own.) `setup` and
 `check` do send each attempt; `setup` says so.
 The server tries again once the credentials change or it restarts. `mcp-synology
 setup` stores new ones in the keyring, and the running server picks them up; a

@@ -177,7 +177,6 @@ async def _check_login(config: object) -> None:
     """Validate credentials by attempting a login."""
     from mcp_synology.core.auth import (
         KEYRING,
-        PASSWORD_STATE,
         AuthManager,
         credential_sources,
         entry_left_unrecorded,
@@ -281,12 +280,7 @@ async def _check_login(config: object) -> None:
                     # A refusal is the strongest sign an unrecorded entry is another NAS's, and
                     # `setup` on it would replace them (QA round 3 on #559).
                     sources = credential_sources(config, cli=True)
-                    # DSM says 408-410 only to the right password, so it's this NAS's.
-                    if (
-                        sources["password"] == KEYRING
-                        and dsm.code not in PASSWORD_STATE
-                        and entry_left_unrecorded(config)
-                    ):
+                    if sources["password"] == KEYRING and entry_left_unrecorded(config):
                         hint = (
                             f"{hint.rstrip('.')}. If these are another NAS's credentials, "
                             f"{own_instance_id_clause(config)} instead"

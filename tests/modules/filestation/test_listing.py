@@ -1420,3 +1420,39 @@ class TestSortNote:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=respond)
         await list_files(mock_client, path="/video", sort_by="changed")
         assert seen[0]["sort_by"] == "ctime"
+
+
+@pytest.mark.parametrize("tool", ["list_files", "list_recycle_bin"])
+async def test_a_refused_re_login_isnt_a_missing_path(
+    mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch, tool: str
+) -> None:
+    """#460: File Station's 408 is `no such path`, and a re-login's is an expired password."""
+    from unittest.mock import AsyncMock
+
+    from mcp_synology.core.errors import LoginRefusedError
+    from mcp_synology.modules.filestation import listing
+
+    refused = LoginRefusedError("DSM refused the login: The password has expired.", code=408)
+    monkeypatch.setattr(mock_client, "request", AsyncMock(side_effect=refused))
+    with pytest.raises(ToolError) as caught:
+        if tool == "list_files":
+            await listing.list_files(mock_client, path="/video")
+        else:
+            await listing.list_recycle_bin(mock_client, share="/video")
+    body = json.loads(str(caught.value))["error"]
+    assert body["code"] == "auth_failed"
+    assert "password has expired" in body["message"]
+
+
+async def test_a_refused_re_login_isnt_a_missing_bin(
+    mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from unittest.mock import AsyncMock
+
+    from mcp_synology.core.errors import LoginRefusedError
+    from mcp_synology.modules.filestation.helpers import probe_recycle_status
+
+    refused = LoginRefusedError("DSM refused the login: The password has expired.", code=408)
+    monkeypatch.setattr(mock_client, "request", AsyncMock(side_effect=refused))
+    # Not "no bin folder", which would say the bin is off: it can't tell, and nothing's cached.
+    assert await probe_recycle_status(mock_client, "video") == (None, False)
