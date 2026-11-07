@@ -6345,3 +6345,81 @@ async def test_a_clash_with_another_calls_finished_task_says_so(mock_client: Dsm
     body = json.loads(str(refused))["error"]
     assert "another move call through this server is landing in '/d'" in body["message"]
     assert "file_task" not in body["suggestion"]
+
+
+@respx.mock
+async def test_a_record_withdrawn_mid_list_doesnt_refuse_a_parallel_call(
+    mock_client: DsmClient,
+) -> None:
+    """QA round 3 on #597: A failed on its first source while B listed, and B was refused
+    for A's second source, which A never started."""
+    calls: list[dict[str, str]] = []
+    base = _dsm_with_running(_a_task_landing("/none"), calls)
+    a_starting = asyncio.Event()
+    b_listing = asyncio.Event()
+    a_done = asyncio.Event()
+    starts: list[str] = []
+
+    async def side_effect(request: httpx.Request) -> httpx.Response:
+        params = dict(request.url.params)
+        await asyncio.sleep(0.001)
+        if params.get("method") == "start":
+            starts.append(params["path"])
+        if params.get("method") == "status" and params.get("taskid", "").endswith('T_x"'):
+            # A's first source fails, after B has read A's records and waits on DSM's list.
+            a_starting.set()
+            await b_listing.wait()
+            data = {"finished": True, "path": "/a/x", "error": {"code": 1000}}
+            return httpx.Response(200, json={"success": True, "data": data})
+        if params.get("method") == "list" and a_starting.is_set() and not a_done.is_set():
+            b_listing.set()
+            await a_done.wait()
+            return httpx.Response(200, json={"success": True, "data": {"tasks": []}})
+        if params.get("method") == "list":
+            return httpx.Response(200, json={"success": True, "data": {"tasks": []}})
+        return base(request)
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+
+    async def a() -> Any:
+        try:
+            return await move_files(
+                mock_client, paths=["/a/x", "/a/y"], dest_folder="/d", overwrite=True
+            )
+        except ToolError as e:
+            return e
+        finally:
+            a_done.set()
+
+    async def b() -> Any:
+        await a_starting.wait()
+        try:
+            return await move_files(mock_client, paths=["/b/y"], dest_folder="/d")
+        except ToolError as e:
+            return e
+
+    first, second = await asyncio.gather(a(), b())
+    assert isinstance(first, ToolError)
+    assert isinstance(second, str), second
+    assert "/b/y" in starts
+
+
+@respx.mock
+async def test_a_restores_nested_item_is_recorded_where_it_lands(mock_client: DsmClient) -> None:
+    """QA round 3 on #597: `x/a` was recorded as landing `a` in `/t`, where nothing lands
+    (it lands at `/t/x/a`), so a parallel move of `/m/a` to `/t` was refused."""
+    moved, starts = await _a_parallel_call_during(
+        mock_client,
+        lambda: restore_from_recycle_bin(
+            mock_client,
+            share="/s",
+            paths=["x", "x/a"],
+            dest_folder="/t",
+            overwrite=True,
+            timeout=5,
+        ),
+        hold="x",
+        second=lambda: move_files(mock_client, paths=["/m/a"], dest_folder="/t", overwrite=True),
+    )
+    assert isinstance(moved, str), moved
+    assert "/m/a" in starts

@@ -784,8 +784,19 @@ def tracked_landings(client: DsmClient) -> Iterator[Callable[[RunningTask], None
         yield track
     finally:
         _TRACKING.reset(token)
-        for taskid in mine:
-            landings.pop(taskid, None)
+        records = [landings.pop(taskid, None) for taskid in mine]
+        # A source this call never started won't land: a parallel call that read the record
+        # mid-list mustn't be refused for it (QA round 3 on #597). A started one keeps its
+        # record in that snapshot, as its task may have finished just now.
+        started = {
+            path
+            for task in records
+            if task is not None and not task.task.get("pending")
+            for path in task.paths
+        }
+        for task in records:
+            if task is not None and task.task.get("pending") and not set(task.paths) & started:
+                task.task["withdrawn"] = True
 
 
 _PENDING_IDS = itertools.count(1)
@@ -801,7 +812,7 @@ def pending_landing(
         Handle(kind, f"pending-{next(_PENDING_IDS)}"),
         [path],
         {"dest_folder_path": dest, "overwrite": overwrite, "remove_src": remove_src},
-        {"local": True},
+        {"local": True, "pending": True},
     )
 
 
@@ -821,6 +832,7 @@ async def tasks_for_landing_check(client: DsmClient) -> tuple[list[RunningTask],
         logger.warning("BackgroundTask list failed, skipping the same-landing check: %s", e)
         listed = []
     known = {task.handle.taskid for task in listed}
+    local = [task for task in local if not task.task.get("withdrawn")]
     return listed, listed + [task for task in local if task.handle.taskid not in known]
 
 

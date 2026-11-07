@@ -1595,8 +1595,15 @@ async def restore_from_recycle_bin(
     # item's destination is recorded before anything starts, and checked before any folder is
     # re-created, so a clash visible now refuses the whole restore with nothing changed.
     with tracked_landings(client) as track:
+        # Recorded as they'll land: an item inside another one going to the same place lands
+        # inside it, not beside it (QA round 3 on #597). The list read here is the one check
+        # made before any folder is re-created; each item is checked again as it starts.
+        by_dest: dict[str, list[str]] = {}
         for fp, dest in zip(full_paths, destinations, strict=False):
-            track(pending_landing("restore", fp, dest, overwrite=overwrite, remove_src=True))
+            by_dest.setdefault(dest, []).append(fp)
+        for dest, items in by_dest.items():
+            for fp in _collapse_overlaps(items):
+                track(pending_landing("restore", fp, dest, overwrite=overwrite, remove_src=True))
         _, tasks = await tasks_for_landing_check(client)
         for fp, dest in zip(full_paths, destinations, strict=False):
             _refuse_landing_on_a_running_task(
