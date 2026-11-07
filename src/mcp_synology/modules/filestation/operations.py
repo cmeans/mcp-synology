@@ -850,7 +850,8 @@ async def _copy_move(
         if running is not None:
             started = running.get("params") or {}
             if isinstance(started.get("dest_folder_path"), str):
-                task_dest = started["dest_folder_path"]
+                # Another client may have sent /d/, so it compares with this call's own.
+                task_dest = started["dest_folder_path"].rstrip("/") or "/"
             if isinstance(started.get("overwrite"), bool):
                 task_overwrite = started["overwrite"]
             # Never start a second task on a path that already has one (#245).
@@ -895,7 +896,6 @@ async def _copy_move(
                 )
         if isinstance(outcome, Handoff):
             # A task already running to another folder lands nothing here.
-            went[p] = task_dest
             placed = [*done, p] if task_dest == dest else list(done)
             if records is not None:
                 records.add(

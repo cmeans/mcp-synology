@@ -5318,3 +5318,150 @@ async def test_a_final_doesnt_warn_about_a_skip_at_another_destination(
     text = await file_task(mock_client, records=records, handle=str(handle))
     assert "Don't retry these with overwrite=true" not in text
     assert "/s/n (to /d2)" in text
+
+
+@respx.mock
+async def test_a_final_with_an_earlier_skip_starts_with_a_warning_mark(
+    mock_client: DsmClient,
+) -> None:
+    """QA round 3 on #601: the first line read as a clean result."""
+    text = await _final_with_skip(mock_client, "move", landed=[], skipped=["/s/c"])
+    assert text.startswith("[!] Moved 1 item(s) to /d/:")
+    plain = await _final_with_skip(mock_client, "move", landed=[], skipped=[])
+    assert plain.startswith("[+] Moved 1 item(s) to /d/:")
+
+
+@respx.mock
+async def test_a_task_running_to_the_same_folder_with_a_slash_counts_as_landing_there(
+    mock_client: DsmClient, no_poll_wait: None
+) -> None:
+    """QA round 3 on #601: `/d/` from another client lost the warning and said `(to /d/)`."""
+    running = {
+        "api": "SYNO.FileStation.CopyMove",
+        "taskid": "T_n",
+        "finished": False,
+        "processed_num": 1,
+        "total": 2,
+        "params": {
+            "path": ["/s/n"],
+            "dest_folder_path": "/d/",
+            "overwrite": False,
+            "remove_src": True,
+        },
+    }
+    base = _dsm_for_each(skipped=("/x/n",), running=("/s/n",))
+    started: list[str] = []
+
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        params = dict(request.url.params)
+        if params.get("method") == "start":
+            started.append(params["path"])
+        if params.get("method") == "list" and started:
+            return httpx.Response(200, json={"success": True, "data": {"tasks": [running]}})
+        return base(request)
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+    reply = await move_files(mock_client, paths=["/x/n", "/s/n"], dest_folder="/d", timeout=1)
+    assert "Don't retry /x/n with overwrite=true" in reply
+    assert "(to /d" not in reply
+
+
+@respx.mock
+async def test_a_restores_hand_off_warns_about_an_earlier_item_at_a_skips_destination(
+    mock_client: DsmClient, no_poll_wait: None
+) -> None:
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        side_effect=_dsm_for_each(skipped=("/s/#recycle/a/N",), running=("/s/#recycle/z/big",))
+    )
+    reply = await restore_from_recycle_bin(
+        mock_client, share="/s", paths=["a/n", "a/N", "z/big"], timeout=1
+    )
+    assert "Don't retry /s/#recycle/a/N (to /s/a) with overwrite=true" in reply
+
+
+@respx.mock
+async def test_a_restores_failed_task_says_where_earlier_items_went(
+    mock_client: DsmClient, no_poll_wait: None
+) -> None:
+    base = _dsm_for_each()
+
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        params = dict(request.url.params)
+        if params.get("method") == "status" and "T_b" in params["taskid"]:
+            data = {"finished": True, "path": "/s/#recycle/y/b", "error": {"code": 1000}}
+            return httpx.Response(200, json={"success": True, "data": data})
+        return base(request)
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+    with pytest.raises(ToolError) as failed:
+        await restore_from_recycle_bin(mock_client, share="/s", paths=["x/a", "y/b"])
+    message = json.loads(str(failed.value))["error"]["message"]
+    assert "Already restored before this failure: /s/#recycle/x/a (to /s/x)" in message
+
+
+def test_a_tasks_errors_list_says_where_earlier_items_went() -> None:
+    from mcp_synology.modules.filestation.operations import _copy_move_result
+
+    status = {"finished": True, "errors": [{"code": 408, "path": "/s/gone"}]}
+    with pytest.raises(ToolError) as failed:
+        _copy_move_result(
+            status, "/s/gone", "Move", ["/s/ok"], dest="/d1", dest_of={"/s/ok": "/d2"}
+        )
+    assert "/s/ok (to /d2)" in json.loads(str(failed.value))["error"]["message"]
+
+
+def test_merging_records_the_later_call_says_where_a_source_went() -> None:
+    from mcp_synology.modules.filestation.tasks import TaskRecord
+
+    records = TaskRecords()
+    handle = Handle("move", "T")
+    records.add(TaskRecord(handle, ["/s/big"], dest_of={"/s/a": "/d1", "/s/b": "/d1"}))
+    records.add(TaskRecord(handle, ["/s/big"], dest_of={"/s/a": "/d2"}))
+    record = records.get(handle)
+    assert record is not None
+    assert record.dest_of == {"/s/a": "/d2", "/s/b": "/d1"}
+
+
+def test_a_source_that_went_elsewhere_stays_on_one_line() -> None:
+    from mcp_synology.modules.filestation.tasks import where_it_went
+
+    assert where_it_went("/s/a", {}, "/d") == "/s/a"
+    assert where_it_went("/s/a", {"/s/a": "/d"}, "/d") == "/s/a"
+    assert where_it_went("/s/a", {"/s/a": "/e"}, "/d") == "/s/a (to /e)"
+    assert where_it_went("/s/a\nb", {"/s/a\nb": "/e\nf"}, "/d") == "'/s/a\\nb' (to '/e\\nf')"
+
+
+@respx.mock
+async def test_file_tasks_other_replies_say_where_a_source_went(mock_client: DsmClient) -> None:
+    from mcp_synology.modules.filestation.tasks import TaskRecord, file_task
+
+    records = TaskRecords()
+    handle = Handle("move", "T_big")
+    records.add(
+        TaskRecord(
+            handle,
+            ["/s/big"],
+            dest="/d1",
+            done_earlier=["/s/ok\u200bx"],
+            skipped_earlier=["/s/c"],
+            dest_of={"/s/ok\u200bx": "/d2", "/s/c": "/d2"},
+        )
+    )
+    running = {"finished": False, "progress": 0.5, "total": 2}
+
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        if dict(request.url.params).get("method") == "status":
+            return httpx.Response(200, json={"success": True, "data": running})
+        return httpx.Response(200, json={"success": True, "data": {}})
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+    stopped = await file_task(mock_client, records=records, handle=str(handle), action="stop")
+    assert "'/s/ok\\u200bx' (to /d2)" in stopped
+    assert "/s/c (to /d2)" in stopped
+
+    failed_status = {"finished": True, "error": {"code": 1000}, "path": "/s/big"}
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        return_value=httpx.Response(200, json={"success": True, "data": failed_status})
+    )
+    with pytest.raises(ToolError, match=r"/s/c \(to /d2\)"):
+        await file_task(mock_client, records=records, handle=str(handle))

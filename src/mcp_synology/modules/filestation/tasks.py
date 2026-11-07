@@ -104,7 +104,8 @@ class TaskRecord:
     # goes elsewhere. A skipped source named like one of these isn't offered overwrite=true.
     landed_earlier: list[str] = field(default_factory=list)
     # Where each of those sources went, when a call has several destinations or a later call met
-    # this task: a name only clashes at one destination, and a reply says which it means.
+    # this task: a name only clashes at one destination, and a reply says which it means. One per
+    # source: a source skipped at two destinations by two calls keeps the later one.
     dest_of: dict[str, str] = field(default_factory=dict)
 
 
@@ -896,6 +897,9 @@ async def _final_text(
                     dest=record.dest,
                 )
                 text += f"\n\nBefore this task: {line}"
+                # A result with skips starts with [!], as the first line is what gets read.
+                if text.startswith("[+]"):
+                    text = "[!]" + text.removeprefix("[+]")
             if handle.kind == "restore":
                 text = _as_restore(text, path.split("/")[1])
             return text
