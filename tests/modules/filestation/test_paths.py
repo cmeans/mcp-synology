@@ -10,6 +10,7 @@ Three layers:
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 from typing import Annotated, Any, get_args, get_origin
@@ -555,6 +556,9 @@ class _FakeClient:
         self.codes = codes or {}
         self.methods = methods or {}
         self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    def destination_lock(self, _dest: str) -> asyncio.Lock:
+        return asyncio.Lock()
 
     async def upload(self, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
         return {"blSkip": True}

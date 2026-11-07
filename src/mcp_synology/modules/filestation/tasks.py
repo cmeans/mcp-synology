@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
+import itertools
 import logging
 import re
 import time
+import weakref
 from collections import OrderedDict
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, NoReturn, get_args
 
@@ -627,7 +631,7 @@ class RunningTask:
     @property
     def dest(self) -> str | None:
         dest = self.params.get("dest_folder_path")
-        return dest if isinstance(dest, str) else None
+        return _no_trailing_slash(dest) if isinstance(dest, str) else None
 
     def record(self) -> TaskRecord:
         """A task record from the task's start ``params``."""
@@ -640,6 +644,13 @@ class RunningTask:
             overwrite=overwrite if isinstance(overwrite, bool) else None,
             recursive=recursive if isinstance(recursive, bool) else None,
         )
+
+
+def _no_trailing_slash(path: str) -> str:
+    """A path as a task's start params may spell it, for comparing with a normalized one. A second
+    guard: ``_list_running`` already strips the slash, and this server's own records are
+    normalized, but a record built another way still compares right."""
+    return path.rstrip("/") or "/"
 
 
 def _in_recycle_bin(path: str) -> bool:
@@ -663,8 +674,8 @@ def _task_kind(api: Any, params: dict[str, Any], paths: list[str]) -> HandleKind
 async def _list_running(client: DsmClient) -> list[RunningTask]:
     """This user's running Delete/CopyMove tasks, from ``SYNO.FileStation.BackgroundTask``
     ``list`` v2, which shows each task's start ``params`` (``path`` as a list; CopyMove
-    also ``dest_folder_path``, ``overwrite``, ``remove_src`` as JSON booleans; vdsm 7.1 and
-    7.2.2). An unexpected reply shape counts as nothing running. Raises DSM and transport
+    also ``dest_folder_path``, ``overwrite``, ``remove_src`` as JSON booleans; vdsm 7.1, 7.2.2,
+    7.3.2 and 7.4.1). An unexpected reply shape counts as nothing running. Raises DSM and transport
     errors.
     """
     data = await client.request("SYNO.FileStation.BackgroundTask", "list", version=2)
@@ -717,12 +728,139 @@ async def running_task(
     except (SynologyError, httpx.TransportError) as e:
         logger.debug("BackgroundTask list failed, skipping the running-task check: %s", e)
         return None
+    return find_running(tasks, api=api, path=path, params=params)
+
+
+def find_running(
+    tasks: list[RunningTask],
+    *,
+    api: str,
+    path: str,
+    params: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """The task of ``api`` on ``path`` among ``tasks``, as ``running_task`` looks for it."""
     for task in tasks:
         if task.handle.api != api or path not in task.paths:
             continue
         if params and any(task.params.get(k) != v for k, v in params.items()):
             continue
         return task.task
+    return None
+
+
+_LANDINGS: weakref.WeakKeyDictionary[DsmClient, dict[str, RunningTask]] = (
+    weakref.WeakKeyDictionary()
+)
+
+
+# The tool call this task runs in: its tracker and the taskids it started, so nested calls
+# share them and its own tasks aren't a clash for its own later sources.
+_TRACKING: contextvars.ContextVar[tuple[Callable[[RunningTask], None], list[str]] | None] = (
+    contextvars.ContextVar("tracking", default=None)
+)
+
+
+@contextmanager
+def tracked_landings(client: DsmClient) -> Iterator[Callable[[RunningTask], None]]:
+    """Keeps the tasks one copy, move or restore call starts where a parallel call on this client
+    finds them, until this call returns (#597). DSM's list can't serve for this: a small move has
+    usually finished by the time a parallel call reads it (probe on vdsm, 38 of 40 parallel moves
+    both ran, on all four versions), and a finished task isn't listed as running. Yields the
+    function that records a task, to call with the destination's lock held."""
+    outer = _TRACKING.get()
+    if outer is not None:
+        # Inside a call that tracks already (a restore to several places runs one per item):
+        # its tasks stay until that call returns.
+        yield outer[0]
+        return
+    landings = _LANDINGS.setdefault(client, {})
+    mine: list[str] = []
+
+    def track(task: RunningTask) -> None:
+        landings[task.handle.taskid] = task
+        mine.append(task.handle.taskid)
+
+    token = _TRACKING.set((track, mine))
+    try:
+        yield track
+    finally:
+        _TRACKING.reset(token)
+        records = [landings.pop(taskid, None) for taskid in mine]
+        # A source this call never started won't land: a parallel call that read the record
+        # mid-list mustn't be refused for it (QA round 3 on #597). A started one keeps its
+        # record in that snapshot, as its task may have finished just now.
+        started = {
+            path
+            for task in records
+            if task is not None and not task.task.get("pending")
+            for path in task.paths
+        }
+        for task in records:
+            if task is not None and task.task.get("pending") and not set(task.paths) & started:
+                task.task["withdrawn"] = True
+
+
+_PENDING_IDS = itertools.count(1)
+
+
+def pending_landing(
+    kind: HandleKind, path: str, dest: str, *, overwrite: bool, remove_src: bool
+) -> RunningTask:
+    """What a call is about to land, recorded before it starts any task (QA round 2 on #597):
+    a parallel call that starts first must not land the same name where this one will. Its
+    handle names no DSM task."""
+    return RunningTask(
+        Handle(kind, f"pending-{next(_PENDING_IDS)}"),
+        [path],
+        {"dest_folder_path": dest, "overwrite": overwrite, "remove_src": remove_src},
+        {"local": True, "pending": True},
+    )
+
+
+async def tasks_for_landing_check(client: DsmClient) -> tuple[list[RunningTask], list[RunningTask]]:
+    """This user's running tasks as DSM lists them, and every task the check should look at: those
+    plus the ones parallel calls on this client have started. If ``list`` fails DSM's part is
+    empty: a guard never refuses the call (#587), but it did not run on them, so this logs a
+    WARNING, and the tool descriptions say it can happen. The parallel calls' tasks are
+    read first: one can finish while ``list`` is answered."""
+    # This call's own tasks aren't a clash for its own sources: those are refuse_same_names'.
+    current = _TRACKING.get()
+    own = set(current[1]) if current is not None else set()
+    local = [t for t in _LANDINGS.get(client, {}).values() if t.handle.taskid not in own]
+    try:
+        listed = await _list_running(client)
+    except (SynologyError, httpx.TransportError) as e:
+        logger.warning(
+            "BackgroundTask list failed, leaving DSM's tasks out of the same-landing check "
+            "(this server's own calls are still checked): %s",
+            e,
+        )
+        listed = []
+    known = {task.handle.taskid for task in listed}
+    local = [task for task in local if not task.task.get("withdrawn")]
+    return listed, listed + [task for task in local if task.handle.taskid not in known]
+
+
+def running_landing(
+    tasks: list[RunningTask], *, sources: list[str], dest: str, overwrite: bool, remove_src: bool
+) -> tuple[str, str, RunningTask] | None:
+    """A source of this call, the path it clashes with and this user's running copy, move or
+    restore that would land both in ``dest`` under one name, where either one replaces (#587): the
+    later task would replace what the earlier landed, and for a move the original is already gone.
+    Names compare as ``refuse_same_names`` does. The same source under the same operation is left
+    out: that's a second run of it, which ``find_running`` hands back. A delete has no ``dest``, so
+    it never matches. What a finished call put there can't be known here."""
+    for task in tasks:
+        if task.dest != dest:
+            continue
+        if not overwrite and task.params.get("overwrite") is not True:
+            continue
+        same_operation = task.params.get("remove_src") is remove_src
+        for source in sources:
+            key = name_key(source)
+            for path in task.paths:
+                if name_key(path) == key and (path != source or not same_operation):
+                    return source, path, task
     return None
 
 

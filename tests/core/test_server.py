@@ -1855,7 +1855,10 @@ class TestInstructionComments:
 # are refused, and that a replaced file may not be in the recycle bin.
 # +51 by #590: if a reply says how a task ended isn't known, say that rather than that it's running.
 # +42 by #601: copy, move and restore say a skip goes by the name at the destination.
-PAYLOAD_BUDGET_CHARS = 58_102
+# +828 by #597: copy, move and restore say a call is refused while this user's running task lands
+# the same name there and either one replaces, what that can miss, and that overwrite=false never
+# replaces.
+PAYLOAD_BUDGET_CHARS = 58_930
 
 
 class TestPayloadBudget:
