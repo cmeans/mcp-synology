@@ -2918,6 +2918,31 @@ class TestTheKeyringIsWrittenOnlyAfterTheLogin:
         assert "Already removed from this entry: device_id." in said.out + said.err
         assert (self.SERVICE, "device_id") not in store.values
 
+    def test_a_token_that_cant_be_dropped_still_says_partly_written(
+        self,
+        store: MemoryKeyring,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """The cleanup is best effort: its failure mustn't hide the message."""
+        self._old(store)
+        real_set = store.set_password
+
+        def stuck(service: str, key: str, value: str) -> None:
+            if key != "username" or value != "someone-else":
+                raise KeyringError("locked")
+            real_set(service, key, value)
+
+        def no_delete(service: str, key: str) -> None:
+            raise KeyringError("locked")
+
+        monkeypatch.setattr(store, "set_password", stuck)
+        monkeypatch.setattr(store, "delete_password", no_delete)
+        with pytest.raises(SystemExit):
+            _store_keyring(self.SERVICE, "someone-else", "new-pw", "nas.home", 5000)
+        said = capsys.readouterr()
+        assert "partly written" in said.out + said.err
+
     def test_a_restored_username_keeps_its_token(
         self, store: MemoryKeyring, monkeypatch: pytest.MonkeyPatch
     ) -> None:

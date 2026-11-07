@@ -233,7 +233,7 @@ The LLM distinguishes them by server name. Each instance validates independently
 
 ### DSM API Auth Model
 
-Synology DSM uses session-based authentication via `SYNO.API.Auth` (versions 3–7, v6 recommended). There are no personal access tokens or API keys for general DSM API use. Every session starts with username + password and returns a `sid` (session ID), optionally a `did` (device ID), and a `synotoken` (CSRF token).
+Synology DSM uses session-based authentication via `SYNO.API.Auth` (versions 3–7, v6 recommended). There are no personal access tokens or API keys for general DSM API use. Every session starts with username + password and returns a `sid` (session ID), optionally a `did` (device ID), and with `enable_syno_token=yes` a `synotoken` (CSRF token).
 
 ### Auth Strategy Chain
 
