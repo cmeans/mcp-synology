@@ -22,7 +22,7 @@ from mcp_synology.modules.filestation.operations import (
     rename,
     restore_from_recycle_bin,
 )
-from mcp_synology.modules.filestation.tasks import Handle, TaskRecords
+from mcp_synology.modules.filestation.tasks import Handle, HandleKind, TaskRecords
 from tests.conftest import BASE_URL
 
 if TYPE_CHECKING:
@@ -4595,3 +4595,123 @@ async def test_a_later_destination_check_after_only_a_skip_goes_on(
     respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
     await restore_from_recycle_bin(mock_client, share="/s", paths=["x/a", "y/b"])
     assert started == ["/s/#recycle/x/a", "/s/#recycle/y/b"]
+
+
+async def _final_with_skip(
+    mock_client: DsmClient, kind: HandleKind, *, landed: list[str], skipped: list[str]
+) -> str:
+    from mcp_synology.modules.filestation.tasks import TaskRecord, file_task
+
+    records = TaskRecords()
+    handle = Handle(kind, "T_big")
+    records.add(
+        TaskRecord(
+            handle,
+            paths=["/s/big"],
+            dest="/d",
+            skipped_earlier=skipped,
+            landed_earlier=landed,
+        )
+    )
+    finished = {"finished": True, "path": "/s/big", "processed_size": 1}
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        return_value=httpx.Response(200, json={"success": True, "data": finished})
+    )
+    return await file_task(mock_client, records=records, handle=str(handle))
+
+
+@respx.mock
+async def test_a_final_keeps_the_warning_about_what_this_call_landed(
+    mock_client: DsmClient,
+) -> None:
+    text = await _final_with_skip(
+        mock_client, "move", landed=["/v/a/x"], skipped=["/v/b/x", "/v/c"]
+    )
+    assert "Don't retry /v/b/x with overwrite=true" in text
+    assert "For the others, pass overwrite=true to replace them" in text
+
+
+@respx.mock
+async def test_a_copys_final_doesnt_say_still_at_the_source(mock_client: DsmClient) -> None:
+    text = await _final_with_skip(mock_client, "copy", landed=[], skipped=["/s/a"])
+    assert "already at its destination: /s/a." in text
+    assert "still at the source" not in text
+
+
+def test_two_skipped_sources_of_one_name_get_the_warning() -> None:
+    """A partly skipped folder landed some items, as `_skip_report` counts it."""
+    from mcp_synology.modules.filestation.tasks import skipped_line
+
+    line = skipped_line(True, ["/v/a/n", "/v/b/n"])
+    assert "Don't retry /v/b/n with overwrite=true" in line
+    assert "For the others, pass" in line
+
+
+def test_a_later_call_on_the_same_task_keeps_the_record_s_lists() -> None:
+    from mcp_synology.modules.filestation.tasks import TaskRecord
+
+    records = TaskRecords()
+    handle = Handle("move", "T_big")
+    records.add(
+        TaskRecord(handle, paths=["/s/big"], skipped_earlier=["/s/a"], landed_earlier=["/s/b"])
+    )
+    records.add(TaskRecord(handle, paths=["/s/big"], dest="/d"))
+    record = records.get(handle)
+    assert record is not None
+    assert (record.dest, record.skipped_earlier, record.landed_earlier) == (
+        "/d",
+        ["/s/a"],
+        ["/s/b"],
+    )
+
+
+@respx.mock
+async def test_a_restores_hand_off_says_still_at_the_source(
+    mock_client: DsmClient, no_poll_wait: None
+) -> None:
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        side_effect=_skip_then("/s/#recycle/y/b", skipped="/s/#recycle/x/a")
+    )
+    reply = await restore_from_recycle_bin(
+        mock_client, share="/s", paths=["x/a", "y/b"], timeout=1, records=TaskRecords()
+    )
+    assert "already at its destination: /s/#recycle/x/a." in reply
+    assert "A skipped file is still at the source" in reply
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("replies", "says"),
+    [
+        (["running", "refuse", "running"], "DSM didn't accept the stop"),
+        (["running", "refuse", "gone", "gone", "gone"], "A stop was sent"),
+        (["gone", "gone", "gone", "stopped"], "A stop was sent"),
+    ],
+    ids=["refused, still running", "refused, then gone", "sent blind"],
+)
+async def test_every_stop_reply_keeps_the_skip(
+    mock_client: DsmClient,
+    monkeypatch: pytest.MonkeyPatch,
+    replies: list[str],
+    says: str,
+) -> None:
+    import mcp_synology.modules.filestation.tasks as tasks
+    from mcp_synology.modules.filestation.tasks import TaskRecord, file_task
+
+    monkeypatch.setattr(tasks, "_LOST_TASK_WAIT", 0)
+    answers = {
+        "running": httpx.Response(
+            200, json={"success": True, "data": {"finished": False, "progress": 0.5, "total": 2}}
+        ),
+        "refuse": httpx.Response(200, json={"success": False, "error": {"code": 401}}),
+        "gone": httpx.Response(200, json={"success": False, "error": {"code": 599}}),
+        "stopped": httpx.Response(200, json={"success": True, "data": {}}),
+    }
+    queue = iter(replies)
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=lambda _: answers[next(queue)])
+    records = TaskRecords()
+    handle = Handle("move", "T_big")
+    records.add(TaskRecord(handle, paths=["/s/big"], dest="/d", skipped_earlier=["/s/a"]))
+    text = await file_task(mock_client, records=records, handle=str(handle), action="stop")
+    assert says in text
+    assert "already at its destination: /s/a." in text

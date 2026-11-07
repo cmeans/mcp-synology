@@ -98,6 +98,8 @@ class TaskRecord:
     earlier: list[str] = field(default_factory=list)
     # The sources DSM skipped before this one in its call, so the final text can say so (#585).
     skipped_earlier: list[str] = field(default_factory=list)
+    # What landed at the call's destination; ``earlier`` isn't that when the task goes elsewhere.
+    landed_earlier: list[str] = field(default_factory=list)
 
 
 class TaskRecords:
@@ -123,7 +125,13 @@ class TaskRecords:
     def add(self, record: TaskRecord) -> None:
         self._purge()
         key = str(record.handle)
-        self._items.pop(key, None)
+        known = self._items.pop(key, None)
+        if known is not None:
+            # A later call that meets the same running task knows less about the first's sources.
+            old = known[1]
+            record.earlier = record.earlier or old.earlier
+            record.skipped_earlier = record.skipped_earlier or old.skipped_earlier
+            record.landed_earlier = record.landed_earlier or old.landed_earlier
         self._items[key] = (self._clock(), record)
         while len(self._items) > self._max:
             self._items.popitem(last=False)
@@ -464,23 +472,22 @@ def skipped_line(
     removes_source: bool,
     skipped: list[str],
     landed: list[str] | None = None,
-    *,
-    advise: bool = True,
 ) -> str:
     """A skipped source isn't done, so it's no leftover from a move that worked (#585). DSM's skip
-    on a folder means only some of its items: the rest land. One named like what this call already
-    landed gets no advice to replace it, as ``_skip_report`` says for the same input (#580)."""
+    on a folder means only some of its items: the rest land. So one named like what this call
+    landed earlier, or like a skipped source before it, gets no advice to replace it (#580)."""
     line = (
         "Skipped in whole or in part, already at its destination: "
         f"{', '.join(map(shown, skipped))}."
     )
     if removes_source:
         line += " A skipped file is still at the source; a skipped folder keeps the items skipped."
-    if not advise:
-        return line
     ran = {name_key(path) for path in landed or []}
-    own = [path for path in skipped if name_key(path) in ran]
-    others = [path for path in skipped if name_key(path) not in ran]
+    own: list[str] = []
+    others: list[str] = []
+    for path in skipped:
+        (own if name_key(path) in ran else others).append(path)
+        ran.add(name_key(path))
     if own:
         line += (
             f" Don't retry {', '.join(map(shown, own))} with overwrite=true unless the user asked "
@@ -820,12 +827,8 @@ async def _final_text(
                 only_named_sources_removed=bool(record.skipped_earlier),
             )
             if record.skipped_earlier:
-                # This task's own skip report, if any, already gives the advice.
                 line = skipped_line(
-                    handle.kind != "copy",
-                    record.skipped_earlier,
-                    record.earlier,
-                    advise=not skipped,
+                    handle.kind != "copy", record.skipped_earlier, record.landed_earlier
                 )
                 text += f"\n\nBefore this task, in the same call: {line}"
             if handle.kind == "restore":
@@ -1023,7 +1026,9 @@ async def file_task(
     def earlier_skip() -> str:
         if record is None or not record.skipped_earlier:
             return ""
-        return "\n" + skipped_line(parsed.kind != "copy", record.skipped_earlier, record.earlier)
+        return "\n" + skipped_line(
+            parsed.kind != "copy", record.skipped_earlier, record.landed_earlier
+        )
 
     async def send_stop() -> int | None:
         """Send the stop. DSM's code when it says it has no such task (401, 599), or None."""
@@ -1072,7 +1077,7 @@ async def file_task(
         return (
             f"DSM didn't accept the stop (error {refused}), and the task is still running "
             f"({progress_text(now)}). Try the stop again; if DSM keeps refusing it, stop it in "
-            "DSM's File Station."
+            f"DSM's File Station.{earlier_skip()}"
         )
 
     status = await status_or_none()

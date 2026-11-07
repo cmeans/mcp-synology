@@ -634,6 +634,17 @@ async def test_a_skip_before_a_hand_off_gets_its_own_line(admin_client: Any, nas
         # DSM's skip on a folder means only some of its items: the rest landed.
         assert nas.exists(f"{dest}/n/only.txt")
 
+    # A move's skip leaves a file at its source, and only the skipped items of a folder. The copy
+    # above landed only.txt, so it goes first, or it's skipped too.
+    nas.run("rm -f /volume1/writable/p585/d/n/only.txt")
+    moved = await move_files(
+        client, paths=[f"{base}/f/x.txt", f"{base}/f/n"], dest_folder=dest, records=records
+    )
+    assert "skipped" in moved.lower(), moved
+    assert nas.exists(f"{base}/f/x.txt")
+    assert nas.exists(f"{base}/f/n/same.txt")
+    assert not nas.exists(f"{base}/f/n/only.txt")
+
 
 # --- Move and restore -----------------------------------------------------
 

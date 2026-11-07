@@ -444,7 +444,7 @@ returns a normal result: "Still deleting on the NAS: … This operation keeps
 running after this reply", with the progress and a handle such as
 `delete:FileStation_179219158016597225`. In a multi-path call, the paths after
 it are listed as "Not started", and any DSM skipped before it get their own line:
-they aren't done. Follow up with `file_task`: `action="status"`
+they aren't all done. Follow up with `file_task`: `action="status"`
 shows progress or the final result, `action="stop"` stops it (it may then be
 partly done), and no handle lists the running operations. Only a canceled
 call (the user, or a client's own timeout) or a DSM error stops the task.

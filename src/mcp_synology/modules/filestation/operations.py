@@ -883,6 +883,7 @@ async def _copy_move(
                         # Only what landed, and only for the destination this call asked for.
                         earlier=landed_here if task_dest == dest else [],
                         skipped_earlier=list(skipped_so_far),
+                        landed_earlier=list(landed_here),
                     )
                 )
             reply = handoff_reply(
