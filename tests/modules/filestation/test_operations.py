@@ -5548,3 +5548,61 @@ async def test_a_restores_hand_off_leads_with_the_skip_mark(
         mock_client, share="/s", paths=["x/a", "y/b", "z/big"], timeout=1
     )
     assert reply.startswith("[!] Restored 1 of 3 item(s) from /s recycle bin so far; 1 with skips ")
+
+
+def _fails_on(source: str, *, skipped: str, answer: dict[str, Any] | None) -> Any:
+    """`skipped` is skipped; `source`'s task reports ``answer``, or its start gets none if None."""
+    base = _dsm_for_each(skipped=(skipped,))
+    started: list[str] = []
+
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        params = dict(request.url.params)
+        if params.get("path") == source and params.get("method") == "start" and answer is None:
+            raise httpx.ConnectError("")
+        method = params.get("method")
+        if method == "start":
+            started.append(params["path"])
+        # Task IDs go by name, and the skipped source may share it: go by what started last.
+        if answer is not None and method == "status" and started[-1] == source:
+            return httpx.Response(200, json={"success": True, "data": answer})
+        return base(request)
+
+    return side_effect
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    "answer",
+    [
+        {"finished": True, "error": {"code": 1002, "path": "/x/a"}},
+        {"finished": True, "errors": [{"code": 1002, "path": "/x/a"}]},
+        None,
+    ],
+    ids=["error", "errors", "no answer to the start"],
+)
+async def test_a_failure_warns_about_a_skip_named_like_the_failing_source(
+    mock_client: DsmClient, no_poll_wait: None, answer: dict[str, Any] | None
+) -> None:
+    """QA round 4 on #601: part of the failing source may have landed, on each route."""
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        side_effect=_fails_on("/x/a", skipped="/s/a", answer=answer)
+    )
+    with pytest.raises(ToolError) as failed:
+        await move_files(mock_client, paths=["/s/a", "/x/a"], dest_folder="/d")
+    assert "Don't retry /s/a" in json.loads(str(failed.value))["error"]["message"]
+
+
+@respx.mock
+async def test_a_failure_warns_about_a_skip_named_like_what_landed(
+    mock_client: DsmClient, no_poll_wait: None
+) -> None:
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        side_effect=_fails_on(
+            "/x/b",
+            skipped="/s/a",
+            answer={"finished": True, "error": {"code": 1002, "path": "/x/b"}},
+        )
+    )
+    with pytest.raises(ToolError) as failed:
+        await move_files(mock_client, paths=["/t/a", "/s/a", "/x/b"], dest_folder="/d")
+    assert "Don't retry /s/a" in json.loads(str(failed.value))["error"]["message"]
