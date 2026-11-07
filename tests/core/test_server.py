@@ -2405,18 +2405,36 @@ class TestArgumentsThatCouldForgeAReplyLine:
             async with Client(server) as client:
                 result = await client.call_tool(tool, arguments)
         assert result.is_error
-        body = json.loads(" ".join(getattr(c, "text", "") for c in result.content))
+        text = " ".join(getattr(c, "text", "") for c in result.content)
+        prefix = f"Error executing tool {tool}: "
+        assert text.startswith(prefix)  # as every tool error reads
+        body = json.loads(text.removeprefix(prefix))
         assert body["error"]["code"] == "invalid_parameter"
         assert not route.called
+
+    def test_the_refusal_never_shows_the_value(self) -> None:
+        """Pre-QA on #604: a password with a control character was echoed, and logged."""
+        from mcp.server.mcpserver.exceptions import ToolError
+
+        from mcp_synology.server import _refuse_forging_arguments
+
+        with pytest.raises(ToolError) as refused:
+            _refuse_forging_arguments({"password": "MARKPW\x7fz"})
+        assert "MARKPW" not in str(refused.value)
+        assert "`password`" in str(refused.value)
 
     def test_a_tab_a_description_and_ordinary_text_pass(self) -> None:
         from mcp_synology.server import _refuse_forging_arguments
 
         _refuse_forging_arguments(
             {
+                # Padding the tools drop, and Download Station's URI list (#459).
+                "dest_folder": "\n/video/x",
+                "tags": ["beach\n"],
+                "uri": "https://a/x.iso,\r\nhttps://b/y.iso\n",
                 "path": "/video/a\tb",
                 "description": "line one\nline two",
-                "tags": ["Café", "日本語"],
+                "names": ["Café", "日本語"],
                 "nested": {"k": "x\u200dy"},
                 "n": 3,
             }

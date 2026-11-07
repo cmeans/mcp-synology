@@ -18,9 +18,16 @@ if TYPE_CHECKING:
 # character (text a model reads and a person doesn't see: OWASP's prompt injection cheat
 # sheet). One class, so it doesn't depend on the running Python's Unicode version; a tab is
 # left out, as it can't start a line and DSM keeps it in names, which are taken exactly (#488).
+# A lone surrogate is in it too: a reply holding one can't be sent at all.
 _FORGES = re.compile(
     "[\x00-\x08\x0a-\x1f\x7f-\x9f\u2028\u2029\u061c\u200e\u200f\u202a-\u202e"
-    "\u2066-\u2069\U000e0000-\U000e007f]"
+    "\u2066-\u2069\ud800-\udfff\U000e0000-\U000e007f]"
+)
+# The same characters as JSON writes them escaped, so a reply with none of them (most) skips
+# the walk: a lone surrogate (`\ud800`) is one too, as the reply couldn't be sent with it.
+_JSON_ESCAPED = re.compile(
+    r"\\(?:[nrbf]|u00[01][0-9a-fA-F]|u007[fF]|u00[89][0-9a-fA-F]|u202[89a-eA-E]"
+    r"|u061[cC]|u200[eEfF]|u206[6-9]|u[dD][89a-fA-F][0-9a-fA-F]{2})"
 )
 # An escape ``escape_controls`` writes for a control character other than a line break.
 _CONTROL_ESCAPE = re.compile(r"\\x(?:[01][0-9a-f]|7f|[89][0-9a-f])")
@@ -72,6 +79,12 @@ def reply_text(value: object) -> str:
     wording isn't a boundary (OWASP)."""
     text = str(value)
     return repr(text) if forges(text) else text
+
+
+def needs_escaping(text: str) -> bool:
+    """Whether a reply's JSON text may hold a character ``escape_nas_text`` escapes, raw or as
+    JSON writes it escaped. False means the walk can be skipped (#604)."""
+    return _FORGES.search(text) is not None or _JSON_ESCAPED.search(text) is not None
 
 
 def escape_nas_text(value: Any) -> Any:

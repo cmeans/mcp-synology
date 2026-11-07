@@ -358,7 +358,7 @@ def test_no_formatter_lets_a_name_start_a_line() -> None:
 
 def test_one_class_matches_the_unicode_categories_it_names() -> None:
     """`forges` is one precompiled class (#604): every character it names, and no other, is
-    Cc (but a tab), Zl, Zp, a Bidi_Control character or a tag character."""
+    Cc (but a tab), Zl, Zp, a lone surrogate, a Bidi_Control character or a tag character."""
     import unicodedata
 
     from mcp_synology.core.formatting import forges
@@ -367,7 +367,9 @@ def test_one_class_matches_the_unicode_categories_it_names() -> None:
     for o in range(0x110000):
         c = chr(o)
         expected = c != "\t" and (
-            unicodedata.category(c) in ("Cc", "Zl", "Zp") or c in bidi or 0xE0000 <= o <= 0xE007F
+            unicodedata.category(c) in ("Cc", "Zl", "Zp", "Cs")
+            or c in bidi
+            or 0xE0000 <= o <= 0xE007F
         )
         assert forges(c) is expected, hex(o)
 
@@ -385,3 +387,19 @@ def test_escaping_takes_nesting_deeper_than_the_recursion_limit() -> None:
     for _ in range(depth):
         out = out[0]
     assert out == "a\\nb"
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["a\nb", "a\x1bb", "a\u2028b", "a\u202eb", "a\U000e0041b", "a\x85b", "a\ud800b"],
+)
+def test_a_reply_that_needs_escaping_is_never_skipped(raw: str) -> None:
+    """The fast path (#604): a reply skips the walk only when its JSON text can't hold any of
+    these characters, raw or escaped."""
+    import json
+
+    from mcp_synology.core.formatting import needs_escaping
+
+    assert needs_escaping(json.dumps({"name": raw}))
+    assert needs_escaping(json.dumps({"name": raw}, ensure_ascii=False))
+    assert not needs_escaping(json.dumps({"name": "Caf\u00e9 \u65e5 a\tb"}, ensure_ascii=False))

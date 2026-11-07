@@ -247,27 +247,29 @@ def _compact_schema(node: Any) -> Any:
     return out
 
 
-# Text a tool takes as written, never echoed in a reply: a Photos description may hold line
-# breaks on purpose.
-_FREE_TEXT_ARGUMENTS = frozenset({"description"})
+# Arguments a line break may be part of: a Photos description (escaped where it's shown), and
+# Download Station's URI list, which `split_uris` splits on whitespace too and no reply echoes.
+_FREE_TEXT_ARGUMENTS = frozenset({"description", "uri"})
 
 
 def _refuse_forging_arguments(arguments: dict[str, Any]) -> None:
     """Refuse an argument holding a character a reply may not carry as it is (#604): a tool
     could echo it into a line of its own, which reads as the server's. Replies show such
     characters escaped, so a name the server showed never holds one. One check for every
-    tool's arguments, names, paths and tags alike."""
+    tool's arguments, names, paths and tags alike. Whitespace around a value is padding the
+    tools drop (`strip_padding`, `.strip()`), so a line break there is fine. The refusal
+    names the argument only: its value may be a password."""
     stack: list[tuple[str, Any]] = [
         (key, value) for key, value in arguments.items() if key not in _FREE_TEXT_ARGUMENTS
     ]
     while stack:
         key, value = stack.pop()
-        if isinstance(value, str) and forges(value):
+        if isinstance(value, str) and forges(value.strip()):
             error_response(
                 ErrorCode.INVALID_PARAMETER,
-                f"{key} {value!r} has a control character, line or paragraph separator, bidi "
-                "control or tag character, which isn't allowed: replies show them escaped, so "
-                "a name that holds one can't be used here.",
+                f"`{key}` has a control character, line or paragraph separator, bidi control or "
+                "tag character, which isn't allowed: replies show them escaped, so a name that "
+                "holds one can't be used here.",
                 retryable=False,
                 param=key,
                 suggestion="For an item on the NAS, rename it there (in DSM) and use its new "
@@ -339,7 +341,6 @@ class _SynologyServer(MCPServer):
         input request), and taking it can't fail the tool.
         """
         try:
-            _refuse_forging_arguments(arguments)
             result = await self._call_tool(name, arguments, context)
         except ToolError as exc:
             notice = await self._take_update_notice()
@@ -395,6 +396,10 @@ class _SynologyServer(MCPServer):
         model as "Error executing tool delete_files: " (#237).
         """
         prefix = f"Error executing tool {name}: "
+        try:
+            _refuse_forging_arguments(arguments)
+        except ToolError as refused:
+            raise ToolError(f"{prefix}{refused}") from None
         try:
             return await super().call_tool(name, arguments, context)
         except UnexpectedToolError as exc:

@@ -75,6 +75,8 @@ def smart_block(scheduler: Any, tasks: Any) -> str:
     for item in dicts(scheduler.get("items") if isinstance(scheduler, dict) else None):
         try:
             # JSON inside DSM's JSON: its strings come out unescaped (#604).
+            # The capture holds it on one line; a line break between its fields would come escaped
+            # and fail to parse here, showing the style as unknown.
             args = escape_nas_text(json.loads(item.get("app_args") or "{}"))
         except (TypeError, ValueError):
             args = {}

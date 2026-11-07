@@ -1900,6 +1900,8 @@ def test_every_dsm_reply_is_read_through_one_parser() -> None:
         assert ".json()" not in text, path.name
         if path.name == "client.py" or path.parts[-3:-1] == ("mcp_synology", "cli"):
             continue  # cli parses local files and PyPI, not DSM
+        for alias in ("import json as", "from json import", "JSONDecoder"):
+            assert alias not in text, f"{path.name}: {alias}"
         for line in text.splitlines():
             if "json.loads(" in line:
                 assert re.search(
@@ -1913,3 +1915,18 @@ def test_a_reply_nested_too_deep_is_not_a_reply() -> None:
     resp = httpx.Response(200, content=b"[" * 100_000 + b"]" * 100_000)
     with pytest.raises(DsmReplyError):
         _read_json(resp, "SYNO.FileStation.List/list")
+
+
+def test_a_reply_with_nothing_to_escape_is_returned_as_parsed() -> None:
+    from mcp_synology.core.client import _read_json
+
+    resp = httpx.Response(200, content=b'{"success": true, "data": {"name": "a\\\\nb"}}')
+    assert _read_json(resp, "x")["data"] == {"name": "a\\nb"}
+
+
+def test_a_lone_surrogate_is_escaped() -> None:
+    """A reply holding one couldn't be sent to the model at all."""
+    from mcp_synology.core.client import _read_json
+
+    resp = httpx.Response(200, content=b'{"success": true, "data": {"name": "a\\ud800b"}}')
+    assert _read_json(resp, "x")["data"] == {"name": "a\\ud800b"}
