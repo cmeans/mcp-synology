@@ -5626,7 +5626,9 @@ async def test_a_failed_final_warns_about_what_its_record_says_landed(
     records = TaskRecords()
     handle = Handle("copy", "T_b")
     records.add(
-        TaskRecord(handle, ["/s/b"], dest="/d", skipped_earlier=["/s/a"], landed_earlier=["/s/a"])
+        TaskRecord(
+            handle, ["/s/b"], dest="/d", skipped_earlier=["/s/a"], landed_earlier=["/t/a", "/s/b"]
+        )
     )
     failed_status = {"finished": True, **failure, "path": "/s/b"}
     respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(

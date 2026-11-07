@@ -666,7 +666,7 @@ def _copy_move_result(
     # With overwrite=false DSM skips items that already exist at the destination and
     # says so only here: {"status": "none"} = nothing skipped, {"status": "all"} = at
     # least one item skipped (a whole file, or some of a folder's children); null with
-    # overwrite=true. Same on DSM 7.1 and 7.2.2 (#171).
+    # overwrite=true. Same on DSM 7.1, 7.2.2, 7.3.2 and 7.4.1 (#171; vdsm).
     skip = status.get("skipstatus")
     skip_value = (skip.get("status") or "unseen") if isinstance(skip, dict) else skip
     if skip is not None:
