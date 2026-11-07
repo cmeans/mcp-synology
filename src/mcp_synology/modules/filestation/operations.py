@@ -573,7 +573,7 @@ def _partial_note(
         else ""
     )
     return (
-        f". Part of it may already be in {shown(dest)}{gone}: DSM doesn't say how much was "
+        f". Part of it may already be in {shown(str(dest))}{gone}: DSM doesn't say how much was "
         f"{past} before it stopped, so check there before trying again"
     )
 
@@ -595,7 +595,7 @@ def _copy_move_result(
         mapped = error_from_code(err_code, "SYNO.FileStation.CopyMove")
         error_response(
             mapped.error_code,
-            f"{operation} files failed: {_code_text(err_code)} on path: {shown(err_path)}"
+            f"{operation} files failed: {_code_text(err_code)} on path: {shown(str(err_path))}"
             + _partial_note(status, [(err_path, err_code)], operation, path, dest)
             + _already_done(operation, done, skipped_so_far),
             retryable=mapped.retryable,
@@ -874,6 +874,8 @@ async def _copy_move(
                     "running it again" + (", and leave out what's already done." if done else "."),
                 )
         if isinstance(outcome, Handoff):
+            # A task already running to another folder lands nothing here.
+            placed = [*landed_here, p] if task_dest == dest else list(landed_here)
             if records is not None:
                 records.add(
                     TaskRecord(
@@ -885,9 +887,7 @@ async def _copy_move(
                         earlier=landed_here if task_dest == dest else [],
                         skipped_earlier=list(skipped_so_far),
                         done_earlier=list(done),
-                        landed_earlier=[*landed_here, p]
-                        if task_dest == dest
-                        else list(landed_here),
+                        landed_earlier=placed,
                     )
                 )
             reply = handoff_reply(
@@ -899,14 +899,12 @@ async def _copy_move(
                 dest=task_dest,
                 done=done,
                 skipped=skipped_so_far,
-                landed=[*landed_here, p] if task_dest == dest else landed_here,
+                landed=placed,
                 not_started=normalized[i + 1 :] + list(later or []),
             )
             if running is not None:
                 other = task_dest if task_dest != dest else None
                 reply = _already_running(operation, p, other) + "\n" + reply
-            # A task already running to another folder lands nothing here.
-            placed = [*landed_here, p] if task_dest == dest else landed_here
             ran = {name_key(path) for path in placed}
             alike = [q for q in normalized[i + 1 :] if name_key(q) in ran]
             if alike:
@@ -934,7 +932,7 @@ async def _copy_move(
         remove_src,
         total_processed,
         skipped_paths,
-        only_named_sources_removed=bool(skipped_so_far) or already_skipped is not None,
+        only_named_sources_removed=already_skipped is not None,
     )
     return text, False
 
@@ -968,7 +966,8 @@ async def _copy_move_summary(
     if total_processed > 0:
         lines.append(f"\nTotal size: {format_size(total_processed)}")
 
-    # With a source skipped earlier in the call, its folder wasn't emptied of what was asked (#585).
+    # A skip, or a caller that can't vouch for the rest of the folder (a restore to several places,
+    # file_task's final result), leaves it unsaid that the folder was emptied (#585).
     if remove_src and not skipped_paths and not only_named_sources_removed:
         src_dirs = sorted({"/".join(p.split("/")[:-1]) for p in normalized})
         lines.extend(f"\nSource files have been removed from {d}/." for d in src_dirs)

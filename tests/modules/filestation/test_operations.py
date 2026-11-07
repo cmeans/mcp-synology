@@ -4900,3 +4900,153 @@ def test_a_skip_is_listed_once_and_shows_odd_paths_safely() -> None:
     assert "/a/x, /a/x" not in line
     assert "\u200b" not in line
     assert "Don't retry" in line
+
+
+def test_a_failure_survives_a_status_with_an_odd_path_or_destination() -> None:
+    """Pre-QA on #601: `shown` took the status's fields as text, and raised on anything else."""
+    from mcp_synology.modules.filestation.operations import _copy_move_result
+
+    status = {"error": {"code": 401}, "path": 123, "dest_folder_path": 456}
+    with pytest.raises(ToolError) as failed:
+        _copy_move_result(status, "/s/a", "Move", dest="/d")
+    message = json.loads(str(failed.value))["error"]["message"]
+    assert "on path: 123" in message
+    assert "may already be in 456" in message
+
+
+@respx.mock
+async def test_a_final_says_what_was_done_before_it(mock_client: DsmClient) -> None:
+    """Pre-QA on #601: the status, stop and failed replies did, and the finished one didn't."""
+    from mcp_synology.modules.filestation.tasks import TaskRecord, file_task
+
+    records = TaskRecords()
+    handle = Handle("move", "T_big")
+    records.add(TaskRecord(handle, paths=["/s/big"], dest="/d", done_earlier=["/s/ok\u200bx"]))
+    finished = {"finished": True, "path": "/s/big", "processed_size": 1}
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        return_value=httpx.Response(200, json={"success": True, "data": finished})
+    )
+    text = await file_task(mock_client, records=records, handle=str(handle))
+    assert "Already moved before this task: '/s/ok\\u200bx'." in text
+
+
+def test_the_later_call_decides_whether_a_source_was_done_or_skipped() -> None:
+    """Pre-QA on #601: merging records listed one source as both."""
+    from mcp_synology.modules.filestation.tasks import TaskRecord
+
+    records = TaskRecords()
+    handle = Handle("move", "T")
+    records.add(
+        TaskRecord(
+            handle, ["/s/big"], skipped_earlier=["/s/a", "/s/c"], done_earlier=["/s/b", "/s/d"]
+        )
+    )
+    records.add(TaskRecord(handle, ["/s/big"], done_earlier=["/s/a"], skipped_earlier=["/s/b"]))
+    record = records.get(handle)
+    assert record is not None
+    assert record.skipped_earlier == ["/s/c", "/s/b"]
+    assert record.done_earlier == ["/s/d", "/s/a"]
+
+
+@respx.mock
+async def test_a_hand_off_records_what_was_done_and_what_lands_here(
+    mock_client: DsmClient, no_poll_wait: None
+) -> None:
+    records = TaskRecords()
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        side_effect=_skip_then("/s/big", skipped="/none")
+    )
+    await move_files(
+        mock_client, paths=["/s/ok", "/s/big"], dest_folder="/d", timeout=1, records=records
+    )
+    record = records.get(Handle("move", "T_big"))
+    assert record is not None
+    assert record.done_earlier == ["/s/ok"]
+    assert record.landed_earlier == ["/s/ok", "/s/big"]
+
+
+@respx.mock
+async def test_a_task_running_elsewhere_doesnt_count_as_landing_here(
+    mock_client: DsmClient, no_poll_wait: None
+) -> None:
+    """A move already running to another folder lands nothing here, so nothing warns about it."""
+    base = _skip_then("/none", skipped="/none")
+    running = {
+        "api": "SYNO.FileStation.CopyMove",
+        "taskid": "FileStation_RUN",
+        "finished": False,
+        "params": {
+            "path": ["/s/big"],
+            "dest_folder_path": "/elsewhere",
+            "overwrite": False,
+            "remove_src": True,
+        },
+    }
+
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        params = dict(request.url.params)
+        if params.get("method") == "list":
+            return httpx.Response(200, json={"success": True, "data": {"tasks": [running]}})
+        return base(request)
+
+    records = TaskRecords()
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+    await move_files(
+        mock_client, paths=["/s/ok", "/s/big"], dest_folder="/d", timeout=1, records=records
+    )
+    record = records.get(Handle("move", "FileStation_RUN"))
+    assert record is not None
+    assert record.landed_earlier == ["/s/ok"]
+    assert record.dest == "/elsewhere"
+
+
+@pytest.mark.parametrize(
+    ("skipstatus", "says"),
+    [({}, True), ({"status": ""}, True), ({"status": "none"}, False), ("all", True), (None, False)],
+    ids=["empty", "blank", "none", "text", "absent"],
+)
+def test_the_generic_final_counts_a_skip_it_cant_read(skipstatus: Any, says: bool) -> None:
+    from mcp_synology.modules.filestation.tasks import _generic_final
+
+    text = _generic_final(Handle("move", "T"), {"finished": True, "skipstatus": skipstatus})
+    assert ("Some items were skipped" in text) is says
+
+
+@respx.mock
+async def test_a_status_on_a_copy_shows_odd_paths_safely_and_says_what_landed(
+    mock_client: DsmClient,
+) -> None:
+    from mcp_synology.modules.filestation.tasks import TaskRecord, file_task
+
+    records = TaskRecords()
+    handle = Handle("copy", "T_big")
+    records.add(
+        TaskRecord(
+            handle,
+            paths=["/s/big"],
+            dest="/d",
+            done_earlier=["/s/ok\u200bx"],
+            skipped_earlier=["/s/q/n"],
+            landed_earlier=["/s/r/n"],
+        )
+    )
+    running = {"finished": False, "progress": 0.5, "total": 2}
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        return_value=httpx.Response(200, json={"success": True, "data": running})
+    )
+    text = await file_task(mock_client, records=records, handle=str(handle))
+    assert "'/s/ok\\u200bx'" in text
+    assert "still at the source" not in text
+    assert "Don't retry /s/q/n with overwrite=true" in text
+
+
+def test_merged_records_keep_what_each_call_did() -> None:
+    from mcp_synology.modules.filestation.tasks import TaskRecord
+
+    records = TaskRecords()
+    handle = Handle("move", "T")
+    records.add(TaskRecord(handle, ["/s/big"], done_earlier=["/s/a"]))
+    records.add(TaskRecord(handle, ["/s/big"], done_earlier=["/s/b"]))
+    record = records.get(handle)
+    assert record is not None
+    assert record.done_earlier == ["/s/a", "/s/b"]

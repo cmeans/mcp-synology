@@ -290,7 +290,7 @@ Common causes:
   one would land in a folder holding another: one could replace the other (for folders, items of
   the same name inside them), and a replaced file may not be in the recycle bin. Use different
   destinations or rename one first. To merge two folders without replacing anything, use
-  `overwrite=false`: items already there are skipped and listed. Separate calls with
+  `overwrite=false`: items whose name is already there are skipped and listed. Separate calls with
   `overwrite=true` don't avoid this.
 - `delete_files` on a whole shared folder (`/video`): a shared folder isn't deleted or
   emptied this way (#451; emptying one with the user's confirmation is #484). Delete a

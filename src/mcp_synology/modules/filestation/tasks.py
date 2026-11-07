@@ -133,10 +133,14 @@ class TaskRecords:
             # A later call that meets the same running task knows less about the first's sources.
             old = known[1]
             record.earlier = list(dict.fromkeys([*old.earlier, *record.earlier]))
-            record.skipped_earlier = list(
-                dict.fromkeys([*old.skipped_earlier, *record.skipped_earlier])
-            )
-            record.done_earlier = list(dict.fromkeys([*old.done_earlier, *record.done_earlier]))
+            # The later call knows better: a source skipped then may be done now, and the reverse.
+            new_skipped, new_done = record.skipped_earlier, record.done_earlier
+            record.skipped_earlier = [
+                p for p in dict.fromkeys([*old.skipped_earlier, *new_skipped]) if p not in new_done
+            ]
+            record.done_earlier = [
+                p for p in dict.fromkeys([*old.done_earlier, *new_done]) if p not in new_skipped
+            ]
             record.landed_earlier = list(
                 dict.fromkeys([*old.landed_earlier, *record.landed_earlier])
             )
@@ -841,6 +845,10 @@ async def _final_text(
                 # one not started, or everything before a restart.
                 only_named_sources_removed=True,
             )
+            if record.done_earlier:
+                earlier_done = ", ".join(map(shown, record.done_earlier))
+                past = _PAST[_GERUND[handle.kind]]
+                text += f"\n\nAlready {past} before this task: {earlier_done}."
             if record.skipped_earlier:
                 line = skipped_line(
                     handle.kind != "copy", record.skipped_earlier, record.landed_earlier
