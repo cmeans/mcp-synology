@@ -240,9 +240,10 @@ def refuse_planted_bin(
 _SAME_NAME_PAIRS_SHOWN = 10
 _SAME_NAME_ADVICE = (
     "Send them to different folders, or rename one first. To merge two folders without replacing "
-    "anything, use overwrite=false: items already there are skipped and listed. Separate calls "
-    "with overwrite=true don't avoid this: a later call replaces what an earlier one put there, "
-    "possibly with no copy in the recycle bin, so do that only if the user asked for it."
+    "anything, use overwrite=false: items whose name is already there are skipped and listed. "
+    "Separate calls with overwrite=true don't avoid this: a later call replaces what an earlier "
+    "one put there, possibly with no copy in the recycle bin, so do that only if the user asked "
+    "for it."
 )
 _DIFFERENT_FILES = (
     " Same-named sources may not be the same file: show both to the user and let them choose."

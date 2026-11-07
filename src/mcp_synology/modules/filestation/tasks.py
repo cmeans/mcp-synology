@@ -28,7 +28,12 @@ from mcp_synology.core.formatting import (
     format_timestamp,
     synology_error_response,
 )
-from mcp_synology.modules.filestation.helpers import describe_transport_error, dsm_str, shown
+from mcp_synology.modules.filestation.helpers import (
+    describe_transport_error,
+    dsm_str,
+    name_key,
+    shown,
+)
 
 if TYPE_CHECKING:
     from mcp_synology.core.client import DsmClient
@@ -91,6 +96,17 @@ class TaskRecord:
     final_status: dict[str, Any] | None = None
     # The sources that landed whole before this one in its call, at the same destination (#580).
     earlier: list[str] = field(default_factory=list)
+    # The sources DSM skipped before this one in its call, so the final text can say so (#585).
+    skipped_earlier: list[str] = field(default_factory=list)
+    # What's reported as already done before this task.
+    done_earlier: list[str] = field(default_factory=list)
+    # What landed, or is landing, at the call's destination; ``earlier`` isn't that when the task
+    # goes elsewhere. A skipped source named like one of these isn't offered overwrite=true.
+    landed_earlier: list[str] = field(default_factory=list)
+    # Where each of those sources went, when a call has several destinations or a later call met
+    # this task: a name only clashes at one destination, and a reply says which it means. One per
+    # source: a source skipped at two destinations by two calls keeps the later one.
+    dest_of: dict[str, str] = field(default_factory=dict)
 
 
 class TaskRecords:
@@ -116,7 +132,23 @@ class TaskRecords:
     def add(self, record: TaskRecord) -> None:
         self._purge()
         key = str(record.handle)
-        self._items.pop(key, None)
+        known = self._items.pop(key, None)
+        if known is not None:
+            # A later call that meets the same running task knows less about the first's sources.
+            old = known[1]
+            record.earlier = list(dict.fromkeys([*old.earlier, *record.earlier]))
+            # The later call knows better: a source skipped then may be done now, and the reverse.
+            new_skipped, new_done = record.skipped_earlier, record.done_earlier
+            record.skipped_earlier = [
+                p for p in dict.fromkeys([*old.skipped_earlier, *new_skipped]) if p not in new_done
+            ]
+            record.done_earlier = [
+                p for p in dict.fromkeys([*old.done_earlier, *new_done]) if p not in new_skipped
+            ]
+            record.landed_earlier = list(
+                dict.fromkeys([*old.landed_earlier, *record.landed_earlier])
+            )
+            record.dest_of = {**old.dest_of, **record.dest_of}
         self._items[key] = (self._clock(), record)
         while len(self._items) > self._max:
             self._items.popitem(last=False)
@@ -446,6 +478,61 @@ _PAST = {
 }
 
 
+# This doesn't know what a finished call put there (#580), so this is never said flat.
+SKIP_CAUTION = (
+    "unless what's there came from this or an earlier call of yours: that would replace it, "
+    "possibly with no copy in the recycle bin."
+)
+
+
+def where_it_went(path: str, dest_of: dict[str, str] | None, dest: str | None) -> str:
+    """A source as a reply names it, with its destination if that isn't the task's own (#585)."""
+    went = (dest_of or {}).get(path, dest)
+    return f"{shown(path)} (to {shown(went)})" if went != dest and went else shown(path)
+
+
+def skipped_line(
+    removes_source: bool,
+    skipped: list[str],
+    landed: list[str] | None = None,
+    *,
+    dest_of: dict[str, str] | None = None,
+    dest: str | None = None,
+) -> str:
+    """A skipped source isn't done, so it's no leftover from a move that worked (#585). DSM's skip
+    on a folder means only some of its items: the rest land. So one named like what this call
+    landed earlier at that destination, or like a skipped source before it, gets no advice to
+    replace it (#580). ``dest_of`` says where each went, ``dest`` where the rest did."""
+
+    def key(path: str) -> tuple[str | None, str]:
+        return (dest_of or {}).get(path, dest), name_key(path)
+
+    def named(path: str) -> str:
+        return where_it_went(path, dest_of, dest)
+
+    line = (
+        "Skipped in whole or in part, as an item of that name is already at the destination "
+        f"(not compared): {', '.join(map(named, dict.fromkeys(skipped)))}."
+    )
+    if removes_source:
+        line += " A skipped file is still at the source; a skipped folder keeps the items skipped."
+    ran = {key(path) for path in landed or []}
+    own: list[str] = []
+    others: list[str] = []
+    for path in dict.fromkeys(skipped):
+        (own if key(path) in ran else others).append(path)
+        ran.add(key(path))
+    if own:
+        line += (
+            f" Don't retry {', '.join(map(named, own))} with overwrite=true unless the user asked "
+            "to replace that item: what's there may be what this call put there."
+        )
+    if others:
+        line += f" {'For the others, pass' if own else 'Pass'} overwrite=true to replace them, "
+        line += SKIP_CAUTION
+    return line
+
+
 def handoff_reply(
     *,
     verb: str,
@@ -455,7 +542,10 @@ def handoff_reply(
     done: list[str],
     not_started: list[str],
     stall: Exception | None = None,
+    skipped: list[str] | None = None,
+    landed: list[str] | None = None,
     dest: str | None = None,
+    dest_of: dict[str, str] | None = None,
 ) -> str:
     """The reply for a task handed off after the wait: the handle and what to do next.
 
@@ -506,7 +596,14 @@ def handoff_reply(
         'action="stop" (it may then be partly done).',
     ]
     if done:
-        lines.append(f"Already {past}: {', '.join(map(shown, done))}.")
+        named = ", ".join(where_it_went(p, dest_of, dest) for p in done)
+        lines.append(f"Already {past}: {named}.")
+    if skipped:
+        lines.append(
+            skipped_line(
+                gerund in ("moving", "restoring"), skipped, landed, dest_of=dest_of, dest=dest
+            )
+        )
     if not_started:
         # A lost task never reports finishing, so "once this one finishes" couldn't be met.
         then = "Run them again once this one finishes."
@@ -588,7 +685,13 @@ async def _list_running(client: DsmClient) -> list[RunningTask]:
             paths = [paths]
         if not isinstance(paths, list) or not _TASKID_RE.match(taskid):
             continue
-        paths = [p for p in paths if isinstance(p, str)]
+        # Another client may send /s/b/, which is the source this server calls /s/b.
+        paths = [p.rstrip("/") or "/" for p in paths if isinstance(p, str)]
+        dest = params.get("dest_folder_path")
+        if isinstance(dest, str):
+            # Another client may send /d/, which is the folder this server calls /d.
+            params = {**params, "dest_folder_path": dest.rstrip("/") or "/"}
+            task = {**task, "params": params}
         kind = _task_kind(task.get("api"), params, paths)
         if kind is None:
             continue
@@ -756,7 +859,16 @@ async def _final_text(
             return await _delete_summary(client, record.paths, record.recycle)
         if record.dest is not None:
             operation = handle.kind.capitalize()
-            size, skipped = _copy_move_result(status, path, operation, dest=record.dest)
+            size, skipped = _copy_move_result(
+                status,
+                path,
+                operation,
+                record.done_earlier,
+                dest=record.dest,
+                skipped_so_far=record.skipped_earlier,
+                dest_of=record.dest_of,
+                landed=record.landed_earlier,
+            )
             text = await _copy_move_summary(
                 client,
                 record.paths,
@@ -764,8 +876,37 @@ async def _final_text(
                 handle.kind != "copy",
                 size,
                 [path] if skipped else [],
-                earlier=record.earlier,
+                # A skipped folder lands its other items, so it warns like one that landed (#585).
+                earlier=[
+                    *record.earlier,
+                    *(
+                        p
+                        for p in [*record.done_earlier, *record.skipped_earlier]
+                        if record.dest_of.get(p, record.dest) == record.dest
+                    ),
+                ],
+                # A record can't know what else the call left in that folder: a source skipped,
+                # one not started, or everything before a restart.
+                only_named_sources_removed=True,
             )
+            if record.done_earlier:
+                earlier_done = ", ".join(
+                    where_it_went(p, record.dest_of, record.dest) for p in record.done_earlier
+                )
+                past = _PAST[_GERUND[handle.kind]]
+                text += f"\n\nAlready {past} before this task: {earlier_done}."
+            if record.skipped_earlier:
+                line = skipped_line(
+                    handle.kind != "copy",
+                    record.skipped_earlier,
+                    record.landed_earlier,
+                    dest_of=record.dest_of,
+                    dest=record.dest,
+                )
+                text += f"\n\nBefore this task: {line}"
+                # A result with skips starts with [!], as the first line is what gets read.
+                if text.startswith("[+]"):
+                    text = "[!]" + text.removeprefix("[+]")
             if handle.kind == "restore":
                 text = _as_restore(text, path.split("/")[1])
             return text
@@ -802,9 +943,11 @@ def _generic_final(handle: Handle, status: dict[str, Any]) -> str:
             text += _partial_note(status, failed, handle.kind.capitalize(), None, None)
         lines.append("DSM reported errors: " + text + ".")
     skip = status.get("skipstatus")
-    skip_value = skip.get("status") if isinstance(skip, dict) else skip
+    skip_value = (skip.get("status") or "unseen") if isinstance(skip, dict) else skip
     if skip_value not in (None, "", "none"):
-        lines.append("Some items were skipped (already at the destination, overwrite=false).")
+        lines.append(
+            "Some items were skipped (that name is already at the destination, overwrite=false)."
+        )
     lines.append("List the path to see the details.")
     return "\n".join(lines)
 
@@ -958,6 +1101,27 @@ async def file_task(
             f"{_LIST_HINT}"
         )
 
+    def earlier_skip() -> str:
+        if record is None or not (record.done_earlier or record.skipped_earlier):
+            return ""
+        lines = []
+        if record.done_earlier:
+            done = ", ".join(
+                where_it_went(p, record.dest_of, record.dest) for p in record.done_earlier
+            )
+            lines.append(f"Already {_PAST[_GERUND[parsed.kind]]} before this task: {done}.")
+        if record.skipped_earlier:
+            lines.append(
+                skipped_line(
+                    parsed.kind != "copy",
+                    record.skipped_earlier,
+                    record.landed_earlier,
+                    dest_of=record.dest_of,
+                    dest=record.dest,
+                )
+            )
+        return "\n" + "\n".join(lines)
+
     async def send_stop() -> int | None:
         """Send the stop. DSM's code when it says it has no such task (401, 599), or None."""
         try:
@@ -997,7 +1161,7 @@ async def file_task(
         """DSM says it has no such task, which can pass too, so a read says what's known."""
         now = await status_or_none(" The stop wasn't accepted.")
         if now is None:
-            return gone(stop_sent=True)
+            return gone(stop_sent=True) + earlier_skip()
         if now.get("finished"):
             records.set_final(parsed, now)
             final = await _final_text(client, parsed, now, record)
@@ -1005,7 +1169,7 @@ async def file_task(
         return (
             f"DSM didn't accept the stop (error {refused}), and the task is still running "
             f"({progress_text(now)}). Try the stop again; if DSM keeps refusing it, stop it in "
-            "DSM's File Station."
+            f"DSM's File Station.{earlier_skip()}"
         )
 
     status = await status_or_none()
@@ -1021,7 +1185,9 @@ async def file_task(
             # (another user's task isn't touched, on vdsm), and one that's not sent leaves a delete
             # running (QA round 2 on #590).
             refused = await send_stop()
-            return gone(stop_sent=True) if refused is None else await after_refusal(refused)
+            if refused is None:
+                return gone(stop_sent=True) + earlier_skip()
+            return await after_refusal(refused)
         logger.debug("%s status before stop (%s): %s", parsed.api, parsed, status)
         if status.get("finished"):
             records.set_final(parsed, status)
@@ -1031,12 +1197,13 @@ async def file_task(
         if refused is not None:
             return await after_refusal(refused)
         what = ", ".join(map(shown, paths)) if paths else f"`{parsed}`"
-        return f"Stopped {parsed.kind} of {what}; it may be partly done. {_LIST_HINT}"
+        stopped = f"Stopped {parsed.kind} of {what}; it may be partly done. {_LIST_HINT}"
+        return stopped + earlier_skip()
 
     if status is None:
         if record is not None and record.final_status is not None:
             return await _final_text(client, parsed, record.final_status, record)
-        return gone()
+        return gone() + earlier_skip()
     logger.debug("%s status (%s): %s", parsed.api, parsed, status)
 
     if status.get("finished"):
@@ -1061,5 +1228,5 @@ async def file_task(
         f"{slow} It keeps running without anything more from you; stopping and starting it "
         "again doesn't make it faster. "
         "Check again later, or, if the user wants it canceled, call file_task with "
-        'action="stop" (it may then be partly done).'
+        f'action="stop" (it may then be partly done).{earlier_skip()}'
     )
