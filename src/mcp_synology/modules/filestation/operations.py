@@ -442,6 +442,7 @@ def _refuse_landing_on_a_running_task(
     done: list[str],
     skipped: list[str],
     later: list[str] | None,
+    dest_of: dict[str, str] | None = None,
 ) -> None:
     """Refuse if a running task would land in ``dest`` under one of ``remaining``'s names, and
     either replaces (#587). Checked before each path: a task can start during an earlier path's
@@ -457,7 +458,10 @@ def _refuse_landing_on_a_running_task(
     rest = [p for p in remaining if p != source] + list(later or [])
     outcome = f" Nothing was {_PAST_TENSE.get(operation, 'changed')}."
     if done or skipped:
-        outcome = _already_done(operation, done, skipped).removeprefix(".") + "."
+        outcome = (
+            _already_done(operation, done, skipped, dest_of=dest_of, dest=dest).removeprefix(".")
+            + "."
+        )
         if rest:
             outcome += f" Not started: {', '.join(map(_escaped_repr, rest))}."
     same = clash.rsplit("/", 1)[-1] == source.rsplit("/", 1)[-1]
@@ -469,15 +473,17 @@ def _refuse_landing_on_a_running_task(
     leave_out = " Leave out what's already done." if done else ""
     error_response(
         ErrorCode.INVALID_PARAMETER,
-        f"{operation} files refused: a running {task.handle.kind} of {_escaped_repr(clash)} is "
-        f"landing in {_escaped_repr(dest)} with {names} as {_escaped_repr(source)}, so one could "
+        f"{operation} files refused: a {task.handle.kind} of {_escaped_repr(clash)}, running or "
+        "just finished, is landing in "
+        f"{_escaped_repr(dest)} with {names} as {_escaped_repr(source)}, so one could "
         f"replace the other (for folders, items of the same name inside them).{outcome}",
         retryable=False,
         param="paths",
         value=source,
-        suggestion=f"Check on it with file_task and the handle `{task.handle}`, and when it's "
-        "done, check what's there before running this again, or use another destination. To "
-        f"keep what's there, use overwrite=false once it's done.{leave_out}",
+        suggestion=f"Check on it with file_task and the handle `{task.handle}` (or list the "
+        "destination with list_files), and when it's done, check what's there before running "
+        "this again, or use another destination. To keep what's there, use overwrite=false "
+        f"once it's done.{leave_out}",
     )
 
 
@@ -945,6 +951,7 @@ async def _copy_move(
                         done=done,
                         skipped=skipped_so_far,
                         later=later,
+                        dest_of=went,
                     )
                     # DSM's list only: a parallel call's finished task is nothing to hand back.
                     running = find_running(
@@ -1586,42 +1593,44 @@ async def restore_from_recycle_bin(
         restored: list[str] = []
         restored_skipped: list[str] = []
         restored_to: dict[str, str] = {}
-        for i, (fp, dest) in enumerate(zip(full_paths, restore_destinations, strict=False)):
-            r, handed_off = await _copy_move(
-                client,
-                paths=[fp],
-                dest_folder=dest,
-                overwrite=overwrite,
-                remove_src=True,
-                operation="Restore",
-                timeout=timeout,
-                check_sources=False,
-                already_done=restored,
-                already_skipped=restored_skipped,
-                dest_of=restored_to,
-                later=full_paths[i + 1 :],
-                records=records,
-                on_progress=on_progress,
-            )
-            if handed_off:
-                earlier_skips = sum(x.startswith("[!]") for x in results)
-                if earlier_skips:
-                    # The first line is what gets read, as it is for a finished restore.
-                    results.insert(
-                        0,
-                        format_status(
-                            f"Restored {len(results) - earlier_skips:,} of {len(full_paths):,} "
-                            f"item(s) from /{share_name} recycle bin so far; {earlier_skips:,} "
-                            "with skips (that name is already at the destination, "
-                            "overwrite=false; details below):",
-                            success=False,
-                        ),
-                    )
-                results.append(r)
-                return "\n".join(results) + note
-            results.append(_as_restore(r, share_name))
-            if fp not in restored_skipped:
-                restored.append(fp)
+        # One record of what this restore started, across its items (#597).
+        with tracked_landings(client):
+            for i, (fp, dest) in enumerate(zip(full_paths, restore_destinations, strict=False)):
+                r, handed_off = await _copy_move(
+                    client,
+                    paths=[fp],
+                    dest_folder=dest,
+                    overwrite=overwrite,
+                    remove_src=True,
+                    operation="Restore",
+                    timeout=timeout,
+                    check_sources=False,
+                    already_done=restored,
+                    already_skipped=restored_skipped,
+                    dest_of=restored_to,
+                    later=full_paths[i + 1 :],
+                    records=records,
+                    on_progress=on_progress,
+                )
+                if handed_off:
+                    earlier_skips = sum(x.startswith("[!]") for x in results)
+                    if earlier_skips:
+                        # The first line is what gets read, as it is for a finished restore.
+                        results.insert(
+                            0,
+                            format_status(
+                                f"Restored {len(results) - earlier_skips:,} of {len(full_paths):,} "
+                                f"item(s) from /{share_name} recycle bin so far; {earlier_skips:,} "
+                                "with skips (that name is already at the destination, "
+                                "overwrite=false; details below):",
+                                success=False,
+                            ),
+                        )
+                    results.append(r)
+                    return "\n".join(results) + note
+                results.append(_as_restore(r, share_name))
+                if fp not in restored_skipped:
+                    restored.append(fp)
         partial = [r for r in results if r.startswith("[!]")]
         if partial:
             results.insert(

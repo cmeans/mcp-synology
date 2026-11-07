@@ -5729,7 +5729,8 @@ async def test_overwrite_is_refused_while_a_task_lands_the_same_name(
         await move_files(mock_client, paths=[ours], dest_folder="/d", overwrite=True)
     body = json.loads(str(refused.value))["error"]
     assert body["message"] == (
-        f"Move files refused: a running move of {theirs!r} is landing in '/d' with {names} as "
+        f"Move files refused: a move of {theirs!r}, running or just finished, is landing in '/d' "
+        f"with {names} as "
         f"{ours!r}, "
         "so one could replace the other (for folders, items of the same name inside them). "
         "Nothing was moved."
@@ -5820,7 +5821,7 @@ async def test_a_restore_refused_partway_says_what_was_done(mock_client: DsmClie
         )
     message = json.loads(str(refused.value))["error"]["message"]
     assert "Nothing was" not in message
-    assert "Already restored before this failure: /s/#recycle/x/a." in message
+    assert "Already restored before this failure: /s/#recycle/x/a (to /s/x)." in message
     assert message.endswith("Not started: '/s/#recycle/z/c'.")
     assert "Leave out what's already done." in body_suggestion(refused)
 
@@ -5909,7 +5910,7 @@ async def test_a_restore_refused_on_its_last_item_lists_none_as_not_started(
             mock_client, share="/s", paths=["x/a", "y/b"], overwrite=True
         )
     message = json.loads(str(refused.value))["error"]["message"]
-    assert "a running move of '/a/b' is landing in '/s/y'" in message
+    assert "a move of '/a/b', running or just finished, is landing in '/s/y'" in message
     assert "Not started" not in message
 
 
@@ -6111,3 +6112,70 @@ async def test_a_failed_task_list_says_the_check_didnt_run(
     with caplog.at_level(logging.WARNING):
         await copy_files(mock_client, paths=["/b/x"], dest_folder="/d", overwrite=True)
     assert "skipping the same-landing check" in caplog.text
+
+
+@respx.mock
+async def test_a_refusal_lists_every_path_it_didnt_start(mock_client: DsmClient) -> None:
+    """Pre-QA on #597: only the paths after the clash were checked."""
+    calls: list[dict[str, str]] = []
+    started: list[str] = []
+    base = _dsm_with_running(_a_task_landing("/a/x"), calls)
+
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        params = dict(request.url.params)
+        if params.get("method") == "start":
+            started.append(params["path"])
+        if params.get("method") == "list" and not started:
+            return httpx.Response(200, json={"success": True, "data": {"tasks": []}})
+        return base(request)
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+    with pytest.raises(ToolError) as refused:
+        await move_files(
+            mock_client, paths=["/b/big", "/b/y", "/b/x"], dest_folder="/d", overwrite=True
+        )
+    message = json.loads(str(refused.value))["error"]["message"]
+    assert message.endswith("Not started: '/b/y'.")
+
+
+@respx.mock
+async def test_a_restore_to_several_places_keeps_its_record_until_it_returns(
+    mock_client: DsmClient,
+) -> None:
+    """Pre-QA on #597: each item's task dropped out when that item finished, while the restore
+    still ran, so a parallel move into its first folder started."""
+    calls: list[dict[str, str]] = []
+    starts: list[str] = []
+    base = _dsm_with_running(_a_task_landing("/none"), calls)
+    release = asyncio.Event()
+
+    async def side_effect(request: httpx.Request) -> httpx.Response:
+        params = dict(request.url.params)
+        await asyncio.sleep(0.001)
+        if params.get("method") == "start":
+            starts.append(params["path"])
+        if params.get("method") == "list":
+            return httpx.Response(200, json={"success": True, "data": {"tasks": []}})
+        if params.get("method") == "status" and "T_b" in params.get("taskid", ""):
+            await release.wait()  # y/b runs until the parallel move has been tried
+        return base(request)
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+
+    async def parallel_move() -> Any:
+        while "/s/#recycle/y/b" not in starts:
+            await asyncio.sleep(0.001)
+        try:
+            return await move_files(mock_client, paths=["/m/a"], dest_folder="/s/x", overwrite=True)
+        except ToolError as e:
+            return e
+        finally:
+            release.set()
+
+    restore = restore_from_recycle_bin(
+        mock_client, share="/s", paths=["x/a", "y/b"], overwrite=True, timeout=5
+    )
+    _, moved = await asyncio.gather(restore, parallel_move())
+    assert isinstance(moved, ToolError), moved
+    assert "is landing in '/s/x'" in str(moved)
+    assert "/m/a" not in starts

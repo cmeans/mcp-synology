@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 import re
 import time
@@ -750,6 +751,12 @@ _LANDINGS: weakref.WeakKeyDictionary[DsmClient, dict[str, RunningTask]] = (
 )
 
 
+# The tracker of the tool call this task runs in, so nested calls share it.
+_TRACKING: contextvars.ContextVar[Callable[[RunningTask], None] | None] = contextvars.ContextVar(
+    "tracking", default=None
+)
+
+
 @contextmanager
 def tracked_landings(client: DsmClient) -> Iterator[Callable[[RunningTask], None]]:
     """Keeps the tasks one copy, move or restore call starts where a parallel call on this client
@@ -757,6 +764,12 @@ def tracked_landings(client: DsmClient) -> Iterator[Callable[[RunningTask], None
     usually finished by the time a parallel call reads it (probe on vdsm, 38 of 40 parallel moves
     both ran, on all four versions), and a finished task isn't listed as running. Yields the
     function that records a task, to call with the destination's lock held."""
+    outer = _TRACKING.get()
+    if outer is not None:
+        # Inside a call that tracks already (a restore to several places runs one per item):
+        # its tasks stay until that call returns.
+        yield outer
+        return
     landings = _LANDINGS.setdefault(client, {})
     mine: list[str] = []
 
@@ -764,9 +777,11 @@ def tracked_landings(client: DsmClient) -> Iterator[Callable[[RunningTask], None
         landings[task.handle.taskid] = task
         mine.append(task.handle.taskid)
 
+    token = _TRACKING.set(track)
     try:
         yield track
     finally:
+        _TRACKING.reset(token)
         for taskid in mine:
             landings.pop(taskid, None)
 
@@ -774,8 +789,8 @@ def tracked_landings(client: DsmClient) -> Iterator[Callable[[RunningTask], None
 async def tasks_for_landing_check(client: DsmClient) -> tuple[list[RunningTask], list[RunningTask]]:
     """This user's running tasks as DSM lists them, and every task the check should look at: those
     plus the ones parallel calls on this client have started. If ``list`` fails DSM's part is
-    empty: a guard never refuses the call (#587), but it did not run on them, so this says so where
-    a user can see it, and the tool descriptions say it can happen. The parallel calls' tasks are
+    empty: a guard never refuses the call (#587), but it did not run on them, so this logs a
+    WARNING, and the tool descriptions say it can happen. The parallel calls' tasks are
     read first: one can finish while ``list`` is answered."""
     local = list(_LANDINGS.get(client, {}).values())
     try:
@@ -794,8 +809,8 @@ def running_landing(
     restore that would land both in ``dest`` under one name, where either one replaces (#587): the
     later task would replace what the earlier landed, and for a move the original is already gone.
     Names compare as ``refuse_same_names`` does. The same source under the same operation is left
-    out: that's a second run of it, which ``running_task`` handles. A delete has no ``dest``, so it
-    never matches. What a finished call put there can't be known here."""
+    out: that's a second run of it, which ``find_running`` hands back. A delete has no ``dest``, so
+    it never matches. What a finished call put there can't be known here."""
     for task in tasks:
         if task.dest != dest:
             continue
