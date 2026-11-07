@@ -751,9 +751,10 @@ _LANDINGS: weakref.WeakKeyDictionary[DsmClient, dict[str, RunningTask]] = (
 )
 
 
-# The tracker of the tool call this task runs in, so nested calls share it.
-_TRACKING: contextvars.ContextVar[Callable[[RunningTask], None] | None] = contextvars.ContextVar(
-    "tracking", default=None
+# The tool call this task runs in: its tracker and the taskids it started, so nested calls
+# share them and its own tasks aren't a clash for its own later sources.
+_TRACKING: contextvars.ContextVar[tuple[Callable[[RunningTask], None], list[str]] | None] = (
+    contextvars.ContextVar("tracking", default=None)
 )
 
 
@@ -768,7 +769,7 @@ def tracked_landings(client: DsmClient) -> Iterator[Callable[[RunningTask], None
     if outer is not None:
         # Inside a call that tracks already (a restore to several places runs one per item):
         # its tasks stay until that call returns.
-        yield outer
+        yield outer[0]
         return
     landings = _LANDINGS.setdefault(client, {})
     mine: list[str] = []
@@ -777,7 +778,7 @@ def tracked_landings(client: DsmClient) -> Iterator[Callable[[RunningTask], None
         landings[task.handle.taskid] = task
         mine.append(task.handle.taskid)
 
-    token = _TRACKING.set(track)
+    token = _TRACKING.set((track, mine))
     try:
         yield track
     finally:
@@ -792,7 +793,10 @@ async def tasks_for_landing_check(client: DsmClient) -> tuple[list[RunningTask],
     empty: a guard never refuses the call (#587), but it did not run on them, so this logs a
     WARNING, and the tool descriptions say it can happen. The parallel calls' tasks are
     read first: one can finish while ``list`` is answered."""
-    local = list(_LANDINGS.get(client, {}).values())
+    # This call's own tasks aren't a clash for its own sources: those are refuse_same_names'.
+    current = _TRACKING.get()
+    own = set(current[1]) if current is not None else set()
+    local = [t for t in _LANDINGS.get(client, {}).values() if t.handle.taskid not in own]
     try:
         listed = await _list_running(client)
     except (SynologyError, httpx.TransportError) as e:

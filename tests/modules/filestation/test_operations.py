@@ -6179,3 +6179,18 @@ async def test_a_restore_to_several_places_keeps_its_record_until_it_returns(
     assert isinstance(moved, ToolError), moved
     assert "is landing in '/s/x'" in str(moved)
     assert "/m/a" not in starts
+
+
+@respx.mock
+async def test_a_calls_own_finished_task_isnt_a_clash_for_its_next_source(
+    mock_client: DsmClient, no_poll_wait: None
+) -> None:
+    """vdsm on #597: two sources of one call landing one name were refused by its own record."""
+    calls: list[dict[str, str]] = []
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        side_effect=_dsm_with_running(_a_task_landing("/none"), calls)
+    )
+    # The operation itself, as vdsm's probes call it: refuse_same_names runs before it, in the
+    # tool's path check, and isn't this check's job.
+    await move_files(mock_client, paths=["/a/n", "/b/n"], dest_folder="/d", overwrite=True)
+    assert [c["path"] for c in calls if c.get("method") == "start"] == ["/a/n", "/b/n"]
