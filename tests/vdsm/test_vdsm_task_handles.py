@@ -41,6 +41,7 @@ from mcp_synology.modules.filestation.operations import (
 )
 from mcp_synology.modules.filestation.tasks import (
     TaskRecords,
+    _list_running,
     discover_running_tasks,
     file_task,
     taskid_started,
@@ -645,6 +646,120 @@ async def test_a_skip_before_a_hand_off_gets_its_own_line(admin_client: Any, nas
     assert nas.exists(f"{base}/f/x.txt")
     assert nas.exists(f"{base}/f/n/same.txt")
     assert not nas.exists(f"{base}/f/n/only.txt")
+
+
+async def test_overwrite_is_refused_while_a_task_lands_the_same_name(
+    admin_client: Any, nas: Nas
+) -> None:
+    """#587: DSM's task list shows the running copy's destination and source, on every version."""
+    client = _admin(admin_client)
+    nas.folder("/writable/cp587")
+    src = nas.tree("/writable/cp587/a/x", dirs=COPY_DIRS)
+    other = nas.folder("/writable/cp587/b/x")
+    dest = nas.folder("/writable/cp587_dst")
+    records = TaskRecords()
+
+    async with _stopped_at_exit(client, records) as handles:
+        reply = await copy_files(
+            client, paths=[src], dest_folder=dest, overwrite=True, timeout=WAIT, records=records
+        )
+        handle = _handle(reply)
+        handles.append(handle)
+        with pytest.raises(ToolError) as refused:
+            await copy_files(client, paths=[other], dest_folder=dest, overwrite=True)
+        body = json.loads(str(refused.value))["error"]
+        assert f"a running copy of {src!r} is landing in {dest!r}" in (body["message"])
+        assert f"`{handle}`" in body["suggestion"]
+        # Theirs replaces, so ours is refused without replacing: DSM's list says `overwrite` too.
+        with pytest.raises(ToolError, match="is landing in"):
+            await copy_files(client, paths=[other], dest_folder=dest, overwrite=False)
+
+
+async def test_a_started_task_is_listed_straight_away(admin_client: Any, nas: Nas) -> None:
+    """The destination lock (#587) relies on this: a task is in DSM's list once its start returns,
+    with what the check reads. The lock holds a parallel call only that long."""
+    client = _admin(admin_client)
+    src = nas.tree("/writable/ls587", dirs=COPY_DIRS)
+    dest = nas.folder("/writable/ls587_dst")
+    data = await client.request(
+        "SYNO.FileStation.CopyMove",
+        "start",
+        version=2,
+        params={"path": src, "dest_folder_path": dest, "overwrite": "true", "remove_src": "false"},
+    )
+    taskid = data["taskid"]
+    try:
+        tasks = await _list_running(client)
+        listed = [t for t in tasks if t.handle.taskid == taskid]
+        assert listed, "the task wasn't in the first list after its start"
+        assert listed[0].paths == [src]
+        assert listed[0].dest == dest
+        assert listed[0].params.get("overwrite") is True
+    finally:
+        await client.request(
+            "SYNO.FileStation.CopyMove", "stop", version=2, params={"taskid": dsm_str(taskid)}
+        )
+
+
+async def test_two_parallel_calls_give_one_task_and_one_refusal(
+    admin_client: Any, nas: Nas
+) -> None:
+    """QA round 1 on #597: both started, and one replaced the other."""
+    client = _admin(admin_client)
+    nas.folder("/writable/par587")
+    first = nas.tree("/writable/par587/a/x", dirs=COPY_DIRS)
+    second = nas.tree("/writable/par587/b/x", dirs=COPY_DIRS)
+    dest = nas.folder("/writable/par587_dst")
+    records = TaskRecords()
+
+    async with _stopped_at_exit(client, records) as handles:
+        results = await asyncio.gather(
+            *(
+                copy_files(
+                    client,
+                    paths=[src],
+                    dest_folder=dest,
+                    overwrite=True,
+                    timeout=WAIT,
+                    records=records,
+                )
+                for src in (first, second)
+            ),
+            return_exceptions=True,
+        )
+        refused = [r for r in results if isinstance(r, ToolError)]
+        replies = [r for r in results if isinstance(r, str)]
+        assert len(refused) == 1, results
+        assert "is landing in" in str(refused[0])
+        assert len(replies) == 1, results
+        handles.append(_handle(replies[0]))
+
+
+async def test_two_parallel_small_moves_give_one_move_and_one_refusal(
+    admin_client: Any, nas: Nas
+) -> None:
+    """The maintainer's option A on #597: a small move has usually finished by the second call's
+    list, so it took the server's own record of what parallel calls started. Without it both ran,
+    both said Moved, and one file was gone (38 of 40 on these four versions)."""
+    client = _admin(admin_client)
+    for i in range(3):
+        base = f"/writable/small587{i}"
+        dest = nas.folder(f"{base}/d")
+        vol = f"/volume1{base}"
+        nas.run(
+            f"mkdir -p {vol}/a {vol}/b && echo A > {vol}/a/x && echo B > {vol}/b/x && "
+            f"chmod -R 777 {vol} && sync"
+        )
+        results = await asyncio.gather(
+            move_files(client, paths=[f"{base}/a/x"], dest_folder=dest, overwrite=True),
+            move_files(client, paths=[f"{base}/b/x"], dest_folder=dest, overwrite=True),
+            return_exceptions=True,
+        )
+        refused = [r for r in results if isinstance(r, ToolError)]
+        assert len(refused) == 1, results
+        assert "is landing in" in str(refused[0])
+        assert nas.exists(f"{base}/d/x")
+        assert nas.exists(f"{base}/a/x") != nas.exists(f"{base}/b/x")
 
 
 # --- Move and restore -----------------------------------------------------

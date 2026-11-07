@@ -14,6 +14,7 @@ import logging
 import os
 import secrets
 import shutil
+import weakref
 from collections.abc import Awaitable, Callable, Coroutine
 from http.cookiejar import CookieJar
 from typing import TYPE_CHECKING, Any, BinaryIO, Self
@@ -308,6 +309,9 @@ class DsmClient:
         # One re-login at a time; a request that waited on it retries with the new
         # session instead of logging in again (#359).
         self._re_auth_lock = asyncio.Lock()
+        self._destination_locks: weakref.WeakValueDictionary[str, asyncio.Lock] = (
+            weakref.WeakValueDictionary()
+        )
         # Re-logins attempted so far, and how the last one failed: requests that were
         # already waiting when it failed get the same error instead of each logging in.
         self._login_attempts = 0
@@ -358,6 +362,15 @@ class DsmClient:
         """The session a request is about to use, and its headers: a session error on
         that request names this session to ``_re_authenticate`` (#359)."""
         return self._sid, self._session_headers()
+
+    def destination_lock(self, dest: str) -> asyncio.Lock:
+        """The lock for starting tasks into ``dest``: one per destination while anyone holds it,
+        so the map doesn't grow with every folder used (#587). Within this process only."""
+        lock = self._destination_locks.get(dest)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._destination_locks[dest] = lock
+        return lock
 
     def set_re_auth_callback(self, callback: ReAuthCallback) -> None:
         """Set callback for transparent re-authentication on session errors."""

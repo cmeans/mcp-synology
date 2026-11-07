@@ -291,7 +291,16 @@ Common causes:
   the same name inside them), and a replaced file may not be in the recycle bin. Use different
   destinations or rename one first. To merge two folders without replacing anything, use
   `overwrite=false`: items whose name is already there are skipped and listed. Separate calls with
-  `overwrite=true` don't avoid this.
+  `overwrite=true` don't avoid this: a call is refused too while this user's running task is
+  landing the same name there (naming its handle, or saying that another call through this server is landing there). Parallel calls through one server process
+  take turns, and the second finds what the first started even if it has already finished, and
+  what the first has yet to start (a later source, a restore's later items). A call with
+  `overwrite=false` is refused too beside one with `overwrite=true`, which could replace what
+  it lands.
+  That check isn't a guarantee: what a finished call put there can't be known, another
+  account's task isn't listed, a start at the same moment from a second server process can get
+  through, and a failed task list skips the check (logged as
+  a warning). `overwrite=false` is the safe route: it never replaces.
 - `delete_files` on a whole shared folder (`/video`): a shared folder isn't deleted or
   emptied this way (#451; emptying one with the user's confirmation is #484). Delete a
   shared folder's items by path, or the shared folder itself in DSM's Control Panel.
