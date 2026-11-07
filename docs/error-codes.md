@@ -546,8 +546,9 @@ Otherwise:
    `file_task` instead.
 6. `timeout` is marked `retryable=true`, but only retry after addressing the
    root cause. Blind retry on an overloaded NAS makes the situation worse.
-   The exception is a `create_download` timeout, which is marked
-   `retryable=false` because DSM may already have created the task.
+   The exceptions are marked `retryable=false`, because DSM may already have
+   started the work: a `create_download` timeout, and a path's start in a
+   multi-path copy, move, restore or delete.
 
 ## unavailable
 

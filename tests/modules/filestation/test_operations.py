@@ -3726,7 +3726,7 @@ def _skipping_dsm(lookup: Any) -> Any:
         if method == "status":
             status: dict[str, Any] = {"finished": True, "path": "/s/x", "processed_size": 1}
             if "T_b" in params["taskid"]:
-                status["skipstatus"] = 1
+                status["skipstatus"] = {"status": "all"}
             return httpx.Response(200, json={"success": True, "data": status})
         if method == "getinfo" and started:
             if isinstance(lookup, Exception):
@@ -3764,6 +3764,10 @@ async def test_a_failed_lookup_keeps_a_finished_copys_result(
     result = await copy_files(mock_client, paths=["/s/a", "/s/b"], dest_folder="/d")
     assert "skipped in whole or in part" in result
     assert "Couldn't read the type of skipped sources ['/s/b']" in caplog.text
+    if isinstance(lookup, httpx.ReadTimeout):
+        assert "ReadTimeout (DSM code None)" in caplog.text
+    if isinstance(lookup, httpx.Response) and b"408" in lookup.content:
+        assert "(DSM code 408)" in caplog.text
 
 
 @respx.mock
@@ -3834,7 +3838,9 @@ async def test_an_unanswered_start_partway_says_what_happened(
         "Check with list_files, or file_task with no handle, before running it again, and leave "
         "out what's already done."
     )
-    assert body["message"].startswith("Move files failed: DSM didn't answer for /s/b (")
+    assert body["message"].startswith(
+        f"Move files failed: DSM didn't answer for /s/b ({type(error).__name__}"
+    )
     assert body["message"].endswith(
         "its move may have started. Already moved before this failure: /s/a. Not started: /s/c."
     )
@@ -4117,7 +4123,8 @@ async def test_a_malformed_destination_check_keeps_a_restores_finished_items(
     respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
     result = await restore_from_recycle_bin(mock_client, share="/s", paths=["x/a", "y/b"])
     assert "/s/y" in result
-    assert "destination check for /s/y failed" in caplog.text
+    assert "destination check for /s/y failed (" in caplog.text
+    assert "DSM code None); starting anyway" in caplog.text
 
 
 @respx.mock
@@ -4127,3 +4134,22 @@ async def test_a_skipped_move_of_unknown_type_doesnt_guess_where_its_leftovers_a
     respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_skipping_dsm(httpx.ReadTimeout("")))
     result = await move_files(mock_client, paths=["/s/a", "/s/b"], dest_folder="/d")
     assert "/s/b (skipped items are still at this path or under it)" in result
+
+
+@respx.mock
+async def test_a_first_destination_check_with_no_answer_starts_nothing(
+    mock_client: DsmClient, no_poll_wait: None
+) -> None:
+    """Pre-QA on #594: starting then would be with the duplicate-task guard down too."""
+    calls: list[dict[str, str]] = []
+    base = _unanswered_start(calls, "/none")
+
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        if dict(request.url.params).get("path") == "/d":
+            raise httpx.ReadTimeout("")
+        return base(request)
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+    with pytest.raises(httpx.ReadTimeout):
+        await move_files(mock_client, paths=["/s/a"], dest_folder="/d")
+    assert not [c for c in calls if c.get("method") == "start"]

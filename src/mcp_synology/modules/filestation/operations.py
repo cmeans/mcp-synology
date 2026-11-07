@@ -396,20 +396,27 @@ async def _refuse_missing_sources(
         )
 
 
-async def _refuse_missing_destination(client: DsmClient, operation: str, dest: str) -> None:
+async def _refuse_missing_destination(
+    client: DsmClient, operation: str, dest: str, *, anything_done: bool = False
+) -> None:
     """Refuse before anything starts if the destination folder is missing or refused (#344).
 
     DSM answers a copy or move into a missing folder with 1002, "Destination error during
     copy/move", whose suggestion points at permissions. getinfo tells the cases apart: 408
-    is `not_found`, 407 `permission_denied`. Any other answer, or no answer, leaves it to
-    the task, as before.
+    is `not_found`, 407 `permission_denied`. Any other DSM answer leaves it to the task, as
+    before. No answer, or an unreadable one, stops a call with nothing started: starting then
+    would be with the duplicate-task guard down too, since it reads the same stalled DSM. With
+    ``anything_done`` (a restore's later destination), it goes on, so finished items aren't lost.
     """
     try:
         found = await find_missing_paths(client, [dest])
     except Exception as e:
+        if not anything_done and not isinstance(e, SynologyError):
+            raise
         # A restore to several places runs this after earlier items finished: no reply it can use
         # mustn't lose them (#588). At WARNING, as DSM's 1002 that follows a missing folder points
         # at permissions.
+        logger.debug("The destination check's error", exc_info=True)
         logger.warning(
             "%s: destination check for %s failed (%s, DSM code %s); starting anyway",
             operation,
@@ -785,7 +792,7 @@ async def _copy_move(
 
     if check_sources:
         await _refuse_missing_sources(client, operation, normalized, paths)
-    await _refuse_missing_destination(client, operation, dest)
+    await _refuse_missing_destination(client, operation, dest, anything_done=bool(already_done))
 
     total_processed = 0
     done = list(already_done or [])
