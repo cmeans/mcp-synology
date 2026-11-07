@@ -1214,7 +1214,7 @@ class TestAWorkingFolderConfigIsntLoaded:
         """Setup as far as writing its file: no keyring, no NAS, and a home folder of its own."""
 
         async def logged_in(*_: Any) -> dict[str, Any]:
-            return {"success": True}
+            return {"success": True, "keyring_ok": True}
 
         monkeypatch.setattr("mcp_synology.cli.setup._CONFIG_DIR", tmp_path / "home'configs")
         monkeypatch.setattr("mcp_synology.cli.setup._store_keyring", lambda *_: True)
