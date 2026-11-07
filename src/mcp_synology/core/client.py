@@ -107,9 +107,9 @@ def _loads(content: bytes, label: str) -> Any:
         logger.debug("%s: the reply has bytes that aren't UTF-8; reading them as U+FFFD", label)
         try:
             return escape_nas_text(json.loads(content.decode("utf-8", errors="replace")))
-        except ValueError:
+        except (ValueError, RecursionError):
             return None
-    except ValueError:
+    except (ValueError, RecursionError):  # nesting deeper than json.loads takes: not a reply
         return None
 
 

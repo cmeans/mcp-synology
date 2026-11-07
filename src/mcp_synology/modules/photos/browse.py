@@ -8,11 +8,12 @@ from typing import TYPE_CHECKING, Any
 
 from mcp_synology.core.errors import SynologyError
 from mcp_synology.core.formatting import (
+    escaped_control,
     format_key_value,
     format_size,
     format_table,
     synology_error_response,
-    unescape_controls,
+    unescaped_length,
 )
 from mcp_synology.modules.photos.helpers import (
     V7,
@@ -719,16 +720,15 @@ _EXIF_VALUE_MAX = 80
 
 def _exif_value(value: str) -> str:
     """A value fit for the table: binary data is described, an overlong value is cut."""
-    # Line breaks and tabs in text (an Image Description, a User Comment) become spaces;
-    # other control characters, C1 included, or bytes that weren't UTF-8 mean binary.
-    # (Only \r, \n and \t: str.splitlines() also splits on \x1c-\x1e and \x85, which
-    # are binary here.)
-    # The client escapes control characters in every reply (#604): read them as they were.
-    value = unescape_controls(value)
-    value = value.replace("\r\n", " ").translate({ord("\r"): " ", ord("\n"): " ", ord("\t"): " "})
-    if any(c == "\ufffd" or c < " " or "\x7f" <= c <= "\x9f" for c in value):
-        unit = "character" if len(value) == 1 else "characters"
-        return f"(binary data, {len(value):,} {unit}; not shown)"
+    # The client escapes control characters in every reply (#604): a line break in text (an
+    # Image Description, a User Comment) arrives as `\n` and stays so, a tab becomes a space,
+    # and another control character (`\x..`, C1 included) or bytes that weren't UTF-8 mean
+    # binary. Its length is counted as DSM sent it.
+    value = value.replace("\t", " ")
+    if "\ufffd" in value or escaped_control(value):
+        length = unescaped_length(value)
+        unit = "character" if length == 1 else "characters"
+        return f"(binary data, {length:,} {unit}; not shown)"
     if len(value) > _EXIF_VALUE_MAX:
         return f"{value[:_EXIF_VALUE_MAX]}… ({len(value):,} characters)"
     return value

@@ -482,7 +482,10 @@ class TestGetPhoto:
             ("a" * 80, "a" * 80),
             ("a" * 81, "a" * 80 + "… (81 characters)"),
             ("a\tb", "a b"),
-            ("line one\r\nline two\nthree", "line one line two three"),
+            # A line break stays visible, escaped by the client (#604); a literal backslash
+            # sequence in text is shown as it is.
+            ("line one\r\nline two\nthree", "line one\\r\\nline two\\nthree"),
+            ("C:\\new\\x41b", "C:\\new\\x41b"),
             ("Canon\ufffd", "(binary data, 6 characters; not shown)"),
             ("\x17", "(binary data, 1 character; not shown)"),
             ("x\x85y", "(binary data, 3 characters; not shown)"),
@@ -491,7 +494,10 @@ class TestGetPhoto:
         ],
     )
     def test_exif_value(self, value: str, shown: str) -> None:
-        assert _exif_value(value) == shown
+        from mcp_synology.core.formatting import escape_controls
+
+        # As the client hands it over: every DSM reply is escaped where it's read (#604).
+        assert _exif_value(escape_controls(value)) == shown
 
     @pytest.mark.parametrize(
         ("exif", "line"),

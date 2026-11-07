@@ -35,7 +35,7 @@ from mcp_synology.core.config import (
     load_config,
 )
 from mcp_synology.core.errors import ErrorCode, SynologyError, detached_copy
-from mcp_synology.core.formatting import error_response, synology_error_response
+from mcp_synology.core.formatting import error_response, forges, synology_error_response
 from mcp_synology.core.local_paths import has_control_character
 from mcp_synology.core.redaction import redact_urls
 from mcp_synology.modules import PermissionTier, RegisterContext, filter_tools_by_permission
@@ -247,6 +247,38 @@ def _compact_schema(node: Any) -> Any:
     return out
 
 
+# Text a tool takes as written, never echoed in a reply: a Photos description may hold line
+# breaks on purpose.
+_FREE_TEXT_ARGUMENTS = frozenset({"description"})
+
+
+def _refuse_forging_arguments(arguments: dict[str, Any]) -> None:
+    """Refuse an argument holding a character a reply may not carry as it is (#604): a tool
+    could echo it into a line of its own, which reads as the server's. Replies show such
+    characters escaped, so a name the server showed never holds one. One check for every
+    tool's arguments, names, paths and tags alike."""
+    stack: list[tuple[str, Any]] = [
+        (key, value) for key, value in arguments.items() if key not in _FREE_TEXT_ARGUMENTS
+    ]
+    while stack:
+        key, value = stack.pop()
+        if isinstance(value, str) and forges(value):
+            error_response(
+                ErrorCode.INVALID_PARAMETER,
+                f"{key} {value!r} has a control character, line or paragraph separator, bidi "
+                "control or tag character, which isn't allowed: replies show them escaped, so "
+                "a name that holds one can't be used here.",
+                retryable=False,
+                param=key,
+                suggestion="For an item on the NAS, rename it there (in DSM) and use its new "
+                "name; for one this would create, give its name plainly.",
+            )
+        if isinstance(value, list):
+            stack.extend((key, v) for v in value)
+        elif isinstance(value, dict):
+            stack.extend((key, v) for v in value.values())
+
+
 class _SynologyServer(MCPServer):
     """MCPServer with compacted tool schemas, text-only results and error details kept.
 
@@ -307,6 +339,7 @@ class _SynologyServer(MCPServer):
         input request), and taking it can't fail the tool.
         """
         try:
+            _refuse_forging_arguments(arguments)
             result = await self._call_tool(name, arguments, context)
         except ToolError as exc:
             notice = await self._take_update_notice()

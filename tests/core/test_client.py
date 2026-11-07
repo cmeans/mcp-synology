@@ -1895,10 +1895,21 @@ def test_every_dsm_reply_is_read_through_one_parser() -> None:
     src = Path(__file__).resolve().parents[2] / "src" / "mcp_synology"
     client = (src / "core" / "client.py").read_text()
     assert client.count("json.loads(") == 2  # both in _loads
-    assert ".json()" not in client.replace("``resp.json()``", "")
-    for path in (src / "modules").rglob("*.py"):
-        for line in path.read_text().splitlines():
+    for path in src.rglob("*.py"):
+        text = path.read_text().replace("``resp.json()``", "")
+        assert ".json()" not in text, path.name
+        if path.name == "client.py" or path.parts[-3:-1] == ("mcp_synology", "cli"):
+            continue  # cli parses local files and PyPI, not DSM
+        for line in text.splitlines():
             if "json.loads(" in line:
                 assert re.search(
                     r"json\.loads\(str\((e|error)\)\)|escape_nas_text\(json\.loads\(", line
                 ), f"{path.name}: {line.strip()}"
+
+
+def test_a_reply_nested_too_deep_is_not_a_reply() -> None:
+    from mcp_synology.core.client import DsmReplyError, _read_json
+
+    resp = httpx.Response(200, content=b"[" * 100_000 + b"]" * 100_000)
+    with pytest.raises(DsmReplyError):
+        _read_json(resp, "SYNO.FileStation.List/list")

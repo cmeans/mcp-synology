@@ -152,11 +152,12 @@ def check_folder_path(value: str, param: str = "folder", advice: str = FOLDER_AD
 
     Taken exactly, by File Station's part rules (#510): `check_parts` drops only whitespace
     before a leading ``/`` (and a trailing ``/``), and refuses a NUL (DSM cuts the path
-    there: ``/x/foo<NUL>y`` resolved to ``/x/foo``), an empty part (``//``) and a ``.`` or
-    ``..`` part (DSM answers 642 for those). Photos reaches a folder whose name starts with
-    whitespace exactly (`` foo`` beside ``foo``), so stripping looked up another folder (vdsm
-    DSM 7.1, 7.2.2, 7.3.2 and 7.4.1, personal space and Shared Space). ``advice`` is the
-    refusal's suggestion, for an argument that takes only a path (`photo_request`).
+    there: ``/x/foo<NUL>y`` resolved to ``/x/foo``), a character a reply shows escaped (#604),
+    an empty part (``//``) and a ``.`` or ``..`` part (DSM answers 642 for those). Photos
+    reaches a folder whose name starts with whitespace exactly (`` foo`` beside ``foo``), so
+    stripping looked up another folder (vdsm DSM 7.1, 7.2.2, 7.3.2 and 7.4.1, personal space
+    and Shared Space). ``advice`` is the refusal's suggestion, for an argument that takes only
+    a path (`photo_request`).
     """
     return check_parts(value, param, advice)
 

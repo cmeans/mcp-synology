@@ -1905,3 +1905,13 @@ def test_a_path_that_could_forge_a_reply_line_is_refused(raw: str) -> None:
         check_parts(raw, "path")
     assert "isn't allowed" in _error(exc)["message"]
     assert check_parts("/video/a\tb", "path") == "/video/a\tb"
+
+
+def test_a_restore_item_that_could_forge_a_reply_line_is_refused() -> None:
+    """#604: a bin item goes through the same rule as a path."""
+    from mcp_synology.modules.filestation.paths import resolve_bin_items
+
+    with pytest.raises(ToolError) as exc:
+        resolve_bin_items("video", ["Shows/a\nb"], "paths")
+    assert "isn't allowed" in _error(exc)["message"]
+    assert "give its name plainly" in _error(exc)["suggestion"]

@@ -5,7 +5,6 @@ from __future__ import annotations
 import datetime
 import json
 import re
-import unicodedata
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NoReturn
 
@@ -13,35 +12,27 @@ if TYPE_CHECKING:
     from mcp_synology.core.errors import ErrorCode, SynologyError
 
 
-# Unicode's Bidi_Control characters (UAX #9): they reorder how the text around them reads.
-_BIDI_CONTROLS = frozenset(
-    "\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069"
+# What text from the NAS may not carry into a reply as it is (#604): a control character (a
+# newline would start a line of its own, read as the server's), a line or paragraph separator,
+# a Bidi_Control character (UAX #9: it reorders how the text around it reads), or a tag
+# character (text a model reads and a person doesn't see: OWASP's prompt injection cheat
+# sheet). One class, so it doesn't depend on the running Python's Unicode version; a tab is
+# left out, as it can't start a line and DSM keeps it in names, which are taken exactly (#488).
+_FORGES = re.compile(
+    "[\x00-\x08\x0a-\x1f\x7f-\x9f\u2028\u2029\u061c\u200e\u200f\u202a-\u202e"
+    "\u2066-\u2069\U000e0000-\U000e007f]"
 )
-# Tag characters carry text a model reads and a person doesn't see (OWASP's prompt injection
-# cheat sheet).
-_TAGS = re.compile("[\U000e0000-\U000e007f]")
+# An escape ``escape_controls`` writes for a control character other than a line break.
+_CONTROL_ESCAPE = re.compile(r"\\x(?:[01][0-9a-f]|7f|[89][0-9a-f])")
 
 
-def needs_quoting(text: str) -> bool:
-    """Whether ``text`` from the NAS can't go into a reply as it is (#604): a control character
-    (a newline would start a line of its own that reads as the server's), a line or paragraph
-    separator, a bidi control or a tag character."""
-    return any(
-        unicodedata.category(c) in ("Cc", "Zl", "Zp") or c in _BIDI_CONTROLS for c in text
-    ) or bool(_TAGS.search(text))
+def forges(text: str) -> bool:
+    """Whether ``text`` holds a character it may not carry into a reply as it is (#604)."""
+    return _FORGES.search(text) is not None
 
 
-def forges(c: str) -> bool:
-    """A character a name may not carry into a reply as it is: ``needs_quoting``'s, but a tab,
-    which can't start a line and is part of names DSM keeps exactly (#488)."""
-    if c == "\t":
-        return False
-    return (
-        unicodedata.category(c) in ("Cc", "Zl", "Zp") or c in _BIDI_CONTROLS or bool(_TAGS.match(c))
-    )
-
-
-def _escape_char(c: str) -> str:
+def _escape_char(m: re.Match[str]) -> str:
+    c = m.group()
     o = ord(c)
     named = {"\n": "\\n", "\r": "\\r"}.get(c)
     if named:
@@ -49,27 +40,38 @@ def _escape_char(c: str) -> str:
     return f"\\x{o:02x}" if o <= 0xFF else f"\\u{o:04x}" if o <= 0xFFFF else f"\\U{o:08x}"
 
 
-_ESCAPE = re.compile(r"\\(n|r|x[0-9a-f]{2}|u[0-9a-f]{4}|U[0-9a-f]{8})")
-
-
 def escape_controls(text: str) -> str:
-    """``text`` with each character a name may not carry into a reply written as an escape
-    (``\\n``, ``\\x1b``, ``\\u202e``), and the rest as it is (#604)."""
-    if not any(forges(c) for c in text):
-        return text
-    return "".join(_escape_char(c) if forges(c) else c for c in text)
+    """``text`` with each character ``forges`` names written as an escape (``\\n``, ``\\x1b``,
+    ``\\u202e``), and the rest as it is (#604). A backslash already in the text is left as it
+    is, so a name that holds one can look like an escaped one: the tools refuse a path with
+    a character this escapes, so the escaped one can't be acted on, but one spelled with a
+    real backslash can."""
+    return _FORGES.sub(_escape_char, text)
 
 
-def unescape_controls(text: str) -> str:
-    """``escape_controls`` undone, for a reader that looks at the characters themselves (Photos'
-    EXIF values, to tell binary from text). Its result goes into a reply only escaped again.
-    Text that already held such a backslash sequence is read as that character."""
+def escaped_control(text: str) -> bool:
+    """Whether ``escape_controls`` wrote a control character other than a line break into
+    ``text`` (Photos' EXIF reader, to tell binary from text)."""
+    return _CONTROL_ESCAPE.search(text) is not None
 
-    def back(m: re.Match[str]) -> str:
-        code = m.group(1)
-        return {"n": "\n", "r": "\r"}.get(code) or chr(int(code[1:], 16))
 
-    return _ESCAPE.sub(back, text)
+_ANY_ESCAPE = re.compile(r"\\(?:n|r|x[0-9a-f]{2}|u[0-9a-f]{4}|U[0-9a-f]{8})")
+
+
+def unescaped_length(text: str) -> int:
+    """How long ``text`` was before ``escape_controls``, counting each escape as one character
+    (a backslash sequence DSM sent as it is counts as one too)."""
+    return len(_ANY_ESCAPE.sub("_", text))
+
+
+def reply_text(value: object) -> str:
+    """``value`` as a reply shows text that may not come from DSM (whose replies are escaped
+    already, ``escape_nas_text``): as is, or quoted with what doesn't print escaped
+    (``repr``), when it holds a character ``forges`` names (#604), as GNU ``ls`` and git quote
+    such a file name. Text that merely reads like an instruction is left alone: filtering
+    wording isn't a boundary (OWASP)."""
+    text = str(value)
+    return repr(text) if forges(text) else text
 
 
 def escape_nas_text(value: Any) -> Any:
@@ -78,25 +80,24 @@ def escape_nas_text(value: Any) -> Any:
     Text from the NAS reaches replies in many places, so it's escaped once, where every reply
     is read (``DsmClient``), rather than at each. A name holding a newline would otherwise
     write a line of its own into a reply, which reads as the server's. The cost: an item
-    with such a name is shown escaped and can't be acted on through the tools (DSM answers
-    that it isn't there), until it's renamed on the NAS; the tools never create one."""
-    if isinstance(value, str):
-        return escape_controls(value)
-    if isinstance(value, list):
-        return [escape_nas_text(v) for v in value]
-    if isinstance(value, dict):
-        return {escape_nas_text(k): escape_nas_text(v) for k, v in value.items()}
-    return value
-
-
-def reply_text(value: object) -> str:
-    """``value`` as a reply shows text from the NAS: as is, or quoted with every character that
-    doesn't print escaped (``repr``), when it holds one ``needs_quoting`` names (#604). The MCP
-    spec says servers MUST sanitize tool outputs. A name with one of those is quoted whole, as
-    GNU ``ls`` and git quote such a file name, so it can't make a line of its own. Text that
-    merely reads like an instruction is left alone: filtering wording isn't a boundary."""
-    text = str(value)
-    return repr(text) if needs_quoting(text) else text
+    with such a name is shown escaped and can't be acted on through the tools, which refuse
+    such characters in an argument (``server`` and File Station's path check), until it's
+    renamed on the NAS."""
+    # A loop, not recursion: json.loads takes nesting deeper than Python's recursion limit.
+    root: list[Any] = [value]
+    stack: list[tuple[list[Any] | dict[str, Any], Any, Any]] = [(root, 0, value)]
+    while stack:
+        parent, key, item = stack.pop()
+        if isinstance(item, str):
+            parent[key] = escape_controls(item)
+        elif isinstance(item, list):
+            stack.extend((item, i, v) for i, v in enumerate(item))
+        elif isinstance(item, dict):
+            escaped = {escape_controls(k) if isinstance(k, str) else k: v for k, v in item.items()}
+            item.clear()
+            item.update(escaped)
+            stack.extend((item, k, v) for k, v in item.items())
+    return root[0]
 
 
 def format_table(

@@ -14,7 +14,6 @@ import pytest
 from mcp.server.mcpserver.exceptions import ToolError
 
 from mcp_synology.modules.filestation.listing import list_files
-from mcp_synology.modules.filestation.metadata import get_file_info
 from mcp_synology.modules.filestation.operations import move_files
 from mcp_synology.modules.filestation.paths import resolve_paths
 from mcp_synology.modules.filestation.search import search_files
@@ -69,8 +68,6 @@ async def test_no_reply_lets_a_name_start_a_line(admin_client: Any, hostile_file
     found = await search_files(client, folder_path=f"{BASE}/src", pattern="report")
     _no_forged_line(found)
     assert SHOWN in found
-    info = await get_file_info(client, paths=[f"{BASE}/src"])
-    _no_forged_line(info)
     # The real name, from anywhere but these replies, is refused before anything is sent:
     # every tool's paths go through resolve_paths (#510).
     known: set[str] = set()
