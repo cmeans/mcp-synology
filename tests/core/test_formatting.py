@@ -403,3 +403,22 @@ def test_a_reply_that_needs_escaping_is_never_skipped(raw: str) -> None:
     assert needs_escaping(json.dumps({"name": raw}))
     assert needs_escaping(json.dumps({"name": raw}, ensure_ascii=False))
     assert not needs_escaping(json.dumps({"name": "Caf\u00e9 \u65e5 a\tb"}, ensure_ascii=False))
+
+
+def test_nested_json_on_several_lines_still_parses() -> None:
+    """QA round 1 on #605: Storage's `app_args` with line breaks between values read as `{}`."""
+    import json
+
+    from mcp_synology.core.formatting import escape_controls, nested_json
+
+    raw = json.dumps({"test_style": "extended", "note": "a\\nb"}, indent=1)
+    assert nested_json(escape_controls(raw)) == {"test_style": "extended", "note": "a\\nb"}
+    assert nested_json("[" * 100_000) == {}
+    assert nested_json(None) == {}
+
+
+def test_keys_that_read_the_same_once_escaped_are_refused() -> None:
+    from mcp_synology.core.formatting import escape_nas_text
+
+    with pytest.raises(ValueError):
+        escape_nas_text({"a\n": 1, "a\\n": 2})

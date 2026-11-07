@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 from mcp_synology.core.errors import SynologyError
 from mcp_synology.core.formatting import (
+    cut_escaped,
     escaped_control,
     format_key_value,
     format_size,
@@ -729,6 +730,7 @@ def _exif_value(value: str) -> str:
         length = unescaped_length(value)
         unit = "character" if length == 1 else "characters"
         return f"(binary data, {length:,} {unit}; not shown)"
-    if len(value) > _EXIF_VALUE_MAX:
-        return f"{value[:_EXIF_VALUE_MAX]}… ({unescaped_length(value):,} characters)"
+    length = unescaped_length(value)
+    if length > _EXIF_VALUE_MAX:
+        return f"{cut_escaped(value, _EXIF_VALUE_MAX)}… ({length:,} characters)"
     return value

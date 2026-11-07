@@ -486,6 +486,9 @@ class TestGetPhoto:
             # sequence in text is shown as it is.
             ("line one\r\nline two\nthree", "line one\\r\\nline two\\nthree"),
             ("C:\\new\\x41b", "C:\\new\\x41b"),
+            # The cap counts characters as DSM sent them, and a cut keeps an escape whole.
+            ("a" * 70 + "\n" * 10, "a" * 70 + "\\n" * 10),
+            ("a" * 78 + "\u202e" * 3, "a" * 78 + "\\u202e" * 2 + "… (81 characters)"),
             ("Canon\ufffd", "(binary data, 6 characters; not shown)"),
             ("\x17", "(binary data, 1 character; not shown)"),
             ("x\x85y", "(binary data, 3 characters; not shown)"),

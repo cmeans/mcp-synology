@@ -930,3 +930,44 @@ def test_person_line_separates_thousands() -> None:
     assert person_line({"id": 12, "name": "Jo", "item_count": 1_234}) == (
         "Person 12: Jo (1,234 items, visible)."
     )
+
+
+class TestNamesShownEscaped:
+    """#604: Photos reads every name escaped, so a name sent back, or two that read the same,
+    need care."""
+
+    @respx.mock
+    async def test_two_tags_that_read_the_same_are_refused(self) -> None:
+        fake = FakePhotos().on(ITEM, "get", 2, _items(12))
+        tags = {"list": [{"id": 4, "name": "a\\nb"}, {"id": 5, "name": "a\nb"}]}
+        fake.on(TAG, "list", 1, tags)
+        install(fake)
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await tag_photos(client, action="remove", ids=[12], tags=["a\\nb"])
+        assert _error(exc)["code"] == "invalid_parameter"
+        assert not fake.of(ITEM, "remove_tag")
+
+    @respx.mock
+    async def test_a_merge_never_sends_back_an_escaped_name(self) -> None:
+        """QA round 1 on #605: it renamed the person to the escaped spelling."""
+        people = captured("person-list", PEOPLE)
+        for person in people["list"]:
+            if person["id"] == 12:
+                person["name"] = "Dov\u200f Cohen"
+        fake = FakePhotos().on(PERSON, "list", 1, people)
+        fake.on(
+            PERSON,
+            "get",
+            1,
+            {"list": [p for p in people["list"] if p["id"] == 12]},
+            {"list": [p for p in people["list"] if p["id"] == 11]},
+        )
+        install(fake)
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await merge_people(client, target="12", merge=["11"])
+        assert (_error(exc)["code"], _error(exc)["param"]) == ("invalid_parameter", "name")
+        assert not fake.of(PERSON, "merge")

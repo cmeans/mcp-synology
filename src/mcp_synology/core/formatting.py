@@ -71,6 +71,20 @@ def unescaped_length(text: str) -> int:
     return len(_ANY_ESCAPE.sub("_", text))
 
 
+def cut_escaped(text: str, limit: int) -> str:
+    """The first ``limit`` characters of ``text`` as DSM sent them, each escape whole."""
+    out: list[str] = []
+    pos = 0
+    count = 0
+    while pos < len(text) and count < limit:
+        m = _ANY_ESCAPE.match(text, pos)
+        piece = m.group() if m else text[pos]
+        out.append(piece)
+        pos += len(piece)
+        count += 1
+    return "".join(out)
+
+
 def reply_text(value: object) -> str:
     """``value`` as a reply shows text that may not come from DSM (whose replies are escaped
     already, ``escape_nas_text``): as is, or quoted with what doesn't print escaped
@@ -79,6 +93,25 @@ def reply_text(value: object) -> str:
     wording isn't a boundary (OWASP)."""
     text = str(value)
     return repr(text) if forges(text) else text
+
+
+# A line break or tab JSON writes between its values, as ``escape_controls`` escaped it; a real
+# backslash pair (``\\``) is kept, so a ``\n`` inside a string value stays as it was.
+_WHITESPACE_ESCAPE = re.compile(r"(\\\\)|\\[nr]")
+
+
+def nested_json(text: object) -> Any:
+    """JSON a DSM reply holds as a string (Storage's ``app_args``), parsed and escaped as a reply
+    is (#604), or ``{}`` if it isn't JSON. Its line breaks between values come escaped, so a
+    second try reads them as spaces."""
+    if not isinstance(text, str) or not text:
+        return {}
+    for attempt in (text, _WHITESPACE_ESCAPE.sub(lambda m: m.group(1) or " ", text)):
+        try:
+            return escape_nas_text(json.loads(attempt))
+        except (ValueError, RecursionError):
+            continue
+    return {}
 
 
 def needs_escaping(text: str) -> bool:
@@ -107,6 +140,10 @@ def escape_nas_text(value: Any) -> Any:
             stack.extend((item, i, v) for i, v in enumerate(item))
         elif isinstance(item, dict):
             escaped = {escape_controls(k) if isinstance(k, str) else k: v for k, v in item.items()}
+            if len(escaped) != len(item):
+                # Two keys that read the same once escaped: one would be lost without notice.
+                msg = "two keys of a reply read the same once escaped"
+                raise ValueError(msg)
             item.clear()
             item.update(escaped)
             stack.extend((item, k, v) for k, v in item.items())

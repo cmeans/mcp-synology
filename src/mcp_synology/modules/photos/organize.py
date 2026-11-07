@@ -14,6 +14,7 @@ from mcp_synology.core.formatting import (
     format_size,
     format_table,
     synology_error_response,
+    unescaped_length,
 )
 from mcp_synology.modules.filestation.paths import refuse_bad_name
 from mcp_synology.modules.photos.helpers import (
@@ -410,6 +411,16 @@ async def merge_people(
                 )
             merged[int(found["id"])] = found
         final = name if name is not None else str(keep.get("name") or "")
+        if name is None and unescaped_length(final) != len(final):
+            # The kept name came escaped (#604): sent back, it would rename the person.
+            invalid(
+                op,
+                f"person {keep_id}'s name holds a character replies show escaped "
+                f"({final}), so keeping it can't be sent back as it is.",
+                param="name",
+                value=None,
+                suggestion="Pass `name`: the name to keep, written plainly.",
+            )
         await ph.call(
             "Browse.Person",
             "merge",

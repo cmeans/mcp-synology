@@ -437,12 +437,27 @@ class Photos:
         change when Photos 1.9.1 re-indexes a file.
         """
         tags = await self.walk("Browse.GeneralTag")
-        exact = {str(t.get("name", "")): int(t["id"]) for t in tags}
+        exact: dict[str, int] = {}
+        doubled: set[str] = set()
+        for t in tags:
+            key = str(t.get("name", ""))
+            if key in exact:
+                doubled.add(key)  # two names that read the same once escaped (#604)
+            exact[key] = int(t["id"])
         folded: dict[str, list[dict[str, Any]]] = {}
         for t in tags:
             folded.setdefault(str(t.get("name", "")).casefold(), []).append(t)
         out: dict[str, int | None] = {}
         for name in names:
+            if name in doubled:
+                invalid(
+                    self.operation,
+                    f"More than one tag reads {name!r}: one holds a character replies show "
+                    "escaped, another a backslash.",
+                    param=param,
+                    value=name,
+                    suggestion="Rename one of them in Photos.",
+                )
             if name in exact:
                 out[name] = exact[name]
                 continue

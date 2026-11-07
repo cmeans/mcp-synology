@@ -1905,7 +1905,11 @@ def test_every_dsm_reply_is_read_through_one_parser() -> None:
         for line in text.splitlines():
             if "json.loads(" in line:
                 assert re.search(
-                    r"json\.loads\(str\((e|error)\)\)|escape_nas_text\(json\.loads\(", line
+                    # This server's own errors, nested DSM JSON escaped again, and a tool
+                    # argument the SDK will parse (server.py), which isn't a reply.
+                    r"json\.loads\(str\((e|error)\)\)|escape_nas_text\(json\.loads\("
+                    r"|stack\.append\(\(key, json\.loads\(value\)\)\)",
+                    line,
                 ), f"{path.name}: {line.strip()}"
 
 
@@ -1930,3 +1934,12 @@ def test_a_lone_surrogate_is_escaped() -> None:
 
     resp = httpx.Response(200, content=b'{"success": true, "data": {"name": "a\\ud800b"}}')
     assert _read_json(resp, "x")["data"] == {"name": "a\\ud800b"}
+
+
+@pytest.mark.parametrize("encoding", ["utf-8-sig", "utf-16", "utf-32"])
+def test_a_reply_in_any_encoding_json_reads_still_parses(encoding: str) -> None:
+    """QA round 1 on #605: parsing the bytes read these, and the first decode read only UTF-8."""
+    from mcp_synology.core.client import _read_json
+
+    resp = httpx.Response(200, content='{"success": true, "data": {"a": "x\\ny"}}'.encode(encoding))
+    assert _read_json(resp, "x")["data"] == {"a": "x\\ny"}

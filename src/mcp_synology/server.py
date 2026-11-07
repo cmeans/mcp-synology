@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
+import json
 import logging
 import os
 import platform
@@ -248,7 +250,7 @@ def _compact_schema(node: Any) -> Any:
 
 
 # Arguments a line break may be part of: a Photos description (escaped where it's shown), and
-# Download Station's URI list, which `split_uris` splits on whitespace too and no reply echoes.
+# Download Station's URI list, which no reply echoes.
 _FREE_TEXT_ARGUMENTS = frozenset({"description", "uri"})
 
 
@@ -264,6 +266,11 @@ def _refuse_forging_arguments(arguments: dict[str, Any]) -> None:
     ]
     while stack:
         key, value = stack.pop()
+        if isinstance(value, str) and value.lstrip()[:1] in ("[", "{"):
+            # The SDK parses a list or dict sent as a JSON string (FuncMetadata.pre_parse_json,
+            # for Claude Desktop): check what the tool will get as well.
+            with contextlib.suppress(ValueError, RecursionError):
+                stack.append((key, json.loads(value)))
         if isinstance(value, str) and forges(value):
             error_response(
                 ErrorCode.INVALID_PARAMETER,

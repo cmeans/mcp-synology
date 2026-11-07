@@ -99,16 +99,23 @@ def _loads(content: bytes, label: str) -> Any:
     DSM copies binary EXIF fields into its JSON as raw bytes, which aren't UTF-8 (Photos
     get_exif, "Picture Info", DSM 7.1.1), so a strict decode would lose the whole reply.
     Those bytes are read as U+FFFD (replacement characters) instead. Every string is then
-    escaped where it could forge a line or hide text in a reply (``escape_nas_text``, #604).
+    escaped where it could forge a line or reorder text in a reply (``escape_nas_text``, #604):
+    a control character, line or paragraph separator, bidi control or tag character. Characters
+    that draw nothing otherwise (a zero-width space, a variation selector) are left as they
+    are, as names use them.
     """
     try:
-        text = content.decode("utf-8-sig")  # as parsing the bytes did, it takes a BOM
+        # The encodings parsing the bytes read (UTF-8, -16 or -32, a BOM), so no reply that
+        # parsed before is refused now.
+        text = content.decode(json.detect_encoding(content))
+        text = text.removeprefix("\ufeff")
         value = json.loads(text)
         return escape_nas_text(value) if needs_escaping(text) else value
     except UnicodeDecodeError:
         logger.debug("%s: the reply has bytes that aren't UTF-8; reading them as U+FFFD", label)
         try:
-            return escape_nas_text(json.loads(content.decode("utf-8", errors="replace")))
+            text = content.decode("utf-8-sig", errors="replace")
+            return escape_nas_text(json.loads(text))
         except (ValueError, RecursionError):
             return None
     except (ValueError, RecursionError):  # nesting deeper than json.loads takes: not a reply
