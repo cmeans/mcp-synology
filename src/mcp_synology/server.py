@@ -280,11 +280,15 @@ def _refuse_forging_arguments(arguments: dict[str, Any]) -> None:
                 retryable=False,
                 param=key,
                 suggestion="Pass it without such characters. For an item on the NAS whose name "
-                "holds one, rename it there (in DSM) and use its new name.",
+                "holds one, rename it there (in DSM) and use its new name. For a local path, "
+                "retype it (a path copied from Windows may begin with an invisible mark), with "
+                "a Windows path's backslashes doubled in JSON (`C:\\\\new`, or `\\n` is a "
+                "line break).",
             )
         if isinstance(value, list):
             stack.extend((key, v) for v in value)
         elif isinstance(value, dict):
+            stack.extend((key, k) for k in value)  # a key could be echoed as a value is
             stack.extend((key, v) for v in value.values())
 
 

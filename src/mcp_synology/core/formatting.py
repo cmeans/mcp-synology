@@ -29,16 +29,31 @@ _JSON_ESCAPED = re.compile(
     r"\\(?:[nrbf]|u00[01][0-9a-fA-F]|u007[fF]|u00[89][0-9a-fA-F]|u202[89a-eA-E]"
     r"|u061[cC]|u200[eEfF]|u206[6-9]|u[dD][89a-fA-F][0-9a-fA-F]{2})"
 )
+# A subdivision flag's tags: only the three RGI ones (UTS #51; emoji-sequences.txt), England,
+# Scotland and Wales, each followed by the cancel tag. Any other tag run, even a well-formed
+# subdivision id, can spell words a model reads ("ASCII smuggling"; maintainer, 2026-10-31,
+# QA round 2 on #515); platforms don't draw other subdivision flags as flags anyway. A name
+# may hold these (#515), so they aren't escaped or refused (#604).
+RGI_FLAG_TAGS = frozenset(
+    "".join(chr(0xE0000 + ord(c)) for c in code) + "\U000e007f"
+    for code in ("gbeng", "gbsct", "gbwls")
+)
+_RGI_FLAG = "\U0001f3f4(?:" + "|".join(sorted(RGI_FLAG_TAGS)) + ")"
+# A flag is matched first and kept whole, so its tags aren't one of the characters.
+_FORGES_OR_FLAG = re.compile(f"({_RGI_FLAG})|{_FORGES.pattern}")
 # An escape ``escape_controls`` writes for a control character other than a line break.
 _CONTROL_ESCAPE = re.compile(r"\\x(?:[01][0-9a-f]|7f|[89][0-9a-f])")
 
 
 def forges(text: str) -> bool:
-    """Whether ``text`` holds a character it may not carry into a reply as it is (#604)."""
-    return _FORGES.search(text) is not None
+    """Whether ``text`` holds a character it may not carry into a reply as it is (#604); an RGI
+    subdivision flag's tags don't count."""
+    return any(m.group(1) is None for m in _FORGES_OR_FLAG.finditer(text))
 
 
 def _escape_char(m: re.Match[str]) -> str:
+    if m.group(1) is not None:
+        return m.group()  # an RGI subdivision flag, kept whole
     c = m.group()
     o = ord(c)
     named = {"\n": "\\n", "\r": "\\r"}.get(c)
@@ -53,7 +68,7 @@ def escape_controls(text: str) -> str:
     is, so a name that holds one can look like an escaped one: the tools refuse a path with
     a character this escapes, so the escaped one can't be acted on, but one spelled with a
     real backslash can."""
-    return _FORGES.sub(_escape_char, text)
+    return _FORGES_OR_FLAG.sub(_escape_char, text)
 
 
 def escaped_control(text: str) -> bool:

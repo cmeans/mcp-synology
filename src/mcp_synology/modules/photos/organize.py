@@ -415,7 +415,7 @@ async def merge_people(
             # The kept name came escaped (#604): sent back, it would rename the person.
             invalid(
                 op,
-                f"person {keep_id}'s name holds a character replies show escaped "
+                f"person {keep_id}'s name may hold a character replies show escaped "
                 f"({final}), so keeping it can't be sent back as it is.",
                 param="name",
                 value=None,

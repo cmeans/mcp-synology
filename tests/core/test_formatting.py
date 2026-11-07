@@ -422,3 +422,20 @@ def test_keys_that_read_the_same_once_escaped_are_refused() -> None:
 
     with pytest.raises(ValueError):
         escape_nas_text({"a\n": 1, "a\\n": 2})
+
+
+def test_an_rgi_subdivision_flag_is_a_name_not_hidden_text() -> None:
+    """Pre-QA on #605: #515 lets a name hold the England, Scotland and Wales flags; any other
+    tag run, or a tag on its own, is still escaped."""
+    from mcp_synology.core.formatting import RGI_FLAG_TAGS, escape_controls, forges
+
+    for tags in RGI_FLAG_TAGS:
+        name = f"Trip \U0001f3f4{tags}"
+        assert not forges(name)
+        assert escape_controls(name) == name
+        assert forges(name + "\n")
+        assert escape_controls(name + "\n") == name + "\\n"
+    gbx = "\U0001f3f4" + "".join(chr(0xE0000 + ord(c)) for c in "gbx") + "\U000e007f"
+    for hostile in (gbx, "x\U000e0041y", "\U000e0067\U000e0062\U000e0065\U000e006e\U000e0067"):
+        assert forges(hostile)
+        assert "\\U000e00" in escape_controls(hostile)

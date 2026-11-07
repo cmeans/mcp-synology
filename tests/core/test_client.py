@@ -1943,3 +1943,18 @@ def test_a_reply_in_any_encoding_json_reads_still_parses(encoding: str) -> None:
 
     resp = httpx.Response(200, content='{"success": true, "data": {"a": "x\\ny"}}'.encode(encoding))
     assert _read_json(resp, "x")["data"] == {"a": "x\\ny"}
+
+
+def test_a_reply_with_a_bom_and_bytes_that_arent_utf8_still_parses() -> None:
+    from mcp_synology.core.client import _read_json
+
+    resp = httpx.Response(200, content=b'\xef\xbb\xbf{"success": true, "data": {"v": "\xec"}}')
+    assert _read_json(resp, "x")["data"] == {"v": "\ufffd"}
+
+
+def test_a_reply_too_deep_with_bytes_that_arent_utf8_is_not_a_reply() -> None:
+    from mcp_synology.core.client import DsmReplyError, _read_json
+
+    resp = httpx.Response(200, content=b"\xec" + b"[" * 100_000 + b"]" * 100_000)
+    with pytest.raises(DsmReplyError):
+        _read_json(resp, "x")
