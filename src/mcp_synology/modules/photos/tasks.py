@@ -93,9 +93,9 @@ async def _wait(
     ``"timeout"``, or what went wrong with a status request: no answer (a transport
     error), a proxy's HTTP error or page (#282), which is how a proxy reports the same
     stall, or any other unexpected answer. The task is most likely still running, so it
-    isn't lost. As File Station's ``poll_task`` (CLAUDE.md, background task cleanup): a
-    DSM error code on a status request stops the task, and the error (re-raised) says
-    whether it was stopped; so does cancellation, which then propagates.
+    isn't lost. As File Station's ``poll_task``, apart from its 599 (CLAUDE.md, background
+    task cleanup): a DSM error code on a status request stops the task, and the error
+    (re-raised) says whether it was stopped; so does cancellation, which then propagates.
     """
     task_id = int(task["id"])
     deadline = time.monotonic() + timeout
