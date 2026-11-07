@@ -2434,6 +2434,8 @@ class TestArgumentsThatCouldForgeAReplyLine:
                 "path": "/video/a\tb",
                 "description": "line one\nline two",
                 "names": ["Café", "日本語"],
+                # Only a top-level JSON string is parsed, as the SDK parses it.
+                "nested_text": ['["a\\nb"]'],
                 "nested": {"k": "x\u200dy"},
                 # The Scotland flag (#515).
                 "name": "Trip \U0001f3f4\U000e0067\U000e0062\U000e0073\U000e0063"

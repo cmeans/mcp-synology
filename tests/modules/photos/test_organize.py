@@ -971,3 +971,4 @@ class TestNamesShownEscaped:
                 await merge_people(client, target="12", merge=["11"])
         assert (_error(exc)["code"], _error(exc)["param"]) == ("invalid_parameter", "name")
         assert not fake.of(PERSON, "merge")
+        assert "without the backslash escapes" in _error(exc)["suggestion"]

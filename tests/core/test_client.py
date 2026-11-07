@@ -1958,3 +1958,17 @@ def test_a_reply_too_deep_with_bytes_that_arent_utf8_is_not_a_reply() -> None:
     resp = httpx.Response(200, content=b"\xec" + b"[" * 100_000 + b"]" * 100_000)
     with pytest.raises(DsmReplyError):
         _read_json(resp, "x")
+
+
+def test_a_reply_whose_keys_collide_says_so_and_isnt_retryable(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """QA round 2 on #605: it read as a proxy's page, retryable, with nothing logged."""
+    from mcp_synology.core.client import DsmReplyError, _read_json
+
+    resp = httpx.Response(200, content=b'{"success": true, "data": {"a\\n": 1, "a\\\\n": 2}}')
+    with caplog.at_level("WARNING"), pytest.raises(DsmReplyError) as exc:
+        _read_json(resp, "SYNO.FileStation.List/list")
+    assert "read the same once escaped" in str(exc.value)
+    assert exc.value.retryable is False
+    assert "read the same once escaped" in caplog.text

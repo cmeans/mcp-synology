@@ -110,9 +110,27 @@ def reply_text(value: object) -> str:
     return repr(text) if forges(text) else text
 
 
-# A line break or tab JSON writes between its values, as ``escape_controls`` escaped it; a real
-# backslash pair (``\\``) is kept, so a ``\n`` inside a string value stays as it was.
-_WHITESPACE_ESCAPE = re.compile(r"(\\\\)|\\[nr]")
+class CollidingKeysError(ValueError):
+    """Two keys of a DSM reply read the same once escaped (#604): one would be lost."""
+
+
+# JSON's tokens for telling inside a string from outside, in one linear pass: a quote, an
+# escape with what follows it, or a run of anything else.
+_JSON_PIECES = re.compile(r'"|\\.?|[^"\\]+', re.DOTALL)
+
+
+def _unescape_whitespace_between_values(text: str) -> str:
+    """``text`` with each ``\\n`` or ``\\r`` that ``escape_controls`` wrote outside a JSON
+    string read as a space, and the ones inside strings kept."""
+    out: list[str] = []
+    in_string = False
+    for piece in _JSON_PIECES.findall(text):
+        if piece == '"':
+            in_string = not in_string
+        elif not in_string and piece in ("\\n", "\\r"):
+            piece = " "
+        out.append(piece)
+    return "".join(out)
 
 
 def nested_json(text: object) -> Any:
@@ -121,10 +139,12 @@ def nested_json(text: object) -> Any:
     second try reads them as spaces."""
     if not isinstance(text, str) or not text:
         return {}
-    for attempt in (text, _WHITESPACE_ESCAPE.sub(lambda m: m.group(1) or " ", text)):
+    for attempt in (text, _unescape_whitespace_between_values(text)):
         try:
             return escape_nas_text(json.loads(attempt))
-        except (ValueError, RecursionError):
+        except CollidingKeysError:
+            return {}
+        except (json.JSONDecodeError, RecursionError):
             continue
     return {}
 
@@ -158,7 +178,7 @@ def escape_nas_text(value: Any) -> Any:
             if len(escaped) != len(item):
                 # Two keys that read the same once escaped: one would be lost without notice.
                 msg = "two keys of a reply read the same once escaped"
-                raise ValueError(msg)
+                raise CollidingKeysError(msg)
             item.clear()
             item.update(escaped)
             stack.extend((item, k, v) for k, v in item.items())

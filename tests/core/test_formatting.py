@@ -439,3 +439,15 @@ def test_an_rgi_subdivision_flag_is_a_name_not_hidden_text() -> None:
     for hostile in (gbx, "x\U000e0041y", "\U000e0067\U000e0062\U000e0065\U000e006e\U000e0067"):
         assert forges(hostile)
         assert "\\U000e00" in escape_controls(hostile)
+
+
+def test_nested_json_keeps_a_line_break_inside_a_string() -> None:
+    """QA round 2 on #605: the retry turned a `\\n` inside a value into a space, and got
+    around the colliding-key refusal."""
+    import json
+
+    from mcp_synology.core.formatting import escape_controls, nested_json
+
+    raw = '{\n "note": ' + json.dumps("a\nb") + ', "test_style": "quick"}'
+    assert nested_json(escape_controls(raw)) == {"note": "a\\nb", "test_style": "quick"}
+    assert nested_json(escape_controls('{"a\\n": 1, "a\\\\n": 2}')) == {}

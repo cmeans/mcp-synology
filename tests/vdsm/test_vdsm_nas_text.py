@@ -64,10 +64,12 @@ async def test_no_reply_lets_a_name_start_a_line(admin_client: Any, hostile_file
     client: DsmClient = admin_client[0]
     listing = await list_files(client, path=f"{BASE}/src")
     _no_forged_line(listing)
-    assert SHOWN in listing
     found = await search_files(client, folder_path=f"{BASE}/src", pattern="report")
     _no_forged_line(found)
-    assert SHOWN in found
+    for reply in (listing, found):
+        # The client wrote it (`_loads`): plain, where the table's own quoting would quote it.
+        assert f"  {SHOWN}" in reply, reply
+        assert f"'{SHOWN}" not in reply, reply
     # The real name, from anywhere but these replies, is refused before anything is sent:
     # every tool's paths go through resolve_paths (#510).
     known: set[str] = set()

@@ -264,13 +264,15 @@ def _refuse_forging_arguments(arguments: dict[str, Any]) -> None:
     stack: list[tuple[str, Any]] = [
         (key, value) for key, value in arguments.items() if key not in _FREE_TEXT_ARGUMENTS
     ]
-    while stack:
-        key, value = stack.pop()
+    for key, value in list(stack):
         if isinstance(value, str) and value.lstrip()[:1] in ("[", "{"):
-            # The SDK parses a list or dict sent as a JSON string (FuncMetadata.pre_parse_json,
-            # for Claude Desktop): check what the tool will get as well.
+            # The SDK parses a top-level list or dict sent as a JSON string
+            # (FuncMetadata.pre_parse_json, for Claude Desktop): check what the tool will get as
+            # well. A `str` parameter holding such text gets the same check, which is cautious.
             with contextlib.suppress(ValueError, RecursionError):
                 stack.append((key, json.loads(value)))
+    while stack:
+        key, value = stack.pop()
         if isinstance(value, str) and forges(value):
             error_response(
                 ErrorCode.INVALID_PARAMETER,

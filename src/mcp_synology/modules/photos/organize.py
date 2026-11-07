@@ -419,7 +419,8 @@ async def merge_people(
                 f"({final}), so keeping it can't be sent back as it is.",
                 param="name",
                 value=None,
-                suggestion="Pass `name`: the name to keep, written plainly.",
+                suggestion="Pass `name`: the name to keep, written plainly, without the "
+                "backslash escapes shown here (they'd become part of the name).",
             )
         await ph.call(
             "Browse.Person",

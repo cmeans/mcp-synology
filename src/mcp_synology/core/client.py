@@ -37,7 +37,7 @@ from mcp_synology.core.errors import (
     error_detail,
     error_from_code,
 )
-from mcp_synology.core.formatting import escape_nas_text, needs_escaping
+from mcp_synology.core.formatting import CollidingKeysError, escape_nas_text, needs_escaping
 from mcp_synology.core.redaction import redact_urls
 from mcp_synology.core.state import ApiInfoEntry
 
@@ -82,7 +82,17 @@ def _read_json(resp: httpx.Response, label: str, *, may_have_applied: bool = Fal
     model as "Expecting value: line 1 column 1 (char 0)". The error names ``label`` and
     the Content-Type, never the body.
     """
-    body = _loads(resp.content, label)
+    try:
+        body = _loads(resp.content, label)
+    except CollidingKeysError:
+        logger.warning("%s: two keys of the reply read the same once escaped", label)
+        raise DsmReplyError(
+            f"{label}: DSM's reply has two names that read the same once escaped: one holds a "
+            "control character, line or paragraph separator, bidi control or tag character, the "
+            "other a backslash where that is shown (#604).",
+            retryable=False,
+            suggestion="Rename one of the two items on the NAS (in DSM). Trying again won't help.",
+        ) from None
     if isinstance(body, dict):
         return body
     ctype = resp.headers.get("content-type", "").split(";")[0].strip().lower() or "none"
@@ -116,8 +126,12 @@ def _loads(content: bytes, label: str) -> Any:
         try:
             text = content.decode("utf-8-sig", errors="replace")
             return escape_nas_text(json.loads(text))
+        except CollidingKeysError:
+            raise
         except (ValueError, RecursionError):
             return None
+    except CollidingKeysError:
+        raise
     except (ValueError, RecursionError):  # nesting deeper than json.loads takes: not a reply
         return None
 
