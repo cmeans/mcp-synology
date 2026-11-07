@@ -641,8 +641,8 @@ async def test_a_skip_before_a_hand_off_gets_its_own_line(admin_client: Any, nas
     moved = await move_files(
         client, paths=[f"{base}/f/x.txt", f"{base}/f/n"], dest_folder=dest, records=records
     )
-    assert "x.txt" in moved, moved
-    assert "/n" in moved, moved
+    assert f"Skipped:\n  {base}/f/x.txt" in moved, moved
+    assert f"{base}/f/n" in moved, moved
     assert nas.exists(f"{base}/f/x.txt")
     assert nas.exists(f"{base}/f/n/same.txt")
     assert not nas.exists(f"{base}/f/n/only.txt")
