@@ -5612,8 +5612,13 @@ async def test_a_failure_warns_about_a_skip_named_like_what_landed(
 
 
 @respx.mock
+@pytest.mark.parametrize(
+    "failure",
+    [{"error": {"code": 1000}}, {"errors": [{"code": 1000, "path": "/s/b"}]}],
+    ids=["error", "errors"],
+)
 async def test_a_failed_final_warns_about_what_its_record_says_landed(
-    mock_client: DsmClient,
+    mock_client: DsmClient, failure: dict[str, Any]
 ) -> None:
     """Pre-QA on #601: `file_task`'s status warned, and its failed final said Pass."""
     from mcp_synology.modules.filestation.tasks import TaskRecord, file_task
@@ -5623,7 +5628,7 @@ async def test_a_failed_final_warns_about_what_its_record_says_landed(
     records.add(
         TaskRecord(handle, ["/s/b"], dest="/d", skipped_earlier=["/s/a"], landed_earlier=["/s/a"])
     )
-    failed_status = {"finished": True, "error": {"code": 1000}, "path": "/s/b"}
+    failed_status = {"finished": True, **failure, "path": "/s/b"}
     respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
         return_value=httpx.Response(200, json={"success": True, "data": failed_status})
     )
