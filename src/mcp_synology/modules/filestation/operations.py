@@ -381,8 +381,9 @@ def _already_done(operation: str, done: list[str] | None, skipped: list[str] | N
         past = _PAST_TENSE.get(operation, "processed")
         text = f". Already {past} before this failure: " + ", ".join(map(shown, done))
     if skipped:
-        text += ". Skipped in whole or in part, already at its destination: " + ", ".join(
-            map(shown, skipped)
+        text += (
+            ". Skipped in whole or in part, as an item of that name is already at the destination "
+            "(not compared): " + ", ".join(map(shown, skipped))
         )
         if operation != "Copy":
             text += (
@@ -594,7 +595,7 @@ def _copy_move_result(
         mapped = error_from_code(err_code, "SYNO.FileStation.CopyMove")
         error_response(
             mapped.error_code,
-            f"{operation} files failed: {_code_text(err_code)} on path: {err_path}"
+            f"{operation} files failed: {_code_text(err_code)} on path: {shown(err_path)}"
             + _partial_note(status, [(err_path, err_code)], operation, path, dest)
             + _already_done(operation, done, skipped_so_far),
             retryable=mapped.retryable,
@@ -635,7 +636,7 @@ def _copy_move_result(
     # least one item skipped (a whole file, or some of a folder's children); null with
     # overwrite=true. Same on DSM 7.1 and 7.2.2 (#171).
     skip = status.get("skipstatus")
-    skip_value = skip.get("status") if isinstance(skip, dict) else skip
+    skip_value = (skip.get("status") or "unseen") if isinstance(skip, dict) else skip
     if skip is not None:
         logger.debug("CopyMove skipstatus for %s: %r", path, skip)
     # Anything but "none"/absent counts as skipped: the safe direction for an unseen shape.
@@ -705,7 +706,7 @@ async def _skip_report(
     lines = [
         format_status(
             f"{verb} {len(ok):,} of {len(normalized):,} item(s){in_full} to {dest}/; "
-            f"{', '.join(parts)} (already at the destination, overwrite=false):",
+            f"{', '.join(parts)} (that name is already at the destination, overwrite=false):",
             success=False,
         )
     ]
@@ -924,7 +925,13 @@ async def _copy_move(
             done.append(p)
 
     text = await _copy_move_summary(
-        client, normalized, dest, remove_src, total_processed, skipped_paths
+        client,
+        normalized,
+        dest,
+        remove_src,
+        total_processed,
+        skipped_paths,
+        only_named_sources_removed=bool(skipped_so_far),
     )
     return text, False
 
@@ -1432,7 +1439,7 @@ async def restore_from_recycle_bin(
                 format_status(
                     f"Restored {len(results) - len(partial):,} of {len(results):,} item(s) from "
                     f"/{share_name} recycle bin; {len(partial):,} with skips "
-                    "(already at the destination, overwrite=false; details below):",
+                    "(that name is already at the destination, overwrite=false; details below):",
                     success=False,
                 ),
             )

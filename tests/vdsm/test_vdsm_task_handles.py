@@ -627,8 +627,8 @@ async def test_a_skip_before_a_hand_off_gets_its_own_line(admin_client: Any, nas
         )
         handles.append(_handle(reply))
         assert (
-            f"Skipped in whole or in part, already at its destination: {base}/f/x.txt, {base}/f/n."
-            in reply
+            "Skipped in whole or in part, as an item of that name is already at the destination "
+            f"(not compared): {base}/f/x.txt, {base}/f/n." in reply
         )
         assert "Already copied" not in reply
         # DSM's skip on a folder means only some of its items: the rest landed.
@@ -640,7 +640,8 @@ async def test_a_skip_before_a_hand_off_gets_its_own_line(admin_client: Any, nas
     moved = await move_files(
         client, paths=[f"{base}/f/x.txt", f"{base}/f/n"], dest_folder=dest, records=records
     )
-    assert "skipped" in moved.lower(), moved
+    assert "x.txt" in moved, moved
+    assert "/n" in moved, moved
     assert nas.exists(f"{base}/f/x.txt")
     assert nas.exists(f"{base}/f/n/same.txt")
     assert not nas.exists(f"{base}/f/n/only.txt")
@@ -678,7 +679,7 @@ async def test_move_handoff_then_status_until_finished(
                 still="Still moving",
             )
             assert f"Moved 1 item(s) to {dest}/:" in final, final
-            assert "Source files have been removed from /writable/." in final
+            assert "Moved sources removed from /writable/:" in final
 
     assert not nas.exists(src)
     assert nas.count("/testshare/mv245") == COPY_FILES

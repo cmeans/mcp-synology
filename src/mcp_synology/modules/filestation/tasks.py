@@ -129,9 +129,13 @@ class TaskRecords:
         if known is not None:
             # A later call that meets the same running task knows less about the first's sources.
             old = known[1]
-            record.earlier = record.earlier or old.earlier
-            record.skipped_earlier = record.skipped_earlier or old.skipped_earlier
-            record.landed_earlier = record.landed_earlier or old.landed_earlier
+            record.earlier = list(dict.fromkeys([*old.earlier, *record.earlier]))
+            record.skipped_earlier = list(
+                dict.fromkeys([*old.skipped_earlier, *record.skipped_earlier])
+            )
+            record.landed_earlier = list(
+                dict.fromkeys([*old.landed_earlier, *record.landed_earlier])
+            )
         self._items[key] = (self._clock(), record)
         while len(self._items) > self._max:
             self._items.popitem(last=False)
@@ -477,8 +481,8 @@ def skipped_line(
     on a folder means only some of its items: the rest land. So one named like what this call
     landed earlier, or like a skipped source before it, gets no advice to replace it (#580)."""
     line = (
-        "Skipped in whole or in part, already at its destination: "
-        f"{', '.join(map(shown, skipped))}."
+        "Skipped in whole or in part, as an item of that name is already at the destination "
+        f"(not compared): {', '.join(map(shown, skipped))}."
     )
     if removes_source:
         line += " A skipped file is still at the source; a skipped folder keeps the items skipped."
@@ -814,7 +818,12 @@ async def _final_text(
         if record.dest is not None:
             operation = handle.kind.capitalize()
             size, skipped = _copy_move_result(
-                status, path, operation, dest=record.dest, skipped_so_far=record.skipped_earlier
+                status,
+                path,
+                operation,
+                record.landed_earlier,
+                dest=record.dest,
+                skipped_so_far=record.skipped_earlier,
             )
             text = await _copy_move_summary(
                 client,
@@ -824,13 +833,15 @@ async def _final_text(
                 size,
                 [path] if skipped else [],
                 earlier=record.earlier,
-                only_named_sources_removed=bool(record.skipped_earlier),
+                # A record can't know what else the call left in that folder: a source skipped,
+                # one not started, or everything before a restart.
+                only_named_sources_removed=True,
             )
             if record.skipped_earlier:
                 line = skipped_line(
                     handle.kind != "copy", record.skipped_earlier, record.landed_earlier
                 )
-                text += f"\n\nBefore this task, in the same call: {line}"
+                text += f"\n\nBefore this task: {line}"
             if handle.kind == "restore":
                 text = _as_restore(text, path.split("/")[1])
             return text
@@ -867,9 +878,11 @@ def _generic_final(handle: Handle, status: dict[str, Any]) -> str:
             text += _partial_note(status, failed, handle.kind.capitalize(), None, None)
         lines.append("DSM reported errors: " + text + ".")
     skip = status.get("skipstatus")
-    skip_value = skip.get("status") if isinstance(skip, dict) else skip
+    skip_value = (skip.get("status") or "unseen") if isinstance(skip, dict) else skip
     if skip_value not in (None, "", "none"):
-        lines.append("Some items were skipped (already at the destination, overwrite=false).")
+        lines.append(
+            "Some items were skipped (that name is already at the destination, overwrite=false)."
+        )
     lines.append("List the path to see the details.")
     return "\n".join(lines)
 
@@ -1026,9 +1039,14 @@ async def file_task(
     def earlier_skip() -> str:
         if record is None or not record.skipped_earlier:
             return ""
-        return "\n" + skipped_line(
-            parsed.kind != "copy", record.skipped_earlier, record.landed_earlier
+        done = (
+            f"\nAlready {_PAST[_GERUND[parsed.kind]]} before this task: "
+            f"{', '.join(map(shown, record.landed_earlier))}."
+            if record.landed_earlier
+            else ""
         )
+        line = skipped_line(parsed.kind != "copy", record.skipped_earlier, record.landed_earlier)
+        return f"{done}\n{line}"
 
     async def send_stop() -> int | None:
         """Send the stop. DSM's code when it says it has no such task (401, 599), or None."""
