@@ -495,6 +495,10 @@ Common causes:
   Other tools name the DSM call, e.g. "DSM didn't answer
   SYNO.FileStation.List/list_share in time" (an `unavailable` error, "The
   connection to DSM failed during …", if the connection dropped).
+- A path's start in a multi-path `copy_files`, `move_files` or
+  `restore_from_recycle_bin` got no answer: the message says what was done, that
+  this one may have started and what wasn't started, so check before running it
+  again. (Alone, it's the usual timeout or connection error.)
 - `file_task` didn't get an answer to its status or stop request for a
   handle. For the status read, the message says nothing was stopped; for the
   stop, that it may or may not have taken effect. Stop requests wait up to
@@ -543,8 +547,9 @@ Otherwise:
    `file_task` instead.
 6. `timeout` is marked `retryable=true`, but only retry after addressing the
    root cause. Blind retry on an overloaded NAS makes the situation worse.
-   The exception is a `create_download` timeout, which is marked
-   `retryable=false` because DSM may already have created the task.
+   The exceptions are marked `retryable=false`, because DSM may already have
+   started the work: a `create_download` timeout, and a path's start in a
+   multi-path copy, move, restore or delete.
 
 ## unavailable
 
@@ -554,7 +559,9 @@ HTTP error status, or the answer wasn't a DSM reply at all.**
 
 The connection case (the message starts "Can't reach the NAS at …") means no
 DSM answer arrived at all: the connection was refused or the host couldn't be
-resolved or routed to. See **Can't reach the NAS?** under Fix. If the
+resolved or routed to. See **Can't reach the NAS?** under Fix. In a multi-path
+copy, move or restore, a start the connection dropped is listed under
+[`timeout`](#timeout), with what was done and what wasn't started. If the
 message starts "The NAS at … accepted the connection but dropped it" instead,
 the NAS answered and then closed the connection: it's reachable but busy or
 restarting, so retry shortly (#254).
