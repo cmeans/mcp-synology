@@ -211,20 +211,25 @@ class PollResult:
     ``stalled``: a status request got no answer (a transport error), an HTTP error
     status (a proxy's 502/504), or an answer that couldn't be read; the task was left
     running, like ``handoff`` (#245, maintainer decision 2026-10-17; #282).
+
+    ``lost``: DSM kept answering that it has no such task (599), so it can't say how the task
+    ended. Not stopped: the call asked for this work, and it may still be going, so stopping it is
+    the caller's choice, with ``file_task``, unless the call itself is canceled (#521). Handed off
+    like ``stalled``, so the call keeps its handle and what it did and didn't do.
     """
 
     status: dict[str, Any]
-    outcome: Literal["finished", "handoff", "poll_error", "stalled"]
+    outcome: Literal["finished", "handoff", "poll_error", "stalled", "lost"]
     error: Exception | None = None
     stopped: bool = False
 
 
 @dataclass
 class Handoff:
-    """A task left running on the NAS: its handle, last status, and the stall if any.
+    """A task left to run on the NAS: its handle, last status, and the stall if any.
 
-    ``stall`` is the status request's error: a ``TransportError`` (no answer) or any
-    other exception (an answer that couldn't be read).
+    ``stall`` is the status request's error: a ``TransportError`` (no answer), a 599 (DSM has no
+    such task, #521) or any other exception (an answer that couldn't be read).
     """
 
     handle: Handle
@@ -305,6 +310,14 @@ def progress_text(status: dict[str, Any]) -> str:
     return text
 
 
+# How many 599s in a row before a task counts as lost (#521): about a second at the usual interval.
+_LOST_TASK_READS = 3
+_LOST_TASK_WAIT = 0.5
+# Past this, no more reads, so slow 599s are less likely to outlast a client's reply limit, which
+# cancels. It's checked after each read, so a slow read can still run past it.
+_LOST_TASK_BOUND = 10.0
+
+
 async def poll_task(
     client: DsmClient,
     *,
@@ -324,8 +337,10 @@ async def poll_task(
     (``stalled``: a transport error, since a DSM stalled by a huge delete is still
     working; an HTTP error status, which is how a reverse proxy reports that same stall
     (504) or a restart (502), #282; or an answer that can't be read; maintainer
-    decision 2026-10-17). Only a DSM error code on a status request stops the task; so
-    does cancellation, which then propagates. The deadline is wall-clock (#237).
+    decision 2026-10-17). A DSM error code on a status request stops the task; so does
+    cancellation, which then propagates. The exception is 599, "no such task", which isn't a
+    verdict on a task this call just started: it's read again a few times, then reported as
+    ``lost`` (#521). The deadline is wall-clock (#237).
     """
     quoted = dsm_str(taskid)
     deadline = time.monotonic() + wait
@@ -333,12 +348,16 @@ async def poll_task(
     last_progress: float | None = None
     last_numbers: tuple[int, int] | None = None
     report = MonotonicProgress.wrap(on_progress)
+    missing_reads = 0
+    missing_since = 0.0
+    last_missing: SynologyError | None = None
 
     async def stop() -> bool:
         return await _stop_background_task(client, api, quoted, version, logger)
 
     try:
         while time.monotonic() < deadline:
+            asked = time.monotonic()
             try:
                 reply: Any = await client.request(
                     api, "status", version=version, params={"taskid": quoted}
@@ -346,6 +365,7 @@ async def poll_task(
                 if not isinstance(reply, dict):
                     raise TypeError("status data is not an object")
                 status = reply
+                missing_reads = 0
             except (DsmHttpError, DsmReplyError, RequestTooLongError) as e:
                 # Not DSM's verdict on the task: a proxy's 502/504 or login page, or a
                 # DSM too busy to answer properly. Hand it off like a stall, never stop
@@ -356,7 +376,29 @@ async def poll_task(
                 )
                 return PollResult(status, "stalled", e)
             except SynologyError as e:
-                return PollResult(status, "poll_error", e, await stop())
+                if e.code != 599:
+                    return PollResult(status, "poll_error", e, await stop())
+                missing_reads += 1
+                last_missing = e
+                # At WARNING so CI's logs keep what's needed to find the cause (#521).
+                logger.warning(
+                    "%s status (%s) answered 599 for %s, read %d of %d, %s",
+                    api,
+                    label,
+                    taskid,
+                    missing_reads,
+                    _LOST_TASK_READS,
+                    "after a status" if status else "with no status yet",
+                )
+                if missing_reads == 1:
+                    missing_since = asked
+                if (
+                    missing_reads >= _LOST_TASK_READS
+                    or time.monotonic() - missing_since >= _LOST_TASK_BOUND
+                ):
+                    return PollResult(status, "lost", e)
+                await asyncio.sleep(interval)
+                continue
             except httpx.TransportError as e:
                 # No answer: DSM is probably busy with this very task. Leave it running
                 # and hand it off; never stop it (#245, maintainer decision 2026-10-17).
@@ -397,6 +439,9 @@ async def poll_task(
         with anyio.CancelScope(shield=True):
             await stop()
         raise
+    # The wait ended during the re-reads: the path check and the reply follow what DSM last said.
+    if missing_reads:
+        return PollResult(status, "lost", last_missing)
     return PollResult(status, "handoff")
 
 
@@ -458,19 +503,30 @@ def handoff_reply(
     stall: Exception | None = None,
     skipped: list[str] | None = None,
     landed: list[str] | None = None,
+    dest: str | None = None,
 ) -> str:
     """The reply for a task handed off after the wait: the handle and what to do next.
 
     ``verb`` is "Still deleting", "Still copying", "Still moving" or "Still restoring".
     ``stall``: the status request's error, for a task handed off because the NAS stopped
-    answering, or its answer couldn't be read (#245, maintainer decision 2026-10-17).
+    answering, or its answer couldn't be read (#245, maintainer decision 2026-10-17), or it
+    kept answering 599 (#521).
+    ``dest``: where a copy, move or restore puts it, for a lost task's next step.
     The error's text is never shown, since it may quote the body: a transport error or
     any other exception shows its type, an HTTP error its status, and a non-DSM reply
     a fixed phrase.
     """
     gerund = verb.split()[-1].lower()
     past = _PAST.get(gerund, "done")
-    if stall is None:
+    lost = isinstance(stall, SynologyError) and stall.code == 599
+    if lost:
+        last = f" Last progress: {progress_text(status)}." if status else ""
+        first = (
+            f"DSM answered that it has no task {gerund} {shown(path)} (error 599), so how it ended "
+            f"isn't known: it may have finished, failed or still be running.{last} It wasn't "
+            f"stopped, so check before starting it again. {_RUNNING_HINT}"
+        )
+    elif stall is None:
         first = (
             f"{verb} on the NAS: {shown(path)} ({progress_text(status)}). This operation keeps "
             "running after this reply, so nothing more needs to be done to finish it."
@@ -502,10 +558,13 @@ def handoff_reply(
     if skipped:
         lines.append(skipped_line(gerund in ("moving", "restoring"), skipped, landed))
     if not_started:
-        lines.append(
-            f"Not started: {', '.join(map(shown, not_started))}. Run them again once this one "
-            "finishes."
-        )
+        # A lost task never reports finishing, so "once this one finishes" couldn't be met.
+        then = "Run them again once this one finishes."
+        if lost and dest:
+            then = f"First: {_where_to_look(gerund, dest, [path])} Then run them."
+        elif lost:
+            then = "Check this one first by listing its path, then run them."
+        lines.append(f"Not started: {', '.join(map(shown, not_started))}. {then}")
     return "\n".join(lines)
 
 
@@ -627,13 +686,25 @@ _GERUND: dict[HandleKind, str] = {
     "restore": "restoring",
 }
 _LIST_HINT = "List the path to see what's left."
+_RUNNING_HINT = "Call file_task with no handle to see what's running."
 _UNAVAILABLE_CODES = (102, 103, 104)
+
+
+def _where_to_look(gerund: str, dest: str, sources: list[str]) -> str:
+    """Where a lost copy, move or restore can be checked: a folder appears at the destination as
+    soon as it starts, so what's there may not be all of it (QA round 3 on #590)."""
+    moved = gerund in ("moving", "restoring")
+    source = f"{', '.join(map(shown, sources))} and " if moved else ""
+    return (
+        f"List {source}{shown(dest)} to see what's there; a folder there may be only partly "
+        f"{_PAST.get(gerund, 'done')}."
+    )
 
 
 def _describe(kind: HandleKind, paths: list[str], dest: str | None) -> str:
     """``deleting /s/a`` or ``moving /s/b to /s/d/``."""
-    where = ", ".join(paths) or "(path unknown)"
-    to = f" to {dest}/" if dest and kind != "delete" else ""
+    where = ", ".join(map(shown, paths)) or "(path unknown)"
+    to = f" to {shown(f'{dest}/')}" if dest and kind != "delete" else ""
     return f"{_GERUND[kind]} {where}{to}"
 
 
@@ -698,12 +769,12 @@ async def _list_reply(client: DsmClient) -> str:
     for task in tasks:
         start = taskid_started(task.handle.taskid)
         started = format_timestamp(start) if start is not None else "unknown"
-        to = f" -> {task.dest}/" if task.dest and task.handle.kind != "delete" else ""
+        to = f" -> {shown(f'{task.dest}/')}" if task.dest and task.handle.kind != "delete" else ""
         rows.append(
             [
                 f"`{task.handle}`",
                 task.handle.kind,
-                ", ".join(task.paths) + to,
+                ", ".join(map(shown, task.paths)) + to,
                 started,
                 progress_text(task.task),
             ]
@@ -862,8 +933,9 @@ async def file_task(
     progress or final result (``status``), or stop it (``stop``). The handle is
     validated before any DSM call; its prefix picks the API. ``stop`` without a handle
     is ``invalid_parameter`` (it never lists or stops anything). ``stop`` reads the status
-    first and stops only a task that is still running: CopyMove ``stop`` answers success
-    for any taskid, so its answer alone can't say whether anything was stopped.
+    first and stops only a task that is still running, or one DSM keeps answering 599 for,
+    which can't be confirmed: CopyMove ``stop`` answers success for any taskid, so its answer
+    alone can't say whether anything was stopped.
     """
     if action == "stop" and (handle is None or not handle.strip()):
         error_response(
@@ -885,50 +957,67 @@ async def file_task(
     taskid = dsm_str(parsed.taskid)
     paths = record.paths if record is not None else []
 
-    async def status_or_none() -> dict[str, Any] | None:
-        """The task's status, or None when DSM doesn't have it (599)."""
-        try:
-            data: dict[str, Any] = await client.request(
-                parsed.api, "status", version=version, params={"taskid": taskid}
-            )
-        except (DsmHttpError, DsmReplyError, RequestTooLongError) as e:
-            stopping = action == "stop"
-            _unreadable(
-                parsed,
-                e,
-                operation="Stop task" if stopping else "Check task",
-                note=" Nothing was stopped." if stopping else "",
-            )
-        except SynologyError as e:
-            if e.code != 599:
-                synology_error_response("Stop task" if action == "stop" else "Check task", e)
-            return None
-        except httpx.TransportError as e:
-            stopping = action == "stop"
-            _unanswered(
-                parsed,
-                e,
-                operation="Stop task" if stopping else "Check task",
-                request="status",
-                note=" Nothing was stopped." if stopping else "",
-            )
-        return data
+    async def status_or_none(stop_note: str = " Nothing was stopped.") -> dict[str, Any] | None:
+        """The task's status, or None when DSM keeps saying it doesn't have it (599). One 599 isn't
+        a verdict (#521): a stop dropped on it would leave a running delete going. Once a final
+        result is remembered it is: DSM forgets a task after one read, and the result can't change.
+        """
+        reads = 1 if record is not None and record.final_status is not None else _LOST_TASK_READS
+        started = time.monotonic()
+        for read in range(reads):
+            try:
+                data: dict[str, Any] = await client.request(
+                    parsed.api, "status", version=version, params={"taskid": taskid}
+                )
+                if not isinstance(data, dict):
+                    # Not "no such task", which sends a stop: it's a reply that can't be read.
+                    raise DsmReplyError(f"{parsed.api} status: the reply's data isn't an object.")
+            except (DsmHttpError, DsmReplyError, RequestTooLongError) as e:
+                stopping = action == "stop"
+                _unreadable(
+                    parsed,
+                    e,
+                    operation="Stop task" if stopping else "Check task",
+                    note=stop_note if stopping else "",
+                )
+            except SynologyError as e:
+                if e.code != 599:
+                    synology_error_response("Stop task" if action == "stop" else "Check task", e)
+                if read + 1 >= reads or time.monotonic() - started >= _LOST_TASK_BOUND:
+                    return None
+                await asyncio.sleep(_LOST_TASK_WAIT)
+                continue
+            except httpx.TransportError as e:
+                stopping = action == "stop"
+                _unanswered(
+                    parsed,
+                    e,
+                    operation="Stop task" if stopping else "Check task",
+                    request="status",
+                    note=stop_note if stopping else "",
+                )
+            return data
+        return None
 
-    def gone() -> str:
-        # A stop request must hear that this call stopped nothing ("or was stopped"
+    def gone(*, stop_sent: bool = False) -> str:
+        # A stop request must hear that this call can't say it worked ("or been stopped"
         # alone reads as "your stop worked").
-        nothing = " Nothing was stopped." if action == "stop" else ""
+        sent = " A stop was sent, but DSM can't confirm it." if stop_sent else ""
         if paths:
-            # Ours, but DSM has let it go: a finished Delete is forgotten unless a status
-            # read caught it finishing, so there's no result left to give.
+            # Ours, but DSM says it doesn't have it: a finished Delete is forgotten unless a status
+            # read caught it finishing, and a 599 can pass (#521), so it may still be running.
+            hint = _LIST_HINT
+            if record is not None and record.dest and parsed.kind != "delete":
+                hint = _where_to_look(_GERUND[parsed.kind], record.dest, paths)
             return (
-                f"The {parsed.kind} of {', '.join(paths)} is no longer running on the NAS: "
-                f"it finished or was stopped, and DSM no longer has its result.{nothing} "
-                f"{_LIST_HINT}"
+                f"DSM has no task for the {parsed.kind} of {', '.join(map(shown, paths))}: it "
+                f"may have finished, failed, been stopped or still be running.{sent} "
+                f"{_RUNNING_HINT} {hint}"
             )
         return (
-            "No running task with this handle. It finished, was stopped, or was started by "
-            f"a different DSM user.{nothing} {_LIST_HINT}"
+            "DSM has no task with this handle: it may have finished, failed, been stopped or still "
+            f"be running, or have been started by a different DSM user.{sent} {_RUNNING_HINT} "
+            f"{_LIST_HINT}"
         )
 
     def earlier_skip() -> str:
@@ -936,21 +1025,8 @@ async def file_task(
             return ""
         return "\n" + skipped_line(parsed.kind != "copy", record.skipped_earlier, record.earlier)
 
-    status = await status_or_none()
-
-    if action == "stop":
-        # Read the status first: CopyMove stop answers success for any taskid, finished,
-        # forgotten or another user's (vdsm 7.1 and 7.2.2), so stop alone can't tell.
-        if status is None:
-            if record is not None and record.final_status is not None:
-                final = await _final_text(client, parsed, record.final_status, record)
-                return f"{_NOT_STOPPED}\n{final}"
-            return gone() + earlier_skip()
-        logger.debug("%s status before stop (%s): %s", parsed.api, parsed, status)
-        if status.get("finished"):
-            records.set_final(parsed, status)
-            final = await _final_text(client, parsed, status, record)
-            return f"{_NOT_STOPPED}\n{final}"
+    async def send_stop() -> int | None:
+        """Send the stop. DSM's code when it says it has no such task (401, 599), or None."""
         try:
             await client.request(
                 parsed.api,
@@ -972,7 +1048,7 @@ async def file_task(
             )
         except SynologyError as e:
             if e.code in (401, 599):
-                return f"That task had already finished or isn't running. {_LIST_HINT}"
+                return e.code
             synology_error_response("Stop task", e)
         except httpx.TransportError as e:
             _unanswered(
@@ -982,7 +1058,48 @@ async def file_task(
                 request="stop",
                 note=" The stop may or may not have taken effect.",
             )
-        what = ", ".join(paths) if paths else f"`{parsed}`"
+        return None
+
+    async def after_refusal(refused: int) -> str:
+        """DSM says it has no such task, which can pass too, so a read says what's known."""
+        now = await status_or_none(" The stop wasn't accepted.")
+        if now is None:
+            return gone(stop_sent=True) + earlier_skip()
+        if now.get("finished"):
+            records.set_final(parsed, now)
+            final = await _final_text(client, parsed, now, record)
+            return f"{_NOT_STOPPED}\n{final}"
+        return (
+            f"DSM didn't accept the stop (error {refused}), and the task is still running "
+            f"({progress_text(now)}). Try the stop again; if DSM keeps refusing it, stop it in "
+            "DSM's File Station."
+        )
+
+    status = await status_or_none()
+
+    if action == "stop":
+        # Read the status first: CopyMove stop answers success for any taskid, finished,
+        # forgotten or another user's (vdsm 7.1 and 7.2.2), so stop alone can't tell.
+        if status is None:
+            if record is not None and record.final_status is not None:
+                final = await _final_text(client, parsed, record.final_status, record)
+                return f"{_NOT_STOPPED}\n{final}"
+            # The reads may be wrong, and a task ID is unique: a stop that's lost costs nothing
+            # (another user's task isn't touched, on vdsm), and one that's not sent leaves a delete
+            # running (QA round 2 on #590).
+            refused = await send_stop()
+            if refused is None:
+                return gone(stop_sent=True) + earlier_skip()
+            return await after_refusal(refused)
+        logger.debug("%s status before stop (%s): %s", parsed.api, parsed, status)
+        if status.get("finished"):
+            records.set_final(parsed, status)
+            final = await _final_text(client, parsed, status, record)
+            return f"{_NOT_STOPPED}\n{final}"
+        refused = await send_stop()
+        if refused is not None:
+            return await after_refusal(refused)
+        what = ", ".join(map(shown, paths)) if paths else f"`{parsed}`"
         stopped = f"Stopped {parsed.kind} of {what}; it may be partly done. {_LIST_HINT}"
         return stopped + earlier_skip()
 

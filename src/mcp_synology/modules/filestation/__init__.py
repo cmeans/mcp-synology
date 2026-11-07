@@ -294,7 +294,7 @@ MODULE_INFO = ModuleInfo(
         ToolInfo(
             name="file_task",
             description=(
-                "Follow up on a delete, copy, move or restore that is still running on the "
+                "Follow up on a delete, copy, move or restore handed off to the "
                 "NAS. Those tools hand off long operations and return a handle such as "
                 "`delete:FileStation_…`, because the NAS keeps working after the reply. "
                 'With a handle: `action="status"` shows progress, or the final result if DSM '

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
+import anyio
 import httpx
 from mcp.server.mcpserver.exceptions import ToolError
 
@@ -53,6 +55,7 @@ from mcp_synology.modules.filestation.tasks import (
     ProgressCallback,
     TaskRecord,
     TaskRecords,
+    _stop_background_task,
     handoff_reply,
     poll_task,
     running_task,
@@ -64,6 +67,9 @@ if TYPE_CHECKING:
     from mcp_synology.core.client import DsmClient
 
 logger = logging.getLogger(__name__)
+
+# How long a lost delete waits on its path check (#521), so a stalled DSM can't hold the reply.
+_LOST_DELETE_CHECK = 5.0
 
 
 async def create_folder(
@@ -340,7 +346,7 @@ def _with_progress_so_far(
         # Added to the cause's own advice (free space, permissions, check before deleting
         # again), never in place of it (QA round 3 on #480).
         # A note that reads after any advice, or alone (QA round 4): no "Then", no second
-        # "retry", and a check first, since the failed path may be gone already (a 599),
+        # "retry", and a check first, since the failed path may be gone already,
         # unless the advice already says to check with list_files (QA round 5).
         original = str(body["error"].get("suggestion") or "").strip()
         if _CHECKS_WITH_LIST_FILES.search(original):
@@ -483,10 +489,11 @@ async def _copy_move_one_path(
     Returns the `processed_size` byte count from the completed task (and whether DSM
     skipped items that already existed at the destination, #171) so the
     caller can sum sizes across all per-path tasks, or a Handoff when the task outlived
-    ``timeout`` or DSM stopped answering its status requests (#245). Raises ToolError on
+    ``timeout``, DSM stopped answering its status requests (#245), or DSM kept answering that it
+    has no such task (#521). Raises ToolError on
     failure (via error_response/synology_error_response). A task that DSM reports an
-    error for, or whose call is canceled, is stopped, so orphaned tasks can't
-    accumulate on the NAS.
+    error for (other than a 599 on a status read, #521), or whose call is canceled, is stopped,
+    so orphaned tasks can't accumulate on the NAS.
     """
     try:
         start_data = await client.request(
@@ -518,9 +525,10 @@ async def _copy_move_one_path(
     if result.outcome == "poll_error":
         assert isinstance(result.error, SynologyError)
         synology_error_response(f"{operation} files", result.error)
-    if result.outcome in ("handoff", "stalled"):
-        # Left running on the NAS, not stopped (#245): the caller gets a handle.
-        stall = result.error if result.outcome == "stalled" else None
+    if result.outcome in ("handoff", "stalled", "lost"):
+        # Left running on the NAS, not stopped (#245): the caller gets a handle. Lost too: it
+        # may still be running, and the reply says what's known (#521).
+        stall = result.error if result.outcome != "handoff" else None
         return Handoff(Handle(_KIND[operation], taskid), result.status, stall)
     return _copy_move_result(
         result.status, path, operation, done, dest=dest, skipped_so_far=skipped
@@ -883,6 +891,7 @@ async def _copy_move(
                 handle=outcome.handle,
                 status=outcome.status,
                 stall=outcome.stall,
+                dest=task_dest,
                 done=done,
                 skipped=skipped_so_far,
                 landed=landed_here,
@@ -976,9 +985,12 @@ async def _delete_one_path(
     """Delete a single path via DSM async-task pattern.
 
     Raises ToolError (via error_response/synology_error_response) on failure;
-    returns None when the delete finished, or a Handoff when the task outlived
-    ``timeout`` or DSM stopped answering its status requests (#245). A task that DSM
-    reports an error for, or whose call is canceled, is stopped.
+    returns None when the delete finished, or DSM kept answering that it has no such task and
+    the path is gone (#521); or a Handoff when the task outlived ``timeout``, DSM stopped
+    answering its status requests (#245), or it has no such task and the path isn't known to be
+    gone. A task that DSM
+    reports an error for, or whose call is canceled, is stopped; a 599 on a status read isn't
+    such an error (#521).
     """
     try:
         start_data = await client.request(
@@ -1010,9 +1022,27 @@ async def _delete_one_path(
     if result.outcome == "poll_error":
         assert isinstance(result.error, SynologyError)
         synology_error_response("Delete files", result.error)
-    if result.outcome in ("handoff", "stalled"):
+    if result.outcome == "lost":
+        # DSM can't say how it ended, but the path can: gone is what was asked for (#521).
+        # Bounded: a stalled DSM mustn't hold the reply and its handle (#245).
+        try:
+            exists = await asyncio.wait_for(path_exists(client, path), _LOST_DELETE_CHECK)
+        except asyncio.CancelledError:
+            # A canceled call stops its task, as `poll_task` does: this one may be running.
+            with anyio.CancelScope(shield=True):
+                await _stop_background_task(
+                    client, "SYNO.FileStation.Delete", dsm_str(taskid), delete_version, logger
+                )
+            raise
+        except Exception as e:
+            # Any answer that doesn't say it's gone leaves the outcome unknown.
+            logger.warning("Couldn't check %s after a lost delete: %s", path, type(e).__name__)
+            exists = None
+        if exists is False:
+            return None
+    if result.outcome in ("handoff", "stalled", "lost"):
         # Left running on the NAS, not stopped (#245): the caller gets a handle.
-        stall = result.error if result.outcome == "stalled" else None
+        stall = result.error if result.outcome != "handoff" else None
         return Handoff(Handle("delete", taskid), status, stall)
 
     _delete_result(status, path, recursive=recursive)

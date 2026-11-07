@@ -1853,7 +1853,8 @@ class TestInstructionComments:
 # model to do next.
 # +494 by #575 (QA round 1): copy, move and restore say two sources that would replace each other
 # are refused, and that a replaced file may not be in the recycle bin.
-PAYLOAD_BUDGET_CHARS = 58_009
+# +51 by #590: if a reply says how a task ended isn't known, say that rather than that it's running.
+PAYLOAD_BUDGET_CHARS = 58_060
 
 
 class TestPayloadBudget:
