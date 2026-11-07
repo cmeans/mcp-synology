@@ -402,19 +402,33 @@ async def _refuse_missing_sources(
         )
 
 
-async def _refuse_missing_destination(client: DsmClient, operation: str, dest: str) -> None:
+async def _refuse_missing_destination(
+    client: DsmClient, operation: str, dest: str, *, anything_done: bool = False
+) -> None:
     """Refuse before anything starts if the destination folder is missing or refused (#344).
 
     DSM answers a copy or move into a missing folder with 1002, "Destination error during
     copy/move", whose suggestion points at permissions. getinfo tells the cases apart: 408
-    is `not_found`, 407 `permission_denied`. Any other answer, or no answer, leaves it to
-    the task, as before.
+    is `not_found`, 407 `permission_denied`. Any other DSM answer leaves it to the task, as
+    before. No answer, or an unreadable one, stops a call with nothing started: starting then
+    would be with the duplicate-task guard down too, since it reads the same stalled DSM. With
+    ``anything_done`` (a restore's later destination), it goes on, so finished items aren't lost.
     """
     try:
         found = await find_missing_paths(client, [dest])
-    except SynologyError as e:
-        logger.debug(
-            "%s: destination check for %s failed (%s); starting anyway", operation, dest, e
+    except Exception as e:
+        if not anything_done and not isinstance(e, SynologyError):
+            raise
+        # A restore to several places runs this after earlier items finished: no reply it can use
+        # mustn't lose them (#588). At WARNING, as DSM's 1002 that follows a missing folder points
+        # at permissions.
+        logger.debug("The destination check's error", exc_info=True)
+        logger.warning(
+            "%s: destination check for %s failed (%s, DSM code %s); starting anyway",
+            operation,
+            dest,
+            type(e).__name__,
+            getattr(e, "code", None),
         )
         return
     codes = {code for _, code in found}
@@ -635,9 +649,16 @@ async def _skip_report(
     """
     try:
         kinds = await paths_isdir(client, skipped_paths)
-    except SynologyError as e:
-        # The copy already happened; report it with the hedged wording, never as an error.
-        logger.warning("Couldn't read the type of skipped sources (DSM %s): %s", e.code, e)
+    except Exception as e:
+        # The copy already happened; report it with the hedged wording, never as an error,
+        # whatever the lookup met: right after a large task, DSM may not answer at all (#588).
+        logger.warning(
+            "Couldn't read the type of skipped sources %s: %s (DSM code %s)",
+            skipped_paths,
+            type(e).__name__,
+            getattr(e, "code", None),
+        )
+        logger.debug("The skip lookup's error", exc_info=True)
         kinds = {}
     files = [p for p in skipped_paths if kinds.get(p) is False]
     folders = [p for p in skipped_paths if kinds.get(p) is True]
@@ -678,7 +699,10 @@ async def _skip_report(
     def entry(p: str, folder: bool = False) -> str:
         # A skipped folder's leftovers are its own children; a file stays in its parent.
         src_dir = p if folder else "/".join(p.split("/")[:-1]) or ""
-        return f"  {p}" + (f" (skipped items are still in {src_dir}/)" if remove_src else "")
+        where = f" (skipped items are still in {src_dir}/)"
+        if p in unknown:
+            where = " (skipped items are still at this path or under it)"
+        return f"  {p}" + (where if remove_src else "")
 
     if ok:
         lines.append(f"{verb}:")
@@ -776,7 +800,7 @@ async def _copy_move(
 
     if check_sources:
         await _refuse_missing_sources(client, operation, normalized, paths)
-    await _refuse_missing_destination(client, operation, dest)
+    await _refuse_missing_destination(client, operation, dest, anything_done=bool(already_done))
 
     total_processed = 0
     done = list(already_done or [])
@@ -800,18 +824,40 @@ async def _copy_move(
             # Never start a second task on a path that already has one (#245).
             outcome = Handoff(Handle(_KIND[operation], str(running["taskid"])), running)
         else:
-            outcome = await _copy_move_one_path(
-                client,
-                p,
-                dest=dest,
-                overwrite=overwrite,
-                remove_src=remove_src,
-                operation=operation,
-                copymove_version=copymove_version,
-                timeout=timeout,
-                done=done,
-                on_progress=on_progress,
-            )
+            try:
+                outcome = await _copy_move_one_path(
+                    client,
+                    p,
+                    dest=dest,
+                    overwrite=overwrite,
+                    remove_src=remove_src,
+                    operation=operation,
+                    copymove_version=copymove_version,
+                    timeout=timeout,
+                    done=done,
+                    on_progress=on_progress,
+                )
+            except httpx.TransportError as e:
+                rest = normalized[i + 1 :] + list(later or [])
+                if not done and not rest:
+                    raise  # nothing to add: the server's usual timeout or connection error
+                # The start got no answer (a status with none hands the item off in
+                # poll_task): it may have started. Say so, with what was done and what
+                # wasn't started, as delete_files does (#588).
+                not_started = f". Not started: {', '.join(map(shown, rest))}" if rest else ""
+                error_response(
+                    ErrorCode.TIMEOUT
+                    if isinstance(e, httpx.TimeoutException)
+                    else ErrorCode.UNAVAILABLE,
+                    f"{operation} files failed: DSM didn't answer for {shown(p)} "
+                    f"({describe_transport_error(e)}); its {operation.lower()} may have started"
+                    f"{_already_done(operation, done)}{not_started}.",
+                    retryable=False,
+                    param="paths",
+                    value=p,
+                    suggestion="Check with list_files, or file_task with no handle, before "
+                    "running it again" + (", and leave out what's already done." if done else "."),
+                )
         if isinstance(outcome, Handoff):
             if records is not None:
                 records.add(
