@@ -1853,7 +1853,7 @@ class TestInstructionComments:
 # model to do next.
 # +494 by #575 (QA round 1): copy, move and restore say two sources that would replace each other
 # are refused, and that a replaced file may not be in the recycle bin.
-# +291 by #PR-NUMBER: copy, move and restore say a call is refused while a running task lands the
+# +291 by #597: copy, move and restore say a call is refused while a running task lands the
 # same name there and either one replaces.
 PAYLOAD_BUDGET_CHARS = 58_300
 
