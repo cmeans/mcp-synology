@@ -71,13 +71,16 @@ while IFS=$'\t' read -r PR SHA ADOPT <&3; do
         echo "PR #$PR: moved on while reading its checks" >&2
       else
         # Workflow or check names only: a fork chooses its job names, and this is the bot's comment.
-        comment_once "$PR" "<!-- pr-labels-recheck-failed $SHA -->" "A check has failed on \`$SHA\`, and this PR is at \`Ready for QA\`. The label stays, in case it was applied on purpose:
+        # The state stops at its first failure, so the names are in the marker: re-running one
+        # failure mustn't silence the next, on this same commit.
+        NAMES=$(sed -nE 's/^failed ([^:]+):.*/\1/p' "$DETAILS" | sort -u)
+        comment_once "$PR" "<!-- pr-labels-recheck-failed $SHA $(printf '%s' "$NAMES" | tr '\n' ' ') -->" "A check has failed on \`$SHA\`:
 
 \`\`\`
-$(sed -nE 's/^failed ([^:]+):.*/\1/p' "$DETAILS" | sort -u)
+$NAMES
 \`\`\`
 
-The PR's Checks tab has the detail. A failed job can be re-run; a failed CodeQL check needs a push."
+This PR stays at \`Ready for QA\`, in case that label was applied on purpose; if it wasn't, take it off. The PR's Checks tab has the detail. A failed job can be re-run. A failed CodeQL check clears with a push, the one known way."
       fi
     fi
     continue
@@ -112,12 +115,12 @@ The PR's Checks tab has the detail. A failed job can be re-run; a failed CodeQL 
   fi
   CLEAR="A lagging listing usually clears on a later recheck. If it doesn't, re-run the workflow in Actions."
   HAND="If the PR has no QA or \`Merge conflict\` label, you can also apply \`Ready for QA\` by hand"
-  STUCK="\`CodeQL\` is GitHub's default setup, not a workflow in this repository, so re-running CI won't clear it. A new commit gets a new check."
+  STUCK="\`CodeQL\` is GitHub's default setup, not a workflow in this repository, so re-running CI won't clear it. A new commit normally gets a new check."
   if ! printf '%s\n' "$MISSING" | grep -qv '^CodeQL'; then
     # Only CodeQL: it may never pass, so no waiting on gh pr checks.
     CLEAR="$STUCK $HAND."
   elif printf '%s\n' "$MISSING" | grep -q '^CodeQL'; then
-    CLEAR="$CLEAR $STUCK $HAND once \`gh pr checks $PR\` shows every other check passed."
+    CLEAR="$CLEAR $STUCK $HAND once \`gh pr checks $PR\` shows every check passed except \`CodeQL\` and \`QA Gate\`."
   else
     CLEAR="$CLEAR $HAND once \`gh pr checks $PR\` shows every check passed except \`QA Gate\`."
   fi

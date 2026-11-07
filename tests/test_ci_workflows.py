@@ -416,7 +416,8 @@ case "$*" in
       cat "$ANSWERS/codeql" 2>/dev/null
     fi
     exit 0 ;;
-  "pr view"*"--json headRefOid"*) cat "$ANSWERS/head"; exit 0 ;;
+  "pr view"*"--json headRefOid"*) [ -f "$ANSWERS/head_fail" ] && exit 1
+    cat "$ANSWERS/head"; exit 0 ;;
   "pr view"*"--json labels"*) cat "$ANSWERS/labels" 2>/dev/null; exit 0 ;;
   "pr view"*"--json comments"*) [ -f "$ANSWERS/comments_fail" ] && exit 1
     cat "$ANSWERS/comments" 2>/dev/null; exit 0 ;;
@@ -836,7 +837,7 @@ def test_a_failure_at_ready_for_qa_comments_and_keeps_the_label(
     assert "pr-labels-recheck-failed abc" in writes
     # Exactly the name, once, with nothing else from the details.
     assert f"```\n{named}\n```" in writes
-    assert "The label stays" in writes
+    assert "This PR stays at `Ready for QA`" in writes
     assert "--remove-label" not in writes
     assert "--add-label" not in writes
 
@@ -866,7 +867,7 @@ def test_a_marker_quoted_in_another_comment_doesnt_silence_this_one(github: _Fak
         codeql="completed failure\n",
         labels="Ready for QA\n",
         prs_json=json.dumps([_pr(7, "Ready for QA")]),
-        comments="ci.yml: x <!-- pr-labels-recheck-failed abc -->: failure\n",
+        comments="ci.yml: x <!-- pr-labels-recheck-failed abc CodeQL -->: failure\n",
     )
     assert github.run("pr-labels-recheck.sh").returncode == 0
     assert "pr comment 7" in "\n".join(github.writes())
@@ -915,9 +916,42 @@ def test_a_failure_at_ready_for_qa_comments_once_per_commit(github: _FakeGitHub)
         codeql="completed failure\n",
         labels="Ready for QA\n",
         prs_json=json.dumps([_pr(7, "Ready for QA")]),
-        comments="<!-- pr-labels-recheck-failed abc -->\n",
+        comments="<!-- pr-labels-recheck-failed abc CodeQL -->\n",
     )
     assert github.run("pr-labels-recheck.sh").returncode == 0
+    assert github.writes() == []
+
+
+@_NEEDS_JQ
+def test_a_later_failure_on_one_commit_gets_its_own_comment(github: _FakeGitHub) -> None:
+    """Pre-QA on #582: the state stops at its first failure, and CodeQL went unnamed for good."""
+    github.runs()
+    github.answer(
+        ci_jobs=_GOOD,
+        vdsm_jobs=_GOOD,
+        codeql="completed failure\n",
+        labels="Ready for QA\n",
+        prs_json=json.dumps([_pr(7, "Ready for QA")]),
+        comments="<!-- pr-labels-recheck-failed abc ci.yml -->\n",
+    )
+    assert github.run("pr-labels-recheck.sh").returncode == 0
+    assert "pr-labels-recheck-failed abc CodeQL" in "\n".join(github.writes())
+
+
+@_NEEDS_JQ
+def test_a_failed_re_read_at_ready_for_qa_fails_the_run(github: _FakeGitHub) -> None:
+    github.runs()
+    github.answer(
+        ci_jobs=_GOOD,
+        vdsm_jobs=_GOOD,
+        codeql="completed failure\n",
+        labels="Ready for QA\n",
+        prs_json=json.dumps([_pr(7, "Ready for QA")]),
+        head_fail="",
+    )
+    done = github.run("pr-labels-recheck.sh")
+    assert done.returncode == 1
+    assert "couldn't read it again" in done.stderr
     assert github.writes() == []
 
 
