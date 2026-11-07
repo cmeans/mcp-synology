@@ -148,14 +148,15 @@ def check_parts(raw: str, param: str, suggestion: str = DEFAULT_SUGGESTION) -> s
         # Replies show such a name escaped, so the name as shown is never the item's (#604).
         error_response(
             ErrorCode.INVALID_PARAMETER,
-            f"Invalid path {raw!r}: a control character, line separator, bidi control or tag "
-            "character isn't allowed. Replies show them escaped, so a name that holds one can't "
-            "be acted on here.",
+            f"Invalid path {raw!r}: a control character, line or paragraph separator, bidi "
+            "control or tag character isn't allowed. Replies show them escaped, so a name that "
+            "holds one can't be given here.",
             retryable=False,
             param=param,
             value=raw,
-            suggestion="For an item on the NAS, rename it there (DSM's File Station) and use its "
-            "new name; for one this would create, give its name plainly.",
+            suggestion="For an item on the NAS, rename it there (in DSM) and use its new name, "
+            "or pass its ID where the tool takes one; for one this would create, give its name "
+            f"plainly. {suggestion}",
         )
     normalized = normalize_path(raw)
     parts = normalized.split("/")[1:]

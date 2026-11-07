@@ -299,7 +299,9 @@ Common causes:
   act on another item) or an empty part (`/video//x`): write the path out in full.
 - Any tool argument with a control character other than a tab, a line or paragraph separator,
   a bidi control or a tag character (#604): replies show those escaped, so
-  a name that holds one can't be used. Rename the item in DSM, or give a new name plainly.
+  a name that holds one can't be used. Rename the item in DSM, or pass its ID where the tool
+  takes one (Photos, Download Station), or give a new name plainly; for a local path, retype it
+  (a path copied from Windows may begin with an invisible mark).
   A Photos `description` and Download Station's `uri` list may hold line breaks.
 - A name a tool would create (`rename`'s `new_name`, `upload_file`'s `filename` or the
   local file's name, `create_folder`'s new folder) starts or ends with whitespace (#488:

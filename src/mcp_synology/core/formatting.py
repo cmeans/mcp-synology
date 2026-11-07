@@ -19,8 +19,8 @@ if TYPE_CHECKING:
 # sheet). One class, so it doesn't depend on the running Python's Unicode version; a tab is
 # left out, as it can't start a line and DSM keeps it in names, which are taken exactly (#488).
 # A lone surrogate is in it too: a reply holding one can't be sent at all.
-# As code-point ranges, written into the pattern as the regex engine's own escapes: a
-# literal class here held lone surrogates in the source, which CodeQL read as U+FFFD.
+# As code-point ranges, written into the pattern as the regex engine's own escapes: a literal
+# class here was a str whose value held lone surrogates, and CodeQL flagged it (#605).
 FORGING_RANGES = (
     (0x00, 0x08),  # C0 controls before the tab
     (0x0A, 0x1F),  # C0 controls after it: line feed, vertical tab, form feed, return, ...
