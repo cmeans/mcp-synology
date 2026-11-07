@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
-from mcp_synology.core.formatting import format_key_value, weekly_plan_grid
+from mcp_synology.core.formatting import escape_nas_text, format_key_value, weekly_plan_grid
 from mcp_synology.modules.storage.helpers import (
     STORAGE_API,
     Sections,
@@ -74,7 +74,8 @@ def smart_block(scheduler: Any, tasks: Any) -> str:
     rows: list[tuple[str, str]] = []
     for item in dicts(scheduler.get("items") if isinstance(scheduler, dict) else None):
         try:
-            args = json.loads(item.get("app_args") or "{}")
+            # JSON inside DSM's JSON: its strings come out unescaped (#604).
+            args = escape_nas_text(json.loads(item.get("app_args") or "{}"))
         except (TypeError, ValueError):
             args = {}
         style = _STYLES.get(str(args.get("test_style")), "?")

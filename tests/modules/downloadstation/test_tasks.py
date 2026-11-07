@@ -2156,7 +2156,7 @@ class TestPauseResume:
         with caplog.at_level("WARNING", logger=tasks_module.__name__):
             await pause_download(mock_client, task_ids=[forged])
         assert (
-            "Couldn't pause ['<not an ID, 14 chars>'] a second time: ReadTimeout" in caplog.messages
+            "Couldn't pause ['<not an ID, 15 chars>'] a second time: ReadTimeout" in caplog.messages
         )
 
     @respx.mock

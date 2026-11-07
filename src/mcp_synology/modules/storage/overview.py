@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
-from mcp_synology.core.formatting import format_key_value, format_timestamp
+from mcp_synology.core.formatting import escape_nas_text, format_key_value, format_timestamp
 from mcp_synology.modules.storage.helpers import (
     STORAGE_API,
     Sections,
@@ -202,7 +202,8 @@ def scheduled_local_times(scheduler: dict[str, Any] | None) -> dict[str, str]:
     times: dict[str, str] = {}
     for task in dicts(scheduler.get("items") if isinstance(scheduler, dict) else None):
         try:
-            args = json.loads(task.get("app_args") or "{}")
+            # JSON inside DSM's JSON: its strings come out unescaped (#604).
+            args = escape_nas_text(json.loads(task.get("app_args") or "{}"))
         except (TypeError, ValueError):
             args = {}
         style = str(args.get("test_style") or "")

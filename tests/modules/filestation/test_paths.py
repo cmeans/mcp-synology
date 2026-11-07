@@ -355,7 +355,6 @@ class TestRefuseBadName:
             ("rep\u200bort", "Retype the name without the character"),
             ("\u8f9b\U000e0100\u845b\U000e0101", "Write fewer characters in their variant forms"),
             ("a" * 256, "Shorten the name to 255 bytes or fewer"),
-            ("a\x1bb", "Give the new folder's name plainly"),
         ],
     )
     async def test_a_new_folders_advice_fits_its_problem(
@@ -680,23 +679,9 @@ class TestResolvePaths:
         [
             ("create_folder", "paths", "/video/#recycle/sub", "is '#recycle'"),
             ("create_folder", "paths", "/homes/bob/#recycle/sub", "is '#recycle'"),
-            ("create_folder", "paths", "/video/new\x1bdir/sub", "contains a control character"),
             ("upload_file", "dest_folder", "/video/#recycle", "is '#recycle'"),
-            ("upload_file", "dest_folder", "/video/a\nb/c", "contains a control character"),
             # The invisible-character rules too (pre-QA r4: untested before).
-            (
-                "upload_file",
-                "dest_folder",
-                "/video/a\u202eb/x",
-                "contains a character that changes text direction",
-            ),
             ("create_folder", "paths", "/video/\u200b/sub", "has no visible character"),
-            (
-                "create_folder",
-                "paths",
-                "/video/a\u2028b/sub",
-                "contains a line or paragraph separator",
-            ),
         ],
     )
     async def test_a_created_parent_gets_the_new_name_rules(
@@ -718,7 +703,6 @@ class TestResolvePaths:
         ("path", "advice"),
         [
             ("/video/a\u200bb/sub", "Retype the folder's name without the character"),
-            ("/video/a\x1bb/sub", "Give the folder a plain name"),
             (
                 "/video/a\u0308\u0301\u0308\u0301/sub",
                 "Retype the folder's name without the character",
@@ -1906,3 +1890,18 @@ async def test_a_restore_back_into_a_bin_is_refused() -> None:
     assert (error["param"], error["value"]) == ("paths", "#recycle/#recycle/x")
     assert "inside the recycle bin" in error["message"]
     assert "dest_folder" in error["suggestion"]
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["/video/a\nb", "/video/a\x1bb/x", "/video/a\u2028b", "/video/a\u202eb", "/video/a\U000e0041"],
+)
+def test_a_path_that_could_forge_a_reply_line_is_refused(raw: str) -> None:
+    """#604: replies show such names escaped, so a name that holds one can't be acted on, and
+    a tool can't echo it back raw. A tab is still allowed (#488)."""
+    from mcp_synology.modules.filestation.paths import check_parts
+
+    with pytest.raises(ToolError) as exc:
+        check_parts(raw, "path")
+    assert "isn't allowed" in _error(exc)["message"]
+    assert check_parts("/video/a\tb", "path") == "/video/a\tb"

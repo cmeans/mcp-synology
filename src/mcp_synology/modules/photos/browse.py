@@ -12,6 +12,7 @@ from mcp_synology.core.formatting import (
     format_size,
     format_table,
     synology_error_response,
+    unescape_controls,
 )
 from mcp_synology.modules.photos.helpers import (
     V7,
@@ -722,6 +723,8 @@ def _exif_value(value: str) -> str:
     # other control characters, C1 included, or bytes that weren't UTF-8 mean binary.
     # (Only \r, \n and \t: str.splitlines() also splits on \x1c-\x1e and \x85, which
     # are binary here.)
+    # The client escapes control characters in every reply (#604): read them as they were.
+    value = unescape_controls(value)
     value = value.replace("\r\n", " ").translate({ord("\r"): " ", ord("\n"): " ", ord("\t"): " "})
     if any(c == "\ufffd" or c < " " or "\x7f" <= c <= "\x9f" for c in value):
         unit = "character" if len(value) == 1 else "characters"

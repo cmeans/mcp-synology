@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Literal, NamedTuple
 import regex
 
 from mcp_synology.core.errors import ErrorCode
-from mcp_synology.core.formatting import error_response
+from mcp_synology.core.formatting import error_response, forges
 from mcp_synology.modules.filestation import helpers
 from mcp_synology.modules.filestation.helpers import (
     NAME_BYTES,
@@ -140,6 +140,18 @@ def check_parts(raw: str, param: str, suggestion: str = DEFAULT_SUGGESTION) -> s
             param=param,
             value=raw,
             suggestion=suggestion,
+        )
+    if any(forges(c) for c in raw):
+        # Replies show such a name escaped, so the name as shown is never the item's (#604).
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            f"Invalid path {raw!r}: a control character, line separator, bidi control or tag "
+            "character isn't allowed. Replies show them escaped, so a name that holds one can't "
+            "be acted on here.",
+            retryable=False,
+            param=param,
+            value=raw,
+            suggestion="Rename the item on the NAS (DSM's File Station), then use its new name.",
         )
     normalized = normalize_path(raw)
     parts = normalized.split("/")[1:]
@@ -795,7 +807,11 @@ def resolve_bin_items(share: str, items: list[str], param: str = "paths") -> lis
 
     resolved: list[ResolvedPath] = []
     for item in items:
-        if "\x00" in item or any(_is_dot(part) for part in item.split("/") if part):
+        if (
+            "\x00" in item
+            or any(forges(c) for c in item)
+            or any(_is_dot(part) for part in item.split("/") if part)
+        ):
             check_parts(item, param, suggestion)
         p = strip_padding(item)
         head, _, rest = p.lstrip("/").partition("/")

@@ -22,6 +22,7 @@ import pytest
 from mcp.server.mcpserver.exceptions import ToolError
 
 from mcp_synology.core.errors import SynologyError
+from mcp_synology.core.formatting import escape_controls
 from mcp_synology.modules.downloadstation.config import set_download_config
 from mcp_synology.modules.downloadstation.tasks import create_download, edit_download
 from mcp_synology.modules.filestation.helpers import dsm_str
@@ -264,7 +265,8 @@ class TestPhotos:
                 made = await ph.call(
                     "Browse.Folder", "create", {"target_id": int(top["id"]), "name": bad}
                 )
-                assert made["folder"]["name"] == f"/{name}/{bad}"
+                # The client escapes what could forge a reply line (#604).
+                assert made["folder"]["name"] == escape_controls(f"/{name}/{bad}")
                 with pytest.raises(ToolError) as exc:
                     await photo_folder(
                         photos, action="create", parent=f"/{name}", name=bad, space=space

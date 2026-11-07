@@ -37,6 +37,7 @@ from mcp_synology.core.errors import (
     error_detail,
     error_from_code,
 )
+from mcp_synology.core.formatting import escape_nas_text
 from mcp_synology.core.redaction import redact_urls
 from mcp_synology.core.state import ApiInfoEntry
 
@@ -97,14 +98,15 @@ def _loads(content: bytes, label: str) -> Any:
 
     DSM copies binary EXIF fields into its JSON as raw bytes, which aren't UTF-8 (Photos
     get_exif, "Picture Info", DSM 7.1.1), so a strict decode would lose the whole reply.
-    Those bytes are read as U+FFFD (replacement characters) instead.
+    Those bytes are read as U+FFFD (replacement characters) instead. Every string is then
+    escaped where it could forge a line or hide text in a reply (``escape_nas_text``, #604).
     """
     try:
-        return json.loads(content)
+        return escape_nas_text(json.loads(content))
     except UnicodeDecodeError:
         logger.debug("%s: the reply has bytes that aren't UTF-8; reading them as U+FFFD", label)
         try:
-            return json.loads(content.decode("utf-8", errors="replace"))
+            return escape_nas_text(json.loads(content.decode("utf-8", errors="replace")))
         except ValueError:
             return None
     except ValueError:
