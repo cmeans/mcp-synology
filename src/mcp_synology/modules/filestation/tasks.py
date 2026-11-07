@@ -98,7 +98,10 @@ class TaskRecord:
     earlier: list[str] = field(default_factory=list)
     # The sources DSM skipped before this one in its call, so the final text can say so (#585).
     skipped_earlier: list[str] = field(default_factory=list)
-    # What landed at the call's destination; ``earlier`` isn't that when the task goes elsewhere.
+    # What's reported as already done before this task.
+    done_earlier: list[str] = field(default_factory=list)
+    # What landed, or is landing, at the call's destination; ``earlier`` isn't that when the task
+    # goes elsewhere. A skipped source named like one of these isn't offered overwrite=true.
     landed_earlier: list[str] = field(default_factory=list)
 
 
@@ -133,6 +136,7 @@ class TaskRecords:
             record.skipped_earlier = list(
                 dict.fromkeys([*old.skipped_earlier, *record.skipped_earlier])
             )
+            record.done_earlier = list(dict.fromkeys([*old.done_earlier, *record.done_earlier]))
             record.landed_earlier = list(
                 dict.fromkeys([*old.landed_earlier, *record.landed_earlier])
             )
@@ -482,14 +486,14 @@ def skipped_line(
     landed earlier, or like a skipped source before it, gets no advice to replace it (#580)."""
     line = (
         "Skipped in whole or in part, as an item of that name is already at the destination "
-        f"(not compared): {', '.join(map(shown, skipped))}."
+        f"(not compared): {', '.join(map(shown, dict.fromkeys(skipped)))}."
     )
     if removes_source:
         line += " A skipped file is still at the source; a skipped folder keeps the items skipped."
     ran = {name_key(path) for path in landed or []}
     own: list[str] = []
     others: list[str] = []
-    for path in skipped:
+    for path in dict.fromkeys(skipped):
         (own if name_key(path) in ran else others).append(path)
         ran.add(name_key(path))
     if own:
@@ -821,7 +825,7 @@ async def _final_text(
                 status,
                 path,
                 operation,
-                record.landed_earlier,
+                record.done_earlier,
                 dest=record.dest,
                 skipped_so_far=record.skipped_earlier,
             )
@@ -1037,16 +1041,17 @@ async def file_task(
         )
 
     def earlier_skip() -> str:
-        if record is None or not record.skipped_earlier:
+        if record is None or not (record.done_earlier or record.skipped_earlier):
             return ""
-        done = (
-            f"\nAlready {_PAST[_GERUND[parsed.kind]]} before this task: "
-            f"{', '.join(map(shown, record.landed_earlier))}."
-            if record.landed_earlier
-            else ""
-        )
-        line = skipped_line(parsed.kind != "copy", record.skipped_earlier, record.landed_earlier)
-        return f"{done}\n{line}"
+        lines = []
+        if record.done_earlier:
+            done = ", ".join(map(shown, record.done_earlier))
+            lines.append(f"Already {_PAST[_GERUND[parsed.kind]]} before this task: {done}.")
+        if record.skipped_earlier:
+            lines.append(
+                skipped_line(parsed.kind != "copy", record.skipped_earlier, record.landed_earlier)
+            )
+        return "\n" + "\n".join(lines)
 
     async def send_stop() -> int | None:
         """Send the stop. DSM's code when it says it has no such task (401, 599), or None."""
@@ -1154,5 +1159,5 @@ async def file_task(
         f"{slow} It keeps running without anything more from you; stopping and starting it "
         "again doesn't make it faster. "
         "Check again later, or, if the user wants it canceled, call file_task with "
-        'action="stop" (it may then be partly done).'
+        f'action="stop" (it may then be partly done).{earlier_skip()}'
     )

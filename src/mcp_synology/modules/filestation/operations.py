@@ -884,7 +884,10 @@ async def _copy_move(
                         # Only what landed, and only for the destination this call asked for.
                         earlier=landed_here if task_dest == dest else [],
                         skipped_earlier=list(skipped_so_far),
-                        landed_earlier=list(landed_here),
+                        done_earlier=list(done),
+                        landed_earlier=[*landed_here, p]
+                        if task_dest == dest
+                        else list(landed_here),
                     )
                 )
             reply = handoff_reply(
@@ -896,7 +899,7 @@ async def _copy_move(
                 dest=task_dest,
                 done=done,
                 skipped=skipped_so_far,
-                landed=landed_here,
+                landed=[*landed_here, p] if task_dest == dest else landed_here,
                 not_started=normalized[i + 1 :] + list(later or []),
             )
             if running is not None:
@@ -931,7 +934,7 @@ async def _copy_move(
         remove_src,
         total_processed,
         skipped_paths,
-        only_named_sources_removed=bool(skipped_so_far),
+        only_named_sources_removed=bool(skipped_so_far) or already_skipped is not None,
     )
     return text, False
 

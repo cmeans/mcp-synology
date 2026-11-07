@@ -4791,6 +4791,7 @@ async def test_a_stop_says_what_landed_too(mock_client: DsmClient) -> None:
             paths=["/s/big"],
             dest="/d",
             skipped_earlier=["/s/a\u200bb"],
+            done_earlier=["/s/ok"],
             landed_earlier=["/s/ok"],
         )
     )
@@ -4805,3 +4806,97 @@ async def test_a_stop_says_what_landed_too(mock_client: DsmClient) -> None:
     text = await file_task(mock_client, records=records, handle=str(handle), action="stop")
     assert "Already moved before this task: /s/ok." in text
     assert "\u200b" not in text
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("paths", "later"),
+    [
+        (["a/x", "b/y", "a/z"], "skip"),
+        (["a/x", "b/y", "a/big"], "running"),
+        (["a/x", "b/big", "a/z"], "not started"),
+    ],
+    ids=["a later skip", "a later hand-off", "not started"],
+)
+async def test_a_restore_never_says_a_folder_was_emptied(
+    mock_client: DsmClient, no_poll_wait: None, paths: list[str], later: str
+) -> None:
+    """Pre-QA on #601: the flag knew only earlier skips, and the rest come later."""
+    skipped = "/s/#recycle/a/z" if later == "skip" else "/none"
+    running = {"skip": "/none", "running": "/s/#recycle/a/big", "not started": "/s/#recycle/b/big"}
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        side_effect=_skip_then(running[later], skipped=skipped)
+    )
+    result = await restore_from_recycle_bin(mock_client, share="/s", paths=paths, timeout=1)
+    assert "Source files have been removed" not in result
+
+
+@respx.mock
+async def test_a_stop_and_a_failed_final_say_what_was_done_with_no_skip(
+    mock_client: DsmClient,
+) -> None:
+    from mcp_synology.modules.filestation.tasks import TaskRecord, file_task
+
+    records = TaskRecords()
+    handle = Handle("move", "T_big")
+    records.add(TaskRecord(handle, paths=["/s/big"], dest="/d", done_earlier=["/s/ok"]))
+    running = {"finished": False, "progress": 0.5, "total": 2}
+
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        if dict(request.url.params).get("method") == "status":
+            return httpx.Response(200, json={"success": True, "data": running})
+        return httpx.Response(200, json={"success": True, "data": {}})
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+    still = await file_task(mock_client, records=records, handle=str(handle))
+    assert "Already moved before this task: /s/ok." in still
+    stopped = await file_task(mock_client, records=records, handle=str(handle), action="stop")
+    assert "Already moved before this task: /s/ok." in stopped
+
+    failed = {"finished": True, "error": {"code": 1002}, "path": "/s/big"}
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        return_value=httpx.Response(200, json={"success": True, "data": failed})
+    )
+    with pytest.raises(ToolError, match="Already moved before this failure: /s/ok"):
+        await file_task(mock_client, records=records, handle=str(handle))
+
+
+@respx.mock
+async def test_a_hand_off_counts_the_task_it_hands_off_as_landing(
+    mock_client: DsmClient, no_poll_wait: None
+) -> None:
+    """Pre-QA on #601: `/a/n` skipped, then `/b/n` handed off: no `Pass overwrite=true` for it."""
+    base = _skip_then("/none")
+    records = TaskRecords()
+
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        params = dict(request.url.params)
+        if params.get("method") == "start":
+            starts.append(params["path"])
+        if params.get("method") == "status":
+            if "/b/n" in starts:
+                data: dict[str, Any] = {"finished": False, "progress": 0.5, "total": 2}
+            else:
+                data = {"finished": True, "path": "/a/n", "skipstatus": {"status": "all"}}
+            return httpx.Response(200, json={"success": True, "data": data})
+        return base(request)
+
+    starts: list[str] = []
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+    reply = await move_files(
+        mock_client, paths=["/a/n", "/b/n"], dest_folder="/d", timeout=1, records=records
+    )
+    assert "Don't retry /a/n with overwrite=true" in reply
+    record = records.get(Handle("move", "T_n"))
+    assert record is not None
+    assert record.landed_earlier == ["/b/n"]
+
+
+def test_a_skip_is_listed_once_and_shows_odd_paths_safely() -> None:
+    from mcp_synology.modules.filestation.tasks import skipped_line
+
+    line = skipped_line(True, ["/a/x", "/a/x", "/b/q\u200br"], ["/c/q\u200br"])
+    assert "(not compared): /a/x, " in line
+    assert "/a/x, /a/x" not in line
+    assert "\u200b" not in line
+    assert "Don't retry" in line
