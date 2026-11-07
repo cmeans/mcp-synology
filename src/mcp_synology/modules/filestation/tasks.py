@@ -859,6 +859,7 @@ async def _final_text(
                 record.done_earlier,
                 dest=record.dest,
                 skipped_so_far=record.skipped_earlier,
+                dest_of=record.dest_of,
             )
             text = await _copy_move_summary(
                 client,
@@ -872,7 +873,7 @@ async def _final_text(
                     *record.earlier,
                     *(
                         p
-                        for p in record.skipped_earlier
+                        for p in [*record.done_earlier, *record.skipped_earlier]
                         if record.dest_of.get(p, record.dest) == record.dest
                     ),
                 ],

@@ -4078,7 +4078,7 @@ async def test_a_restores_unanswered_start_lists_a_later_item(
     with pytest.raises(ToolError) as refused:
         await restore_from_recycle_bin(mock_client, share="/s", paths=["x/a", "y/b", "z/c"])
     message = json.loads(str(refused.value))["error"]["message"]
-    assert "Already restored before this failure: /s/#recycle/x/a." in message
+    assert "Already restored before this failure: /s/#recycle/x/a (to /s/x)." in message
     assert message.endswith("Not started: /s/#recycle/z/c.")
 
 
@@ -4478,7 +4478,7 @@ async def test_a_restores_skipped_item_isnt_already_restored(
         await restore_from_recycle_bin(mock_client, share="/s", paths=["x/a", "y/b"])
     message = json.loads(str(refused.value))["error"]["message"]
     assert "Already restored" not in message
-    assert "(not compared): /s/#recycle/x/a." in message
+    assert "(not compared): /s/#recycle/x/a (to /s/x)." in message
 
 
 @respx.mock
@@ -5084,7 +5084,7 @@ def test_a_skip_only_clashes_at_its_own_destination() -> None:
     went = {"/v/#recycle/A/x": "/v/A", "/v/#recycle/B/x": "/v/B"}
     line = skipped_line(True, ["/v/#recycle/A/x"], ["/v/#recycle/B/x"], dest_of=went, dest="/v/B")
     assert "Don't retry" not in line
-    assert "'/v/#recycle/A/x' (to '/v/A')" in line or "/v/#recycle/A/x (to /v/A)" in line
+    assert "/v/#recycle/A/x (to /v/A)" in line
     assert "Pass overwrite=true" in line
 
     went = {"/v/#recycle/A/x": "/v/A", "/v/#recycle/A/X": "/v/A"}
@@ -5137,8 +5137,184 @@ def test_merged_records_keep_what_landed_for_each_call() -> None:
 def test_a_failure_shows_an_odd_path_safely() -> None:
     from mcp_synology.modules.filestation.operations import _copy_move_result
 
-    status = {"error": {"code": 401}, "path": "/s/a\u200bb"}
+    status = {"error": {"code": 401}, "path": "/s/a\u200bb", "dest_folder_path": "/d\u200be"}
     with pytest.raises(ToolError) as failed:
         _copy_move_result(status, "/s/a", "Move", dest="/d")
-    assert "\u200b" not in str(failed.value).encode().decode("unicode_escape", "ignore")
-    assert "\\u200b" in json.loads(str(failed.value))["error"]["message"]
+    message = json.loads(str(failed.value))["error"]["message"]
+    assert "'/s/a\\u200bb'" in message
+    assert "may already be in '/d\\u200be'" in message
+
+
+def _dsm_for_each(
+    *,
+    skipped: tuple[str, ...] = (),
+    running: tuple[str, ...] = (),
+    calls: list[dict[str, str]] | None = None,
+) -> Any:
+    """Every source exists; each task finishes on its first status, skipped or still running if
+    named. A source's task ID is ``T_`` plus its name."""
+
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        params = dict(request.url.params)
+        method = params.get("method")
+        if calls is not None:
+            calls.append(params)
+        data: dict[str, Any]
+        if method == "start":
+            data = {"taskid": f"T_{params['path'].rsplit('/', 1)[-1]}"}
+        elif method == "status":
+            source = next(
+                (
+                    p
+                    for p in (*skipped, *running)
+                    if params["taskid"].strip('"') == "T_" + p.rsplit("/", 1)[-1]
+                ),
+                None,
+            )
+            if source in running:
+                data = {"finished": False, "progress": 0.5, "total": 2}
+            elif source in skipped:
+                data = {"finished": True, "path": source, "skipstatus": {"status": "all"}}
+            else:
+                data = {"finished": True, "path": "/s/x", "processed_size": 1}
+        elif method == "list":
+            data = {"tasks": []}
+        else:
+            data = {"files": [{"path": params.get("path", "/s/a"), "isdir": False}]}
+        return httpx.Response(200, json={"success": True, "data": data})
+
+    return side_effect
+
+
+@respx.mock
+async def test_a_restores_skip_warns_about_an_earlier_item_at_its_destination(
+    mock_client: DsmClient, no_poll_wait: None
+) -> None:
+    """QA round 2 on #601: `a/n` restored, then `a/N` skipped in the same folder."""
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        side_effect=_dsm_for_each(skipped=("/s/#recycle/a/N",))
+    )
+    text = await restore_from_recycle_bin(mock_client, share="/s", paths=["a/n", "b/y", "a/N"])
+    assert "Don't retry these with overwrite=true" in text
+    assert "this call's '/s/#recycle/a/n' went first" in text
+
+
+@respx.mock
+async def test_a_restores_skip_at_another_destination_doesnt_warn(
+    mock_client: DsmClient, no_poll_wait: None
+) -> None:
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        side_effect=_dsm_for_each(skipped=("/s/#recycle/b/n",))
+    )
+    text = await restore_from_recycle_bin(mock_client, share="/s", paths=["a/n", "b/n"])
+    assert "Don't retry" not in text
+
+
+@respx.mock
+async def test_a_restores_skip_warns_the_same_when_it_was_handed_off(
+    mock_client: DsmClient, no_poll_wait: None
+) -> None:
+    """Pre-QA on #601: finished, it warned; through `file_task`, it offered overwrite=true."""
+    from mcp_synology.modules.filestation.tasks import file_task
+
+    records = TaskRecords()
+    item = "/s/#recycle/a/N"
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_dsm_for_each(running=(item,)))
+    reply = await restore_from_recycle_bin(
+        mock_client, share="/s", paths=["a/n", "b/y", "a/N"], timeout=1, records=records
+    )
+    assert "Already restored: /s/#recycle/a/n, /s/#recycle/b/y (to /s/b)." in reply
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_dsm_for_each(skipped=(item,)))
+    text = await file_task(mock_client, records=records, handle="restore:T_N")
+    assert "Don't retry these with overwrite=true" in text
+    assert "this call's '/s/#recycle/a/n' went first" in text
+
+
+@respx.mock
+async def test_a_later_call_meeting_a_running_task_says_where_its_skip_was(
+    mock_client: DsmClient, no_poll_wait: None
+) -> None:
+    """QA round 2 on #601, through the real calls: a skip at /d2 read as one at the task's /d1."""
+    from mcp_synology.modules.filestation.tasks import file_task
+
+    records = TaskRecords()
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_dsm_for_each(running=("/s/big",)))
+    await move_files(mock_client, paths=["/s/big"], dest_folder="/d1", timeout=1, records=records)
+
+    running = {
+        "api": "SYNO.FileStation.CopyMove",
+        "taskid": "T_big",
+        "finished": False,
+        "params": {
+            "path": ["/s/big"],
+            "dest_folder_path": "/d1",
+            "overwrite": False,
+            "remove_src": True,
+        },
+    }
+    base = _dsm_for_each(skipped=("/s/c",), running=("/s/big",))
+
+    def meets_it(request: httpx.Request) -> httpx.Response:
+        if dict(request.url.params).get("method") == "list":
+            return httpx.Response(200, json={"success": True, "data": {"tasks": [running]}})
+        return base(request)
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=meets_it)
+    await move_files(
+        mock_client, paths=["/s/c", "/s/big"], dest_folder="/d2", timeout=1, records=records
+    )
+
+    finished = {"finished": True, "path": "/s/big", "processed_size": 1}
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        return_value=httpx.Response(200, json={"success": True, "data": finished})
+    )
+    text = await file_task(mock_client, records=records, handle="move:T_big")
+    assert "/s/c (to /d2)" in text
+    assert "Don't retry" not in text
+
+
+def test_a_failure_says_where_a_skip_went() -> None:
+    """Pre-QA on #601: the hand-off, status and final replies named it, and a failure didn't."""
+    from mcp_synology.modules.filestation.operations import _copy_move_result
+
+    status = {"error": {"code": 1000}, "path": "/s/big"}
+    with pytest.raises(ToolError) as failed:
+        _copy_move_result(
+            status,
+            "/s/big",
+            "Move",
+            ["/s/ok"],
+            dest="/d1",
+            skipped_so_far=["/s/c"],
+            dest_of={"/s/c": "/d2", "/s/ok": "/d1"},
+        )
+    message = json.loads(str(failed.value))["error"]["message"]
+    assert "Already moved before this failure: /s/ok." in message
+    assert "(not compared): /s/c (to /d2)" in message
+
+
+@respx.mock
+async def test_a_final_doesnt_warn_about_a_skip_at_another_destination(
+    mock_client: DsmClient,
+) -> None:
+    from mcp_synology.modules.filestation.tasks import TaskRecord, file_task
+
+    records = TaskRecords()
+    handle = Handle("move", "T_n")
+    records.add(
+        TaskRecord(handle, ["/t/n"], dest="/d1", skipped_earlier=["/s/n"], dest_of={"/s/n": "/d2"})
+    )
+    # A later call meeting this task knows nothing of the first's destinations: they're kept.
+    records.add(TaskRecord(handle, ["/t/n"], dest="/d1"))
+    finished = {
+        "finished": True,
+        "path": "/t/n",
+        "processed_size": 1,
+        "skipstatus": {"status": "partial"},
+    }
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        return_value=httpx.Response(200, json={"success": True, "data": finished})
+    )
+    text = await file_task(mock_client, records=records, handle=str(handle))
+    assert "Don't retry these with overwrite=true" not in text
+    assert "/s/n (to /d2)" in text

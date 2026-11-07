@@ -59,6 +59,7 @@ from mcp_synology.modules.filestation.tasks import (
     handoff_reply,
     poll_task,
     running_task,
+    where_it_went,
 )
 
 if TYPE_CHECKING:
@@ -373,17 +374,29 @@ def _with_progress_so_far(
     return ToolError(json.dumps(body))
 
 
-def _already_done(operation: str, done: list[str] | None, skipped: list[str] | None = None) -> str:
+def _already_done(
+    operation: str,
+    done: list[str] | None,
+    skipped: list[str] | None = None,
+    *,
+    dest_of: dict[str, str] | None = None,
+    dest: str | None = None,
+) -> str:
     """Name the items a multi-path operation finished before a later one failed, and the ones DSM
-    skipped, which aren't done: a move's is still at its source (#585)."""
+    skipped, which aren't done: a move's is still at its source (#585). One that went elsewhere
+    than ``dest`` says so (``dest_of``)."""
+
+    def named(path: str) -> str:
+        return where_it_went(path, dest_of, dest)
+
     text = ""
     if done:
         past = _PAST_TENSE.get(operation, "processed")
-        text = f". Already {past} before this failure: " + ", ".join(map(shown, done))
+        text = f". Already {past} before this failure: " + ", ".join(map(named, done))
     if skipped:
         text += (
             ". Skipped in whole or in part, as an item of that name is already at the destination "
-            "(not compared): " + ", ".join(map(shown, skipped))
+            "(not compared): " + ", ".join(map(named, skipped))
         )
         if operation != "Copy":
             text += (
@@ -483,6 +496,7 @@ async def _copy_move_one_path(
     timeout: float,
     done: list[str] | None = None,
     skipped: list[str] | None = None,
+    dest_of: dict[str, str] | None = None,
     on_progress: ProgressCallback | None = None,
 ) -> tuple[int, bool] | Handoff:
     """Copy or move a single path via DSM async-task pattern.
@@ -532,7 +546,7 @@ async def _copy_move_one_path(
         stall = result.error if result.outcome != "handoff" else None
         return Handoff(Handle(_KIND[operation], taskid), result.status, stall)
     return _copy_move_result(
-        result.status, path, operation, done, dest=dest, skipped_so_far=skipped
+        result.status, path, operation, done, dest=dest, skipped_so_far=skipped, dest_of=dest_of
     )
 
 
@@ -586,6 +600,7 @@ def _copy_move_result(
     *,
     dest: str | None = None,
     skipped_so_far: list[str] | None = None,
+    dest_of: dict[str, str] | None = None,
 ) -> tuple[int, bool]:
     """``(processed bytes, skipped)`` from a finished CopyMove status; ToolError on failure."""
     if "error" in status:
@@ -597,7 +612,7 @@ def _copy_move_result(
             mapped.error_code,
             f"{operation} files failed: {_code_text(err_code)} on path: {shown(str(err_path))}"
             + _partial_note(status, [(err_path, err_code)], operation, path, dest)
-            + _already_done(operation, done, skipped_so_far),
+            + _already_done(operation, done, skipped_so_far, dest_of=dest_of, dest=dest),
             retryable=mapped.retryable,
             suggestion=(
                 mapped.suggestion
@@ -620,7 +635,7 @@ def _copy_move_result(
             f"{operation} files failed: "
             + "; ".join(f"{shown(p)} ({_code_text(code)})" for p, code in failed)
             + _partial_note(status, failed, operation, path, dest)
-            + _already_done(operation, done, skipped_so_far),
+            + _already_done(operation, done, skipped_so_far, dest_of=dest_of, dest=dest),
             retryable=mapped.retryable,
             param="paths",
             value=path,
@@ -659,8 +674,9 @@ async def _skip_report(
     DSM's ``skipstatus`` says only that something was skipped for a source: all of a file,
     or some of a folder's children (the rest still went through). So each skipped source's
     type is looked up: a file was skipped, a folder had items skipped. A source whose type
-    can't be read keeps the hedged "in whole or in part" wording. ``earlier``: the sources that
-    landed before these in the same call, when a hand-off split it up.
+    can't be read keeps the hedged "in whole or in part" wording. ``earlier``: other sources of the
+    same call at this destination, landed or skipped, when a hand-off or a restore to several
+    places split it up.
     """
     try:
         kinds = await paths_isdir(client, skipped_paths)
@@ -819,7 +835,7 @@ async def _copy_move(
     total_processed = 0
     done = list(already_done or [])
     skipped_so_far = already_skipped if already_skipped is not None else []
-    went = dest_of if dest_of is not None else {}
+    went: dict[str, str] = dest_of if dest_of is not None else {}
     skipped_paths: list[str] = []
     landed_here: list[str] = []
     for i, p in enumerate(normalized):
@@ -852,6 +868,7 @@ async def _copy_move(
                     timeout=timeout,
                     done=done,
                     skipped=skipped_so_far,
+                    dest_of=went,
                     on_progress=on_progress,
                 )
             except httpx.TransportError as e:
@@ -868,7 +885,8 @@ async def _copy_move(
                     else ErrorCode.UNAVAILABLE,
                     f"{operation} files failed: DSM didn't answer for {shown(p)} "
                     f"({describe_transport_error(e)}); its {operation.lower()} may have started"
-                    f"{_already_done(operation, done, skipped_so_far)}{not_started}.",
+                    f"{_already_done(operation, done, skipped_so_far, dest_of=went, dest=dest)}"
+                    f"{not_started}.",
                     retryable=False,
                     param="paths",
                     value=p,
@@ -911,11 +929,7 @@ async def _copy_move(
                 other = task_dest if task_dest != dest else None
                 reply = _already_running(operation, p, other) + "\n" + reply
             # A skipped folder lands its other items, and a hand-off can't tell it from a file.
-            ran = {
-                name_key(path)
-                for path in [*placed, *skipped_so_far]
-                if went.get(path, dest) == dest
-            }
+            ran = {name_key(path) for path in [*placed, *skipped_so_far]}
             alike = [q for q in normalized[i + 1 :] if name_key(q) in ran]
             if alike:
                 # #580: "Run them again" with overwrite=true would replace what this call placed.
