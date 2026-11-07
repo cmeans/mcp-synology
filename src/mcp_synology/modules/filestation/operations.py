@@ -375,8 +375,13 @@ def _already_done(operation: str, done: list[str] | None, skipped: list[str] | N
         past = _PAST_TENSE.get(operation, "processed")
         text = f". Already {past} before this failure: " + ", ".join(map(shown, done))
     if skipped:
-        where = ", so still at the source" if operation != "Copy" else ""
-        text += f". Skipped, already at the destination{where}: " + ", ".join(map(shown, skipped))
+        text += ". Skipped in whole or in part, already at its destination: " + ", ".join(
+            map(shown, skipped)
+        )
+        if operation != "Copy":
+            text += (
+                ". A skipped file is still at the source; a skipped folder keeps the items skipped"
+            )
     return text
 
 
@@ -880,6 +885,7 @@ async def _copy_move(
                 stall=outcome.stall,
                 done=done,
                 skipped=skipped_so_far,
+                landed=landed_here,
                 not_started=normalized[i + 1 :] + list(later or []),
             )
             if running is not None:
@@ -921,6 +927,7 @@ async def _copy_move_summary(
     total_processed: int,
     skipped_paths: list[str],
     *,
+    only_named_sources_removed: bool = False,
     earlier: Sequence[str] = (),
 ) -> str:
     """The result text of a finished copy or move (a restore rewords it, ``_as_restore``)."""
@@ -941,7 +948,8 @@ async def _copy_move_summary(
     if total_processed > 0:
         lines.append(f"\nTotal size: {format_size(total_processed)}")
 
-    if remove_src and not skipped_paths:
+    # With a source skipped earlier in the call, its folder wasn't emptied of what was asked (#585).
+    if remove_src and not skipped_paths and not only_named_sources_removed:
         src_dirs = sorted({"/".join(p.split("/")[:-1]) for p in normalized})
         lines.extend(f"\nSource files have been removed from {d}/." for d in src_dirs)
     elif remove_src:

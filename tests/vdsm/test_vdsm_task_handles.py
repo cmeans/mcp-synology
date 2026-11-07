@@ -564,6 +564,36 @@ async def test_stop_of_a_finished_or_unknown_copy_stops_nothing(
         assert reply.startswith(_NO_RUNNING), (handle, reply)
 
 
+async def test_a_skip_before_a_hand_off_gets_its_own_line(admin_client: Any, nas: Nas) -> None:
+    """#585: a skipped file and a partly skipped folder, then a task that outlives the wait."""
+    client = _admin(admin_client)
+    base = nas.folder("/writable/p585")
+    nas.run(
+        "cd /volume1/writable/p585 && mkdir -p f/n d/n && echo s > f/x.txt && echo d > d/x.txt "
+        "&& echo s > f/n/same.txt && echo d > d/n/same.txt && echo o > f/n/only.txt "
+        "&& chmod -R 777 /volume1/writable/p585"
+    )
+    src = nas.tree("/writable/p585big", dirs=COPY_DIRS)
+    dest = f"{base}/d"
+    records = TaskRecords()
+    async with _stopped_at_exit(client, records) as handles:
+        reply = await copy_files(
+            client,
+            paths=[f"{base}/f/x.txt", f"{base}/f/n", src],
+            dest_folder=dest,
+            timeout=WAIT,
+            records=records,
+        )
+        handles.append(_handle(reply))
+        assert (
+            f"Skipped in whole or in part, already at its destination: {base}/f/x.txt, {base}/f/n."
+            in reply
+        )
+        assert "Already copied" not in reply
+        # DSM's skip on a folder means only some of its items: the rest landed.
+        assert nas.exists(f"{dest}/n/only.txt")
+
+
 # --- Move and restore -----------------------------------------------------
 
 

@@ -28,7 +28,12 @@ from mcp_synology.core.formatting import (
     format_timestamp,
     synology_error_response,
 )
-from mcp_synology.modules.filestation.helpers import describe_transport_error, dsm_str, shown
+from mcp_synology.modules.filestation.helpers import (
+    describe_transport_error,
+    dsm_str,
+    name_key,
+    shown,
+)
 
 if TYPE_CHECKING:
     from mcp_synology.core.client import DsmClient
@@ -410,14 +415,36 @@ SKIP_CAUTION = (
 )
 
 
-def skipped_line(removes_source: bool, skipped: list[str]) -> str:
-    """A skipped source isn't done, and a move's is still at its source, so it's no leftover
-    from a move that worked (#585)."""
-    where = ", so still at the source" if removes_source else ""
-    return (
-        f"Skipped, already at the destination{where}: {', '.join(map(shown, skipped))}. "
-        f"Pass overwrite=true to replace them, {SKIP_CAUTION}"
+def skipped_line(
+    removes_source: bool,
+    skipped: list[str],
+    landed: list[str] | None = None,
+    *,
+    advise: bool = True,
+) -> str:
+    """A skipped source isn't done, so it's no leftover from a move that worked (#585). DSM's skip
+    on a folder means only some of its items: the rest land. One named like what this call already
+    landed gets no advice to replace it, as ``_skip_report`` says for the same input (#580)."""
+    line = (
+        "Skipped in whole or in part, already at its destination: "
+        f"{', '.join(map(shown, skipped))}."
     )
+    if removes_source:
+        line += " A skipped file is still at the source; a skipped folder keeps the items skipped."
+    if not advise:
+        return line
+    ran = {name_key(path) for path in landed or []}
+    own = [path for path in skipped if name_key(path) in ran]
+    others = [path for path in skipped if name_key(path) not in ran]
+    if own:
+        line += (
+            f" Don't retry {', '.join(map(shown, own))} with overwrite=true unless the user asked "
+            "to replace that item: what's there may be what this call put there."
+        )
+    if others:
+        line += f" {'For the others, pass' if own else 'Pass'} overwrite=true to replace them, "
+        line += SKIP_CAUTION
+    return line
 
 
 def handoff_reply(
@@ -430,6 +457,7 @@ def handoff_reply(
     not_started: list[str],
     stall: Exception | None = None,
     skipped: list[str] | None = None,
+    landed: list[str] | None = None,
 ) -> str:
     """The reply for a task handed off after the wait: the handle and what to do next.
 
@@ -472,7 +500,7 @@ def handoff_reply(
     if done:
         lines.append(f"Already {past}: {', '.join(map(shown, done))}.")
     if skipped:
-        lines.append(skipped_line(gerund in ("moving", "restoring"), skipped))
+        lines.append(skipped_line(gerund in ("moving", "restoring"), skipped, landed))
     if not_started:
         lines.append(
             f"Not started: {', '.join(map(shown, not_started))}. Run them again once this one "
@@ -707,7 +735,9 @@ async def _final_text(
             return await _delete_summary(client, record.paths, record.recycle)
         if record.dest is not None:
             operation = handle.kind.capitalize()
-            size, skipped = _copy_move_result(status, path, operation, dest=record.dest)
+            size, skipped = _copy_move_result(
+                status, path, operation, dest=record.dest, skipped_so_far=record.skipped_earlier
+            )
             text = await _copy_move_summary(
                 client,
                 record.paths,
@@ -716,10 +746,17 @@ async def _final_text(
                 size,
                 [path] if skipped else [],
                 earlier=record.earlier,
+                only_named_sources_removed=bool(record.skipped_earlier),
             )
             if record.skipped_earlier:
-                line = skipped_line(handle.kind != "copy", record.skipped_earlier)
-                text += f"\n\nEarlier in this call: {line}"
+                # This task's own skip report, if any, already gives the advice.
+                line = skipped_line(
+                    handle.kind != "copy",
+                    record.skipped_earlier,
+                    record.earlier,
+                    advise=not skipped,
+                )
+                text += f"\n\nBefore this task, in the same call: {line}"
             if handle.kind == "restore":
                 text = _as_restore(text, path.split("/")[1])
             return text
@@ -894,6 +931,11 @@ async def file_task(
             f"a different DSM user.{nothing} {_LIST_HINT}"
         )
 
+    def earlier_skip() -> str:
+        if record is None or not record.skipped_earlier:
+            return ""
+        return "\n" + skipped_line(parsed.kind != "copy", record.skipped_earlier, record.earlier)
+
     status = await status_or_none()
 
     if action == "stop":
@@ -903,7 +945,7 @@ async def file_task(
             if record is not None and record.final_status is not None:
                 final = await _final_text(client, parsed, record.final_status, record)
                 return f"{_NOT_STOPPED}\n{final}"
-            return gone()
+            return gone() + earlier_skip()
         logger.debug("%s status before stop (%s): %s", parsed.api, parsed, status)
         if status.get("finished"):
             records.set_final(parsed, status)
@@ -941,12 +983,13 @@ async def file_task(
                 note=" The stop may or may not have taken effect.",
             )
         what = ", ".join(paths) if paths else f"`{parsed}`"
-        return f"Stopped {parsed.kind} of {what}; it may be partly done. {_LIST_HINT}"
+        stopped = f"Stopped {parsed.kind} of {what}; it may be partly done. {_LIST_HINT}"
+        return stopped + earlier_skip()
 
     if status is None:
         if record is not None and record.final_status is not None:
             return await _final_text(client, parsed, record.final_status, record)
-        return gone()
+        return gone() + earlier_skip()
     logger.debug("%s status (%s): %s", parsed.api, parsed, status)
 
     if status.get("finished"):

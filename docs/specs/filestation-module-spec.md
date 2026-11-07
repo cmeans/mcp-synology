@@ -786,6 +786,8 @@ To check on it, call file_task with this handle. To stop it, call file_task with
 Not started: /Backups/Y, /Backups/Z. Run them again once this one finishes.
 ```
 
+A copy, move or restore also lists any source DSM skipped before this one, on a line of its own, never under `Already moved` (#585): `Skipped in whole or in part, already at its destination: /v/b/x.` A move or restore adds that a skipped file is still at the source and a skipped folder keeps the items skipped, since DSM's skip on a folder means only some of its items. The task record keeps the list, so the final result, a failed task and a stop say it too.
+
 When DSM stops answering status requests during the wait (2026-10-17), the first line instead says so; the progress part appears only if DSM answered at least once. An answer that isn't a DSM reply reads `The NAS's status reply couldn't be read while deleting /Backups/X (not a DSM reply; a proxy or captive portal may be answering). It's probably still running there; don't start it again.`; an HTTP error status reads `The NAS, or a proxy in front of it, answered a status request with an error while deleting /Backups/X (HTTP 504). …`; any other unexpected answer names only its exception type. The error's text is never shown:
 
 ```
