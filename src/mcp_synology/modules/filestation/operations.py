@@ -406,11 +406,16 @@ async def _refuse_missing_destination(client: DsmClient, operation: str, dest: s
     """
     try:
         found = await find_missing_paths(client, [dest])
-    except (SynologyError, httpx.TransportError) as e:
-        # A restore to several places runs this after earlier items finished: no answer here
-        # mustn't lose them (#588).
-        logger.debug(
-            "%s: destination check for %s failed (%s); starting anyway", operation, dest, e
+    except Exception as e:
+        # A restore to several places runs this after earlier items finished: no reply it can use
+        # mustn't lose them (#588). At WARNING, as DSM's 1002 that follows a missing folder points
+        # at permissions.
+        logger.warning(
+            "%s: destination check for %s failed (%s, DSM code %s); starting anyway",
+            operation,
+            dest,
+            type(e).__name__,
+            getattr(e, "code", None),
         )
         return
     codes = {code for _, code in found}
@@ -632,7 +637,12 @@ async def _skip_report(
     except Exception as e:
         # The copy already happened; report it with the hedged wording, never as an error,
         # whatever the lookup met: right after a large task, DSM may not answer at all (#588).
-        logger.warning("Couldn't read the type of skipped sources: %s", type(e).__name__)
+        logger.warning(
+            "Couldn't read the type of skipped sources %s: %s (DSM code %s)",
+            skipped_paths,
+            type(e).__name__,
+            getattr(e, "code", None),
+        )
         logger.debug("The skip lookup's error", exc_info=True)
         kinds = {}
     files = [p for p in skipped_paths if kinds.get(p) is False]
@@ -674,7 +684,10 @@ async def _skip_report(
     def entry(p: str, folder: bool = False) -> str:
         # A skipped folder's leftovers are its own children; a file stays in its parent.
         src_dir = p if folder else "/".join(p.split("/")[:-1]) or ""
-        return f"  {p}" + (f" (skipped items are still in {src_dir}/)" if remove_src else "")
+        where = f" (skipped items are still in {src_dir}/)"
+        if p in unknown:
+            where = " (skipped items are still at this path or under it)"
+        return f"  {p}" + (where if remove_src else "")
 
     if ok:
         lines.append(f"{verb}:")

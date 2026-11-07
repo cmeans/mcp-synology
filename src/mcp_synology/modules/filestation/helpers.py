@@ -977,7 +977,7 @@ async def find_missing_paths(client: DsmClient, paths: list[str]) -> list[tuple[
     DSM answers a missing path with a per-file ``{"code": 408, "path": ...}`` entry rather
     than a failed request (DSM 7.1 and 7.2.2; #161, #162). An answer with no entry for a
     path proves nothing either way, so that path isn't reported. A failed request raises
-    ``SynologyError`` for the caller to map.
+    ``SynologyError``, or a transport error with no answer, for the caller to map.
     """
     version = min(2, client.negotiate_version("SYNO.FileStation.List", max_version=2))
     missing: list[tuple[str, int]] = []
@@ -1013,7 +1013,8 @@ async def paths_isdir(client: DsmClient, paths: list[str]) -> dict[str, bool]:
     """Return ``{path: isdir}`` for each path whose type ``getinfo`` reports.
 
     A path DSM gives no ``isdir`` for (missing, or an unexpected shape) is left out. A
-    failed request raises ``SynologyError`` for the caller to handle.
+    failed request raises ``SynologyError``, or a transport error with no answer, for the caller
+    to handle.
     """
     version = min(2, client.negotiate_version("SYNO.FileStation.List", max_version=2))
     kinds: dict[str, bool] = {}

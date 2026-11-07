@@ -3754,12 +3754,16 @@ def _skipping_dsm(lookup: Any) -> Any:
     ids=["timeout", "connection", "proxy", "not DSM", "DSM error", "odd shape"],
 )
 async def test_a_failed_lookup_keeps_a_finished_copys_result(
-    mock_client: DsmClient, no_poll_wait: None, lookup: Any
+    mock_client: DsmClient,
+    no_poll_wait: None,
+    lookup: Any,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """#588: finished work was reported as a failed call."""
     respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_skipping_dsm(lookup))
     result = await copy_files(mock_client, paths=["/s/a", "/s/b"], dest_folder="/d")
     assert "skipped in whole or in part" in result
+    assert "Couldn't read the type of skipped sources ['/s/b']" in caplog.text
 
 
 @respx.mock
@@ -4052,7 +4056,8 @@ async def test_a_restores_later_destination_check_with_no_answer_goes_on(
     """#588: a restore to several places re-checks each destination after finishing items."""
     respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_restoring_dsm(fail_check="/s/y"))
     result = await restore_from_recycle_bin(mock_client, share="/s", paths=["x/a", "y/b"])
-    assert "Restored" in result
+    assert "/s/x" in result
+    assert "/s/y" in result
 
 
 @respx.mock
@@ -4067,3 +4072,58 @@ async def test_a_restores_unanswered_start_lists_a_later_item(
     message = json.loads(str(refused.value))["error"]["message"]
     assert "Already restored before this failure: /s/#recycle/x/a." in message
     assert message.endswith("Not started: /s/#recycle/z/c.")
+
+
+@respx.mock
+async def test_an_unanswered_start_shows_an_odd_path_safely(
+    mock_client: DsmClient, no_poll_wait: None
+) -> None:
+    odd = "/s/b\u200bx"
+    calls: list[dict[str, str]] = []
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_unanswered_start(calls, odd))
+    with pytest.raises(ToolError) as refused:
+        await copy_files(mock_client, paths=["/s/a", odd], dest_folder="/d")
+    assert f"DSM didn't answer for {odd!r} (" in json.loads(str(refused.value))["error"]["message"]
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    "answer",
+    [
+        {"success": True, "data": [1]},
+        {"success": True, "data": {"files": [1]}},
+        {"success": True, "data": {"files": [{"code": "x"}]}},
+    ],
+    ids=["list", "item", "code"],
+)
+async def test_a_malformed_destination_check_keeps_a_restores_finished_items(
+    mock_client: DsmClient,
+    no_poll_wait: None,
+    answer: dict[str, Any],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """QA round 1 on #594: the check caught less than the skip lookup, so a restore was lost."""
+    base = _restoring_dsm()
+    started: list[str] = []
+
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        params = dict(request.url.params)
+        if params.get("method") == "start":
+            started.append(params["path"])
+        if params.get("path") == "/s/y" and started:
+            return httpx.Response(200, json=answer)
+        return base(request)
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+    result = await restore_from_recycle_bin(mock_client, share="/s", paths=["x/a", "y/b"])
+    assert "/s/y" in result
+    assert "destination check for /s/y failed" in caplog.text
+
+
+@respx.mock
+async def test_a_skipped_move_of_unknown_type_doesnt_guess_where_its_leftovers_are(
+    mock_client: DsmClient, no_poll_wait: None
+) -> None:
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_skipping_dsm(httpx.ReadTimeout("")))
+    result = await move_files(mock_client, paths=["/s/a", "/s/b"], dest_folder="/d")
+    assert "/s/b (skipped items are still at this path or under it)" in result

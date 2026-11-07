@@ -494,7 +494,7 @@ Common causes:
   Other tools name the DSM call, e.g. "DSM didn't answer
   SYNO.FileStation.List/list_share in time" (an `unavailable` error, "The
   connection to DSM failed during …", if the connection dropped).
-- A later path's start in a multi-path `copy_files`, `move_files` or
+- A path's start in a multi-path `copy_files`, `move_files` or
   `restore_from_recycle_bin` got no answer: the message says what was done, that
   this one may have started and what wasn't started, so check before running it
   again. (Alone, it's the usual timeout or connection error.)
@@ -557,7 +557,9 @@ HTTP error status, or the answer wasn't a DSM reply at all.**
 
 The connection case (the message starts "Can't reach the NAS at …") means no
 DSM answer arrived at all: the connection was refused or the host couldn't be
-resolved or routed to. See **Can't reach the NAS?** under Fix. If the
+resolved or routed to. See **Can't reach the NAS?** under Fix. In a multi-path
+copy, move or restore, a start the connection dropped is listed under
+[`timeout`](#timeout), with what was done and what wasn't started. If the
 message starts "The NAS at … accepted the connection but dropped it" instead,
 the NAS answered and then closed the connection: it's reachable but busy or
 restarting, so retry shortly (#254).
