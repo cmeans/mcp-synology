@@ -1919,3 +1919,16 @@ def test_a_restore_item_that_could_forge_a_reply_line_is_refused() -> None:
         resolve_bin_items("video", ["Shows/a\nb"], "paths")
     assert "isn't allowed" in _error(exc)["message"]
     assert "give its name plainly" in _error(exc)["suggestion"]
+
+
+def test_a_forging_path_refusal_keeps_its_callers_advice() -> None:
+    """QA round 5 on #605: the caller's own advice comes after the shared text."""
+    from mcp_synology.modules.downloadstation.helpers import normalize_destination
+    from mcp_synology.modules.filestation.paths import DEFAULT_SUGGESTION, check_parts
+
+    with pytest.raises(ToolError) as exc:
+        check_parts("/video/a\nb", "path")
+    assert _error(exc)["suggestion"].endswith(DEFAULT_SUGGESTION)
+    with pytest.raises(ToolError) as exc:
+        normalize_destination("video/a\nb", operation="Create download")
+    assert "Write the path out in full from the shared folder" in _error(exc)["suggestion"]

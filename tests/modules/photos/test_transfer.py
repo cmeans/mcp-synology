@@ -1548,3 +1548,15 @@ def test_a_name_that_cant_be_used_keeps_its_extension() -> None:
     assert _dest_name({"id": 41, "filename": "a/b.jpg"}, "original", set()) == "item-41.jpg"
     assert _dest_name({"id": 41, "filename": "a\\b"}, "original", set()) == "item-41"
     assert _dest_name({"id": 41, "filename": "IMG_1.jpg"}, "original", set()) == "IMG_1.jpg"
+
+
+def test_the_extension_kept_must_itself_be_plain() -> None:
+    """QA round 5 on #605: an escaped name's suffix (`.j\\npg`) holds a backslash, a path
+    separator on Windows, and an overlong one isn't an extension."""
+    from mcp_synology.core.formatting import escape_controls
+
+    assert _dest_name({"id": 5, "filename": escape_controls("a.j\npg")}, "original", set()) == (
+        "item-5"
+    )
+    long_name = escape_controls("a\n." + "x" * 31)
+    assert _dest_name({"id": 5, "filename": long_name}, "original", set()) == "item-5"

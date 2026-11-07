@@ -1981,3 +1981,10 @@ def test_a_download_error_whose_keys_collide_says_so() -> None:
     body = b'{"success": false, "error": {"code": 408}, "a\\n": 1, "a\\\\n": 2}'
     with pytest.raises(DsmReplyError, match="read the same once escaped"):
         _error_envelope(body)
+
+
+def test_a_surrogate_encoded_in_utf8_reads_as_parsing_the_bytes_did() -> None:
+    """QA round 5 on #605: `surrogatepass` keeps it a lone surrogate, which is then escaped."""
+    from mcp_synology.core.client import _loads
+
+    assert _loads(b'{"a":"\xed\xa0\x80"}', "t") == {"a": "\\ud800"}
