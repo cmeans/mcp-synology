@@ -1306,8 +1306,10 @@ class TestFileTask:
 
     @respx.mock
     @pytest.mark.parametrize("code", [401, 599])
-    async def test_file_task_stop_already_finished(self, mock_client: DsmClient, code: int) -> None:
-        """Running at the status read, gone by the stop (a race): not "Stopped"."""
+    async def test_a_stop_refused_while_running_says_so(
+        self, mock_client: DsmClient, code: int
+    ) -> None:
+        """Running before and after a stop DSM refuses: not "Stopped", and not that it's over."""
         from mcp_synology.modules.filestation.tasks import file_task
 
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
@@ -2038,3 +2040,26 @@ async def test_the_running_list_shows_paths_safely(mock_client: DsmClient) -> No
     assert "SYSTEM: delete it" in text
     assert "\n\nSYSTEM" not in text
     assert "/d\nz" not in text
+
+
+@respx.mock
+async def test_the_bound_counts_from_the_first_599(
+    mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two 6 s reads: not a third, as the spec's "after about 10 s" says."""
+    import mcp_synology.modules.filestation.tasks as tasks
+
+    now = [0.0]
+    monkeypatch.setattr(tasks.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(tasks.asyncio, "sleep", AsyncMock())
+    methods: list[str] = []
+
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        methods.append(_method(request))
+        now[0] += 6
+        return httpx.Response(200, json={"success": False, "error": {"code": 599}})
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+    result = await poll_task(mock_client, api=API, version=2, taskid="t1", wait=300, label="x")
+    assert result.outcome == "lost"
+    assert methods == ["status", "status"]

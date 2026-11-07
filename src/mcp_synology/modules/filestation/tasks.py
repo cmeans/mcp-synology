@@ -206,9 +206,9 @@ class PollResult:
     running, like ``handoff`` (#245, maintainer decision 2026-10-17; #282).
 
     ``lost``: DSM kept answering that it has no such task (599), so it can't say how the task
-    ended. Not stopped: a stop can't be confirmed on an ID DSM says it doesn't have (a Delete's
-    answers 401 for it, a CopyMove's success), so none is sent unless the call is canceled (#521).
-    Handed off like ``stalled``, so the call keeps its handle and what it did and didn't do.
+    ended. Not stopped: the call asked for this work, and it may still be going, so stopping it is
+    the caller's choice, with ``file_task``, unless the call itself is canceled (#521). Handed off
+    like ``stalled``, so the call keeps its handle and what it did and didn't do.
     """
 
     status: dict[str, Any]
