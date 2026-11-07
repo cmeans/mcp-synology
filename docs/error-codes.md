@@ -448,6 +448,15 @@ shows progress or the final result, `action="stop"` stops it (it may then be
 partly done), and no handle lists the running operations. Only a canceled
 call (the user, or a client's own timeout) or a DSM error stops the task.
 
+DSM's `599` (no such task) on a status read isn't such an error (#521). The
+status is read up to three times in all, fewer if a read returns after about
+10 s or the wait ends. After that a delete whose path is gone
+counts as done. Otherwise the reply says how it ended isn't known, and gives a
+handle: `file_task` reads it again, and listing the path, or for a copy the
+destination and for a move or restore the source and destination too, shows
+what's there, though a folder there may be only partly done. `file_task` with no handle lists what's running. A `401` from a
+stop is File Station's "no such task", not an account problem.
+
 The same goes for a NAS that stops answering status requests during the wait
 (a network timeout or dropped connection), that answers one with an HTTP error
 status (a reverse proxy's `502` or `504`, #282), or whose answer can't be read
@@ -461,9 +470,10 @@ with the handle.
 Check on it with `file_task` rather than starting it again.
 
 `file_task` answers a handle DSM no longer knows with a normal reply, not an
-error: the final result if this server remembers it, otherwise "No running
-task with this handle. It finished, was stopped, or was started by a
-different DSM user. List the path to see what's left." DSM forgets a finished
+error: the final result if this server remembers it, otherwise "DSM has no
+task with this handle: it may have finished, failed, been stopped or still be
+running, or have been started by a different DSM user. Call file_task with no
+handle to see what's running. List the path to see what's left." DSM forgets a finished
 task after its final status has been read once, and never shows one user's
 tasks to another.
 
@@ -500,7 +510,8 @@ Common causes:
   this one may have started and what wasn't started, so check before running it
   again. (Alone, it's the usual timeout or connection error.)
 - `file_task` didn't get an answer to its status or stop request for a
-  handle. For the status read, the message says nothing was stopped; for the
+  handle. For the status read, the message says nothing was stopped, or after a
+  stop DSM refused, that it wasn't accepted; for the
   stop, that it may or may not have taken effect. Stop requests wait up to
   90 s, longer than other requests: DSM 7.1 sometimes answers a Delete `stop`
   only after about 60 s, although the stop takes effect at once.
@@ -587,7 +598,7 @@ file as `text/html` or `application/xhtml+xml`, so such a page isn't saved, and
 nothing is written; neither is JSON that isn't DSM's error envelope (#292).
 `file_task` reports either case as "Check task failed for `<handle>`: …", or for
 a stop "Stop task failed for `<handle>`: … Nothing was stopped." (the status
-read failed) or "… The stop may or may not have taken effect." (the stop
+read failed; "… The stop wasn't accepted." after a stop DSM refused) or "… The stop may or may not have taken effect." (the stop
 request itself failed), with `retryable` set as above: a 4xx isn't retryable.
 `photo_task` reports either case as "Photo task failed for `photos:<id>`: …",
 ending "The stop was requested; its status couldn't be read." after a stop that
