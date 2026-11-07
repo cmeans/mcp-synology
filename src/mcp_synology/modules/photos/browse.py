@@ -730,5 +730,5 @@ def _exif_value(value: str) -> str:
         unit = "character" if length == 1 else "characters"
         return f"(binary data, {length:,} {unit}; not shown)"
     if len(value) > _EXIF_VALUE_MAX:
-        return f"{value[:_EXIF_VALUE_MAX]}… ({len(value):,} characters)"
+        return f"{value[:_EXIF_VALUE_MAX]}… ({unescaped_length(value):,} characters)"
     return value

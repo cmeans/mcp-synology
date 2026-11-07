@@ -41,7 +41,7 @@ def hostile_files(vdsm_container: VirtualDsmContainer, dsm_version: str) -> Iter
     script = (
         f"rm -rf {vol}; mkdir -p {vol}/src {vol}/dst\n"
         f"n=$(printf 'report\\n{FORGED}')\n"
-        f'touch "{vol}/src/$n" "{vol}/dst/$n"\nchmod -R 777 {vol}\nsync\n'
+        f'touch "{vol}/src/$n"\nchmod -R 777 {vol}\nsync\n'
     )
     encoded = base64.b64encode(script.encode()).decode()
 

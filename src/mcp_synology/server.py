@@ -256,15 +256,15 @@ def _refuse_forging_arguments(arguments: dict[str, Any]) -> None:
     """Refuse an argument holding a character a reply may not carry as it is (#604): a tool
     could echo it into a line of its own, which reads as the server's. Replies show such
     characters escaped, so a name the server showed never holds one. One check for every
-    tool's arguments, names, paths and tags alike. Whitespace around a value is padding the
-    tools drop (`strip_padding`, `.strip()`), so a line break there is fine. The refusal
-    names the argument only: its value may be a password."""
+    tool's arguments, names, paths and tags alike, checked as given: a tool may echo a value
+    before or without dropping its padding (a search pattern). The refusal names the argument
+    only: its value may be a password."""
     stack: list[tuple[str, Any]] = [
         (key, value) for key, value in arguments.items() if key not in _FREE_TEXT_ARGUMENTS
     ]
     while stack:
         key, value = stack.pop()
-        if isinstance(value, str) and forges(value.strip()):
+        if isinstance(value, str) and forges(value):
             error_response(
                 ErrorCode.INVALID_PARAMETER,
                 f"`{key}` has a control character, line or paragraph separator, bidi control or "
@@ -272,8 +272,8 @@ def _refuse_forging_arguments(arguments: dict[str, Any]) -> None:
                 "holds one can't be used here.",
                 retryable=False,
                 param=key,
-                suggestion="For an item on the NAS, rename it there (in DSM) and use its new "
-                "name; for one this would create, give its name plainly.",
+                suggestion="Pass it without such characters. For an item on the NAS whose name "
+                "holds one, rename it there (in DSM) and use its new name.",
             )
         if isinstance(value, list):
             stack.extend((key, v) for v in value)

@@ -641,7 +641,7 @@ def shown(path: str) -> str:
     (`refuse_same_names`, `refuse_planted_bin`; the older ``!r`` refusals are on #458); an
     error or list that names a path the server checked or got
     from DSM uses ``shown`` (plain unless something would be invisible). Successful
-    replies and listings show paths as DSM does."""
+    replies and listings show paths as DSM does, escaped by the client (#604)."""
     for part in path.split("/"):
         if not part:
             continue

@@ -102,7 +102,7 @@ def _loads(content: bytes, label: str) -> Any:
     escaped where it could forge a line or hide text in a reply (``escape_nas_text``, #604).
     """
     try:
-        text = content.decode("utf-8")
+        text = content.decode("utf-8-sig")  # as parsing the bytes did, it takes a BOM
         value = json.loads(text)
         return escape_nas_text(value) if needs_escaping(text) else value
     except UnicodeDecodeError:
