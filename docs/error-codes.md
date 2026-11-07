@@ -299,7 +299,8 @@ Common causes:
   it lands.
   That check isn't a guarantee: what a finished call put there can't be known, another
   account's task isn't listed, a start at the same moment from a second server process can get
-  through, and a failed task list skips the check (logged as
+  through, and a failed task list leaves out DSM's tasks, though parallel calls through this
+  server are still checked (logged as
   a warning). `overwrite=false` is the safe route: it never replaces.
 - `delete_files` on a whole shared folder (`/video`): a shared folder isn't deleted or
   emptied this way (#451; emptying one with the user's confirmation is #484). Delete a

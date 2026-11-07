@@ -228,7 +228,7 @@ MODULE_INFO = ModuleInfo(
                 "running on the NAS and returns a handle for file_task. "
                 "While this user's running task is landing the same name there, the call is "
                 "refused if either one replaces. That can miss another account's task or a start "
-                "at the same moment from another server process, and is skipped if DSM's task "
+                "at the same moment from another server process, and DSM's tasks if its task "
                 "list fails; overwrite=false never replaces."
             ),
             permission_tier=PermissionTier.WRITE,
@@ -249,7 +249,7 @@ MODULE_INFO = ModuleInfo(
                 "running on the NAS and returns a handle for file_task. "
                 "While this user's running task is landing the same name there, the call is "
                 "refused if either one replaces. That can miss another account's task or a start "
-                "at the same moment from another server process, and is skipped if DSM's task "
+                "at the same moment from another server process, and DSM's tasks if its task "
                 "list fails; overwrite=false never replaces."
             ),
             permission_tier=PermissionTier.WRITE,
@@ -297,7 +297,7 @@ MODULE_INFO = ModuleInfo(
                 "the NAS and returns a handle for file_task. "
                 "While this user's running task is landing the same name there, the call is "
                 "refused if either one replaces. That can miss another account's task or a start "
-                "at the same moment from another server process, and is skipped if DSM's task "
+                "at the same moment from another server process, and DSM's tasks if its task "
                 "list fails; overwrite=false never replaces."
             ),
             permission_tier=PermissionTier.WRITE,

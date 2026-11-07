@@ -647,8 +647,9 @@ class RunningTask:
 
 
 def _no_trailing_slash(path: str) -> str:
-    """A path as a task's start params may spell it, for comparing with a normalized one. Another
-    client may send ``/d/``; what DSM echoes then isn't verified, so it's read either way."""
+    """A path as a task's start params may spell it, for comparing with a normalized one. A second
+    guard: ``_list_running`` already strips the slash, and this server's own records are
+    normalized, but a record built another way still compares right."""
     return path.rstrip("/") or "/"
 
 
@@ -829,7 +830,11 @@ async def tasks_for_landing_check(client: DsmClient) -> tuple[list[RunningTask],
     try:
         listed = await _list_running(client)
     except (SynologyError, httpx.TransportError) as e:
-        logger.warning("BackgroundTask list failed, skipping the same-landing check: %s", e)
+        logger.warning(
+            "BackgroundTask list failed, leaving DSM's tasks out of the same-landing check "
+            "(this server's own calls are still checked): %s",
+            e,
+        )
         listed = []
     known = {task.handle.taskid for task in listed}
     local = [task for task in local if not task.task.get("withdrawn")]

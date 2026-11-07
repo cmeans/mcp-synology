@@ -6118,7 +6118,7 @@ async def test_a_failed_task_list_says_the_check_didnt_run(
     respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
     with caplog.at_level(logging.WARNING):
         await copy_files(mock_client, paths=["/b/x"], dest_folder="/d", overwrite=True)
-    assert "skipping the same-landing check" in caplog.text
+    assert "leaving DSM's tasks out of the same-landing check" in caplog.text
 
 
 @respx.mock
@@ -6239,7 +6239,7 @@ async def test_a_parallel_call_sees_what_a_call_hasnt_started_yet(mock_client: D
     assert isinstance(b, ToolError), b
     message = json.loads(str(b))["error"]["message"]
     assert "another move call through this server is landing in '/d'" in message
-    assert "until that call returns" in message
+    assert "started or about to start when this call checked" in message
     assert "/b/y" not in starts
 
 
@@ -6423,3 +6423,72 @@ async def test_a_restores_nested_item_is_recorded_where_it_lands(mock_client: Ds
     )
     assert isinstance(moved, str), moved
     assert "/m/a" in starts
+
+
+@respx.mock
+async def test_a_restores_nested_item_is_checked_where_it_lands(mock_client: DsmClient) -> None:
+    """Pre-QA on #597: the restore's up-front check read `x/a` as landing `a` in `/t`, so a
+    running move of `/m/a` into `/t` refused it, though `x/a` lands at `/t/x/a`."""
+    calls: list[dict[str, str]] = []
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        side_effect=_dsm_with_running(_a_task_landing("/m/a", dest="/t"), calls)
+    )
+    result = await restore_from_recycle_bin(
+        mock_client, share="/s", paths=["x", "x/a"], dest_folder="/t", overwrite=True
+    )
+    assert "Restored" in result, result
+    assert [c["path"] for c in calls if c.get("method") == "start"] == ["/s/#recycle/x"]
+
+
+@respx.mock
+async def test_a_started_source_keeps_its_record_after_its_call_returns(
+    mock_client: DsmClient,
+) -> None:
+    """Pre-QA on #597: only a source that never started is withdrawn. Move A starts `/a/b`
+    into `/s/y`, finishes and returns while restore B's up-front list is in flight; B read A's
+    record and must still refuse, since A's task may have replaced what B would land."""
+    calls: list[dict[str, str]] = []
+    starts: list[str] = []
+    base = _dsm_with_running(_a_task_landing("/none"), calls)
+    a_listing, b_listing, a_done = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    lists = 0
+
+    async def side_effect(request: httpx.Request) -> httpx.Response:
+        nonlocal lists
+        params = dict(request.url.params)
+        await asyncio.sleep(0.001)
+        if params.get("method") == "start":
+            starts.append(params["path"])
+        if params.get("method") == "list":
+            lists += 1
+            if lists == 1:  # A's list, under its lock: B records and reads meanwhile
+                a_listing.set()
+                await b_listing.wait()
+            elif lists == 2:  # B's up-front list: A starts, finishes and returns meanwhile
+                b_listing.set()
+                await a_done.wait()
+            return httpx.Response(200, json={"success": True, "data": {"tasks": []}})
+        return base(request)
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+
+    async def a() -> str:
+        try:
+            return await move_files(mock_client, paths=["/a/b"], dest_folder="/s/y", overwrite=True)
+        finally:
+            a_done.set()
+
+    async def b() -> str | ToolError:
+        await a_listing.wait()
+        try:
+            return await restore_from_recycle_bin(
+                mock_client, share="/s", paths=["y/b"], overwrite=True
+            )
+        except ToolError as e:
+            return e
+
+    moved, restored = await asyncio.gather(a(), b())
+    assert isinstance(moved, str), moved
+    assert isinstance(restored, ToolError), restored
+    assert "another move call through this server is landing in '/s/y'" in str(restored)
+    assert starts == ["/a/b"]

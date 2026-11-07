@@ -475,14 +475,15 @@ def _refuse_landing_on_a_running_task(
     keep = "" if not overwrite else " Once it's done, overwrite=false keeps what's there."
     if task.task.get("local"):
         # Another call through this server, started or about to start: it counts until that
-        # call returns, though DSM may show its task finished (QA round 2 on #597).
+        # call returns, though DSM may show its task finished (QA round 2 on #597). The record
+        # was read during this call's check, so that call may have returned since.
         what = (
             f"another {task.handle.kind} call through this server is landing in "
-            f"{_escaped_repr(dest)} (with {_escaped_repr(clash)}, started or about to start; it "
-            "counts until that call returns)"
+            f"{_escaped_repr(dest)} (with {_escaped_repr(clash)}, started or about to start when "
+            "this call checked; it may have returned since)"
         )
         advice = (
-            "Wait until that call has returned, then check what's there (list_files) before "
+            "Once that call has returned, check what's there (list_files) before "
             f"running this again, or use another destination.{keep}{leave_out}"
         )
     else:
@@ -1601,11 +1602,14 @@ async def restore_from_recycle_bin(
         by_dest: dict[str, list[str]] = {}
         for fp, dest in zip(full_paths, destinations, strict=False):
             by_dest.setdefault(dest, []).append(fp)
-        for dest, items in by_dest.items():
-            for fp in _collapse_overlaps(items):
-                track(pending_landing("restore", fp, dest, overwrite=overwrite, remove_src=True))
+        landing = [
+            (fp, dest) for dest, items in by_dest.items() for fp in _collapse_overlaps(items)
+        ]
+        for fp, dest in landing:
+            track(pending_landing("restore", fp, dest, overwrite=overwrite, remove_src=True))
         _, tasks = await tasks_for_landing_check(client)
-        for fp, dest in zip(full_paths, destinations, strict=False):
+        # Checked as recorded: a nested item lands inside its parent, not in `dest`.
+        for fp, dest in landing:
             _refuse_landing_on_a_running_task(
                 tasks,
                 "Restore",
