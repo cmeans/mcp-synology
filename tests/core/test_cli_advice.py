@@ -12,6 +12,7 @@ import json
 import re
 import shlex
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -248,6 +249,12 @@ class TestNoCredentialsWithNoKeyring:
         assert "mcp-synology setup" not in (exc.value.suggestion or "")
 
 
+async def _logs_in(*args: Any, **_kwargs: Any) -> dict[str, Any]:
+    """Stands in for `_setup_login` or `_connect_and_login` when DSM accepts the login."""
+    store = next(arg for arg in args if callable(arg))
+    return {"success": True, "keyring_ok": store(None)}
+
+
 class _WriteFails(MemoryKeyring):
     """A backend that reads, and refuses a write."""
 
@@ -265,6 +272,7 @@ class TestSetupWithAKeyringThatFails:
         with (
             patch("mcp_synology.cli.setup._CONFIG_DIR", tmp_path / "config"),
             patch("mcp_synology.core.config.discover_config_path", side_effect=FileNotFoundError),
+            patch("mcp_synology.cli.setup._connect_and_login", _logs_in),
         ):
             return CliRunner().invoke(main, args, input=_ANSWERS).output
 
@@ -272,7 +280,7 @@ class TestSetupWithAKeyringThatFails:
         self, request: pytest.FixtureRequest, no_keyring: None, tmp_path: Path
     ) -> None:
         output = self._run(request, ["setup"], tmp_path)
-        assert "Couldn't store these in the keyring." in output
+        assert "Couldn't store these in the keyring (" in output
         assert "Keyring not available" not in output
         assert "If this account uses 2FA" not in output
         assert (tmp_path / "config" / "192-168-1-50.yaml").exists()
@@ -288,8 +296,9 @@ class TestSetupWithAKeyringThatFails:
         previous = keyring.get_keyring()
         keyring.set_keyring(_WriteFails())
         request.addfinalizer(lambda: keyring.set_keyring(previous))
-        result = CliRunner().invoke(main, ["setup", "--config", str(config)], input="me\nx\n")
-        assert "Couldn't store these in the keyring." in result.output
+        with patch("mcp_synology.cli.setup._setup_login", _logs_in):
+            result = CliRunner().invoke(main, ["setup", "--config", str(config)], input="me\nx\n")
+        assert "Couldn't store these in the keyring (" in result.output
         assert "If this account uses 2FA" not in result.output
 
 
@@ -347,7 +356,7 @@ class TestSetupWithAKeyringThatWorks:
             patch("mcp_synology.core.config.discover_config_path", side_effect=FileNotFoundError),
             patch(
                 "mcp_synology.cli.setup._connect_and_login",
-                AsyncMock(return_value={"success": True}),
+                AsyncMock(return_value={"success": True, "keyring_ok": True}),
             ),
         ):
             result = CliRunner().invoke(main, ["setup"], input=_ANSWERS)

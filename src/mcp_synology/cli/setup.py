@@ -12,7 +12,7 @@ import re
 import shutil
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NoReturn
 
 import click
 import yaml
@@ -22,6 +22,8 @@ from mcp_synology.cli.logging_ import _configure_logging, _init_early_logging
 from mcp_synology.cli.startup import escape_what_stdout_cant_encode, load_or_exit
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from mcp_synology.core.config import AppConfig
 
 logger = logging.getLogger(__name__)
@@ -301,17 +303,29 @@ def _setup_interactive(verbose: bool, not_loaded: str | None = None) -> None:
     username = click.prompt("DSM username").strip()
     password = click.prompt("DSM password", hide_input=True)
 
-    # Store in keyring
-    keyring_ok = _store_keyring(service, username, password, host, app_config.connection.port)
+    # Connect, validate login, fetch hostname. The keyring is written only once DSM accepts the
+    # login, so a mistyped password can't replace a working one (#454). Without a keyring the
+    # file is still what's needed: stopping here left the user with variables and no config (#481).
+    from mcp_synology.core.auth import no_keyring_here
 
-    # Connect, validate login, fetch hostname. Without a keyring the file is still what's
-    # needed: stopping here left the user with variables and no config (#481).
+    connection_port = app_config.connection.port
+
+    def store(device_id: str | None) -> bool:
+        try:
+            return _store_keyring(service, username, password, host, connection_port, device_id)
+        except SystemExit:
+            click.echo("No config was written.", err=True)
+            raise
+
     nas_hostname = None
-    if keyring_ok:
+    if no_keyring_here():
+        keyring_ok = store(None)
+    else:
         click.echo("\nConnecting to NAS...")
-        result = asyncio.run(_connect_and_login(app_config, username, password, service, verbose))
+        result = asyncio.run(_connect_and_login(app_config, username, password, store, verbose))
         if not result["success"]:
-            return
+            _exit_nothing_changed()
+        keyring_ok = result["keyring_ok"]
 
         # Suggest hostname as alias if we fetched one and user didn't set an alias
         nas_hostname = result.get("hostname")
@@ -401,7 +415,22 @@ def _setup_credential_flow(app_config: Any, verbose: bool) -> None:
     username = click.prompt("DSM username").strip()
     password = click.prompt("DSM password", hide_input=True)
 
-    keyring_ok = _store_keyring(service, username, password, connection.host, connection.port)
+    # The keyring is written only once DSM accepts the login (#454).
+    from mcp_synology.core.auth import no_keyring_here
+
+    def store(device_id: str | None) -> bool:
+        return _store_keyring(
+            service, username, password, connection.host, connection.port, device_id
+        )
+
+    if no_keyring_here():
+        keyring_ok = store(None)
+    else:
+        click.echo("\nAttempting login...")
+        result = asyncio.run(_setup_login(app_config, username, password, store))
+        if not result["success"]:
+            _exit_nothing_changed()
+        keyring_ok = result["keyring_ok"]
     if not keyring_ok:
         from mcp_synology.core.config import quoted_path
         from mcp_synology.core.errors import CHECK_NO_FILE
@@ -419,10 +448,6 @@ def _setup_credential_flow(app_config: Any, verbose: bool) -> None:
                 f"SYNOLOGY_PORT set, test it: {CHECK_NO_FILE}"
             )
         _echo_two_fa_advice()
-        return
-
-    click.echo("\nAttempting login...")
-    asyncio.run(_setup_login(app_config, username, password, service))
 
 
 def _may_replace_entry(
@@ -526,8 +551,17 @@ def _variable_lines(username: str, *, windows: bool = os.name == "nt") -> str:
     )
 
 
-def _store_keyring(service: str, username: str, password: str, host: str, port: int | None) -> bool:
+def _store_keyring(
+    service: str,
+    username: str,
+    password: str,
+    host: str,
+    port: int | None,
+    device_id: str | None = None,
+) -> bool:
     """Store credentials and the host they're for in the OS keyring. True on success.
+
+    Callers with a keyring run this only after DSM accepts the login (#454).
 
     When the host or port changes, the old secrets go first and the new record before the new
     password, so a stop partway leaves nothing to send to the wrong host. The old device token
@@ -535,60 +569,235 @@ def _store_keyring(service: str, username: str, password: str, host: str, port: 
     still there: the backends raise the same error for "no such password" and for a real failure,
     and a chain of backends deletes from only the first. Any exception counts: backends raise their
     own types.
+
+    ``device_id`` is a token this login just got, and it replaces a stored one. Without one, a
+    stored token stays for the same username. For another it goes either way: it's that account's
+    trust, not this one's (#454). On the same host it goes last, so a keyring that refuses writes
+    can't cost a working login its token, unless a new username was written and can't be put
+    back. A write that fails puts back what it changed, when the keyring lets it: on the same host
+    the old values, on another host nothing, so no secret stays for the wrong host. What the
+    failure message says comes from reading the entry again.
+
+    Exits 1 when the entry isn't known to be as it was, or a new token couldn't be stored, since the
+    server may not be able to log in without a code. A keyring that changed nothing returns False,
+    and the variables are the way forward.
     """
     from mcp_synology.core.auth import no_keyring_here
     from mcp_synology.core.config import comparable_target
 
-    removed: list[str] = []
+    before: dict[str, str | None] | None = None
+    same_host = stored = False
     try:
         import keyring
-        from keyring.errors import PasswordDeleteError
+        from keyring.errors import KeyringError, PasswordDeleteError
 
+        before = _read_entry(service)
         recorded = comparable_target(host, port)
-        if (keyring.get_password(service, "host") or "").strip() != recorded:
+        same_host = (before["host"] or "").strip() == recorded
+        if not same_host:
             for key in ("device_id", "password", "username"):
-                held = keyring.get_password(service, key)
                 with contextlib.suppress(PasswordDeleteError):  # there may be none
                     keyring.delete_password(service, key)
                 if keyring.get_password(service, key):
                     raise PasswordDeleteError(f"{key} is still stored")
-                if held:
-                    removed.append(key)
             keyring.set_password(service, "host", recorded)
         keyring.set_password(service, "username", username)
         keyring.set_password(service, "password", password)
-        click.echo("\nCredentials stored in OS keyring.")
-        return True
+        # A backend whose writes do nothing raises nothing (#589). Only a mismatch counts: a read
+        # that fails after good writes says nothing about them. This comes before the old
+        # account's token goes, so a keyring that kept nothing doesn't lose it.
+        held = _read_entry_or_none(service)
+        if held is not None and (
+            held["username"] != username
+            or held["password"] != password
+            or (held["host"] or "").strip() != recorded
+        ):
+            raise KeyringError("the keyring didn't keep what was written")
+        if same_host and before["device_id"] and before["username"] != username:
+            with contextlib.suppress(PasswordDeleteError):  # a backend's "no such password"
+                keyring.delete_password(service, "device_id")
+            if keyring.get_password(service, "device_id"):
+                raise PasswordDeleteError("device_id is still stored")
+        stored = True
+        if device_id:
+            keyring.set_password(service, "device_id", device_id)
+        held = _read_entry_or_none(service) if device_id else None
+        if held is not None and held["device_id"] != device_id:
+            raise KeyringError("the keyring didn't keep the device token")
     except Exception as e:
         logger.debug("Keyring error storing credentials: %s", e, exc_info=True)
-        gone = f" Already removed from this entry: {', '.join(removed)}." if removed else ""
         lead = (
             "Keyring not available."
             if no_keyring_here()
-            else "Couldn't store these in the keyring."
+            else f"Couldn't store these in the keyring ({type(e).__name__})."
         )
+        fix = (
+            "Check that the keyring is unlocked and writable, and run this again; each run with "
+            f"2FA needs a new code. With no keyring, see {_NO_KEYRING_DOC}."
+        )
+        now = _read_entry_or_none(service)
+        # The token's write raised: what's said about the rest comes from a read too.
+        if now is not None and (now["username"] != username or now["password"] != password):
+            stored = False
+        if stored:
+            if now is not None and now["device_id"] == device_id:
+                # The write applied, then the backend raised: the token is there.
+                _say_stored(device_id)
+                return True
+            went = before and before["device_id"] and now is not None and not now["device_id"]
+            token = ", and the old 2FA device token was removed" if went else ""
+            outcome = "may not have been stored" if now is None else "couldn't be stored"
+            _stop_on_keyring(
+                f"The username and password are stored{token}, but the new 2FA device token "
+                f"{outcome}, so the server may not be able to log in without a code. {fix}"
+            )
+        if before is not None and now != before:
+            _put_back(service, before if same_host else dict.fromkeys(_ENTRY_KEYS))
+            now = _read_entry_or_none(service)
+        unchanged = before is not None and now == before
+        if not unchanged and before is not None and now is not None:
+            _drop_a_token_left_for_another_account(service, before, now, username)
+            now = _read_entry_or_none(service)
+        if unchanged:
+            state = " This entry is as it was."
+        elif before is None:
+            state = ""  # the first read failed, so nothing was written
+        elif now is None:
+            state = " The entry can't be read back, so it may be partly written."
+        else:
+            gone = [
+                key for key in ("device_id", "password", "username") if before[key] and not now[key]
+            ]
+            state = f" Already removed from this entry: {', '.join(gone)}." if gone else ""
+            state += " The entry may be partly written."
+        stop = before is not None and not unchanged
+        if device_id:
+            _stop_on_keyring(
+                f"{lead}{state} The new 2FA device token couldn't be stored either, so the server "
+                f"may not be able to log in without a code. {fix}"
+            )
         click.echo(
-            f"\n{lead}{gone} Set these environment variables where the server runs instead: "
+            f"\n{lead}{state} Set these environment variables where the server runs instead: "
             "in the `env` block of your MCP client's config, or in your shell, with your "
-            "password in place of the placeholder:\n" + _variable_lines(username)
+            "password in place of the placeholder:\n" + _variable_lines(username),
+            err=stop,
         )
+        if stop:
+            click.echo(
+                "Or check that the keyring is unlocked and writable, and run this again.", err=True
+            )
+            sys.exit(1)
         return False
+    _say_stored(device_id)
+    return True
+
+
+_ENTRY_KEYS = ("host", "username", "password", "device_id")
+_NO_KEYRING_DOC = (
+    "https://github.com/cmeans/mcp-synology/blob/main/docs/credentials.md#2fa-with-no-keyring"
+)
+
+
+def _read_entry(service: str) -> dict[str, str | None]:
+    import keyring
+
+    return {key: keyring.get_password(service, key) for key in _ENTRY_KEYS}
+
+
+def _read_entry_or_none(service: str) -> dict[str, str | None] | None:
+    try:
+        return _read_entry(service)
+    except Exception as e:  # noqa: BLE001 - backends raise their own types
+        logger.debug("Keyring error reading the entry: %s", e, exc_info=True)
+        return None
+
+
+def _drop_a_token_left_for_another_account(
+    service: str, before: dict[str, str | None], now: dict[str, str | None], username: str
+) -> None:
+    """When the old username couldn't be put back: the next run would see this username stored, and
+    keep the other account's token beside it. Best effort; the message says it's partly written."""
+    if now["username"] != username or not now["device_id"] or before["username"] == username:
+        return
+    try:
+        import keyring
+
+        keyring.delete_password(service, "device_id")
+    except Exception as e:  # noqa: BLE001 - backends raise their own types
+        logger.debug("Keyring error removing the token: %s", e, exc_info=True)
+
+
+def _say_stored(device_id: str | None) -> None:
+    click.echo("\nCredentials stored in OS keyring.")
+    if device_id:
+        click.echo(click.style("2FA bootstrap complete!", fg="green"))
+        click.echo("Device token stored in keyring.")
+
+
+def _stop_on_keyring(message: str) -> NoReturn:
+    click.echo(click.style(f"\n{message}", fg="red"), err=True)
+    sys.exit(1)
+
+
+def _put_back(service: str, before: dict[str, str | None]) -> None:
+    """Restore the credentials a failed store overwrote, where the keyring lets it: the host record
+    stays, and the caller reads the entry again to see what happened."""
+    try:
+        import keyring
+
+        for key in ("username", "password", "device_id"):
+            value = before[key]
+            if keyring.get_password(service, key) == value:
+                continue
+            if value is None:
+                keyring.delete_password(service, key)
+            else:
+                keyring.set_password(service, key, value)
+    except Exception as e:  # noqa: BLE001 - backends raise their own types
+        logger.debug("Keyring error restoring the entry: %s", e, exc_info=True)
+
+
+def _usable_token(value: object) -> str | None:
+    return value.strip() or None if isinstance(value, str) else None
+
+
+def _login_failed(error: Exception) -> None:
+    """Say why, what to do, and that a retry isn't free: each counts toward Auto Block (#454)."""
+    click.echo(click.style(f"Login failed: {error}", fg="red"), err=True)
+    code = getattr(error, "code", None)
+    suggestion = getattr(error, "suggestion", None)
+    # Those say to run setup, that a re-login will follow or that another session displaced this
+    # one: none fits a login.
+    if suggestion and code not in (403, 106, 107, 119):
+        click.echo(suggestion, err=True)
+    if code in (400, 403, 404):
+        click.echo(
+            "Each failed login counts toward DSM's Auto Block (on by default: 10 within 5 minutes "
+            "blocks this computer's IP address), so verify the password or code before retrying.",
+            err=True,
+        )
 
 
 async def _attempt_login(
     client: Any,
     username: str,
     password: str,
-    service: str,
 ) -> dict[str, Any]:
-    """Attempt DSM login, handling 2FA if required.
+    """Attempt DSM login, handling 2FA if required. It writes nothing to the keyring.
 
-    Returns dict with 'success' bool, and optionally 'sid'.
-    On 2FA success, stores device token in keyring.
+    Returns dict with 'success' bool, and optionally 'sid' and, on 2FA success, 'device_id' for
+    the caller to store with the rest (#454).
     """
-    from mcp_synology.core.errors import SynologyError
+    from mcp_synology.core.errors import (
+        NOT_DSM_HINT,
+        DsmHttpError,
+        DsmReplyError,
+        SynologyError,
+    )
 
     result: dict[str, Any] = {"success": False}
+    device_id: Any = None
+    needs_token = False
 
     try:
         data = await client.request(
@@ -598,6 +807,8 @@ async def _attempt_login(
             params={"account": username, "passwd": password, "format": "sid"},
             post_form=True,  # keeps the password out of the URL (#235)
         )
+    except (DsmHttpError, DsmReplyError):
+        raise  # not DSM's answer: exit_on_connection_failure says so
     except SynologyError as e:
         if e.code == 403:
             # 2FA required
@@ -618,53 +829,77 @@ async def _attempt_login(
                     },
                     post_form=True,
                 )
-                device_id = data.get("did", "")
-                if device_id:
-                    import keyring
-
-                    try:
-                        keyring.set_password(service, "device_id", device_id)
-                    except Exception as e3:  # backends raise their own types
-                        logger.debug("Keyring error storing the token: %s", e3, exc_info=True)
-                        result["token_not_stored"] = True
-                        click.echo(
-                            click.style(
-                                "Login successful, but the 2FA device token couldn't be stored in "
-                                "the keyring, so the server can't log in without a code. Check "
-                                "that the keyring can be written to, and run this again.",
-                                fg="yellow",
-                            )
-                        )
-                    else:
-                        click.echo(click.style("2FA bootstrap complete!", fg="green"))
-                        click.echo("Device token stored in keyring.")
-                else:
-                    click.echo(click.style("Login successful!", fg="green"))
-            except SynologyError as e2:
-                click.echo(click.style(f"Login failed: {e2}", fg="red"), err=True)
+                # Only this login asked for one.
+                # `did` on a real DSM 7.1.1 and in DSM's guide; third parties report `device_id` on
+                # some versions.
+                if isinstance(data, dict):
+                    device_id = _usable_token(data.get("did")) or _usable_token(
+                        data.get("device_id")
+                    )
+                needs_token = True
+            except (DsmHttpError, DsmReplyError):
+                raise  # not DSM's answer: exit_on_connection_failure says so
+            except (SynologyError, OSError) as e2:
+                _login_failed(e2)
                 return result
         else:
-            click.echo(click.style(f"Login failed: {e}", fg="red"), err=True)
+            _login_failed(e)
             return result
     except OSError as e:
-        click.echo(click.style(f"Login failed: {e}", fg="red"), err=True)
+        _login_failed(e)
         return result
 
-    sid = data.get("sid")
-    if sid:
-        client.sid = sid
-        # After the warning that the token wasn't stored, this would read as all's well.
-        if not result.get("success") and not result.get("token_not_stored"):
-            click.echo(click.style("Login successful!", fg="green"))
+    # Without a session it isn't a login, whatever the reply says, so nothing gets stored (#454).
+    sid = data.get("sid") if isinstance(data, dict) else None
+    if not isinstance(sid, str) or not sid.strip():
+        click.echo(
+            click.style(
+                f"Login failed: the server's reply had no session ID. {NOT_DSM_HINT}",
+                fg="red",
+            ),
+            err=True,
+        )
+        return result
+    client.sid = sid
+    if needs_token and not device_id:
+        # An account known to need a code, with nothing that would let the server skip it. Client
+        # has the session, so the caller's logout still runs.
+        click.echo(
+            click.style(
+                "DSM accepted the code but sent no usable 2FA device token, so the server couldn't "
+                "log in without a code. With a token from elsewhere, the server needs a config "
+                "file plus SYNOLOGY_USERNAME, SYNOLOGY_PASSWORD and SYNOLOGY_DEVICE_ID. Please "
+                "report your DSM version: https://github.com/cmeans/mcp-synology/issues",
+                fg="red",
+            ),
+            err=True,
+        )
+        return result
+    click.echo(click.style("Login successful!", fg="green"))
+    if device_id:
+        result["device_id"] = device_id
     result["success"] = True
     result["sid"] = sid
     return result
 
 
+def _exit_nothing_changed() -> NoReturn:
+    """After a failed login, which has said why: nothing was written, and a script can tell."""
+    click.echo("Nothing was changed.", err=True)
+    sys.exit(1)
+
+
 async def _connect_and_login(
-    config: Any, username: str, password: str, service: str, verbose: bool
+    config: Any,
+    username: str,
+    password: str,
+    store: Callable[[str | None], bool],
+    verbose: bool,
 ) -> dict[str, Any]:
-    """Connect to NAS, validate login, fetch hostname. Returns result dict."""
+    """Connect to NAS, validate login, store the credentials, fetch hostname. Returns result dict.
+
+    ``store`` runs right after the login succeeds. The hostname only suggests an alias, so a failed
+    read costs that and nothing else: the login worked, and its code is spent."""
     from mcp_synology.core.client import DsmClient
     from mcp_synology.core.config import AppConfig
 
@@ -678,7 +913,7 @@ async def _connect_and_login(
 
     result: dict[str, Any] = {"success": False}
 
-    with exit_on_connection_failure(base_url, config.connection.host):
+    with exit_on_connection_failure(base_url, config.connection.host, note="Nothing was changed."):
         async with DsmClient(
             base_url=base_url,
             verify_ssl=config.connection.verify_ssl,
@@ -686,14 +921,22 @@ async def _connect_and_login(
         ) as client:
             await client.query_api_info()
 
-            login_result = await _attempt_login(client, username, password, service)
+            login_result = await _attempt_login(client, username, password)
             if not login_result["success"]:
+                if client.sid:
+                    await _logout(client)
                 return result
 
-            # Fetch NAS hostname. The logout runs whatever happens here, so a
-            # timeout or dropped connection doesn't leave the session open (#404).
+            # The logout runs whatever happens here, so a timeout, a dropped connection or an
+            # interrupt doesn't leave the session open (#404).
             try:
-                dsm_info = await client.fetch_dsm_info()
+                result["keyring_ok"] = store(login_result.get("device_id"))
+                try:
+                    dsm_info = await client.fetch_dsm_info()
+                except Exception as e:  # noqa: BLE001 - a bad reply too; only the type is shown
+                    logger.debug("Hostname read failed", exc_info=True)
+                    click.echo(f"Couldn't read the NAS's hostname ({type(e).__name__}).")
+                    dsm_info = {}
             finally:
                 await _logout(client)
             nas_hostname = dsm_info.get("hostname") or ""
@@ -708,8 +951,10 @@ async def _connect_and_login(
     return result
 
 
-async def _setup_login(config: object, username: str, password: str, service: str) -> None:
-    """Attempt login during setup, handle 2FA if needed."""
+async def _setup_login(
+    config: object, username: str, password: str, store: Callable[[str | None], bool]
+) -> dict[str, Any]:
+    """Attempt login during setup, handle 2FA if needed, then store the credentials."""
     from mcp_synology.core.client import DsmClient
     from mcp_synology.core.config import AppConfig
 
@@ -721,7 +966,7 @@ async def _setup_login(config: object, username: str, password: str, service: st
     protocol = "https" if config.connection.https else "http"
     base_url = f"{protocol}://{config.connection.host}:{config.connection.port}"
 
-    with exit_on_connection_failure(base_url, config.connection.host):
+    with exit_on_connection_failure(base_url, config.connection.host, note="Nothing was changed."):
         async with DsmClient(
             base_url=base_url,
             verify_ssl=config.connection.verify_ssl,
@@ -729,13 +974,18 @@ async def _setup_login(config: object, username: str, password: str, service: st
         ) as client:
             await client.query_api_info()
 
-            login_result = await _attempt_login(client, username, password, service)
+            login_result = await _attempt_login(client, username, password)
             if not login_result["success"]:
-                return
+                if client.sid:
+                    await _logout(client)
+                return {"success": False}
 
             # Logout, best effort as in _connect_and_login: the login worked (#404).
-            if client.sid:
+            try:
+                keyring_ok = store(login_result.get("device_id"))
+            finally:
                 await _logout(client)
+            return {"success": True, "keyring_ok": keyring_ok}
 
 
 async def _logout(client: Any) -> None:
