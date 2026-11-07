@@ -82,17 +82,7 @@ def _read_json(resp: httpx.Response, label: str, *, may_have_applied: bool = Fal
     model as "Expecting value: line 1 column 1 (char 0)". The error names ``label`` and
     the Content-Type, never the body.
     """
-    try:
-        body = _loads(resp.content, label)
-    except CollidingKeysError:
-        logger.warning("%s: two keys of the reply read the same once escaped", label)
-        raise DsmReplyError(
-            f"{label}: DSM's reply has two names that read the same once escaped: one holds a "
-            "control character, line or paragraph separator, bidi control or tag character, the "
-            "other a backslash where that is shown (#604).",
-            retryable=False,
-            suggestion="Rename one of the two items on the NAS (in DSM). Trying again won't help.",
-        ) from None
+    body = _loads_or_refuse(resp.content, label)
     if isinstance(body, dict):
         return body
     ctype = resp.headers.get("content-type", "").split(";")[0].strip().lower() or "none"
@@ -136,9 +126,24 @@ def _loads(content: bytes, label: str) -> Any:
         return None
 
 
+def _loads_or_refuse(content: bytes, label: str) -> Any:
+    """``_loads``, with a reply whose keys collide once escaped refused as such (#604)."""
+    try:
+        return _loads(content, label)
+    except CollidingKeysError:
+        logger.warning("%s: two keys of the reply read the same once escaped", label)
+        raise DsmReplyError(
+            f"{label}: DSM's reply has two names that read the same once escaped: one holds a "
+            "control character, line or paragraph separator, bidi control or tag character, the "
+            "other a backslash where that is shown (#604).",
+            retryable=False,
+            suggestion="Rename one of the two items on the NAS (in DSM). Trying again won't help.",
+        ) from None
+
+
 def _error_envelope(body: bytes) -> dict[str, Any] | None:
     """The ``error`` object of a DSM error envelope in ``body``, or None if it has none."""
-    parsed = _loads(body, "download error envelope")
+    parsed = _loads_or_refuse(body, "download error envelope")
     if not isinstance(parsed, dict) or not isinstance(parsed.get("error"), dict):
         return None
     code = parsed["error"].get("code", 0)

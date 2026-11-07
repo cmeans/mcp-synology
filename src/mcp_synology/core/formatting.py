@@ -161,7 +161,8 @@ def escape_nas_text(value: Any) -> Any:
     Text from the NAS reaches replies in many places, so it's escaped once, where every reply
     is read (``DsmClient``), rather than at each. A name holding a newline would otherwise
     write a line of its own into a reply, which reads as the server's. The cost: an item
-    with such a name is shown escaped and can't be acted on through the tools, which refuse
+    with such a name is shown escaped and can't be named or given by path (an ID still works),
+    as the tools refuse
     such characters in an argument (``server`` and File Station's path check), until it's
     renamed on the NAS."""
     # A loop, not recursion: json.loads takes nesting deeper than Python's recursion limit.

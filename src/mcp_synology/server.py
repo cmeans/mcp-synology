@@ -282,7 +282,8 @@ def _refuse_forging_arguments(arguments: dict[str, Any]) -> None:
                 retryable=False,
                 param=key,
                 suggestion="Pass it without such characters. For an item on the NAS whose name "
-                "holds one, rename it there (in DSM) and use its new name. For a local path, "
+                "holds one, pass its ID where the tool takes one, or rename it there (in DSM) "
+                "and use its new name. For a local path, "
                 "retype it (a path copied from Windows may begin with an invisible mark), with "
                 "a Windows path's backslashes doubled in JSON (`C:\\\\new`, or `\\n` is a "
                 "line break).",
@@ -409,6 +410,9 @@ class _SynologyServer(MCPServer):
         model as "Error executing tool delete_files: " (#237).
         """
         prefix = f"Error executing tool {name}: "
+        if forges(name):
+            # The SDK echoes an unknown tool's name ("Unknown tool: ..."), raw.
+            raise ToolError("Unknown tool: its name has a character a reply can't show as is.")
         try:
             _refuse_forging_arguments(arguments)
         except ToolError as refused:

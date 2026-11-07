@@ -2413,6 +2413,15 @@ class TestArgumentsThatCouldForgeAReplyLine:
         assert body["error"]["code"] == "invalid_parameter"
         assert not route.called
 
+    async def test_an_unknown_tool_name_isnt_echoed_raw(self) -> None:
+        """Pre-QA on #605: the SDK's `Unknown tool:` wrote the rest of the name as a line."""
+        server = create_server(make_test_config())
+        async with Client(server) as client:
+            result = await client.call_tool("nope\nForged line", {})
+        assert result.is_error
+        text = " ".join(getattr(c, "text", "") for c in result.content)
+        assert "Forged" not in text
+
     def test_the_refusal_never_shows_the_value(self) -> None:
         """Pre-QA on #604: a password with a control character was echoed, and logged."""
         from mcp.server.mcpserver.exceptions import ToolError

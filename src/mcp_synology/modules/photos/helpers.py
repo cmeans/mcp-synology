@@ -438,12 +438,13 @@ class Photos:
         """
         tags = await self.walk("Browse.GeneralTag")
         exact: dict[str, int] = {}
-        doubled: set[str] = set()
+        by_name: dict[str, list[int]] = {}
         for t in tags:
             key = str(t.get("name", ""))
-            if key in exact:
-                doubled.add(key)  # two names that read the same once escaped (#604)
+            by_name.setdefault(key, []).append(int(t["id"]))
             exact[key] = int(t["id"])
+        # Two names that read the same once escaped (#604).
+        doubled = {key: ids for key, ids in by_name.items() if len(ids) > 1}
         folded: dict[str, list[dict[str, Any]]] = {}
         for t in tags:
             folded.setdefault(str(t.get("name", "")).casefold(), []).append(t)
@@ -452,8 +453,8 @@ class Photos:
             if name in doubled:
                 invalid(
                     self.operation,
-                    f"More than one tag reads {name!r}: one holds a character replies show "
-                    "escaped, another a backslash.",
+                    f"Tags {', '.join(map(str, doubled[name][:10]))} all read {name!r}: one holds "
+                    "a character replies show escaped, another a backslash.",
                     param=param,
                     value=name,
                     suggestion="Rename one of them in Photos.",

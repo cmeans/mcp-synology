@@ -947,6 +947,7 @@ class TestNamesShownEscaped:
             with pytest.raises(ToolError) as exc:
                 await tag_photos(client, action="remove", ids=[12], tags=["a\\nb"])
         assert _error(exc)["code"] == "invalid_parameter"
+        assert "Tags 4, 5 all read" in _error(exc)["message"]
         assert not fake.of(ITEM, "remove_tag")
 
     @respx.mock

@@ -1972,3 +1972,12 @@ def test_a_reply_whose_keys_collide_says_so_and_isnt_retryable(
     assert "read the same once escaped" in str(exc.value)
     assert exc.value.retryable is False
     assert "read the same once escaped" in caplog.text
+
+
+def test_a_download_error_whose_keys_collide_says_so() -> None:
+    """Pre-QA on #605: the download path raised a bare ValueError."""
+    from mcp_synology.core.client import DsmReplyError, _error_envelope
+
+    body = b'{"success": false, "error": {"code": 408}, "a\\n": 1, "a\\\\n": 2}'
+    with pytest.raises(DsmReplyError, match="read the same once escaped"):
+        _error_envelope(body)
