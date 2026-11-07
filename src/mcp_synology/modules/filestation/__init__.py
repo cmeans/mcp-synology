@@ -221,11 +221,11 @@ MODULE_INFO = ModuleInfo(
                 "Copy files or folders into a destination folder; a folder is copied with "
                 "everything in it, and the sources stay in place. To move instead, use "
                 "move_files. `dest_folder` must already exist; it isn't created. With "
-                "`overwrite=false` (default), items already at the destination are skipped and "
-                "listed, and the rest are copied. With `overwrite=true`, two sources that would "
-                "replace each other are refused, and a replaced file may not be in the recycle "
-                "bin. If any source is missing, nothing is copied. A long copy keeps running on "
-                "the NAS and returns a handle for file_task."
+                "`overwrite=false` (default), items whose name is already at the destination are "
+                "skipped and listed, and the rest are copied. With `overwrite=true`, two sources "
+                "that would replace each other are refused, and a replaced file may not be in the "
+                "recycle bin. If any source is missing, nothing is copied. A long copy keeps "
+                "running on the NAS and returns a handle for file_task."
             ),
             permission_tier=PermissionTier.WRITE,
             annotations=_ANNO_DESTRUCTIVE,
@@ -236,10 +236,10 @@ MODULE_INFO = ModuleInfo(
                 "Move files or folders into a destination folder; a folder moves with everything "
                 "in it, and the sources are removed. To keep the sources, use copy_files. "
                 "`dest_folder` must already exist; it isn't created. With `overwrite=false` "
-                "(default), items already at the destination are skipped, listed and left at the "
-                "source. With `overwrite=true`, two sources that would replace each other are "
-                "refused, and a replaced file may not be in the recycle bin. If any source is "
-                "missing, nothing is moved. A whole shared folder "
+                "(default), items whose name is already at the destination are skipped, listed and "
+                "left at the source. With `overwrite=true`, two sources that would replace each "
+                "other are refused, and a replaced file may not be in the recycle bin. If any "
+                "source is missing, nothing is moved. A whole shared folder "
                 "(`/video`), recycle bin or user's home folder (`/homes/<user>`) is refused as a "
                 "source: move its items by path. A long move keeps "
                 "running on the NAS and returns a handle for file_task."
@@ -282,11 +282,11 @@ MODULE_INFO = ModuleInfo(
                 "what's there first with list_recycle_bin: every path must be in that share's "
                 "bin, or nothing is restored; an empty item, naming the whole bin, is refused. "
                 "Without `dest_folder`, each item goes back to its "
-                "original folder, which is re-created if it's gone. An item already at the "
-                "destination is skipped and stays in the bin, unless `overwrite=true`, which "
-                "replaces the existing one, which may then not be in the recycle bin; two items "
-                "that would replace each other are refused. A long restore keeps running on the "
-                "NAS and returns a handle for file_task."
+                "original folder, which is re-created if it's gone. An item whose name is already "
+                "at the destination is skipped and stays in the bin, unless `overwrite=true`, "
+                "which replaces the existing one, which may then not be in the recycle bin; two "
+                "items that would replace each other are refused. A long restore keeps running on "
+                "the NAS and returns a handle for file_task."
             ),
             permission_tier=PermissionTier.WRITE,
             annotations=_ANNO_DESTRUCTIVE,

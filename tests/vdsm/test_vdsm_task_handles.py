@@ -605,6 +605,48 @@ async def test_stop_of_a_finished_or_unknown_copy_says_so(admin_client: Any, nas
         assert "A stop was sent" in reply, (handle, reply)
 
 
+async def test_a_skip_before_a_hand_off_gets_its_own_line(admin_client: Any, nas: Nas) -> None:
+    """#585: a skipped file and a partly skipped folder, then a task that outlives the wait."""
+    client = _admin(admin_client)
+    base = nas.folder("/writable/p585")
+    nas.run(
+        "cd /volume1/writable/p585 && mkdir -p f/n d/n && echo s > f/x.txt && echo d > d/x.txt "
+        "&& echo s > f/n/same.txt && echo d > d/n/same.txt && echo o > f/n/only.txt "
+        "&& chmod -R 777 /volume1/writable/p585"
+    )
+    src = nas.tree("/writable/p585big", dirs=COPY_DIRS)
+    dest = f"{base}/d"
+    records = TaskRecords()
+    async with _stopped_at_exit(client, records) as handles:
+        reply = await copy_files(
+            client,
+            paths=[f"{base}/f/x.txt", f"{base}/f/n", src],
+            dest_folder=dest,
+            timeout=WAIT,
+            records=records,
+        )
+        handles.append(_handle(reply))
+        assert (
+            "Skipped in whole or in part, as an item of that name is already at the destination "
+            f"(not compared): {base}/f/x.txt, {base}/f/n." in reply
+        )
+        assert "Already copied" not in reply
+        # DSM's skip on a folder means only some of its items: the rest landed.
+        assert nas.exists(f"{dest}/n/only.txt")
+
+    # A move's skip leaves a file at its source, and only the skipped items of a folder. The copy
+    # above landed only.txt, so it goes first, or it's skipped too.
+    nas.run("rm -f /volume1/writable/p585/d/n/only.txt")
+    moved = await move_files(
+        client, paths=[f"{base}/f/x.txt", f"{base}/f/n"], dest_folder=dest, records=records
+    )
+    assert f"Skipped:\n  {base}/f/x.txt" in moved, moved
+    assert f"{base}/f/n" in moved, moved
+    assert nas.exists(f"{base}/f/x.txt")
+    assert nas.exists(f"{base}/f/n/same.txt")
+    assert not nas.exists(f"{base}/f/n/only.txt")
+
+
 # --- Move and restore -----------------------------------------------------
 
 
@@ -637,7 +679,7 @@ async def test_move_handoff_then_status_until_finished(
                 still="Still moving",
             )
             assert f"Moved 1 item(s) to {dest}/:" in final, final
-            assert "Source files have been removed from /writable/." in final
+            assert "Moved sources removed from /writable/:" in final
 
     assert not nas.exists(src)
     assert nas.count("/testshare/mv245") == COPY_FILES

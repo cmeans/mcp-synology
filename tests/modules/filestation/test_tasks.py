@@ -1005,7 +1005,9 @@ class TestFileTask:
         records = TaskRecords()
         await discover_running_tasks(mock_client, records)
         text = await file_task(mock_client, records=records, handle="move:FileStation_M1")
-        expected = await _copy_move_summary(mock_client, ["/s/b"], "/s/d", True, 2048, [])
+        expected = await _copy_move_summary(
+            mock_client, ["/s/b"], "/s/d", True, 2048, [], only_named_sources_removed=True
+        )
         assert text == expected
 
     @respx.mock

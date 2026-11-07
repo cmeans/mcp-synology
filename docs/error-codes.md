@@ -290,7 +290,7 @@ Common causes:
   one would land in a folder holding another: one could replace the other (for folders, items of
   the same name inside them), and a replaced file may not be in the recycle bin. Use different
   destinations or rename one first. To merge two folders without replacing anything, use
-  `overwrite=false`: items already there are skipped and listed. Separate calls with
+  `overwrite=false`: items whose name is already there are skipped and listed. Separate calls with
   `overwrite=true` don't avoid this.
 - `delete_files` on a whole shared folder (`/video`): a shared folder isn't deleted or
   emptied this way (#451; emptying one with the user's confirmation is #484). Delete a
@@ -457,7 +457,8 @@ runs out (`delete_timeout` or `copy_move_timeout`, default 30 s, capped at
 returns a normal result: "Still deleting on the NAS: … This operation keeps
 running after this reply", with the progress and a handle such as
 `delete:FileStation_179219158016597225`. In a multi-path call, the paths after
-it are listed as "Not started". Follow up with `file_task`: `action="status"`
+it are listed as "Not started", and any DSM skipped before it get their own line:
+they aren't all done. Follow up with `file_task`: `action="status"`
 shows progress or the final result, `action="stop"` stops it (it may then be
 partly done), and no handle lists the running operations. Only a canceled
 call (the user, or a client's own timeout) or a DSM error stops the task.
@@ -521,8 +522,8 @@ Common causes:
   connection to DSM failed during …", if the connection dropped).
 - A path's start in a multi-path `copy_files`, `move_files` or
   `restore_from_recycle_bin` got no answer: the message says what was done, that
-  this one may have started and what wasn't started, so check before running it
-  again. (Alone, it's the usual timeout or connection error.)
+  this one may have started, what DSM skipped and what wasn't started, so check
+  before running it again. (Alone, it's the usual timeout or connection error.)
 - `file_task` didn't get an answer to its status or stop request for a
   handle. For the status read, the message says nothing was stopped, or after a
   stop DSM refused, that it wasn't accepted; for the

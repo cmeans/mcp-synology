@@ -1466,8 +1466,8 @@ class TestErrorHandling:
             )
             # #189: a skipped file is reported as skipped, with no folder hedging.
             assert copied.startswith(
-                f"[!] Copied 0 of 1 item(s) to {base}/dst/; 1 skipped (already at the "
-                "destination, overwrite=false):"
+                f"[!] Copied 0 of 1 item(s) to {base}/dst/; 1 skipped (that name is already at "
+                "the destination, overwrite=false):"
             ), copied
             assert f"Skipped:\n  {base}/src/f.txt" in copied
             assert "in whole or in part" not in copied and "folder" not in copied
