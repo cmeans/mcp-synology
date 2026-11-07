@@ -93,6 +93,20 @@ def escaped_control(text: str) -> bool:
 _ANY_ESCAPE = re.compile(r"\\(?:n|r|x[0-9a-f]{2}|u[0-9a-f]{4}|U[0-9a-f]{8})")
 
 
+# Advice for a path that may have been copied from a reply showing a name escaped (#604).
+ESCAPED_NAME_ADVICE = (
+    "A name a reply shows with an escape (`\\n`, `\\x..`, `\\u....`) holds a character these "
+    "tools can't take, so they can't act on it, and passing it as shown names nothing: rename "
+    "it in DSM's File Station first."
+)
+
+
+def holds_escape(text: str) -> bool:
+    """Whether ``text`` holds an escape as ``escape_controls`` writes one: a name copied from a
+    reply that way names no item, as the item's own name holds the character itself."""
+    return _ANY_ESCAPE.search(text) is not None
+
+
 def unescaped_length(text: str) -> int:
     """How long ``text`` was before ``escape_controls``, counting each escape as one character
     (a backslash sequence DSM sent as it is counts as one too)."""

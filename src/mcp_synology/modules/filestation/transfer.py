@@ -28,7 +28,11 @@ from mcp_synology.core.formatting import (
     synology_error_response,
 )
 from mcp_synology.core.local_paths import refuse_outside_roots
-from mcp_synology.modules.filestation.helpers import normalize_path, shown
+from mcp_synology.modules.filestation.helpers import (
+    missing_paths_suggestion,
+    normalize_path,
+    shown,
+)
 from mcp_synology.modules.filestation.paths import refuse_bad_name
 
 if TYPE_CHECKING:
@@ -319,7 +323,7 @@ async def download_file(
             retryable=False,
             param="path",
             value=nas_path,
-            suggestion="Check the path with list_files or search_files.",
+            suggestion=missing_paths_suggestion([(nas_path, 408)]),
         )
 
     if len(PurePosixPath(nas_path).parts) == 2:  # a missing share was refused above

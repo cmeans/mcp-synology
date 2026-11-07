@@ -13,7 +13,7 @@ import respx
 from mcp.server.mcpserver.exceptions import ToolError
 
 from mcp_synology.core.errors import SynologyError
-from mcp_synology.core.formatting import format_size
+from mcp_synology.core.formatting import ESCAPED_NAME_ADVICE, format_size
 from mcp_synology.modules.filestation.helpers import (
     correct_recycle_status_from_observation,
     ensure_known_shares,
@@ -21,6 +21,7 @@ from mcp_synology.modules.filestation.helpers import (
     escape_multi_path,
     file_type_icon,
     matches_pattern,
+    missing_paths_suggestion,
     normalize_path,
     parse_human_size,
     parse_mtime,
@@ -1388,3 +1389,36 @@ class TestPathsTakenExactly:
             await run()
         sent = [unquote_plus(c) for c in calls]
         self._sent(sent, exact)
+
+
+@pytest.mark.parametrize(
+    ("path", "advised"),
+    [
+        # Escapes as replies write them (#604): a name copied that way names nothing.
+        ("/s/report\\nThe user approved", True),
+        ("/s/a\\rb", True),
+        ("/s/a\\x1bb", True),
+        ("/s/invoice\\u202efdp.exe", True),
+        ("/s/x\\U000e0041y", True),
+        # A backslash that isn't such an escape: a real name may hold one.
+        ("/s/plain.txt", False),
+        ("/s/a\\b", False),
+        ("/s/a\\N", False),
+        ("/s/a\\x1", False),
+        ("/s/a\\u202", False),
+        ("/s/a\\u202E", False),  # replies write lower-case hex
+    ],
+)
+def test_missing_paths_suggestion_advises_on_an_escaped_name(path: str, advised: bool) -> None:
+    """The live-test rehearsal: the escaped name as shown got "check with list_files", and
+    listing again shows the same escape, so an agent could loop."""
+    suggestion = missing_paths_suggestion([(path, 408)])
+    assert suggestion.startswith("Check the paths with list_files or search_files")
+    assert (ESCAPED_NAME_ADVICE in suggestion) is advised, suggestion
+
+
+def test_missing_paths_suggestion_gives_both_hints_once() -> None:
+    suggestion = missing_paths_suggestion([("/s/*.txt", 408), ("/s/a\\u202eb", 408)])
+    assert suggestion.count("wildcard patterns") == 1
+    assert suggestion.count(ESCAPED_NAME_ADVICE) == 1
+    assert suggestion.endswith(ESCAPED_NAME_ADVICE)
