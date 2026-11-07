@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 import pytest
 
-from mcp_synology.core.errors import AUTH_ERROR_CODES, AuthenticationError, error_from_code
+from mcp_synology.core.errors import AuthenticationError, error_from_code
 from tests.vdsm.config import DEFAULT_FRESH_PASSWORD, DEFAULT_FRESH_USER
 from tests.vdsm.conftest import _ssh, load_golden_meta
 
@@ -92,22 +92,23 @@ async def account(
     state = _Account(vdsm_container, str(meta["admin_password"]), admin_client[0])
     day = state.read_day()
     yield state
-    state.last_changed(day)
+    # The policy first: it expires the admin's own password too, which stops SSH.
     await state.policy(enabled=False)
+    state.last_changed(day)
     assert _login(state.base_url, DEFAULT_FRESH_PASSWORD) is None
 
 
-def _is_a_refusal(code: int) -> None:
+def _is_a_refusal(code: int, message: str) -> None:
     error = error_from_code(code, "SYNO.API.Auth")
     assert isinstance(error, AuthenticationError)
-    assert str(error) == AUTH_ERROR_CODES[code][0]
+    assert str(error) == message
 
 
 async def test_a_password_that_must_change_is_410(account: _Account) -> None:
     account.last_changed("0")
     assert _login(account.base_url, DEFAULT_FRESH_PASSWORD) == 410
     assert _login(account.base_url, "not-the-password") == 400
-    _is_a_refusal(410)
+    _is_a_refusal(410, "The password must be changed")
 
 
 async def test_an_expired_password_is_409_or_408(account: _Account) -> None:
@@ -118,5 +119,6 @@ async def test_an_expired_password_is_409_or_408(account: _Account) -> None:
     assert _login(account.base_url, "not-the-password") == 400
     await account.policy(enabled=True, reset=False)
     assert _login(account.base_url, DEFAULT_FRESH_PASSWORD) == 408
-    _is_a_refusal(409)
-    _is_a_refusal(408)
+    assert _login(account.base_url, "not-the-password") == 400
+    _is_a_refusal(409, "The password has expired")
+    _is_a_refusal(408, "The password has expired, and DSM doesn't let this account change it")

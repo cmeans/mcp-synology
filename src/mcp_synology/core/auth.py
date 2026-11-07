@@ -556,6 +556,9 @@ def credential_sources(config: AppConfig, *, cli: bool = False) -> dict[str, str
 _SETUP_PICKED_UP = "the running server picks it up"
 _RECORD_HOST = "'mcp-synology check --config <full path to your config file>'"
 _TWO_FA = (403, 404, 406)
+# DSM says these only to the right password, and they don't count toward Auto Block: 18 such logins
+# at 3 attempts tripped nothing, on DSM 7.1, 7.2.2, 7.3.2 and 7.4.1 (#460).
+PASSWORD_STATE = (408, 409, 410)
 # `setup` never prints the token (maintainer, 2026-11-05), so it comes from a machine that
 # can store one. Naming `setup` alone sent a host with no keyring in a circle (#481).
 _GET_THE_TOKEN = (
@@ -617,6 +620,17 @@ def refusal_advice(
             if password == KEYRING:
                 advice += restart
         return advice
+    if code in PASSWORD_STATE:
+        password = sources.get("password")
+        if password == KEYRING:
+            advice = f"Then run {SETUP_COMMAND} to store the new password{picked}"
+        else:
+            advice = (
+                f"The password comes from {password}: change it there too{restart} "
+                f"({SETUP_COMMAND} writes only the keyring)"
+            )
+        clear = "" if cli else ". If an administrator clears the expiry instead, restart the server"
+        return f"{first}. {advice}{clear}" if first else f"{advice}{clear}"
     if code in _TWO_FA:
         device = sources.get("device_id")
         if no_keyring_here():
@@ -704,16 +718,23 @@ class LoginRefusals:
         if sources is None:
             sources = {"username": KEYRING, "password": KEYRING, "device_id": None}
         where = refusal_advice(error.code, first, sources)
+        if error.code in PASSWORD_STATE:
+            why = "because DSM gives the same answer until the password changes."
+            test = f"After the fix, {CHECK_COMMAND} tests the login once."
+        else:
+            why = (
+                "because repeated failed logins can trip DSM's Auto Block, which blocks this "
+                "computer's IP address from the NAS."
+            )
+            test = (
+                f"After the fix, {CHECK_COMMAND} tests the login once (each failed check counts "
+                "toward Auto Block)."
+            )
         refusal = LoginRefusedError(
             f"DSM refused the login: {reason}. mcp-synology won't send these credentials "
-            "again until they change or the server restarts, because repeated failed "
-            "logins can trip DSM's Auto Block, which blocks this computer's IP address "
-            "from the NAS.",
+            f"again until they change or the server restarts, {why}",
             code=error.code,
-            suggestion=(
-                f"{where}. After the fix, {CHECK_COMMAND} tests the login once (each "
-                "failed check counts toward Auto Block)."
-            ),
+            suggestion=f"{where}. {test}",
         )
         # Keep a fresh copy: the raised one carries the login's frames (and its password)
         # in its traceback once raised.

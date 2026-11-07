@@ -998,7 +998,8 @@ class TestLoginRefusals:
         assert len({str(e) for e in errors}) == 1  # the same answer every time
         message = str(errors[0])
         assert message.startswith("DSM refused the login: ")
-        assert "Auto Block" in message and ".." not in message
+        assert ("Auto Block" in message) is (code not in (408, 409, 410))
+        assert ".." not in message
         if code != 401:  # a disabled account: no credential change helps
             assert "mcp-synology setup" in (errors[0].suggestion or "")
         assert ".." not in (errors[0].suggestion or "")
@@ -1030,15 +1031,13 @@ class TestLoginRefusals:
                         await auth.login()
         assert len(logins) == 1
         assert says in (exc.value.suggestion or "")
-        assert "mcp-synology tries again once the credentials change" in (
-            exc.value.suggestion or ""
-        )
+        assert "mcp-synology won't send these credentials again" in str(exc.value)
 
     @respx.mock
     @pytest.mark.parametrize("code", [402, 407])
     async def test_other_login_errors_are_not_remembered(self, code: int) -> None:
-        # Not a verdict on the credentials (no permission for the service, a temporary
-        # lock or an IP block): the next call tries again.
+        # Not a verdict on the credentials (no permission for the service, or a blocked IP
+        # address, which clearing the block ends): the next call tries again.
         logins: list[httpx.Request] = []
         _auth_routes([_refused(code), _granted()], logins)
         config = _make_config(auth={"username": "admin", "password": "secret"})
@@ -1426,8 +1425,8 @@ class TestRefusalSuggestion:
         ids=["401-without-suggestion", "unmapped-code", "no-code"],
     )
     def test_advice_for_other_codes(self, code: int | None, first: str, expected: str) -> None:
-        """Codes the five above don't cover (#460 decides 402 and 407-410) get the
-        general advice, naming credentials set outside the keyring."""
+        """Codes with no advice of their own (402, 407) get the general advice, naming
+        credentials set outside the keyring."""
         from mcp_synology.core.auth import KEYRING, refusal_advice
 
         sources = {"username": KEYRING, "password": "auth.password in the config file"}
@@ -1621,3 +1620,66 @@ class TestWaitersShareAFailedLogin:
             second.cancel()
             await third  # not the earlier ConnectError: it logs in itself
         assert calls == ["try", "try", "try"]
+
+
+@pytest.mark.parametrize(
+    ("code", "message"),
+    [
+        (407, "This computer's IP address is blocked"),
+        (408, "The password has expired, and DSM doesn't let this account change it"),
+        (409, "The password has expired"),
+        (410, "The password must be changed"),
+    ],
+)
+def test_login_codes_say_what_synologys_guide_says(code: int, message: str) -> None:
+    """#460: they said IP blocked, SID required and Token expired."""
+    from mcp_synology.core.errors import error_from_code
+
+    assert str(error_from_code(code, "SYNO.API.Auth")) == message
+
+
+@pytest.mark.parametrize(
+    ("sources", "says", "doesnt"),
+    [
+        (
+            {"username": "keyring", "password": "keyring", "device_id": "SYNOLOGY_DEVICE_ID"},
+            "to store the new password",
+            "SYNOLOGY_DEVICE_ID",
+        ),
+        (
+            {"username": "SYNOLOGY_USERNAME", "password": "keyring", "device_id": None},
+            "to store the new password",
+            "SYNOLOGY_USERNAME",
+        ),
+        (
+            {"username": "keyring", "password": "SYNOLOGY_PASSWORD", "device_id": None},
+            "The password comes from SYNOLOGY_PASSWORD: change it there too",
+            "to store the new password",
+        ),
+    ],
+    ids=["token elsewhere", "username elsewhere", "password elsewhere"],
+)
+def test_an_expired_passwords_advice_names_only_the_password(
+    sources: dict[str, str | None], says: str, doesnt: str
+) -> None:
+    """Pre-QA on #460: the general advice said to change the username or the device token."""
+    from mcp_synology.core.auth import KEYRING, refusal_advice
+
+    resolved = {k: (KEYRING if v == "keyring" else v) for k, v in sources.items()}
+    advice = refusal_advice(409, "Sign in to DSM in a browser to change it", resolved)
+    assert says in advice
+    assert doesnt not in advice
+    assert "If an administrator clears the expiry instead, restart the server" in advice
+    cli = refusal_advice(409, "Sign in to DSM in a browser to change it", resolved, cli=True)
+    assert "restart" not in cli
+
+
+def test_an_expired_passwords_refusal_doesnt_blame_auto_block() -> None:
+    """Pre-QA on #460: such logins didn't trip it, on any DSM version tried."""
+    from mcp_synology.core.auth import LoginRefusals
+    from mcp_synology.core.errors import AuthenticationError
+
+    refused = LoginRefusals().refuse("x", AuthenticationError("The password has expired", code=409))
+    assert "Auto Block" not in str(refused)
+    assert "Auto Block" not in (refused.suggestion or "")
+    assert "DSM gives the same answer until the password changes" in str(refused)

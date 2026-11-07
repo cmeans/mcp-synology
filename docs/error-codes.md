@@ -57,7 +57,7 @@ Fix:
    token in the keyring so subsequent runs do not need the OTP code. A `device_id`
    set in the environment or the config file overrides the keyring: remove it there
    first (the error's suggestion says where it comes from).
-3. If the IP is auto-blocked, sign in to DSM directly and clear the entry at
+3. If the IP is auto-blocked, sign in to DSM from another address and clear the entry at
    **Control Panel → Security → Account → Auto Block → Allow / Block List**.
 4. If the password has expired or must be changed, sign in to DSM in a browser to
    change it, and store the new one with `mcp-synology setup`. With 408, DSM doesn't
@@ -78,7 +78,8 @@ there (then restart the server). The error's suggestion names where the refused
 credential comes from: the password for a wrong one (400), the device token for a
 2FA refusal (403, 404, 406), an expired or must-change password (408, 409, 410); a
 disabled account (401) needs an administrator. A blocked IP address (407) isn't
-remembered, since the block can end on its own.
+remembered, since clearing the block, or its expiry where DSM is set to expire
+blocks, ends it. It arrives as [`dsm_error`](#dsm_error).
 
 `auth_failed` is **not** retryable. mcp-synology will not auto-retry on this
 code — fix the underlying credential or 2FA state before re-running.
@@ -679,7 +680,9 @@ Fix:
 **A DSM error that does not map to one of the specific codes above.**
 
 Typically a background-task failure with a non-standard error structure, or a
-DSM error code mcp-synology does not recognize yet.
+DSM error code mcp-synology does not recognize yet. A login answered 407 arrives
+this way too: this computer's IP address is blocked, as under
+[`auth_failed`](#auth_failed).
 
 Fix:
 
