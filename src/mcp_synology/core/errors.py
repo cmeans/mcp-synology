@@ -348,8 +348,8 @@ AUTH_ERROR_CODES: dict[int, tuple[str, str]] = {
     408: (
         "The password has expired, and DSM doesn't let this account change it",
         "An administrator can set a new password in DSM > Control Panel > User & Group, or allow "
-        "a reset after expiry in its Advanced > Password Settings, and you then sign in to DSM in "
-        "a browser to change it.",
+        "a reset after expiry in its Advanced > Password Settings, so you can sign in to DSM in a "
+        "browser and change it.",
     ),
     409: (
         "The password has expired",

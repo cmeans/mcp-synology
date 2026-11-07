@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -11,6 +12,7 @@ from urllib.parse import parse_qsl
 import httpx
 import pytest
 import respx
+from mcp.server.mcpserver.exceptions import ToolError
 
 from mcp_synology.core.auth import AuthManager, LoginRefusals
 from mcp_synology.core.client import DsmClient
@@ -1425,8 +1427,8 @@ class TestRefusalSuggestion:
         ids=["401-without-suggestion", "unmapped-code", "no-code"],
     )
     def test_advice_for_other_codes(self, code: int | None, first: str, expected: str) -> None:
-        """Codes with no advice of their own (402, 407) get the general advice, naming
-        credentials set outside the keyring."""
+        """Codes with no branch of their own (no login maps one today) get the general advice,
+        naming credentials set outside the keyring."""
         from mcp_synology.core.auth import KEYRING, refusal_advice
 
         sources = {"username": KEYRING, "password": "auth.password in the config file"}
@@ -1643,7 +1645,7 @@ def test_login_codes_say_what_synologys_guide_says(code: int, message: str) -> N
     [
         (
             {"username": "keyring", "password": "keyring", "device_id": "SYNOLOGY_DEVICE_ID"},
-            "to store the new password",
+            "to store the new password; the running server picks it up",
             "SYNOLOGY_DEVICE_ID",
         ),
         (
@@ -1653,7 +1655,7 @@ def test_login_codes_say_what_synologys_guide_says(code: int, message: str) -> N
         ),
         (
             {"username": "keyring", "password": "SYNOLOGY_PASSWORD", "device_id": None},
-            "The password comes from SYNOLOGY_PASSWORD: change it there too",
+            "The password comes from SYNOLOGY_PASSWORD: change it there too and restart the server",
             "to store the new password",
         ),
     ],
@@ -1672,6 +1674,7 @@ def test_an_expired_passwords_advice_names_only_the_password(
     assert "If an administrator clears this instead, restart the server" in advice
     cli = refusal_advice(409, "Sign in to DSM in a browser to change it", resolved, cli=True)
     assert "restart" not in cli
+    assert "picks it up" not in cli
 
 
 def test_an_expired_passwords_refusal_doesnt_blame_auto_block() -> None:
@@ -1683,3 +1686,29 @@ def test_an_expired_passwords_refusal_doesnt_blame_auto_block() -> None:
     assert "Auto Block" not in str(refused)
     assert "(a wrong password counts toward Auto Block)" in (refused.suggestion or "")
     assert "DSM gives the same answer until the password is changed" in str(refused)
+
+
+@respx.mock
+async def test_a_re_login_refused_with_408_isnt_a_missing_shared_folder() -> None:
+    """#460: the bin's folder answers File Station's 408, the share 119, and the re-login 408."""
+    from mcp_synology.modules.filestation.listing import list_recycle_bin
+
+    def on_get(request: httpx.Request) -> httpx.Response:
+        code = 408 if "recycle" in str(request.url) else 119
+        return httpx.Response(200, json={"success": False, "error": {"code": code}})
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=on_get)
+    respx.post(f"{BASE_URL}/webapi/entry.cgi").mock(return_value=_refused(408))
+    config = _make_config(auth={"username": "admin", "password": "right"})
+    async with _make_client() as client:
+        AuthManager(config, client)
+        client.sid = "old-sid"
+        with (
+            patch.dict(os.environ, _clean_env(), clear=True),
+            patch("mcp_synology.core.auth.kr", _no_keyring()),
+            pytest.raises(ToolError) as caught,
+        ):
+            await list_recycle_bin(client, share="/video", recycle_bin_status={})
+    body = json.loads(str(caught.value))["error"]
+    assert body["code"] == "auth_failed"
+    assert "password has expired" in body["message"]

@@ -60,11 +60,11 @@ Fix:
 3. If the IP is auto-blocked, sign in to DSM from another address and clear the entry at
    **Control Panel → Security → Account → Auto Block → Allow / Block List**.
 4. If the password has expired or must be changed, sign in to DSM in a browser to
-   change it, and store the new one with `mcp-synology setup`. With 408, DSM doesn't
+   change it, and store the new one with `mcp-synology setup --config <your config file>`. With 408, DSM doesn't
    let the account do that: an administrator sets a new one, or allows a reset after
    expiry in **Control Panel → User & Group → Advanced → Password Settings**, and the
-   account's user then signs in to change it. The policy covers administrators too: if none
-   can sign in, see Synology's guide to resetting the administrator's password.
+   account's user can then sign in to change it. The policy covers administrators too: if
+   none can sign in, see "How to reset my Synology NAS" in Synology's Knowledge Center.
 5. Verify the account has access to FileStation: **Control Panel → User & Group
    → [account] → Edit → Applications**. The account must be allowed to use
    File Station.
