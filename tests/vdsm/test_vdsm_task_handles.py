@@ -569,7 +569,8 @@ async def test_overwrite_is_refused_while_a_task_lands_the_same_name(
 ) -> None:
     """#587: DSM's task list shows the running copy's destination and source, on every version."""
     client = _admin(admin_client)
-    src = nas.tree("/writable/cp587/a/x")
+    nas.folder("/writable/cp587")
+    src = nas.tree("/writable/cp587/a/x", dirs=COPY_DIRS)
     other = nas.folder("/writable/cp587/b/x")
     dest = nas.folder("/writable/cp587_dst")
     records = TaskRecords()
@@ -585,6 +586,9 @@ async def test_overwrite_is_refused_while_a_task_lands_the_same_name(
         body = json.loads(str(refused.value))["error"]
         assert f"a running copy of {src} is landing in {dest}" in body["message"]
         assert f"`{handle}`" in body["suggestion"]
+        # Theirs replaces, so ours is refused without replacing: DSM's list says `overwrite` too.
+        with pytest.raises(ToolError, match="is landing in"):
+            await copy_files(client, paths=[other], dest_folder=dest, overwrite=False)
 
 
 # --- Move and restore -----------------------------------------------------

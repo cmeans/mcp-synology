@@ -225,7 +225,9 @@ MODULE_INFO = ModuleInfo(
                 "listed, and the rest are copied. With `overwrite=true`, two sources that would "
                 "replace each other are refused, and a replaced file may not be in the recycle "
                 "bin. If any source is missing, nothing is copied. A long copy keeps running on "
-                "the NAS and returns a handle for file_task."
+                "the NAS and returns a handle for file_task. "
+                "While a running task is landing the same name there, the call is refused if "
+                "either one replaces."
             ),
             permission_tier=PermissionTier.WRITE,
             annotations=_ANNO_DESTRUCTIVE,
@@ -242,7 +244,9 @@ MODULE_INFO = ModuleInfo(
                 "missing, nothing is moved. A whole shared folder "
                 "(`/video`), recycle bin or user's home folder (`/homes/<user>`) is refused as a "
                 "source: move its items by path. A long move keeps "
-                "running on the NAS and returns a handle for file_task."
+                "running on the NAS and returns a handle for file_task. "
+                "While a running task is landing the same name there, the call is refused if "
+                "either one replaces."
             ),
             permission_tier=PermissionTier.WRITE,
             annotations=_ANNO_DESTRUCTIVE,
@@ -286,7 +290,9 @@ MODULE_INFO = ModuleInfo(
                 "destination is skipped and stays in the bin, unless `overwrite=true`, which "
                 "replaces the existing one, which may then not be in the recycle bin; two items "
                 "that would replace each other are refused. A long restore keeps running on the "
-                "NAS and returns a handle for file_task."
+                "NAS and returns a handle for file_task. "
+                "While a running task is landing the same name there, the call is refused if "
+                "either one replaces."
             ),
             permission_tier=PermissionTier.WRITE,
             annotations=_ANNO_DESTRUCTIVE,

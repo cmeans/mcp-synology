@@ -512,8 +512,8 @@ def _task_kind(api: Any, params: dict[str, Any], paths: list[str]) -> HandleKind
 async def _list_running(client: DsmClient) -> list[RunningTask]:
     """This user's running Delete/CopyMove tasks, from ``SYNO.FileStation.BackgroundTask``
     ``list`` v2, which shows each task's start ``params`` (``path`` as a list; CopyMove
-    also ``dest_folder_path``, ``overwrite``, ``remove_src`` as JSON booleans; vdsm 7.1 and
-    7.2.2). An unexpected reply shape counts as nothing running. Raises DSM and transport
+    also ``dest_folder_path``, ``overwrite``, ``remove_src`` as JSON booleans; vdsm 7.1, 7.2.2,
+    7.3.2 and 7.4.1). An unexpected reply shape counts as nothing running. Raises DSM and transport
     errors.
     """
     data = await client.request("SYNO.FileStation.BackgroundTask", "list", version=2)
@@ -570,14 +570,14 @@ async def running_task(
 
 
 async def running_landing(
-    client: DsmClient, *, sources: list[str], dest: str, overwrite: bool
+    client: DsmClient, *, sources: list[str], dest: str, overwrite: bool, remove_src: bool
 ) -> tuple[str, RunningTask] | None:
     """A source of this call and this user's running copy, move or restore that would land in
     ``dest`` under one name, where either one replaces (#587): the later task would replace what
     the earlier landed, and for a move the original is already gone. Names compare as
-    ``refuse_same_names`` does. The same source is left out: that's a second run of one operation,
-    which ``running_task`` handles. None if there is none, or if ``list`` fails: it's a guard, as
-    in ``running_task``. What a finished call put there can't be known here."""
+    ``refuse_same_names`` does. The same source under the same operation is left out: that's a
+    second run of it, which ``running_task`` handles. None if there is none, or if ``list`` fails:
+    it's a guard, as in ``running_task``. What a finished call put there can't be known here."""
     try:
         tasks = await _list_running(client)
     except (SynologyError, httpx.TransportError) as e:
@@ -590,7 +590,11 @@ async def running_landing(
             continue
         for source in sources:
             key = name_key(source)
-            if any(path != source and name_key(path) == key for path in task.paths):
+            same_operation = task.params.get("remove_src") is remove_src
+            if any(
+                name_key(path) == key and (path != source or not same_operation)
+                for path in task.paths
+            ):
                 return source, task
     return None
 

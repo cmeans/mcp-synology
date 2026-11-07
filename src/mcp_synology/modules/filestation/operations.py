@@ -400,28 +400,38 @@ async def _refuse_missing_sources(
 async def _refuse_landing_on_a_running_task(
     client: DsmClient,
     operation: str,
-    normalized: list[str],
+    remaining: list[str],
     dest: str,
+    *,
     overwrite: bool,
-    already_done: list[str] | None,
+    remove_src: bool,
+    done: list[str],
     later: list[str] | None,
 ) -> None:
-    """Refuse before anything starts if a running task would land in ``dest`` under a source's
-    name, and either replaces (#587). A restore to several places gets here after earlier items
-    finished, so it says what was done and what wasn't started, not that nothing changed."""
-    found = await running_landing(client, sources=normalized, dest=dest, overwrite=overwrite)
+    """Refuse if a running task would land in ``dest`` under one of ``remaining``'s names, and
+    either replaces (#587). Checked before each path: a task can start during an earlier path's
+    wait. Earlier paths may be done, or a restore's earlier items, so it says what was done and
+    what wasn't started."""
+    found = await running_landing(
+        client, sources=remaining, dest=dest, overwrite=overwrite, remove_src=remove_src
+    )
     if found is None:
         return
     source, task = found
-    rest = [p for p in normalized if p != source] + list(later or [])
-    outcome = " Nothing was changed."
-    if already_done:
-        outcome = _already_done(operation, already_done).removeprefix(".") + "."
+    rest = [p for p in remaining if p != source] + list(later or [])
+    outcome = f" Nothing was {_PAST_TENSE.get(operation, 'changed')}."
+    if done:
+        outcome = _already_done(operation, done).removeprefix(".") + "."
         if rest:
             outcome += f" Not started: {', '.join(map(shown, rest))}."
     same = any(p.rsplit("/", 1)[-1] == source.rsplit("/", 1)[-1] for p in task.paths)
-    names = "the same name" if same else "a name that matches ignoring case"
+    names = (
+        "the same name"
+        if same
+        else "a name that matches ignoring case, which some file systems treat as one,"
+    )
     running = ", ".join(map(shown, task.paths))
+    leave_out = " Leave out what's already done." if done else ""
     error_response(
         ErrorCode.INVALID_PARAMETER,
         f"{operation} files refused: a running {task.handle.kind} of {running} is landing in "
@@ -432,7 +442,7 @@ async def _refuse_landing_on_a_running_task(
         value=source,
         suggestion=f"Check on it with file_task and the handle `{task.handle}`, and when it's "
         "done, check what's there before running this again, or use another destination. To "
-        "keep what's there, use overwrite=false once it's done.",
+        f"keep what's there, use overwrite=false once it's done.{leave_out}",
     )
 
 
@@ -809,15 +819,21 @@ async def _copy_move(
     if check_sources:
         await _refuse_missing_sources(client, operation, normalized, paths)
     await _refuse_missing_destination(client, operation, dest)
-    await _refuse_landing_on_a_running_task(
-        client, operation, normalized, dest, overwrite, already_done, later
-    )
-
     total_processed = 0
     done = list(already_done or [])
     skipped_paths: list[str] = []
     landed_here: list[str] = []
     for i, p in enumerate(normalized):
+        await _refuse_landing_on_a_running_task(
+            client,
+            operation,
+            normalized[i:],
+            dest,
+            overwrite=overwrite,
+            remove_src=remove_src,
+            done=done,
+            later=later,
+        )
         # A copy of the same source to another destination is a different operation; a
         # move (or restore) of a source that is already moving anywhere is not.
         match: dict[str, Any] = {"remove_src": remove_src}

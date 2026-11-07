@@ -3893,7 +3893,11 @@ def _dsm_with_running(task: dict[str, Any], calls: list[dict[str, str]]) -> Any:
     ("ours", "theirs", "names"),
     [
         ("/b/x", "/a/x", "the same name"),
-        ("/b/X.TXT", "/a/x.txt", "a name that matches ignoring case"),
+        (
+            "/b/X.TXT",
+            "/a/x.txt",
+            "a name that matches ignoring case, which some file systems treat as one,",
+        ),
     ],
     ids=["same name", "case"],
 )
@@ -3911,7 +3915,7 @@ async def test_overwrite_is_refused_while_a_task_lands_the_same_name(
     assert body["message"] == (
         f"Move files refused: a running move of {theirs} is landing in /d with {names} as {ours}, "
         "so one could replace the other (for folders, items of the same name inside them). "
-        "Nothing was changed."
+        "Nothing was moved."
     )
     assert body["param"] == "paths"
     assert body["value"] == ours
@@ -3986,6 +3990,85 @@ async def test_a_restore_refused_partway_says_what_was_done(mock_client: DsmClie
             mock_client, share="/s", paths=["x/a", "y/b", "z/c"], overwrite=True
         )
     message = json.loads(str(refused.value))["error"]["message"]
-    assert "Nothing was changed" not in message
+    assert "Nothing was" not in message
     assert "Already restored before this failure: /s/#recycle/x/a." in message
     assert message.endswith("Not started: /s/#recycle/z/c.")
+    assert "Leave out what's already done." in body_suggestion(refused)
+
+
+def body_suggestion(refused: Any) -> str:
+    return str(json.loads(str(refused.value))["error"]["suggestion"])
+
+
+@respx.mock
+async def test_a_task_starting_during_an_earlier_path_is_seen(
+    mock_client: DsmClient,
+) -> None:
+    """Pre-QA on #587: the check ran once, and a task could start during the first path's wait."""
+    calls: list[dict[str, str]] = []
+    started: list[str] = []
+    base = _dsm_with_running(_a_task_landing("/a/x"), calls)
+
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        params = dict(request.url.params)
+        if params.get("method") == "start":
+            started.append(params["path"])
+        if params.get("method") == "list" and not started:
+            return httpx.Response(200, json={"success": True, "data": {"tasks": []}})
+        return base(request)
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+    with pytest.raises(ToolError) as refused:
+        await move_files(mock_client, paths=["/b/big", "/b/x"], dest_folder="/d", overwrite=True)
+    message = json.loads(str(refused.value))["error"]["message"]
+    assert message.endswith("Already moved before this failure: /b/big.")
+    assert started == ["/b/big"]
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("tool", "remove_src"), [(copy_files, True), (move_files, False)], ids=["copy", "move"]
+)
+async def test_the_same_source_under_the_other_operation_is_refused(
+    mock_client: DsmClient, tool: Any, remove_src: bool
+) -> None:
+    """Pre-QA on #587: `running_task` matches the operation too, so this one started."""
+    calls: list[dict[str, str]] = []
+    task = _a_task_landing("/a/x")
+    task["params"]["remove_src"] = remove_src
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_dsm_with_running(task, calls))
+    with pytest.raises(ToolError, match="is landing in"):
+        await tool(mock_client, paths=["/a/x"], dest_folder="/d", overwrite=True)
+    assert not [call for call in calls if call.get("method") == "start"]
+
+
+@respx.mock
+async def test_a_dsm_error_listing_tasks_doesnt_refuse(mock_client: DsmClient) -> None:
+    calls: list[dict[str, str]] = []
+    base = _dsm_with_running(_a_task_landing("/a/x"), calls)
+
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        if "BackgroundTask" in dict(request.url.params).get("api", ""):
+            return httpx.Response(200, json={"success": False, "error": {"code": 401}})
+        return base(request)
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+    await copy_files(mock_client, paths=["/b/x"], dest_folder="/d", overwrite=True)
+    assert [call for call in calls if call.get("method") == "start"]
+
+
+@respx.mock
+async def test_a_restore_refused_on_its_last_item_lists_none_as_not_started(
+    mock_client: DsmClient,
+) -> None:
+    calls: list[dict[str, str]] = []
+    task = _a_task_landing("/a/b", dest="/s/y")
+    task["params"]["remove_src"] = True
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_dsm_with_running(task, calls))
+    with pytest.raises(ToolError) as refused:
+        await restore_from_recycle_bin(
+            mock_client, share="/s", paths=["x/a", "y/b"], overwrite=True
+        )
+    message = json.loads(str(refused.value))["error"]["message"]
+    assert "a running move of /a/b is landing in /s/y" in message
+    assert "Not started" not in message
