@@ -14,6 +14,7 @@ import httpx
 
 from mcp_synology.cli.logging_ import _init_early_logging
 from mcp_synology.cli.startup import escape_what_stdout_cant_encode, load_or_exit
+from mcp_synology.core.errors import NOT_DSM_HINT
 from mcp_synology.core.redaction import redact_urls
 
 if TYPE_CHECKING:
@@ -93,9 +94,6 @@ def connection_failure_message(base_url: str, host: str, exc: BaseException) -> 
     return f"Can't connect to {base_url}: {reason}. Check the host, port and https settings."
 
 
-_NOT_DSM = "Is this a Synology DSM address? Check the host, port and https settings."
-
-
 def not_dsm_message(base_url: str, status: int | None) -> str:
     """One clean line for a server that answers but isn't DSM's API (QA R1 on #210).
 
@@ -103,16 +101,16 @@ def not_dsm_message(base_url: str, status: int | None) -> str:
     HTML page such as a router login. ``status`` is None when the reply wasn't JSON.
     """
     if status is None:
-        return f"{base_url} didn't return a DSM API response (not JSON). {_NOT_DSM}"
+        return f"{base_url} didn't return a DSM API response (not JSON). {NOT_DSM_HINT}"
     message = f"{base_url} answered HTTP {status}, not a DSM API response."
     if status == 400 and base_url.startswith("http://"):
         # DSM's nginx answers plain HTTP sent to its HTTPS port (5001) with 400.
         message += " Plain HTTP sent to an HTTPS port gets 400; is https: true needed?"
-    return f"{message} {_NOT_DSM}"
+    return f"{message} {NOT_DSM_HINT}"
 
 
 @contextlib.contextmanager
-def exit_on_connection_failure(base_url: str, host: str) -> Iterator[None]:
+def exit_on_connection_failure(base_url: str, host: str, *, note: str = "") -> Iterator[None]:
     """Turn a NAS that can't be reached, or a server that isn't DSM, into a red error
     line and exit 1 instead of a traceback (check and setup, #191)."""
     import httpx
@@ -130,6 +128,8 @@ def exit_on_connection_failure(base_url: str, host: str) -> Iterator[None]:
     else:
         return
     click.echo(click.style(f"Error: {message}", fg="red"), err=True)
+    if note:
+        click.echo(note, err=True)
     sys.exit(1)
 
 

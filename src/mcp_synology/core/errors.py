@@ -19,6 +19,7 @@ SETUP_NEW_CONFIG = "'mcp-synology setup'"
 # variables (a client's `env` block doesn't reach it). SYNOLOGY_HOST alone would send the
 # password over plain HTTP to port 5000.
 CHECK_NO_FILE = "mcp-synology check"
+NOT_DSM_HINT = "Is this a Synology DSM address? Check the host, port and https settings."
 NO_FILE_NOTE = (
     "(with no config file, set SYNOLOGY_HOST and SYNOLOGY_HTTPS, and SYNOLOGY_PORT if it "
     "isn't DSM's default, to what the server has, and leave out --config)"

@@ -339,7 +339,7 @@ class TestSetupInteractive:
             k: v for k, v in os.environ.items() if not k.startswith("SYNOLOGY_")
         }
 
-        connect_result: dict[str, Any] = {"success": True, "hostname": "MyNAS"}
+        connect_result: dict[str, Any] = {"success": True, "keyring_ok": True, "hostname": "MyNAS"}
 
         # Input order: host, https(n), permission(read), alias(""),
         # username, password, hostname-confirm(y)
@@ -370,7 +370,7 @@ class TestSetupInteractive:
             patch("mcp_synology.cli.setup._store_keyring", return_value=True),
             patch(
                 "mcp_synology.cli.setup.asyncio.run",
-                return_value={"success": True, "hostname": None},
+                return_value={"success": True, "keyring_ok": True, "hostname": None},
             ),
             patch.dict(os.environ, clean_env, clear=True),
         ):
@@ -397,7 +397,7 @@ class TestSetupInteractive:
             patch("mcp_synology.cli.setup._store_keyring", return_value=True),
             patch(
                 "mcp_synology.cli.setup.asyncio.run",
-                return_value={"success": True, "hostname": hostname},
+                return_value={"success": True, "keyring_ok": True, "hostname": hostname},
             ),
             patch.dict(os.environ, clean_env, clear=True),
         ):
@@ -418,7 +418,7 @@ class TestSetupInteractive:
             k: v for k, v in os.environ.items() if not k.startswith("SYNOLOGY_")
         }
 
-        connect_result: dict[str, Any] = {"success": True}
+        connect_result: dict[str, Any] = {"success": True, "keyring_ok": True}
 
         with (
             patch("mcp_synology.cli.setup._CONFIG_DIR", config_dir),
@@ -444,7 +444,7 @@ class TestSetupInteractive:
             k: v for k, v in os.environ.items() if not k.startswith("SYNOLOGY_")
         }
 
-        connect_result: dict[str, Any] = {"success": True}
+        connect_result: dict[str, Any] = {"success": True, "keyring_ok": True}
 
         # Prompts: host, https(y), verify_ssl(n), permission(write), alias(""),
         # username, password
@@ -486,7 +486,10 @@ class TestSetupInteractive:
             patch("mcp_synology.cli.setup._CONFIG_DIR", config_dir),
             patch("mcp_synology.core.config.discover_config_path", side_effect=FileNotFoundError),
             patch("mcp_synology.cli.setup._store_keyring", return_value=True),
-            patch("mcp_synology.cli.setup.asyncio.run", return_value={"success": True}),
+            patch(
+                "mcp_synology.cli.setup.asyncio.run",
+                return_value={"success": True, "keyring_ok": True},
+            ),
             patch.dict(os.environ, clean_env, clear=True),
         ):
             # host, https(answer), permission, alias(""), [verify_ssl(default)], user, pass
@@ -511,7 +514,7 @@ class TestSetupInteractive:
             assert "self-signed" not in result.output
 
     def test_interactive_setup_keyring_failure(self, tmp_path: Path) -> None:
-        """When keyring fails, the config is still written: the variables need it (#481)."""
+        """With no keyring, the config is still written: the variables need it (#481)."""
         runner = CliRunner()
         config_dir = tmp_path / "config"
 
@@ -522,6 +525,7 @@ class TestSetupInteractive:
         with (
             patch("mcp_synology.cli.setup._CONFIG_DIR", config_dir),
             patch("mcp_synology.core.config.discover_config_path", side_effect=FileNotFoundError),
+            patch("mcp_synology.core.auth.no_keyring_here", return_value=True),
             patch("mcp_synology.cli.setup._store_keyring", return_value=False),
             patch.dict(os.environ, clean_env, clear=True),
         ):
@@ -561,7 +565,8 @@ class TestSetupInteractive:
                 input="192.168.1.50\nn\n\nread\n\nadmin\npassword\n",
             )
 
-        assert result.exit_code == 0
+        assert result.exit_code == 1
+        assert "Nothing was changed." in result.output
         assert not (config_dir / "192-168-1-50.yaml").exists()
 
 
@@ -624,7 +629,9 @@ class TestStoreKeyring:
         from mcp_synology.cli.setup import _store_keyring
 
         mock_kr = MagicMock()
-        mock_kr.get_password.return_value = None
+        held: dict[str, str] = {}
+        mock_kr.get_password.side_effect = lambda _service, key: held.get(key)
+        mock_kr.set_password.side_effect = lambda _service, key, value: held.update({key: value})
         # keyring is imported inside the function, so mock at the import target
         with patch.dict("sys.modules", {"keyring": mock_kr}):
             result = _store_keyring("mcp-synology/test", "admin", "secret", "nas", 5000)
@@ -656,7 +663,7 @@ class TestEmitClaudeDesktopSnippet:
         }
         clean_env["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=/run/user/1000/bus"
 
-        connect_result: dict[str, Any] = {"success": True}
+        connect_result: dict[str, Any] = {"success": True, "keyring_ok": True}
 
         with (
             patch("mcp_synology.cli.setup._CONFIG_DIR", config_dir),
@@ -684,7 +691,7 @@ class TestEmitClaudeDesktopSnippet:
             k: v for k, v in os.environ.items() if not k.startswith("SYNOLOGY_")
         }
 
-        connect_result: dict[str, Any] = {"success": True}
+        connect_result: dict[str, Any] = {"success": True, "keyring_ok": True}
 
         with (
             patch("mcp_synology.cli.setup._CONFIG_DIR", config_dir),
@@ -931,7 +938,9 @@ class TestSetupConnectionFailures:
 
         port = _closed_port()
         with pytest.raises(SystemExit) as exc:
-            asyncio.run(_connect_and_login(self._config(port), "x", "y", "svc", False))
+            asyncio.run(
+                _connect_and_login(self._config(port), "x", "y", lambda _device_id: True, False)
+            )
         assert exc.value.code == 1
         assert f"Can't connect to http://127.0.0.1:{port}" in capsys.readouterr().err
 
@@ -940,7 +949,7 @@ class TestSetupConnectionFailures:
 
         port = _closed_port()
         with pytest.raises(SystemExit) as exc:
-            asyncio.run(_setup_login(self._config(port), "x", "y", "svc"))
+            asyncio.run(_setup_login(self._config(port), "x", "y", lambda _token: True))
         assert exc.value.code == 1
         assert f"Can't connect to http://127.0.0.1:{port}" in capsys.readouterr().err
 
@@ -964,7 +973,11 @@ class TestSetupConnectionFailures:
         from mcp_synology.cli import setup
 
         respx.get("http://127.0.0.1:5000/webapi/query.cgi").mock(return_value=response)
-        args = ("x", "y", "svc", False) if which == "_connect_and_login" else ("x", "y", "svc")
+        args = (
+            ("x", "y", lambda _device_id: True, False)
+            if which == "_connect_and_login"
+            else ("x", "y", lambda _token: True)
+        )
         with pytest.raises(SystemExit) as exc:
             asyncio.run(getattr(setup, which)(self._config(5000), *args))
         assert exc.value.code == 1
