@@ -4157,13 +4157,6 @@ async def test_a_first_destination_check_with_no_answer_starts_nothing(
     assert not [c for c in calls if c.get("method") == "start"]
 
 
-@pytest.fixture
-def no_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
-    from mcp_synology.modules.filestation import tasks
-
-    monkeypatch.setattr(tasks.asyncio, "sleep", AsyncMock())
-
-
 def _lost_task_dsm(calls: list[dict[str, str]], info: Any, *, lost: str = "") -> Any:
     """A DSM whose status answers 599 (for ``lost`` only, if given; others finish at once), with
     this getinfo answer once a task has started. Task IDs follow the path's last part."""
@@ -4196,7 +4189,7 @@ def _lost_task_dsm(calls: list[dict[str, str]], info: Any, *, lost: str = "") ->
 
 @respx.mock
 async def test_a_lost_delete_whose_path_is_gone_is_done(
-    mock_client: DsmClient, no_sleep: None
+    mock_client: DsmClient, no_poll_wait: None
 ) -> None:
     """#521: the reply said it failed, though it may have gone through."""
     calls: list[dict[str, str]] = []
@@ -4225,7 +4218,7 @@ async def test_a_lost_delete_whose_path_is_gone_is_done(
     ids=["still there", "neither", "unreadable", "denied", "no answer", "proxy", "DSM error"],
 )
 async def test_a_lost_delete_not_known_gone_hands_off(
-    mock_client: DsmClient, no_sleep: None, info: Any
+    mock_client: DsmClient, no_poll_wait: None, info: Any
 ) -> None:
     calls: list[dict[str, str]] = []
     respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_lost_task_dsm(calls, info))
@@ -4243,7 +4236,7 @@ async def test_a_lost_delete_not_known_gone_hands_off(
 
 @respx.mock
 async def test_a_lost_delete_partway_says_whats_done_and_not_started(
-    mock_client: DsmClient, no_sleep: None
+    mock_client: DsmClient, no_poll_wait: None
 ) -> None:
     calls: list[dict[str, str]] = []
     respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
@@ -4259,7 +4252,7 @@ async def test_a_lost_delete_partway_says_whats_done_and_not_started(
 
 @respx.mock
 async def test_a_lost_copy_partway_hands_off_and_stops_nothing(
-    mock_client: DsmClient, no_sleep: None
+    mock_client: DsmClient, no_poll_wait: None
 ) -> None:
     calls: list[dict[str, str]] = []
     respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
@@ -4284,7 +4277,7 @@ async def test_a_lost_copy_partway_hands_off_and_stops_nothing(
 
 @respx.mock
 async def test_a_lost_task_reply_keeps_the_last_progress(
-    mock_client: DsmClient, no_sleep: None
+    mock_client: DsmClient, no_poll_wait: None
 ) -> None:
     running = {"finished": False, "progress": 0.5, "total": 100, "processed_num": 50}
     replies = iter([running])
@@ -4304,7 +4297,7 @@ async def test_a_lost_task_reply_keeps_the_last_progress(
 
 @respx.mock
 async def test_a_stalled_path_check_is_bounded(
-    mock_client: DsmClient, no_sleep: None, monkeypatch: pytest.MonkeyPatch
+    mock_client: DsmClient, no_poll_wait: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """QA round 1 on #590: a stalled DSM mustn't hold the reply and its handle."""
     from mcp_synology.modules.filestation import operations
@@ -4328,7 +4321,7 @@ async def test_a_stalled_path_check_is_bounded(
 
 @respx.mock
 async def test_a_cancel_during_the_path_check_stops_the_task(
-    mock_client: DsmClient, no_sleep: None
+    mock_client: DsmClient, no_poll_wait: None
 ) -> None:
     """Level-triggered, as the MCP SDK cancels: the stop is canceled too unless it's shielded."""
     calls: list[dict[str, str]] = []
@@ -4357,7 +4350,7 @@ def _stalls(request: httpx.Request, calls: list[dict[str, str]]) -> bool:
 
 @respx.mock
 async def test_a_lost_copys_next_step_shows_its_destination_safely(
-    mock_client: DsmClient, no_sleep: None
+    mock_client: DsmClient, no_poll_wait: None
 ) -> None:
     odd = "/s/d\u200bst"
     calls: list[dict[str, str]] = []
