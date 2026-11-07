@@ -668,10 +668,7 @@ async def test_overwrite_is_refused_while_a_task_lands_the_same_name(
         with pytest.raises(ToolError) as refused:
             await copy_files(client, paths=[other], dest_folder=dest, overwrite=True)
         body = json.loads(str(refused.value))["error"]
-        assert (
-            f"a copy of {src!r}, running or just finished, is landing in {dest!r}"
-            in (body["message"])
-        )
+        assert f"a running copy of {src!r} is landing in {dest!r}" in (body["message"])
         assert f"`{handle}`" in body["suggestion"]
         # Theirs replaces, so ours is refused without replacing: DSM's list says `overwrite` too.
         with pytest.raises(ToolError, match="is landing in"):

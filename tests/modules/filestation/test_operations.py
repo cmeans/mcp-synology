@@ -5729,8 +5729,7 @@ async def test_overwrite_is_refused_while_a_task_lands_the_same_name(
         await move_files(mock_client, paths=[ours], dest_folder="/d", overwrite=True)
     body = json.loads(str(refused.value))["error"]
     assert body["message"] == (
-        f"Move files refused: a move of {theirs!r}, running or just finished, is landing in '/d' "
-        f"with {names} as "
+        f"Move files refused: a running move of {theirs!r} is landing in '/d', with {names} as "
         f"{ours!r}, "
         "so one could replace the other (for folders, items of the same name inside them). "
         "Nothing was moved."
@@ -5910,7 +5909,7 @@ async def test_a_restore_refused_on_its_last_item_lists_none_as_not_started(
             mock_client, share="/s", paths=["x/a", "y/b"], overwrite=True
         )
     message = json.loads(str(refused.value))["error"]["message"]
-    assert "a move of '/a/b', running or just finished, is landing in '/s/y'" in message
+    assert "a running move of '/a/b' is landing in '/s/y'" in message
     assert "Not started" not in message
 
 
@@ -6115,7 +6114,7 @@ async def test_a_failed_task_list_says_the_check_didnt_run(
 
 
 @respx.mock
-async def test_a_refusal_lists_every_path_it_didnt_start(mock_client: DsmClient) -> None:
+async def test_a_refusal_lists_the_other_paths_it_didnt_start(mock_client: DsmClient) -> None:
     """Pre-QA on #597: only the paths after the clash were checked."""
     calls: list[dict[str, str]] = []
     started: list[str] = []
@@ -6194,3 +6193,78 @@ async def test_a_calls_own_finished_task_isnt_a_clash_for_its_next_source(
     # tool's path check, and isn't this check's job.
     await move_files(mock_client, paths=["/a/n", "/b/n"], dest_folder="/d", overwrite=True)
     assert [c["path"] for c in calls if c.get("method") == "start"] == ["/a/n", "/b/n"]
+
+
+@respx.mock
+async def test_a_parallel_call_sees_what_a_call_hasnt_started_yet(mock_client: DsmClient) -> None:
+    """QA round 2 on #597: B landed `y` while A's `big` ran, and A's `y` then replaced it."""
+    calls: list[dict[str, str]] = []
+    starts: list[str] = []
+    base = _dsm_with_running(_a_task_landing("/none"), calls)
+    release = asyncio.Event()
+
+    async def side_effect(request: httpx.Request) -> httpx.Response:
+        params = dict(request.url.params)
+        await asyncio.sleep(0.001)
+        if params.get("method") == "start":
+            starts.append(params["path"])
+        if params.get("method") == "list":
+            return httpx.Response(200, json={"success": True, "data": {"tasks": []}})
+        if params.get("method") == "status" and "T_big" in params.get("taskid", ""):
+            await release.wait()
+        return base(request)
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+
+    async def second() -> Any:
+        while "/a/big" not in starts:
+            await asyncio.sleep(0.001)
+        try:
+            return await move_files(mock_client, paths=["/b/y"], dest_folder="/d")
+        except ToolError as e:
+            return e
+        finally:
+            release.set()
+
+    first = move_files(mock_client, paths=["/a/big", "/a/y"], dest_folder="/d", overwrite=True)
+    _, b = await asyncio.gather(first, second())
+    assert isinstance(b, ToolError), b
+    message = json.loads(str(b))["error"]["message"]
+    assert "another move call through this server is landing in '/d'" in message
+    assert "until that call returns" in message
+    assert "/b/y" not in starts
+
+
+@respx.mock
+async def test_a_refused_restore_recreates_nothing(mock_client: DsmClient) -> None:
+    """QA round 2 on #597: it re-created the missing folders, then said Nothing was restored."""
+    calls: list[dict[str, str]] = []
+
+    def dsm(running: list[dict[str, Any]]) -> Any:
+        base = _dsm_with_running(_a_task_landing("/none"), calls)
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            if params.get("method") == "list" and "BackgroundTask" in params.get("api", ""):
+                calls.append(params)
+                return httpx.Response(200, json={"success": True, "data": {"tasks": running}})
+            created = any(c.get("method") == "create" for c in calls)
+            if params.get("method") == "getinfo" and params.get("path") == "/s/y" and not created:
+                calls.append(params)  # the item's folder is gone, so a restore re-creates it
+                data = {"files": [{"path": "/s/y", "code": 408}]}
+                return httpx.Response(200, json={"success": True, "data": data})
+            return base(request)
+
+        return side_effect
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        side_effect=dsm([_a_task_landing("/a/b", dest="/s/y")])
+    )
+    with pytest.raises(ToolError, match="Nothing was restored"):
+        await restore_from_recycle_bin(mock_client, share="/s", paths=["y/b"], overwrite=True)
+    assert not [c for c in calls if c.get("method") in ("create", "start")]
+    # With no clash, the same restore re-creates the folder: the refusal came first.
+    calls.clear()
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=dsm([]))
+    await restore_from_recycle_bin(mock_client, share="/s", paths=["y/b"], overwrite=True)
+    assert [c for c in calls if c.get("method") == "create"]

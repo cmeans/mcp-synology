@@ -293,7 +293,10 @@ Common causes:
   `overwrite=false`: items whose name is already there are skipped and listed. Separate calls with
   `overwrite=true` don't avoid this: a call is refused too while this user's running task is
   landing the same name there (naming its handle). Parallel calls through one server process
-  take turns, and the second finds what the first started even if it has already finished.
+  take turns, and the second finds what the first started even if it has already finished, and
+  what the first has yet to start (a later source, a restore's later items). A call with
+  `overwrite=false` is refused too beside one with `overwrite=true`, which could replace what
+  it lands.
   That check isn't a guarantee: what a finished call put there can't be known, another
   account's task isn't listed, a start at the same moment from a second server process can get
   through, and a failed task list skips the check (logged as

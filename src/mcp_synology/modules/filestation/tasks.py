@@ -648,7 +648,7 @@ class RunningTask:
 def _no_trailing_slash(path: str) -> str:
     """A path as a task's start params may spell it, for comparing with a normalized one. Another
     client may send ``/d/``; what DSM echoes then isn't verified, so it's read either way."""
-    return path.rstrip("/") or path
+    return path.rstrip("/") or "/"
 
 
 def _in_recycle_bin(path: str) -> bool:
@@ -785,6 +785,20 @@ def tracked_landings(client: DsmClient) -> Iterator[Callable[[RunningTask], None
         _TRACKING.reset(token)
         for taskid in mine:
             landings.pop(taskid, None)
+
+
+def pending_landing(
+    kind: HandleKind, path: str, dest: str, *, overwrite: bool, remove_src: bool
+) -> RunningTask:
+    """What a call is about to land, recorded before it starts any task (QA round 2 on #597):
+    a parallel call that starts first must not land the same name where this one will. Its
+    handle names no DSM task."""
+    return RunningTask(
+        Handle(kind, f"pending-{id(object())}"),
+        [path],
+        {"dest_folder_path": dest, "overwrite": overwrite, "remove_src": remove_src},
+        {"local": True, "pending": True},
+    )
 
 
 async def tasks_for_landing_check(client: DsmClient) -> tuple[list[RunningTask], list[RunningTask]]:
