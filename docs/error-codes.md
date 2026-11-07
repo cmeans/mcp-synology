@@ -41,7 +41,10 @@ Common causes:
   for example because the trusted device was removed in **Personal → Security →
   Sign-in Activity**.
 - The account is disabled in DSM.
-- The IP has been auto-blocked after too many failed attempts.
+- The IP has been auto-blocked after too many failed attempts (DSM's 407, for every
+  account from that address).
+- The password has expired (408, 409) or must be changed (410). DSM says so only to
+  the right password; a wrong one gets 400.
 
 Fix:
 
@@ -54,14 +57,22 @@ Fix:
    token in the keyring so subsequent runs do not need the OTP code. A `device_id`
    set in the environment or the config file overrides the keyring: remove it there
    first (the error's suggestion says where it comes from).
-3. If the IP is auto-blocked, sign in to DSM directly and clear the entry at
+3. If the IP is auto-blocked, sign in to DSM from another address and clear the entry at
    **Control Panel → Security → Account → Auto Block → Allow / Block List**.
-4. Verify the account has access to FileStation: **Control Panel → User & Group
+4. If the password has expired or must be changed, sign in to DSM in a browser to
+   change it, and store the new one with `mcp-synology setup --config <your config file>`. With 408, DSM doesn't
+   let the account do that: an administrator sets a new one, or allows a reset after
+   expiry in **Control Panel → User & Group → Advanced → Password Settings**, and the
+   account's user can then sign in to change it. The policy covers administrators too: if
+   none can sign in, see "How to reset my Synology NAS" in Synology's Knowledge Center.
+5. Verify the account has access to FileStation: **Control Panel → User & Group
    → [account] → Edit → Applications**. The account must be allowed to use
    File Station.
 
 When DSM refuses the credentials, the server doesn't send them again: every later
-tool call gets the same error, so a model's tool retries can't trip DSM's Auto Block. `setup` and
+tool call gets the same error, so a model's tool retries can't trip DSM's Auto Block.
+(An expired or must-change password doesn't count toward it, but DSM's answer won't change on
+its own.) `setup` and
 `check` do send each attempt; `setup` says so.
 The server tries again once the credentials change or it restarts. `mcp-synology
 setup` stores new ones in the keyring, and the running server picks them up; a
@@ -69,7 +80,10 @@ value set in `SYNOLOGY_USERNAME`, `SYNOLOGY_PASSWORD` or `SYNOLOGY_DEVICE_ID`, o
 in the config file's `auth:` section, overrides the keyring and must be changed
 there (then restart the server). The error's suggestion names where the refused
 credential comes from: the password for a wrong one (400), the device token for a
-2FA refusal (403, 404, 406); a disabled account (401) needs an administrator.
+2FA refusal (403, 404, 406), an expired or must-change password (408, 409, 410); a
+disabled account (401) needs an administrator. A blocked IP address (407) isn't
+remembered, since clearing the block, or its expiry where DSM is set to expire
+blocks, ends it. It arrives as [`dsm_error`](#dsm_error).
 
 `auth_failed` is **not** retryable. mcp-synology will not auto-retry on this
 code — fix the underlying credential or 2FA state before re-running.
@@ -688,7 +702,9 @@ Fix:
 **A DSM error that does not map to one of the specific codes above.**
 
 Typically a background-task failure with a non-standard error structure, or a
-DSM error code mcp-synology does not recognize yet.
+DSM error code mcp-synology does not recognize yet. A login answered 407 arrives
+this way too: this computer's IP address is blocked, as under
+[`auth_failed`](#auth_failed).
 
 Fix:
 

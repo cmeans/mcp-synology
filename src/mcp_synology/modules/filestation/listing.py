@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 from mcp.server.mcpserver.exceptions import ToolError
 
-from mcp_synology.core.errors import ErrorCode, SynologyError
+from mcp_synology.core.errors import AuthenticationError, ErrorCode, SynologyError
 from mcp_synology.core.formatting import (
     error_response,
     format_size,
@@ -303,7 +303,8 @@ async def list_files(
     try:
         data = await client.request("SYNO.FileStation.List", "list", params=params)
     except SynologyError as e:
-        if e.code == 408:
+        # A re-login refused with its own 408 (an expired password) isn't this path (#460).
+        if e.code == 408 and not isinstance(e, AuthenticationError):
             # DSM answers 408 for a file too, not only a missing path (seska DSM 7.1.1,
             # pre-QA on #515): one getinfo tells them apart.
             isdir: bool | None = None
@@ -476,7 +477,7 @@ async def _not_enabled(
             "SYNO.FileStation.List", "list", params={"folder_path": f"/{share_name}", "limit": 1}
         )
     except SynologyError as e:
-        if e.code != 408:
+        if e.code != 408 or isinstance(e, AuthenticationError):
             synology_error_response("List recycle bin", e)
         if recycle_bin_status is not None:
             recycle_bin_status.pop(share_name, None)

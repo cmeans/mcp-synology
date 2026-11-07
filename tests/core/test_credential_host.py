@@ -3076,8 +3076,10 @@ class TestTheKeyringIsWrittenOnlyAfterTheLogin:
         [
             (400, "Check username and password."),
             (404, "fresh code"),
-            (407, "Wait a few minutes"),
-            (408, "Auto Block"),
+            (407, "Auto Block > Allow/Block List"),
+            (408, "An administrator can set a new password"),
+            (409, "Sign in to DSM in a browser"),
+            (410, "Sign in to DSM in a browser"),
         ],
     )
     def test_a_failed_login_gives_its_advice(
