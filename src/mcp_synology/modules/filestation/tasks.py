@@ -91,6 +91,8 @@ class TaskRecord:
     final_status: dict[str, Any] | None = None
     # The sources that landed whole before this one in its call, at the same destination (#580).
     earlier: list[str] = field(default_factory=list)
+    # The sources DSM skipped before this one in its call, so the final text can say so (#585).
+    skipped_earlier: list[str] = field(default_factory=list)
 
 
 class TaskRecords:
@@ -401,6 +403,23 @@ _PAST = {
 }
 
 
+# This doesn't know what a finished call put there (#580), so this is never said flat.
+SKIP_CAUTION = (
+    "unless what's there came from this or an earlier call of yours: that would replace it, "
+    "possibly with no copy in the recycle bin."
+)
+
+
+def skipped_line(removes_source: bool, skipped: list[str]) -> str:
+    """A skipped source isn't done, and a move's is still at its source, so it's no leftover
+    from a move that worked (#585)."""
+    where = ", so still at the source" if removes_source else ""
+    return (
+        f"Skipped, already at the destination{where}: {', '.join(map(shown, skipped))}. "
+        f"Pass overwrite=true to replace them, {SKIP_CAUTION}"
+    )
+
+
 def handoff_reply(
     *,
     verb: str,
@@ -410,6 +429,7 @@ def handoff_reply(
     done: list[str],
     not_started: list[str],
     stall: Exception | None = None,
+    skipped: list[str] | None = None,
 ) -> str:
     """The reply for a task handed off after the wait: the handle and what to do next.
 
@@ -451,6 +471,8 @@ def handoff_reply(
     ]
     if done:
         lines.append(f"Already {past}: {', '.join(map(shown, done))}.")
+    if skipped:
+        lines.append(skipped_line(gerund in ("moving", "restoring"), skipped))
     if not_started:
         lines.append(
             f"Not started: {', '.join(map(shown, not_started))}. Run them again once this one "
@@ -695,6 +717,9 @@ async def _final_text(
                 [path] if skipped else [],
                 earlier=record.earlier,
             )
+            if record.skipped_earlier:
+                line = skipped_line(handle.kind != "copy", record.skipped_earlier)
+                text += f"\n\nEarlier in this call: {line}"
             if handle.kind == "restore":
                 text = _as_restore(text, path.split("/")[1])
             return text

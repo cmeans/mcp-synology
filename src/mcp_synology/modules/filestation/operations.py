@@ -45,6 +45,7 @@ from mcp_synology.modules.filestation.paths import (
     resolve_bin_items,
 )
 from mcp_synology.modules.filestation.tasks import (
+    SKIP_CAUTION,
     Handle,
     HandleKind,
     Handoff,
@@ -366,13 +367,17 @@ def _with_progress_so_far(
     return ToolError(json.dumps(body))
 
 
-def _already_done(operation: str, done: list[str] | None) -> str:
-    """Name the items a multi-path operation finished before a later one failed."""
-    if not done:
-        return ""
-    return f". Already {_PAST_TENSE.get(operation, 'processed')} before this failure: " + ", ".join(
-        map(shown, done)
-    )
+def _already_done(operation: str, done: list[str] | None, skipped: list[str] | None = None) -> str:
+    """Name the items a multi-path operation finished before a later one failed, and the ones DSM
+    skipped, which aren't done: a move's is still at its source (#585)."""
+    text = ""
+    if done:
+        past = _PAST_TENSE.get(operation, "processed")
+        text = f". Already {past} before this failure: " + ", ".join(map(shown, done))
+    if skipped:
+        where = ", so still at the source" if operation != "Copy" else ""
+        text += f". Skipped, already at the destination{where}: " + ", ".join(map(shown, skipped))
+    return text
 
 
 async def _refuse_missing_sources(
@@ -465,6 +470,7 @@ async def _copy_move_one_path(
     copymove_version: int,
     timeout: float,
     done: list[str] | None = None,
+    skipped: list[str] | None = None,
     on_progress: ProgressCallback | None = None,
 ) -> tuple[int, bool] | Handoff:
     """Copy or move a single path via DSM async-task pattern.
@@ -511,7 +517,9 @@ async def _copy_move_one_path(
         # Left running on the NAS, not stopped (#245): the caller gets a handle.
         stall = result.error if result.outcome == "stalled" else None
         return Handoff(Handle(_KIND[operation], taskid), result.status, stall)
-    return _copy_move_result(result.status, path, operation, done, dest=dest)
+    return _copy_move_result(
+        result.status, path, operation, done, dest=dest, skipped_so_far=skipped
+    )
 
 
 def _code_text(code: object) -> str:
@@ -563,6 +571,7 @@ def _copy_move_result(
     done: list[str] | None = None,
     *,
     dest: str | None = None,
+    skipped_so_far: list[str] | None = None,
 ) -> tuple[int, bool]:
     """``(processed bytes, skipped)`` from a finished CopyMove status; ToolError on failure."""
     if "error" in status:
@@ -574,7 +583,7 @@ def _copy_move_result(
             mapped.error_code,
             f"{operation} files failed: {_code_text(err_code)} on path: {err_path}"
             + _partial_note(status, [(err_path, err_code)], operation, path, dest)
-            + _already_done(operation, done),
+            + _already_done(operation, done, skipped_so_far),
             retryable=mapped.retryable,
             suggestion=(
                 mapped.suggestion
@@ -597,7 +606,7 @@ def _copy_move_result(
             f"{operation} files failed: "
             + "; ".join(f"{shown(p)} ({_code_text(code)})" for p, code in failed)
             + _partial_note(status, failed, operation, path, dest)
-            + _already_done(operation, done),
+            + _already_done(operation, done, skipped_so_far),
             retryable=mapped.retryable,
             param="paths",
             value=path,
@@ -725,15 +734,10 @@ async def _skip_report(
             f"  {_escaped_repr(p)} (this call's {_escaped_repr(first)} went first)"
             for p, first in own.items()
         )
-    # This doesn't know what a finished call put there (#580), so this is never said flat.
-    caution = (
-        "unless what's there came from this or an earlier call of yours: that would replace it, "
-        "possibly with no copy in the recycle bin."
-    )
     if not own:
-        lines.append(f"Pass overwrite=true to replace them, {caution}")
+        lines.append(f"Pass overwrite=true to replace them, {SKIP_CAUTION}")
     elif len(own) < len(skipped_paths):
-        lines.append(f"For the others, pass overwrite=true to replace them, {caution}")
+        lines.append(f"For the others, pass overwrite=true to replace them, {SKIP_CAUTION}")
     return lines
 
 
@@ -748,6 +752,7 @@ async def _copy_move(
     timeout: float = 120.0,
     check_sources: bool = True,
     already_done: list[str] | None = None,
+    already_skipped: list[str] | None = None,
     later: list[str] | None = None,
     records: TaskRecords | None = None,
     on_progress: ProgressCallback | None = None,
@@ -792,10 +797,13 @@ async def _copy_move(
 
     if check_sources:
         await _refuse_missing_sources(client, operation, normalized, paths)
-    await _refuse_missing_destination(client, operation, dest, anything_done=bool(already_done))
+    await _refuse_missing_destination(
+        client, operation, dest, anything_done=bool(already_done or already_skipped)
+    )
 
     total_processed = 0
     done = list(already_done or [])
+    skipped_so_far = already_skipped if already_skipped is not None else []
     skipped_paths: list[str] = []
     landed_here: list[str] = []
     for i, p in enumerate(normalized):
@@ -827,11 +835,12 @@ async def _copy_move(
                     copymove_version=copymove_version,
                     timeout=timeout,
                     done=done,
+                    skipped=skipped_so_far,
                     on_progress=on_progress,
                 )
             except httpx.TransportError as e:
                 rest = normalized[i + 1 :] + list(later or [])
-                if not done and not rest:
+                if not done and not skipped_so_far and not rest:
                     raise  # nothing to add: the server's usual timeout or connection error
                 # The start got no answer (a status with none hands the item off in
                 # poll_task): it may have started. Say so, with what was done and what
@@ -843,7 +852,7 @@ async def _copy_move(
                     else ErrorCode.UNAVAILABLE,
                     f"{operation} files failed: DSM didn't answer for {shown(p)} "
                     f"({describe_transport_error(e)}); its {operation.lower()} may have started"
-                    f"{_already_done(operation, done)}{not_started}.",
+                    f"{_already_done(operation, done, skipped_so_far)}{not_started}.",
                     retryable=False,
                     param="paths",
                     value=p,
@@ -860,6 +869,7 @@ async def _copy_move(
                         overwrite=task_overwrite,
                         # Only what landed, and only for the destination this call asked for.
                         earlier=landed_here if task_dest == dest else [],
+                        skipped_earlier=list(skipped_so_far),
                     )
                 )
             reply = handoff_reply(
@@ -869,6 +879,7 @@ async def _copy_move(
                 status=outcome.status,
                 stall=outcome.stall,
                 done=done,
+                skipped=skipped_so_far,
                 not_started=normalized[i + 1 :] + list(later or []),
             )
             if running is not None:
@@ -891,9 +902,10 @@ async def _copy_move(
         total_processed += size
         if skipped:
             skipped_paths.append(p)
+            skipped_so_far.append(p)
         else:
             landed_here.append(p)
-        done.append(p)
+            done.append(p)
 
     text = await _copy_move_summary(
         client, normalized, dest, remove_src, total_processed, skipped_paths
@@ -1351,6 +1363,7 @@ async def restore_from_recycle_bin(
         # Multiple different destinations — move each one separately
         results: list[str] = []
         restored: list[str] = []
+        restored_skipped: list[str] = []
         for i, (fp, dest) in enumerate(zip(full_paths, restore_destinations, strict=False)):
             r, handed_off = await _copy_move(
                 client,
@@ -1362,6 +1375,7 @@ async def restore_from_recycle_bin(
                 timeout=timeout,
                 check_sources=False,
                 already_done=restored,
+                already_skipped=restored_skipped,
                 later=full_paths[i + 1 :],
                 records=records,
                 on_progress=on_progress,
@@ -1370,7 +1384,8 @@ async def restore_from_recycle_bin(
                 results.append(r)
                 return "\n".join(results) + note
             results.append(_as_restore(r, share_name))
-            restored.append(fp)
+            if fp not in restored_skipped:
+                restored.append(fp)
         partial = [r for r in results if r.startswith("[!]")]
         if partial:
             results.insert(

@@ -497,7 +497,7 @@ Common causes:
   connection to DSM failed during …", if the connection dropped).
 - A path's start in a multi-path `copy_files`, `move_files` or
   `restore_from_recycle_bin` got no answer: the message says what was done, that
-  this one may have started and what wasn't started, so check before running it
+  this one may have started, what DSM skipped and what wasn't started, so check before running it
   again. (Alone, it's the usual timeout or connection error.)
 - `file_task` didn't get an answer to its status or stop request for a
   handle. For the status read, the message says nothing was stopped; for the
