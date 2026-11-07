@@ -1904,6 +1904,7 @@ def test_a_path_that_could_forge_a_reply_line_is_refused(raw: str) -> None:
     with pytest.raises(ToolError) as exc:
         check_parts(raw, "path")
     assert "isn't allowed" in _error(exc)["message"]
+    assert "File Station's tools take paths only" in _error(exc)["suggestion"]
     assert check_parts("/video/a\tb", "path") == "/video/a\tb"
 
 
