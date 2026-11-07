@@ -920,6 +920,20 @@ class TestCreateDownloadDestination:
         assert _form(route.calls.last.request)["destination"] == '"downloads"'
 
     @respx.mock
+    async def test_an_escaped_default_isnt_sent_back(self, mock_client: DsmClient) -> None:
+        """Pre-QA on #605: the default came escaped and went out naming another folder."""
+        _default_destination("downloads/a\nb")
+        route = post_route(TASK2, "create", version=2).respond(json=captured("ds2_task_create_url"))
+        with pytest.raises(ToolError) as exc:
+            await create_download(mock_client, uri="magnet:?xt=a")
+        body = json.loads(str(exc.value))["error"]
+        assert (body["code"], body["param"]) == ("invalid_parameter", "destination")
+        assert not route.called
+        # A destination passed explicitly still works.
+        await create_download(mock_client, uri="magnet:?xt=a", destination="writable")
+        assert _form(route.calls.last.request)["destination"] == '"writable"'
+
+    @respx.mock
     async def test_explicit_destination_wins_over_default(self, mock_client: DsmClient) -> None:
         _default_destination("downloads")
         route = post_route(TASK2, "create", version=2).respond(json=captured("ds2_task_create_url"))

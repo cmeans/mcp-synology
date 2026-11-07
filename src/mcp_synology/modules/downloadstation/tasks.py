@@ -21,6 +21,7 @@ from mcp_synology.core.formatting import (
     format_table,
     format_timestamp,
     synology_error_response,
+    unescaped_length,
 )
 from mcp_synology.core.local_paths import refuse_outside_roots
 from mcp_synology.core.redaction import redact_title, redact_url, redact_urls
@@ -620,6 +621,17 @@ async def _resolve_destination(
         return destination, ""
     default = config.get("default_destination") or None
     if default is not None:
+        if destination is None and unescaped_length(str(default)) != len(str(default)):
+            # It came escaped (#604): sent back, it would name another folder, or none.
+            error_response(
+                ErrorCode.INVALID_PARAMETER,
+                f"Your default destination ({default}) may hold a character replies show "
+                "escaped, so it can't be sent back as it is.",
+                retryable=False,
+                param="destination",
+                suggestion="Pass `destination`, or rename that folder in DSM (or set another "
+                "default with set_download_config).",
+            )
         return (destination if destination is not None else str(default)), ""
 
     non_manager = await ds_is_manager(client) is False

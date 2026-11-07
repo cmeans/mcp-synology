@@ -3522,7 +3522,12 @@ class TestDeleteFailurePartway:
             # The task may have finished: the note says to check the failed path first.
             (599, f"Background task not found (may have already completed). {_RETRY_NOTE}"),
             # Mentioning list_files isn't saying to check with it: the check stays (pre-QA).
-            (408, f"Use list_files or search_files to find the correct path. {_RETRY_NOTE}"),
+            (
+                408,
+                "Use list_files or search_files to find the correct path. A name listed with an "
+                "escape (`\\n`, `\\x..`, `\\u....`) holds a character the tools can't take "
+                f"(#604): rename it in DSM. {_RETRY_NOTE}",
+            ),
         ],
     )
     async def test_a_dsm_error_partway_keeps_its_advice(
